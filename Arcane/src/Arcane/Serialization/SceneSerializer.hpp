@@ -21,6 +21,7 @@
 // the same array. A version mismatch is detected and reported (LoadJson returns
 // false) rather than mis-parsed; the loader never throws (exception-free engine).
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
@@ -215,6 +216,13 @@ namespace Arcane::Scene
             std::vector<Astra::Entity> created;
             created.reserve(entities.size());
 
+            // Accumulated across the WHOLE load and published ONCE after the
+            // entity loop below -- Diagnostics::Publish is a publication-group
+            // replace, so publishing per-entity would leave only the last
+            // entity's rows visible. See the unconditional Publish() after the
+            // loop for the empty-vector/clean-reload retraction case.
+            std::vector<Arcane::Diagnostic> diagnostics;
+
             // File-order position of the entity currently being populated. This
             // is the only entity identification available at skip time that is
             // never in doubt: the entity's own components (e.g. Identity, which
@@ -277,6 +285,16 @@ namespace Arcane::Scene
                                      "will drop it permanently",
                                      it.key(), entityIndex, e.GetID(),
                                      static_cast<unsigned>(e.GetVersion()));
+                            Arcane::Diagnostic d;
+                            d.severity = Arcane::DiagSeverity::Error;
+                            d.scope    = Arcane::DiagScope::Scene;
+                            d.code     = "scene.component.unknown";
+                            d.message  = "Unknown component \"" + std::string(it.key()) +
+                                         "\" on entity #" + std::to_string(entityIndex);
+                            d.detail   = "Re-saving this scene will drop it permanently.";
+                            d.locator  = Arcane::DiagLocator::Entity(
+                                             static_cast<std::uint64_t>(e.GetID()));
+                            diagnostics.push_back(std::move(d));
                         }
                         else if (r == Detail::AddComponentResult::SkippedUnregistered)
                         {
@@ -286,12 +304,30 @@ namespace Arcane::Scene
                                      "will drop it permanently",
                                      it.key(), entityIndex, e.GetID(),
                                      static_cast<unsigned>(e.GetVersion()));
+                            Arcane::Diagnostic d;
+                            d.severity = Arcane::DiagSeverity::Error;
+                            d.scope    = Arcane::DiagScope::Scene;
+                            d.code     = "scene.component.unregistered";
+                            d.message  = "Component \"" + std::string(it.key()) +
+                                         "\" is reflected but not registered (plugin not "
+                                         "loaded?) on entity #" + std::to_string(entityIndex);
+                            d.detail   = "Re-saving this scene will drop it permanently.";
+                            d.locator  = Arcane::DiagLocator::Entity(
+                                             static_cast<std::uint64_t>(e.GetID()));
+                            diagnostics.push_back(std::move(d));
                         }
                     }
                 }
                 created.push_back(e);
                 ++entityIndex;
             }
+
+            // Unconditional: an empty vector RETRACTS the previous load's rows,
+            // which is exactly the clean-reload case. LoadJson takes no path/
+            // asset id -- callers hand it an already-parsed nlohmann::json --
+            // so there is no per-scene identifier in scope here to key on; a
+            // stable constant key is the documented fallback (see Task 7 brief).
+            Arcane::Diagnostics::Publish("scene", diagnostics);
 
             for (size_t i = 0; i < entities.size(); ++i)
             {

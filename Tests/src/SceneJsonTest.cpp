@@ -13,6 +13,8 @@
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/Reflection/Reflection.hpp>
 
+#include <DiagnosticStore.hpp>
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -349,4 +351,39 @@ TEST_CASE("scene with a 3rd component type and a non-parent link round-trips", "
     for (Astra::Entity l : reg.GetRelationshipGraph().GetLinks(tagged[0]))
         if (l == tagged[1]) linked = true;
     CHECK(linked);
+}
+
+// Task 7: the highest-consequence diagnostic in the engine -- a skipped
+// component means "re-saving this scene will drop it permanently" (see the
+// ARC_WARN text in SceneSerializer.hpp). This proves the skip is now ALSO
+// visible as a structured diagnostic, not just a log line.
+TEST_CASE("Loading a scene with an unknown component publishes a scene diagnostic", "[diagnostics]")
+{
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+
+    // Hand-built scene JSON carrying a component name no reflected type
+    // matches. Mirrors the shape SaveJson emits above ("version" / "entities"
+    // / per-entity "components"); only the component key is bogus.
+    nlohmann::json entity;
+    entity["components"]["ThisComponentTypeDoesNotExist"] = nlohmann::json::object();
+    entity["parent"] = -1;
+    nlohmann::json doc;
+    doc["version"] = Arcane::Scene::kSceneJsonVersion;
+    doc["entities"] = nlohmann::json::array({ entity });
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+    CHECK(Arcane::Scene::LoadJson(reg, doc));   // an unknown component is tolerated, not fatal
+
+    const std::vector<Arcane::Diagnostic> rows = store.Snapshot();
+    REQUIRE_FALSE(rows.empty());
+    CHECK(rows[0].code == "scene.component.unknown");
+    CHECK(rows[0].severity == Arcane::DiagSeverity::Error);
+    CHECK(rows[0].scope == Arcane::DiagScope::Scene);
+    CHECK(rows[0].locator.kind == Arcane::DiagLocator::Kind::Entity);
+    CHECK_FALSE(rows[0].detail.empty());   // the permanent-data-loss consequence
+
+    store.UninstallEngineSink();
 }
