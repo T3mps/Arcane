@@ -2,6 +2,7 @@
 
 #include "EditGesture.hpp"   // EditGesture::GestureState (InspectorState parks one)
 #include "EntityList.hpp"
+#include "RecentProjects.hpp"   // RecentSelection (File -> Open Recent)
 #include "ViewportInput.hpp"
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
@@ -29,6 +30,14 @@ namespace Arcane::Editor
     struct MenuRequests
     {
         bool openProject = false;    // File -> Open Project...   (folder dialog)
+        // File -> Open Recent -> <entry>. Empty = nothing picked this frame.
+        // A path rather than a bool because the submenu carries the choice.
+        std::string openRecentPath;
+        // OUTPUT, not a request: the File menu is open this frame. The app uses
+        // it to refresh the Open Recent cache on demand -- rebuilding it every
+        // frame would re-read a file and stat every project for a menu almost
+        // nobody has open.
+        bool fileMenuOpen = false;
         bool newMaterial = false;    // File -> New Material...   (save dialog; graph-owned)
         bool openMaterial = false;   // File -> Open Material...  (open-file dialog)
         bool newScene = false;       // File -> New Scene
@@ -44,8 +53,10 @@ namespace Arcane::Editor
     // (same CommandStack as the Ctrl+Z / Ctrl+Y shortcuts handled in the app input loop).
     // Menu clicks land in `requests`; the caller launches the dialogs.
     // `sceneDirty` puts the * on Save Scene; `playing` greys both Save items out.
+    // `recents` populates File -> Open Recent; null or empty greys the submenu.
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
-                        bool sceneDirty, bool playing);
+                        bool sceneDirty, bool playing,
+                        const RecentSelection* recents = nullptr);
 
     // Emit the DockSpace() into the host window opened by BeginDockSpace and close it.
     // Everything drawn in between becomes a fixed (non-dockable, tab-less) strip above

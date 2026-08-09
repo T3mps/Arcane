@@ -39,7 +39,8 @@
 namespace Arcane::Editor
 {
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
-                        bool sceneDirty, bool playing)
+                        bool sceneDirty, bool playing,
+                        const RecentSelection* recents)
     {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
@@ -63,7 +64,48 @@ namespace Arcane::Editor
         {
             if (ImGui::BeginMenu("File"))
             {
+                requests.fileMenuOpen = true;
                 if (ImGui::MenuItem("Open Project...")) requests.openProject = true;
+
+                // Open Recent: the Hub's shared list, already filtered to what
+                // THIS editor's ABI can open (see RecentProjects.hpp). Greyed
+                // when there is nothing at all to show, rather than opening onto
+                // an empty submenu.
+                const bool anyRecents =
+                    recents && (!recents->visible.empty() || recents->hiddenForAbi > 0);
+                if (ImGui::BeginMenu("Open Recent", anyRecents))
+                {
+                    for (const RecentProject& r : recents->visible)
+                    {
+                        if (ImGui::MenuItem(r.name.c_str()))
+                            requests.openRecentPath = r.path;
+                        // Full path on hover. The name alone cannot separate two
+                        // projects that share a folder name, which is exactly why
+                        // Unreal puts the absolute path in this tooltip
+                        // (FRecentProjectsMenu::MakeMenu).
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("%s", r.path.c_str());
+                    }
+
+                    // Never leave the list silently short: the Hub shows every
+                    // project across every engine version, so without this line
+                    // an ABI-filtered absence is indistinguishable from a broken
+                    // recents list. Disabled -- it is a statement, not an action.
+                    if (recents->hiddenForAbi > 0)
+                    {
+                        if (!recents->visible.empty())
+                            ImGui::Separator();
+                        char hidden[128];
+                        std::snprintf(hidden, sizeof(hidden),
+                                      "%zu project%s hidden (built for another engine version)",
+                                      recents->hiddenForAbi,
+                                      recents->hiddenForAbi == 1 ? "" : "s");
+                        ImGui::BeginDisabled();
+                        ImGui::MenuItem(hidden);
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::EndMenu();
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem("New Scene", "Ctrl+N")) requests.newScene = true;
                 if (ImGui::MenuItem("Open Scene...", "Ctrl+O")) requests.openScene = true;

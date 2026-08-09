@@ -28,6 +28,7 @@
 #include "EditorCamera.hpp"
 #include "EditorPanels.hpp"
 #include "PlayMode.hpp"
+#include "RecentProjects.hpp"
 #include "SceneSession.hpp"
 #include "SelectionContext.hpp"
 #include "ShaderEditorDocument.hpp"
@@ -624,6 +625,25 @@ namespace Arcane::Editor
         // and the string is identical on the overwhelming majority of frames).
         std::string m_windowTitle;
         void        UpdateWindowTitle();
+
+        // ---- File -> Open Recent -------------------------------------------
+        // The Hub's shared recents list, already filtered to what THIS editor
+        // can open (RecentProjects.hpp). Cached rather than rebuilt per frame:
+        // building it reads a file and stats every candidate, and the menu bar
+        // draws every frame whether or not File is ever opened.
+        //
+        // Refreshed at exactly two moments -- a successful project open, and
+        // the frame the File menu is first opened. The second is what lets a
+        // project opened in the HUB while this editor runs show up without a
+        // restart; the first is what makes the list correct on the very first
+        // open rather than one frame late.
+        RecentSelection m_recents;
+        bool            m_fileMenuWasOpen = false;
+        void            RefreshRecents();
+        // Record this project as most-recently-opened (in the Hub's own file)
+        // and refresh the cache. Called ONLY from the two success paths -- a
+        // refused open must never reorder the list.
+        void            NoteProjectOpened();
 
         // The dock node the Viewport occupied LAST frame (0 = floating):
         // where new document windows dock as sibling tabs (DrawAll).

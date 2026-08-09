@@ -1094,7 +1094,7 @@ namespace Arcane::Editor
         m_gpu->Imgui().BeginFrame();
         Arcane::Editor::MenuRequests menuReq;
         Arcane::Editor::BeginDockSpace(*m_undo, menuReq, m_scene.IsDirty(*m_undo),
-                                       m_play.IsPlaying());
+                                       m_play.IsPlaying(), &m_recents);
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
         // click (same "panel reports, app performs" split as ViewportPanelResult);
         // LaunchStandalone owns the project/dirty-scene checks and the spawn.
@@ -1115,6 +1115,23 @@ namespace Arcane::Editor
         if (menuReq.openProject)
             m_gpu->Win().ShowOpenFileDialog(&EditorApp::ProjectPickedThunk, this,
                                             "Arcane Project", "arcproj");
+        // Open Recent lands in the SAME slot the file dialog's callback fills,
+        // so it flows through ConsumeProjectDialogResult and inherits every
+        // guard the menu path already has -- the unsaved-scene confirm, the
+        // rival-editor lock, the ABI gate, the failure modal. A second open
+        // path would have to re-earn all of them.
+        if (!menuReq.openRecentPath.empty())
+        {
+            std::lock_guard<std::mutex> lk(m_pendingProjectMutex);
+            m_pendingProjectPath = menuReq.openRecentPath;
+        }
+        // Refresh on the RISING EDGE of the File menu only. That is what lets a
+        // project opened in the Hub while this editor runs appear without a
+        // restart, without paying a file read plus a stat per project on every
+        // frame of a session where the menu is never touched.
+        if (menuReq.fileMenuOpen && !m_fileMenuWasOpen)
+            RefreshRecents();
+        m_fileMenuWasOpen = menuReq.fileMenuOpen;
         if (menuReq.newMaterial || menuReq.openMaterial)
         {
             // Material dialogs start in the project's Content/ (the only place

@@ -553,6 +553,10 @@ namespace Arcane::Editor
             }
             EnsureScene();
             UpdateWindowTitle();
+            // The switch SUCCEEDED -- record it as most-recently-opened. Only
+            // the success paths do this: a refused open must never reorder the
+            // list (the failure fallback below deliberately does not call it).
+            NoteProjectOpened();
             return true;
         }));
 

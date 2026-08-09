@@ -632,6 +632,14 @@ project "ArcaneTests"
         -- invoked by any test -- process creation is desk-verify territory,
         -- same "no spawn test" rule the task brief states outright.
         "%{wks.location}/ArcaneEditor/src/RuntimeLaunch.cpp",
+        -- File -> Open Recent: RecentProjects source-compiles into the test exe
+        -- so the [editor] units drive its PURE half directly -- parsing the
+        -- Hub's shared recents.archub, ABI/current/missing selection, and the
+        -- move-to-front touch that must preserve fields the editor does not
+        -- model. No ImGui in it at all, same pattern as SceneSession/
+        -- EditorCamera above. This file writes to a file the HUB owns, so the
+        -- refuse-to-clobber rules are the ones most worth pinning.
+        "%{wks.location}/ArcaneEditor/src/RecentProjects.cpp",
     }
 
     includedirs {
