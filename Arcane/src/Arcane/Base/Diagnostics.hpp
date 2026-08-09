@@ -29,9 +29,12 @@
 // planned Linux port keeps linking.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Guid.hpp>
 
 #include <cstdint>
+#include <span>
 #include <string>
+#include <string_view>
 
 namespace Arcane::Diagnostics
 {
@@ -82,4 +85,96 @@ namespace Arcane::Diagnostics
 
     // Reports written this process. The observable the watchdog test asserts on.
     [[nodiscard]] ARCANE_API std::uint32_t ReportCount() noexcept;
+}
+
+// =============================================================================
+// Structured diagnostics: the publish/sink seam
+// =============================================================================
+//
+// Distinct from the post-mortem capture above (crash/hang reports written to
+// disk after the fact). This seam is for problems a USER must act on RIGHT
+// NOW -- a broken material reference, an unresolved asset, a plugin load
+// failure -- surfaced live in an editor Problems/Console panel. Deliberately
+// separate from Arcane::Log (Base/Log.hpp) too: a log line is an event that
+// happened, a diagnostic is an assertion about how things are right now and
+// stops being true when the underlying problem is fixed.
+//
+// PUBLICATION GROUPS: a producer owns a `key` and republishes its ENTIRE set
+// for that key; the consumer replaces that key's contents atomically. Retraction
+// is not a special case -- it is Publish(key, {}) (or Clear(key)). Individual
+// rows are never added or removed, so there is no reconciliation to get wrong.
+//
+// The sink slot lives once, in Arcane.dll (Diagnostics.cpp), and is
+// mutex-guarded: producers publish from worker threads (the async-boot arc runs
+// the asset-registry scan off the main thread).
+
+namespace Arcane
+{
+    enum class DiagSeverity : std::uint8_t { Info, Warning, Error };
+
+    enum class DiagScope : std::uint8_t { Project, Assets, Scene, Plugin, Material, Shader };
+
+    // What clicking the row should do. A tagged union in spirit; only the
+    // members belonging to `kind` are meaningful.
+    struct DiagLocator
+    {
+        enum class Kind : std::uint8_t { None, Entity, Asset, File, GraphNode };
+
+        Kind          kind   = Kind::None;
+        std::uint64_t entity = 0;    // Kind::Entity
+        Guid          asset;         // Kind::Asset
+        std::string   file;          // Kind::File
+        int           line   = 0;    // Kind::File
+        int           col    = 0;    // Kind::File
+        Guid          ownerAsset;    // Kind::GraphNode -- the owning material
+        std::uint32_t nodeId = 0;    // Kind::GraphNode
+
+        [[nodiscard]] static DiagLocator Entity(std::uint64_t id) noexcept
+        {
+            DiagLocator l; l.kind = Kind::Entity; l.entity = id; return l;
+        }
+        [[nodiscard]] static DiagLocator Asset(const Guid& id) noexcept
+        {
+            DiagLocator l; l.kind = Kind::Asset; l.asset = id; return l;
+        }
+        [[nodiscard]] static DiagLocator File(std::string path, int lineNo = 0, int colNo = 0)
+        {
+            DiagLocator l; l.kind = Kind::File; l.file = std::move(path);
+            l.line = lineNo; l.col = colNo; return l;
+        }
+        [[nodiscard]] static DiagLocator GraphNode(const Guid& owner, std::uint32_t node) noexcept
+        {
+            DiagLocator l; l.kind = Kind::GraphNode; l.ownerAsset = owner; l.nodeId = node; return l;
+        }
+    };
+
+    struct Diagnostic
+    {
+        DiagSeverity severity = DiagSeverity::Warning;
+        DiagScope    scope    = DiagScope::Project;
+        // Stable and dotted ("scene.component.unknown"). This is the identity a
+        // future suppression UI, a docs link, or a lint rule id hangs off --
+        // never localize it and never reword it casually.
+        std::string  code;
+        std::string  message;
+        // Optional consequence line, rendered dimmed beneath the message.
+        std::string  detail;
+        DiagLocator  locator;
+    };
+
+    namespace Diagnostics
+    {
+        // Raw function pointer + user data, mirroring Mosaic::SetLogSink. Keeps
+        // the DLL boundary free of std::function's allocator coupling.
+        using Sink = void (*)(std::string_view key, std::span<const Diagnostic> diags, void* user);
+
+        // Install (or clear, with nullptr) the process-wide sink. Last writer wins.
+        ARCANE_API void SetSink(Sink sink, void* user) noexcept;
+
+        // Replace `key`'s entire diagnostic set. Safe with no sink installed.
+        ARCANE_API void Publish(std::string_view key, std::span<const Diagnostic> diags);
+
+        // Retract everything under `key`. Exactly Publish(key, {}).
+        ARCANE_API void Clear(std::string_view key);
+    }
 }

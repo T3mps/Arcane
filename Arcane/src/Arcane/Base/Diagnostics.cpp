@@ -561,3 +561,43 @@ std::uint32_t ReportCount() noexcept
     return g_reportCount.load(std::memory_order_acquire);
 }
 }   // namespace Arcane::Diagnostics
+
+// =============================================================================
+// Structured diagnostics: the publish/sink seam
+// =============================================================================
+// Separate anonymous namespace + separate statics from the capture module
+// above: this slot is the live Problems/Console feed, unrelated to crash/hang
+// report state. Named g_sink* (not g_mutex) to keep grep-for-a-static
+// unambiguous between the two halves of this file.
+
+namespace Arcane::Diagnostics
+{
+namespace
+{
+    // One slot, in Arcane.dll. The mutex guards BOTH the slot and the
+    // dispatch: a worker publishing while the main thread swaps sinks (at
+    // editor shutdown) must never call a half-torn-down consumer.
+    std::mutex g_sinkMutex;
+    Sink       g_sink     = nullptr;
+    void*      g_sinkUser = nullptr;
+}   // namespace
+
+void SetSink(Sink sink, void* user) noexcept
+{
+    std::lock_guard<std::mutex> lock(g_sinkMutex);
+    g_sink     = sink;
+    g_sinkUser = user;
+}
+
+void Publish(std::string_view key, std::span<const Diagnostic> diags)
+{
+    std::lock_guard<std::mutex> lock(g_sinkMutex);
+    if (g_sink)
+        g_sink(key, diags, g_sinkUser);
+}
+
+void Clear(std::string_view key)
+{
+    Publish(key, {});
+}
+}   // namespace Arcane::Diagnostics
