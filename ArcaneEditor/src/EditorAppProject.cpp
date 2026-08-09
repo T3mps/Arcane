@@ -123,8 +123,12 @@ namespace Arcane::Editor
             }
             case Arcane::DiagLocator::Kind::File:
             {
-                // The material document is the only File-locator producer today
-                // (shader diagnostics); it owns the jump.
+                // Shader/material documents are the only ROUTABLE File target --
+                // FindByPath only ever matches an open ShaderEditorDocument. Other
+                // File-locator producers (plugin dll load failures, assets outside
+                // every content root, project manifest errors) point at paths that
+                // are never an open document, so this is a deliberate no-op for
+                // them today, not a bug.
                 if (auto* doc = FindByPath(locator.file))
                     doc->RequestJumpToLine(locator.line);
                 break;
@@ -506,6 +510,13 @@ namespace Arcane::Editor
             // forgotten).
             if (m_resolver)
                 m_resolver->Clear();
+
+            // Problems is current STATE, rebuilt by producers on load (spec
+            // sec 10), not a log -- stale rows from the outgoing project
+            // (asset/plugin/material/scene diagnostics keyed by paths and
+            // Guids that belong to THAT project's registry) must not survive
+            // into the incoming one.
+            m_diagnostics.ClearAll();
 
             // Return to Edit + clear editor state that references the outgoing scene.
             ClearSceneReferences();

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <tuple>
 
 namespace Arcane::Editor
 {
@@ -133,7 +134,7 @@ namespace Arcane::Editor
         // descriptor). If we are not the current sink, someone else already
         // is -- leave it alone. Reset m_installed either way: this call is
         // done being "installed" regardless of whose slot it finds.
-        Arcane::Diagnostics::ClearSinkIfCurrent(&DiagnosticStore::SinkTrampoline, this);
+        std::ignore = Arcane::Diagnostics::ClearSinkIfCurrent(&DiagnosticStore::SinkTrampoline, this);
         m_installed = false;
     }
 }

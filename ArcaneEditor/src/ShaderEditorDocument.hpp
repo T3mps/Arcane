@@ -215,8 +215,9 @@ namespace Arcane::Editor
         [[nodiscard]] PassListState CapturePassListState() const;
         void ApplyPassListState(PassListState state);
 
-        // Parse/chain-resolution errors (published to the Console ahead of the
-        // compile diags). Exposed for the headless tests.
+        // Parse/chain-resolution errors. Surfaced through PublishDiagnostics
+        // into the Problems panel, ahead of the compile diags. Exposed for
+        // the headless tests.
         const std::vector<std::string>& ParseErrors() const { return m_parseErrors; }
 
         // Undo plumbing (doc-identity commands, review M3): apply a param

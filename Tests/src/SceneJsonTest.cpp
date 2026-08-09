@@ -385,5 +385,18 @@ TEST_CASE("Loading a scene with an unknown component publishes a scene diagnosti
     CHECK(rows[0].locator.kind == Arcane::DiagLocator::Kind::Entity);
     CHECK_FALSE(rows[0].detail.empty());   // the permanent-data-loss consequence
 
+    // Producer-side round-trip contract (final-review fix): the locator must
+    // carry the entity's FULL packed value (GetValue(), id+version), not the
+    // version-stripped GetID() -- the consumer (EditorApp::RouteLocator)
+    // reconstructs via Astra::Entity(StorageType), which expects the packed
+    // value, and no live entity has version 0. This document has exactly one
+    // entity, and LoadJson sets SceneRoot to it on success, so that is the
+    // real handle to pin the reconstruction against.
+    const Arcane::SceneRoot* root = reg.GetResource<Arcane::SceneRoot>();
+    REQUIRE(root != nullptr);
+    const Astra::Entity reconstructed(
+        static_cast<Astra::Entity::StorageType>(rows[0].locator.entity));
+    CHECK(reconstructed == root->entity);
+
     store.UninstallEngineSink();
 }

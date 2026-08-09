@@ -1,5 +1,6 @@
 #include <Arcane/Host/ProjectBoot.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>   // Arcane::Diagnostic (silent-peek outDiag below)
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/GpuContext.hpp>
 
@@ -302,8 +303,16 @@ namespace Arcane::HostBoot
                 // modes are already OpenProject's failure modes reported again.
                 if (ctx.splash)
                     if (const auto peekFile = Arcane::Project::ResolveManifestFile(ctx.projectPath))
-                        if (const auto peek = Arcane::ProjectManifest::LoadFile(*peekFile))
+                    {
+                        // Silent by design (this stage's own comment above): a
+                        // throwaway outDiag stops LoadFile from publishing under
+                        // "project" here -- Project::Open owns that key, and a
+                        // parse failure on THIS peek is already re-reported,
+                        // authoritatively, when OpenProject runs a few lines down.
+                        Arcane::Diagnostic peekDiag;
+                        if (const auto peek = Arcane::ProjectManifest::LoadFile(*peekFile, &peekDiag))
                             ctx.splash->SetShowProgress(peek->splash.showProgress);
+                    }
 
                 if (ctx.runtime->OpenProject(ctx.projectPath,
                         [scanDetail](std::size_t done, std::size_t total)

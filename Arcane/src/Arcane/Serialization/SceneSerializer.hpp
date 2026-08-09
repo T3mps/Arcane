@@ -292,8 +292,15 @@ namespace Arcane::Scene
                             d.message  = "Unknown component \"" + std::string(it.key()) +
                                          "\" on entity #" + std::to_string(entityIndex);
                             d.detail   = "Re-saving this scene will drop it permanently.";
+                            // GetValue() -- the FULL packed id+version, not GetID()
+                            // (which strips the version bits, see Entity.hpp) -- so
+                            // the consumer (EditorApp::RouteLocator) can reconstruct
+                            // via Astra::Entity(StorageType), which expects the
+                            // packed value. No live entity has version 0, so a
+                            // version-stripped id can never round-trip to a real
+                            // selection.
                             d.locator  = Arcane::DiagLocator::Entity(
-                                             static_cast<std::uint64_t>(e.GetID()));
+                                             static_cast<std::uint64_t>(e.GetValue()));
                             diagnostics.push_back(std::move(d));
                         }
                         else if (r == Detail::AddComponentResult::SkippedUnregistered)
@@ -312,8 +319,10 @@ namespace Arcane::Scene
                                          "\" is reflected but not registered (plugin not "
                                          "loaded?) on entity #" + std::to_string(entityIndex);
                             d.detail   = "Re-saving this scene will drop it permanently.";
+                            // GetValue() -- see the SkippedUnknownType branch above
+                            // for why this must be the packed value, not GetID().
                             d.locator  = Arcane::DiagLocator::Entity(
-                                             static_cast<std::uint64_t>(e.GetID()));
+                                             static_cast<std::uint64_t>(e.GetValue()));
                             diagnostics.push_back(std::move(d));
                         }
                     }

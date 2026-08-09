@@ -186,6 +186,10 @@ namespace Arcane::Editor
         m_runtime->ResetRegistry();
         Arcane::Scene::CreateEmpty(m_runtime->Registry());
         m_scene.Reset(*m_undo);
+        // Unlike Open Scene, this path never calls LoadJson to republish (and
+        // thereby retract) the "scene" key -- do it explicitly so the outgoing
+        // scene's rows don't survive into the new, empty one.
+        Arcane::Diagnostics::Clear("scene");
         m_frameOnSceneOpen = true;
         ARC_INFO("New scene");
         return true;
