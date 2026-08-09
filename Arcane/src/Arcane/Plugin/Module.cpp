@@ -10,6 +10,13 @@
     #include <dlfcn.h>
 #endif
 
+namespace
+{
+    // Last load failure reason, for the diagnostic. Thread-local so a worker
+    // load never clobbers the main thread's pending message.
+    thread_local std::string t_lastLoadError;
+}
+
 namespace Arcane
 {
     Module::Module(std::filesystem::path path, NativeHandle handle) noexcept
@@ -40,12 +47,28 @@ namespace Arcane
         return *this;
     }
 
+    const std::string& Module::LastLoadError() noexcept { return t_lastLoadError; }
+
     std::optional<Module> Module::Load(std::filesystem::path path)
     {
+        t_lastLoadError.clear();
 #if defined(_WIN32)
         NativeHandle handle = reinterpret_cast<NativeHandle>(::LoadLibraryW(path.c_str()));
+        if (!handle)
+        {
+            const DWORD err = ::GetLastError();
+            char buf[512] = {};
+            ::FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                             nullptr, err, 0, buf, sizeof(buf) - 1, nullptr);
+            t_lastLoadError = "error " + std::to_string(err) + ": " + buf;
+        }
 #else
         NativeHandle handle = ::dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+        if (!handle)
+        {
+            const char* err = ::dlerror();
+            t_lastLoadError = err ? err : "dlopen failed";
+        }
 #endif
         if (!handle)
             return std::nullopt;

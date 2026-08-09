@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <optional>
+#include <string>
 
 namespace Arcane
 {
@@ -25,6 +26,15 @@ namespace Arcane
         Module& operator=(Module&& other) noexcept;
 
         static std::optional<Module> Load(std::filesystem::path path);
+
+        // The OS-reported reason the most recent Load() on THIS THREAD failed --
+        // e.g. "error 126: The specified module could not be found." Empty after
+        // a successful Load(), or if Load() has not failed yet on this thread.
+        // Thread-local so a worker thread's load failure never clobbers the main
+        // thread's pending diagnostic message (see PluginHost's plugin_load,
+        // which runs on BootThread::Main -- but the seam itself makes no
+        // assumption about which thread calls it).
+        [[nodiscard]] static const std::string& LastLoadError() noexcept;
 
         void* Symbol(const char* name) const noexcept;
         void Unload() noexcept;

@@ -2,6 +2,7 @@
 
 #include <Arcane/Plugin/Plugin.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>   // RegisterPhysicsComponents (engine roster restore)
@@ -106,6 +107,47 @@ namespace Arcane
             ImGuiContextGuard& operator=(const ImGuiContextGuard&) = delete;
             ImGuiContext* saved;
         };
+
+        // Publishes the ONE diagnostic row naming WHICH of the three load causes
+        // (OS-level load failure, missing export, ABI mismatch) sank a plugin load,
+        // keyed "plugin:<name>" so the matching success site's Diagnostics::Clear
+        // retracts it once the plugin is fixed. Deliberately NOT called for an
+        // Init()-returned-false failure (the module loaded fine; that is a
+        // plugin-authored failure, a different cause than this task covers) --
+        // callers only reach here when the Plugin itself failed to resolve.
+        void PublishPluginLoadFailure(const std::string& name, const std::filesystem::path& dllPath,
+                                       const PluginResolveError& resolveError)
+        {
+            Diagnostic d;
+            d.severity = DiagSeverity::Error;
+            d.scope    = DiagScope::Plugin;
+            switch (resolveError.kind)
+            {
+                case PluginResolveError::Kind::MissingExport:
+                    d.code    = "plugin.export.missing";
+                    d.message = "Plugin '" + name + "' is missing the required export '" +
+                                resolveError.symbol + "'.";
+                    d.detail  = "The DLL loaded, but it does not export the full plugin entry "
+                                "point set -- it may not be an Arcane game module.";
+                    break;
+                case PluginResolveError::Kind::AbiMismatch:
+                    d.code    = "plugin.abi.mismatch";
+                    d.message = "Plugin '" + name + "' targets engine ABI " +
+                                std::to_string(resolveError.pluginAbi) + ", but this engine is ABI " +
+                                std::to_string(resolveError.engineAbi) + ".";
+                    d.detail  = "Rebuild the game DLL against this engine and update its manifest.";
+                    break;
+                case PluginResolveError::Kind::None:
+                    d.code    = "plugin.module.load-failed";
+                    d.message = "Plugin '" + name + "' could not be loaded: " + Module::LastLoadError();
+                    d.detail  = "The file may be missing, corrupt, or built for a different "
+                                "architecture, or one of its own dependencies may be missing.";
+                    break;
+            }
+            d.locator = DiagLocator::File(dllPath.string());
+            const std::vector<Diagnostic> diags{std::move(d)};
+            Diagnostics::Publish("plugin:" + name, diags);
+        }
     }
 
     struct PluginHost::Impl
@@ -257,11 +299,15 @@ namespace Arcane
         {
             for (const auto& src : pluginSources)
             {
-                std::optional<Plugin> p = Plugin::Load(src);
+                const std::string name = src.stem().string();
+                PluginResolveError resolveError;
+                std::optional<Plugin> p = Plugin::Load(src, &resolveError);
                 RefreshContext();
                 if (!p || !p->VTable().Init(&ctx))
                 {
                     if (p && p->VTable().Shutdown) p->VTable().Shutdown();
+                    if (!p)   // a real load failure, not Init()-returned-false -- name the cause
+                        PublishPluginLoadFailure(name, src, resolveError);
                     ShutdownPluginsLive();
                     plugins.clear();
                     ARC_ERROR("plugin: failed to load secondary '{}'", src.generic_string());
@@ -270,6 +316,7 @@ namespace Arcane
                 PluginImage img;
                 img.plugin = std::move(*p);
                 plugins.push_back(std::move(img));
+                Diagnostics::Clear("plugin:" + name);
                 ARC_INFO("plugin: secondary '{}' loaded", src.generic_string());
             }
             return true;
@@ -305,6 +352,8 @@ namespace Arcane
 
     bool PluginHost::Impl::ReloadPrimary(bool restoreState)
     {
+        const std::string name = source.stem().string();
+
         const std::uint32_t nextGen = gen + 1;
         PluginImage next;
         if (!CopyVersioned(nextGen, next))
@@ -335,7 +384,8 @@ namespace Arcane
         if (!restoreState)
             runtime.ResetRegistry();
 
-        std::optional<Plugin> loadedNext = Plugin::Load(next.dll);
+        PluginResolveError resolveError;
+        std::optional<Plugin> loadedNext = Plugin::Load(next.dll, &resolveError);
         RefreshContext();
         const bool initRan = loadedNext && loadedNext->VTable().Init(&ctx);
         bool ok = initRan;
@@ -352,6 +402,7 @@ namespace Arcane
             gen = nextGen;
             if (previous)
                 DeleteFiles(*previous);
+            Diagnostics::Clear("plugin:" + name);
             ARC_INFO("plugin reloaded (gen {}, snapshot {} bytes)", nextGen, snapshot.size());
             return true;
         }
@@ -360,6 +411,10 @@ namespace Arcane
         {
             next.plugin = std::move(*loadedNext);
             TeardownImage(next, initRan);
+        }
+        else   // a real load failure, not Init()/SaveState/LoadState -- name the cause
+        {
+            PublishPluginLoadFailure(name, source, resolveError);
         }
         DeleteFiles(next);
         runtime.ClearSystems();
@@ -439,6 +494,8 @@ namespace Arcane
         if (m_impl->source.empty())
             return m_impl->LoadInitPlugins();
 
+        const std::string name = m_impl->source.stem().string();
+
         const std::uint32_t g = m_impl->gen + 1;
         PluginImage img;
         bool copied = false;
@@ -454,7 +511,8 @@ namespace Arcane
             return false;
         }
 
-        std::optional<Plugin> plugin = Plugin::Load(img.dll);
+        PluginResolveError resolveError;
+        std::optional<Plugin> plugin = Plugin::Load(img.dll, &resolveError);
         m_impl->RefreshContext();
         const bool initRan = plugin && plugin->VTable().Init(&m_impl->ctx);
         if (!initRan)
@@ -464,6 +522,10 @@ namespace Arcane
                 img.plugin = std::move(*plugin);
                 m_impl->TeardownImage(img, false);
             }
+            else   // a real load failure, not Init()-returned-false -- name the cause
+            {
+                PublishPluginLoadFailure(name, m_impl->source, resolveError);
+            }
             m_impl->DeleteFiles(img);
             ARC_ERROR("plugin: initial load failed");
             return false;
@@ -472,6 +534,7 @@ namespace Arcane
         img.plugin = std::move(*plugin);
         m_impl->current = std::move(img);
         m_impl->gen = g;
+        Diagnostics::Clear("plugin:" + name);
         ARC_INFO("plugin loaded (gen {})", g);
 
         // Bring up the secondary plugins after the primary (they share the Runtime). A
