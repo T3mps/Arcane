@@ -15,6 +15,12 @@
 
 namespace Arcane
 {
+    // Forward decl only (Arcane/Base/Diagnostics.hpp) -- LoadFile's outDiag
+    // param below is a pointer, so callers that don't pass it never need the
+    // full definition. Callers that DO pass it already include Diagnostics.hpp
+    // for the type they're passing.
+    struct Diagnostic;
+
     struct ProjectManifest
     {
         struct PluginRef
@@ -67,6 +73,18 @@ namespace Arcane
         static ARCANE_API std::optional<ProjectManifest> FromJson(const nlohmann::json& doc);
 
         // Read + parse + validate a .arcproj file. nullopt on IO/parse/schema failure.
-        static ARCANE_API std::optional<ProjectManifest> LoadFile(const std::filesystem::path& file);
+        //
+        // `outDiag`: null (the default) means LoadFile publishes the failure
+        // itself, directly, under the engine Diagnostics seam's fixed "project"
+        // key -- exactly as it always has. Pass a non-null `outDiag` and LoadFile
+        // instead FILLS it (severity/scope/code/message/File-locator) on failure
+        // and does NOT publish -- the CALLER then owns publication (and can fold
+        // the filled diagnostic into its own accumulated batch instead of it
+        // being published here and immediately superseded by a caller's own
+        // later publish under the same key). See Project::Open's plugin-
+        // descriptor validation loop (Project.cpp) for the caller that needs
+        // this. `outDiag` is left untouched on success.
+        static ARCANE_API std::optional<ProjectManifest> LoadFile(const std::filesystem::path& file,
+                                                                   Diagnostic* outDiag = nullptr);
     };
 }

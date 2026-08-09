@@ -205,16 +205,20 @@ namespace Arcane
 
         MaterialAssetData data;
 
-        // KEY OWNERSHIP: "material-load:<id-or-path>" -- every dropped-entry
+        // KEY OWNERSHIP: "material-load:<path>" -- every dropped-entry
         // diagnostic below (malformed param/pass/graph) accumulates into this
         // vector and is published ONCE at the very end of this function (see
         // the unconditional Diagnostics::Publish() right before `return
         // data;`). Publishing per-entry would leave only the LAST dropped
         // entry's row visible, since Publish() replaces the key's whole set.
+        // Keyed on the file PATH, not the parsed guid -- see the final
+        // publish's own comment for why (a guid-based key is not stable
+        // across reloads of the SAME file).
         //
         // NEVER publish this loader's rows under "material:<guid>" -- that key
         // belongs to the OPEN ShaderEditorDocument (ShaderEditorDocument::
-        // DiagnosticKey, Task 6's compile-diagnostics seam). A loader publish
+        // DiagnosticKey, Task 6's compile-diagnostics seam; that function
+        // carries the reciprocal half of this warning). A loader publish
         // on that key would silently wipe the document's live compile rows
         // out from under it the next time this asset happens to reload from
         // disk (e.g. an external file-watcher reload while the document is
@@ -435,12 +439,18 @@ namespace Arcane
         // above. Unconditional: an empty vector RETRACTS a previous load's
         // rows for this asset -- exactly the clean-reload case (a file that
         // was malformed and got fixed must not leave stale rows on screen).
-        // Keyed by the asset's own guid when one parsed; a guid-less file
-        // (malformed/missing "id") falls back to its path so the row still
-        // has a stable, distinguishable key rather than colliding with every
-        // other guid-less load under one shared key.
-        const std::string diagKey = "material-load:" +
-            (data.id.IsValid() ? data.id.ToString() : path.generic_string());
+        //
+        // Keyed UNCONDITIONALLY on the file path, never on data.id: the path
+        // is this loader's one stable identity for a given file across
+        // reloads. Keying on "guid if valid, else path" (the original shape)
+        // is a hazard -- if a file's id validity CHANGES between two loads
+        // (e.g. a hand-edit corrupts "id", or a missing id gets minted and
+        // written back), the key shifts too, and nothing ever retracts the
+        // ABANDONED key's row: it is orphaned on screen forever, since no
+        // future load of this file will ever publish under that old key
+        // again. The Asset locator below still carries the guid when one
+        // parsed (data.id may be nil), so per-asset navigation is unaffected.
+        const std::string diagKey = "material-load:" + path.generic_string();
         Diagnostics::Publish(diagKey, diagnostics);
         return data;
     }

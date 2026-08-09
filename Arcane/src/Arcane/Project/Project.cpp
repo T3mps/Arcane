@@ -230,21 +230,21 @@ namespace Arcane
         // retracts a previous open's rows -- the empty-vector-is-a-retraction
         // rule shared by every other producer in this arc).
         //
-        // ProjectManifest::LoadFile (ProjectManifest.cpp) ALSO publishes
-        // directly under this SAME "project" key at its own open/parse/
-        // schema failure sites -- it is the only code that knows which of
-        // the three actually failed. That is authoritative for the TOP-LEVEL
-        // manifest load a few lines above (this function already returned
-        // std::nullopt in that branch, so execution never reaches here to
-        // stomp it). For the PER-PLUGIN descriptor validated in the loop
-        // below, LoadFile's direct publish is only transient: this
-        // function's own unconditional publish at the end would otherwise
-        // silently retract it (Publish() replaces the whole key, and this
-        // function has no way to read back what LoadFile just published to
-        // fold it in). So the loop below mirrors an equivalent
-        // "project.manifest.invalid" row into THIS vector whenever a
-        // descriptor exists but fails to load, keeping it alive past this
-        // function's final publish.
+        // ProjectManifest::LoadFile (ProjectManifest.cpp) DECIDES the content
+        // of every manifest-shaped-file diagnostic (it is the only code that
+        // knows which of open/parse/schema failed), but WHO PUBLISHES depends
+        // on the call site. The TOP-LEVEL manifest load a few lines above
+        // passes no outDiag, so LoadFile publishes directly under "project"
+        // itself -- safe, because this function already returned std::nullopt
+        // in that failure branch and never reaches here to stomp it. The
+        // PER-PLUGIN descriptor validated in the loop below passes `&diag` and
+        // captures LoadFile's filled-but-unpublished diagnostic instead: were
+        // LoadFile to publish directly there too, this function's own
+        // unconditional publish at the end would silently retract it (Publish()
+        // replaces the whole key, and this function has no way to read back
+        // what LoadFile published to fold it in). Appending LoadFile's filled
+        // diagnostic verbatim (not re-deriving code/message here) is also what
+        // keeps an unreadable descriptor from mis-surfacing as "invalid".
         std::vector<Diagnostic> diagnostics;
 
         // Slice 4 -- project plugins. Each enabled plugin in the manifest lives at
@@ -277,19 +277,17 @@ namespace Arcane
             }
             // Validate the descriptor (well-formed .arcproj-shaped manifest). LoadFile logs
             // on failure; a malformed descriptor disables the plugin rather than the project.
-            if (!ProjectManifest::LoadFile(descriptor))
+            Diagnostic descriptorDiag;
+            if (!ProjectManifest::LoadFile(descriptor, &descriptorDiag))
             {
-                // Mirrors LoadFile's own (transient, about to be superseded)
-                // "project" publish for this same failure -- see the KEY
-                // OWNERSHIP comment above `diagnostics`'s declaration.
-                Diagnostic d;
-                d.severity = DiagSeverity::Error;
-                d.scope    = DiagScope::Project;
-                d.code     = "project.manifest.invalid";
-                d.message  = "Plugin '" + ref.name + "'s descriptor at '" +
-                             descriptor.generic_string() + "' could not be loaded.";
-                d.locator  = DiagLocator::File(descriptor.generic_string());
-                diagnostics.push_back(std::move(d));
+                // `descriptorDiag` was FILLED (not published) by LoadFile --
+                // the true code (project.manifest.unreadable for an open/parse
+                // failure, project.manifest.invalid for a schema failure) with
+                // its own message and File locator. Appended VERBATIM, never
+                // re-derived here, so this row survives past this function's
+                // own unconditional "project" publish at the end -- see the
+                // KEY OWNERSHIP comment above `diagnostics`'s declaration.
+                diagnostics.push_back(std::move(descriptorDiag));
                 continue;
             }
 

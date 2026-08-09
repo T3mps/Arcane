@@ -103,29 +103,33 @@ namespace Arcane
     namespace
     {
         // KEY OWNERSHIP: "project" (fixed key). LoadFile is the SINGLE owner
-        // of every manifest-shaped-file diagnostic, for EVERY caller -- both
-        // the project's own .arcproj (Project::Open's top-level call, made
-        // BEFORE a Project instance even exists) and a plugin's .arcplugin
-        // descriptor (Project::Open's per-plugin validation call, made from
-        // INSIDE an already-constructed Project). LoadFile is the only code
-        // that knows which of open/parse/schema actually failed, so it
-        // publishes directly here rather than smuggling a reason code out
-        // through the std::optional<> return.
+        // of every manifest-shaped-file diagnostic's CONTENT (code/message/
+        // File-locator), for EVERY caller -- both the project's own .arcproj
+        // (Project::Open's top-level call, made BEFORE a Project instance even
+        // exists) and a plugin's .arcplugin descriptor (Project::Open's
+        // per-plugin validation call, made from INSIDE an already-constructed
+        // Project). LoadFile is the only code that knows which of open/parse/
+        // schema actually failed, so it is always the one that DECIDES the
+        // diagnostic here.
         //
-        // This is "replace-semantics safe" for the top-level call: on that
-        // failure Project::Open returns std::nullopt immediately afterward
-        // (Project.cpp) without ever touching "project" again, so this
-        // publish is the final, authoritative word for that open attempt.
-        //
-        // For the per-plugin descriptor call it is only the FIRST word:
-        // Project::Open reaches its own unconditional "project" publish at
-        // the end of a successful open regardless, which would otherwise
-        // silently retract this row. Project::Open's own comment (Project.cpp)
-        // covers how it re-mirrors an equivalent diagnostic into its own
-        // accumulated set for exactly this reason -- see there for why this
-        // function does not need (and must not attempt) to know its caller.
-        void PublishManifestDiagnostic(const std::filesystem::path& file, DiagSeverity severity,
-                                        const char* code, std::string message)
+        // WHO PUBLISHES differs by caller, via `outDiag`:
+        //   - outDiag == nullptr (the default): this function publishes
+        //     directly. Safe for the top-level manifest load, because on that
+        //     failure Project::Open returns std::nullopt immediately afterward
+        //     (Project.cpp) without ever touching "project" again -- this
+        //     publish is the final, authoritative word for that open attempt.
+        //   - outDiag != nullptr: this function FILLS *outDiag and does NOT
+        //     publish. Project::Open's plugin-descriptor validation loop uses
+        //     this, because ITS OWN unconditional "project" publish at the end
+        //     of Open() would otherwise silently retract a direct publish made
+        //     here mid-loop (Publish() replaces the whole key, and Open() has
+        //     no way to read back what LoadFile just published to fold it in).
+        //     Open() instead appends the filled diagnostic verbatim to its own
+        //     accumulator -- same code/message/locator LoadFile decided, no
+        //     re-deriving or re-wording it caller-side (which is what let an
+        //     unreadable descriptor mis-surface as "invalid" before this).
+        void ReportManifestFailure(const std::filesystem::path& file, DiagSeverity severity,
+                                    const char* code, std::string message, Diagnostic* outDiag)
         {
             Diagnostic d;
             d.severity = severity;
@@ -133,18 +137,22 @@ namespace Arcane
             d.code     = code;
             d.message  = std::move(message);
             d.locator  = DiagLocator::File(file.generic_string());
-            Diagnostics::Publish("project", std::vector<Diagnostic>{ std::move(d) });
+            if (outDiag)
+                *outDiag = std::move(d);
+            else
+                Diagnostics::Publish("project", std::vector<Diagnostic>{ std::move(d) });
         }
     }
 
-    std::optional<ProjectManifest> ProjectManifest::LoadFile(const std::filesystem::path& file)
+    std::optional<ProjectManifest> ProjectManifest::LoadFile(const std::filesystem::path& file,
+                                                              Diagnostic* outDiag)
     {
         std::ifstream in(file, std::ios::binary);
         if (!in)
         {
             ARC_WARN("ProjectManifest: cannot open '{}'", file.generic_string());
-            PublishManifestDiagnostic(file, DiagSeverity::Error, "project.manifest.unreadable",
-                                       "Could not open '" + file.generic_string() + "'.");
+            ReportManifestFailure(file, DiagSeverity::Error, "project.manifest.unreadable",
+                                   "Could not open '" + file.generic_string() + "'.", outDiag);
             return std::nullopt;
         }
         std::stringstream ss;
@@ -158,16 +166,16 @@ namespace Arcane
         catch (const std::exception& e)
         {
             ARC_WARN("ProjectManifest: parse failed for '{}': {}", file.generic_string(), e.what());
-            PublishManifestDiagnostic(file, DiagSeverity::Error, "project.manifest.unreadable",
-                                       "Could not parse '" + file.generic_string() + "': " + e.what());
+            ReportManifestFailure(file, DiagSeverity::Error, "project.manifest.unreadable",
+                                   "Could not parse '" + file.generic_string() + "': " + e.what(), outDiag);
             return std::nullopt;
         }
         auto m = FromJson(doc);
         if (!m)
         {
             ARC_WARN("ProjectManifest: schema invalid in '{}'", file.generic_string());
-            PublishManifestDiagnostic(file, DiagSeverity::Error, "project.manifest.invalid",
-                                       "'" + file.generic_string() + "' is not a valid project manifest.");
+            ReportManifestFailure(file, DiagSeverity::Error, "project.manifest.invalid",
+                                   "'" + file.generic_string() + "' is not a valid project manifest.", outDiag);
         }
         return m;
     }

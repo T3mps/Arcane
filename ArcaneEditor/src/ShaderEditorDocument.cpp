@@ -3113,6 +3113,15 @@ namespace Arcane::Editor
 
     std::string ShaderEditorDocument::DiagnosticKey() const
     {
+        // KEY OWNERSHIP: "material:<guid>" -- this document's own live compile
+        // rows (published a few lines up, in the lambda above). NEVER reuse
+        // this key for anything but this document's own compile output.
+        // LoadMaterialAsset (MaterialAsset.cpp) publishes its dropped-entry
+        // diagnostics under the DISTINCT "material-load:<path>" key precisely
+        // so a background/file-watcher reload of this same asset can never
+        // silently wipe these compile rows out from under an open document --
+        // see MaterialAsset.cpp's reciprocal comment at LoadMaterialAsset's
+        // `diagnostics` declaration and its final Diagnostics::Publish call.
         return "material:" + m_data.id.ToString();
     }
 
