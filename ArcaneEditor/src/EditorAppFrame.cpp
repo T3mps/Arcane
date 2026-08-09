@@ -16,6 +16,7 @@
 #include "ViewportImGuiInput.hpp"
 
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
+#include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
@@ -109,8 +110,17 @@ namespace Arcane::Editor
         ls.simPrev       = std::chrono::steady_clock::now();
         ls.lastFrameTime = ls.simPrev;
 
+        // Boot is over; anything the watchdog reports from here on belongs to
+        // the frame loop, not to a stale boot stage.
+        Arcane::Diagnostics::SetPhase("editor frame loop");
+
         while (ls.running)
         {
+            // FIRST statement in the frame, before any phase can block. The
+            // watchdog's whole definition of "alive" is this call, so it has to
+            // sit on the loop itself rather than inside any one phase.
+            Arcane::Diagnostics::Heartbeat();
+
             const FramePump pump = PumpFrameEvents();
             if (pump == FramePump::Exit)      break;
             if (pump == FramePump::SkipFrame) continue;

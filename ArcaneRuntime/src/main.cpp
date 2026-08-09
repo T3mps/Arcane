@@ -4,6 +4,7 @@
 // RuntimeApp class (RuntimeApp.hpp/.cpp); main is just the wire-up.
 
 #include <Arcane/Base/Assert.hpp>
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/HostConfig.hpp>
@@ -33,12 +34,32 @@ int main(int argc, char** argv)
         return 0;
     }
 
+    // Same arming as the editor, same reasoning, same position relative to the
+    // probe -- see ArcaneEditor/src/main.cpp. The two hosts must not diverge on
+    // whether a crash or a hang leaves evidence behind.
+    {
+        Arcane::Diagnostics::Config diag;
+        diag.appName = "ArcaneRuntime";
+        Arcane::Diagnostics::Install(diag);
+    }
+
     // Before ANY engine boot: something on screen within ~100ms. The probe
     // return above stays free of any window on purpose. Never fails boot --
     // BootSplashWindow's whole contract is "every error path degrades to no
     // splash, silently".
     Arcane::BootSplashWindow splash("data/images/arcane_logo.png");
 
-    RuntimeApp app(*parsed.config, &splash);
-    return app.Run();
+    // Scoped so ~RuntimeApp runs while the watchdog is still armed, then joined
+    // before main returns -- see ArcaneEditor/src/main.cpp for the full reason
+    // (teardown is a suspect; a joinable std::thread at static destruction
+    // calls std::terminate).
+    int rc = 0;
+    {
+        RuntimeApp app(*parsed.config, &splash);
+        rc = app.Run();
+        Arcane::Diagnostics::SetPhase("runtime teardown");
+        Arcane::Diagnostics::Heartbeat();
+    }
+    Arcane::Diagnostics::Shutdown();
+    return rc;
 }

@@ -5,6 +5,7 @@
 // wire-up (mirrors ArcaneRuntime/src/main.cpp).
 
 #include <Arcane/Base/Assert.hpp>
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Project/Project.hpp>   // EditorLock: the direct-launch double-open guard
 #include <Arcane/Host/BootSplashWindow.hpp>
@@ -50,6 +51,19 @@ int main(int argc, char** argv)
         // ANSI-codepage bytes under MSVC, which a strict-UTF-8 dump() rejects.
         std::printf("%s\n", Arcane::HostBoot::EngineInfoJson(Arcane::ExecutablePathUtf8()).c_str());
         return 0;
+    }
+
+    // Post-mortem capture, armed for every REAL run. A crash writes a minidump
+    // plus a symbolized all-thread stack; a WEDGED main thread writes the same
+    // report while the process is still alive. The second half is the point:
+    // Windows Error Reporting only ever fires on process death, so a hang
+    // ("Not Responding") otherwise produces nothing, anywhere, ever.
+    // Deliberately AFTER the probe -- that path pays for nothing it can skip,
+    // and a watchdog thread is not free.
+    {
+        Arcane::Diagnostics::Config diag;
+        diag.appName = "ArcaneEditor";
+        Arcane::Diagnostics::Install(diag);
     }
 
 #ifdef _WIN32
@@ -121,8 +135,23 @@ int main(int argc, char** argv)
     // whole contract is "every error path degrades to no splash, silently".
     Arcane::BootSplashWindow splash("data/images/arcane_logo.png");
 
-    Arcane::Editor::EditorApp app(*parsed.config, &splash);
-    if (noProject)
-        app.RaiseOpenProjectOnStart();
-    return app.Run();
+    // Scoped so ~EditorApp -- the load-bearing teardown sequence -- runs while
+    // the watchdog is STILL armed. Teardown does not beat, so a deadlock in it
+    // reports as a hang, which is exactly right: tearing down threaded state is
+    // itself a suspect. Shutdown() then joins the watchdog before main returns;
+    // leaving a joinable std::thread to static destruction would call
+    // std::terminate and turn a clean exit into a crash.
+    // Declaring app in a nested scope keeps its destruction BEFORE splash's,
+    // the same relative order as when both were siblings here.
+    int rc = 0;
+    {
+        Arcane::Editor::EditorApp app(*parsed.config, &splash);
+        if (noProject)
+            app.RaiseOpenProjectOnStart();
+        rc = app.Run();
+        Arcane::Diagnostics::SetPhase("editor teardown");
+        Arcane::Diagnostics::Heartbeat();
+    }
+    Arcane::Diagnostics::Shutdown();
+    return rc;
 }

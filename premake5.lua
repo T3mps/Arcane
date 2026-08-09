@@ -239,6 +239,9 @@ project "Arcane"
             "SDL3-static",
             "user32", "gdi32", "winmm", "imm32", "ole32", "oleaut32",
             "version", "uuid", "advapi32", "setupapi", "shell32", "dinput8",
+            -- dbghelp: MiniDumpWriteDump + StackWalk64/Sym* behind
+            -- Arcane/Base/Diagnostics.cpp (crash + hang post-mortem capture).
+            "dbghelp",
         }
 
     filter { "system:windows", "configurations:Debug" }

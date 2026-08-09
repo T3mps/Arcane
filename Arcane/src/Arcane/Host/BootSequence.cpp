@@ -1,5 +1,6 @@
 #include <Arcane/Host/BootSequence.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/ServiceThread.hpp>
 
@@ -218,9 +219,17 @@ namespace Arcane
                 {
                     started[i] = true;
                     ranStageId = im.stages[i].id;
+                    // A Main stage runs INLINE on this thread, so for however
+                    // long `run` takes nothing here beats -- which is exactly
+                    // the condition the hang watchdog looks for. Naming the
+                    // stage first is what turns its report from "the main
+                    // thread is stuck" into "stuck in <this stage>".
+                    Diagnostics::SetPhase("boot stage '" + im.stages[i].id + "' (main)");
+                    Diagnostics::Heartbeat();
                     bool ok = true;
                     try { ok = im.stages[i].run(); }
                     catch (...) { ok = false; }
+                    Diagnostics::Heartbeat();
                     if (!complete(i, ok))
                     {
                         result.failedStage = im.stages[i].id;
@@ -263,12 +272,19 @@ namespace Arcane
                     // screen for as long as that overlap runs, and Windows
                     // marks the window "Not Responding" -- the precise
                     // failure this arc exists to prevent.
+                    Diagnostics::SetPhase("boot stage '" + workerStageId + "' (worker; main pumping)");
                     std::unique_lock lk(wh.mx);
                     for (;;)
                     {
                         wh.cv.wait_for(lk, std::chrono::milliseconds(8), [&] { return wh.finished >= 0; });
                         if (wh.finished >= 0) break;
                         lk.unlock();
+                        // Main is alive here even though it is waiting, so it
+                        // beats. A stall during an overlap therefore belongs to
+                        // the WORKER, and the report's all-thread walk is what
+                        // names it -- which is why the walk covers every thread
+                        // rather than just this one.
+                        Diagnostics::Heartbeat();
                         if (!present(workerStageId))
                         {
                             result.quitRequested = true;
@@ -307,6 +323,11 @@ namespace Arcane
         }
 
         present(std::string());   // boot complete -- no single stage owns this update
+        // Clear on SUCCESS only. A failed boot's last phase is evidence worth
+        // keeping, but a stale "boot stage ..." label surviving into the frame
+        // loop would misname any later hang report.
+        Diagnostics::SetPhase({});
+        Diagnostics::Heartbeat();
         result.ok = true;
         return result;
     }

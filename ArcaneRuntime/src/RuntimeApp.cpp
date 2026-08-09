@@ -9,6 +9,7 @@
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Assets/Assets.hpp>      // Arcane::SaveTexturePng (--screenshot)
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
+#include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Guid.hpp>          // Arcane::Guid::FromString (--scene override; not pulled in transitively by any of the below)
@@ -325,8 +326,16 @@ void RuntimeApp::MainLoop()
     auto lastShaderPoll = simPrev;
     bool running = true;
 
+    // Boot is over; anything the watchdog reports from here on belongs to the
+    // frame loop, not to a stale boot stage.
+    Arcane::Diagnostics::SetPhase("runtime frame loop");
+
     while (running)
     {
+        // FIRST statement in the frame, before anything can block. Mirrors
+        // EditorApp::MainLoop -- the two hosts must not diverge on liveness.
+        Arcane::Diagnostics::Heartbeat();
+
         auto events = m_gpu->Win().PumpEvents();
         if (events.quitRequested) break;
         if (events.resized)
