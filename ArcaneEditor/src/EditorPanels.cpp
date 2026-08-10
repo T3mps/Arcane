@@ -1095,9 +1095,14 @@ namespace Arcane::Editor
         if (ImGui::BeginTable("##outliner_rows", 2, tflags, ImVec2(0.0f, -footerH)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
+            // A SQUARE eye slot: sized to the GLYPH, not GetFrameHeight --
+            // frame height carries FramePadding.y the unframed rows don't
+            // have, which left the column ~10px wider than the row is tall.
+            // Glyph advance + the cell padding both sides lands the header
+            // cell and the row button at the row's own height: square.
             ImGui::TableSetupColumn(ICON_LC_EYE,
                 ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed,
-                ImGui::GetFrameHeight());
+                ImGui::CalcTextSize(ICON_LC_EYE).x);
             ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_DefaultSort);
             // Dim the legend text (icon + "Label" + sort arrow): the chrome
             // band fill (EditorTheme's TableHeaderBg) plus muted text is what
