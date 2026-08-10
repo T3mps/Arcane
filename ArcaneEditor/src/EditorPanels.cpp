@@ -1132,7 +1132,7 @@ namespace Arcane::Editor
             // slot and clear air around the dividers -- UE's proportions.
             // Glyphs are CENTERED in the slot (SelectableTextAlign in the
             // header, a cursor offset in the rows).
-            const float iconColW = ImGui::GetFrameHeight();
+            const float iconColW = ImGui::GetFrameHeight() * 1.5f;
             ImGui::TableSetupColumn(ICON_LC_EYE, ImGuiTableColumnFlags_WidthFixed, iconColW);
             ImGui::TableSetupColumn(ICON_LC_ASTERISK, ImGuiTableColumnFlags_WidthFixed, iconColW);
             ImGui::TableSetupColumn("Label");
@@ -1205,9 +1205,14 @@ namespace Arcane::Editor
                 // the boundary (BordersInnerV would rule every row).
                 if (col < 2)
                 {
+                    // Full BAND height, not the Selectable's: the cell rect
+                    // is inset by the cell padding, and a divider that stops
+                    // short reads as a stray tick (capture loop, round 1).
+                    const float padY = ImGui::GetStyle().CellPadding.y;
                     const float x = cellMax.x + ImGui::GetStyle().CellPadding.x;
-                    dl->AddLine(ImVec2(x, cellMin.y), ImVec2(x, cellMax.y),
-                                ImGui::GetColorU32(ImGuiCol_TableBorderLight));
+                    dl->AddLine(ImVec2(x, cellMin.y - padY),
+                                ImVec2(x, cellMax.y + padY),
+                                ImGui::GetColorU32(ImGuiCol_TableBorderStrong));
                 }
             };
             headerCell(0, OutlinerSort::Column::Visibility, ICON_LC_EYE,      true);

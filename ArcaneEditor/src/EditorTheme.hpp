@@ -207,7 +207,11 @@ namespace Arcane::Editor
         // complaint. As chrome it frames the rows the way the title/menu
         // bars frame panels, and it matches the outliner's bottom status
         // bar (MenuBarBg), bracketing the panel in the same tone.
-        c[ImGuiCol_TableHeaderBg]          = Theme::kChrome;
+        // kChromeDeep, not kChrome: #191919 against the #1e1e1e panel was a
+        // 5-unit difference -- invisible at the desk (2026-08-10 capture
+        // loop). The DEEP chrome is the title-bar tone, and a header band
+        // that visibly matches the window chrome is exactly the UE read.
+        c[ImGuiCol_TableHeaderBg]          = Theme::kChromeDeep;
         c[ImGuiCol_TableBorderStrong]      = Theme::kSeparatorHot;
         c[ImGuiCol_TableBorderLight]       = Theme::kSeparator;
         c[ImGuiCol_TableRowBg]             = Theme::kNone;
