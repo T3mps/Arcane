@@ -36,6 +36,23 @@ TEST_CASE("AssetKindFilterForFieldName infers the kind from the field name", "[e
     CHECK(AssetKindFilterForFieldName("") == -1);
 }
 
+TEST_CASE("IsIdentityGuidFieldName separates identity guids from asset refs", "[editor]")
+{
+    // Arcane::Identity.id is the live case: every entity carries one, the
+    // registry can never resolve it, and treating it as a dangling asset ref
+    // painted three "(missing)" rows on a perfectly healthy scene.
+    CHECK(IsIdentityGuidFieldName("id"));
+    CHECK(IsIdentityGuidFieldName("Id"));
+    CHECK(IsIdentityGuidFieldName("guid"));
+    CHECK(IsIdentityGuidFieldName("GUID"));
+    // Exact match only: substring would eat "textureId", which the kind
+    // heuristic correctly claims as a texture reference.
+    CHECK_FALSE(IsIdentityGuidFieldName("textureId"));
+    CHECK_FALSE(IsIdentityGuidFieldName("sprite"));
+    CHECK_FALSE(IsIdentityGuidFieldName("material"));
+    CHECK_FALSE(IsIdentityGuidFieldName(""));
+}
+
 TEST_CASE("BuildAssetEntries snapshots a scanned registry, sorted by name", "[editor]")
 {
     namespace fs = std::filesystem;

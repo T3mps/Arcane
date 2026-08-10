@@ -800,7 +800,10 @@ namespace Arcane::Editor
                         else if (v.IsValid())
                         {
                             display = v.ToString();
-                            if (project)
+                            // Identity guids (Arcane::Identity.id) are not asset
+                            // references -- the registry can never resolve them, so
+                            // asking it would flag every healthy entity "(missing)".
+                            if (project && !Arcane::Editor::IsIdentityGuidFieldName(rawName))
                             {
                                 if (const auto mount = project->Registry().Resolve(v))
                                     display = *mount;

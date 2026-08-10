@@ -129,6 +129,22 @@ namespace Arcane::Editor
         return -1;
     }
 
+    // A Guid field whose NAME says it is an IDENTITY, not an asset reference:
+    // exactly "id" or "guid", case-insensitive. Same name-heuristic seam as
+    // AssetKindFilterForFieldName above (reflection carries no per-field
+    // attributes yet). Arcane::Identity.id is the live case -- every entity
+    // carries one, the asset registry can never resolve it, and running it
+    // through the dangling-reference styling painted "(missing)" on healthy
+    // entities. Exact match on purpose: substring would eat "textureId",
+    // which the kind heuristic correctly claims as a texture reference.
+    inline bool IsIdentityGuidFieldName(std::string_view fieldName)
+    {
+        std::string lower(fieldName);
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return lower == "id" || lower == "guid";
+    }
+
     // kindFilter: -1 = all kinds. `search`: case-insensitive substring over
     // name AND mount path; empty matches everything.
     inline bool MatchesFilter(const AssetEntry& entry, int kindFilter, std::string_view search)
