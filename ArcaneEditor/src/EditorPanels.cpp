@@ -1093,7 +1093,13 @@ namespace Arcane::Editor
                 ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed,
                 ImGui::GetFrameHeight());
             ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_DefaultSort);
+            // Dim the legend text (icon + "Label" + sort arrow): the chrome
+            // band fill (EditorTheme's TableHeaderBg) plus muted text is what
+            // separates "column header" from "another entity row".
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             ImGui::TableHeadersRow();
+            ImGui::PopStyleColor();
 
             // Header sort -> state.sort; rows were built with LAST frame's
             // sort (one-frame lag, rebuilt every frame anyway). Label is the

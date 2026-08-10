@@ -58,7 +58,8 @@ namespace Arcane::Editor
 
         // -- PANEL --------------------------------------------------------
         // kPanel is the editor's base surface. kPanelRaised is the one step
-        // up used for transient row/tab hover and table header bands.
+        // up used for transient row/tab hover. (Table header bands moved to
+        // kChrome -- sharing the hover tone made headers read as rows.)
         inline constexpr ImVec4 kPanel        = ImVec4(0.118f, 0.118f, 0.118f, 1.00f); // #1e1e1e
         inline constexpr ImVec4 kPanelRaised  = ImVec4(0.165f, 0.165f, 0.165f, 1.00f); // #2a2a2a
 
@@ -200,7 +201,13 @@ namespace Arcane::Editor
         c[ImGuiCol_PlotHistogram]          = Theme::kAmber;                 // data mark, exempt (see above)
         c[ImGuiCol_PlotHistogramHovered]   = Theme::kAmberLight;
 
-        c[ImGuiCol_TableHeaderBg]          = Theme::kPanelRaised;
+        // Chrome, not kPanelRaised: kPanelRaised is ALSO the row-hover fill
+        // (HeaderHovered above), and a header band that shares its color
+        // with a hovered row reads as another row -- the 2026-08-10 outliner
+        // complaint. As chrome it frames the rows the way the title/menu
+        // bars frame panels, and it matches the outliner's bottom status
+        // bar (MenuBarBg), bracketing the panel in the same tone.
+        c[ImGuiCol_TableHeaderBg]          = Theme::kChrome;
         c[ImGuiCol_TableBorderStrong]      = Theme::kSeparatorHot;
         c[ImGuiCol_TableBorderLight]       = Theme::kSeparator;
         c[ImGuiCol_TableRowBg]             = Theme::kNone;
