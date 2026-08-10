@@ -1117,15 +1117,17 @@ namespace Arcane::Editor
         if (ImGui::BeginTable("##outliner_rows", 3, tflags, ImVec2(0.0f, -footerH)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
-            // SQUARE icon slots: sized to each GLYPH, not GetFrameHeight --
-            // frame height carries FramePadding.y the unframed rows don't
-            // have, which left the eye column ~10px wider than the row is
-            // tall. Glyph advance + the cell padding both sides lands the
-            // header cell and the row button at the row's own height.
-            ImGui::TableSetupColumn(ICON_LC_EYE, ImGuiTableColumnFlags_WidthFixed,
-                                    ImGui::CalcTextSize(ICON_LC_EYE).x);
-            ImGui::TableSetupColumn(ICON_LC_ASTERISK, ImGuiTableColumnFlags_WidthFixed,
-                                    ImGui::CalcTextSize(ICON_LC_ASTERISK).x);
+            // SQUARE icon slots: one text-line tall IS one text-line wide.
+            // Glyph-advance widths packed the eye and asterisk into a
+            // disjoint clump; GetFrameHeight carries FramePadding.y the
+            // unframed rows don't have and ran too wide. lineH + the cell
+            // padding both sides lands each cell at the row's own height,
+            // and the padding is what visibly separates the three headers.
+            // Glyphs are CENTERED in the slot (SelectableTextAlign in the
+            // header, a cursor offset in the rows).
+            const float iconColW = ImGui::GetTextLineHeight();
+            ImGui::TableSetupColumn(ICON_LC_EYE, ImGuiTableColumnFlags_WidthFixed, iconColW);
+            ImGui::TableSetupColumn(ICON_LC_ASTERISK, ImGuiTableColumnFlags_WidthFixed, iconColW);
             ImGui::TableSetupColumn("Label");
 
             // CUSTOM header row (see the flags comment): each cell is a
@@ -1151,6 +1153,12 @@ namespace Arcane::Editor
                                                  : "  " ICON_LC_CHEVRON_DOWN;
                 text += "###hdr";
                 text += static_cast<char>('0' + col);
+                // Icon columns center their glyph in the square slot; Label
+                // stays left-aligned like any text header.
+                const bool iconCol = (col < 2);
+                if (iconCol)
+                    ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign,
+                                        ImVec2(0.5f, 0.0f));
                 if (ImGui::Selectable(text.c_str(), false))
                 {
                     if (state.sort.column != id)
@@ -1160,6 +1168,8 @@ namespace Arcane::Editor
                     else
                         state.sort = OutlinerSort{};   // third click: tree order
                 }
+                if (iconCol)
+                    ImGui::PopStyleVar();
                 // UE separates its column headers with vertical dividers
                 // (SHeaderRow) while the ROWS stay line-free -- so the line
                 // is drawn here, header-only, at the cell boundary, rather
@@ -1222,6 +1232,13 @@ namespace Arcane::Editor
                 if (row.hidden || rowSelected || rowHovered)
                 {
                     const char* icon = row.hidden ? ICON_LC_EYE_OFF : ICON_LC_EYE;
+                    // Center the glyph in the square icon slot (the header
+                    // centers via SelectableTextAlign); the offset cursor is
+                    // consumed by the very next item, per the imgui.cpp:11544
+                    // trailing-SetCursorPos rule.
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                        std::max(0.0f, (ImGui::GetTextLineHeight() -
+                                        ImGui::CalcTextSize(icon).x) * 0.5f));
                     if (row.hidden)
                         ImGui::PushStyleColor(ImGuiCol_Text,
                             ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -1271,6 +1288,10 @@ namespace Arcane::Editor
                 ImGui::TableSetColumnIndex(1);
                 if (row.modified)
                 {
+                    // Same square-slot centering as the eye.
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                        std::max(0.0f, (ImGui::GetTextLineHeight() -
+                                        ImGui::CalcTextSize(ICON_LC_ASTERISK).x) * 0.5f));
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
                     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
                     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
