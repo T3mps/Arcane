@@ -19,7 +19,6 @@
 #include <Astra/Serialization/BinaryReader.hpp>
 
 #include <cstddef>
-#include <optional>
 #include <vector>
 
 #ifndef HOTRELOAD_STEP
@@ -36,10 +35,17 @@ namespace
     Arcane::EngineContext* g_ctx = nullptr;
     Astra::Entity          g_pulse{};
 
-    // Heap-held ownership handle for this module's component types. Reset in
-    // Shutdown (which the host calls BEFORE unmapping) -- never a DLL static:
-    // a static's destructor would run under the loader lock during FreeLibrary.
-    std::optional<Astra::ComponentModule> g_module;
+    // Heap-held ownership handle for this module's component types, deleted in
+    // Shutdown (which the host calls BEFORE unmapping). A RAW pointer on
+    // purpose, per the ComponentModule.hpp contract's "NEVER a plugin-side
+    // static/global object": ANY static whose destructor does live cleanup --
+    // a ComponentModule by value, an optional, a unique_ptr -- runs that
+    // destructor during FreeLibrary at DLL_PROCESS_DETACH, under the loader
+    // lock, taking the registration mutex and possibly running meta thunks
+    // there. A raw pointer has no destructor, so a skipped Shutdown degrades
+    // to the contract's documented forget semantics: the handle leaks and the
+    // host's UnregisterModuleRange net catches the descriptor half.
+    Astra::ComponentModule* g_module = nullptr;
 
     void CacheHandle(Astra::Registry& reg)
     {
@@ -59,9 +65,14 @@ extern "C"
     {
         Astra::SetTypeContext(ctx->typeContext);          // 1. shared context in THIS module
         g_ctx = ctx;
-        g_module = Astra::ComponentModule::Open(ctx->engine->Components(), "HotReloadPlugin");
+        g_module = new Astra::ComponentModule(
+            Astra::ComponentModule::Open(ctx->engine->Components(), "HotReloadPlugin"));
         if (!*g_module)
+        {
+            delete g_module;                               // empty handle: safe to destroy here (still mapped)
+            g_module = nullptr;
             return false;                                  // SetTypeContext above makes this unreachable; fail loudly if not
+        }
         g_module->Register<Pulse>();                       // descriptors + meta -> THIS image
 
         Astra::Registry& reg = ctx->engine->Registry();
@@ -73,7 +84,7 @@ extern "C"
         return true;
     }
 
-    GAME_API void GamePlugin_Shutdown() { g_module.reset(); g_pulse = {}; }
+    GAME_API void GamePlugin_Shutdown() { delete g_module; g_module = nullptr; g_pulse = {}; }
 
     GAME_API void GamePlugin_FixedUpdate(double)
     {
