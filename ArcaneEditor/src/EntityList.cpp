@@ -45,7 +45,8 @@ namespace Arcane::Editor
     std::vector<OutlinerRow> BuildOutlinerRows(Astra::Registry& reg,
                                                std::string_view filter,
                                                const OutlinerSort& sort,
-                                               const std::unordered_set<std::uint64_t>& collapsed)
+                                               const std::unordered_set<std::uint64_t>& collapsed,
+                                               const OutlinerModified& modified)
     {
         std::vector<OutlinerRow> rows;
 
@@ -56,6 +57,7 @@ namespace Arcane::Editor
             r.depth = depth;
             r.label = Edit::DisplayName(reg, e);
             r.hidden = reg.HasComponent<Hidden>(e);
+            r.modified = modified.Contains(static_cast<std::uint64_t>(e.GetValue()));
             r.childCount = reg.GetChildCount(e);
             r.hasChildren = r.childCount > 0;
             return r;
@@ -79,12 +81,16 @@ namespace Arcane::Editor
                             return sort.ascending ? (ha < hb) : (hb < ha);
                         }
                         case OutlinerSort::Column::Modified:
-                            // Every key is equal until the OutlinerRow::modified
-                            // seam is wired (see EntityList.hpp) -- all-equal
-                            // under a stable sort keeps hierarchy order. The
-                            // case exists so the wiring pass only swaps in the
-                            // real probe.
-                            return false;
+                        {
+                            // Ascending = clean before modified; ties keep
+                            // hierarchy order via the stable sort. With no
+                            // modified input every key is equal -- a no-op.
+                            const bool ma = modified.Contains(
+                                static_cast<std::uint64_t>(a.GetValue()));
+                            const bool mb = modified.Contains(
+                                static_cast<std::uint64_t>(b.GetValue()));
+                            return sort.ascending ? (ma < mb) : (mb < ma);
+                        }
                         case OutlinerSort::Column::Label:
                         default:
                         {

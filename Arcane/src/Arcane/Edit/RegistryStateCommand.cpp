@@ -54,7 +54,8 @@ namespace Arcane
     bool ApplyRegistryMutation(CommandStack& stack, std::string label,
                                const RegistryStateCommand::SnapshotFn& snapshot,
                                const RegistryStateCommand::RestoreFn& restore,
-                               FunctionRef<bool()> mutate)
+                               FunctionRef<bool()> mutate,
+                               const std::vector<Astra::Entity>* touched)
     {
         // A structural memento pushed while a gesture is open would ride
         // Cancel()'s discard-without-revert path, stranding the (already
@@ -75,8 +76,12 @@ namespace Arcane
         }
         if (!mutate())
             return false;   // no-op edit: no undo step
+        // `touched` is read here, AFTER mutate() -- see the header: a create
+        // appends its new entity ids from inside the mutate lambda.
         stack.Push(std::make_unique<RegistryStateCommand>(
-            std::move(label), snapshot, restore, std::move(before)));
+                       std::move(label), snapshot, restore, std::move(before)),
+                   touched ? std::span<const Astra::Entity>(*touched)
+                           : std::span<const Astra::Entity>{});
         return true;
     }
 }

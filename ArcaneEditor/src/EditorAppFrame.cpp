@@ -1648,7 +1648,8 @@ namespace Arcane::Editor
                           { return reg->IsValid(e); });
         m_editBinding.editMode = !m_play.IsPlaying();
         Arcane::Editor::DrawOutlinerPanel(m_runtime->Registry(), m_selection,
-                                          *m_undo, m_editBinding, m_outliner);
+                                          *m_undo, m_editBinding, m_outliner,
+                                          m_scene.SavedStateId());
         Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo,
                                            m_editBinding, m_runtime->CurrentProject(),
                                            m_inspector, &m_inspectorServices);

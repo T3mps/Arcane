@@ -23,6 +23,8 @@
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Util/FunctionRef.hpp>
 
+#include <Astra/Entity/Entity.hpp>   // ApplyRegistryMutation's `touched` tags
+
 #include <cstddef>
 #include <functional>
 #include <span>
@@ -80,8 +82,14 @@ namespace Arcane
     // mutate() must be all-or-nothing: it must NOT partially mutate the
     // registry and then return false -- a false return means "nothing
     // changed" and skips the undo push entirely.
+    // `touched`: the entities this edit affects, tagged onto the pushed step
+    // for CommandStack::TouchedSinceState (a registry memento is opaque bytes,
+    // so only the call site can name them). A POINTER read AFTER mutate()
+    // returns, so a mutate that CREATES entities can append the new ids to
+    // the same vector from inside its lambda. Null = tags nothing.
     ARCANE_API bool ApplyRegistryMutation(CommandStack& stack, std::string label,
                                           const RegistryStateCommand::SnapshotFn& snapshot,
                                           const RegistryStateCommand::RestoreFn& restore,
-                                          FunctionRef<bool()> mutate);
+                                          FunctionRef<bool()> mutate,
+                                          const std::vector<Astra::Entity>* touched = nullptr);
 }

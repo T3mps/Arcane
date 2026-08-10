@@ -870,13 +870,18 @@ namespace Arcane::Editor
             return b.editMode && !undo.InTransaction();
         }
 
+        // `touched` names the entities the edit affects, for the Outliner's
+        // unsaved asterisks (CommandStack::TouchedSinceState) -- read AFTER
+        // mutate() runs, so creates can append their new ids from inside the
+        // lambda (ApplyRegistryMutation's contract).
         bool ApplyStructural(Arcane::CommandStack& undo, const SceneEditBinding& b,
-                             std::string label, Arcane::FunctionRef<bool()> mutate)
+                             std::string label, Arcane::FunctionRef<bool()> mutate,
+                             const std::vector<Astra::Entity>* touched = nullptr)
         {
             if (!b.editMode)
                 return false;
             return Arcane::ApplyRegistryMutation(undo, std::move(label),
-                                                 b.snapshot, b.restore, mutate);
+                                                 b.snapshot, b.restore, mutate, touched);
         }
 
         // `current` is Identity::name RAW -- never Edit::DisplayName, which
@@ -904,7 +909,8 @@ namespace Arcane::Editor
             if (doomed.empty())
                 return;
             if (ApplyStructural(undo, binding, "Delete",
-                    [&] { return Arcane::Edit::DeleteEntities(registry, doomed) > 0; }))
+                    [&] { return Arcane::Edit::DeleteEntities(registry, doomed) > 0; },
+                    &doomed))
                 sel.Clear();
         }
 
@@ -987,14 +993,15 @@ namespace Arcane::Editor
             {
                 const Astra::ComponentDescriptor& desc = *chosen;
                 ApplyStructural(undo, binding, "Add Component",
-                    [&] { return Arcane::Edit::AddComponent(registry, selection, desc) > 0; });
+                    [&] { return Arcane::Edit::AddComponent(registry, selection, desc) > 0; },
+                    &selection);
             }
         }
     }
 
     void DrawOutlinerPanel(Astra::Registry& registry, SelectionContext& sel,
                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
-                           OutlinerState& state)
+                           OutlinerState& state, std::uint64_t savedStateId)
     {
         ImGui::Begin("Outliner");
 
@@ -1041,8 +1048,20 @@ namespace Arcane::Editor
         ImGui::InputTextWithHint("##outliner_search", ICON_LC_SEARCH " Filter",
                                  state.search, sizeof(state.search));
 
+        // Per-entity unsaved markers (the asterisk column): the CommandStack
+        // diff between the scene's save baseline and now. An unreachable
+        // baseline (undone past the save point then diverged, or evicted)
+        // honestly marks EVERYTHING possibly-modified via `all`.
+        const Arcane::CommandStack::TouchedSince touchedSince =
+            undo.TouchedSinceState(savedStateId);
+        std::unordered_set<std::uint64_t> touchedIds;
+        touchedIds.reserve(touchedSince.entities.size());
+        for (Astra::Entity e : touchedSince.entities)
+            touchedIds.insert(static_cast<std::uint64_t>(e.GetValue()));
+        const OutlinerModified modified{ &touchedIds, !touchedSince.baselineFound };
+
         const std::vector<OutlinerRow> rows =
-            BuildOutlinerRows(registry, state.search, state.sort, state.collapsed);
+            BuildOutlinerRows(registry, state.search, state.sort, state.collapsed, modified);
 
         // The rename target can stop being drawable two ways: a structural
         // undo/redo destroys it, or it simply leaves the visible set (its
@@ -1209,8 +1228,14 @@ namespace Arcane::Editor
                         {
                             const Astra::Entity e = row.entity;
                             const bool hide = !row.hidden;
+                            // Recursive toggle -> the whole subtree is the
+                            // touched set for the unsaved markers.
+                            std::vector<Astra::Entity> targets{ e };
+                            registry.GetRelations(e).ForEachDescendant(
+                                [&](Astra::Entity d, std::size_t) { targets.push_back(d); });
                             ApplyStructural(undo, binding, hide ? "Hide" : "Show",
-                                [&] { return Arcane::Edit::SetHiddenRecursive(registry, e, hide) > 0; });
+                                [&] { return Arcane::Edit::SetHiddenRecursive(registry, e, hide) > 0; },
+                                &targets);
                         }
                         ImGui::PopStyleVar(2);
                         ImGui::PopStyleColor();
@@ -1417,9 +1442,12 @@ namespace Arcane::Editor
                         {
                             Astra::Entity created = Astra::Entity::Invalid();
                             const Astra::Entity parent = row.entity;
+                            std::vector<Astra::Entity> made;
                             if (ApplyStructural(undo, binding, "Create Entity",
                                     [&] { created = Arcane::Edit::CreateEntityInScene(registry, parent);
-                                          return created.IsValid(); }))
+                                          if (created.IsValid()) made.push_back(created);
+                                          return created.IsValid(); },
+                                    &made))
                             {
                                 state.collapsed.erase(
                                     static_cast<std::uint64_t>(parent.GetValue()));
@@ -1476,7 +1504,8 @@ namespace Arcane::Editor
                                                       : std::vector<Astra::Entity>{ dragged };
                             const Astra::Entity target = row.entity;
                             ApplyStructural(undo, binding, "Reparent",
-                                [&] { return Arcane::Edit::Reparent(registry, moving, target) > 0; });
+                                [&] { return Arcane::Edit::Reparent(registry, moving, target) > 0; },
+                                &moving);
                         }
                         ImGui::EndDragDropTarget();
                     }
@@ -1515,7 +1544,8 @@ namespace Arcane::Editor
                                               : std::vector<Astra::Entity>{ dragged };
                     ApplyStructural(undo, binding, "Unparent",
                         [&] { return Arcane::Edit::Reparent(registry, moving,
-                                                            Astra::Entity::Invalid()) > 0; });
+                                                            Astra::Entity::Invalid()) > 0; },
+                        &moving);
                 }
                 ImGui::EndDragDropTarget();
             }
@@ -1536,10 +1566,13 @@ namespace Arcane::Editor
             if (ImGui::MenuItem("New Entity"))
             {
                 Astra::Entity created = Astra::Entity::Invalid();
+                std::vector<Astra::Entity> made;
                 if (ApplyStructural(undo, binding, "Create Entity",
                         [&] { created = Arcane::Edit::CreateEntityInScene(registry,
                                             Astra::Entity::Invalid());
-                              return created.IsValid(); }))
+                              if (created.IsValid()) made.push_back(created);
+                              return created.IsValid(); },
+                        &made))
                     sel.Select(created);
             }
             ImGui::EndPopup();
@@ -2045,7 +2078,8 @@ namespace Arcane::Editor
             const std::vector<Astra::Entity> targets = sel.Entities();
             const Astra::ComponentDescriptor& desc = *pendingRemove;
             ApplyStructural(undo, binding, "Remove Component",
-                [&] { return Arcane::Edit::RemoveComponent(registry, targets, desc) > 0; });
+                [&] { return Arcane::Edit::RemoveComponent(registry, targets, desc) > 0; },
+                &targets);
         }
 
         // Bottom of the panel, full width -- the UE/Unity placement.

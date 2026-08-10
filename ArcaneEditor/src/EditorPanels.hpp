@@ -212,9 +212,12 @@ namespace Arcane::Editor
         // popup's scope.
         bool addComponentPending = false;
     };
+    // `savedStateId` is the scene's save baseline (SceneSession::SavedStateId)
+    // -- the panel derives the per-entity unsaved asterisks from it via
+    // CommandStack::TouchedSinceState.
     void DrawOutlinerPanel(Astra::Registry& registry, SelectionContext& sel,
                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
-                           OutlinerState& state);
+                           OutlinerState& state, std::uint64_t savedStateId);
 
     // App-level effect the Inspector panel triggers but does not own. UNLIKE
     // AssetBrowserActions -- which only RETURNS a request and defers every

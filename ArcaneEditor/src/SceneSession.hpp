@@ -58,6 +58,9 @@ namespace Arcane::Editor
         {
             m_savedStateId = stack.StateId();
         }
+        // The recorded save baseline, for per-entity dirty queries
+        // (CommandStack::TouchedSinceState -- the Outliner's asterisks).
+        [[nodiscard]] std::uint64_t SavedStateId() const noexcept { return m_savedStateId; }
 
         // ---- retargeting -------------------------------------------------
         // After a successful save-as or open: adopt the file and go clean.

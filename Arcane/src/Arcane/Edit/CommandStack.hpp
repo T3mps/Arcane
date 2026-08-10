@@ -15,6 +15,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -85,7 +86,15 @@ namespace Arcane
         // becomes its own one-command undo step labeled by cmd->Label(). This is
         // the non-component edit path -- material param edits, and later graph
         // edits, share the ONE undo history through it.
-        void Push(std::unique_ptr<ICommand> command);
+        //
+        // `touched`: the scene entities this command's edit affected, for
+        // TouchedSinceState below. Generic commands cannot be introspected
+        // (RegistryStateCommand is opaque registry bytes), so the CALLER names
+        // them -- ApplyRegistryMutation threads them from the structural call
+        // sites, which know their semantic targets. Empty = touches no
+        // entities (correct for asset edits like material params).
+        void Push(std::unique_ptr<ICommand> command,
+                  std::span<const Astra::Entity> touched = {});
 
         void Undo();
         void Redo();
@@ -114,11 +123,33 @@ namespace Arcane
             return m_undo.empty() ? 0u : m_undo.back().id;
         }
 
+        // The entities whose state differs from `savedStateId` (the value
+        // StateId() returned when the caller saved) -- the per-entity form of
+        // the StateId dirty test, and the source for the Outliner's unsaved
+        // asterisks. Field edits contribute automatically (Commit records the
+        // entities of every CHANGED snapshot); structural edits contribute
+        // what their call sites tagged through Push's `touched`.
+        struct TouchedSince
+        {
+            // False when the baseline is UNREACHABLE from the current state:
+            // its transaction was evicted by the depth cap, or the user
+            // undid past the save point and then committed new work (which
+            // clears redo). The per-entity answer is then unknowable, and
+            // callers should treat EVERY entity as possibly modified -- the
+            // same safe direction StateId's eviction caveat takes.
+            bool baselineFound = false;
+            std::vector<Astra::Entity> entities;   // deduplicated, unordered
+        };
+        [[nodiscard]] TouchedSince TouchedSinceState(std::uint64_t savedStateId) const;
+
     private:
         struct Transaction
         {
             std::string label;
             std::vector<std::unique_ptr<ICommand>> commands;
+            // Scene entities this step changed (TouchedSinceState's unit):
+            // the changed-snapshot entities plus anything Push tagged.
+            std::vector<Astra::Entity> touched;
             // Identifies the STATE this transaction produced. Stamped from
             // m_nextId (the same monotonic generator TransactionId uses), so an
             // id is never re-minted and a retired state can never be mistaken
@@ -145,6 +176,7 @@ namespace Arcane
         std::string          m_openLabel;
         std::vector<Pending> m_pending;
         std::vector<std::unique_ptr<ICommand>> m_pendingGeneric;   // Push while open
+        std::vector<Astra::Entity>             m_pendingTouched;   // Push's tags while open
     };
 #if defined(_MSC_VER)
 #pragma warning(pop)

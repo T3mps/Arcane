@@ -919,3 +919,71 @@ TEST_CASE("RenameWithUndo: Invalid for a dead entity and for a missing Identity"
         CHECK_FALSE(stack.InTransaction());
     }
 }
+
+TEST_CASE("TouchedSinceState: the per-entity diff against a saved baseline", "[edit]")
+{
+    // Registry-free path on purpose: Push with `touched` tags exercises the
+    // undo-side walk, the redo-side walk, and the diverged case without any
+    // component reflection in play. (Commit's changed-snapshot collection is
+    // implied by the ComponentEditCommand tests above -- the entities it
+    // records are exactly the commands it pushes.)
+    struct Nop final : Arcane::ICommand
+    {
+        void Undo() override {}
+        void Redo() override {}
+        const char* Label() const override { return "nop"; }
+    };
+    auto reg = MakeReg();
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    auto push = [&stack](std::initializer_list<Astra::Entity> touched)
+    {
+        const std::vector<Astra::Entity> t(touched);
+        stack.Push(std::make_unique<Nop>(), t);
+    };
+    const Astra::Entity e1(static_cast<Astra::Entity::StorageType>(1));
+    const Astra::Entity e2(static_cast<Astra::Entity::StorageType>(2));
+    const Astra::Entity e3(static_cast<Astra::Entity::StorageType>(3));
+
+    // Clean at the empty-stack baseline.
+    auto r0 = stack.TouchedSinceState(stack.StateId());
+    CHECK(r0.baselineFound);
+    CHECK(r0.entities.empty());
+
+    push({ e1 });
+    const std::uint64_t saved = stack.StateId();   // "the user saved here"
+    push({ e2 });
+    push({ e2, e3 });
+
+    // Above the baseline: e2 deduplicated across two steps, plus e3.
+    auto r1 = stack.TouchedSinceState(saved);
+    REQUIRE(r1.baselineFound);
+    CHECK(r1.entities.size() == 2);
+
+    // Undo back to the save point: clean again.
+    stack.Undo();
+    stack.Undo();
+    auto r2 = stack.TouchedSinceState(saved);
+    CHECK(r2.baselineFound);
+    CHECK(r2.entities.empty());
+
+    // Undo PAST the save point: the baseline sits on the redo side, and the
+    // undone step's entities are the diff (its edit is IN the saved state,
+    // absent from the current one).
+    stack.Undo();
+    auto r3 = stack.TouchedSinceState(saved);
+    REQUIRE(r3.baselineFound);
+    REQUIRE(r3.entities.size() == 1);
+    CHECK(r3.entities[0] == e1);
+
+    // Diverge: a new commit clears redo, so the baseline becomes unreachable
+    // -- the honest answer is "unknown", not a guess.
+    push({ e3 });
+    auto r4 = stack.TouchedSinceState(saved);
+    CHECK_FALSE(r4.baselineFound);
+    CHECK(r4.entities.empty());
+
+    // A never-saved scene (baseline 0): the whole stack is the diff.
+    auto r5 = stack.TouchedSinceState(0);
+    REQUIRE(r5.baselineFound);
+    CHECK(r5.entities.size() == 1);
+}

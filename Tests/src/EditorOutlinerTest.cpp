@@ -164,10 +164,8 @@ TEST_CASE("Visibility sort splits hidden from visible; Modified is a stable no-o
     rows = BuildOutlinerRows(w.reg, "", byVisDesc, kNoneCollapsed);
     CHECK(rows[0].entity == b);
 
-    // Modified: OutlinerRow::modified is an unwired seam (EntityList.hpp), so
-    // every key compares equal and the stable sort must keep hierarchy order
-    // EXACTLY -- this pin is what makes wiring the seam later a visible,
-    // test-breaking change rather than a silent one.
+    // Modified with NO modified input: every key compares equal and the
+    // stable sort keeps hierarchy order exactly.
     OutlinerSort byMod{ OutlinerSort::Column::Modified, true };
     rows = BuildOutlinerRows(w.reg, "", byMod, kNoneCollapsed);
     REQUIRE(rows.size() == 3);
@@ -175,6 +173,37 @@ TEST_CASE("Visibility sort splits hidden from visible; Modified is a stable no-o
     CHECK(rows[1].entity == b);
     CHECK(rows[2].entity == c);
     CHECK_FALSE(rows[0].modified);
+}
+
+TEST_CASE("OutlinerModified marks rows and drives the Modified sort", "[editor][outliner]")
+{
+    using Arcane::Editor::OutlinerModified;
+    World w;
+    Astra::Entity a = w.Make("A");
+    Astra::Entity b = w.Make("B");
+    Astra::Entity c = w.Make("C");
+
+    std::unordered_set<std::uint64_t> dirty{ static_cast<std::uint64_t>(b.GetValue()) };
+    const OutlinerModified mod{ &dirty, false };
+
+    auto rows = BuildOutlinerRows(w.reg, "", kNoSort, kNoneCollapsed, mod);
+    REQUIRE(rows.size() == 3);
+    CHECK_FALSE(rows[0].modified);
+    CHECK(rows[1].modified);
+    CHECK_FALSE(rows[2].modified);
+
+    // Descending = modified first; the clean tie keeps creation order.
+    OutlinerSort byModDesc{ OutlinerSort::Column::Modified, false };
+    rows = BuildOutlinerRows(w.reg, "", byModDesc, kNoneCollapsed, mod);
+    CHECK(rows[0].entity == b);
+    CHECK(rows[1].entity == a);
+    CHECK(rows[2].entity == c);
+
+    // `all` (unreachable save baseline): every row is possibly modified.
+    const OutlinerModified all{ nullptr, true };
+    rows = BuildOutlinerRows(w.reg, "", kNoSort, kNoneCollapsed, all);
+    CHECK(rows[0].modified);
+    CHECK(rows[2].modified);
 }
 
 TEST_CASE("A matching root needs no ancestors and is not dimmed", "[editor][outliner]")
