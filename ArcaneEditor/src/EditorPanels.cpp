@@ -1145,16 +1145,26 @@ namespace Arcane::Editor
                 ImGui::TableNextRow();
                 ++tableRow;
                 const bool rowSelected = sel.Contains(row.entity);
+                const bool rowHovered  = (hoveredRow == tableRow);
                 if (rowSelected)
                     ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
                         ImGui::GetColorU32(ImGuiCol_Header));
-                else if (hoveredRow == tableRow)
+                else if (rowHovered)
                     ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
                         ImGui::GetColorU32(ImGuiCol_HeaderHovered));
                 ImGui::PushID(static_cast<int>(row.entity.GetValue()));
 
                 // -- column 0: the eye --------------------------------------
+                // ON DEMAND (UE's gutter: SVisibilityWidget::GetBrush swaps
+                // brushes on visible x hovered, SceneOutlinerGutter.cpp:
+                // 108-121): a HIDDEN entity always wears its closed eye --
+                // that state must stay readable at a glance -- while visible
+                // entities only show one when the row is hovered or selected.
+                // To click the eye you must hover the row, so the button is
+                // always there when reachable; rowHovered carries
+                // TableGetHoveredRow's one-frame lag, invisible here too.
                 ImGui::TableSetColumnIndex(0);
+                if (row.hidden || rowSelected || rowHovered)
                 {
                     const char* icon = row.hidden ? ICON_LC_EYE_OFF : ICON_LC_EYE;
                     if (row.hidden)
