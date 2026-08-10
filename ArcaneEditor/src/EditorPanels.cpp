@@ -571,7 +571,7 @@ namespace Arcane::Editor
 
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
                                           bool& gizmoEnabled, Arcane::GizmoMode& mode,
-                                          Arcane::GizmoSpace& space)
+                                          Arcane::GizmoSpace& space, bool showToolOverlay)
     {
         // Stateless icon-button helpers (mirrors the toolbar's).
         auto iconBtn = [](const char* icon, const char* id, const char* tip) -> bool
@@ -612,7 +612,11 @@ namespace Arcane::Editor
         // UE5-style transform-tool overlay at the top-right of the viewport image:
         // Select (no gizmo) / Move / Rotate / Scale + Local-World. Drawn over the
         // image; a click on it changes the tool and must NOT also pick an entity.
+        // Hidden in Play mode (showToolOverlay=false): the game owns the viewport
+        // there, and with the overlay gone overlayHovered stays false, so clicks
+        // in that corner fall through to the game like anywhere else.
         bool overlayHovered = false;
+        if (showToolOverlay)
         {
             const ImGuiStyle& st = ImGui::GetStyle();
             auto bw = [&](const char* ic){ return ImGui::CalcTextSize(ic).x + st.FramePadding.x * 2.0f; };

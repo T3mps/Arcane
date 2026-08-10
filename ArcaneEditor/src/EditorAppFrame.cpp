@@ -1508,7 +1508,8 @@ namespace Arcane::Editor
     {
         fs.vp = Arcane::Editor::DrawViewportPanel(m_viewport->TextureId(),
                                             m_viewport->Width(), m_viewport->Height(),
-                                            m_gizmoEnabled, m_gizmoMode, m_gizmoSpace);
+                                            m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
+                                            /*showToolOverlay=*/!m_play.IsPlaying());
         m_viewportDockId = fs.vp.dockId;
         m_pendingViewportW = fs.vp.desiredW;
         m_pendingViewportH = fs.vp.desiredH;

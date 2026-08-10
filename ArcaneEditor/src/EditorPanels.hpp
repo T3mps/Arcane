@@ -146,9 +146,12 @@ namespace Arcane::Editor
 
     // Draw the scene texture into a dockable Viewport window; report its rect,
     // hover/focus, and the content-region size the offscreen canvas should match.
+    // showToolOverlay gates the top-right transform-tool buttons: the host passes
+    // false in Play mode, where the game owns the viewport and the edit tools
+    // (like the gizmo they drive) have no business on screen.
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
                                           bool& gizmoEnabled, Arcane::GizmoMode& mode,
-                                          Arcane::GizmoSpace& space);
+                                          Arcane::GizmoSpace& space, bool showToolOverlay);
 
     // The Outliner (replaces the flat Hierarchy panel). Pure row data comes
     // from BuildOutlinerRows (EntityList.hpp, headless-tested); this shell
