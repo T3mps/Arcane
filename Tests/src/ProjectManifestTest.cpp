@@ -184,3 +184,44 @@ TEST_CASE("SetBootScene rewrites only that field, preserving key order", "[proje
 
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("RestampEngineAbi rewrites the nested stamp, preserving engine siblings and key order", "[project]")
+{
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_restamp_abi";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Content", ec);
+
+    // A STALE stamp plus a sibling inside engine{}: the nested edit must
+    // replace abi alone, not rebuild the engine object around it. zzzFuture
+    // proves top-level unknowns survive, same as the SetBootScene case.
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":8,"zzzEngineFuture":true},)"
+        R"("gameModule":"","plugins":[],"bootScene":"","zzzFuture":42})";
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK(proj->Manifest().engineAbi == 8);
+
+    REQUIRE(proj->RestampEngineAbi(12345));
+    CHECK(proj->Manifest().engineAbi == 12345);   // mirrored in memory
+
+    // Re-open from disk: the write landed, and only abi moved.
+    auto again = Arcane::Project::Open(dir);
+    REQUIRE(again.has_value());
+    CHECK(again->Manifest().engineAbi == 12345);
+    {
+        std::ifstream in(dir / "P.arcproj");
+        const nlohmann::ordered_json doc = nlohmann::ordered_json::parse(in);
+        CHECK(doc["engine"]["abi"] == 12345);
+        CHECK(doc["engine"]["zzzEngineFuture"] == true);
+        CHECK(doc["zzzFuture"] == 42);
+        std::vector<std::string> keys;
+        for (auto it = doc.begin(); it != doc.end(); ++it) keys.push_back(it.key());
+        CHECK(keys == std::vector<std::string>{"formatVersion", "name", "engine", "gameModule",
+                                               "plugins", "bootScene", "zzzFuture", "guid"});
+    }
+
+    fs::remove_all(dir, ec);
+}

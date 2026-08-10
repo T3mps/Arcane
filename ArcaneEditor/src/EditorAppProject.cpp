@@ -419,16 +419,41 @@ namespace Arcane::Editor
         }
         if (probe->Manifest().engineAbi != static_cast<int>(Arcane::kGamePluginABIVersion))
         {
-            ARC_ERROR("Open Project: '{}' targets engine ABI {} but this engine is ABI {}",
-                      path.generic_string(), probe->Manifest().engineAbi,
-                      static_cast<int>(Arcane::kGamePluginABIVersion));
-            m_projectOpenError = "'" + path.generic_string() + "' targets engine ABI " +
-                                 std::to_string(probe->Manifest().engineAbi) +
-                                 " but this editor is ABI " +
-                                 std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) +
-                                 ".\nRebuild the project's game DLL against this engine "
-                                 "and update its manifest.";
-            return;
+            // This used to be a hard refusal of the WHOLE project, which locked
+            // the user out of their own data across every engine ABI bump. The
+            // stamp only describes what the game DLL was built against, and the
+            // one genuinely dangerous case -- loading that stale DLL -- is
+            // already refused cleanly by the plugin ABI gate (Plugin.cpp), which
+            // surfaces plugin.abi.mismatch in the Problems panel naming both
+            // versions and the fix.
+            if (probe->Manifest().gameModule.empty() && probe->Manifest().plugins.empty())
+            {
+                // Content-only: no compiled code exists behind the stamp, so the
+                // old number is inert metadata. Self-heal it (guid-self-heal
+                // precedent) and open; best-effort -- an unwritable manifest
+                // must not block the open it does not endanger.
+                // Captured BEFORE the restamp mirrors the new value in memory.
+                const int oldAbi = probe->Manifest().engineAbi;
+                if (probe->RestampEngineAbi(static_cast<int>(Arcane::kGamePluginABIVersion)))
+                    ARC_INFO("Open Project: '{}' upgraded from engine ABI {} to {} (content-only project)",
+                             path.generic_string(), oldAbi,
+                             static_cast<int>(Arcane::kGamePluginABIVersion));
+                else
+                    ARC_WARN("Open Project: '{}' targets engine ABI {} (this editor: {}) and its "
+                             "manifest could not be restamped; opening anyway (content-only)",
+                             path.generic_string(), oldAbi,
+                             static_cast<int>(Arcane::kGamePluginABIVersion));
+            }
+            else
+            {
+                // Module project: open it -- the data is ABI-agnostic. Do NOT
+                // restamp: the manifest must keep telling the Hub the truth
+                // about the DLL until it is actually rebuilt.
+                ARC_WARN("Open Project: '{}' targets engine ABI {} but this editor is ABI {} -- "
+                         "opening; its game module will be refused until rebuilt (see Problems)",
+                         path.generic_string(), probe->Manifest().engineAbi,
+                         static_cast<int>(Arcane::kGamePluginABIVersion));
+            }
         }
 
         // Documents belong to the outgoing project (their texture params and

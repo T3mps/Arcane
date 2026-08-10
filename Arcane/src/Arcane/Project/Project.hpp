@@ -90,6 +90,17 @@ namespace Arcane
         // interrupted write cannot leave a project with a truncated manifest.
         bool SetBootScene(const Guid& id);
 
+        // Re-stamp the manifest's engine.abi (same atomic rewrite as
+        // SetBootScene) and mirror it in memory. The EDITOR calls this to
+        // self-heal a CONTENT-ONLY project across an engine ABI bump -- with
+        // no gameModule there is no compiled code behind the stamp, so the
+        // old number is inert metadata that would otherwise lock the user
+        // out. Callers must NOT restamp a project that has a game module:
+        // the plugin gate compares the DLL's exported ABI, and a restamped
+        // manifest over a stale DLL would make the Hub report compatible
+        // while the module still refuses to load.
+        bool RestampEngineAbi(int abi);
+
     private:
         // Open()/Create() are the only construction paths (they are static members and
         // can reach this). std::optional<Project> in Runtime move-constructs, never

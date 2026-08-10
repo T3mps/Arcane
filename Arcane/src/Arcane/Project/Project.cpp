@@ -7,6 +7,7 @@
 #include <Json.hpp>
 
 #include <fstream>
+#include <functional>
 #include <system_error>
 
 #ifdef _WIN32
@@ -23,16 +24,18 @@ namespace Arcane
 {
     namespace
     {
-        // Read a .arcproj, set ONE field, write it back atomically. Shared by
-        // SetBootScene and the Open-time guid self-heal.
+        // Read a .arcproj, apply ONE edit, write it back atomically. Shared by
+        // SetBootScene, the Open-time guid self-heal, and RestampEngineAbi
+        // (whose target is NESTED -- engine.abi -- which is why this takes an
+        // edit callback rather than a top-level key/value pair).
         //
         // ordered_json, NOT json: the default type is key-sorted, so a
         // read-modify-write would hand back a manifest alphabetised top to
         // bottom for a one-field edit -- a diff nobody asked for in a file that
         // is very likely in git. `who` prefixes the logs so a failure names the
         // operation the user attempted, not this helper.
-        bool RewriteManifestField(const std::filesystem::path& file, const char* key,
-                                  const std::string& value, const char* who)
+        bool RewriteManifest(const std::filesystem::path& file, const char* who,
+                             const std::function<void(nlohmann::ordered_json&)>& edit)
         {
             nlohmann::ordered_json doc;
             try
@@ -56,7 +59,7 @@ namespace Arcane
                 return false;
             }
 
-            doc[key] = value;
+            edit(doc);
 
             // Temp + rename: a half-written .arcproj is a project that will not open.
             const std::filesystem::path tmp = file.string() + ".tmp";
@@ -210,7 +213,8 @@ namespace Arcane
         if (!Guid::FromString(manifest->guid))
         {
             const std::string fresh = Guid::Generate().ToString();
-            if (RewriteManifestField(*manifestFile, "guid", fresh, "Project::Open"))
+            if (RewriteManifest(*manifestFile, "Project::Open",
+                                [&](nlohmann::ordered_json& doc) { doc["guid"] = fresh; }))
                 manifest->guid = fresh;
         }
 
@@ -445,10 +449,28 @@ namespace Arcane
         }
 
         const std::string value = id.IsValid() ? id.ToString() : std::string{};
-        if (!RewriteManifestField(file, "bootScene", value, "SetBootScene"))
+        if (!RewriteManifest(file, "SetBootScene",
+                             [&](nlohmann::ordered_json& doc) { doc["bootScene"] = value; }))
             return false;
 
         m_manifest.bootScene = value;
+        return true;
+    }
+
+    bool Project::RestampEngineAbi(int abi)
+    {
+        const std::filesystem::path file = m_manifestFile;
+        if (file.empty())
+        {
+            ARC_ERROR("RestampEngineAbi: this project has no manifest file on disk");
+            return false;
+        }
+
+        if (!RewriteManifest(file, "RestampEngineAbi",
+                             [&](nlohmann::ordered_json& doc) { doc["engine"]["abi"] = abi; }))
+            return false;
+
+        m_manifest.engineAbi = abi;
         return true;
     }
 
