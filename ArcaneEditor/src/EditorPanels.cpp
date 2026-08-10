@@ -1117,15 +1117,15 @@ namespace Arcane::Editor
         if (ImGui::BeginTable("##outliner_rows", 3, tflags, ImVec2(0.0f, -footerH)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
-            // SQUARE icon slots: one text-line tall IS one text-line wide.
-            // Glyph-advance widths packed the eye and asterisk into a
-            // disjoint clump; GetFrameHeight carries FramePadding.y the
-            // unframed rows don't have and ran too wide. lineH + the cell
-            // padding both sides lands each cell at the row's own height,
-            // and the padding is what visibly separates the three headers.
+            // Icon slots at the standard icon-BUTTON size (GetFrameHeight,
+            // the toolbar buttons' square): line-height slots hugged the
+            // glyphs so tightly that the eye/asterisk headers read as one
+            // clump (2026-08-10 screenshot). Frame-height slots + the cell
+            // padding both sides give each glyph real margins inside its
+            // slot and clear air around the dividers -- UE's proportions.
             // Glyphs are CENTERED in the slot (SelectableTextAlign in the
             // header, a cursor offset in the rows).
-            const float iconColW = ImGui::GetTextLineHeight();
+            const float iconColW = ImGui::GetFrameHeight();
             ImGui::TableSetupColumn(ICON_LC_EYE, ImGuiTableColumnFlags_WidthFixed, iconColW);
             ImGui::TableSetupColumn(ICON_LC_ASTERISK, ImGuiTableColumnFlags_WidthFixed, iconColW);
             ImGui::TableSetupColumn("Label");
@@ -1237,7 +1237,7 @@ namespace Arcane::Editor
                     // consumed by the very next item, per the imgui.cpp:11544
                     // trailing-SetCursorPos rule.
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                        std::max(0.0f, (ImGui::GetTextLineHeight() -
+                        std::max(0.0f, (ImGui::GetFrameHeight() -
                                         ImGui::CalcTextSize(icon).x) * 0.5f));
                     if (row.hidden)
                         ImGui::PushStyleColor(ImGuiCol_Text,
@@ -1290,7 +1290,7 @@ namespace Arcane::Editor
                 {
                     // Same square-slot centering as the eye.
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                        std::max(0.0f, (ImGui::GetTextLineHeight() -
+                        std::max(0.0f, (ImGui::GetFrameHeight() -
                                         ImGui::CalcTextSize(ICON_LC_ASTERISK).x) * 0.5f));
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
                     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
