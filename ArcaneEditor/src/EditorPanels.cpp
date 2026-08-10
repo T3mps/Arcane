@@ -1125,7 +1125,18 @@ namespace Arcane::Editor
                             ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
                     if (binding.editMode)
                     {
+                        // Chrome-free toggle, drawn to be pixel-identical to
+                        // the Play branch's plain text below: transparent
+                        // fill, no frame border (the theme's global 1px
+                        // FrameBorderSize is what boxed the eye), and zero
+                        // FramePadding so the glyph sits at the same x as the
+                        // header's icon. Only the hover/active fill remains,
+                        // hugging the glyph -- so the column stays aligned
+                        // across modes and the button reads as an icon, not
+                        // a button.
                         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+                        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
                         if (ImGui::SmallButton(icon))
                         {
                             const Astra::Entity e = row.entity;
@@ -1133,6 +1144,7 @@ namespace Arcane::Editor
                             ApplyStructural(undo, binding, hide ? "Hide" : "Show",
                                 [&] { return Arcane::Edit::SetHiddenRecursive(registry, e, hide) > 0; });
                         }
+                        ImGui::PopStyleVar(2);
                         ImGui::PopStyleColor();
                     }
                     else
