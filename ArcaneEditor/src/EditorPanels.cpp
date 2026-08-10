@@ -370,14 +370,17 @@ namespace Arcane::Editor
 
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(kTransportGap, st.ItemSpacing.y));
 
-        // Play/Stop toggle (Unity-style): ALWAYS the play glyph, tinted while playing;
-        // clicking the lit (playing) button stops. No icon swap. The tint/toggle is
-        // PIE-ONLY: a SeparateWindow launch is fire-and-forget (the editor takes no
-        // lock on the child and does not track it), so it never lights this button --
-        // Stop would have nothing of its own to restore for a launch it never tracked.
+        // Play/Stop toggle: the glyph SWAPS to a stop square while playing (user
+        // ruling 2026-08-10, reversing the icon-font arc's tint-only Unity model)
+        // and stays tinted, so the lit square reads unambiguously as "this stops".
+        // The swap/tint is PIE-ONLY: a SeparateWindow launch is fire-and-forget
+        // (the editor takes no lock on the child and does not track it), so it
+        // never lights this button -- Stop would have nothing of its own to
+        // restore for a launch it never tracked.
         bool launchStandaloneRequested = false;
         const bool playing = play.IsPlaying();
-        if (iconToggle(ICON_LC_PLAY, "##sim_play", playing, playing ? "Stop" : "Play"))
+        if (iconToggle(playing ? ICON_LC_SQUARE : ICON_LC_PLAY, "##sim_play",
+                       playing, playing ? "Stop" : "Play"))
         {
             if (playing)
                 play.Stop(runtime, plugin);
