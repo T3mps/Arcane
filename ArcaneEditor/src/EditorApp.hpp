@@ -310,6 +310,17 @@ namespace Arcane::Editor
                                               ImGuiTextBuffer* buf);
         void RegisterPlayModeSettings();   // called from Init, beside RegisterLayoutSettings
 
+        // ImGuiSettingsHandler callbacks for m_panelVis ("[EditorPanels]
+        // [Visibility]", one name-keyed line per hideable panel), mirroring
+        // the PlayMode handler above. Registered at the same Init site.
+        void RegisterPanelVisibilitySettings();
+        static void* PanelVisibilitySettingsReadOpen(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
+                                                     const char* name);
+        static void  PanelVisibilitySettingsReadLine(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
+                                                     void* entry, const char* line);
+        static void  PanelVisibilitySettingsWriteAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
+                                                     ImGuiTextBuffer* buf);
+
         // SeparateWindow's launch flow (LaunchStandalone, EditorAppScene.cpp).
         // m_launchModalPending is the edge LaunchStandalone raises when the active
         // scene is not ready to hand to ArcaneRuntime (dirty, OR never saved --

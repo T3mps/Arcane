@@ -24,6 +24,7 @@
 #include "EditorApp.hpp"
 #include "EditorFonts.hpp"
 #include "EditorTheme.hpp"
+#include "PanelRegistry.hpp"
 #include "SpriteDocument.hpp"
 
 #include <Arcane/Host/ProjectBoot.hpp>
@@ -154,6 +155,57 @@ namespace Arcane::Editor
         handler.ReadOpenFn = &EditorApp::PlayModeSettingsReadOpen;
         handler.ReadLineFn = &EditorApp::PlayModeSettingsReadLine;
         handler.WriteAllFn = &EditorApp::PlayModeSettingsWriteAll;
+        ImGui::AddSettingsHandler(&handler);
+    }
+
+    namespace
+    {
+        constexpr const char* kPanelsIniType = "EditorPanels";
+        constexpr const char* kPanelsIniName = "Visibility";
+    }
+
+    void* EditorApp::PanelVisibilitySettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler,
+                                                     const char* name)
+    {
+        return std::strcmp(name, kPanelsIniName) == 0 ? handler->UserData : nullptr;
+    }
+
+    void EditorApp::PanelVisibilitySettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*,
+                                                    void* entry, const char* line)
+    {
+        auto* self = static_cast<EditorApp*>(entry);
+        // Unknown names and junk are ignored (never trust a hand-edited ini);
+        // missing lines keep the default (visible).
+        if (const auto parsed = Arcane::Editor::ParsePanelVisibilityLine(line))
+            self->m_panelVis.visible[static_cast<std::size_t>(parsed->first)] = parsed->second;
+    }
+
+    void EditorApp::PanelVisibilitySettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler,
+                                                    ImGuiTextBuffer* buf)
+    {
+        auto* self = static_cast<EditorApp*>(handler->UserData);
+        buf->reserve(buf->size() + 128);
+        buf->appendf("[%s][%s]\n", handler->TypeName, kPanelsIniName);
+        for (const Arcane::Editor::PanelInfo& p : Arcane::Editor::kPanels)
+            if (!p.permanent)
+                buf->appendf("%s=%d\n", p.name,
+                             self->m_panelVis.visible[static_cast<std::size_t>(p.id)] ? 1 : 0);
+        buf->append("\n");
+    }
+
+    void EditorApp::RegisterPanelVisibilitySettings()
+    {
+        if (ImGui::GetCurrentContext() == nullptr ||
+            ImGui::FindSettingsHandler(kPanelsIniType) != nullptr)
+            return;
+
+        ImGuiSettingsHandler handler;
+        handler.TypeName   = kPanelsIniType;
+        handler.TypeHash   = ImHashStr(kPanelsIniType);
+        handler.UserData   = this;
+        handler.ReadOpenFn = &EditorApp::PanelVisibilitySettingsReadOpen;
+        handler.ReadLineFn = &EditorApp::PanelVisibilitySettingsReadLine;
+        handler.WriteAllFn = &EditorApp::PanelVisibilitySettingsWriteAll;
         ImGui::AddSettingsHandler(&handler);
     }
 
@@ -321,6 +373,7 @@ namespace Arcane::Editor
         // would never see the saved entry.
         ShaderEditorDocument::RegisterLayoutSettings();
         RegisterPlayModeSettings();
+        RegisterPanelVisibilitySettings();
 
         // Does NOT construct or bind the swapchain-backed m_presenter (Task
         // 8c, 2026-07-30 correction): that presenter's ImGui::NewFrame() now
