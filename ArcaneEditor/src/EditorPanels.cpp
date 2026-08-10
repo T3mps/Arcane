@@ -1109,9 +1109,31 @@ namespace Arcane::Editor
                 }
             }
 
+            // Full-width row highlight via the TABLE's row background, not
+            // the tree item's own frame: TreeNodeEx sits AFTER the per-depth
+            // Indent, so its Header fill starts at the indent (childed rows
+            // read half-highlighted) and can never cover the eye column. The
+            // row bg spans every column edge to edge. Priority is SELECTION
+            // FIRST: a selected row stays selection-blue under the cursor --
+            // the item path let HeaderHovered grey paint over it -- and hover
+            // grey only ever shows on unselected rows.
+            // TableGetHoveredRow is imgui_internal (this file already
+            // includes it for DockBuilder) and reports LAST frame's hovered
+            // row -- one frame of hover lag, invisible in practice. Row 0 is
+            // the TableHeadersRow, so data rows count from 1.
+            const int hoveredRow = ImGui::TableGetHoveredRow();
+            int tableRow = 0;
             for (const OutlinerRow& row : rows)
             {
                 ImGui::TableNextRow();
+                ++tableRow;
+                const bool rowSelected = sel.Contains(row.entity);
+                if (rowSelected)
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
+                        ImGui::GetColorU32(ImGuiCol_Header));
+                else if (hoveredRow == tableRow)
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
+                        ImGui::GetColorU32(ImGuiCol_HeaderHovered));
                 ImGui::PushID(static_cast<int>(row.entity.GetValue()));
 
                 // -- column 0: the eye --------------------------------------
@@ -1241,7 +1263,7 @@ namespace Arcane::Editor
                                              | ImGuiTreeNodeFlags_NoTreePushOnOpen;
                     if (!row.hasChildren)
                         flags |= ImGuiTreeNodeFlags_Leaf;
-                    if (sel.Contains(row.entity))
+                    if (rowSelected)
                         flags |= ImGuiTreeNodeFlags_Selected;
 
                     const std::uint64_t value = static_cast<std::uint64_t>(row.entity.GetValue());
@@ -1250,7 +1272,16 @@ namespace Arcane::Editor
                     if (row.dimmed)
                         ImGui::PushStyleColor(ImGuiCol_Text,
                             ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    // The row bg set at TableNextRow owns ALL row
+                    // highlighting; the tree item's own fills are silenced so
+                    // the indent-clipped frame never paints a second, shorter
+                    // highlight over the full-width one. Behavior (click,
+                    // arrow toggle, nav) is untouched.
+                    ImGui::PushStyleColor(ImGuiCol_Header,        ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleColor(ImGuiCol_HeaderActive,  ImVec4(0, 0, 0, 0));
                     const bool nowOpen = ImGui::TreeNodeEx(row.label.c_str(), flags);
+                    ImGui::PopStyleColor(3);
                     if (row.dimmed)
                         ImGui::PopStyleColor();
                     if (row.hasChildren && nowOpen != open)
