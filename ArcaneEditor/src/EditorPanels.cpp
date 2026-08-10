@@ -232,7 +232,12 @@ namespace Arcane::Editor
         // (movable, dockable-over) and editor documents open as tabs beside it
         // -- the UE/Unity shape where asset editors share the main area with
         // the scene.
-        ImGui::DockSpace(dockspaceId, ImVec2(0, 0), ImGuiDockNodeFlags_None);
+        // NoWindowMenuButton kills the tab-bar arrow menu (the one offering
+        // "Hide tab bar") on EVERY node under this dockspace: DockSpace() flags
+        // become the root's SharedFlags each frame, and SharedFlagsInheritMask_
+        // is ~0 so children inherit them (imgui.cpp:18914/20202) -- no per-node
+        // flags, no layout reset needed.
+        ImGui::DockSpace(dockspaceId, ImVec2(0, 0), ImGuiDockNodeFlags_NoWindowMenuButton);
 
         // SCRUB the old lock: NoTabBar/NoCloseButton are SAVED dock flags, so
         // every imgui.ini written while the lock existed still carries them --
@@ -242,6 +247,24 @@ namespace Arcane::Editor
                                    | ImGuiDockNodeFlags_NoCloseButton
                                    | ImGuiDockNodeFlags_NoDockingOverMe
                                    | ImGuiDockNodeFlags_NoUndocking);
+
+        // SCRUB HiddenTabBar the same way, on every node under the dockspace: a
+        // tab bar hidden through the now-removed arrow menu in an earlier session
+        // is a SAVED flag too, and with the menu gone there would be no way back.
+        // Floating windows are separate root nodes, not under this dockspace, so
+        // their single-window look is untouched.
+        if (ImGuiDockNode* root = ImGui::DockBuilderGetNode(dockspaceId))
+        {
+            std::vector<ImGuiDockNode*> stack{ root };
+            while (!stack.empty())
+            {
+                ImGuiDockNode* n = stack.back();
+                stack.pop_back();
+                n->LocalFlags &= ~ImGuiDockNodeFlags_HiddenTabBar;
+                if (n->ChildNodes[0]) stack.push_back(n->ChildNodes[0]);
+                if (n->ChildNodes[1]) stack.push_back(n->ChildNodes[1]);
+            }
+        }
 
         ImGui::End();
     }
