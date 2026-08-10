@@ -60,79 +60,45 @@ namespace Arcane::Editor
         ImGui::Begin("EditorDockHost", nullptr, flags);
         ImGui::PopStyleVar(3);
 
-        // Editor menu bar. File's project/scene/material items all land in `requests`;
-        // File -> Exit and Edit's Cut/Copy/Paste are still placeholders. Edit's
-        // Undo/Redo drive the CommandStack; Preferences is a leaf item that will open a
-        // settings window later.
+        // Editor menu bar (layout ratified 2026-08-10; the unwired items are
+        // VISUAL for now -- the wiring pass follows). File's scene/project
+        // items land in `requests`; Save Project / Exit and Edit's clipboard/
+        // selection items are placeholders in the file's established style
+        // (enabled no-ops). Edit's Undo/Redo drive the CommandStack;
+        // Preferences is a leaf item that will open a settings window later.
         if (ImGui::BeginMenuBar())
         {
             if (ImGui::BeginMenu("File"))
             {
                 requests.fileMenuOpen = true;
-                if (ImGui::MenuItem("Open Project...")) requests.openProject = true;
-
-                // Open Recent: the Hub's shared list, already filtered to what
-                // THIS editor's ABI can open (see RecentProjects.hpp). Greyed
-                // when there is nothing at all to show, rather than opening onto
-                // an empty submenu.
-                const bool anyRecents =
-                    recents && (!recents->visible.empty() || recents->hiddenForAbi > 0);
-                if (ImGui::BeginMenu("Open Recent", anyRecents))
-                {
-                    for (const RecentProject& r : recents->visible)
-                    {
-                        if (ImGui::MenuItem(r.name.c_str()))
-                            requests.openRecentPath = r.path;
-                        // Full path on hover. The name alone cannot separate two
-                        // projects that share a folder name, which is exactly why
-                        // Unreal puts the absolute path in this tooltip
-                        // (FRecentProjectsMenu::MakeMenu).
-                        if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("%s", r.path.c_str());
-                    }
-
-                    // Never leave the list silently short: the Hub shows every
-                    // project across every engine version, so without this line
-                    // an ABI-filtered absence is indistinguishable from a broken
-                    // recents list. Disabled -- it is a statement, not an action.
-                    if (recents->hiddenForAbi > 0)
-                    {
-                        if (!recents->visible.empty())
-                            ImGui::Separator();
-                        char hidden[128];
-                        std::snprintf(hidden, sizeof(hidden),
-                                      "%zu project%s hidden (built for another engine version)",
-                                      recents->hiddenForAbi,
-                                      recents->hiddenForAbi == 1 ? "" : "s");
-                        ImGui::BeginDisabled();
-                        ImGui::MenuItem(hidden);
-                        ImGui::EndDisabled();
-                    }
-                    ImGui::EndMenu();
-                }
-                ImGui::Separator();
                 if (ImGui::MenuItem("New Scene", "Ctrl+N")) requests.newScene = true;
-                if (ImGui::MenuItem("Open Scene...", "Ctrl+O")) requests.openScene = true;
-                ImGui::Separator();
-                if (ImGui::MenuItem("New Material...")) requests.newMaterial = true;
-                if (ImGui::MenuItem("Open Material...")) requests.openMaterial = true;
+                if (ImGui::MenuItem("Open Scene", "Ctrl+O")) requests.openScene = true;
+                // Visual-only until scene recents exist (UE's "Recent Levels"
+                // shape). The old project-recents submenu is parked, not
+                // dead: `recents` still arrives and the wiring pass decides
+                // where the Hub's shared list resurfaces.
+                if (ImGui::BeginMenu("Open Recent Scene", false))
+                    ImGui::EndMenu();
                 ImGui::Separator();
                 // Disabled during Play: the authored scene is the pre-Play snapshot,
                 // and the live registry is play-time mutation that PlaySession::Stop
                 // exists to discard, so saving it would persist garbage. Both items
                 // carry the same tooltip because IsItemHovered names the LAST
                 // submitted item -- one call after the pair would explain the greying
-                // of "Save Scene As..." only, and "Save Scene" (the item carrying the
-                // Ctrl+S hint) is the one users reach for.
-                if (ImGui::MenuItem(sceneDirty ? "Save Scene *" : "Save Scene",
+                // of "Save As..." only, and "Save" (the item carrying the Ctrl+S
+                // hint) is the one users reach for.
+                if (ImGui::MenuItem(sceneDirty ? "Save *" : "Save",
                                     "Ctrl+S", false, !playing))
                     requests.saveScene = true;
                 if (playing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("Stop play mode to save the scene");
-                if (ImGui::MenuItem("Save Scene As...", nullptr, false, !playing))
+                if (ImGui::MenuItem("Save As...", nullptr, false, !playing))
                     requests.saveSceneAs = true;
                 if (playing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("Stop play mode to save the scene");
+                ImGui::Separator();
+                if (ImGui::MenuItem("Open Project")) requests.openProject = true;
+                ImGui::MenuItem("Save Project");
                 ImGui::Separator();
                 ImGui::MenuItem("Exit");
                 ImGui::EndMenu();
@@ -153,6 +119,31 @@ namespace Arcane::Editor
                 ImGui::MenuItem("Cut");
                 ImGui::MenuItem("Copy");
                 ImGui::MenuItem("Paste");
+                ImGui::MenuItem("Duplicate");
+                // The hints name bindings that already exist (the Outliner's
+                // F2 rename and Delete-key delete); the menu routes join them
+                // in the wiring pass.
+                ImGui::MenuItem("Rename", "F2");
+                ImGui::MenuItem("Delete", "Del");
+                ImGui::Separator();
+                ImGui::MenuItem("Select All");
+                ImGui::MenuItem("Deselect All");
+                ImGui::MenuItem("Invert Selection");
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Assets"))
+            {
+                if (ImGui::BeginMenu("Create"))
+                {
+                    // Moved from File -> New Material... -- same request, so
+                    // the dialog flow behind it is unchanged. Further asset
+                    // types land here as they exist.
+                    if (ImGui::MenuItem("Material...")) requests.newMaterial = true;
+                    ImGui::EndMenu();
+                }
+                // Visual-only until wired to the Assets panel's selection.
+                ImGui::MenuItem("Show in Explorer");
+                ImGui::MenuItem("Copy Path");
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Build"))

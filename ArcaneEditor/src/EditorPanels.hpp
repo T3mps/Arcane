@@ -29,17 +29,24 @@ namespace Arcane::Editor
     // (dialog launches happen at the call site, never inside the menu draw).
     struct MenuRequests
     {
-        bool openProject = false;    // File -> Open Project...   (folder dialog)
-        // File -> Open Recent -> <entry>. Empty = nothing picked this frame.
-        // A path rather than a bool because the submenu carries the choice.
+        bool openProject = false;    // File -> Open Project      (file dialog)
+        // A picked recent-project path. Empty = nothing picked this frame.
+        // A path rather than a bool because a submenu carries the choice.
+        // NO MENU RAISES THIS TODAY: the 2026-08-10 menu restructure parked
+        // the project-recents submenu (File shows a greyed "Open Recent
+        // Scene" placeholder instead); the consumer plumbing is kept intact
+        // for the wiring pass.
         std::string openRecentPath;
         // OUTPUT, not a request: the File menu is open this frame. The app uses
         // it to refresh the Open Recent cache on demand -- rebuilding it every
         // frame would re-read a file and stat every project for a menu almost
         // nobody has open.
         bool fileMenuOpen = false;
-        bool newMaterial = false;    // File -> New Material...   (save dialog; graph-owned)
-        bool openMaterial = false;   // File -> Open Material...  (open-file dialog)
+        bool newMaterial = false;    // Assets -> Create -> Material... (save dialog; graph-owned)
+        // NO MENU RAISES THIS TODAY (the restructure dropped File -> Open
+        // Material...; the Assets panel double-click is the open path). The
+        // request + its dialog handler stay wired for the wiring pass.
+        bool openMaterial = false;
         bool newScene = false;       // File -> New Scene
         bool openScene = false;      // File -> Open Scene...     (open-file dialog)
         bool saveScene = false;      // File -> Save Scene        (Save As when never saved)
@@ -58,7 +65,9 @@ namespace Arcane::Editor
     // (greyed while playing -- the UE model, see the item's own comment --
     // while a build is already running, and when the open project declares no
     // gameModule at all).
-    // `recents` populates File -> Open Recent; null or empty greys the submenu.
+    // `recents` is currently PARKED (the 2026-08-10 restructure removed the
+    // project-recents submenu; see MenuRequests::openRecentPath) -- still
+    // passed so the wiring pass can resurface it without a signature change.
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
                         bool sceneDirty, bool playing,
                         bool buildingModule, bool hasGameModule,
