@@ -1106,6 +1106,7 @@ namespace Arcane::Editor
         Arcane::Editor::BeginDockSpace(*m_undo, menuReq, m_scene.IsDirty(*m_undo),
                                        m_play.IsPlaying(),
                                        m_moduleBuild.Running(), hasGameModule,
+                                       m_panelVis,
                                        &m_recents);
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
         // click (same "panel reports, app performs" split as ViewportPanelResult);
@@ -1114,7 +1115,9 @@ namespace Arcane::Editor
                                                m_plugin ? m_plugin->Vtable() : nullptr, m_playMode,
                                                (uint64_t)(intptr_t)m_toolbarLogo.Get()))
             LaunchStandalone();
-        Arcane::Editor::EndDockSpace();
+        Arcane::Editor::EndDockSpace(menuReq.resetLayout);
+        if (menuReq.resetLayout)
+            m_panelVis = Arcane::Editor::PanelVisibility{};   // reset re-shows everything
         // Bare interactive launch: raise the picker as if the user had clicked
         // File -> Open Project, once. Routed through menuReq (rather than
         // calling the dialog directly) so there is exactly ONE launch site and
@@ -1206,9 +1209,11 @@ namespace Arcane::Editor
         if (menuReq.saveSceneAs || (menuReq.saveScene && m_scene.Path().empty()))
             ShowSceneSaveDialog();
 
-        const Arcane::Editor::AssetBrowserActions browserActions =
-            Arcane::Editor::DrawAssetBrowserPanel(m_assetBrowser,
-                                                  m_runtime->CurrentProject(), m_documents);
+        Arcane::Editor::AssetBrowserActions browserActions;
+        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets))
+            browserActions = Arcane::Editor::DrawAssetBrowserPanel(
+                m_assetBrowser, m_runtime->CurrentProject(), m_documents,
+                m_panelVis.OpenFlag(Arcane::Editor::PanelId::Assets));
         if (browserActions.createInstanceOf.IsValid())
         {
             m_pendingInstanceParent = browserActions.createInstanceOf;
@@ -1261,7 +1266,9 @@ namespace Arcane::Editor
         }
         if (static_cast<std::size_t>(m_consoleUi.lineCap) != m_console.Capacity())
             m_console.SetCapacity(static_cast<std::size_t>(m_consoleUi.lineCap));
-        Arcane::Editor::DrawConsolePanel(m_console, m_consoleUi);
+        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Console))
+            Arcane::Editor::DrawConsolePanel(m_console, m_consoleUi,
+                m_panelVis.OpenFlag(Arcane::Editor::PanelId::Console));
 
         // Problems panel: current diagnostic STATE (Console above is the
         // append-only log stream). A clicked row's locator is routed here,
@@ -1269,11 +1276,11 @@ namespace Arcane::Editor
         // above already opens documents synchronously; only project/scene
         // teardown needs the frame-boundary deferral this function's other
         // effects use.
-        if (const std::optional<Arcane::DiagLocator> hit =
-                Arcane::Editor::DrawProblemsPanel(m_diagnostics, m_problemsUi))
-        {
-            RouteLocator(*hit);
-        }
+        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems))
+            if (const std::optional<Arcane::DiagLocator> hit =
+                    Arcane::Editor::DrawProblemsPanel(m_diagnostics, m_problemsUi,
+                        m_panelVis.OpenFlag(Arcane::Editor::PanelId::Problems)))
+                RouteLocator(*hit);
 
         // The Material panel draws BEFORE the documents, and that order is
         // load-bearing rather than incidental: the panel's param rows and the
@@ -1647,12 +1654,16 @@ namespace Arcane::Editor
         m_selection.Prune([reg = &m_runtime->Registry()](Astra::Entity e)
                           { return reg->IsValid(e); });
         m_editBinding.editMode = !m_play.IsPlaying();
-        Arcane::Editor::DrawOutlinerPanel(m_runtime->Registry(), m_selection,
-                                          *m_undo, m_editBinding, m_outliner,
-                                          m_scene.SavedStateId());
-        Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo,
-                                           m_editBinding, m_runtime->CurrentProject(),
-                                           m_inspector, &m_inspectorServices);
+        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Outliner))
+            Arcane::Editor::DrawOutlinerPanel(m_runtime->Registry(), m_selection,
+                                              *m_undo, m_editBinding, m_outliner,
+                                              m_scene.SavedStateId(),
+                                              m_panelVis.OpenFlag(Arcane::Editor::PanelId::Outliner));
+        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Inspector))
+            Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo,
+                                               m_editBinding, m_runtime->CurrentProject(),
+                                               m_inspector, &m_inspectorServices,
+                                               m_panelVis.OpenFlag(Arcane::Editor::PanelId::Inspector));
 
         // (The hosted plugin's DrawUI now renders into its OWN ImGui context,
         // composited into the viewport texture above -- not the editor context.)

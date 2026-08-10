@@ -44,6 +44,7 @@ namespace Arcane::Editor
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
                         bool sceneDirty, bool playing,
                         bool buildingModule, bool hasGameModule,
+                        PanelVisibility& panels,
                         const RecentSelection* recents)
     {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -155,6 +156,34 @@ namespace Arcane::Editor
                 ImGui::MenuItem("Copy Path");
                 ImGui::EndMenu();
             }
+            if (ImGui::BeginMenu("Window"))
+            {
+                // One loop over the registry -- the menu can never drift from
+                // the panels that exist (PanelRegistry.hpp). Permanent entries
+                // (the Viewport) are an always-checked focus action, the UE
+                // shape; the rest are checkmark toggles bound to the same
+                // bools the tabs' X buttons write.
+                for (const PanelInfo& p : kPanels)
+                {
+                    if (p.permanent)
+                    {
+                        if (ImGui::MenuItem(p.name, nullptr, true))
+                            SelectDockTab(p.name);
+                    }
+                    else
+                    {
+                        ImGui::MenuItem(p.name, nullptr,
+                                        &panels.visible[static_cast<std::size_t>(p.id)]);
+                    }
+                }
+                ImGui::Separator();
+                // Rebuild the stock dock layout (the first-run path, on
+                // demand) and re-show everything -- also the standing cure for
+                // an old imgui.ini hiding newly shipped panels.
+                if (ImGui::MenuItem("Reset Layout"))
+                    requests.resetLayout = true;
+                ImGui::EndMenu();
+            }
             if (ImGui::BeginMenu("Build"))
             {
                 // Disabled during Play -- the UE model: the level editor
@@ -236,12 +265,14 @@ namespace Arcane::Editor
             ImGui::TabBarQueueFocus(w->DockNode->TabBar, tab);
     }
 
-    void EndDockSpace()
+    void EndDockSpace(bool resetLayout)
     {
         const ImGuiID dockspaceId = ImGui::GetID("EditorDockSpace");
 
-        // First run (no saved .ini layout): arrange the default editor layout.
-        if (ImGui::DockBuilderGetNode(dockspaceId) == nullptr)
+        // First run (no saved .ini layout) -- or an explicit Window -> Reset
+        // Layout: arrange the default editor layout. Same call, same safe
+        // point (DockBuilder mutations before the DockSpace() submission).
+        if (resetLayout || ImGui::DockBuilderGetNode(dockspaceId) == nullptr)
             BuildDefaultLayout(dockspaceId);
 
         // Emit the dockspace into the still-open host window. Anything drawn between
@@ -478,9 +509,9 @@ namespace Arcane::Editor
         return launchStandaloneRequested;
     }
 
-    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui)
+    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui, bool* open)
     {
-        ImGui::Begin("Console");
+        ImGui::Begin("Console", open);
 
         // Snapshot once: CollapseConsole holds pointers into its input, and a
         // worker thread can push (and therefore evict) mid-frame.
@@ -1001,9 +1032,10 @@ namespace Arcane::Editor
 
     void DrawOutlinerPanel(Astra::Registry& registry, SelectionContext& sel,
                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
-                           OutlinerState& state, std::uint64_t savedStateId)
+                           OutlinerState& state, std::uint64_t savedStateId,
+                           bool* open)
     {
-        ImGui::Begin("Outliner");
+        ImGui::Begin("Outliner", open);
 
         // A rename the commit site below could not land because another
         // transaction was open. Retried BEFORE any row is built, so this
@@ -1657,12 +1689,12 @@ namespace Arcane::Editor
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding,
                             const Arcane::Project* project, InspectorState& state,
-                            const InspectorServices* services)
+                            const InspectorServices* services, bool* open)
     {
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard.
         const EditGesture::ScopeGuard gestureGuard{ &undo, state.gesture };
 
-        ImGui::Begin("Inspector");
+        ImGui::Begin("Inspector", open);
         if (!sel.HasSelection())
         {
             ImGui::TextDisabled("No selection");

@@ -22,6 +22,7 @@ namespace Arcane::Editor
 
     [[nodiscard]] const char* ScopeLabel(Arcane::DiagScope scope) noexcept;
 
+    // `open` is forwarded to ImGui::Begin (the tab's X button; null = no X).
     [[nodiscard]] std::optional<Arcane::DiagLocator>
-    DrawProblemsPanel(const DiagnosticStore& store, ProblemsUiState& ui);
+    DrawProblemsPanel(const DiagnosticStore& store, ProblemsUiState& ui, bool* open = nullptr);
 }

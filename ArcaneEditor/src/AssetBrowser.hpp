@@ -209,7 +209,9 @@ namespace Arcane::Editor
     // AssetBrowserActions::openScene for the host to load. Material, scene,
     // and texture rows each carry their own context menu ("New Instance..." /
     // "Set as Boot Scene" / "Create Sprite"); other kinds have none.
+    // `open` is forwarded to ImGui::Begin (the tab's X button; null = no X).
     AssetBrowserActions DrawAssetBrowserPanel(AssetBrowserState& state,
                                               const Arcane::Project* project,
-                                              DocumentHost& docs);
+                                              DocumentHost& docs,
+                                              bool* open = nullptr);
 }

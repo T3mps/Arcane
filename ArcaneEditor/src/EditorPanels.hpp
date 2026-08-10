@@ -2,6 +2,7 @@
 
 #include "EditGesture.hpp"   // EditGesture::GestureState (InspectorState parks one)
 #include "EntityList.hpp"
+#include "PanelRegistry.hpp"   // PanelVisibility (BeginDockSpace's Window menu)
 #include "RecentProjects.hpp"   // RecentSelection (File -> Open Recent)
 #include "ViewportInput.hpp"
 #include <Arcane/Edit/CommandStack.hpp>
@@ -52,6 +53,7 @@ namespace Arcane::Editor
         bool saveScene = false;      // File -> Save Scene        (Save As when never saved)
         bool saveSceneAs = false;    // File -> Save Scene As...  (save dialog)
         bool rebuildModule = false;  // Build -> Rebuild Game Module (worker premake+msbuild)
+        bool resetLayout = false;   // Window -> Reset Layout (rebuild default dock layout, re-show all)
     };
 
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
@@ -68,15 +70,20 @@ namespace Arcane::Editor
     // `recents` is currently PARKED (the 2026-08-10 restructure removed the
     // project-recents submenu; see MenuRequests::openRecentPath) -- still
     // passed so the wiring pass can resurface it without a signature change.
+    // `panels` drives the Window menu's toggles; only Reset Layout goes
+    // through `requests` (it must run at EndDockSpace's DockBuilder-safe
+    // point).
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
                         bool sceneDirty, bool playing,
                         bool buildingModule, bool hasGameModule,
+                        PanelVisibility& panels,
                         const RecentSelection* recents = nullptr);
 
     // Emit the DockSpace() into the host window opened by BeginDockSpace and close it.
     // Everything drawn in between becomes a fixed (non-dockable, tab-less) strip above
-    // the dockspace.
-    void EndDockSpace();
+    // the dockspace. `resetLayout` (Window -> Reset Layout) rebuilds the default dock
+    // layout at this call's DockBuilder-safe point, same as the first-run path.
+    void EndDockSpace(bool resetLayout = false);
 
     // Centered Play/Pause/Step transport, drawn as a FIXED STRIP into the current window
     // -- call between BeginDockSpace and EndDockSpace so it lands in the dockspace host.
@@ -127,7 +134,8 @@ namespace Arcane::Editor
 
     // Scrolling console of captured log lines: severity filters, text search,
     // collapse-identical, wrap toggle, Clear/Copy. Autoscroll pins to bottom.
-    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui);
+    // `open` is forwarded to ImGui::Begin (the tab's X button; null = no X).
+    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui, bool* open = nullptr);
 
     struct ViewportPanelResult
     {
@@ -214,10 +222,12 @@ namespace Arcane::Editor
     };
     // `savedStateId` is the scene's save baseline (SceneSession::SavedStateId)
     // -- the panel derives the per-entity unsaved asterisks from it via
-    // CommandStack::TouchedSinceState.
+    // CommandStack::TouchedSinceState. `open` is forwarded to ImGui::Begin
+    // (the tab's X button; null = no X).
     void DrawOutlinerPanel(Astra::Registry& registry, SelectionContext& sel,
                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
-                           OutlinerState& state, std::uint64_t savedStateId);
+                           OutlinerState& state, std::uint64_t savedStateId,
+                           bool* open = nullptr);
 
     // App-level effect the Inspector panel triggers but does not own. UNLIKE
     // AssetBrowserActions -- which only RETURNS a request and defers every
@@ -303,8 +313,10 @@ namespace Arcane::Editor
         // the panel's available width.
         float labelColWidth = 0.0f;
     };
+    // `open` is forwarded to ImGui::Begin (the tab's X button; null = no X).
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding,
                             const Arcane::Project* project, InspectorState& state,
-                            const InspectorServices* services = nullptr);
+                            const InspectorServices* services = nullptr,
+                            bool* open = nullptr);
 }

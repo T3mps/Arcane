@@ -349,6 +349,11 @@ namespace Arcane::Editor
         // performed here.
         Arcane::Editor::SceneSession m_scene;
 
+        // Window-menu panel visibility (PanelRegistry.hpp). The menu's
+        // checkmarks and the tabs' X buttons write these same bools;
+        // persisted by the [EditorPanels][Visibility] ini handler.
+        Arcane::Editor::PanelVisibility m_panelVis;
+
         // Outliner panel state + structural-edit binding (slice 2)
         Arcane::Editor::OutlinerState   m_outliner;
         Arcane::Editor::SceneEditBinding m_editBinding;

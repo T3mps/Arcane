@@ -51,10 +51,11 @@ namespace Arcane::Editor
 
     AssetBrowserActions DrawAssetBrowserPanel(AssetBrowserState& state,
                                               const Arcane::Project* project,
-                                              DocumentHost& docs)
+                                              DocumentHost& docs,
+                                              bool* open)
     {
         AssetBrowserActions actions;
-        ImGui::Begin("Assets");
+        ImGui::Begin("Assets", open);
         if (!project)
         {
             ImGui::TextDisabled("No project open (data/-next-to-exe)");

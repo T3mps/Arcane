@@ -23,11 +23,11 @@ namespace Arcane::Editor
     }
 
     std::optional<Arcane::DiagLocator> DrawProblemsPanel(const DiagnosticStore& store,
-                                                         ProblemsUiState& ui)
+                                                         ProblemsUiState& ui, bool* open)
     {
         std::optional<Arcane::DiagLocator> clicked;
 
-        ImGui::Begin("Problems");
+        ImGui::Begin("Problems", open);
 
         const std::size_t nErr  = store.Count(Arcane::DiagSeverity::Error);
         const std::size_t nWarn = store.Count(Arcane::DiagSeverity::Warning);
