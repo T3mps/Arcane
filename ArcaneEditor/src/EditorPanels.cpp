@@ -64,8 +64,9 @@ namespace Arcane::Editor
         // VISUAL for now -- the wiring pass follows). File's scene/project
         // items land in `requests`; Save Project / Exit and Edit's clipboard/
         // selection items are placeholders in the file's established style
-        // (enabled no-ops). Edit's Undo/Redo drive the CommandStack;
-        // Preferences is a leaf item that will open a settings window later.
+        // (enabled no-ops). Edit's Undo/Redo drive the CommandStack; its
+        // closing section (Preferences... / Project Settings...) will open
+        // the settings windows later.
         if (ImGui::BeginMenuBar())
         {
             if (ImGui::BeginMenu("File"))
@@ -129,6 +130,14 @@ namespace Arcane::Editor
                 ImGui::MenuItem("Select All");
                 ImGui::MenuItem("Deselect All");
                 ImGui::MenuItem("Invert Selection");
+                ImGui::Separator();
+                // UE's placement and order: the Edit menu's closing section is
+                // Editor Preferences... then Project Settings... (vendored
+                // MainMenu.cpp:261-276). Placeholders until the settings
+                // windows exist -- this absorbs the old top-level Preferences
+                // leaf.
+                ImGui::MenuItem("Preferences...");
+                ImGui::MenuItem("Project Settings...");
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Assets"))
@@ -166,8 +175,6 @@ namespace Arcane::Editor
                                                        : "This project has no game module");
                 ImGui::EndMenu();
             }
-            // Leaf item (no submenu): will open a preferences window later.
-            if (ImGui::MenuItem("Preferences")) { /* TODO: open preferences window */ }
             ImGui::EndMenuBar();
         }
         // Host window is left OPEN: the caller draws the fixed toolbar strip
