@@ -40,6 +40,42 @@ TEST_CASE("CategoryForMessage falls back to General for an unknown prefix", "[ed
     CHECK(Arcane::Editor::CategoryForMessage("") == "General");
 }
 
+TEST_CASE("FormatConsoleRow mirrors the drawn row for the clipboard", "[editor]")
+{
+    // Structure only, no exact clock digits: ClockText is LOCAL wall time by
+    // design, and a test that assumed a timezone would fail on another box.
+    Arcane::Editor::ConsoleEntry e = Entry(Arcane::DiagSeverity::Warning,
+                                           "Assets: unresolved asset id 7");
+    e.timestampMs = 1765000000000ull;
+
+    const std::string one = Arcane::Editor::FormatConsoleRow(e);
+    REQUIRE(one.size() > 8);
+    CHECK(one[2] == ':');            // "HH:MM:SS" clock prefix
+    CHECK(one[5] == ':');
+    CHECK(one.find("Assets") != std::string::npos);
+    CHECK(one.find("Assets: unresolved asset id 7") != std::string::npos);
+    CHECK(one.find("(x") == std::string::npos);   // count of 1 adds no suffix
+    CHECK(one.find('\n') == std::string::npos);   // the caller joins rows
+
+    // A collapsed row carries its fold count, same as the drawn "(xN)".
+    const std::string folded = Arcane::Editor::FormatConsoleRow(e, 3);
+    CHECK(folded.find("(x3)") != std::string::npos);
+
+    // The category column pads to the panel's 8-char minimum, so multi-row
+    // pastes stay aligned; the message starts after it.
+    const std::size_t catPos = one.find("Assets");
+    const std::size_t msgPos = one.find("Assets: unresolved");
+    CHECK(catPos < msgPos);
+}
+
+TEST_CASE("ClockText is an 8-char HH:MM:SS clock", "[editor]")
+{
+    const std::string t = Arcane::Editor::ClockText(1765000000000ull);
+    REQUIRE(t.size() == 8);
+    CHECK(t[2] == ':');
+    CHECK(t[5] == ':');
+}
+
 TEST_CASE("CollapseConsole folds identical level+category+message into one row", "[editor]")
 {
     const std::vector<Arcane::Editor::ConsoleEntry> entries = {

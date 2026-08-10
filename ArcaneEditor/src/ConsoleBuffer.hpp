@@ -44,5 +44,6 @@ namespace Arcane::Editor
         mutable std::mutex      m_mutex;
         std::size_t             m_capacity;
         std::deque<ConsoleEntry> m_entries;
+        std::uint64_t           m_nextSeq = 1;   // 0 is "never pushed" (ConsoleEntry::seq)
     };
 }

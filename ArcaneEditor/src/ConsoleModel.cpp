@@ -1,5 +1,7 @@
 #include <ConsoleModel.hpp>
 
+#include <cstdio>
+#include <ctime>
 #include <unordered_map>
 
 namespace Arcane::Editor
@@ -64,5 +66,39 @@ namespace Arcane::Editor
             }
         }
         return rows;
+    }
+
+    std::string ClockText(std::uint64_t timestampMs)
+    {
+        const std::time_t secs = static_cast<std::time_t>(timestampMs / 1000);
+        std::tm tm{};
+#if defined(_WIN32)
+        localtime_s(&tm, &secs);
+#else
+        localtime_r(&secs, &tm);
+#endif
+        char buf[16] = {};
+        std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+        return std::string(buf);
+    }
+
+    std::string FormatConsoleRow(const ConsoleEntry& e, std::size_t count)
+    {
+        std::string out = ClockText(e.timestampMs);
+        out += "  ";
+        out += e.category;
+        // Pad to the panel's own 8-column category minimum ("%-8s") so a
+        // multi-row paste stays column-aligned in a monospace target.
+        for (std::size_t i = e.category.size(); i < 8; ++i)
+            out += ' ';
+        out += "  ";
+        out += e.message;
+        if (count > 1)
+        {
+            out += "  (x";
+            out += std::to_string(count);
+            out += ')';
+        }
+        return out;
     }
 }

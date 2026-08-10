@@ -1,6 +1,7 @@
 // Arcane Editor console ring buffer: bounded FIFO of structured log entries the
 // Console panel renders. CPU-only ([editor]).
 
+#include <cstdint>
 #include <string>
 #include <thread>
 #include <vector>
@@ -42,6 +43,28 @@ TEST_CASE("ConsoleBuffer::Clear empties it", "[editor]")
     buf.Push(Line("a"));
     buf.Clear();
     CHECK(buf.Size() == 0);
+}
+
+TEST_CASE("Push stamps a monotonic seq that survives eviction and Clear", "[editor]")
+{
+    // The Console panel keys row SELECTION on seq (ConsoleEntry::seq): deque
+    // positions shift on eviction, so the identity must ride the entry -- and
+    // must never be reused, or a stale selected id could alias a new line.
+    Arcane::Editor::ConsoleBuffer buf(2);
+    buf.Push(Line("a")); buf.Push(Line("b")); buf.Push(Line("c"));   // evicts "a"
+
+    std::vector<std::uint64_t> seqs;
+    buf.ForEach([&](const Arcane::Editor::ConsoleEntry& e) { seqs.push_back(e.seq); });
+    REQUIRE(seqs.size() == 2);
+    CHECK(seqs[0] != 0);            // 0 is "never pushed"
+    CHECK(seqs[1] == seqs[0] + 1);  // display order == stamp order
+    const std::uint64_t lastBeforeClear = seqs[1];
+
+    buf.Clear();
+    buf.Push(Line("d"));
+    std::uint64_t after = 0;
+    buf.ForEach([&](const Arcane::Editor::ConsoleEntry& e) { after = e.seq; });
+    CHECK(after > lastBeforeClear);   // Clear must not restart the counter
 }
 
 TEST_CASE("SetCapacity trims immediately to the new cap", "[editor]")

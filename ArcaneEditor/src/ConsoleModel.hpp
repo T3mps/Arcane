@@ -23,6 +23,12 @@ namespace Arcane::Editor
         std::string          message;
         std::string          file;        // spdlog source_loc, may be empty
         int                  line = 0;
+        // Monotonic per-buffer identity, stamped by ConsoleBuffer::Push (0 =
+        // never pushed). The Console panel keys row SELECTION on it: deque
+        // positions shift on every ring eviction, but a seq follows its line
+        // for the line's whole life -- and it is never reused, not even
+        // across Clear, so a stale selected id can never alias a new line.
+        std::uint64_t        seq = 0;
     };
 
     // Derive a category from the engine's already-consistent "Subsystem: "
@@ -45,4 +51,17 @@ namespace Arcane::Editor
     // preserving first-seen order. Nothing is hidden -- the count carries the
     // rest. Computed at draw time over the current buffer, so storage is untouched.
     [[nodiscard]] std::vector<CollapsedRow> CollapseConsole(std::span<const ConsoleEntry> entries);
+
+    // Wall-clock hh:mm:ss from epoch millis. LOCAL time: this is a human
+    // reading their own session, not a log correlated across machines. Shared
+    // by the panel's row prefix and FormatConsoleRow below, so what is drawn
+    // and what lands on the clipboard cannot drift.
+    [[nodiscard]] std::string ClockText(std::uint64_t timestampMs);
+
+    // The plain-text form of one rendered row -- what Copy and the selection's
+    // Ctrl+C put on the clipboard, mirroring the drawn row:
+    // "HH:MM:SS  Category   message" plus "  (xN)" when a collapsed row's
+    // count > 1. Category is padded to the panel's own 8-column minimum. No
+    // trailing newline; the caller joins rows.
+    [[nodiscard]] std::string FormatConsoleRow(const ConsoleEntry& e, std::size_t count = 1);
 }

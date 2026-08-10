@@ -496,14 +496,33 @@ namespace Arcane::Editor
             else                                               ++nInfo;
         }
 
-        if (ImGui::Button("Clear")) console.Clear();
-        ImGui::SameLine();
-        if (ImGui::Button("Copy"))
+        // Row selection (UE model: the output log body is a READ-ONLY TEXT BOX
+        // -- SMultiLineEditableTextBox with IsReadOnly, SOutputLog.cpp:1221-1228
+        // -- so its text is selectable and Ctrl+C copies the selection; the
+        // context menu is the text box's Copy/Select All extended with Clear
+        // Log via ExtendTextBoxMenu). ImGui has no colored-text widget with
+        // character selection, so the mapping here is LINE-granular: rows are
+        // multi-selectable (drag box-select, Shift/Ctrl click, Ctrl+A) and
+        // copy reproduces the drawn rows via FormatConsoleRow.
+        //
+        // A panel-local static rather than a ConsoleUiState member: exactly
+        // one Console panel exists per process (EditorApp is one-per-process),
+        // and this keeps ImGuiSelectionBasicStorage -- an imgui.h type -- out
+        // of EditorPanels.hpp, which is deliberately ImGui-free.
+        static ImGuiSelectionBasicStorage s_selection;
+
+        bool wantCopyAll = false;   // resolved below, once the visible rows exist
+
+        if (ImGui::Button("Clear"))
         {
-            std::string all;
-            for (const ConsoleEntry& e : entries) { all += e.message; all += '\n'; }
-            ImGui::SetClipboardText(all.c_str());
+            console.Clear();
+            s_selection.Clear();
         }
+        ImGui::SameLine();
+        // Copies the rows AS DRAWN (filters + collapse + the same text the
+        // selection copy produces) -- it used to dump every raw message, which
+        // made the button and a select-all copy disagree about the same panel.
+        wantCopyAll = ImGui::Button("Copy");
         ImGui::SameLine();
         ImGui::Checkbox("Collapse", &ui.collapse);
         ImGui::SameLine();
@@ -539,52 +558,149 @@ namespace Arcane::Editor
             return MatchesDiagnosticFilter(probe, Arcane::DiagSeverity::Info, ui.search);
         };
 
-        // Wall-clock hh:mm:ss from the stored epoch millis. Local time: this is a
-        // human reading their own session, not a log correlated across machines.
-        const auto clockText = [](std::uint64_t ms)
+        // The visible rows, resolved BEFORE the multi-select scope opens:
+        // BeginMultiSelect wants the item count up front, and the draw loop,
+        // Ctrl+A, and both copy paths must all agree on one display-ordered
+        // list. Pointers reach into `entries` (the frame's snapshot), which
+        // outlives every use below.
+        struct Row { const ConsoleEntry* e; std::size_t count; };
+        std::vector<Row> rows;
+        if (ui.collapse)
         {
-            const std::time_t secs = static_cast<std::time_t>(ms / 1000);
-            std::tm tm{};
-#if defined(_WIN32)
-            localtime_s(&tm, &secs);
-#else
-            localtime_r(&secs, &tm);
-#endif
-            char buf[16] = {};
-            std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
-            return std::string(buf);
-        };
+            for (const CollapsedRow& r : CollapseConsole(entries))
+                if (r.first && visible(*r.first)) rows.push_back({ r.first, r.count });
+        }
+        else
+        {
+            rows.reserve(entries.size());
+            for (const ConsoleEntry& e : entries)
+                if (visible(e)) rows.push_back({ &e, 1 });
+        }
 
-        const auto drawRow = [&](const ConsoleEntry& e, std::size_t count)
+        // Rows in display order -> one clipboard string (FormatConsoleRow is
+        // the same text the rows draw, so copy is WYSIWYG).
+        const auto copyRows = [&](bool selectedOnly)
         {
+            std::string text;
+            for (const Row& r : rows)
+                if (!selectedOnly || s_selection.Contains(static_cast<ImGuiID>(r.e->seq)))
+                {
+                    text += FormatConsoleRow(*r.e, r.count);
+                    text += '\n';
+                }
+            if (!text.empty()) ImGui::SetClipboardText(text.c_str());
+        };
+        if (wantCopyAll)
+            copyRows(false);
+
+        // Selection ids are entry seqs, not row indices: the ring evicts from
+        // the front and the filter hides rows, so an index would name a
+        // different line every frame; a seq follows its line for life
+        // (ConsoleEntry::seq).
+        ImGuiMultiSelectFlags msFlags = ImGuiMultiSelectFlags_ClearOnEscape |
+                                        ImGuiMultiSelectFlags_ClearOnClickVoid |
+                                        ImGuiMultiSelectFlags_BoxSelect1d;
+        ImGuiMultiSelectIO* ms =
+            ImGui::BeginMultiSelect(msFlags, s_selection.Size, static_cast<int>(rows.size()));
+        s_selection.UserData = &rows;
+        s_selection.AdapterIndexToStorageId =
+            [](ImGuiSelectionBasicStorage* self, int idx) -> ImGuiID
+        {
+            const auto& r = *static_cast<const std::vector<Row>*>(self->UserData);
+            return static_cast<ImGuiID>(r[static_cast<std::size_t>(idx)].e->seq);
+        };
+        s_selection.ApplyRequests(ms);
+
+        const float lineH = ImGui::GetTextLineHeight();
+        for (int i = 0; i < static_cast<int>(rows.size()); ++i)
+        {
+            const Row& row = rows[static_cast<std::size_t>(i)];
+            const ConsoleEntry& e = *row.e;
+
             ImVec4 col(0.80f, 0.80f, 0.80f, 1.0f);
             if (e.level == Arcane::DiagSeverity::Error)        col = ImVec4(0.90f, 0.35f, 0.35f, 1.0f);
             else if (e.level == Arcane::DiagSeverity::Warning) col = ImVec4(0.95f, 0.77f, 0.30f, 1.0f);
 
-            // Timestamp and category are dimmed prefixes so the message stays the
-            // thing the eye lands on.
-            ImGui::TextDisabled("%s", clockText(e.timestampMs).c_str());
-            ImGui::SameLine();
-            ImGui::TextDisabled("%-8s", e.category.c_str());
-            ImGui::SameLine();
+            const std::string clock = ClockText(e.timestampMs);
+            char cat[64];
+            std::snprintf(cat, sizeof(cat), "%-8s", e.category.c_str());
+            std::string msg = e.message;
+            if (row.count > 1)
+            {
+                msg += "  (x";
+                msg += std::to_string(row.count);
+                msg += ')';
+            }
 
+            // The whole row is ONE full-width Selectable, sized up front so a
+            // wrapped message stays clickable on every visual line -- the text
+            // is then drawn OVER it (the standard rewind trick; Text items
+            // carry no ID, so the Selectable keeps every click).
+            float rowH = lineH;
+            const float spacingX = ImGui::GetStyle().ItemSpacing.x;
+            const float prefixW  = ImGui::CalcTextSize(clock.c_str()).x + spacingX +
+                                   ImGui::CalcTextSize(cat).x + spacingX;
+            if (ui.wrap)
+            {
+                const float wrapW = ImGui::GetContentRegionAvail().x - prefixW;
+                if (wrapW > 1.0f)
+                    rowH = std::max(rowH,
+                                    ImGui::CalcTextSize(msg.c_str(), nullptr, false, wrapW).y);
+            }
+
+            ImGui::PushID(i);
+            ImGui::SetNextItemSelectionUserData(i);
+            const bool selected = s_selection.Contains(static_cast<ImGuiID>(e.seq));
+            const ImVec2 rowPos = ImGui::GetCursorPos();
+            ImGui::Selectable("##row", selected, ImGuiSelectableFlags_None, ImVec2(0.0f, rowH));
+            const ImVec2 afterPos = ImGui::GetCursorPos();
+
+            // Timestamp and category are dimmed prefixes so the message stays
+            // the thing the eye lands on.
+            ImGui::SetCursorPos(rowPos);
+            ImGui::TextDisabled("%s", clock.c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", cat);
+            ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, col);
             if (ui.wrap) ImGui::PushTextWrapPos(0.0f);
-            if (count > 1) ImGui::Text("%s  (x%zu)", e.message.c_str(), count);
-            else           ImGui::TextUnformatted(e.message.c_str());
+            ImGui::TextUnformatted(msg.c_str());
             if (ui.wrap) ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
-        };
-
-        if (ui.collapse)
-        {
-            for (const CollapsedRow& r : CollapseConsole(entries))
-                if (r.first && visible(*r.first)) drawRow(*r.first, r.count);
+            ImGui::SetCursorPos(afterPos);
+            ImGui::PopID();
         }
-        else
+
+        ms = ImGui::EndMultiSelect();
+        s_selection.ApplyRequests(ms);
+
+        // Ctrl+C copies the selection while the log child has focus (clicking
+        // a row focuses it). Ctrl+A is BeginMultiSelect's own -- it arrives as
+        // a SelectAll request through ApplyRequests above.
+        if (s_selection.Size > 0 && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
+            copyRows(true);
+
+        // UE parity: the read-only text box's Copy/Select All, extended with
+        // Clear Log (SOutputLog::ExtendTextBoxMenu).
+        if (ImGui::BeginPopupContextWindow("##consolectx"))
         {
-            for (const ConsoleEntry& e : entries)
-                if (visible(e)) drawRow(e, 1);
+            if (ImGui::MenuItem("Copy", "Ctrl+C", false, s_selection.Size > 0))
+                copyRows(true);
+            if (ImGui::MenuItem("Copy All"))
+                copyRows(false);
+            if (ImGui::MenuItem("Select All", "Ctrl+A"))
+            {
+                s_selection.Clear();
+                for (const Row& r : rows)
+                    s_selection.SetItemSelected(static_cast<ImGuiID>(r.e->seq), true);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Clear Log"))
+            {
+                console.Clear();
+                s_selection.Clear();
+            }
+            ImGui::EndPopup();
         }
 
         if (ui.autoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())

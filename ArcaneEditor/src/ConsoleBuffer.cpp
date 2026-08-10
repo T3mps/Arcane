@@ -5,6 +5,10 @@ namespace Arcane::Editor
     void ConsoleBuffer::Push(ConsoleEntry entry)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
+        // Stamped under the same lock that orders the pushes, so seq order ==
+        // display order even with worker-thread pushes. Never reset (not even
+        // by Clear) -- see ConsoleEntry::seq.
+        entry.seq = m_nextSeq++;
         m_entries.push_back(std::move(entry));
         while (m_entries.size() > m_capacity) m_entries.pop_front();
     }
