@@ -522,7 +522,16 @@ namespace Arcane::Editor
         // Copies the rows AS DRAWN (filters + collapse + the same text the
         // selection copy produces) -- it used to dump every raw message, which
         // made the button and a select-all copy disagree about the same panel.
-        wantCopyAll = ImGui::Button("Copy");
+        // The label flashes "Copied" until the deadline the copy handler below
+        // set: "###" keeps the widget id identical across the swap (id from
+        // the suffix alone, so hover/active state survives), and the width is
+        // fixed at the LONGER label's so the toolbar never shifts mid-flash.
+        const bool copyFlash = ImGui::GetTime() < ui.copyFlashUntil;
+        const float copyW = ImGui::CalcTextSize("Copied").x +
+                            ImGui::GetStyle().FramePadding.x * 2.0f;
+        wantCopyAll = ImGui::Button(copyFlash ? "Copied###consolecopy"
+                                              : "Copy###consolecopy",
+                                    ImVec2(copyW, 0.0f));
         ImGui::SameLine();
         ImGui::Checkbox("Collapse", &ui.collapse);
         ImGui::SameLine();
@@ -595,8 +604,9 @@ namespace Arcane::Editor
         }
 
         // Rows in display order -> one clipboard string (FormatConsoleRow is
-        // the same text the rows draw, so copy is WYSIWYG).
-        const auto copyRows = [&](bool selectedOnly)
+        // the same text the rows draw, so copy is WYSIWYG). Returns whether
+        // anything actually reached the clipboard.
+        const auto copyRows = [&](bool selectedOnly) -> bool
         {
             std::string text;
             for (const Row& r : rows)
@@ -605,10 +615,16 @@ namespace Arcane::Editor
                     text += FormatConsoleRow(*r.e, r.count);
                     text += '\n';
                 }
-            if (!text.empty()) ImGui::SetClipboardText(text.c_str());
+            if (text.empty())
+                return false;
+            ImGui::SetClipboardText(text.c_str());
+            return true;
         };
-        if (wantCopyAll)
-            copyRows(false);
+        // The "Copied" flash arms only when the copy actually LANDED -- an
+        // empty console (or a filter that hides everything) writes nothing to
+        // the clipboard and must not claim otherwise.
+        if (wantCopyAll && copyRows(false))
+            ui.copyFlashUntil = ImGui::GetTime() + 0.75;
 
         // Selection ids are entry seqs, not row indices: the ring evicts from
         // the front and the filter hides rows, so an index would name a

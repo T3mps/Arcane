@@ -110,6 +110,10 @@ namespace Arcane::Editor
         bool wrap        = true;
         char search[128] = {};
         int  lineCap     = 512;
+        // Copy button's "Copied" feedback: the ImGui::GetTime() deadline the
+        // swapped label holds until. A plain deadline the draw compares each
+        // frame -- no timer, no animation state; 0 (any past time) = idle.
+        double copyFlashUntil = 0.0;
     };
 
     // Scrolling console of captured log lines: severity filters, text search,
