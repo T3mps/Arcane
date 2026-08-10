@@ -1160,6 +1160,21 @@ namespace Arcane::Editor
                     else
                         state.sort = OutlinerSort{};   // third click: tree order
                 }
+                // UE separates its column headers with vertical dividers
+                // (SHeaderRow) while the ROWS stay line-free -- so the line
+                // is drawn here, header-only, at the cell boundary, rather
+                // than via BordersInnerV, which would rule every row. Drawn
+                // after the trailing cell padding so it sits centered
+                // between the two columns' contents.
+                if (col < 2)
+                {
+                    const ImVec2 cellMin = ImGui::GetItemRectMin();
+                    const ImVec2 cellMax = ImGui::GetItemRectMax();
+                    const float x = cellMax.x + ImGui::GetStyle().CellPadding.x;
+                    ImGui::GetWindowDrawList()->AddLine(
+                        ImVec2(x, cellMin.y), ImVec2(x, cellMax.y),
+                        ImGui::GetColorU32(ImGuiCol_TableBorderLight));
+                }
             };
             headerCell(0, OutlinerSort::Column::Visibility, ICON_LC_EYE,      false);
             headerCell(1, OutlinerSort::Column::Modified,   ICON_LC_ASTERISK, false);
