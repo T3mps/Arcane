@@ -36,11 +36,22 @@ namespace Arcane::Editor
         bool          dimmed = false;
         bool          hasChildren = false;
         std::size_t   childCount = 0;
+        // Per-entity unsaved-changes marker (the Outliner's asterisk column).
+        // A SEAM today: nothing populates it -- per-entity dirty tracking
+        // does not exist yet, so this stays false, the asterisk column stays
+        // quiet, and Column::Modified sorts are a stable no-op. The wiring
+        // pass fills it (and the matching probe in BuildOutlinerRows's
+        // sibling sort) from whatever dirty source lands.
+        bool          modified = false;
     };
 
     struct OutlinerSort
     {
-        enum class Column { None, Label };
+        // Visibility sorts on the hidden flag (ascending = visible first);
+        // Modified sorts on OutlinerRow::modified (ascending = clean first --
+        // a stable no-op until that seam is wired); Label is case-insensitive
+        // on the display name. Ties always keep hierarchy order (stable sort).
+        enum class Column { None, Visibility, Modified, Label };
         Column column = Column::None;
         bool   ascending = true;
     };

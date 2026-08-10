@@ -1086,45 +1086,66 @@ namespace Arcane::Editor
         const float footerH = ImGui::GetFrameHeightWithSpacing();
         // PadOuterX is NOT a default for borderless tables (only BordersOuterV
         // implies it), so without it the outermost columns run flush to the
-        // table edges -- the header's eye sat on the far left edge and the
-        // sort arrow on the far right. One flag pads header and rows alike,
-        // so the row eyes stay column-aligned under the header eye.
+        // table edges -- the header's eye sat on the far left edge. One flag
+        // pads header and rows alike, so the row icons stay column-aligned
+        // under their header glyphs. NOT ImGuiTableFlags_Sortable: sort state
+        // is OURS (state.sort, cycled by the custom header below), because
+        // ImGui's TableHeader right-justifies its sort arrow in the cell and
+        // offers no per-column way to hide it -- and this outliner wants the
+        // arrow ONLY on Label, sitting directly after the text.
         const ImGuiTableFlags tflags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY
-                                     | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate
                                      | ImGuiTableFlags_PadOuterX;
-        if (ImGui::BeginTable("##outliner_rows", 2, tflags, ImVec2(0.0f, -footerH)))
+        if (ImGui::BeginTable("##outliner_rows", 3, tflags, ImVec2(0.0f, -footerH)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
-            // A SQUARE eye slot: sized to the GLYPH, not GetFrameHeight --
+            // SQUARE icon slots: sized to each GLYPH, not GetFrameHeight --
             // frame height carries FramePadding.y the unframed rows don't
-            // have, which left the column ~10px wider than the row is tall.
-            // Glyph advance + the cell padding both sides lands the header
-            // cell and the row button at the row's own height: square.
-            ImGui::TableSetupColumn(ICON_LC_EYE,
-                ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed,
-                ImGui::CalcTextSize(ICON_LC_EYE).x);
-            ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_DefaultSort);
-            // Dim the legend text (icon + "Label" + sort arrow): the chrome
-            // band fill (EditorTheme's TableHeaderBg) plus muted text is what
-            // separates "column header" from "another entity row".
+            // have, which left the eye column ~10px wider than the row is
+            // tall. Glyph advance + the cell padding both sides lands the
+            // header cell and the row button at the row's own height.
+            ImGui::TableSetupColumn(ICON_LC_EYE, ImGuiTableColumnFlags_WidthFixed,
+                                    ImGui::CalcTextSize(ICON_LC_EYE).x);
+            ImGui::TableSetupColumn(ICON_LC_ASTERISK, ImGuiTableColumnFlags_WidthFixed,
+                                    ImGui::CalcTextSize(ICON_LC_ASTERISK).x);
+            ImGui::TableSetupColumn("Label");
+
+            // CUSTOM header row (see the flags comment): each cell is a
+            // Selectable (HeaderHovered fill on hover, like a real header)
+            // that cycles state.sort ascending -> descending -> none -- the
+            // tri-state the old SortTristate flag provided. All three columns
+            // sort; only Label ever shows the arrow, an inline chevron padded
+            // directly after the text ("###" keeps the widget id stable while
+            // the label swaps). Legend text dims, as before: chrome fill +
+            // muted text is what separates "column header" from "entity row".
+            // Rows were built with LAST frame's sort (one-frame lag, rebuilt
+            // every frame anyway).
+            ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
             ImGui::PushStyleColor(ImGuiCol_Text,
                 ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::TableHeadersRow();
-            ImGui::PopStyleColor();
-
-            // Header sort -> state.sort; rows were built with LAST frame's
-            // sort (one-frame lag, rebuilt every frame anyway). Label is the
-            // only sortable column, so any spec means sort-by-label.
-            if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs())
+            const auto headerCell = [&state](int col, OutlinerSort::Column id,
+                                             const char* label, bool showArrow)
             {
-                state.sort = OutlinerSort{};
-                if (specs->SpecsCount > 0)
+                ImGui::TableSetColumnIndex(col);
+                std::string text = label;
+                if (showArrow && state.sort.column == id)
+                    text += state.sort.ascending ? "  " ICON_LC_CHEVRON_UP
+                                                 : "  " ICON_LC_CHEVRON_DOWN;
+                text += "###hdr";
+                text += static_cast<char>('0' + col);
+                if (ImGui::Selectable(text.c_str(), false))
                 {
-                    state.sort.column = OutlinerSort::Column::Label;
-                    state.sort.ascending =
-                        specs->Specs[0].SortDirection != ImGuiSortDirection_Descending;
+                    if (state.sort.column != id)
+                        state.sort = OutlinerSort{ id, true };
+                    else if (state.sort.ascending)
+                        state.sort.ascending = false;
+                    else
+                        state.sort = OutlinerSort{};   // third click: tree order
                 }
-            }
+            };
+            headerCell(0, OutlinerSort::Column::Visibility, ICON_LC_EYE,      false);
+            headerCell(1, OutlinerSort::Column::Modified,   ICON_LC_ASTERISK, false);
+            headerCell(2, OutlinerSort::Column::Label,      "Label",          true);
+            ImGui::PopStyleColor();
 
             // Full-width row highlight via the TABLE's row background, not
             // the tree item's own frame: TreeNodeEx sits AFTER the per-depth
@@ -1200,8 +1221,28 @@ namespace Arcane::Editor
                         ImGui::PopStyleColor();
                 }
 
-                // -- column 1: tree arrow + label (or inline rename) --------
+                // -- column 1: the unsaved-changes asterisk -----------------
+                // Only a MODIFIED entity wears one (mirrors the hidden eye:
+                // the state itself must stay readable, so no hover gating).
+                // row.modified is a seam today (EntityList.hpp) -- nothing
+                // sets it, so this column stays quiet until per-entity dirty
+                // tracking lands; the button's save-ish action arrives with
+                // that wiring, same chrome-free dressing as the eye.
                 ImGui::TableSetColumnIndex(1);
+                if (row.modified)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+                    ImGui::SmallButton(ICON_LC_ASTERISK);
+                    ImGui::PopStyleVar(2);
+                    ImGui::PopStyleColor();
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Unsaved changes");
+                }
+
+                // -- column 2: tree arrow + label (or inline rename) --------
+                ImGui::TableSetColumnIndex(2);
                 if (state.renameTarget == row.entity)
                 {
                     ImGui::SetNextItemWidth(-FLT_MIN);

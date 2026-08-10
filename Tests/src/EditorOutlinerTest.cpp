@@ -142,6 +142,41 @@ TEST_CASE("Sort reorders sibling groups without breaking the tree", "[editor][ou
     CHECK(rows[0].entity == zeta);
 }
 
+TEST_CASE("Visibility sort splits hidden from visible; Modified is a stable no-op",
+          "[editor][outliner]")
+{
+    World w;
+    Astra::Entity a = w.Make("A");
+    Astra::Entity b = w.Make("B");
+    Astra::Entity c = w.Make("C");
+    w.reg.AddComponent<Hidden>(b, Hidden{});
+
+    // Ascending = visible first; the tie between A and C keeps creation order
+    // (the sort is stable).
+    OutlinerSort byVis{ OutlinerSort::Column::Visibility, true };
+    auto rows = BuildOutlinerRows(w.reg, "", byVis, kNoneCollapsed);
+    REQUIRE(rows.size() == 3);
+    CHECK(rows[0].entity == a);
+    CHECK(rows[1].entity == c);
+    CHECK(rows[2].entity == b);
+
+    OutlinerSort byVisDesc{ OutlinerSort::Column::Visibility, false };
+    rows = BuildOutlinerRows(w.reg, "", byVisDesc, kNoneCollapsed);
+    CHECK(rows[0].entity == b);
+
+    // Modified: OutlinerRow::modified is an unwired seam (EntityList.hpp), so
+    // every key compares equal and the stable sort must keep hierarchy order
+    // EXACTLY -- this pin is what makes wiring the seam later a visible,
+    // test-breaking change rather than a silent one.
+    OutlinerSort byMod{ OutlinerSort::Column::Modified, true };
+    rows = BuildOutlinerRows(w.reg, "", byMod, kNoneCollapsed);
+    REQUIRE(rows.size() == 3);
+    CHECK(rows[0].entity == a);
+    CHECK(rows[1].entity == b);
+    CHECK(rows[2].entity == c);
+    CHECK_FALSE(rows[0].modified);
+}
+
 TEST_CASE("A matching root needs no ancestors and is not dimmed", "[editor][outliner]")
 {
     // The ancestor-chain walk has an empty chain at depth 0; a root that

@@ -68,9 +68,31 @@ namespace Arcane::Editor
             std::stable_sort(kids.begin(), kids.end(),
                 [&](Astra::Entity a, Astra::Entity b)
                 {
-                    const std::string ka = Edit::DisplayName(reg, a);
-                    const std::string kb = Edit::DisplayName(reg, b);
-                    return sort.ascending ? LessCI(ka, kb) : LessCI(kb, ka);
+                    switch (sort.column)
+                    {
+                        case OutlinerSort::Column::Visibility:
+                        {
+                            // Ascending = visible before hidden (false < true);
+                            // ties keep hierarchy order via the stable sort.
+                            const bool ha = reg.HasComponent<Hidden>(a);
+                            const bool hb = reg.HasComponent<Hidden>(b);
+                            return sort.ascending ? (ha < hb) : (hb < ha);
+                        }
+                        case OutlinerSort::Column::Modified:
+                            // Every key is equal until the OutlinerRow::modified
+                            // seam is wired (see EntityList.hpp) -- all-equal
+                            // under a stable sort keeps hierarchy order. The
+                            // case exists so the wiring pass only swaps in the
+                            // real probe.
+                            return false;
+                        case OutlinerSort::Column::Label:
+                        default:
+                        {
+                            const std::string ka = Edit::DisplayName(reg, a);
+                            const std::string kb = Edit::DisplayName(reg, b);
+                            return sort.ascending ? LessCI(ka, kb) : LessCI(kb, ka);
+                        }
+                    }
                 });
         };
 
