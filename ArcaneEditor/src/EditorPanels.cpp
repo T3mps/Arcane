@@ -1112,52 +1112,46 @@ namespace Arcane::Editor
         // ImGui's TableHeader right-justifies its sort arrow in the cell and
         // offers no per-column way to hide it -- and this outliner wants the
         // arrow ONLY on Label, sitting directly after the text.
-        // NoSavedSettings: imgui.ini persists per-table column state keyed on
-        // the table id, and this table's saved 2-column-era state was
-        // overriding the fresh setup (three builds of column-width changes
-        // showed NOTHING at the desk until this). Nothing here needs
-        // persisting anyway -- widths are fixed and the sort state is OURS
-        // (OutlinerState::sort).
         const ImGuiTableFlags tflags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY
-                                     | ImGuiTableFlags_PadOuterX
-                                     | ImGuiTableFlags_NoSavedSettings;
+                                     | ImGuiTableFlags_PadOuterX;
         if (ImGui::BeginTable("##outliner_rows", 3, tflags, ImVec2(0.0f, -footerH)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
-            // Icon slots at the standard icon-BUTTON size (GetFrameHeight,
-            // the toolbar buttons' square): line-height slots hugged the
-            // glyphs so tightly that the eye/asterisk headers read as one
-            // clump (2026-08-10 screenshot). Frame-height slots + the cell
-            // padding both sides give each glyph real margins inside its
-            // slot and clear air around the dividers -- UE's proportions.
-            // Glyphs are CENTERED in the slot (SelectableTextAlign in the
-            // header, a cursor offset in the rows).
-            const float iconColW = ImGui::GetFrameHeight() * 1.5f;
-            ImGui::TableSetupColumn(ICON_LC_EYE, ImGuiTableColumnFlags_WidthFixed, iconColW);
-            ImGui::TableSetupColumn(ICON_LC_ASTERISK, ImGuiTableColumnFlags_WidthFixed, iconColW);
+            // SQUARE icon slots: sized to each GLYPH, not GetFrameHeight --
+            // frame height carries FramePadding.y the unframed rows don't
+            // have, which left the eye column ~10px wider than the row is
+            // tall. Glyph advance + the cell padding both sides lands the
+            // header cell and the row button at the row's own height.
+            ImGui::TableSetupColumn(ICON_LC_EYE, ImGuiTableColumnFlags_WidthFixed,
+                                    ImGui::CalcTextSize(ICON_LC_EYE).x);
+            ImGui::TableSetupColumn(ICON_LC_ASTERISK, ImGuiTableColumnFlags_WidthFixed,
+                                    ImGui::CalcTextSize(ICON_LC_ASTERISK).x);
             ImGui::TableSetupColumn("Label");
 
-            // CUSTOM header row, built as WIDGETS rather than typesetting:
-            // the first cut appended chevron CHARACTERS to the label string
-            // and squeezed icon glyphs into a one-text-line row -- alignment
-            // by string surgery. Here each cell is one full-height Selectable
-            // (the hit target + hover fill), and its CONTENT -- glyph, label,
-            // sort arrow -- is DRAWN through the draw list at measured
-            // positions: nothing shifts when the sort changes, the glyphs
-            // center in their square slots, and the arrow is ImGui's own
-            // triangle (RenderArrow, the primitive TableHeader itself draws)
-            // padded directly after the Label text. Clicking cycles
-            // state.sort ascending -> descending -> none (the old
-            // SortTristate). Rows were built with LAST frame's sort
-            // (one-frame lag, rebuilt every frame anyway).
+            // CUSTOM header row (see the flags comment): each cell is a
+            // Selectable (HeaderHovered fill on hover, like a real header)
+            // that cycles state.sort ascending -> descending -> none -- the
+            // tri-state the old SortTristate flag provided. All three columns
+            // sort; only Label ever shows the arrow, an inline chevron padded
+            // directly after the text ("###" keeps the widget id stable while
+            // the label swaps). Legend text dims, as before: chrome fill +
+            // muted text is what separates "column header" from "entity row".
+            // Rows were built with LAST frame's sort (one-frame lag, rebuilt
+            // every frame anyway).
             ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             const auto headerCell = [&state](int col, OutlinerSort::Column id,
-                                             const char* label, bool isIcon)
+                                             const char* label, bool showArrow)
             {
                 ImGui::TableSetColumnIndex(col);
-                ImGui::PushID(col);
-                if (ImGui::Selectable("##hdr", false, ImGuiSelectableFlags_None,
-                                      ImVec2(0.0f, ImGui::GetFrameHeight())))
+                std::string text = label;
+                if (showArrow && state.sort.column == id)
+                    text += state.sort.ascending ? "  " ICON_LC_CHEVRON_UP
+                                                 : "  " ICON_LC_CHEVRON_DOWN;
+                text += "###hdr";
+                text += static_cast<char>('0' + col);
+                if (ImGui::Selectable(text.c_str(), false))
                 {
                     if (state.sort.column != id)
                         state.sort = OutlinerSort{ id, true };
@@ -1166,58 +1160,11 @@ namespace Arcane::Editor
                     else
                         state.sort = OutlinerSort{};   // third click: tree order
                 }
-                ImGui::PopID();
-
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-                const ImVec2 cellMin   = ImGui::GetItemRectMin();
-                const ImVec2 cellMax   = ImGui::GetItemRectMax();
-                const ImU32  ink       = ImGui::GetColorU32(ImGuiCol_TextDisabled);
-                const ImVec2 labelSize = ImGui::CalcTextSize(label);
-                const float  textY = cellMin.y + (cellMax.y - cellMin.y - labelSize.y) * 0.5f;
-                if (isIcon)
-                {
-                    // Glyph centered on both axes of its square slot.
-                    dl->AddText(ImVec2(cellMin.x +
-                                           (cellMax.x - cellMin.x - labelSize.x) * 0.5f,
-                                       textY), ink, label);
-                }
-                else
-                {
-                    dl->AddText(ImVec2(cellMin.x, textY), ink, label);
-                    if (state.sort.column == id)
-                    {
-                        // TableHeader's arrow scale, vertically centered,
-                        // padded one inner-spacing after the text.
-                        const float scale  = 0.65f;
-                        const float arrowH = ImGui::GetFontSize() * scale;
-                        ImGui::RenderArrow(dl,
-                            ImVec2(cellMin.x + labelSize.x +
-                                       ImGui::GetStyle().ItemInnerSpacing.x,
-                                   cellMin.y + (cellMax.y - cellMin.y - arrowH) * 0.5f),
-                            ink,
-                            state.sort.ascending ? ImGuiDir_Up : ImGuiDir_Down, scale);
-                    }
-                }
-
-                // UE separates its column headers with vertical dividers
-                // (SHeaderRow) while the ROWS stay line-free -- header-only,
-                // full cell height, centered in the double cell padding at
-                // the boundary (BordersInnerV would rule every row).
-                if (col < 2)
-                {
-                    // Full BAND height, not the Selectable's: the cell rect
-                    // is inset by the cell padding, and a divider that stops
-                    // short reads as a stray tick (capture loop, round 1).
-                    const float padY = ImGui::GetStyle().CellPadding.y;
-                    const float x = cellMax.x + ImGui::GetStyle().CellPadding.x;
-                    dl->AddLine(ImVec2(x, cellMin.y - padY),
-                                ImVec2(x, cellMax.y + padY),
-                                ImGui::GetColorU32(ImGuiCol_TableBorderStrong));
-                }
             };
-            headerCell(0, OutlinerSort::Column::Visibility, ICON_LC_EYE,      true);
-            headerCell(1, OutlinerSort::Column::Modified,   ICON_LC_ASTERISK, true);
-            headerCell(2, OutlinerSort::Column::Label,      "Label",          false);
+            headerCell(0, OutlinerSort::Column::Visibility, ICON_LC_EYE,      false);
+            headerCell(1, OutlinerSort::Column::Modified,   ICON_LC_ASTERISK, false);
+            headerCell(2, OutlinerSort::Column::Label,      "Label",          true);
+            ImGui::PopStyleColor();
 
             // Full-width row highlight via the TABLE's row background, not
             // the tree item's own frame: TreeNodeEx sits AFTER the per-depth
@@ -1260,13 +1207,6 @@ namespace Arcane::Editor
                 if (row.hidden || rowSelected || rowHovered)
                 {
                     const char* icon = row.hidden ? ICON_LC_EYE_OFF : ICON_LC_EYE;
-                    // Center the glyph in the square icon slot (the header
-                    // centers via SelectableTextAlign); the offset cursor is
-                    // consumed by the very next item, per the imgui.cpp:11544
-                    // trailing-SetCursorPos rule.
-                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                        std::max(0.0f, (ImGui::GetFrameHeight() -
-                                        ImGui::CalcTextSize(icon).x) * 0.5f));
                     if (row.hidden)
                         ImGui::PushStyleColor(ImGuiCol_Text,
                             ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -1316,10 +1256,6 @@ namespace Arcane::Editor
                 ImGui::TableSetColumnIndex(1);
                 if (row.modified)
                 {
-                    // Same square-slot centering as the eye.
-                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                        std::max(0.0f, (ImGui::GetFrameHeight() -
-                                        ImGui::CalcTextSize(ICON_LC_ASTERISK).x) * 0.5f));
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
                     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
                     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
