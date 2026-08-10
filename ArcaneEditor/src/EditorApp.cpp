@@ -80,10 +80,10 @@ namespace Arcane::Editor
         std::string EditorTitle(const Arcane::Project* project,
                                 const std::string& scene, bool sceneDirty)
         {
-            std::string title = "Arcane Editor";
+            std::string title = "Arcane";
             if (project)
-                title += " -- " + project->Manifest().name;
-            title += " -- " + scene;
+                title += " | " + project->Manifest().name;
+            title += " | " + scene;
             if (sceneDirty)
                 title += "*";
             return title;
@@ -990,7 +990,7 @@ namespace Arcane::Editor
         std::vector<Arcane::BootStage> stages = Arcane::HostBoot::EditorStages(ctx);
         for (Arcane::BootStage& stage : stages)
         {
-            if (stage.id == "runtime_create")       stage.run = [this, &ctx] { return StageRuntimeCreate(ctx); };
+            if (stage.id == "runtime_create")        stage.run = [this, &ctx] { return StageRuntimeCreate(ctx); };
             else if (stage.id == "gpu_core")         stage.run = [this, &ctx] { return StageGpuCore(ctx); };
             else if (stage.id == "editor_fonts")     stage.run = [this, &ctx] { return StageEditorFonts(ctx); };
             else if (stage.id == "editor_shell")     stage.run = [this, &ctx] { return StageEditorShell(ctx); };
