@@ -1112,8 +1112,15 @@ namespace Arcane::Editor
         // ImGui's TableHeader right-justifies its sort arrow in the cell and
         // offers no per-column way to hide it -- and this outliner wants the
         // arrow ONLY on Label, sitting directly after the text.
+        // NoSavedSettings: imgui.ini persists per-table column state keyed on
+        // the table id, and this table's saved 2-column-era state was
+        // overriding the fresh setup (three builds of column-width changes
+        // showed NOTHING at the desk until this). Nothing here needs
+        // persisting anyway -- widths are fixed and the sort state is OURS
+        // (OutlinerState::sort).
         const ImGuiTableFlags tflags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY
-                                     | ImGuiTableFlags_PadOuterX;
+                                     | ImGuiTableFlags_PadOuterX
+                                     | ImGuiTableFlags_NoSavedSettings;
         if (ImGui::BeginTable("##outliner_rows", 3, tflags, ImVec2(0.0f, -footerH)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
