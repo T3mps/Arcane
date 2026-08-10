@@ -74,6 +74,7 @@ Expected: compile FAILURES only in files that call `ReRegisterComponent` — `Sa
 - Modify: `Arcane/Sandbox/src/Sandbox.cpp` (:109-122)
 - Modify: `Arcane/PlaygroundGame/src/PlaygroundGame.cpp` (:117-123)
 - Modify: `Arcane/Tests/plugins/HotReloadPlugin.cpp` (:32-66)
+- Modify: `Arcane/Tests/src/PluginHostTest.cpp` (:181-230 — the disown test's semantics flip, so THIS task's commit is green; Task 3 adds the new coverage)
 
 **Interfaces:**
 - Consumes: `Astra::ComponentModule::Open(std::shared_ptr<Astra::ComponentRegistry>, std::string_view) -> ComponentModule` (empty/falsy on refusal), `template<Component...> void Register()`, `void Reset()`, `explicit operator bool()`. `ComponentRegistry::UnregisterModuleRange(const void*, size_t)` unchanged signature.
@@ -203,41 +204,9 @@ In `GamePlugin_Init` (:55), replace `ctx->engine->Components()->ReRegisterCompon
 
 In `GamePlugin_Shutdown` (:66): `GAME_API void GamePlugin_Shutdown() { g_module.reset(); g_pulse = {}; }`
 
-- [ ] **Step 6: Build + full non-GPU suite**
+- [ ] **Step 6: Rewrite the flipped regression test (restore-not-hole semantics)**
 
-```bat
-cd Arcane
-msbuild Arcane.slnx /p:Configuration=Debug /m
-bin\Debug-windows-x86_64-md\ArcaneTests\ArcaneTests.exe "~[gpu]"
-```
-
-Expected: build green. Tests: everything passes EXCEPT ONE known-flip documented in Task 3 — `"Unloading a plugin disowns the component descriptors it owned"` now fails its `== nullptr` assertion at PluginHostTest.cpp:212, because the owner stack RESTORES the test binary's anonymous Pulse base instead of leaving a purged hole. That single expected failure is the signal to proceed; any OTHER failure is a regression to fix before committing.
-
-- [ ] **Step 7: Commit (sync + migration atomically)**
-
-```bat
-cd D:\dev\starworks\Gacha
-git add ThirdParty/Astra Arcane/Arcane/src/Arcane/Scene/SceneModule.hpp Arcane/Arcane/src/Arcane/Scene/PhysicsComponents.hpp Arcane/Arcane/src/Arcane/Base/Runtime.cpp Arcane/Arcane/src/Arcane/Plugin/PluginHost.cpp Arcane/Arcane/src/Arcane/Plugin/PluginABI.hpp Arcane/Sandbox/src/Sandbox.cpp Arcane/PlaygroundGame/src/PlaygroundGame.cpp Arcane/Tests/plugins/HotReloadPlugin.cpp
-git commit -m "feat(plugin)!: Astra f8a75a9 + ComponentModule migration -- module-owned rosters, ABI v10"
-```
-
-(The one flipped test is fixed in Task 3's commit, minutes later, on the same branch. Note it in the commit body.)
-
----
-
-### Task 3: Test migration + new acceptance coverage
-
-**Files:**
-- Modify: `Arcane/Tests/src/PluginHostTest.cpp` (:181-230 rewrite; new test after :230; comment at :185)
-- Modify: `Arcane/Tests/src/PlaygroundGamePluginTest.cpp` (:55 ABI assert)
-- Modify: `Arcane/Tests/src/EditorComponentCatalogTest.cpp` (:297 comment only)
-
-**Interfaces:**
-- Consumes: the migrated HotReloadPlugin fixtures (V1/V2 both register Pulse via handles) and the Task 2 engine module.
-
-- [ ] **Step 1: Rewrite the disown regression test as a restore test**
-
-Replace the test at :181-230. The semantics IMPROVED: the test binary's anonymous `RegisterComponent<Pulse>` (:195) is now the shadowed BASE; plugin unload restores it instead of leaving a hole. Preserve the call-through-the-descriptor technique — it is what catches a dangling restore:
+The owner stack changes one existing test's correct expectation: the test binary's anonymous `RegisterComponent<Pulse>` (PluginHostTest.cpp:195) is now the shadowed BASE, and plugin unload RESTORES it instead of leaving a purged hole — so `== nullptr` at :212 is no longer the correct assertion. Replace the whole test at :181-230:
 
 ```cpp
 TEST_CASE("Unloading a plugin restores the descriptors it overrode", "[hotreload]")
@@ -283,6 +252,38 @@ TEST_CASE("Unloading a plugin restores the descriptors it overrode", "[hotreload
 }
 ```
 
+- [ ] **Step 7: Build + full non-GPU suite**
+
+```bat
+cd Arcane
+msbuild Arcane.slnx /p:Configuration=Debug /m
+bin\Debug-windows-x86_64-md\ArcaneTests\ArcaneTests.exe "~[gpu]"
+```
+
+Expected: build green, ALL tests green (count = Task 1 baseline). Any failure is a regression to fix before committing.
+
+- [ ] **Step 8: Commit (sync + migration atomically, green)**
+
+```bat
+cd D:\dev\starworks\Gacha
+git add ThirdParty/Astra Arcane/Arcane/src/Arcane/Scene/SceneModule.hpp Arcane/Arcane/src/Arcane/Scene/PhysicsComponents.hpp Arcane/Arcane/src/Arcane/Base/Runtime.cpp Arcane/Arcane/src/Arcane/Plugin/PluginHost.cpp Arcane/Arcane/src/Arcane/Plugin/PluginABI.hpp Arcane/Sandbox/src/Sandbox.cpp Arcane/PlaygroundGame/src/PlaygroundGame.cpp Arcane/Tests/plugins/HotReloadPlugin.cpp Arcane/Tests/src/PluginHostTest.cpp
+git commit -m "feat(plugin)!: Astra f8a75a9 + ComponentModule migration -- module-owned rosters, ABI v10"
+```
+
+---
+
+### Task 3: Test migration + new acceptance coverage
+
+**Files:**
+- Modify: `Arcane/Tests/src/PluginHostTest.cpp` (:181-230 rewrite; new test after :230; comment at :185)
+- Modify: `Arcane/Tests/src/PlaygroundGamePluginTest.cpp` (:55 ABI assert)
+- Modify: `Arcane/Tests/src/EditorComponentCatalogTest.cpp` (:297 comment only)
+
+**Interfaces:**
+- Consumes: the migrated HotReloadPlugin fixtures (V1/V2 both register Pulse via handles) and the Task 2 engine module.
+
+- [ ] **Step 1: (moved to Task 2 Step 6 — the flipped test is rewritten there so Task 2's commit is green; this task ADDS coverage only)**
+
 - [ ] **Step 2: New secondary-coverage regression test** (the 2026-08-09 audit's live bug — secondaries were never disowned; now their handles clean up, and the new host net catches a forgetter). Add after the rewritten test:
 
 ```cpp
@@ -323,7 +324,7 @@ TEST_CASE("Unloading secondaries leaves no descriptor aimed at their images", "[
 
 (Reuse the file's existing `StepAllK` helper; match its ReadPulse/fixture-copy conventions. If `StepAllK` requires the vtable differently, mirror the secondary test at :116-149.)
 
-- [ ] **Step 3: Meta-transience acceptance assertion** (spec §4: no consumer retains a `TypeMeta*` across erasure). Extend the rewritten Step-1 test — after `host.Unload()` and the restore assertions, add:
+- [ ] **Step 3: Meta-transience acceptance assertion** (spec §4: no consumer retains a `TypeMeta*` across erasure). Extend the test Task 2 Step 6 rewrote (`"Unloading a plugin restores the descriptors it overrode"`) — after its restore assertions, add:
 
 ```cpp
     // Meta acceptance (spec 2026-08-09 §4): Pulse is REFLECTED, and its meta was
