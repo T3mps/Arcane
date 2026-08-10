@@ -294,9 +294,10 @@ TEST_CASE("a fresh Runtime registers the engine's own component roster", "[edito
     // project): the Add Component catalog can only offer what the runtime
     // ComponentRegistry knows, and NOTHING registered the engine's own scene
     // components in a live host -- the roster came entirely from whatever the
-    // hosted game plugin chose to ReRegisterComponent<T>() in its Init. A
-    // project whose plugin registered two types showed a two-row, fully
-    // disabled catalog, so "+ Add Component" appeared to do nothing.
+    // hosted game plugin chose to register through its own ComponentModule
+    // handle in its Init. A project whose plugin registered two types showed
+    // a two-row, fully disabled catalog, so "+ Add Component" appeared to do
+    // nothing.
     //
     // The same gap silently dropped Identity/Hidden when a runtime host
     // loaded a scene the editor saved: SceneSerializer skips a type that is

@@ -13,6 +13,7 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 
 #include <Astra/Registry/Registry.hpp>
+#include <Astra/Reflection/MetaRegistry.hpp>
 
 #include <cstddef>
 #include <filesystem>
@@ -217,6 +218,49 @@ TEST_CASE("Unloading a plugin restores the descriptors it overrode", "[hotreload
     tf->DefaultConstruct(buf);
     tf->Destruct(buf);
 
+    // Meta acceptance (spec 2026-08-09 section 4): Pulse is REFLECTED, and its meta was
+    // rebound to the plugin image while loaded. After unload+restore, consumers
+    // that look meta up fresh must get a live entry -- and the restored
+    // descriptor's cached meta pointer must AGREE with the registry (the Astra
+    // side rebinds in place at a stable address on pop).
+    const Astra::TypeMeta* liveMeta = Astra::MetaRegistry::Instance().Get(Astra::TypeID<Pulse>::Hash());
+    REQUIRE(liveMeta != nullptr);
+    CHECK(restored->meta == liveMeta);
+
+    CHECK(Arcane::RenderErrorCount() == 0);
+}
+
+TEST_CASE("Unloading secondaries leaves no descriptor aimed at their images", "[hotreload]")
+{
+    // The audited live bug: plugins.clear() used to FreeLibrary secondaries with
+    // no purge, leaving Pulse's descriptor aimed at the unmapped V2 image
+    // permanently. Now V2's own ComponentModule resets in its Shutdown (and the
+    // host's DisownPluginImages nets a forgetter). After Unload, the descriptor
+    // must be the test binary's restored base -- calling through it faults if
+    // any dangling entry survived.
+    std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
+                               std::filesystem::copy_options::overwrite_existing);
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Components()->RegisterComponent<Pulse>();
+    const Astra::ComponentID pulseId = Astra::TypeID<Pulse>::Value();
+    const Astra::ComponentDescriptor* base = rt.Components()->GetComponentDescriptor(pulseId);
+    REQUIRE(base != nullptr);
+
+    {
+        Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+        host.AddPlugin(std::filesystem::path("HotReloadPluginV2.dll"));   // secondary
+        REQUIRE(host.Load());
+        StepAllK(rt, host, 1);
+        // Primary AND secondary both pushed handles over the base: depth-2 stack.
+        host.Unload();
+    }
+
+    const Astra::ComponentDescriptor* restored = rt.Components()->GetComponentDescriptor(pulseId);
+    REQUIRE(restored == base);
+    alignas(Pulse) std::byte buf[sizeof(Pulse)];
+    restored->DefaultConstruct(buf);      // faults if a dead image's entry was restored
+    restored->Destruct(buf);
     CHECK(Arcane::RenderErrorCount() == 0);
 }
 
