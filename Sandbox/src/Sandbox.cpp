@@ -106,22 +106,10 @@ extern "C"
                 ctx->imguiUserData);
         }
 
-        // 2. Re-register every component descriptor into THIS module so its function
-        //    pointers (ctor/dtor/serialize) target the plugin's code, not the previously
-        //    loaded image's. Scene + physics components both.
-        auto creg = ctx->engine->Components();
-        creg->ReRegisterComponent<Arcane::Transform>();
-        creg->ReRegisterComponent<Arcane::WorldTransform>();
-        creg->ReRegisterComponent<Arcane::PreviousTransform>();
-        creg->ReRegisterComponent<Arcane::SpriteRenderer>();
-        creg->ReRegisterComponent<Arcane::PostProcess>();
-        creg->ReRegisterComponent<Arcane::Identity>();
-        creg->ReRegisterComponent<Arcane::Hidden>();
-        creg->ReRegisterComponent<Arcane::RigidBody2D>();
-        creg->ReRegisterComponent<Arcane::Collider2D>();
-        creg->ReRegisterComponent<Arcane::PhysicsBodyRef>();
+        // Engine components are engine-owned now (Runtime's ComponentModule);
+        // this plugin owns no component types and registers nothing.
 
-        // 3. Register systems (functors in this module).
+        // 2. Register systems (functors in this module).
         //    fixedUpdate: EMPTY of engine systems. The PHYSICS STEP is the sandbox's
         //                 RunLoop plugin-fixed hook (SandboxApp::FixedUpdate); RunLoop now
         //                 owns pause/single-step/time-scale and GATES this whole phase, so
@@ -137,7 +125,7 @@ extern "C"
         sch.render.AddSystem<Arcane::Sandbox::PhysicsDebugRenderSystem>();
         sch.render.AddSystem<Arcane::Sandbox::PolygonDraftRenderSystem>();
 
-        // 4. Build the scene (fresh boot only; a hot-reload-with-state restores it).
+        // 3. Build the scene (fresh boot only; a hot-reload-with-state restores it).
         //    BuildInitialScene mints its OWN fresh PhysicsResource (via the clean-rebuild
         //    path it shares with SetScene/Reset), so no pre-EnsurePhysicsResource is needed
         //    on the build path; the LoadState path below still calls EnsurePhysicsResource.

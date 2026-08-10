@@ -3,9 +3,9 @@ change them in the Astra repo and re-run scripts\sync-astra.ps1, or the next
 sync silently reverts your edit.
 
 source  : D:\dev\starworks\Astra
-commit  : d1750e10006b01b68c5cd2c85ad16020fc761013
+commit  : f8a75a920ad07a7e06af2936948f1ffa19463804
 branch  : dev
-subject : feat(component): UnregisterModuleRange -- module unload disowns its descriptors
-synced  : 2026-08-08 19:02:41
+subject : fix(component): hoist alignment refusal above the meta phase -- refused types never touch the registry
+synced  : 2026-08-09 23:41:48
 scope   : include/ only (Arcane compiles nothing else from this tree --
           see Arcane/premake5.lua IncludeDir["Astra"])

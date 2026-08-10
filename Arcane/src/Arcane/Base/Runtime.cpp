@@ -22,6 +22,7 @@
 #include <Astra/Serialization/SerializationError.hpp>
 
 #include <optional>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -130,12 +131,34 @@ namespace Arcane
             // SceneSerializer skips a type that is reflected but not
             // REGISTERED as a component.
             //
-            // Safe to do unconditionally, and safe for plugins to re-register
-            // over: RegisterComponent<T> is idempotent (it early-returns when
-            // the id is already registered), and a plugin's later
-            // ReRegisterComponent<T> still rebinds the descriptor's function
-            // pointers to that module, which is the whole point of the
-            // hot-reload path.
+            // Plugins now register only the types they themselves implement,
+            // through their own RAII Astra::ComponentModule handle (see
+            // PluginHost.cpp / HotReloadPlugin.cpp) -- the old "re-register
+            // the roster after unload" host ritual is gone. The engine's OWN
+            // roster deliberately stays on the PLAIN (anonymous, owner-less)
+            // registration path below rather than ALSO going through its own
+            // ComponentModule: a plugin's InstallOwned already shadows
+            // WHATEVER is live for an id, anonymous or module-owned, and
+            // restores that shadow on its own unload -- the anonymous
+            // baseline gets the exact same "plugin overrides it, unload
+            // restores it" behavior for free. Wrapping this roster in its own
+            // ComponentModule was tried and reverted: ReleaseModule reports a
+            // module's entries "cleared to empty" when it is the sole owner
+            // within ITS OWN registry, which erases the type's TypeMeta from
+            // the SHARED TypeContext (ComponentModule.hpp's own documented
+            // scope caveat -- "one registry per context is the supported
+            // shape"). Production only ever has one Runtime for the process's
+            // life, so that never bites there, but the test suite runs MANY
+            // short-lived Runtime instances (each with its own fresh
+            // ComponentRegistry, by existing design) against ONE process-wide
+            // TypeContext -- every one of those Runtimes tearing down its own
+            // engine ComponentModule wiped the shared reflected meta out from
+            // under every other registry/test using the same context, and a
+            // follow-up attempt to keep that handle alive past the Runtime's
+            // own lifetime (retiring it into a longer-lived container) traded
+            // that bug for a cross-module static-destruction-order crash at
+            // process exit. Anonymous registration was already correct and
+            // is not module-owned, so nothing here is ever torn down early.
             //
             // ComponentID NUMBERING (corrected 2026-07-26 -- the previous comment
             // here claimed ids are resolved BY HASH and therefore order-
@@ -147,19 +170,6 @@ namespace Arcane
             // registered Transform + SpriteRenderer used to get 0,1; it now gets
             // 0,3). Ids are process-local; only the hash is stable across
             // processes.
-            //
-            // Nothing in this engine is hurt by that today: every binary blob is
-            // memory-only and same-process (Play snapshots, structural undo, hot
-            // reload), so the ids written and the ids read always come from one
-            // counter. The one path that could bite is a PATH-BASED Save then Load
-            // in a different process -- the vendored Astra still rebuilds an
-            // archetype straight from the on-disk mask words
-            // (Archetype.hpp:871, `make_unique<Archetype>(mask)`), which assumes
-            // the ids mean the same thing in both runs. That is already fixed
-            // upstream in the dev Astra (marked "CR-4": the mask is rebuilt from
-            // hash-resolved descriptors plus a popcount integrity check) and lands
-            // on the next vendor sync. Until then, treat cross-process
-            // Save/Load of a registry snapshot as unsupported.
             RegisterSceneComponents(*components);
             RegisterPhysicsComponents(*components);
 

@@ -114,13 +114,8 @@ extern "C"
                 ctx->imguiUserData);
         }
 
-        auto creg = ctx->engine->Components();
-        creg->ReRegisterComponent<Arcane::Transform>();   // 2. descriptors -> this module
-        creg->ReRegisterComponent<Arcane::WorldTransform>();
-        creg->ReRegisterComponent<Arcane::SpriteRenderer>();
-        creg->ReRegisterComponent<Arcane::PostProcess>();
-        creg->ReRegisterComponent<Arcane::Identity>();
-        creg->ReRegisterComponent<Arcane::Hidden>();
+        // Engine components are engine-owned now (Runtime's ComponentModule);
+        // this plugin owns no component types and registers nothing.
 
         auto& sch = ctx->engine->Schedulers();                 // 3. register systems (functors in this module)
         sch.fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>();

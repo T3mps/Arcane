@@ -52,7 +52,7 @@ TEST_CASE("PlaygroundGame runs and survives a reload", "[hotreload]")
     REQUIRE(vt != nullptr);
     REQUIRE(vt->ABIVersion != nullptr);
     CHECK(vt->ABIVersion() == Arcane::kGamePluginABIVersion);
-    CHECK(Arcane::kGamePluginABIVersion == 9u);   // v9: Astra re-vendored (40/60 headers; TypeContext identity rules changed)
+    CHECK(Arcane::kGamePluginABIVersion == 10u);  // v10: Astra re-vendored -- ComponentModule migration, ReRegisterComponent removed
     CHECK(vt->DrawUI != nullptr);
 
     const glm::vec2 before = MoonWorldPos(rt);

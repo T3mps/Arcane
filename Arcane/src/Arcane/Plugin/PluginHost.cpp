@@ -5,8 +5,6 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
-#include <Arcane/Scene/PhysicsComponents.hpp>   // RegisterPhysicsComponents (engine roster restore)
-#include <Arcane/Scene/SceneModule.hpp>         // RegisterSceneComponents   (engine roster restore)
 
 #include <Astra/Serialization/BinaryReader.hpp>
 #include <Astra/Serialization/BinaryWriter.hpp>
@@ -244,25 +242,23 @@ namespace Arcane
             runtime.ResetRegistry();
 
             // ...and the DESCRIPTORS themselves die with the image too, which the
-            // line above does NOT cover. A ComponentDescriptor stores raw function
-            // pointers into whichever module registered the type, and a plugin's
-            // Init deliberately re-points even ENGINE-owned types at itself via
-            // ReRegisterComponent -- that is the hot-reload contract, not a bug.
-            // The moment this image is unmapped every one of those aims at freed
-            // code, and Astra's first-registration guard means RegisterComponent<T>
-            // can never rebuild them: the next scene load calls one and takes an
-            // access violation. (Diagnosed 2026-07-31 from a hang/crash on project
-            // switch: Aphelyon -> SampleProject -> Aphelyon, faulting in
-            // AddComponentByTypeName -> ComponentDescriptor::DefaultConstruct.)
+            // line above does NOT cover. The hot-reload contract is now HANDLE-
+            // BASED: a well-behaved plugin owns only the component types it
+            // implements via its own Astra::ComponentModule, and that handle's
+            // Shutdown-time Reset() already cleaned them up (restoring whatever
+            // it shadowed) before we get here. The engine's own roster is never
+            // displaced in the first place -- Runtime's ComponentModule owns it
+            // and that module never dies -- so there is nothing to rebind on this
+            // path anymore.
             //
-            // Disown them while the image is STILL MAPPED, then restore the
-            // engine's roster below. BOTH halves are required:
-            //   - the purge covers types only this plugin knew; they become a
-            //     clean SkippedUnregistered miss in SceneSerializer instead of a
-            //     call into freed memory;
-            //   - the re-registration rebinds the types Arcane owns back to
-            //     Arcane.dll, so a host with NO plugin loaded still has a working
-            //     roster (without it, unloading a plugin would strip Transform).
+            // The purge below is the FALLBACK NET for a plugin that forgot (or
+            // never adopted) that cleanup: it catches any descriptor still
+            // pointing into this image while the image is STILL MAPPED, turning
+            // what used to be a dangling call into freed code (Diagnosed
+            // 2026-07-31 from a hang/crash on project switch: Aphelyon ->
+            // SampleProject -> Aphelyon, faulting in AddComponentByTypeName ->
+            // ComponentDescriptor::DefaultConstruct) into a clean
+            // SkippedUnregistered miss in SceneSerializer instead.
             if (const Module::ImageSpan image = img.plugin->LoadedModule().Image(); image.size != 0)
             {
                 if (const auto& creg = runtime.Components())
@@ -274,13 +270,26 @@ namespace Arcane
             }
 
             img.plugin.reset();   // FreeLibrary / dlclose
+        }
 
-            // Rebind the engine's own types to THIS module. Cheap and idempotent:
-            // RegisterComponent<T> early-returns for anything the purge left alone.
-            if (const auto& creg = runtime.Components())
+        // Fallback net for secondaries, mirroring TeardownImage's purge for the
+        // primary: a well-behaved plugin's ComponentModule already cleaned up in
+        // its Shutdown; this catches one that forgot, BEFORE FreeLibrary.
+        void DisownPluginImages()
+        {
+            const auto& creg = runtime.Components();
+            if (!creg)
+                return;
+            for (auto& img : plugins)
             {
-                RegisterSceneComponents(*creg);
-                RegisterPhysicsComponents(*creg);
+                if (!img.plugin)
+                    continue;
+                if (const Module::ImageSpan image = img.plugin->LoadedModule().Image(); image.size != 0)
+                {
+                    const std::size_t dropped = creg->UnregisterModuleRange(image.base, image.size);
+                    if (dropped != 0)
+                        ARC_TRACE("PluginHost: disowned {} descriptor(s) from a secondary that skipped handle cleanup", dropped);
+                }
             }
         }
 
@@ -309,6 +318,7 @@ namespace Arcane
                     if (!p)   // a real load failure, not Init()-returned-false -- name the cause
                         PublishPluginLoadFailure(name, src, resolveError);
                     ShutdownPluginsLive();
+                    DisownPluginImages();
                     plugins.clear();
                     ARC_ERROR("plugin: failed to load secondary '{}'", src.generic_string());
                     return false;
@@ -572,6 +582,7 @@ namespace Arcane
             m_impl->runtime.ClearSystems();
             m_impl->runtime.ResetRegistry();
         }
+        m_impl->DisownPluginImages();
         m_impl->plugins.clear();   // unload plugin DLLs AFTER the reset
     }
 

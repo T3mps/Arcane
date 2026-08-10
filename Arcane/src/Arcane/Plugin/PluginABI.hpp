@@ -81,7 +81,13 @@ namespace Arcane
     //     back an INVALID ComponentID that then overflows the component bitmap
     //     -- an assert in a checked build, a wrong-component read in a
     //     shipping one. Reject the pairing.
-    inline constexpr uint32_t kGamePluginABIVersion = 9;
+    // v10 (2026-08-09): Astra re-vendored to dev f8a75a9 -- the ComponentModule
+    //     program. ReRegisterComponent NO LONGER EXISTS (plugins own their types
+    //     via RAII ComponentModule handles, heap-held + reset in Shutdown), and
+    //     ComponentRegistry grew owner/shadow/meta-thunk state, so a v9 plugin's
+    //     inlined template code manipulates a registry whose layout changed.
+    //     Layout mismatch plus a removed API: reject the pairing.
+    inline constexpr uint32_t kGamePluginABIVersion = 10;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

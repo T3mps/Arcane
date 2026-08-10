@@ -12,12 +12,14 @@
 #include <Arcane/Plugin/PluginABI.hpp>
 
 #include <Astra/Registry/Registry.hpp>
+#include <Astra/Component/ComponentModule.hpp>
 #include <Astra/Component/ComponentRegistry.hpp>
 #include <Astra/Core/TypeContext.hpp>
 #include <Astra/Serialization/BinaryWriter.hpp>
 #include <Astra/Serialization/BinaryReader.hpp>
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 #ifndef HOTRELOAD_STEP
@@ -33,6 +35,11 @@ namespace
 {
     Arcane::EngineContext* g_ctx = nullptr;
     Astra::Entity          g_pulse{};
+
+    // Heap-held ownership handle for this module's component types. Reset in
+    // Shutdown (which the host calls BEFORE unmapping) -- never a DLL static:
+    // a static's destructor would run under the loader lock during FreeLibrary.
+    std::optional<Astra::ComponentModule> g_module;
 
     void CacheHandle(Astra::Registry& reg)
     {
@@ -52,7 +59,10 @@ extern "C"
     {
         Astra::SetTypeContext(ctx->typeContext);          // 1. shared context in THIS module
         g_ctx = ctx;
-        ctx->engine->Components()->ReRegisterComponent<Pulse>();   // 2. descriptors -> this module
+        g_module = Astra::ComponentModule::Open(ctx->engine->Components(), "HotReloadPlugin");
+        if (!*g_module)
+            return false;                                  // SetTypeContext above makes this unreachable; fail loudly if not
+        g_module->Register<Pulse>();                       // descriptors + meta -> THIS image
 
         Astra::Registry& reg = ctx->engine->Registry();
         bool exists = false;
@@ -63,7 +73,7 @@ extern "C"
         return true;
     }
 
-    GAME_API void GamePlugin_Shutdown() { g_pulse = {}; }
+    GAME_API void GamePlugin_Shutdown() { g_module.reset(); g_pulse = {}; }
 
     GAME_API void GamePlugin_FixedUpdate(double)
     {
