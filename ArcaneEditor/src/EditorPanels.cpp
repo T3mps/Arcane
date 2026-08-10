@@ -1084,8 +1084,14 @@ namespace Arcane::Editor
         }
 
         const float footerH = ImGui::GetFrameHeightWithSpacing();
+        // PadOuterX is NOT a default for borderless tables (only BordersOuterV
+        // implies it), so without it the outermost columns run flush to the
+        // table edges -- the header's eye sat on the far left edge and the
+        // sort arrow on the far right. One flag pads header and rows alike,
+        // so the row eyes stay column-aligned under the header eye.
         const ImGuiTableFlags tflags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY
-                                     | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
+                                     | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate
+                                     | ImGuiTableFlags_PadOuterX;
         if (ImGui::BeginTable("##outliner_rows", 2, tflags, ImVec2(0.0f, -footerH)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
