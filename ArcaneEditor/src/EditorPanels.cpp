@@ -1394,10 +1394,13 @@ namespace Arcane::Editor
         // Drop below the table = unparent to root. Only visible mid-drag, and
         // only for our own entity payload -- GetDragDropPayload() returns
         // non-null for ANY active drag (e.g. an asset-browser drag), which
-        // used to show this strip for foreign payloads too.
+        // used to show this strip for foreign payloads too. The bool is kept:
+        // the status bar below yields the footer area to this strip while it
+        // is up.
         const ImGuiPayload* activeDrag = ImGui::GetDragDropPayload();
-        if (canEditStructure && activeDrag != nullptr
-            && activeDrag->IsDataType(kOutlinerDragType))
+        const bool droppingBelowTable = canEditStructure && activeDrag != nullptr
+            && activeDrag->IsDataType(kOutlinerDragType);
+        if (droppingBelowTable)
         {
             ImGui::Selectable("(drop here to unparent)", false,
                               ImGuiSelectableFlags_Disabled);
@@ -1454,13 +1457,46 @@ namespace Arcane::Editor
         }
         DrawAddComponentPopup(registry, sel.Entities(), undo, binding);
 
-        std::size_t total = 0;
-        for (Astra::Entity e : registry.GetEntityManager())
+        // ---- status bar -----------------------------------------------------
+        // UE's outliner closes with a full-width count bar, not floating text.
+        // Drawn ENTIRELY through the draw list -- fill, seam, and text -- so
+        // it is pure chrome: no items, no cursor moves, no content-size
+        // growth (a trailing SetCursorPos-then-text here would re-create the
+        // Console's imgui.cpp:11544 abort, and an item this low would make
+        // the outer window want a scrollbar). Full-bleed on purpose: the
+        // fill runs edge to edge UNDER the window padding, which is what
+        // makes it read as panel chrome rather than another row. The rows
+        // table's footerH reserve (above) is what keeps rows from sliding
+        // beneath it. Suppressed while the unparent drop strip occupies the
+        // footer -- mid-drag that strip is the load-bearing UI.
+        if (!droppingBelowTable)
         {
-            (void)e;
-            ++total;
+            std::size_t total = 0;
+            for (Astra::Entity e : registry.GetEntityManager())
+            {
+                (void)e;
+                ++total;
+            }
+
+            const ImVec2 winPos  = ImGui::GetWindowPos();
+            const ImVec2 winSize = ImGui::GetWindowSize();
+            const float  statusH = ImGui::GetFrameHeight();
+            const ImVec2 barMin(winPos.x, winPos.y + winSize.y - statusH);
+            const ImVec2 barMax(winPos.x + winSize.x, winPos.y + winSize.y);
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(barMin, barMax, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
+            dl->AddLine(barMin, ImVec2(barMax.x, barMin.y),
+                        ImGui::GetColorU32(ImGuiCol_Border));
+
+            char status[64];
+            std::snprintf(status, sizeof(status), "%zu entities (%zu selected)",
+                          total, sel.Count());
+            const ImVec2 textSize = ImGui::CalcTextSize(status);
+            dl->AddText(ImVec2(barMin.x + ImGui::GetStyle().FramePadding.x * 2.0f,
+                               barMin.y + (statusH - textSize.y) * 0.5f),
+                        ImGui::GetColorU32(ImGuiCol_TextDisabled), status);
         }
-        ImGui::Text("%zu entities (%zu selected)", total, sel.Count());
 
         ImGui::End();
     }
