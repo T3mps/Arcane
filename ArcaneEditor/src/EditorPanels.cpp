@@ -1130,36 +1130,27 @@ namespace Arcane::Editor
             ImGui::TableSetupColumn(ICON_LC_ASTERISK, ImGuiTableColumnFlags_WidthFixed, iconColW);
             ImGui::TableSetupColumn("Label");
 
-            // CUSTOM header row (see the flags comment): each cell is a
-            // Selectable (HeaderHovered fill on hover, like a real header)
-            // that cycles state.sort ascending -> descending -> none -- the
-            // tri-state the old SortTristate flag provided. All three columns
-            // sort; only Label ever shows the arrow, an inline chevron padded
-            // directly after the text ("###" keeps the widget id stable while
-            // the label swaps). Legend text dims, as before: chrome fill +
-            // muted text is what separates "column header" from "entity row".
-            // Rows were built with LAST frame's sort (one-frame lag, rebuilt
-            // every frame anyway).
+            // CUSTOM header row, built as WIDGETS rather than typesetting:
+            // the first cut appended chevron CHARACTERS to the label string
+            // and squeezed icon glyphs into a one-text-line row -- alignment
+            // by string surgery. Here each cell is one full-height Selectable
+            // (the hit target + hover fill), and its CONTENT -- glyph, label,
+            // sort arrow -- is DRAWN through the draw list at measured
+            // positions: nothing shifts when the sort changes, the glyphs
+            // center in their square slots, and the arrow is ImGui's own
+            // triangle (RenderArrow, the primitive TableHeader itself draws)
+            // padded directly after the Label text. Clicking cycles
+            // state.sort ascending -> descending -> none (the old
+            // SortTristate). Rows were built with LAST frame's sort
+            // (one-frame lag, rebuilt every frame anyway).
             ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             const auto headerCell = [&state](int col, OutlinerSort::Column id,
-                                             const char* label, bool showArrow)
+                                             const char* label, bool isIcon)
             {
                 ImGui::TableSetColumnIndex(col);
-                std::string text = label;
-                if (showArrow && state.sort.column == id)
-                    text += state.sort.ascending ? "  " ICON_LC_CHEVRON_UP
-                                                 : "  " ICON_LC_CHEVRON_DOWN;
-                text += "###hdr";
-                text += static_cast<char>('0' + col);
-                // Icon columns center their glyph in the square slot; Label
-                // stays left-aligned like any text header.
-                const bool iconCol = (col < 2);
-                if (iconCol)
-                    ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign,
-                                        ImVec2(0.5f, 0.0f));
-                if (ImGui::Selectable(text.c_str(), false))
+                ImGui::PushID(col);
+                if (ImGui::Selectable("##hdr", false, ImGuiSelectableFlags_None,
+                                      ImVec2(0.0f, ImGui::GetFrameHeight())))
                 {
                     if (state.sort.column != id)
                         state.sort = OutlinerSort{ id, true };
@@ -1168,28 +1159,53 @@ namespace Arcane::Editor
                     else
                         state.sort = OutlinerSort{};   // third click: tree order
                 }
-                if (iconCol)
-                    ImGui::PopStyleVar();
+                ImGui::PopID();
+
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 cellMin   = ImGui::GetItemRectMin();
+                const ImVec2 cellMax   = ImGui::GetItemRectMax();
+                const ImU32  ink       = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+                const ImVec2 labelSize = ImGui::CalcTextSize(label);
+                const float  textY = cellMin.y + (cellMax.y - cellMin.y - labelSize.y) * 0.5f;
+                if (isIcon)
+                {
+                    // Glyph centered on both axes of its square slot.
+                    dl->AddText(ImVec2(cellMin.x +
+                                           (cellMax.x - cellMin.x - labelSize.x) * 0.5f,
+                                       textY), ink, label);
+                }
+                else
+                {
+                    dl->AddText(ImVec2(cellMin.x, textY), ink, label);
+                    if (state.sort.column == id)
+                    {
+                        // TableHeader's arrow scale, vertically centered,
+                        // padded one inner-spacing after the text.
+                        const float scale  = 0.65f;
+                        const float arrowH = ImGui::GetFontSize() * scale;
+                        ImGui::RenderArrow(dl,
+                            ImVec2(cellMin.x + labelSize.x +
+                                       ImGui::GetStyle().ItemInnerSpacing.x,
+                                   cellMin.y + (cellMax.y - cellMin.y - arrowH) * 0.5f),
+                            ink,
+                            state.sort.ascending ? ImGuiDir_Up : ImGuiDir_Down, scale);
+                    }
+                }
+
                 // UE separates its column headers with vertical dividers
-                // (SHeaderRow) while the ROWS stay line-free -- so the line
-                // is drawn here, header-only, at the cell boundary, rather
-                // than via BordersInnerV, which would rule every row. Drawn
-                // after the trailing cell padding so it sits centered
-                // between the two columns' contents.
+                // (SHeaderRow) while the ROWS stay line-free -- header-only,
+                // full cell height, centered in the double cell padding at
+                // the boundary (BordersInnerV would rule every row).
                 if (col < 2)
                 {
-                    const ImVec2 cellMin = ImGui::GetItemRectMin();
-                    const ImVec2 cellMax = ImGui::GetItemRectMax();
                     const float x = cellMax.x + ImGui::GetStyle().CellPadding.x;
-                    ImGui::GetWindowDrawList()->AddLine(
-                        ImVec2(x, cellMin.y), ImVec2(x, cellMax.y),
-                        ImGui::GetColorU32(ImGuiCol_TableBorderLight));
+                    dl->AddLine(ImVec2(x, cellMin.y), ImVec2(x, cellMax.y),
+                                ImGui::GetColorU32(ImGuiCol_TableBorderLight));
                 }
             };
-            headerCell(0, OutlinerSort::Column::Visibility, ICON_LC_EYE,      false);
-            headerCell(1, OutlinerSort::Column::Modified,   ICON_LC_ASTERISK, false);
-            headerCell(2, OutlinerSort::Column::Label,      "Label",          true);
-            ImGui::PopStyleColor();
+            headerCell(0, OutlinerSort::Column::Visibility, ICON_LC_EYE,      true);
+            headerCell(1, OutlinerSort::Column::Modified,   ICON_LC_ASTERISK, true);
+            headerCell(2, OutlinerSort::Column::Label,      "Label",          false);
 
             // Full-width row highlight via the TABLE's row background, not
             // the tree item's own frame: TreeNodeEx sits AFTER the per-depth
