@@ -31,6 +31,7 @@ TEST_CASE("CategoryForMessage maps the engine's subsystem prefixes", "[editor]")
     CHECK(CategoryForMessage("SpriteMaterialCache: failed to compile") == "Material");
     CHECK(CategoryForMessage("PostChainCache: createShader failed") == "Material");
     CHECK(CategoryForMessage("LoadMaterialAsset: not a material") == "Material");
+    CHECK(CategoryForMessage("Build: msbuild exited with code 0") == "Build");
 }
 
 TEST_CASE("CategoryForMessage falls back to General for an unknown prefix", "[editor]")

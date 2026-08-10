@@ -44,6 +44,7 @@ namespace Arcane::Editor
         bool openScene = false;      // File -> Open Scene...     (open-file dialog)
         bool saveScene = false;      // File -> Save Scene        (Save As when never saved)
         bool saveSceneAs = false;    // File -> Save Scene As...  (save dialog)
+        bool rebuildModule = false;  // Build -> Rebuild Game Module (worker premake+msbuild)
     };
 
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
@@ -53,9 +54,14 @@ namespace Arcane::Editor
     // (same CommandStack as the Ctrl+Z / Ctrl+Y shortcuts handled in the app input loop).
     // Menu clicks land in `requests`; the caller launches the dialogs.
     // `sceneDirty` puts the * on Save Scene; `playing` greys both Save items out.
+    // `buildingModule`/`hasGameModule` gate Build -> Rebuild Game Module
+    // (greyed while playing -- the UE model, see the item's own comment --
+    // while a build is already running, and when the open project declares no
+    // gameModule at all).
     // `recents` populates File -> Open Recent; null or empty greys the submenu.
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
                         bool sceneDirty, bool playing,
+                        bool buildingModule, bool hasGameModule,
                         const RecentSelection* recents = nullptr);
 
     // Emit the DockSpace() into the host window opened by BeginDockSpace and close it.

@@ -95,10 +95,13 @@ namespace Arcane
         // self-heal a CONTENT-ONLY project across an engine ABI bump -- with
         // no gameModule there is no compiled code behind the stamp, so the
         // old number is inert metadata that would otherwise lock the user
-        // out. Callers must NOT restamp a project that has a game module:
-        // the plugin gate compares the DLL's exported ABI, and a restamped
-        // manifest over a stale DLL would make the Hub report compatible
-        // while the module still refuses to load.
+        // out. Callers must NOT restamp a project that has a game module
+        // OVER A STALE DLL: the plugin gate compares the DLL's exported ABI,
+        // and a restamped manifest over a stale DLL would make the Hub report
+        // compatible while the module still refuses to load. The one moment a
+        // module project may be restamped is immediately after its module was
+        // REBUILT against this engine (the editor's Build -> Rebuild Game
+        // Module success path) -- then the stamp and the DLL agree again.
         bool RestampEngineAbi(int abi);
 
     private:

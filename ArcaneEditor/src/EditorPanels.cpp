@@ -43,6 +43,7 @@ namespace Arcane::Editor
 {
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
                         bool sceneDirty, bool playing,
+                        bool buildingModule, bool hasGameModule,
                         const RecentSelection* recents)
     {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -152,6 +153,26 @@ namespace Arcane::Editor
                 ImGui::MenuItem("Cut");
                 ImGui::MenuItem("Copy");
                 ImGui::MenuItem("Paste");
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Build"))
+            {
+                // Disabled during Play -- the UE model: the level editor
+                // refuses a recompile while PIE runs (vendored source,
+                // LevelEditorActions.cpp:1360-1374) and hot reload defers a
+                // finished compile until play ends (HotReload.cpp:1272).
+                // Mid-Play reload is a later opt-in, desk-verified first.
+                // Also disabled while a build is already running (one at a
+                // time -- the Runner refuses too, this just says so up front)
+                // and when the open project has no gameModule to rebuild.
+                const bool canRebuild = !playing && !buildingModule && hasGameModule;
+                if (ImGui::MenuItem(buildingModule ? "Rebuilding..." : "Rebuild Game Module",
+                                    nullptr, false, canRebuild))
+                    requests.rebuildModule = true;
+                if (!canRebuild && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip(playing        ? "Stop to rebuild"
+                                      : buildingModule ? "A rebuild is already running (see Console)"
+                                                       : "This project has no game module");
                 ImGui::EndMenu();
             }
             // Leaf item (no submenu): will open a preferences window later.

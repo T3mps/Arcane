@@ -894,6 +894,14 @@ namespace Arcane::Editor
             m_consoleSink.reset();
         }
 
+        // Reclaim the module-rebuild worker before member teardown: it only
+        // touches its own mutex-guarded queue, but a thread outliving the
+        // object that owns that queue is a use-after-free waiting for a
+        // reorder. Blocks until the child cmd/msbuild exits -- closing the
+        // editor mid-build waits for the build, by design (there is no child
+        // handle to terminate through _wpopen).
+        m_moduleBuild.Join();
+
         // While the device and viewport are still alive (m_gpu destructs after
         // Run returns): leave the Hub a fresh cover of the last thing seen.
         WriteAutoScreenshot();

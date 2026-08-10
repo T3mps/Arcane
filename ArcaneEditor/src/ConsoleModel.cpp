@@ -22,6 +22,7 @@ namespace Arcane::Editor
             { "Open Project: ",      "Project"  },
             { "bootScene: ",         "Project"  },
             { "RuntimeLaunch: ",     "Project"  },
+            { "Build: ",             "Build"    },
         };
     }
 

@@ -129,6 +129,11 @@ namespace Arcane::Editor
             ConsumeSceneDialogResults(ls);
             ConsumeProjectDialogResult();
             ConsumeMaterialDialogResults();
+            // Worker -> main-thread drain of the module rebuild, at the same
+            // safe point the dialog results land at: its finish path can run
+            // effects (plugin re-engage, scene reload) that must never land
+            // mid-render. See EditorApp.hpp's Build section.
+            PollModuleBuild();
 
             FrameState fs;
             FrameInput(ls, fs);
@@ -1093,8 +1098,15 @@ namespace Arcane::Editor
         UpdateWindowTitle();   // project + scene name + unsaved marker
         m_gpu->Imgui().BeginFrame();
         Arcane::Editor::MenuRequests menuReq;
+        // Build -> Rebuild Game Module gating inputs: the menu greys the item
+        // while playing (UE model), while a build runs, and for a project
+        // with no gameModule (content-only, or none open).
+        const Arcane::Project* menuProj = m_runtime->CurrentProject();
+        const bool hasGameModule = menuProj && !menuProj->Manifest().gameModule.empty();
         Arcane::Editor::BeginDockSpace(*m_undo, menuReq, m_scene.IsDirty(*m_undo),
-                                       m_play.IsPlaying(), &m_recents);
+                                       m_play.IsPlaying(),
+                                       m_moduleBuild.Running(), hasGameModule,
+                                       &m_recents);
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
         // click (same "panel reports, app performs" split as ViewportPanelResult);
         // LaunchStandalone owns the project/dirty-scene checks and the spawn.
@@ -1132,6 +1144,12 @@ namespace Arcane::Editor
         if (menuReq.fileMenuOpen && !m_fileMenuWasOpen)
             RefreshRecents();
         m_fileMenuWasOpen = menuReq.fileMenuOpen;
+        // Build -> Rebuild Game Module: spawn the worker right here (no
+        // dialog, no teardown -- nothing about starting a build needs the
+        // frame-boundary deferral the scene/project requests above use). The
+        // finish-side effects all live in PollModuleBuild.
+        if (menuReq.rebuildModule)
+            StartModuleRebuild();
         if (menuReq.newMaterial || menuReq.openMaterial)
         {
             // Material dialogs start in the project's Content/ (the only place

@@ -20,10 +20,12 @@
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>   // Save/LoadSpriteAsset (MintOrReuseSpriteForTexture)
 
+#include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Publish/Clear (the Build failure row)
 #include <Arcane/Host/ProjectBoot.hpp>
 
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 
 namespace Arcane::Editor
@@ -766,5 +768,177 @@ namespace Arcane::Editor
             m_runtime->Loop().SetPaused(true);   // back to Edit
             UpdateWindowTitle();
         }
+    }
+
+    // ---- Build -> Rebuild Game Module (see EditorApp.hpp's Build section) ---
+
+    void EditorApp::StartModuleRebuild()
+    {
+        const Arcane::Project* proj = m_runtime->CurrentProject();
+        // The menu item is greyed for all three of these; re-checked here so
+        // a future keybind or other caller cannot slip past the gates.
+        if (!proj || proj->Manifest().gameModule.empty())
+        {
+            ARC_ERROR("Build: no open project with a game module -- nothing to rebuild");
+            return;
+        }
+        if (m_play.IsPlaying())
+        {
+            ARC_ERROR("Build: refused while Play is running -- stop to rebuild");
+            return;
+        }
+        if (m_moduleBuild.Running())
+        {
+            ARC_WARN("Build: a rebuild is already running");
+            return;
+        }
+
+        // The RUNNING editor's SDK wins over any machine-wide ARCANE_SDK: the
+        // point of the button is "rebuild against the engine you are looking
+        // at", and the project's premake5.lua resolves the engine through
+        // this variable (build/arcane.lua).
+        const std::filesystem::path sdkRoot =
+            ModuleBuild::SdkRootFromExeDir(ModuleBuild::ExeDir());
+        ModuleBuild::SetSdkEnv(sdkRoot);
+
+        ModuleBuild::ComposeInputs in;
+        in.projectRoot   = proj->Root();
+        in.premakeExe    = ModuleBuild::ResolvePremake(sdkRoot);
+        in.msbuildExe    = ModuleBuild::ResolveMsBuild();
+        in.solution      = ModuleBuild::DiscoverSolution(proj->Root());
+        in.configuration = ModuleBuild::Configuration();
+        if (in.solution.empty())
+        {
+            // Nothing generated yet (fresh clone): premake -- which always
+            // runs first, every build -- is about to write it. Name it by the
+            // committed convention (the workspace in a project's premake5.lua
+            // is named after the project, e.g. Aphelyon.slnx); if a project
+            // breaks that convention, msbuild fails loudly with the missing
+            // path in the Console, which is the honest failure.
+            in.solution = proj->Root() / (proj->Manifest().name + ".slnx");
+        }
+
+        m_moduleBuildRoot = proj->Root();
+        const std::string cmd = ModuleBuild::ComposeRebuildCommands(in);
+        ARC_INFO("Build: rebuilding {} ({}) against SDK {}",
+                 proj->Manifest().gameModule, in.configuration, sdkRoot.generic_string());
+        ARC_INFO("Build: {}", cmd);
+        if (!m_moduleBuild.Start(cmd))
+            ARC_WARN("Build: a rebuild is already running");
+    }
+
+    void EditorApp::PollModuleBuild()
+    {
+        for (std::string& line : m_moduleBuild.DrainLines())
+        {
+            // Severity COLORING only -- v1 deliberately does not parse MSVC
+            // diagnostics into per-line locators (arc non-goal); these
+            // contains-checks just pick the Console severity lane for the
+            // raw line.
+            const bool isError = line.find(": error") != std::string::npos ||
+                                 line.find(": fatal") != std::string::npos ||
+                                 line.rfind("Error:", 0) == 0;
+            const bool isWarn  = line.find(": warning") != std::string::npos;
+            if (isError)     ARC_ERROR("Build: {}", line);
+            else if (isWarn) ARC_WARN("Build: {}", line);
+            else             ARC_INFO("Build: {}", line);
+        }
+
+        const std::optional<int> exit = m_moduleBuild.TakeExit();
+        if (!exit)
+            return;
+
+        // KEY OWNERSHIP: "build:<project root>" -- THIS finish path is the
+        // only publisher, and it replaces the key's ENTIRE set every build
+        // (the Diagnostics publication-group contract). The root is the one
+        // the build STARTED for (m_moduleBuildRoot), so a project switch
+        // mid-build cannot strand a row under a key nobody will ever clear.
+        const std::string key = "build:" + m_moduleBuildRoot.generic_string();
+
+        if (*exit != 0)
+        {
+            ARC_ERROR("Build: rebuild failed (exit code {})", *exit);
+            Arcane::Diagnostic d;
+            d.severity = Arcane::DiagSeverity::Error;
+            d.scope    = Arcane::DiagScope::Plugin;
+            d.code     = "build.module.failed";
+            d.message  = "Rebuild Game Module failed (exit code " +
+                         std::to_string(*exit) + ")";
+            d.detail   = "See the Console's Build lines";
+            // File locator = the project root: clicking the row is a
+            // DOCUMENTED no-op (RouteLocator's File branch only matches open
+            // shader documents) -- the row exists to persist the failure
+            // state; the Console's Build lines carry the detail.
+            d.locator  = Arcane::DiagLocator::File(m_moduleBuildRoot.generic_string());
+            Arcane::Diagnostics::Publish(key, std::span<const Arcane::Diagnostic>(&d, 1));
+            return;
+        }
+
+        ARC_INFO("Build: rebuild succeeded");
+        Arcane::Diagnostics::Clear(key);
+
+        const Arcane::Project* proj = m_runtime->CurrentProject();
+        if (!proj || proj->Root() != m_moduleBuildRoot)
+        {
+            ARC_WARN("Build: the project changed while the build ran -- "
+                     "skipping the restamp/reload half");
+            return;
+        }
+
+        // The module was JUST rebuilt against this engine, so the manifest's
+        // engine.abi may finally be restamped -- the one legitimate module-
+        // project moment (Project::RestampEngineAbi's own contract). The
+        // Hub's compatibility badge heals off this.
+        if (proj->Manifest().engineAbi != static_cast<int>(Arcane::kGamePluginABIVersion))
+        {
+            const int oldAbi = proj->Manifest().engineAbi;
+            if (m_runtime->RestampProjectEngineAbi(static_cast<int>(Arcane::kGamePluginABIVersion)))
+                ARC_INFO("Build: manifest engine.abi restamped {} -> {} (module rebuilt)",
+                         oldAbi, static_cast<int>(Arcane::kGamePluginABIVersion));
+            else
+                ARC_WARN("Build: manifest engine.abi is stale ({}) and could not be restamped",
+                         oldAbi);
+        }
+
+        if (m_plugin)
+        {
+            // A live host needs nothing from us: PluginHost::Poll (EndFrame)
+            // sees the fresh DLL mtime and hot-reloads with state after its
+            // own debounce. Forcing a reload here would race that debounce.
+            ARC_INFO("Build: the module watcher will hot-reload the fresh DLL");
+            return;
+        }
+
+        // No host is watching: the module was REFUSED at open (stale ABI),
+        // and StagePluginLoad/switch_plugin_load left the host disengaged.
+        // Re-engage exactly the way StagePluginLoad does.
+        const std::string gameModule =
+            Arcane::HostBoot::GameModule(proj, m_config.pluginPath);
+        const auto pluginModules = Arcane::HostBoot::PluginModules(proj);
+        if (gameModule.empty() && pluginModules.empty())
+            return;
+        m_plugin.emplace(*m_runtime,
+            gameModule.empty() ? std::filesystem::path{}
+                               : std::filesystem::path(gameModule));
+        for (const auto& dll : pluginModules)
+            m_plugin->AddPlugin(dll);
+        if (!m_plugin->Load())
+        {
+            // Same defined-state failure shape as StagePluginLoad: a
+            // disengaged host plus the loud cause (Plugin.cpp's gate already
+            // published plugin.abi.mismatch if that is what refused it).
+            ARC_ERROR("Build: the rebuilt module still failed to load (see Problems)");
+            m_plugin.reset();
+            return;
+        }
+        ARC_INFO("Build: game module loaded");
+        // The open scene was deserialized WITHOUT the module's components
+        // (unknown components drop with warnings at load) -- re-open it from
+        // disk so they come back now that the types exist. Clean, on-disk
+        // scenes only: a reload must never discard edits. Not during Play
+        // either -- a build started in Edit mode can finish after the user
+        // pressed Play, and Stop's registry restore must stay authoritative.
+        if (!m_play.IsPlaying() && !m_scene.Path().empty() && !m_scene.IsDirty(*m_undo))
+            DoOpenScene(m_scene.Path());
     }
 }

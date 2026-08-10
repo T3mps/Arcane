@@ -650,6 +650,13 @@ project "ArcaneTests"
         -- EditorCamera above. This file writes to a file the HUB owns, so the
         -- refuse-to-clobber rules are the ones most worth pinning.
         "%{wks.location}/ArcaneEditor/src/RecentProjects.cpp",
+        -- Build -> Rebuild Game Module: ModuleBuild's PURE halves (solution
+        -- discovery, the SDK-root walk, the composed premake+msbuild line)
+        -- source-compile into the test exe so the [editor] units drive them
+        -- directly. The Runner/_wpopen half and the vswhere probe are compiled
+        -- too but never invoked by any test -- process creation is desk-verify
+        -- territory, the same rule as RuntimeLaunch's SpawnDetached above.
+        "%{wks.location}/ArcaneEditor/src/ModuleBuild.cpp",
     }
 
     includedirs {

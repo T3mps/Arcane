@@ -482,6 +482,16 @@ namespace Arcane
         return m_impl->project->SetBootScene(id);
     }
 
+    bool Runtime::RestampProjectEngineAbi(int abi)
+    {
+        if (!m_impl->project)
+        {
+            ARC_WARN("Runtime::RestampProjectEngineAbi: no project open -- manifest not restamped");
+            return false;
+        }
+        return m_impl->project->RestampEngineAbi(abi);
+    }
+
     Config& Runtime::Configuration() noexcept
     {
         return m_impl->config;

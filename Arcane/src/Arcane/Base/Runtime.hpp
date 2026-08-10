@@ -132,6 +132,18 @@ namespace Arcane
         // needs, and it keeps Project's mutability from leaking to every caller.
         bool SetProjectBootScene(const Guid& id);
 
+        // Re-stamp the open project's manifest engine.abi (Project::
+        // RestampEngineAbi). Same narrow-seam shape as SetProjectBootScene
+        // above -- and the same reason: it keeps Project's mutability from
+        // leaking into a mutable CurrentProject accessor. False when no
+        // project is open or the rewrite failed (Project logs the cause).
+        // The editor's TWO legitimate call moments are documented on
+        // Project::RestampEngineAbi -- a content-only project at open, and a
+        // module project immediately after its module was REBUILT against
+        // this engine (Build -> Rebuild Game Module), the one moment the
+        // stamp and the DLL agree again.
+        bool RestampProjectEngineAbi(int abi);
+
         // --- render bridge: the host sets the live batcher each frame, IN this module ---
         // SetRenderContext writes RenderContext2D using the STORED camera (offset+zoom),
         // so the PLUGIN owns the camera (via SetCamera) and the host stays camera-agnostic.

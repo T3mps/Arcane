@@ -28,6 +28,7 @@
 #include "DocumentHost.hpp"
 #include "EditorCamera.hpp"
 #include "EditorPanels.hpp"
+#include "ModuleBuild.hpp"
 #include "PlayMode.hpp"
 #include "ProblemsPanel.hpp"
 #include "RecentProjects.hpp"
@@ -613,6 +614,30 @@ namespace Arcane::Editor
 
         static void ProjectPickedThunk(const char* path, void* user);  // -> m_pendingProjectPath (background thread)
         void        SwitchProject(const std::filesystem::path& path);  // validate-then-soft-restart
+
+        // ---- Build -> Rebuild Game Module (ModuleBuild.hpp) -----------------
+        // StartModuleRebuild composes the premake+msbuild line for the open
+        // project (against the RUNNING editor's SDK, via ARCANE_SDK) and
+        // starts the worker; the menu item is greyed while playing/building/
+        // module-less, and this re-checks the same gates for any future
+        // caller. PollModuleBuild is the per-frame drain (EditorAppProject.cpp,
+        // called from MainLoop's top-of-frame consume block): worker lines ->
+        // "Build: "-prefixed Console entries; on finish, failure publishes ONE
+        // Problems row under the "build:<root>" key and success clears it,
+        // restamps a stale manifest abi (the module now matches this engine),
+        // and -- when the module had been REFUSED at open (stale ABI), which
+        // left no PluginHost watching -- re-engages the host the way
+        // StagePluginLoad does. A LIVE host needs nothing here: the existing
+        // debounced watcher (PluginHost::Poll, EndFrame) sees the fresh DLL
+        // mtime and hot-reloads with state on its own; forcing it would race
+        // the debounce.
+        void StartModuleRebuild();
+        void PollModuleBuild();
+        Arcane::Editor::ModuleBuild::Runner m_moduleBuild;   // joined in Shutdown
+        // The project root the RUNNING build was started for. Publish/Clear
+        // key identity ("build:<root>") + the guard that skips restamp/
+        // re-engage when the project switched mid-build.
+        std::filesystem::path m_moduleBuildRoot;
 
         // Async scene file-dialog results (same background-thread stash pattern as
         // m_pendingProjectPath: the SDL dialog backend fires its callback from a
