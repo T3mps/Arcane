@@ -77,8 +77,12 @@ TEST_CASE("Runtime::OpenProject forwards its progress callback through to the co
     std::error_code ec; fs::remove_all(dir, ec);
 }
 
-TEST_CASE("Runtime::OpenProject refuses a mismatched engine ABI", "[project]")
+TEST_CASE("Runtime::OpenProject opens a mismatched engine ABI (the plugin gate owns refusal)", "[project]")
 {
+    // Was a hard refusal, which locked every host out of every project at
+    // each engine ABI bump. The stamp describes what the game DLL was built
+    // against; the data is ABI-agnostic, and loading the stale DLL is what
+    // Plugin.cpp's gate refuses. OpenProject warns and adopts.
     const fs::path dir = MakeTempDir("badabi");
     WriteFile(dir / "Bad.arcproj",
         R"({"formatVersion":1,"name":"Bad","engine":{"abi":9999},)"
@@ -86,8 +90,12 @@ TEST_CASE("Runtime::OpenProject refuses a mismatched engine ABI", "[project]")
     std::error_code ec; fs::create_directories(dir / "Content", ec);
 
     Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
-    REQUIRE(rt.OpenProject(dir) == false);
-    REQUIRE(rt.CurrentProject() == nullptr);   // state untouched
+    REQUIRE(rt.OpenProject(dir) == true);
+    REQUIRE(rt.CurrentProject() != nullptr);
+    // The RUNTIME never rewrites the stamp: it must keep telling the Hub the
+    // truth about the DLL. (Content-only self-heal is the EDITOR's, and only
+    // through its own open path.)
+    REQUIRE(rt.CurrentProject()->Manifest().engineAbi == 9999);
 
     fs::remove_all(dir, ec);
 }

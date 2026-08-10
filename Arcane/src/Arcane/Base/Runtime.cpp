@@ -398,15 +398,25 @@ namespace Arcane
         if (!proj)
             return false;   // Project::Open already logged the cause
 
-        // Engine/ABI binding: refuse a project built against a different engine ABI.
-        // Belt-and-suspenders over PluginHost's own DLL-ABI gate -- this catches a
-        // stale manifest before we even try to load the game module.
+        // Engine/ABI stamp check: WARN, never refuse. This was a hard refusal
+        // ("belt-and-suspenders over the DLL gate"), and it is what locked
+        // every host out of every existing project at each engine ABI bump --
+        // the v10 bump made it bite everywhere at once. The manifest stamp
+        // only describes what the game DLL was built against; the project's
+        // DATA is ABI-agnostic, and the one dangerous act -- loading that
+        // stale DLL -- is refused by the plugin ABI gate (Plugin.cpp), which
+        // reports plugin.abi.mismatch with both versions and the fix. Host
+        // strictness is a STAGE policy, not this function's: the runtime host
+        // keeps plugin_load Fatal (a game host whose module cannot load still
+        // refuses to boot), the editor keeps it Optional (the editor is where
+        // the developer goes to FIX a stale project). The editor additionally
+        // self-heals content-only stamps before this runs (EditorAppProject).
         if (proj->Manifest().engineAbi != static_cast<int>(kGamePluginABIVersion))
         {
-            ARC_ERROR("Runtime::OpenProject: project '{}' targets engine ABI {} but this "
-                      "engine is ABI {}", proj->Manifest().name,
-                      proj->Manifest().engineAbi, static_cast<int>(kGamePluginABIVersion));
-            return false;   // leave state untouched
+            ARC_WARN("Runtime::OpenProject: project '{}' targets engine ABI {} but this "
+                     "engine is ABI {} -- opening; its game module will be refused "
+                     "until rebuilt", proj->Manifest().name,
+                     proj->Manifest().engineAbi, static_cast<int>(kGamePluginABIVersion));
         }
 
         m_impl->project = std::move(*proj);

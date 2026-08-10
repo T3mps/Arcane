@@ -301,13 +301,14 @@ TEST_CASE("RuntimeStages' project_open .run() reuses CoreStages' attached detail
 TEST_CASE("RuntimeStages' project_open .run() peeks splash.showProgress before OpenProject, "
           "even when OpenProject itself fails", "[boot][project]")
 {
-    // A manifest ABI mismatch makes Runtime::OpenProject fail (Fatal for the
-    // runtime host -- same shape as RuntimeProjectTest.cpp's own "refuses a
-    // mismatched engine ABI" case), so the success-only post-open re-set
-    // (ctx.runtime->CurrentProject()->Manifest().splash.showProgress) never
-    // runs. ProjectManifest::LoadFile parses formatVersion/name/engine.abi
-    // structurally and does not itself compare against kGamePluginABIVersion
-    // (Runtime::OpenProject does), so the PEEK still succeeds regardless.
+    // HISTORY: a manifest ABI mismatch used to make Runtime::OpenProject fail,
+    // and this test proved the PEEK had already set showProgress by then. The
+    // mismatch no longer fails the open (the plugin gate owns ABI refusal;
+    // data is ABI-agnostic), so the failed-open half of the property is
+    // extinct: any manifest the peek can parse, OpenProject can now open.
+    // What remains pinned here: the stage still runs the peek path without
+    // error on a stale-ABI manifest, SUCCEEDS, and both the peek and the
+    // authoritative post-open re-set agree on showProgress.
     const auto dir = TempProjectDir("peek_abi_mismatch");
     std::ofstream(dir / "Bad.arcproj") <<
         R"({"formatVersion":1,"name":"Bad","engine":{"abi":9999},)"
@@ -326,9 +327,9 @@ TEST_CASE("RuntimeStages' project_open .run() peeks splash.showProgress before O
     const Arcane::BootStage* stage = FindStage(stages, "project_open");
     REQUIRE(stage != nullptr);
 
-    CHECK_FALSE(stage->run());               // ABI mismatch: Fatal for the runtime host
-    CHECK(rt.CurrentProject() == nullptr);   // confirms the success branch never ran
-    CHECK(splash.ShowProgress());            // ...yet the PEEK still flipped it
+    CHECK(stage->run());                     // stale ABI opens (warn, not refuse)
+    CHECK(rt.CurrentProject() != nullptr);
+    CHECK(splash.ShowProgress());            // peek + post-open re-set agree
 
     splash.Close();
 }
