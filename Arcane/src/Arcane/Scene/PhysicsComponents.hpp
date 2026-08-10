@@ -38,7 +38,6 @@
 #include <Manifold2D/Physics/PhysicsTypes.hpp>
 #include <Manifold2D/Physics/Shapes.hpp>
 
-#include <Astra/Component/ComponentModule.hpp>
 #include <Astra/Component/ComponentRegistry.hpp>
 #include <Astra/Reflection/Reflection.hpp>
 #include <Astra/Registry/Registry.hpp>
@@ -255,12 +254,5 @@ namespace Arcane
     inline void RegisterPhysicsComponents(Astra::Registry& reg)
     {
         RegisterPhysicsComponents(*reg.GetComponentRegistry());
-    }
-
-    // Module-owned form -- see SceneModule.hpp's sibling overload for why
-    // Runtime.cpp itself does not call this for the engine's own roster.
-    inline void RegisterPhysicsComponents(Astra::ComponentModule& mod)
-    {
-        mod.Register<RigidBody2D, Collider2D, PhysicsBodyRef>();
     }
 } // namespace Arcane

@@ -114,10 +114,13 @@ extern "C"
                 ctx->imguiUserData);
         }
 
-        // Engine components are engine-owned now (Runtime's ComponentModule);
-        // this plugin owns no component types and registers nothing.
+        // Engine components are registered anonymously by Runtime's
+        // constructor; this plugin owns no component types and registers
+        // nothing. (A plugin that DID own a type would shadow the
+        // anonymous entry via its own ComponentModule and the owner stack
+        // would restore it automatically on unload.)
 
-        auto& sch = ctx->engine->Schedulers();                 // 3. register systems (functors in this module)
+        auto& sch = ctx->engine->Schedulers();                 // 2. register systems (functors in this module)
         sch.fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>();
         sch.render.AddSystem<Arcane::RenderSubmissionSystem>();
 

@@ -7,7 +7,6 @@
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
-#include <Astra/Component/ComponentModule.hpp>
 #include <Astra/Component/ComponentRegistry.hpp>
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/Serialization/SerializationError.hpp>
@@ -37,19 +36,6 @@ namespace Arcane
     inline void RegisterSceneComponents(Astra::Registry& reg)
     {
         RegisterSceneComponents(*reg.GetComponentRegistry());
-    }
-
-    // Module-owned form: for a caller (a plugin, or a test exercising the
-    // ComponentModule path directly) that wants to register the scene roster
-    // through an Astra::ComponentModule handle rather than a bare
-    // ComponentRegistry. NOT used by Runtime.cpp itself for the engine's own
-    // roster -- see Runtime.cpp's ctor comment for why that stays on the
-    // plain (Astra::ComponentRegistry&) overload above. Same append-only
-    // ordering rule as above.
-    inline void RegisterSceneComponents(Astra::ComponentModule& mod)
-    {
-        mod.Register<Transform, WorldTransform, PreviousTransform, SpriteRenderer,
-                     PostProcess, Identity, Hidden, Camera>();
     }
 
     namespace Scene

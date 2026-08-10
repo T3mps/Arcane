@@ -106,8 +106,11 @@ extern "C"
                 ctx->imguiUserData);
         }
 
-        // Engine components are engine-owned now (Runtime's ComponentModule);
-        // this plugin owns no component types and registers nothing.
+        // Engine components are registered anonymously by Runtime's
+        // constructor; this plugin owns no component types and registers
+        // nothing. (A plugin that DID own a type would shadow the
+        // anonymous entry via its own ComponentModule and the owner stack
+        // would restore it automatically on unload.)
 
         // 2. Register systems (functors in this module).
         //    fixedUpdate: EMPTY of engine systems. The PHYSICS STEP is the sandbox's

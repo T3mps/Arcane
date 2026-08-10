@@ -36,8 +36,9 @@ namespace
 TEST_CASE("PlaygroundGame runs and survives a reload", "[hotreload]")
 {
     Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
-    // Scene component types are registered by the plugin's Init (ReRegisterComponent);
-    // the shared TypeContext makes the test module's TypeID<WorldTransform> agree.
+    // Scene component types are registered anonymously by Runtime's constructor;
+    // the plugin registers nothing. The shared TypeContext still makes the test
+    // module's TypeID<WorldTransform> agree with the plugin's and the engine's.
 
     Arcane::PluginHost host(rt, std::filesystem::path("PlaygroundGame.dll"));
     REQUIRE(host.Load());
