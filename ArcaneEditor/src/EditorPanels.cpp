@@ -545,7 +545,24 @@ namespace Arcane::Editor
         ImGui::InputTextWithHint("##consolesearch", "Search", ui.search, sizeof(ui.search));
 
         ImGui::Separator();
-        ImGui::BeginChild("##consolerows");
+        // The gate matters, not just politeness: when the Console is a HIDDEN
+        // dock tab this child is SkipItems, where Selectable() early-returns
+        // BEFORE ItemAdd (imgui_widgets.cpp:7370-ish) -- but
+        // SetNextItemSelectionUserData() arms g.NextItemData UNCONDITIONALLY
+        // (imgui_widgets.cpp:8227) and only ItemAdd clears it (imgui.cpp:
+        // 12015). Run the multi-select body anyway and the armed
+        // IsMultiSelect flag leaks to the first REAL item drawn later in the
+        // frame; if that item is a Selectable/TreeNode (an Outliner row), it
+        // calls MultiSelectItemHeader with g.CurrentMultiSelect == null and
+        // crashes (imgui_widgets.cpp:7453 -> 8249). Frame ONE of any launch
+        // where another tab covers the Console hits this. So: no body in a
+        // skipped child, period.
+        if (!ImGui::BeginChild("##consolerows"))
+        {
+            ImGui::EndChild();   // always called -- BeginChild's contract, unlike Begin's
+            ImGui::End();
+            return;
+        }
 
         const auto visible = [&](const ConsoleEntry& e)
         {
