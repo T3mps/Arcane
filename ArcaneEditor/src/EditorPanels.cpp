@@ -45,6 +45,7 @@ namespace Arcane::Editor
                         bool sceneDirty, bool playing,
                         bool buildingModule, bool hasGameModule,
                         PanelVisibility& panels,
+                        bool hasSelection,
                         const RecentSelection* recents)
     {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -128,9 +129,9 @@ namespace Arcane::Editor
                 ImGui::MenuItem("Rename", "F2");
                 ImGui::MenuItem("Delete", "Del");
                 ImGui::Separator();
-                ImGui::MenuItem("Select All");
-                ImGui::MenuItem("Deselect All");
-                ImGui::MenuItem("Invert Selection");
+                if (ImGui::MenuItem("Select All"))       requests.selectAll = true;
+                if (ImGui::MenuItem("Deselect All"))     requests.deselectAll = true;
+                if (ImGui::MenuItem("Invert Selection")) requests.invertSelection = true;
                 ImGui::Separator();
                 // UE's placement and order: the Edit menu's closing section is
                 // Editor Preferences... then Project Settings... (vendored

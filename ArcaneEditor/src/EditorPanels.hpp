@@ -54,6 +54,9 @@ namespace Arcane::Editor
         bool saveSceneAs = false;    // File -> Save Scene As...  (save dialog)
         bool rebuildModule = false;  // Build -> Rebuild Game Module (worker premake+msbuild)
         bool resetLayout = false;   // Window -> Reset Layout (rebuild default dock layout, re-show all)
+        bool selectAll = false;        // Edit -> Select All
+        bool deselectAll = false;      // Edit -> Deselect All
+        bool invertSelection = false;  // Edit -> Invert Selection
     };
 
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
@@ -73,10 +76,13 @@ namespace Arcane::Editor
     // `panels` drives the Window menu's toggles; only Reset Layout goes
     // through `requests` (it must run at EndDockSpace's DockBuilder-safe
     // point).
+    // `hasSelection` gates the Edit menu's selection-dependent items (Rename/
+    // Delete now, the clipboard items in a later wiring pass).
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
                         bool sceneDirty, bool playing,
                         bool buildingModule, bool hasGameModule,
                         PanelVisibility& panels,
+                        bool hasSelection,
                         const RecentSelection* recents = nullptr);
 
     // Emit the DockSpace() into the host window opened by BeginDockSpace and close it.

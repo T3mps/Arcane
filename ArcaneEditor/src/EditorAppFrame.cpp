@@ -13,6 +13,7 @@
 
 #include "EditorApp.hpp"
 #include "EditorPanels.hpp"
+#include "SelectionOps.hpp"
 #include "ViewportImGuiInput.hpp"
 
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
@@ -1107,6 +1108,7 @@ namespace Arcane::Editor
                                        m_play.IsPlaying(),
                                        m_moduleBuild.Running(), hasGameModule,
                                        m_panelVis,
+                                       m_selection.HasSelection(),
                                        &m_recents);
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
         // click (same "panel reports, app performs" split as ViewportPanelResult);
@@ -1153,6 +1155,21 @@ namespace Arcane::Editor
         // finish-side effects all live in PollModuleBuild.
         if (menuReq.rebuildModule)
             StartModuleRebuild();
+        // Edit -> selection ops. Pure selection state -- no undo step (UE
+        // does not undo selection either).
+        if (menuReq.deselectAll)
+            m_selection.Clear();
+        if (menuReq.selectAll || menuReq.invertSelection)
+        {
+            const std::vector<Astra::Entity> all =
+                Arcane::Editor::CollectSceneEntities(m_runtime->Registry());
+            const std::vector<Astra::Entity> next = menuReq.selectAll
+                ? all
+                : Arcane::Editor::InvertSelectionSet(all, m_selection);
+            m_selection.Clear();
+            m_selection.AddRange(next, next.empty() ? Astra::Entity::Invalid()
+                                                    : next.back());
+        }
         if (menuReq.newMaterial || menuReq.openMaterial)
         {
             // Material dialogs start in the project's Content/ (the only place
