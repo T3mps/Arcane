@@ -688,6 +688,16 @@ namespace Arcane::Editor
             ImGui::PopID();
         }
 
+        // The LAST row's trailing SetCursorPos(afterPos) has no item after it
+        // -- every other row's is consumed by the next row's Selectable -- and
+        // ImGui ASSERTS at EndChild when a raw SetCursorPos is left extending
+        // the window (ErrorCheckUsingSetCursorPosToExtendParentBoundaries,
+        // imgui.cpp:11544, whose message says to do exactly this). This was
+        // the launch-crash on 2026-08-10, presenting as a zero-trace abort:
+        // CRT assert box -> Abort -> exit(3), no dump, no report.
+        if (!rows.empty())
+            ImGui::Dummy(ImVec2(0.0f, 0.0f));
+
         ms = ImGui::EndMultiSelect();
         s_selection.ApplyRequests(ms);
 
