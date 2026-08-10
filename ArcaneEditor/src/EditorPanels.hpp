@@ -9,6 +9,7 @@
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Edit/RegistryStateCommand.hpp>
 #include <Arcane/Guid.hpp>   // InspectorServices::mintSpriteForTexture
+#include <Arcane/Util/FunctionRef.hpp>   // ApplyStructural's mutate callback
 #include <cstdint>
 #include <functional>
 #include <glm/vec4.hpp>   // InspectorState::colorPopupOriginal
@@ -57,6 +58,8 @@ namespace Arcane::Editor
         bool selectAll = false;        // Edit -> Select All
         bool deselectAll = false;      // Edit -> Deselect All
         bool invertSelection = false;  // Edit -> Invert Selection
+        bool renameSelected = false;   // Edit -> Rename (the Outliner's F2 code path)
+        bool deleteSelected = false;   // Edit -> Delete (the Outliner's Del code path)
     };
 
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
@@ -226,6 +229,30 @@ namespace Arcane::Editor
         // popup's scope.
         bool addComponentPending = false;
     };
+
+    // Promoted out of EditorPanels.cpp's anonymous namespace so the Edit
+    // menu (EditorAppFrame.cpp) can drive the exact same code the Outliner's
+    // F2/Del bindings use -- one implementation, two entry points, menu and
+    // keybind cannot drift.
+    //
+    // `touched` names the entities the edit affects, for the Outliner's
+    // unsaved asterisks (CommandStack::TouchedSinceState) -- read AFTER
+    // mutate() runs, so creates can append their new ids from inside the
+    // lambda (ApplyRegistryMutation's contract).
+    bool ApplyStructural(Arcane::CommandStack& undo, const SceneEditBinding& b,
+                         std::string label, Arcane::FunctionRef<bool()> mutate,
+                         const std::vector<Astra::Entity>* touched = nullptr);
+
+    // `current` is Identity::name RAW -- never Edit::DisplayName, which
+    // substitutes "Entity <id>" for an empty name (EntityOps.cpp:49-55).
+    // Seeding that fallback made a no-edit commit on an empty-named entity
+    // write "Entity 7" into the component; seeding the raw (possibly empty)
+    // name keeps Escape and no-edit commits true no-ops.
+    void BeginRename(OutlinerState& st, Astra::Entity e, const std::string& current);
+
+    void DeleteSelection(Astra::Registry& registry, SelectionContext& sel,
+                         Arcane::CommandStack& undo, const SceneEditBinding& binding);
+
     // `savedStateId` is the scene's save baseline (SceneSession::SavedStateId)
     // -- the panel derives the per-entity unsaved asterisks from it via
     // CommandStack::TouchedSinceState. `open` is forwarded to ImGui::Begin

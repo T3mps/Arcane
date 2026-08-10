@@ -123,11 +123,11 @@ namespace Arcane::Editor
                 ImGui::MenuItem("Copy");
                 ImGui::MenuItem("Paste");
                 ImGui::MenuItem("Duplicate");
-                // The hints name bindings that already exist (the Outliner's
-                // F2 rename and Delete-key delete); the menu routes join them
-                // in the wiring pass.
-                ImGui::MenuItem("Rename", "F2");
-                ImGui::MenuItem("Delete", "Del");
+                // Same code paths as the Outliner's F2/Del bindings.
+                if (ImGui::MenuItem("Rename", "F2", false, hasSelection))
+                    requests.renameSelected = true;
+                if (ImGui::MenuItem("Delete", "Del", false, hasSelection))
+                    requests.deleteSelected = true;
                 ImGui::Separator();
                 if (ImGui::MenuItem("Select All"))       requests.selectAll = true;
                 if (ImGui::MenuItem("Deselect All"))     requests.deselectAll = true;
@@ -901,51 +901,54 @@ namespace Arcane::Editor
         {
             return b.editMode && !undo.InTransaction();
         }
+    }
 
-        // `touched` names the entities the edit affects, for the Outliner's
-        // unsaved asterisks (CommandStack::TouchedSinceState) -- read AFTER
-        // mutate() runs, so creates can append their new ids from inside the
-        // lambda (ApplyRegistryMutation's contract).
-        bool ApplyStructural(Arcane::CommandStack& undo, const SceneEditBinding& b,
-                             std::string label, Arcane::FunctionRef<bool()> mutate,
-                             const std::vector<Astra::Entity>* touched = nullptr)
-        {
-            if (!b.editMode)
-                return false;
-            return Arcane::ApplyRegistryMutation(undo, std::move(label),
-                                                 b.snapshot, b.restore, mutate, touched);
-        }
+    // `touched` names the entities the edit affects, for the Outliner's
+    // unsaved asterisks (CommandStack::TouchedSinceState) -- read AFTER
+    // mutate() runs, so creates can append their new ids from inside the
+    // lambda (ApplyRegistryMutation's contract).
+    bool ApplyStructural(Arcane::CommandStack& undo, const SceneEditBinding& b,
+                         std::string label, Arcane::FunctionRef<bool()> mutate,
+                         const std::vector<Astra::Entity>* touched)
+    {
+        if (!b.editMode)
+            return false;
+        return Arcane::ApplyRegistryMutation(undo, std::move(label),
+                                             b.snapshot, b.restore, mutate, touched);
+    }
 
-        // `current` is Identity::name RAW -- never Edit::DisplayName, which
-        // substitutes "Entity <id>" for an empty name (EntityOps.cpp:49-55).
-        // Seeding that fallback made a no-edit commit on an empty-named entity
-        // write "Entity 7" into the component; seeding the raw (possibly empty)
-        // name keeps Escape and no-edit commits true no-ops.
-        void BeginRename(OutlinerState& st, Astra::Entity e, const std::string& current)
-        {
-            st.renameTarget = e;
-            st.renameBuf = current;
-            st.renameFocusPending = true;
-            // Starting a NEW rename abandons any deferred one. The user has
-            // moved on; landing a parked rename afterwards would apply a name
-            // they already replaced (or applied to an entity they have since
-            // stopped editing) out of nowhere, one frame late.
-            st.pendingRename = Astra::Entity::Invalid();
-            st.pendingRenameName.clear();
-        }
+    // `current` is Identity::name RAW -- never Edit::DisplayName, which
+    // substitutes "Entity <id>" for an empty name (EntityOps.cpp:49-55).
+    // Seeding that fallback made a no-edit commit on an empty-named entity
+    // write "Entity 7" into the component; seeding the raw (possibly empty)
+    // name keeps Escape and no-edit commits true no-ops.
+    void BeginRename(OutlinerState& st, Astra::Entity e, const std::string& current)
+    {
+        st.renameTarget = e;
+        st.renameBuf = current;
+        st.renameFocusPending = true;
+        // Starting a NEW rename abandons any deferred one. The user has
+        // moved on; landing a parked rename afterwards would apply a name
+        // they already replaced (or applied to an entity they have since
+        // stopped editing) out of nowhere, one frame late.
+        st.pendingRename = Astra::Entity::Invalid();
+        st.pendingRenameName.clear();
+    }
 
-        void DeleteSelection(Astra::Registry& registry, SelectionContext& sel,
-                             Arcane::CommandStack& undo, const SceneEditBinding& binding)
-        {
-            const std::vector<Astra::Entity> doomed = sel.Entities();   // copy: sel mutates after
-            if (doomed.empty())
-                return;
-            if (ApplyStructural(undo, binding, "Delete",
-                    [&] { return Arcane::Edit::DeleteEntities(registry, doomed) > 0; },
-                    &doomed))
-                sel.Clear();
-        }
+    void DeleteSelection(Astra::Registry& registry, SelectionContext& sel,
+                         Arcane::CommandStack& undo, const SceneEditBinding& binding)
+    {
+        const std::vector<Astra::Entity> doomed = sel.Entities();   // copy: sel mutates after
+        if (doomed.empty())
+            return;
+        if (ApplyStructural(undo, binding, "Delete",
+                [&] { return Arcane::Edit::DeleteEntities(registry, doomed) > 0; },
+                &doomed))
+            sel.Clear();
+    }
 
+    namespace
+    {
         // Popup id shared by the Inspector's "+ Add Component" button and the
         // Outliner row menu's "Add Component...".
         //

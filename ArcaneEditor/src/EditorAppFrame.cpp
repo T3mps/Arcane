@@ -1170,6 +1170,17 @@ namespace Arcane::Editor
             m_selection.AddRange(next, next.empty() ? Astra::Entity::Invalid()
                                                     : next.back());
         }
+        // Edit -> Rename / Delete: the Outliner's own F2/Del code paths
+        // (promoted in EditorPanels.hpp) -- menu and keybind cannot drift.
+        if (menuReq.renameSelected && m_selection.HasSelection())
+        {
+            if (const Arcane::Identity* info =
+                    m_runtime->Registry().GetComponent<Arcane::Identity>(m_selection.Primary()))
+                Arcane::Editor::BeginRename(m_outliner, m_selection.Primary(), info->name);
+        }
+        if (menuReq.deleteSelected)
+            Arcane::Editor::DeleteSelection(m_runtime->Registry(), m_selection,
+                                            *m_undo, m_editBinding);
         if (menuReq.newMaterial || menuReq.openMaterial)
         {
             // Material dialogs start in the project's Content/ (the only place
