@@ -44,7 +44,7 @@ namespace Arcane::Editor::RuntimeLaunch
     //
     // Each element is ONE argv token: HostConfig's Cli takes an option's
     // value as a separate token, not an inline "--flag=value" (Cli::Parse
-    // reads argv[i] then argv[++i]; see Arcane/Core/src/Arcane/Cli/Cli.cpp).
+    // reads argv[i] then argv[++i]; see Arcane/ArcaneCore/src/Arcane/Cli/Cli.cpp).
     // No quoting decisions happen here -- SpawnDetached alone turns these
     // logical tokens into one Win32 command line, so callers never have to
     // think about embedded spaces or quotes.

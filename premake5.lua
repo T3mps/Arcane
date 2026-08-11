@@ -61,7 +61,7 @@ workspace "Arcane"
     THIRDPARTY_NODE_EDITOR_IMGUI_API = "__declspec(dllimport)"
 
     IncludeDir = {}
-    IncludeDir["Core"]             = "%{wks.location}/Core/src"
+    IncludeDir["ArcaneCore"]       = "%{wks.location}/ArcaneCore/src"
     IncludeDir["nlohmann"]         = "%{wks.location}/../ThirdParty/nlohmann"
     IncludeDir["picosha2"]         = "%{wks.location}/../ThirdParty/picosha2"
     IncludeDir["spdlog"]           = "%{wks.location}/../ThirdParty/spdlog/include"
@@ -99,11 +99,12 @@ group "Dependencies"
 group ""
 
 -- ============================================================================
--- Core: Arcane.Core static lib (presentation-free; also compiled by the
--- Server workspace as project "ArcaneCore" with static CRT)
+-- ArcaneCore: Arcane.Core static lib (presentation-free; also compiled by the
+-- Server workspace as project "ArcaneCore" with static CRT -- same project
+-- name in both workspaces)
 -- ============================================================================
-project "Core"
-    location "Core"
+project "ArcaneCore"
+    location "ArcaneCore"
     kind "StaticLib"
     language "C++"
     cppdialect "C++23"
@@ -124,11 +125,11 @@ project "Core"
         "%{IncludeDir.picosha2}",
         "%{IncludeDir.spdlog}",
         -- M6 physics module (Arcane/Physics/) uses glm for vec2/mat. glm is
-        -- header-only; adding it here keeps Core presentation-free.
+        -- header-only; adding it here keeps ArcaneCore presentation-free.
         "%{IncludeDir.glm}",
-        -- Phase 2 lift: Core's still-resident Physics/Geometry will include
-        -- Manifold2D/Core primitives (FunctionRef/BitSet/Simd/WorkScheduler)
-        -- ahead of the Task 2 move.
+        -- Phase 2 lift: ArcaneCore's still-resident Physics/Geometry will
+        -- include Manifold2D/Core primitives (FunctionRef/BitSet/Simd/
+        -- WorkScheduler) ahead of the Task 2 move.
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
     }
@@ -165,7 +166,7 @@ project "Core"
 -- (Base, Platform, Render for M1; Audio/Text/Assets/UI/Jobs/Plugin later).
 -- NVRHI and SDL3 link INTO this DLL; consumers link only the import lib.
 -- Second namespaced include root: src/Arcane/{Base,Platform,Render} --
--- relative paths are disjoint from Core's root (Net/Crypto/Types/Util),
+-- relative paths are disjoint from ArcaneCore's root (Net/Crypto/Types/Util),
 -- so <Arcane/...> resolves unambiguously across both.
 -- ============================================================================
 project "Arcane"
@@ -191,7 +192,7 @@ project "Arcane"
 
     includedirs {
         "%{prj.location}/src",
-        "%{IncludeDir.Core}",
+        "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.picosha2}",
         "%{IncludeDir.spdlog}",
@@ -212,7 +213,7 @@ project "Arcane"
         "%{IncludeDir.Mosaic}",
     }
 
-    links { "Core", "nvrhi", "msdfgen", "freetype", "imgui", "enkiTS", "Manifold2D" }
+    links { "ArcaneCore", "nvrhi", "msdfgen", "freetype", "imgui", "enkiTS", "Manifold2D" }
 
     -- Force EVERY imgui object (incl. imgui_demo's ShowDemoWindow) into the
     -- DLL so their dllexport symbols are emitted: a dllexport in a static-lib
@@ -282,7 +283,7 @@ project "Arcane"
 
 -- ============================================================================
 -- PlaygroundGame: the M4 scene as a game plugin (the first live ABI consumer).
--- SharedLib, /MD, links Arcane (NOT Core). Loaded by ArcaneRuntime at runtime.
+-- SharedLib, /MD, links Arcane (NOT ArcaneCore). Loaded by ArcaneRuntime at runtime.
 -- The reserved Game/ slot stays empty for the future Aphelyon client port.
 -- ============================================================================
 project "PlaygroundGame"
@@ -296,7 +297,7 @@ project "PlaygroundGame"
     files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
     includedirs {
         "%{wks.location}/Arcane/src",
-        "%{IncludeDir.Core}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
+        "%{IncludeDir.ArcaneCore}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
         "%{IncludeDir.glm}",
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.Astra}",
@@ -321,9 +322,10 @@ project "PlaygroundGame"
 
 -- ============================================================================
 -- Sandbox: the physics-sandbox game plugin (Arcane Physics Sandbox, Task 4).
--- SharedLib, /MD, v2 ABI. Mirrors PlaygroundGame (imgui import) but ALSO links Core:
--- it is the first plugin to drive PhysicsSystem, whose header-only body calls into
--- the Core PhysicsWorld implementation (see the links{} note below). Loaded by
+-- SharedLib, /MD, v2 ABI. Mirrors PlaygroundGame (imgui import) but ALSO links
+-- ArcaneCore: it is the first plugin to drive PhysicsSystem, whose header-only
+-- body calls into the ArcaneCore PhysicsWorld implementation (see the links{}
+-- note below). Loaded by
 -- ArcaneRuntime (--plugin Sandbox.dll) and the SandboxSmokeTest; the DLL is copied
 -- beside BOTH ArcaneRuntime.exe and ArcaneTests.exe (its own postbuild) so the host
 -- and the test can load it.
@@ -339,7 +341,7 @@ project "Sandbox"
     files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
     includedirs {
         "%{wks.location}/Arcane/src",
-        "%{IncludeDir.Core}",
+        "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.glm}",
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.Astra}",
@@ -351,22 +353,25 @@ project "Sandbox"
     }
     -- Sandbox is the first plugin to drive physics. PhysicsSystem (header-only) is
     -- instantiated in THIS module and calls Arcane::Physics::PhysicsWorld directly;
-    -- PhysicsWorld's implementation lives in Core (.cpp, not ARCANE_API-exported from
-    -- Arcane.dll), so the plugin must link Core to resolve those symbols. Core is
-    -- Astra-free and carries no mutable global state, so the duplicate static copy is
-    -- benign: the PhysicsWorld instance is owned entirely within this module (created
-    -- here, stepped by this module's PhysicsSystem); Arcane.dll only ever READS it via
-    -- DrawPhysicsDebug through a const ref, and both modules compile the identical Core
-    -- headers under identical flags (/MD, matching NDEBUG, float-strict) so the layout
-    -- matches -- the same identical-layout contract the scene components already rely on.
-    links { "Arcane", "Core", "Manifold2D" }
+    -- PhysicsWorld's implementation lives in ArcaneCore (.cpp, not ARCANE_API-exported
+    -- from Arcane.dll), so the plugin must link ArcaneCore to resolve those symbols.
+    -- ArcaneCore is Astra-free and carries no mutable global state, so the duplicate
+    -- static copy is benign: the PhysicsWorld instance is owned entirely within this
+    -- module (created here, stepped by this module's PhysicsSystem); Arcane.dll only
+    -- ever READS it via DrawPhysicsDebug through a const ref, and both modules compile
+    -- the identical ArcaneCore headers under identical flags (/MD, matching NDEBUG,
+    -- float-strict) so the layout matches -- the same identical-layout contract the
+    -- scene components already rely on.
+    links { "Arcane", "ArcaneCore", "Manifold2D" }
     -- ABI v2: the plugin imports imgui from Arcane.dll (one GImGui per process), same
     -- as PlaygroundGame. The import lib arrives via "Arcane" (imgui surface is
     -- /WHOLEARCHIVE-exported there).
     defines { "GAME_BUILD_DLL", "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
-    floatingpoint "Strict"   -- physics determinism: match Core's /fp:strict (no /fp:fast)
+    floatingpoint "Strict"   -- physics determinism: match ArcaneCore's /fp:strict (no /fp:fast)
     -- Copy Sandbox.dll beside ArcaneRuntime.exe (host) AND ArcaneTests.exe (smoke test).
-    -- The Arcane/Core include dir is needed because Sandbox.cpp touches PhysicsWorld (Core).
+    -- The Arcane/ArcaneCore include dir is needed because SandboxApp.hpp includes
+    -- Arcane/Jobs/TaskExecutor.hpp (ITaskExecutor); PhysicsWorld itself lives in
+    -- Manifold2D, not ArcaneCore.
     postbuildcommands {
         '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/ArcaneRuntime"',
         '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/ArcaneTests"',
@@ -400,7 +405,7 @@ project "ArcaneRuntime"
     includedirs {
         "%{prj.location}/src",           -- RuntimeApp.hpp (self-resolving quoted include; kept for any future local header)
         "%{wks.location}/Arcane/src",
-        "%{IncludeDir.Core}",
+        "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.spdlog}",
         "%{IncludeDir.nvrhi}",
@@ -410,14 +415,15 @@ project "ArcaneRuntime"
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.Mosaic}",
     }
-    -- Core is linked directly (alongside the Arcane DLL) even though the host-boot
-    -- layer (HostConfig/GpuContext/FramePerf/ProjectBoot) moved INTO Arcane.dll as
-    -- Arcane/Host -- ArcaneRuntime.exe no longer source-compiles any of it. Core stays:
-    -- it's a cheap, established two-static-copies pattern (see the ArcaneTests links
-    -- comment), and other exe TUs may still want un-exported Core APIs directly.
-    -- Core links into exactly ONE module per PROCESS holds because ArcaneRuntime.exe and
-    -- Arcane.dll are distinct modules.
-    links { "Core", "Arcane" }
+    -- ArcaneCore is linked directly (alongside the Arcane DLL) even though the
+    -- host-boot layer (HostConfig/GpuContext/FramePerf/ProjectBoot) moved INTO
+    -- Arcane.dll as Arcane/Host -- ArcaneRuntime.exe no longer source-compiles
+    -- any of it. ArcaneCore stays: it's a cheap, established two-static-copies
+    -- pattern (see the ArcaneTests links comment), and other exe TUs may still
+    -- want un-exported ArcaneCore APIs directly. ArcaneCore links into exactly
+    -- ONE module per PROCESS holds because ArcaneRuntime.exe and Arcane.dll are
+    -- distinct modules.
+    links { "ArcaneCore", "Arcane" }
     dependson { "PlaygroundGame", "Sandbox" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
@@ -466,7 +472,7 @@ project "ArcaneEditor"
     includedirs {
         "%{prj.location}/src",
         "%{wks.location}/Arcane/src",
-        "%{IncludeDir.Core}",
+        "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.spdlog}",
         "%{IncludeDir.nvrhi}",
@@ -478,7 +484,7 @@ project "ArcaneEditor"
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
     }
-    links { "Core", "Arcane", "imgui-node-editor" }
+    links { "ArcaneCore", "Arcane", "imgui-node-editor" }
     dependson { "Sandbox" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
@@ -525,8 +531,8 @@ project "ArcaneEditor"
     filter {}
 
 -- ============================================================================
--- ArcaneTests: Catch2 + rapidcheck (Server conventions). Links Core
--- directly -- Core links into exactly ONE module per process.
+-- ArcaneTests: Catch2 + rapidcheck (Server conventions). Links ArcaneCore
+-- directly -- ArcaneCore links into exactly ONE module per process.
 -- ============================================================================
 project "ArcaneTests"
     location "Tests"
@@ -676,7 +682,7 @@ project "ArcaneTests"
     }
 
     includedirs {
-        "%{IncludeDir.Core}",
+        "%{IncludeDir.ArcaneCore}",
         "%{wks.location}/Arcane/src",
         "%{wks.location}/Sandbox/src",   -- Interaction.hpp / Scenes.hpp / Camera.hpp for the [sandbox] tests
         "%{wks.location}/ArcaneEditor/src",  -- ConsoleBuffer.hpp for the [editor] test
@@ -709,7 +715,7 @@ project "ArcaneTests"
     -- imgui-node-editor IS linked (a plain static lib compiled with
     -- IMGUI_API=dllimport, same as this exe): ShaderEditorDocument.cpp's graph
     -- canvas calls it, and that TU source-compiles into the tests.
-    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "Manifold2D", "imgui-node-editor" }
+    links { "ArcaneCore", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "Manifold2D", "imgui-node-editor" }
 
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad", "PlaygroundGame", "Sandbox" }
 
@@ -751,7 +757,7 @@ project "ArcaneTests"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
-        links { "ws2_32" }  -- Core TcpSocket
+        links { "ws2_32" }  -- ArcaneCore TcpSocket
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }
@@ -772,7 +778,7 @@ project "ArcaneTests"
 
 -- ============================================================================
 -- Hot-reload TEST plugins: one source, three DLLs (V1 step=1, V2 step=10,
--- Bad ABI). SharedLib, /MD, links Arcane (NOT Core -- one Core per process).
+-- Bad ABI). SharedLib, /MD, links Arcane (NOT ArcaneCore -- one ArcaneCore per process).
 -- Loaded at runtime by PluginHost in ArcaneTests; never linked by the test exe.
 -- ============================================================================
 local function test_plugin(name, defs)
@@ -788,7 +794,7 @@ local function test_plugin(name, defs)
         files { "%{prj.location}/HotReloadPlugin.cpp", "%{prj.location}/PluginExport.hpp", "%{prj.location}/HotReloadShared.hpp" }
         includedirs {
             "%{wks.location}/Arcane/src",
-            "%{IncludeDir.Core}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
+            "%{IncludeDir.ArcaneCore}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
             "%{IncludeDir.glm}",
             "%{IncludeDir.nvrhi}",
             "%{IncludeDir.Astra}",
