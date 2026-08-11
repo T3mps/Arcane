@@ -46,6 +46,11 @@ namespace Arcane::Editor
         EditorDocument* FindByGuid(const Arcane::Guid& guid);
         std::size_t Count() const { return m_docs.size(); }
         bool AnyDirty() const;
+        // Save every dirty document in place. Every document has a real path
+        // (they are only born from files via OpenPath), so no dialog is ever
+        // needed here -- unlike the scene. Returns how many saves FAILED
+        // (0 = everything clean now); a failed save keeps its dirty flag.
+        std::size_t SaveAllDirty();
         // The document whose window held focus at the last DrawAll, or null when
         // the user is not in one. This is what Ctrl+S means by "this document";
         // the app routes the shortcut through it so a focused asset editor owns

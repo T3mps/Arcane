@@ -1285,6 +1285,27 @@ namespace Arcane::Editor
                 instantiateAndSelect(payload, "Duplicate");
         }
 
+        // File -> Save All: scene first (never-saved routes through the Save
+        // As dialog, exactly like Save), then every dirty document in place.
+        if (menuReq.saveAll)
+        {
+            if (m_scene.IsDirty(*m_undo))
+            {
+                if (!m_scene.Path().empty()) DoSaveScene(m_scene.Path());
+                else                         ShowSceneSaveDialog();
+            }
+            if (const std::size_t failed = m_documents.SaveAllDirty())
+                ARC_ERROR("Save All: {} document save(s) failed (see Console)", failed);
+        }
+        // File -> Exit: the SAME SceneIntent::Exit flow the OS quit uses --
+        // dirty scene parks behind the confirm modal; a clean exit defers to
+        // the top of the next frame like every other scene action.
+        if (menuReq.exitEditor &&
+            m_scene.Request(Arcane::Editor::SceneIntent::Exit, {}, *m_undo))
+        {
+            ls.sceneAction = { Arcane::Editor::SceneIntent::Exit, {} };
+        }
+
         if (menuReq.newMaterial || menuReq.openMaterial)
         {
             // Material dialogs start in the project's Content/ (the only place

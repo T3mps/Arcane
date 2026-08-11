@@ -79,6 +79,15 @@ namespace Arcane::Editor
         return false;
     }
 
+    std::size_t DocumentHost::SaveAllDirty()
+    {
+        std::size_t failed = 0;
+        for (const auto& d : m_docs)
+            if (d->Dirty() && !d->Save())
+                ++failed;
+        return failed;
+    }
+
     EditorDocument* DocumentHost::FocusedDoc() const
     {
         // At most one window holds focus, so the first hit is the answer.

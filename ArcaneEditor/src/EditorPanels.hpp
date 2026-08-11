@@ -64,6 +64,8 @@ namespace Arcane::Editor
         bool copySelection = false;        // Edit -> Copy
         bool paste = false;                // Edit -> Paste
         bool duplicateSelection = false;   // Edit -> Duplicate
+        bool saveAll = false;        // File -> Save All (scene + every dirty document)
+        bool exitEditor = false;     // File -> Exit
     };
 
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT

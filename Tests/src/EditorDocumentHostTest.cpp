@@ -159,6 +159,22 @@ TEST_CASE("DocumentHost peek resolves focus-not-reopen without constructing", "[
     CHECK(factoryCalls == 1);   // the peek short-circuited: NO throwaway construct
 }
 
+TEST_CASE("DocumentHost::SaveAllDirty saves every dirty document, reporting failures", "[editor]")
+{
+    DocumentHost host;
+    auto* ok = static_cast<FakeDoc*>(host.Add(
+        std::make_unique<FakeDoc>("ok", Arcane::Guid::Generate(), true)));
+    auto* bad = static_cast<FakeDoc*>(host.Add(
+        std::make_unique<FakeDoc>("bad", Arcane::Guid::Generate(), true)));
+    bad->saveSucceeds = false;
+
+    CHECK(host.SaveAllDirty() == 1);
+    CHECK_FALSE(ok->Dirty());
+    CHECK(bad->Dirty());
+    CHECK(ok->saveCalls == 1);
+    CHECK(bad->saveCalls == 1);
+}
+
 TEST_CASE("DocumentHost::CloseAll drops every document and any pending confirm", "[editor]")
 {
     DocumentHost host;

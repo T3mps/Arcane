@@ -62,13 +62,14 @@ namespace Arcane::Editor
         ImGui::Begin("EditorDockHost", nullptr, flags);
         ImGui::PopStyleVar(3);
 
-        // Editor menu bar (layout ratified 2026-08-10; the unwired items are
-        // VISUAL for now -- the wiring pass follows). File's scene/project
-        // items land in `requests`; Save Project / Exit and Edit's clipboard/
-        // selection items are placeholders in the file's established style
-        // (enabled no-ops). Edit's Undo/Redo drive the CommandStack; its
-        // closing section (Preferences... / Project Settings...) will open
-        // the settings windows later.
+        // Editor menu bar (layout ratified 2026-08-10; a few items are still
+        // VISUAL-only -- the wiring pass is landing them task by task).
+        // File's scene/project items, Save All, and Exit all land in
+        // `requests` now, as do Edit's clipboard and selection items. The
+        // remaining placeholders (Open Recent Scene, Preferences...,
+        // Project Settings..., Assets' Show in Explorer / Copy Path) stay in
+        // the file's established style (enabled no-ops) until later tasks
+        // wire them. Edit's Undo/Redo drive the CommandStack.
         if (ImGui::BeginMenuBar())
         {
             if (ImGui::BeginMenu("File"))
@@ -101,9 +102,17 @@ namespace Arcane::Editor
                     ImGui::SetTooltip("Stop play mode to save the scene");
                 ImGui::Separator();
                 if (ImGui::MenuItem("Open Project")) requests.openProject = true;
-                ImGui::MenuItem("Save Project");
+                // UE's File-menu item is "Save All", and that is what this
+                // saves: the scene + every dirty open document. There is no
+                // project-level state to save (the manifest is immutable
+                // outside narrow seams) -- the old "Save Project" label lied.
+                if (ImGui::MenuItem("Save All", nullptr, false, !playing))
+                    requests.saveAll = true;
+                if (playing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Stop play mode to save");
                 ImGui::Separator();
-                ImGui::MenuItem("Exit");
+                if (ImGui::MenuItem("Exit"))
+                    requests.exitEditor = true;
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Edit"))
