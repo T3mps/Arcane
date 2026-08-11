@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -25,6 +24,7 @@
 #include "Panels/AssetBrowser.hpp"
 #include "Panels/ConsoleBuffer.hpp"
 #include "Panels/DiagnosticStore.hpp"
+#include "App/DialogSlot.hpp"
 #include "Documents/DocumentHost.hpp"
 #include "Viewport/EditorCamera.hpp"
 #include "Panels/EditorPanels.hpp"
@@ -620,19 +620,52 @@ namespace Arcane::Editor
         std::unordered_map<std::string, std::filesystem::file_time_type> m_materialMtimes;
         double m_materialWatchNext = 0.0;
 
-        // Async file-dialog results for the material flows (same background-
-        // thread stash pattern as m_pendingProjectPath below).
-        std::string m_pendingMaterialNewPath;
-        std::string m_pendingMaterialOpenPath;
-        std::string m_pendingInstanceNewPath;
-        std::mutex  m_pendingMaterialMutex;
-        // Parent for a pending "New Instance..." save dialog. Main-thread only:
-        // written on the menu click, read when the dialog result lands.
-        Arcane::Guid m_pendingInstanceParent;
+        // ---- Async file-dialog inbox (architecture pass sec 2) --------------
+        // One DialogSlot per dialog kind. The old six pending strings + three
+        // mutexes + the unguarded m_pendingInstanceParent sidecar live here now;
+        // the instance parent rides INSIDE its payload so it is stashed under the
+        // lock, taken atomically with the path, and cleared with the slot.
+        struct InstanceNewResult
+        {
+            std::string  path;
+            Arcane::Guid parent;
+        };
+        struct DialogInbox
+        {
+            DialogSlot<std::string>       sceneOpen;
+            DialogSlot<std::string>       sceneSave;
+            DialogSlot<std::string>       projectOpen;
+            DialogSlot<std::string>       materialNew;
+            DialogSlot<std::string>       materialOpen;
+            DialogSlot<InstanceNewResult> instanceNew;
+            void ClearAll()
+            {
+                sceneOpen.Clear(); sceneSave.Clear(); projectOpen.Clear();
+                materialNew.Clear(); materialOpen.Clear(); instanceNew.Clear();
+            }
+        };
+        DialogInbox m_dialogs;
 
-        static void MaterialNewPickedThunk(const char* path, void* user);
-        static void MaterialOpenPickedThunk(const char* path, void* user);
-        static void InstanceNewPickedThunk(const char* path, void* user);
+        // Two shared trampolines replace the six per-dialog thunks the old
+        // pending-string scheme used. SDL's dialog backend fires the callback
+        // exactly once per ShowXFileDialog (null path on cancel), so the
+        // heap-allocated request is single-owner and freed inside the
+        // trampoline. Defined in EditorAppFrame.cpp beside the launch sites
+        // they serve.
+        struct PathDialogRequest
+        {
+            DialogSlot<std::string>* slot;
+            std::uint64_t            epoch;
+        };
+        struct InstanceDialogRequest
+        {
+            DialogSlot<InstanceNewResult>* slot;
+            std::uint64_t                  epoch;
+            Arcane::Guid                   parent;
+        };
+        static void PathPickedThunk(const char* path, void* user);
+        static void InstancePickedThunk(const char* path, void* user);
+
         // Mint a GRAPH-owned .arcmat (UE-model: nodes are the authoring tier)
         // + open its doc. Legacy text-owned files still open via OpenPath.
         void CreateMaterialAt(std::filesystem::path path);
@@ -688,19 +721,13 @@ namespace Arcane::Editor
         std::uint32_t m_pendingViewportW = 0;
         std::uint32_t m_pendingViewportH = 0;
 
-        // File -> Open Project (soft-restart). The menu sets m_openProjectRequested;
-        // DrawEditorUi launches the async .arcproj FILE dialog; SDL runs
-        // ProjectPickedThunk on an SDL-owned BACKGROUND thread (NOT the main
-        // thread -- the Windows backend's dialog callback fires off a detached
-        // worker), which stashes the chosen path in m_pendingProjectPath under
-        // m_pendingProjectMutex; the next frame's ConsumeProjectDialogResult takes
-        // the lock, swaps the path out, and (outside the lock) runs SwitchProject
-        // at a safe point. (Project::Open accepts the .arcproj file directly.)
-        std::string m_pendingProjectPath;
-        std::mutex  m_pendingProjectMutex;   // guards m_pendingProjectPath across the SDL callback thread
-
-        static void ProjectPickedThunk(const char* path, void* user);  // -> m_pendingProjectPath (background thread)
-        void        SwitchProject(const std::filesystem::path& path);  // validate-then-soft-restart
+        // File -> Open Project (soft-restart). The menu sets menuReq.openProject;
+        // DrawEditorUi launches the async .arcproj FILE dialog via the shared
+        // PathPickedThunk trampoline, targeting m_dialogs.projectOpen; the next
+        // frame's ConsumeProjectDialogResult Take()s the slot and (outside any
+        // lock -- DialogSlot owns its own) runs SwitchProject at a safe point.
+        // (Project::Open accepts the .arcproj file directly.)
+        void SwitchProject(const std::filesystem::path& path);  // validate-then-soft-restart
 
         // ---- Build -> Rebuild Game Module (ModuleBuild.hpp) -----------------
         // StartModuleRebuild composes the premake+msbuild line for the open
@@ -725,17 +752,6 @@ namespace Arcane::Editor
         // key identity ("build:<root>") + the guard that skips restamp/
         // re-engage when the project switched mid-build.
         std::filesystem::path m_moduleBuildRoot;
-
-        // Async scene file-dialog results (same background-thread stash pattern as
-        // m_pendingProjectPath: the SDL dialog backend fires its callback from a
-        // detached worker, so these are swapped out at the top of the next frame
-        // under the mutex).
-        std::string m_pendingSceneOpenPath;
-        std::string m_pendingSceneSavePath;
-        std::mutex  m_pendingSceneMutex;
-
-        static void SceneOpenPickedThunk(const char* path, void* user);
-        static void SceneSavePickedThunk(const char* path, void* user);
 
         // Editor state naming entities of the OUTGOING scene, torn down before any
         // registry swap. Shared by SwitchProject and the scene effects below.

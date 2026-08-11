@@ -1,11 +1,12 @@
 // EditorApp, scene lifecycle: the .arcscene effects (new/open/save), the scene
-// file-dialog thunks and launches, the editor-state teardown they share, and
-// the viewport-framing helpers. Split out of EditorApp.cpp as a pure move.
+// dialog launch helper, the editor-state teardown they share, and the
+// viewport-framing helpers. Split out of EditorApp.cpp as a pure move.
 //
 // The effects here are called ONLY from the frame loop's top-of-frame phases or
-// its deferred sceneAction (EditorAppFrame.cpp) -- never mid-render. The dialog
-// THUNKS below are the background-thread half of that contract: they stash a
-// path under m_pendingSceneMutex and nothing else.
+// its deferred sceneAction (EditorAppFrame.cpp) -- never mid-render. The scene
+// dialogs launch through the shared PathPickedThunk trampoline (EditorAppFrame.cpp),
+// which Stash()es into m_dialogs.sceneOpen/sceneSave -- the background-thread
+// half of that contract.
 
 #include "App/EditorApp.hpp"
 #include "Viewport/EditorCamera.hpp"
@@ -123,23 +124,6 @@ namespace Arcane::Editor
         m_camera.offset = panel * 0.5f;
     }
 
-    void EditorApp::SceneOpenPickedThunk(const char* path, void* user)
-    {
-        // SDL dialog callback thread (see ProjectPickedThunk).
-        auto* self = static_cast<EditorApp*>(user);
-        if (!path) return;
-        std::lock_guard<std::mutex> lk(self->m_pendingSceneMutex);
-        self->m_pendingSceneOpenPath = path;
-    }
-
-    void EditorApp::SceneSavePickedThunk(const char* path, void* user)
-    {
-        auto* self = static_cast<EditorApp*>(user);
-        if (!path) return;
-        std::lock_guard<std::mutex> lk(self->m_pendingSceneMutex);
-        self->m_pendingSceneSavePath = path;
-    }
-
     // Scene dialogs start in the project's Content/scenes, created on demand:
     // a project scaffolded before scenes existed has no such folder, and the
     // dialog would silently fall back to the OS default.
@@ -156,9 +140,10 @@ namespace Arcane::Editor
     void EditorApp::ShowSceneSaveDialog()
     {
         const std::string dir = SceneDialogDir();
-        m_gpu->Win().ShowSaveFileDialog(&EditorApp::SceneSavePickedThunk, this,
-                                        "Arcane Scene", "arcscene",
-                                        dir.empty() ? nullptr : dir.c_str());
+        m_gpu->Win().ShowSaveFileDialog(&EditorApp::PathPickedThunk,
+            new PathDialogRequest{ &m_dialogs.sceneSave, m_dialogs.sceneSave.Arm() },
+            "Arcane Scene", "arcscene",
+            dir.empty() ? nullptr : dir.c_str());
     }
 
     void EditorApp::ClearSceneReferences()

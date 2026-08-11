@@ -41,6 +41,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -149,6 +150,27 @@ namespace Arcane::Editor
             if (copyPath)
                 ImGui::SetClipboardText(assetPath->string().c_str());
         }
+    }
+
+    // Two shared file-dialog completion trampolines (declared in EditorApp.hpp),
+    // replacing the six per-dialog thunks the old pending-string scheme used.
+    // SDL's dialog backend fires the callback exactly once per ShowXFileDialog
+    // (null path on cancel -- see the early return below), so the heap-allocated
+    // request is single-owner and freed here. If a future backend ever skipped
+    // the callback the request would leak (bounded, one small struct per
+    // un-fired dialog) -- acceptable, noted.
+    void EditorApp::PathPickedThunk(const char* path, void* user)
+    {
+        std::unique_ptr<PathDialogRequest> req(static_cast<PathDialogRequest*>(user));
+        if (path)
+            req->slot->Stash(req->epoch, path);
+    }
+
+    void EditorApp::InstancePickedThunk(const char* path, void* user)
+    {
+        std::unique_ptr<InstanceDialogRequest> req(static_cast<InstanceDialogRequest*>(user));
+        if (path)
+            req->slot->Stash(req->epoch, InstanceNewResult{ path, req->parent });
     }
 
     // The frame. Every line here is a phase call, and the ORDER IS THE
@@ -291,31 +313,23 @@ namespace Arcane::Editor
         }
     }
 
-    // Phase 3: scene file-dialog results. The thunks stash on an SDL BACKGROUND
-    // thread; this is the main-thread consumption half and must stay at the top
-    // of the frame, under the same mutex, never mid-render.
+    // Phase 3: scene file-dialog results. The thunks Stash() into the slots on
+    // an SDL BACKGROUND thread; this is the main-thread Take() half and must
+    // stay at the top of the frame, never mid-render.
     void EditorApp::ConsumeSceneDialogResults(LoopState& ls)
     {
-        // Scene file-dialog results (same background-thread stash pattern as the
-        // project/material dialogs below).
-        std::string sceneOpen, sceneSave;
-        {
-            std::lock_guard<std::mutex> lk(m_pendingSceneMutex);
-            sceneOpen.swap(m_pendingSceneOpenPath);
-            sceneSave.swap(m_pendingSceneSavePath);
-        }
-        if (!sceneOpen.empty())
+        if (const auto sceneOpen = m_dialogs.sceneOpen.Take())
         {
             // Guarded: opening over unsaved work parks the intent for the confirm
             // modal (drawn later this frame) instead of discarding it.
-            if (m_scene.Request(Arcane::Editor::SceneIntent::OpenScene, sceneOpen, *m_undo))
+            if (m_scene.Request(Arcane::Editor::SceneIntent::OpenScene, *sceneOpen, *m_undo))
             {
-                DoOpenScene(sceneOpen);
+                DoOpenScene(*sceneOpen);
             }
         }
-        if (!sceneSave.empty())
+        if (const auto sceneSave = m_dialogs.sceneSave.Take())
         {
-            std::filesystem::path p = sceneSave;
+            std::filesystem::path p = *sceneSave;
             // The save dialog does not force the extension (Window.hpp), and a
             // scene without it does not scan as an asset. Case-insensitive:
             // a hand-typed "MyScene.ARCSCENE" must not become
@@ -361,55 +375,40 @@ namespace Arcane::Editor
         }
     }
 
-    // Phase 4: File->Open Project result. Same background-thread stash pattern;
+    // Phase 4: File->Open Project result. Same epoch-guarded slot pattern;
     // the soft restart must land at the top of the frame, never mid-render.
     void EditorApp::ConsumeProjectDialogResult()
     {
         // File->Open Project: run a pending soft-restart at a safe point (top of
-        // frame, never mid-render). Set by ProjectPickedThunk, which runs on an
-        // SDL-owned background thread -- take the path out under the lock, then
-        // switch on the local copy outside the lock (SwitchProject itself never
-        // touches m_pendingProjectPath/m_pendingProjectMutex).
-        std::string pending;
-        {
-            std::lock_guard<std::mutex> lk(m_pendingProjectMutex);
-            pending.swap(m_pendingProjectPath);
-        }
-        if (!pending.empty())
+        // frame, never mid-render). Stashed by PathPickedThunk, which runs on an
+        // SDL-owned background thread -- Take() the path out of the slot, then
+        // switch on the local copy (SwitchProject itself never touches m_dialogs).
+        if (const auto pending = m_dialogs.projectOpen.Take())
         {
             // Same guard as Open Scene: the outgoing project's scene may have
             // unsaved changes, and switching would drop them.
-            if (m_scene.Request(Arcane::Editor::SceneIntent::OpenProject, pending, *m_undo))
+            if (m_scene.Request(Arcane::Editor::SceneIntent::OpenProject, *pending, *m_undo))
             {
-                SwitchProject(pending);
+                SwitchProject(*pending);
             }
         }
     }
 
-    // Phase 5: material/instance file-dialog results. Same background-thread
-    // stash pattern; consumed here so document creation never lands mid-render.
+    // Phase 5: material/instance file-dialog results. Same epoch-guarded slot
+    // pattern; consumed here so document creation never lands mid-render.
     void EditorApp::ConsumeMaterialDialogResults()
     {
-        // Material file-dialog results (same background-thread stash
-        // pattern): create/open at the top of the frame, never mid-render.
-        std::string materialNew, materialOpen, instanceNew;
+        if (const auto materialNew = m_dialogs.materialNew.Take())
         {
-            std::lock_guard<std::mutex> lk(m_pendingMaterialMutex);
-            materialNew.swap(m_pendingMaterialNewPath);
-            materialOpen.swap(m_pendingMaterialOpenPath);
-            instanceNew.swap(m_pendingInstanceNewPath);
+            CreateMaterialAt(*materialNew);
         }
-        if (!materialNew.empty())
+        if (const auto materialOpen = m_dialogs.materialOpen.Take())
         {
-            CreateMaterialAt(materialNew);
+            m_documents.OpenPath(*materialOpen);
         }
-        if (!materialOpen.empty())
+        if (const auto instance = m_dialogs.instanceNew.Take())
         {
-            m_documents.OpenPath(materialOpen);
-        }
-        if (!instanceNew.empty())
-        {
-            CreateInstanceAt(instanceNew, m_pendingInstanceParent);
+            CreateInstanceAt(instance->path, instance->parent);
         }
     }
 
@@ -1273,27 +1272,22 @@ namespace Arcane::Editor
             menuReq.openProject       = true;
         }
         if (menuReq.openProject)
-            m_gpu->Win().ShowOpenFileDialog(&EditorApp::ProjectPickedThunk, this,
-                                            "Arcane Project", "arcproj");
+            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.projectOpen, m_dialogs.projectOpen.Arm() },
+                "Arcane Project", "arcproj");
         // Open Recent lands in the SAME slot the file dialog's callback fills,
         // so it flows through ConsumeProjectDialogResult and inherits every
         // guard the menu path already has -- the unsaved-scene confirm, the
         // rival-editor lock, the ABI gate, the failure modal. A second open
         // path would have to re-earn all of them.
         if (!menuReq.openRecentPath.empty())
-        {
-            std::lock_guard<std::mutex> lk(m_pendingProjectMutex);
-            m_pendingProjectPath = menuReq.openRecentPath;
-        }
+            m_dialogs.projectOpen.Stash(m_dialogs.projectOpen.Arm(), menuReq.openRecentPath);
         // A picked recent scene lands in the SAME slot the Open Scene dialog's
         // callback fills, so it flows through ConsumeSceneDialogResults and
         // inherits the unsaved-scene guard -- a second open path would have to
         // re-earn it.
         if (!menuReq.openRecentScenePath.empty())
-        {
-            std::lock_guard<std::mutex> lk(m_pendingSceneMutex);
-            m_pendingSceneOpenPath = menuReq.openRecentScenePath;
-        }
+            m_dialogs.sceneOpen.Stash(m_dialogs.sceneOpen.Arm(), menuReq.openRecentScenePath);
         // Refresh on the RISING EDGE of the File menu only. That is what lets a
         // project opened in the Hub while this editor runs appear without a
         // restart, without paying a file read plus a stat per project on every
@@ -1405,11 +1399,13 @@ namespace Arcane::Editor
                 proj ? (proj->Root() / "Content").string() : std::string();
             const char* defaultPath = contentDir.empty() ? nullptr : contentDir.c_str();
             if (menuReq.newMaterial)
-                m_gpu->Win().ShowSaveFileDialog(&EditorApp::MaterialNewPickedThunk, this,
-                                                "Arcane Material", "arcmat", defaultPath);
+                m_gpu->Win().ShowSaveFileDialog(&EditorApp::PathPickedThunk,
+                    new PathDialogRequest{ &m_dialogs.materialNew, m_dialogs.materialNew.Arm() },
+                    "Arcane Material", "arcmat", defaultPath);
             if (menuReq.openMaterial)
-                m_gpu->Win().ShowOpenFileDialog(&EditorApp::MaterialOpenPickedThunk, this,
-                                                "Arcane Material", "arcmat", defaultPath);
+                m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+                    new PathDialogRequest{ &m_dialogs.materialOpen, m_dialogs.materialOpen.Arm() },
+                    "Arcane Material", "arcmat", defaultPath);
         }
 
         // Scene menu items + their Ctrl+N/O/S shortcuts (raised in the input
@@ -1441,9 +1437,10 @@ namespace Arcane::Editor
         if (menuReq.openScene)
         {
             const std::string dir = SceneDialogDir();
-            m_gpu->Win().ShowOpenFileDialog(&EditorApp::SceneOpenPickedThunk, this,
-                                            "Arcane Scene", "arcscene",
-                                            dir.empty() ? nullptr : dir.c_str());
+            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.sceneOpen, m_dialogs.sceneOpen.Arm() },
+                "Arcane Scene", "arcscene",
+                dir.empty() ? nullptr : dir.c_str());
         }
         // Save on a never-saved scene IS Save As -- otherwise the item would look
         // enabled and do nothing.
@@ -1459,13 +1456,15 @@ namespace Arcane::Editor
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::Assets));
         if (browserActions.createInstanceOf.IsValid())
         {
-            m_pendingInstanceParent = browserActions.createInstanceOf;
             const Arcane::Project* proj = m_runtime->CurrentProject();
             const std::string contentDir =
                 proj ? (proj->Root() / "Content").string() : std::string();
-            m_gpu->Win().ShowSaveFileDialog(&EditorApp::InstanceNewPickedThunk, this,
-                                            "Arcane Material", "arcmat",
-                                            contentDir.empty() ? nullptr : contentDir.c_str());
+            m_gpu->Win().ShowSaveFileDialog(&EditorApp::InstancePickedThunk,
+                new InstanceDialogRequest{ &m_dialogs.instanceNew,
+                                           m_dialogs.instanceNew.Arm(),
+                                           browserActions.createInstanceOf },
+                "Arcane Material", "arcmat",
+                contentDir.empty() ? nullptr : contentDir.c_str());
         }
         if (browserActions.createSpriteFrom.IsValid())
         {
@@ -1740,8 +1739,8 @@ namespace Arcane::Editor
                     // BOTH gates, not just the modal's: the never-saved branch
                     // above may already have armed m_launchAfterSceneSave and
                     // opened the async Save-As dialog. Cancelling THAT dialog
-                    // stashes no path (SceneSavePickedThunk returns early on a
-                    // null path, EditorAppScene.cpp), so ConsumeSceneDialogResults
+                    // stashes no path (PathPickedThunk returns early on a
+                    // null path, EditorAppFrame.cpp), so ConsumeSceneDialogResults
                     // never runs and never clears the gate -- it would survive
                     // here and fire LaunchStandalone off the next UNRELATED
                     // successful save. Cancel means abandon the whole action.

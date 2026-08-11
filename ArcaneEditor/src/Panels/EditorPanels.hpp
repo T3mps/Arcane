@@ -38,7 +38,7 @@ namespace Arcane::Editor
         std::string openRecentPath;
         // A picked recent-scene path (File -> Open Recent Scene). Empty =
         // nothing picked this frame. Routed through the scene-open dialog
-        // slot (m_pendingSceneOpenPath) so it inherits the unsaved-scene
+        // slot (m_dialogs.sceneOpen) so it inherits the unsaved-scene
         // guard rather than re-earning it.
         std::string openRecentScenePath;
         // OUTPUT, not a request: the File menu is open this frame. The app uses

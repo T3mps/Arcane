@@ -6,9 +6,10 @@
 // SwitchProject and the CreateXAt effects are called ONLY from the frame loop's
 // top-of-frame phases or its deferred sceneAction (EditorAppFrame.cpp) -- never
 // mid-render, because they tear down plugin/document GPU resources that this
-// frame's already-built ImGui draw lists may still reference. The dialog THUNKS
-// below are the background-thread half: they stash a path under
-// m_pendingProjectMutex / m_pendingMaterialMutex and nothing else.
+// frame's already-built ImGui draw lists may still reference. The project/
+// material/instance dialogs launch through the shared PathPickedThunk /
+// InstancePickedThunk trampolines (EditorAppFrame.cpp), which Stash() into
+// m_dialogs -- the background-thread half of that contract.
 
 #include "App/EditorApp.hpp"
 #include "Panels/AssetBrowser.hpp"
@@ -205,31 +206,6 @@ namespace Arcane::Editor
         }
     }
 
-    void EditorApp::MaterialNewPickedThunk(const char* path, void* user)
-    {
-        // SDL dialog callback thread (see ProjectPickedThunk).
-        auto* self = static_cast<EditorApp*>(user);
-        if (!path) return;
-        std::lock_guard<std::mutex> lk(self->m_pendingMaterialMutex);
-        self->m_pendingMaterialNewPath = path;
-    }
-
-    void EditorApp::MaterialOpenPickedThunk(const char* path, void* user)
-    {
-        auto* self = static_cast<EditorApp*>(user);
-        if (!path) return;
-        std::lock_guard<std::mutex> lk(self->m_pendingMaterialMutex);
-        self->m_pendingMaterialOpenPath = path;
-    }
-
-    void EditorApp::InstanceNewPickedThunk(const char* path, void* user)
-    {
-        auto* self = static_cast<EditorApp*>(user);
-        if (!path) return;
-        std::lock_guard<std::mutex> lk(self->m_pendingMaterialMutex);
-        self->m_pendingInstanceNewPath = path;
-    }
-
     void EditorApp::CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent)
     {
         if (!parent.IsValid())
@@ -369,17 +345,6 @@ namespace Arcane::Editor
         // the browser and resolves by GUID IMMEDIATELY (not on next project open).
         m_runtime->RegisterCreatedAsset(path);
         m_documents.OpenPath(path);
-    }
-
-    void EditorApp::ProjectPickedThunk(const char* path, void* user)
-    {
-        // Runs on an SDL-owned BACKGROUND thread (the Windows dialog backend
-        // fires the callback from a detached worker, not PumpEvents/the main thread) --
-        // m_pendingProjectPath must be synchronized against MainLoop's top-of-frame read.
-        auto* self = static_cast<EditorApp*>(user);
-        if (!path) return;
-        std::lock_guard<std::mutex> lk(self->m_pendingProjectMutex);
-        self->m_pendingProjectPath = path;
     }
 
     void EditorApp::SwitchProject(const std::filesystem::path& path)
