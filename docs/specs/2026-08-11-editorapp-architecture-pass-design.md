@@ -259,7 +259,8 @@ struct Edge
 
 EditorApp's 17 `m_prevKey*` / `m_prevLmb` / `m_prevRmb` bools become one
 `struct InputEdges { Edge undo, redo, save, ... , lmb, rmb; }` member with
-named fields, all `Update`d together at frame top (section 1's preamble). The
+named fields, each `Update`d inside FrameInput (section 1's preamble phase)
+at the site its chord's `down` value is computed. The
 18 hand-rolled `down && !prev` expressions become `.pressed` reads; the
 scattered write-backs across three functions **vanish** (Update owns them).
 Adding a keybind = one field + one Update line + one `.pressed` read;
