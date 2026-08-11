@@ -25,6 +25,7 @@
 #include "Panels/ConsoleBuffer.hpp"
 #include "Panels/DiagnosticStore.hpp"
 #include "App/DialogSlot.hpp"
+#include "App/InputEdges.hpp"
 #include "App/ModalErrorQueue.hpp"
 #include "Documents/DocumentHost.hpp"
 #include "Viewport/EditorCamera.hpp"
@@ -456,11 +457,23 @@ namespace Arcane::Editor
         // Runtime*, dereferenced fresh each call), so it must not outlive it.
         std::optional<Arcane::CommandStack> m_undo;
 
-        // Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y edge-tracking for the undo/redo keybinds
-        // (InputSnapshot only reports held-state, not rising-edge; tracked here
-        // across frames -- see HandleUndoRedoAndSceneShortcuts).
-        bool m_prevUndoKeyDown = false;
-        bool m_prevRedoKeyDown = false;
+        // Editor keybind + mouse edge tracking (architecture pass sec 6). All
+        // Updated within FrameInput's phases (6a-6d) at the site each chord's
+        // `down` value is computed; consumers read .pressed/.released. Replaces
+        // the 17 hand-rolled m_prev* bools (undo/redo, W/E/R/Q gizmo mode,
+        // Ctrl+N/O/S scene shortcuts, Ctrl+X/C/V/D clipboard shortcuts, F/Home
+        // framing, LMB/RMB) that used to be scattered across this class and the
+        // three functions in EditorAppFrame.cpp that consumed them.
+        struct InputEdges
+        {
+            Edge undo, redo;            // Ctrl+Z / Ctrl+(Shift+)Z|Y
+            Edge w, e, r, q;            // gizmo tools
+            Edge n, o, s;               // Ctrl+N/O/S scene shortcuts
+            Edge x, c, v, d;            // Ctrl+X/C/V/D clipboard shortcuts
+            Edge f, home;                // camera framing
+            Edge lmb, rmb;               // gizmo press/release; camera pan
+        };
+        InputEdges m_edges;
 
         // Transform-gizmo state (Edit-mode; drives the Viewport handles). Mode/
         // space persist across frames and selection changes; m_gizmoHovered is
@@ -493,26 +506,6 @@ namespace Arcane::Editor
             Arcane::TransactionId txn = Arcane::TransactionId::None;
         } m_gizmoDrag;
 
-        // W/E/R mode-key edge-tracking (same pattern as m_prevUndoKeyDown/
-        // m_prevRedoKeyDown above).
-        bool m_prevKeyW = false;
-        bool m_prevKeyE = false;
-        bool m_prevKeyR = false;
-        bool m_prevKeyQ = false;
-        // Ctrl+N / Ctrl+O / Ctrl+S edge-tracking for the File-menu scene shortcuts
-        // (same pattern as the undo/redo keys above).
-        bool m_prevKeyN = false;
-        bool m_prevKeyO = false;
-        bool m_prevKeyS = false;
-        // Ctrl+X / Ctrl+C / Ctrl+V / Ctrl+D edge-tracking for the Edit-menu
-        // clipboard shortcuts (same pattern as m_prevKeyN/O/S above).
-        bool m_prevKeyX = false;
-        bool m_prevKeyC = false;
-        bool m_prevKeyV = false;
-        bool m_prevKeyD = false;
-        // Left-mouse edge-tracking, shared by the gizmo press/release detection.
-        bool m_prevLmbDown = false;
-
         // The EDITOR's viewport camera (Edit mode). Runtime::SetCamera is the
         // PLUGIN's seam, so a project whose game module never calls it would be
         // stuck at the identity transform -- offset (0,0), zoom 1, i.e. 1 px per
@@ -529,11 +522,6 @@ namespace Arcane::Editor
         // whether the viewport is active.
         bool      m_camPanning = false;
         glm::vec2 m_camPanLastMouse{0.0f, 0.0f};
-        bool      m_prevRmbDown = false;
-        // F (frame selection) / Home (frame scene) edge-tracking, same pattern
-        // as the undo/redo and gizmo mode keys above.
-        bool m_prevKeyF = false;
-        bool m_prevKeyHome = false;
         // Point the editor camera at the selection (selectionOnly) or at the
         // whole scene. A no-op when there is nothing framable, so the user's
         // view is never thrown away by an F press that had no target.

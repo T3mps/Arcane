@@ -558,6 +558,8 @@ namespace Arcane::Editor
         const bool shift = snap.ScancodeDown(kScLShift) || snap.ScancodeDown(kScRShift);
         const bool undoKeyDown = ctrl && !shift && snap.ScancodeDown(kScZ);
         const bool redoKeyDown = ctrl && ((shift && snap.ScancodeDown(kScZ)) || (!shift && snap.ScancodeDown(kScY)));
+        m_edges.undo.Update(undoKeyDown);
+        m_edges.redo.Update(redoKeyDown);
 
         const bool active = ShortcutsLive(snap, false);
         // Also refuse while a transaction is open (e.g. a live gizmo drag):
@@ -569,10 +571,8 @@ namespace Arcane::Editor
         // undo and clobbers the redo entry. Ctrl is also the gizmo SNAP
         // modifier, so Ctrl-held drags are the normal case, not an edge case.
         const bool noOpenTxn = !m_undo->InTransaction();
-        if (active && noOpenTxn && undoKeyDown && !m_prevUndoKeyDown) m_undo->Undo();
-        if (active && noOpenTxn && redoKeyDown && !m_prevRedoKeyDown) m_undo->Redo();
-        m_prevUndoKeyDown = undoKeyDown;
-        m_prevRedoKeyDown = redoKeyDown;
+        if (active && noOpenTxn && m_edges.undo.pressed) m_undo->Undo();
+        if (active && noOpenTxn && m_edges.redo.pressed) m_undo->Redo();
 
         // Ctrl+N / Ctrl+O / Ctrl+S -- the shortcuts the File menu prints
         // beside New Scene / Open Scene / Save Scene. Raised as requests
@@ -589,12 +589,12 @@ namespace Arcane::Editor
         const bool nDown = ctrl && !shift && snap.ScancodeDown(kScN);
         const bool oDown = ctrl && !shift && snap.ScancodeDown(kScO);
         const bool sDown = ctrl && !shift && snap.ScancodeDown(kScS);
-        fs.scNewScene  = active && nDown && !m_prevKeyN;
-        fs.scOpenScene = active && oDown && !m_prevKeyO;
-        fs.scSaveScene = active && sDown && !m_prevKeyS;
-        m_prevKeyN = nDown;
-        m_prevKeyO = oDown;
-        m_prevKeyS = sDown;
+        m_edges.n.Update(nDown);
+        m_edges.o.Update(oDown);
+        m_edges.s.Update(sDown);
+        fs.scNewScene  = active && m_edges.n.pressed;
+        fs.scOpenScene = active && m_edges.o.pressed;
+        fs.scSaveScene = active && m_edges.s.pressed;
 
         // Ctrl+X/C/V/D -- the Edit menu's clipboard items. Same raised-as-
         // request shape as Ctrl+N/O/S above: ONE handler at the menu-request
@@ -604,14 +604,14 @@ namespace Arcane::Editor
         const bool cDown = ctrl && !shift && snap.ScancodeDown(kScC);
         const bool vDown = ctrl && !shift && snap.ScancodeDown(kScV);
         const bool dDown = ctrl && !shift && snap.ScancodeDown(kScD);
-        fs.scCut       = active && xDown && !m_prevKeyX;
-        fs.scCopy      = active && cDown && !m_prevKeyC;
-        fs.scPaste     = active && vDown && !m_prevKeyV;
-        fs.scDuplicate = active && dDown && !m_prevKeyD;
-        m_prevKeyX = xDown;
-        m_prevKeyC = cDown;
-        m_prevKeyV = vDown;
-        m_prevKeyD = dDown;
+        m_edges.x.Update(xDown);
+        m_edges.c.Update(cDown);
+        m_edges.v.Update(vDown);
+        m_edges.d.Update(dDown);
+        fs.scCut       = active && m_edges.x.pressed;
+        fs.scCopy      = active && m_edges.c.pressed;
+        fs.scPaste     = active && m_edges.v.pressed;
+        fs.scDuplicate = active && m_edges.d.pressed;
     }
 
     // Phase 6b: gizmo mode keys. Pure state, but it runs before the gizmo
@@ -627,28 +627,28 @@ namespace Arcane::Editor
         const bool eDown = snap.ScancodeDown(kScE);
         const bool rDown = snap.ScancodeDown(kScR);
         const bool qDown = snap.ScancodeDown(kScQ);
+        m_edges.w.Update(wDown);
+        m_edges.e.Update(eDown);
+        m_edges.r.Update(rDown);
+        m_edges.q.Update(qDown);
         const bool keysActive = ShortcutsLive(snap, true);
         // Q = Select (no gizmo); W/E/R activate a transform gizmo (UE5 tools).
-        if (keysActive && qDown && !m_prevKeyQ)
+        if (keysActive && m_edges.q.pressed)
         {
             m_gizmoEnabled = false;
         }
-        if (keysActive && wDown && !m_prevKeyW)
+        if (keysActive && m_edges.w.pressed)
         {
             m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Translate;
         }
-        if (keysActive && eDown && !m_prevKeyE)
+        if (keysActive && m_edges.e.pressed)
         {
             m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Rotate;
         }
-        if (keysActive && rDown && !m_prevKeyR)
+        if (keysActive && m_edges.r.pressed)
         {
             m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Scale;
         }
-        m_prevKeyW = wDown;
-        m_prevKeyE = eDown;
-        m_prevKeyR = rDown;
-        m_prevKeyQ = qDown;
     }
 
     // Phase 6c: editor viewport camera. Its tail holds the FIRST of the frame's
@@ -662,6 +662,7 @@ namespace Arcane::Editor
         // RMB/wheel in Edit mode (see the pluginSnap mask above), so the
         // two cameras cannot fight over the same gesture.
         const bool      rmbDown = (snap.mouseButtons & 0x2u) != 0;
+        m_edges.rmb.Update(rmbDown);
         const glm::vec2 mouseWindow(snap.mouseX, snap.mouseY);
         if (!InPlayMode())
         {
@@ -669,7 +670,7 @@ namespace Arcane::Editor
             // started it keeps tracking anywhere -- same rule as the
             // gizmo drag, so crossing the panel edge mid-drag does
             // not strand the view.
-            if (rmbDown && !m_prevRmbDown && inViewport)
+            if (m_edges.rmb.pressed && inViewport)
             {
                 m_camPanning = true;
             }
@@ -680,8 +681,14 @@ namespace Arcane::Editor
             // RMB held across BOTH frames, so m_camPanLastMouse is a
             // real previous cursor and the press edge cannot jump the
             // view by the whole distance from wherever the cursor last
-            // was (same guard as Sandbox's Interaction pan).
-            if (m_camPanning && m_prevRmbDown)
+            // was (same guard as Sandbox's Interaction pan). Equivalence:
+            // m_camPanning && m_edges.rmb.down && !m_edges.rmb.pressed has
+            // the same truth table as the old m_camPanning && m_prevRmbDown
+            // -- m_camPanning implies rmbDown this frame (the `!rmbDown`
+            // branch above clears it otherwise), so `down` is redundant and
+            // `!pressed` (not a fresh rising edge) is exactly "was also down
+            // last frame".
+            if (m_camPanning && m_edges.rmb.down && !m_edges.rmb.pressed)
             {
                 m_camera.Pan(mouseWindow - m_camPanLastMouse);
             }
@@ -702,7 +709,6 @@ namespace Arcane::Editor
             m_camPanning = false;   // Play owns the pointer; drop any live pan
         }
         m_camPanLastMouse = mouseWindow;
-        m_prevRmbDown     = rmbDown;
 
         // F / Home framing. Gated on wantCaptureKeyboard exactly like
         // the Ctrl+N/O/S shortcuts above, so F does not fire while a
@@ -713,13 +719,13 @@ namespace Arcane::Editor
         // pressing F is the point of the shortcut.
         const bool fDown    = snap.ScancodeDown(kScF);
         const bool homeDown = snap.ScancodeDown(kScHome);
+        m_edges.f.Update(fDown);
+        m_edges.home.Update(homeDown);
         const bool framingActive = ShortcutsLive(snap, false);
-        if (framingActive && fDown && !m_prevKeyF)
+        if (framingActive && m_edges.f.pressed)
             FrameCamera(m_selection.HasSelection());
-        if (framingActive && homeDown && !m_prevKeyHome)
+        if (framingActive && m_edges.home.pressed)
             FrameCamera(false);
-        m_prevKeyF    = fDown;
-        m_prevKeyHome = homeDown;
 
         // Push the editor camera BEFORE the gizmo block below reads
         // Runtime::CameraOffset/CameraZoom. Those reads happen earlier
@@ -751,9 +757,10 @@ namespace Arcane::Editor
         // NOT gate on snap.wantCaptureMouse -- it is true over the viewport
         // image by design (see the pluginSnap comment above); `inViewport`
         // already folds in m_viewportActive.
-        const bool lmbDown          = (snap.mouseButtons & 0x1u) != 0;
-        const bool mousePressedLeft  = lmbDown && !m_prevLmbDown;
-        const bool mouseReleasedLeft = !lmbDown && m_prevLmbDown;
+        const bool lmbDown = (snap.mouseButtons & 0x1u) != 0;
+        m_edges.lmb.Update(lmbDown);
+        const bool mousePressedLeft  = m_edges.lmb.pressed;
+        const bool mouseReleasedLeft = m_edges.lmb.released;
         const glm::vec2 mouseScreen(lx, ly);
         const bool ctrlHeld = snap.ScancodeDown(kScLCtrl) || snap.ScancodeDown(kScRCtrl);
 
@@ -905,8 +912,6 @@ namespace Arcane::Editor
                 m_gizmoDrag = {};
             }
         }
-
-        m_prevLmbDown = lmbDown;
     }
 
     // Phase 7: sim advance. The plugin's UpdateAll runs HERE, before the
