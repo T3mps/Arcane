@@ -184,10 +184,32 @@ TEST_CASE("Diagnostics watchdog re-arms and does not spam a single stall", "[dia
     cfg.hangSeconds         = 1;
     cfg.startHangWatchdog   = true;
 
+    // Elastic wait, exact assertion: a loaded shared runner (hosted CI) can
+    // take several seconds to symbolize + write the first report, so a fixed
+    // post-stall sleep captures afterFirstStall BEFORE the report lands and
+    // the no-spam check below trips on the report's late arrival (2-for-2 on
+    // GitHub-hosted runners, 2026-08-11). Poll for the count instead; only
+    // the WAIT is generous, one-report-per-stall stays exact.
+    const auto waitForCount = [](std::uint32_t target, std::chrono::seconds cap)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + cap;
+        while (Arcane::Diagnostics::ReportCount() < target)
+        {
+            if (std::chrono::steady_clock::now() >= deadline)
+                return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        return true;
+    };
+
+    const std::uint32_t base = Arcane::Diagnostics::ReportCount();
+
     ArmedDiagnostics armed(cfg);
     Arcane::Diagnostics::Heartbeat();
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    // No heartbeats from here on -- this thread IS the stall. The poll sleeps
+    // are on the test thread, not the watchdog's, so they do not feed it.
+    REQUIRE(waitForCount(base + 1, std::chrono::seconds(15)));
     const std::uint32_t afterFirstStall = Arcane::Diagnostics::ReportCount();
 
     // Still stalled, well past another threshold: ONE stall must yield ONE
@@ -200,6 +222,6 @@ TEST_CASE("Diagnostics watchdog re-arms and does not spam a single stall", "[dia
     // reported. Otherwise the first hang of a session would be the only one
     // ever captured.
     Arcane::Diagnostics::Heartbeat();
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    REQUIRE(waitForCount(afterFirstStall + 1, std::chrono::seconds(15)));
     CHECK(Arcane::Diagnostics::ReportCount() > afterFirstStall);
 }
