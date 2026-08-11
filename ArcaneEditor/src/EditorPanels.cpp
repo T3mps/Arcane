@@ -4,6 +4,7 @@
 #include "DiagnosticStore.hpp"   // MatchesDiagnosticFilter, reused for the console's own text search
 #include "EditorFonts.hpp"
 #include "EditorWidgets.hpp"
+#include "EntityClipboard.hpp"
 #include "EntityList.hpp"
 #include "IconsLucide.h"
 #include "InspectorFields.hpp"
@@ -12,6 +13,7 @@
 #include "PlayMode.hpp"
 #include "SelectionContext.hpp"
 
+#include <Arcane/Base/Log.hpp>   // ARC_INFO -- Paste's foreign-clipboard notice
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Project/Project.hpp>
@@ -1025,6 +1027,90 @@ namespace Arcane::Editor
             sel.Clear();
     }
 
+    // Edit -> clipboard (spec II.B). Copy serializes the selection's
+    // subtree roots to a JSON envelope on the OS clipboard; every
+    // structural half wraps in ApplyStructural like the Outliner's ops.
+    bool CopySelectionToClipboard(Astra::Registry& registry, const SelectionContext& sel)
+    {
+        if (!sel.HasSelection())
+            return false;
+        nlohmann::json payload = Arcane::Edit::SerializeSubtrees(registry, sel.Entities());
+        if (payload["entities"].empty())
+            return false;
+        ImGui::SetClipboardText(
+            Arcane::Editor::WrapEntityClipboard(std::move(payload)).c_str());
+        return true;
+    }
+
+    void CutSelection(Astra::Registry& registry, SelectionContext& sel,
+                      Arcane::CommandStack& undo, const SceneEditBinding& binding)
+    {
+        // No-clipboard-clobber rule: a Play-mode (or otherwise structure-
+        // locked) Cut must not overwrite the clipboard with a cut that never
+        // happens. Checked BEFORE the copy, not after.
+        if (!binding.editMode)
+            return;
+        // Copy only when the delete half can apply -- see above.
+        if (!CopySelectionToClipboard(registry, sel))
+            return;
+        // Delete the FULL captured subtrees -- DeleteEntities splices
+        // children up, so passing only the roots would orphan what the
+        // clipboard just took (EntityOps.hpp, SubtreeEntities).
+        const std::vector<Astra::Entity> roots =
+            Arcane::Edit::SelectionRoots(registry, sel.Entities());
+        const std::vector<Astra::Entity> doomed =
+            Arcane::Edit::SubtreeEntities(registry, roots);
+        if (Arcane::Editor::ApplyStructural(undo, binding, "Cut",
+                [&] { return Arcane::Edit::DeleteEntities(registry, doomed) > 0; },
+                &doomed))
+            sel.Clear();
+    }
+
+    // Shared instantiate+select half of Paste/Duplicate: apply the
+    // structural instantiate, then move the selection onto the fresh
+    // roots. One implementation -- Paste and Duplicate differ only in
+    // where the payload comes from.
+    static void InstantiateAndSelect(Astra::Registry& registry, SelectionContext& sel,
+                                     Arcane::CommandStack& undo, const SceneEditBinding& binding,
+                                     const nlohmann::json& payload, std::string label)
+    {
+        std::vector<Astra::Entity> roots;
+        std::vector<Astra::Entity> made;
+        if (Arcane::Editor::ApplyStructural(undo, binding, std::move(label),
+                [&]
+                {
+                    roots = Arcane::Edit::InstantiateSubtrees(registry, payload);
+                    if (!roots.empty())
+                        made = Arcane::Edit::SubtreeEntities(registry, roots);
+                    return !roots.empty();
+                },
+                &made))
+        {
+            sel.Clear();
+            sel.AddRange(roots, roots.back());
+        }
+    }
+
+    void PasteFromClipboard(Astra::Registry& registry, SelectionContext& sel,
+                            Arcane::CommandStack& undo, const SceneEditBinding& binding)
+    {
+        if (const auto payload =
+                Arcane::Editor::ParseEntityClipboard(ImGui::GetClipboardText()))
+            InstantiateAndSelect(registry, sel, undo, binding, *payload, "Paste");
+        else
+            ARC_INFO("Paste: the clipboard holds no Arcane entities");
+    }
+
+    void DuplicateSelection(Astra::Registry& registry, SelectionContext& sel,
+                            Arcane::CommandStack& undo, const SceneEditBinding& binding)
+    {
+        if (!sel.HasSelection())
+            return;
+        const nlohmann::json payload = Arcane::Edit::SerializeSubtrees(registry, sel.Entities());
+        if (!payload["entities"].empty())
+            InstantiateAndSelect(registry, sel, undo, binding, payload, "Duplicate");
+    }
+
     namespace
     {
         // Popup id shared by the Inspector's "+ Add Component" button and the
@@ -1568,6 +1654,19 @@ namespace Arcane::Editor
                                 sel.Select(created);
                             }
                         }
+                        ImGui::Separator();
+                        // Edit-menu parity via the shared functions above.
+                        // Acts on the SELECTION -- the right-click already
+                        // selected this row when it was outside it.
+                        if (ImGui::MenuItem("Cut", "Ctrl+X"))
+                            CutSelection(registry, sel, undo, binding);
+                        if (ImGui::MenuItem("Copy", "Ctrl+C"))
+                            CopySelectionToClipboard(registry, sel);
+                        if (ImGui::MenuItem("Paste", "Ctrl+V"))
+                            PasteFromClipboard(registry, sel, undo, binding);
+                        if (ImGui::MenuItem("Duplicate", "Ctrl+D"))
+                            DuplicateSelection(registry, sel, undo, binding);
+                        ImGui::Separator();
                         // Disabled rather than hidden without an Identity, so
                         // the refusal is visible before the click -- the same
                         // treatment the structural items get above. ForTooltip's
@@ -1689,6 +1788,9 @@ namespace Arcane::Editor
                         &made))
                     sel.Select(created);
             }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Paste", "Ctrl+V"))
+                PasteFromClipboard(registry, sel, undo, binding);
             ImGui::EndPopup();
         }
 

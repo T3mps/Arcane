@@ -115,26 +115,29 @@ namespace Arcane::Editor
                     ImGui::EndDragDropSource();
                 }
 
-                // Material rows: context menu -> derive an instance (Slice 7).
-                if (e.kind == AssetKind::Material && ImGui::BeginPopupContextItem())
+                // Row context menu: kind-specific action first (Material ->
+                // derive an instance, Scene -> set as boot scene, Texture ->
+                // mint/reuse a .arcsprite wrapping it), then Assets-menu
+                // parity (Show in Explorer / Copy Path) for every kind.
+                if (ImGui::BeginPopupContextItem())
                 {
-                    if (ImGui::MenuItem("New Instance..."))
+                    // Right-click acts on this row: make it the tracked
+                    // selection so the highlight + the Assets menu follow.
+                    state.selected = e.guid;
+                    if (e.kind == AssetKind::Material && ImGui::MenuItem("New Instance..."))
                         actions.createInstanceOf = e.guid;
-                    ImGui::EndPopup();
-                }
-                // Scene rows: context menu -> make this the project's boot scene.
-                if (e.kind == AssetKind::Scene && ImGui::BeginPopupContextItem())
-                {
-                    if (ImGui::MenuItem("Set as Boot Scene"))
+                    if (e.kind == AssetKind::Scene && ImGui::MenuItem("Set as Boot Scene"))
                         actions.setBootScene = e.guid;
-                    ImGui::EndPopup();
-                }
-                // Texture rows: context menu -> mint (or reuse) a .arcsprite wrapping
-                // this texture (Task 4, mirrors the Material menu above).
-                if (e.kind == AssetKind::Texture && ImGui::BeginPopupContextItem())
-                {
-                    if (ImGui::MenuItem("Create Sprite"))
+                    if (e.kind == AssetKind::Texture && ImGui::MenuItem("Create Sprite"))
                         actions.createSpriteFrom = e.guid;
+                    if (e.kind == AssetKind::Material || e.kind == AssetKind::Scene ||
+                        e.kind == AssetKind::Texture)
+                        ImGui::Separator();
+                    // Assets-menu parity (Show in Explorer / Copy Path).
+                    if (ImGui::MenuItem("Show in Explorer"))
+                        actions.showInExplorer = e.guid;
+                    if (ImGui::MenuItem("Copy Path"))
+                        actions.copyPath = e.guid;
                     ImGui::EndPopup();
                 }
 

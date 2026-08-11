@@ -268,6 +268,21 @@ namespace Arcane::Editor
     void DeleteSelection(Astra::Registry& registry, SelectionContext& sel,
                          Arcane::CommandStack& undo, const SceneEditBinding& binding);
 
+    // Edit-menu clipboard semantics, shared by the menu-bar consume
+    // (EditorAppFrame.cpp), the keybinds, and the Outliner's context menus --
+    // one implementation so the three routes cannot drift.
+    // Copy returns whether anything reached the clipboard.
+    bool CopySelectionToClipboard(Astra::Registry& registry, const SelectionContext& sel);
+    // Cut = Copy + delete the captured subtrees as ONE undo step. Refuses
+    // whole (and leaves the clipboard alone) when structural edits cannot
+    // apply -- a refused cut must not clobber the clipboard.
+    void CutSelection(Astra::Registry& registry, SelectionContext& sel,
+                      Arcane::CommandStack& undo, const SceneEditBinding& binding);
+    void PasteFromClipboard(Astra::Registry& registry, SelectionContext& sel,
+                            Arcane::CommandStack& undo, const SceneEditBinding& binding);
+    void DuplicateSelection(Astra::Registry& registry, SelectionContext& sel,
+                            Arcane::CommandStack& undo, const SceneEditBinding& binding);
+
     // `savedStateId` is the scene's save baseline (SceneSession::SavedStateId)
     // -- the panel derives the per-entity unsaved asterisks from it via
     // CommandStack::TouchedSinceState. `open` is forwarded to ImGui::Begin

@@ -13,7 +13,6 @@
 
 #include "EditorApp.hpp"
 #include "EditorPanels.hpp"
-#include "EntityClipboard.hpp"
 #include "SelectionOps.hpp"
 #include "ViewportImGuiInput.hpp"
 
@@ -119,6 +118,32 @@ namespace Arcane::Editor
                     return ci.descriptor;
             }
             return nullptr;
+        }
+
+        // Assets -> Show in Explorer / Copy Path, on a resolved asset Guid.
+        // Extracted so the menu-bar route (the browser's tracked row) and the
+        // Asset Browser's own row context menu (AssetBrowser.cpp) resolve the
+        // SAME way -- one implementation, two entry points.
+        void AssetPathAction(const Arcane::Project* proj, const Arcane::Guid& guid,
+                             bool showInExplorer, bool copyPath)
+        {
+            const auto assetPath = proj
+                ? proj->ResolveAsset(Arcane::AssetId::FromGuid(guid))
+                : std::nullopt;
+            if (!assetPath)
+            {
+                ARC_WARN("Assets: the selected asset no longer resolves to a file");
+                return;
+            }
+            if (showInExplorer)
+            {
+                // explorer /select opens the folder WITH the file focused.
+                const std::wstring args = L"/select,\"" + assetPath->wstring() + L"\"";
+                ShellExecuteW(nullptr, L"open", L"explorer.exe",
+                              args.c_str(), nullptr, SW_SHOWNORMAL);
+            }
+            if (copyPath)
+                ImGui::SetClipboardText(assetPath->string().c_str());
         }
     }
 
@@ -1249,76 +1274,20 @@ namespace Arcane::Editor
         menuReq.copySelection      |= fs.scCopy;
         menuReq.paste              |= fs.scPaste;
         menuReq.duplicateSelection |= fs.scDuplicate;
-        // Edit -> clipboard (spec II.B). Copy serializes the selection's
-        // subtree roots to a JSON envelope on the OS clipboard; every
-        // structural half wraps in ApplyStructural like the Outliner's ops.
-        const auto copySelectionToClipboard = [&]() -> bool
-        {
-            if (!m_selection.HasSelection())
-                return false;
-            nlohmann::json payload = Arcane::Edit::SerializeSubtrees(
-                m_runtime->Registry(), m_selection.Entities());
-            if (payload["entities"].empty())
-                return false;
-            ImGui::SetClipboardText(
-                Arcane::Editor::WrapEntityClipboard(std::move(payload)).c_str());
-            return true;
-        };
+        // Edit -> clipboard (spec II.B), delegated to the shared functions
+        // promoted in EditorPanels.cpp/.hpp -- the menu-bar consume, the
+        // keybinds (folded in above), and the Outliner's context menus all
+        // route through the same four, so they cannot drift.
         if (menuReq.copySelection)
-            copySelectionToClipboard();
-        // Copy only when the delete half can apply -- a Play-mode Cut must
-        // not clobber the clipboard with a cut that never happens.
-        if (menuReq.cutSelection && !m_play.IsPlaying() && copySelectionToClipboard())
-        {
-            // Delete the FULL captured subtrees -- DeleteEntities splices
-            // children up, so passing only the roots would orphan what the
-            // clipboard just took (EntityOps.hpp, SubtreeEntities).
-            const std::vector<Astra::Entity> roots = Arcane::Edit::SelectionRoots(
-                m_runtime->Registry(), m_selection.Entities());
-            const std::vector<Astra::Entity> doomed =
-                Arcane::Edit::SubtreeEntities(m_runtime->Registry(), roots);
-            if (Arcane::Editor::ApplyStructural(*m_undo, m_editBinding, "Cut",
-                    [&] { return Arcane::Edit::DeleteEntities(m_runtime->Registry(),
-                                                              doomed) > 0; },
-                    &doomed))
-                m_selection.Clear();
-        }
-        const auto instantiateAndSelect = [&](const nlohmann::json& payload,
-                                              std::string label)
-        {
-            std::vector<Astra::Entity> roots;
-            std::vector<Astra::Entity> made;
-            if (Arcane::Editor::ApplyStructural(*m_undo, m_editBinding, std::move(label),
-                    [&]
-                    {
-                        roots = Arcane::Edit::InstantiateSubtrees(m_runtime->Registry(),
-                                                                  payload);
-                        if (!roots.empty())
-                            made = Arcane::Edit::SubtreeEntities(m_runtime->Registry(),
-                                                                 roots);
-                        return !roots.empty();
-                    },
-                    &made))
-            {
-                m_selection.Clear();
-                m_selection.AddRange(roots, roots.back());
-            }
-        };
+            Arcane::Editor::CopySelectionToClipboard(m_runtime->Registry(), m_selection);
+        // Copy only when the delete half can apply -- a Play-mode Cut must not
+        // clobber the clipboard with a cut that never happens.
+        if (menuReq.cutSelection && !m_play.IsPlaying())
+            Arcane::Editor::CutSelection(m_runtime->Registry(), m_selection, *m_undo, m_editBinding);
         if (menuReq.paste)
-        {
-            if (const auto payload =
-                    Arcane::Editor::ParseEntityClipboard(ImGui::GetClipboardText()))
-                instantiateAndSelect(*payload, "Paste");
-            else
-                ARC_INFO("Paste: the clipboard holds no Arcane entities");
-        }
-        if (menuReq.duplicateSelection && m_selection.HasSelection())
-        {
-            const nlohmann::json payload = Arcane::Edit::SerializeSubtrees(
-                m_runtime->Registry(), m_selection.Entities());
-            if (!payload["entities"].empty())
-                instantiateAndSelect(payload, "Duplicate");
-        }
+            Arcane::Editor::PasteFromClipboard(m_runtime->Registry(), m_selection, *m_undo, m_editBinding);
+        if (menuReq.duplicateSelection)
+            Arcane::Editor::DuplicateSelection(m_runtime->Registry(), m_selection, *m_undo, m_editBinding);
 
         // File -> Save All: scene first (never-saved routes through the Save
         // As dialog, exactly like Save), then every dirty document in place.
@@ -1345,27 +1314,8 @@ namespace Arcane::Editor
         if ((menuReq.showInExplorer || menuReq.copyAssetPath) &&
             m_assetBrowser.selected.IsValid())
         {
-            const Arcane::Project* proj = m_runtime->CurrentProject();
-            const auto assetPath = proj
-                ? proj->ResolveAsset(Arcane::AssetId::FromGuid(m_assetBrowser.selected))
-                : std::nullopt;
-            if (!assetPath)
-            {
-                ARC_WARN("Assets: the selected asset no longer resolves to a file");
-            }
-            else
-            {
-                if (menuReq.showInExplorer)
-                {
-                    // explorer /select opens the folder WITH the file focused.
-                    const std::wstring args =
-                        L"/select,\"" + assetPath->wstring() + L"\"";
-                    ShellExecuteW(nullptr, L"open", L"explorer.exe",
-                                  args.c_str(), nullptr, SW_SHOWNORMAL);
-                }
-                if (menuReq.copyAssetPath)
-                    ImGui::SetClipboardText(assetPath->string().c_str());
-            }
+            AssetPathAction(m_runtime->CurrentProject(), m_assetBrowser.selected,
+                            menuReq.showInExplorer, menuReq.copyAssetPath);
         }
 
         if (menuReq.newMaterial || menuReq.openMaterial)
@@ -1479,6 +1429,13 @@ namespace Arcane::Editor
             else
                 m_sceneError = "Could not write the project's boot scene (see Console).";
         }
+        // Row context menu parity for Show in Explorer / Copy Path (Part 3):
+        // the SAME helper the menu-bar route above uses, on whichever row
+        // the browser's own popup was just opened against.
+        if (browserActions.showInExplorer.IsValid())
+            AssetPathAction(m_runtime->CurrentProject(), browserActions.showInExplorer, true, false);
+        if (browserActions.copyPath.IsValid())
+            AssetPathAction(m_runtime->CurrentProject(), browserActions.copyPath, false, true);
         if (static_cast<std::size_t>(m_consoleUi.lineCap) != m_console.Capacity())
             m_console.SetCapacity(static_cast<std::size_t>(m_consoleUi.lineCap));
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Console))

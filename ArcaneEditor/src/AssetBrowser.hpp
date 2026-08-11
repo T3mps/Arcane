@@ -204,6 +204,12 @@ namespace Arcane::Editor
 
         // Context menu "Set as Boot Scene" on a scene row.
         Arcane::Guid setBootScene;
+
+        // Row context menu "Show in Explorer" / "Copy Path" -- the APP
+        // resolves the Guid and shells/copies (never the panel; same rule as
+        // the dialogs). Nil = not requested this frame.
+        Arcane::Guid showInExplorer;
+        Arcane::Guid copyPath;
     };
 
     // The "Assets" panel: filter row + entry table over the open project's
