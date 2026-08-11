@@ -25,6 +25,7 @@
 #include "Panels/ConsoleBuffer.hpp"
 #include "Panels/DiagnosticStore.hpp"
 #include "App/DialogSlot.hpp"
+#include "App/ModalErrorQueue.hpp"
 #include "Documents/DocumentHost.hpp"
 #include "Viewport/EditorCamera.hpp"
 #include "Panels/EditorPanels.hpp"
@@ -402,11 +403,6 @@ namespace Arcane::Editor
         // some later, unrelated save.
         bool m_launchModalPending   = false;
         bool m_launchAfterSceneSave = false;
-        // Last standalone-launch failure (no project open, ArcaneRuntime.exe not
-        // found, or CreateProcessW itself failed), shown as its own blocking
-        // modal until dismissed. Kept separate from m_sceneError/m_projectOpenError
-        // so the message and the modal title stay honest about which action failed.
-        std::string m_launchError;
         // Entry point for the Play button's SeparateWindow branch (see
         // DrawSimTimeToolbar's return value and its call site in DrawEditorUi).
         // Re-entrant: DrawModals' Save button and ConsumeSceneDialogResults'
@@ -767,7 +763,8 @@ namespace Arcane::Editor
         void        ShowSceneSaveDialog();
 
         // The scene effects. Each returns false when the effect itself failed, and
-        // sets m_sceneError to the reason (DrawModals draws it as a modal).
+        // pushes m_modalErrors with the reason under a "Scene Error" title
+        // (DrawModals draws the queue's front as a modal).
         bool DoNewScene();
         bool DoOpenScene(const std::filesystem::path& file);
         bool DoSaveScene(const std::filesystem::path& file);
@@ -777,10 +774,6 @@ namespace Arcane::Editor
         // chain (Unreal's model). Called on scene save and on clean
         // shutdown; a no-op without a project, a viewport, or a device.
         void WriteAutoScreenshot();
-
-        // Last scene failure, shown as a blocking modal until dismissed. Main
-        // thread only (set in the effects, read in the ImGui pass).
-        std::string m_sceneError;
 
         // Window title, recomposed from project + scene + dirty state each frame
         // and pushed to the window only when it changes (SetTitle is an SDL call,
@@ -844,11 +837,16 @@ namespace Arcane::Editor
         // (a document that was floating rather than tabbed over the scene).
         std::size_t  m_materialDocCount = 0;
 
-        // Open-failure surfacing: SwitchProject's refusals used to be console-only
-        // and were repeatedly missed at the desk. Any refusal/failure sets this;
-        // DrawModals shows it as a blocking modal (main thread only -- set inside
-        // SwitchProject/Init, read in the ImGui frame; no lock needed).
-        std::string m_projectOpenError;
+        // Failure surfacing for project-open, scene, and standalone-launch
+        // refusals (architecture pass sec 7): SwitchProject's refusals used to
+        // be console-only and were repeatedly missed at the desk, and the
+        // scene/launch effects had their own parallel string + popup each.
+        // Any refusal/failure Push()es a titled error here; DrawModals draws
+        // the queue's front as a blocking modal (main thread only -- pushed
+        // inside the effects/SwitchProject/Init, read in the ImGui pass; no
+        // lock needed). Errors display one at a time, FIFO, instead of racing
+        // for the popup stack.
+        Arcane::Editor::ModalErrorQueue m_modalErrors;
 
         // One-shot latch for RaiseOpenProjectOnStart: consumed on the first frame
         // that draws the menu bar, so the picker appears over a live editor window
@@ -861,7 +859,7 @@ namespace Arcane::Editor
         // already consumed the OS quit event during its own event pump, so it
         // will not reach PumpFrameEvents' own SDL_EVENT_QUIT check on a later
         // frame. PumpFrameEvents reads this flag first and requests the same
-        // normal exit a live quit would, instead of surfacing m_projectOpenError.
+        // normal exit a live quit would, instead of surfacing through m_modalErrors.
         // Safe to check unconditionally: SwitchProject's switch_teardown stage
         // has already reset m_scene to a clean Untitled state by the time this
         // can be set, so there is nothing for the unsaved-changes confirm modal

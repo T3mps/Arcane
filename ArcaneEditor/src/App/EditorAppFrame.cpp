@@ -1504,7 +1504,7 @@ namespace Arcane::Editor
             if (m_runtime->SetProjectBootScene(browserActions.setBootScene))
                 ARC_INFO("Boot scene set to {}", browserActions.setBootScene.ToString());
             else
-                m_sceneError = "Could not write the project's boot scene (see Console).";
+                m_modalErrors.Push("Scene Error", "Could not write the project's boot scene (see Console).");
         }
         // Row context menu parity for Show in Explorer / Copy Path (Part 3):
         // the SAME helper the menu-bar route above uses, on whichever row
@@ -1568,26 +1568,28 @@ namespace Arcane::Editor
     // panel window -- that is why they live here and not inside a panel draw.
     void EditorApp::DrawModals(LoopState& ls)
     {
-        // Project-open failure modal: any refusal in SwitchProject/Init lands
-        // here (drawn at the dockspace level, outside any panel window). The
-        // string stays set until the user dismisses it, so OpenPopup re-arms
-        // across frames even if another popup momentarily owned the stack.
-        if (!m_projectOpenError.empty() && !ImGui::IsPopupOpen("Open Project Failed"))
-            ImGui::OpenPopup("Open Project Failed");
-        if (ImGui::BeginPopupModal("Open Project Failed", nullptr,
-                                   ImGuiWindowFlags_AlwaysAutoResize))
+        // ONE error modal, FIFO off the queue (architecture pass sec 7). The title
+        // is per-error so it stays honest about which action failed; Pop advances
+        // to the next queued error on the following frame.
+        if (const Arcane::Editor::ModalError* err = m_modalErrors.Front())
         {
-            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
-            ImGui::TextUnformatted(m_projectOpenError.c_str());
-            ImGui::PopTextWrapPos();
-            ImGui::Separator();
-            if (ImGui::Button("OK", ImVec2(120, 0)) ||
-                ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter))
+            if (!ImGui::IsPopupOpen(err->title.c_str()))
+                ImGui::OpenPopup(err->title.c_str());
+            if (ImGui::BeginPopupModal(err->title.c_str(), nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize))
             {
-                m_projectOpenError.clear();
-                ImGui::CloseCurrentPopup();
+                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+                ImGui::TextUnformatted(err->message.c_str());
+                ImGui::PopTextWrapPos();
+                ImGui::Separator();
+                if (ImGui::Button("OK", ImVec2(120, 0)) ||
+                    ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter))
+                {
+                    m_modalErrors.Pop();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
-            ImGui::EndPopup();
         }
 
         // Unsaved-scene confirm. SceneSession parked the intent (New Scene, Open
@@ -1640,9 +1642,9 @@ namespace Arcane::Editor
                     }
                     else
                     {
-                        // The save failed (m_sceneError says why). Drop the action
-                        // rather than proceed -- proceeding would discard exactly
-                        // the work the save was meant to preserve.
+                        // The save failed (m_modalErrors carries why). Drop the
+                        // action rather than proceed -- proceeding would discard
+                        // exactly the work the save was meant to preserve.
                         m_scene.ClearPending();
                         ImGui::CloseCurrentPopup();
                     }
@@ -1660,24 +1662,6 @@ namespace Arcane::Editor
                     m_scene.ClearPending();
                     ImGui::CloseCurrentPopup();
                 }
-            }
-            ImGui::EndPopup();
-        }
-
-        // Scene failure modal (bad file, failed write). Same re-arm shape.
-        if (!m_sceneError.empty() && !ImGui::IsPopupOpen("Scene Error"))
-            ImGui::OpenPopup("Scene Error");
-        if (ImGui::BeginPopupModal("Scene Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-        {
-            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
-            ImGui::TextUnformatted(m_sceneError.c_str());
-            ImGui::PopTextWrapPos();
-            ImGui::Separator();
-            if (ImGui::Button("OK", ImVec2(120, 0)) ||
-                ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter))
-            {
-                m_sceneError.clear();
-                ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
         }
@@ -1727,7 +1711,7 @@ namespace Arcane::Editor
                     }
                     else
                     {
-                        // Save failed; m_sceneError carries why (its own modal).
+                        // Save failed; m_modalErrors carries why (its own modal).
                         m_launchModalPending = false;
                         ImGui::CloseCurrentPopup();
                     }
@@ -1748,28 +1732,6 @@ namespace Arcane::Editor
                     m_launchAfterSceneSave = false;
                     ImGui::CloseCurrentPopup();
                 }
-            }
-            ImGui::EndPopup();
-        }
-
-        // Standalone-launch failure modal (no project open, ArcaneRuntime.exe
-        // not found, or CreateProcessW itself failed). Same re-arm shape; kept
-        // separate from m_sceneError so the message and title stay honest
-        // about which action failed.
-        if (!m_launchError.empty() && !ImGui::IsPopupOpen("Play in Separate Window Failed"))
-            ImGui::OpenPopup("Play in Separate Window Failed");
-        if (ImGui::BeginPopupModal("Play in Separate Window Failed", nullptr,
-                                   ImGuiWindowFlags_AlwaysAutoResize))
-        {
-            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
-            ImGui::TextUnformatted(m_launchError.c_str());
-            ImGui::PopTextWrapPos();
-            ImGui::Separator();
-            if (ImGui::Button("OK", ImVec2(120, 0)) ||
-                ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter))
-            {
-                m_launchError.clear();
-                ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
         }

@@ -191,7 +191,7 @@ namespace Arcane::Editor
         if (!doc)
         {
             ARC_ERROR("Open Scene: {}", err);
-            m_sceneError = err;
+            m_modalErrors.Push("Scene Error", err);
             return false;
         }
 
@@ -206,8 +206,8 @@ namespace Arcane::Editor
             // than the half-populated one this left behind.
             Arcane::Scene::CreateEmpty(m_runtime->Registry());
             m_scene.Reset(*m_undo);
-            m_sceneError = "'" + file.generic_string() +
-                           "' parsed but could not be loaded (see Console).";
+            m_modalErrors.Push("Scene Error", "'" + file.generic_string() +
+                           "' parsed but could not be loaded (see Console).");
             ARC_ERROR("Open Scene: ApplySceneDocument failed for {}", file.generic_string());
             return false;
         }
@@ -236,8 +236,8 @@ namespace Arcane::Editor
         if (InPlayMode())
         {
             ARC_ERROR("Save Scene: refused -- play mode is running");
-            m_sceneError = "Cannot save while play mode is running.\n"
-                           "Stop play mode -- which restores the authored scene -- and save again.";
+            m_modalErrors.Push("Scene Error", "Cannot save while play mode is running.\n"
+                           "Stop play mode -- which restores the authored scene -- and save again.");
             return false;
         }
 
@@ -250,8 +250,8 @@ namespace Arcane::Editor
         if (!m_runtime->Registry().GetResource<Arcane::SceneRoot>())
         {
             ARC_ERROR("Save Scene: refused -- the registry has no SceneRoot");
-            m_sceneError = "There is no scene to save.\n"
-                           "Create one with File -> New Scene, or open an existing scene.";
+            m_modalErrors.Push("Scene Error", "There is no scene to save.\n"
+                           "Create one with File -> New Scene, or open an existing scene.");
             return false;
         }
 
@@ -266,7 +266,7 @@ namespace Arcane::Editor
         if (!Arcane::Scene::SaveSceneFile(file, m_runtime->Registry(), id, &err))
         {
             ARC_ERROR("Save Scene: {}", err);
-            m_sceneError = err;
+            m_modalErrors.Push("Scene Error", err);
             return false;
         }
 
@@ -315,7 +315,8 @@ namespace Arcane::Editor
         const Arcane::Project* proj = m_runtime->CurrentProject();
         if (!proj)
         {
-            m_launchError = "Open a project before playing in a separate window.";
+            m_modalErrors.Push("Play in Separate Window Failed",
+                                "Open a project before playing in a separate window.");
             return;
         }
 
@@ -354,7 +355,8 @@ namespace Arcane::Editor
                 looked += "'" + candidate.string() + "'";
             }
             ARC_ERROR("LaunchStandalone: ArcaneRuntime.exe not found ({})", looked);
-            m_launchError = "ArcaneRuntime.exe was not found. Looked in:\n" + looked;
+            m_modalErrors.Push("Play in Separate Window Failed",
+                                "ArcaneRuntime.exe was not found. Looked in:\n" + looked);
             return;
         }
 
@@ -362,8 +364,9 @@ namespace Arcane::Editor
             proj->Root(), m_scene.Id(), m_config.backend);
 
         if (!Arcane::Editor::RuntimeLaunch::SpawnDetached(resolved, args))
-            m_launchError = "Failed to launch '" + resolved.string() +
-                             "'. See the Console for details.";
+            m_modalErrors.Push("Play in Separate Window Failed",
+                                "Failed to launch '" + resolved.string() +
+                                "'. See the Console for details.");
     }
 
     void EditorApp::FrameCamera(bool selectionOnly)

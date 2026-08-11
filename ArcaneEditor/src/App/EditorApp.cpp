@@ -691,14 +691,15 @@ namespace Arcane::Editor
                 // on purpose (every m_plugin-> use in MainLoop is optional-guarded,
                 // per this function's opening comment), and a detailed banner --
                 // naming the required ABI, the same wording switch_plugin_load uses
-                // -- surfaces through m_projectOpenError as the "Open Project
+                // -- surfaces through m_modalErrors as the "Open Project
                 // Failed" modal (EditorAppFrame.cpp) once MainLoop starts, rather
                 // than only a Console line.
                 ARC_ERROR("Arcane Editor: failed to load the game module / project plugins");
-                m_projectOpenError = "The project opened, but its game module / plugins "
+                m_modalErrors.Push("Open Project Failed",
+                                     "The project opened, but its game module / plugins "
                                      "failed to load (see Console).\nCheck the DLL paths in "
                                      "the manifest and that they are built against ABI " +
-                                     std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) + ".";
+                                     std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) + ".");
                 m_plugin.reset();
             }
         }
@@ -724,9 +725,9 @@ namespace Arcane::Editor
         // none is open now" is exactly "the open failed".
         if (!m_config.projectPath.empty() && m_runtime && !m_runtime->CurrentProject())
         {
-            m_projectOpenError = "--project '" + m_config.projectPath +
+            m_modalErrors.Push("Open Project Failed", "--project '" + m_config.projectPath +
                                  "' failed to open.\nRunning with the data/ + --plugin "
-                                 "fallback instead (see Console).";
+                                 "fallback instead (see Console).");
         }
 
         // Task 7: open into the project's boot scene, now that the plugin has

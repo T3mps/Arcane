@@ -188,6 +188,8 @@ namespace Arcane::Editor
         for (EditorDocument* d : toClose)
             RequestClose(d);
 
+        // Deliberately NOT folded into EditorApp's ModalErrorQueue -- DocumentHost
+        // is self-contained; see the architecture-pass spec sec 7.
         if (m_pendingClose)
         {
             ImGui::OpenPopup("Unsaved Changes##dochost");

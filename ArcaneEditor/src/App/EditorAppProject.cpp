@@ -364,9 +364,9 @@ namespace Arcane::Editor
             {
                 ARC_ERROR("Open Project: '{}' is already open in another editor (pid {})",
                           path.generic_string(), *rival);
-                m_projectOpenError = "'" + path.generic_string() +
+                m_modalErrors.Push("Open Project Failed", "'" + path.generic_string() +
                                      "' is already open in another Arcane Editor.\n"
-                                     "That editor has been brought to the front.";
+                                     "That editor has been brought to the front.");
                 Arcane::EditorLock::FocusWindowOfProcess(*rival);
                 return;
             }
@@ -380,8 +380,8 @@ namespace Arcane::Editor
         if (!probe)
         {
             ARC_ERROR("Open Project: '{}' is not a valid Arcane project", path.generic_string());
-            m_projectOpenError = "'" + path.generic_string() +
-                                 "' is not a valid Arcane project (no readable .arcproj).";
+            m_modalErrors.Push("Open Project Failed", "'" + path.generic_string() +
+                                 "' is not a valid Arcane project (no readable .arcproj).");
             return;
         }
         if (probe->Manifest().engineAbi != static_cast<int>(Arcane::kGamePluginABIVersion))
@@ -430,8 +430,8 @@ namespace Arcane::Editor
         {
             ARC_ERROR("Open Project: unsaved material documents -- save or close them "
                       "before switching projects");
-            m_projectOpenError = "There are unsaved material documents.\n"
-                                 "Save or close them before switching projects.";
+            m_modalErrors.Push("Open Project Failed", "There are unsaved material documents.\n"
+                                 "Save or close them before switching projects.");
             return;
         }
         // The OUTGOING project's root, captured before teardown replaces it:
@@ -606,10 +606,11 @@ namespace Arcane::Editor
                     // r.ok == true, so the generic "switching to X failed at
                     // stage Y" message past seq.Run() never overwrites it.
                     ARC_ERROR("Open Project: failed to load the game module / project plugins");
-                    m_projectOpenError = "The project opened, but its game module / plugins "
+                    m_modalErrors.Push("Open Project Failed",
+                                         "The project opened, but its game module / plugins "
                                          "failed to load (see Console).\nCheck the DLL paths in "
                                          "the manifest and that they are built against ABI " +
-                                         std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) + ".";
+                                         std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) + ".");
                     m_plugin.reset();
                 }
             }
@@ -663,7 +664,7 @@ namespace Arcane::Editor
             // NOT a failure -- the overlay presenter's Present() returned false
             // because it saw the OS quit event (BootPresenter.cpp), and
             // BootSequence::Run turned that into quitRequested + failedStage =
-            // "quit requested". Reporting that through m_projectOpenError would
+            // "quit requested". Reporting that through m_modalErrors would
             // show a bogus "failed at stage 'quit requested'" banner AND leave
             // the editor running -- the quit event is already consumed by the
             // presenter's own pump, so PumpFrameEvents' SDL_EVENT_QUIT check
@@ -685,10 +686,10 @@ namespace Arcane::Editor
             {
                 ARC_ERROR("Open Project: switching to '{}' failed at stage '{}'",
                           path.generic_string(), r.failedStage);
-                m_projectOpenError = "Switching to '" + path.generic_string() +
+                m_modalErrors.Push("Open Project Failed", "Switching to '" + path.generic_string() +
                                      "' failed at stage '" + r.failedStage +
                                      "'.\nThe editor was returned to a clean, project-less "
-                                     "state (see Console) -- open another project to continue.";
+                                     "state (see Console) -- open another project to continue.");
             }
 
             // AMENDMENT 2 (2026-07-30 human ruling): converge on the SAME
