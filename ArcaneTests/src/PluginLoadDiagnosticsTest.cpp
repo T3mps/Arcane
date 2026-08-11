@@ -73,10 +73,10 @@ TEST_CASE("An ABI-mismatched plugin reports BOTH version numbers", "[plugin][dia
 
 TEST_CASE("A missing required export is named", "[plugin][diagnostics]")
 {
-    // Arcane.dll itself loads fine as a module but exports none of the plugin
-    // entry points -- the cheapest real MissingExport case available in-tree.
+    // ArcaneClient.dll itself loads fine as a module but exports none of the
+    // plugin entry points -- the cheapest real MissingExport case in-tree.
     Arcane::PluginResolveError error;
-    auto plugin = Arcane::Plugin::Load(std::filesystem::path("Arcane.dll"), &error);
+    auto plugin = Arcane::Plugin::Load(std::filesystem::path("ArcaneClient.dll"), &error);
 
     CHECK_FALSE(plugin.has_value());
     CHECK(error.kind == Arcane::PluginResolveError::Kind::MissingExport);
