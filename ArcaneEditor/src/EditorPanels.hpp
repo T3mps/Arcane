@@ -34,10 +34,6 @@ namespace Arcane::Editor
         bool openProject = false;    // File -> Open Project      (file dialog)
         // A picked recent-project path. Empty = nothing picked this frame.
         // A path rather than a bool because a submenu carries the choice.
-        // NO MENU RAISES THIS TODAY: the 2026-08-10 menu restructure parked
-        // the project-recents submenu (File shows a greyed "Open Recent
-        // Scene" placeholder instead); the consumer plumbing is kept intact
-        // for the wiring pass.
         std::string openRecentPath;
         // OUTPUT, not a request: the File menu is open this frame. The app uses
         // it to refresh the Open Recent cache on demand -- rebuilding it every
@@ -79,9 +75,6 @@ namespace Arcane::Editor
     // (greyed while playing -- the UE model, see the item's own comment --
     // while a build is already running, and when the open project declares no
     // gameModule at all).
-    // `recents` is currently PARKED (the 2026-08-10 restructure removed the
-    // project-recents submenu; see MenuRequests::openRecentPath) -- still
-    // passed so the wiring pass can resurface it without a signature change.
     // `panels` drives the Window menu's toggles; only Reset Layout goes
     // through `requests` (it must run at EndDockSpace's DockBuilder-safe
     // point).

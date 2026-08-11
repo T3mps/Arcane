@@ -102,6 +102,43 @@ namespace Arcane::Editor
                     ImGui::SetTooltip("Stop play mode to save the scene");
                 ImGui::Separator();
                 if (ImGui::MenuItem("Open Project")) requests.openProject = true;
+                // Open Recent Project: the Hub's shared list, already filtered
+                // to what THIS editor's ABI can open (RecentProjects.hpp).
+                // Greyed when there is nothing at all to show. The picked path
+                // lands in the SAME slot the Open Project dialog fills, so it
+                // inherits every guard that path has (unsaved-scene confirm,
+                // rival-editor lock, ABI gate, failure modal).
+                const bool anyRecents =
+                    recents && (!recents->visible.empty() || recents->hiddenForAbi > 0);
+                if (ImGui::BeginMenu("Open Recent Project", anyRecents))
+                {
+                    for (const RecentProject& r : recents->visible)
+                    {
+                        if (ImGui::MenuItem(r.name.c_str()))
+                            requests.openRecentPath = r.path;
+                        // Full path on hover: the name alone cannot separate two
+                        // projects sharing a folder name -- UE's tooltip choice
+                        // (FRecentProjectsMenu::MakeMenu).
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("%s", r.path.c_str());
+                    }
+                    // Never leave the list silently short: an ABI-filtered
+                    // absence must be distinguishable from a broken list.
+                    if (recents->hiddenForAbi > 0)
+                    {
+                        if (!recents->visible.empty())
+                            ImGui::Separator();
+                        char hidden[128];
+                        std::snprintf(hidden, sizeof(hidden),
+                                      "%zu project%s hidden (built for another engine version)",
+                                      recents->hiddenForAbi,
+                                      recents->hiddenForAbi == 1 ? "" : "s");
+                        ImGui::BeginDisabled();
+                        ImGui::MenuItem(hidden);
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::EndMenu();
+                }
                 // UE's File-menu item is "Save All", and that is what this
                 // saves: the scene + every dirty open document. There is no
                 // project-level state to save (the manifest is immutable
