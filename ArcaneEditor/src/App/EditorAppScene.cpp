@@ -301,16 +301,19 @@ namespace Arcane::Editor
     // the other place this matters), and RuntimeLaunch::BuildArgs silently
     // OMITS --scene for a nil guid -- the spawned runtime would then boot the
     // project manifest's bootScene instead of what is on screen, with no
-    // signal anything was skipped. So the gate below treats "no valid id yet"
-    // exactly like "dirty": both park behind the SAME "Save and Play?" modal
-    // (DrawModals, EditorAppFrame.cpp), and only a successful save (which
-    // assigns the id, same as any other Save Scene) may proceed past it.
+    // signal anything was skipped. So SceneSession::Request treats "no valid
+    // id yet" exactly like "dirty": both park behind the shared "Unsaved
+    // Scene" modal (DrawModals, EditorAppFrame.cpp), and only a successful
+    // save (which assigns the id, same as any other Save Scene) lets the
+    // LaunchStandalone intent proceed to this function.
     //
-    // Re-entrant: the modal's Save button (already-saved branch, synchronously)
-    // and ConsumeSceneDialogResults' deferred branch (never-saved branch, once
-    // its async Save-As dialog actually lands) both call this function again
-    // once the guard is satisfied, and it falls straight through to the spawn.
-    void EditorApp::LaunchStandalone()
+    // Called from RunSceneAction's LaunchStandalone case -- both the
+    // immediate accept (Request returned true on an already clean, saved
+    // scene) and the parked-resume path (the modal's Save button, or
+    // ConsumeSceneDialogResults once a never-saved scene's Save-As lands)
+    // route through there, per SceneSession::Request's completion-convention
+    // comment.
+    void EditorApp::DoLaunchStandalone()
     {
         const Arcane::Project* proj = m_runtime->CurrentProject();
         if (!proj)
@@ -320,9 +323,12 @@ namespace Arcane::Editor
             return;
         }
 
+        // Backstop, same rationale as DoSaveScene's Play refusal: the Request
+        // machine is the gate; if a caller reaches here unready anyway, refuse
+        // loudly rather than spawn against a stale file.
         if (!m_scene.Id().IsValid() || m_scene.IsDirty(*m_undo))
         {
-            m_launchModalPending = true;
+            ARC_ERROR("Play Standalone: refused -- scene is unsaved (the intent machine should have parked this)");
             return;
         }
 

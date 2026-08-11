@@ -224,3 +224,54 @@ TEST_CASE("TakePending consumes the parked intent, unwedging future requests", "
     s.MarkSaved(h.stack);
     CHECK(s.Request(SceneIntent::Exit, {}, h.stack));
 }
+
+TEST_CASE("LaunchStandalone parks on a dirty scene", "[editor][scene]")
+{
+    Harness h;
+    SceneSession s;
+    s.Adopt("D:/Games/G/Content/scenes/level_one.arcscene",
+            Arcane::Guid::Generate(), h.stack);
+    h.Edit(1.0f);
+
+    CHECK_FALSE(s.Request(SceneIntent::LaunchStandalone, {}, h.stack));
+    CHECK(s.Pending() == SceneIntent::LaunchStandalone);
+
+    const SceneSession::PendingRequest req = s.TakePending();
+    CHECK(req.intent == SceneIntent::LaunchStandalone);
+    CHECK(s.Pending() == SceneIntent::None);
+}
+
+TEST_CASE("LaunchStandalone parks on a never-saved scene even when clean", "[editor][scene]")
+{
+    // A nil scene guid means the spawned runtime would boot the manifest's
+    // bootScene instead of what is on screen -- "never saved" is exactly as
+    // unready as "dirty" for this one intent (LaunchStandalone's old guard,
+    // now owned by the machine).
+    Harness h;
+    SceneSession s;                       // Untitled: nil id, clean
+    CHECK_FALSE(s.IsDirty(h.stack));
+    CHECK_FALSE(s.Request(SceneIntent::LaunchStandalone, {}, h.stack));
+    CHECK(s.Pending() == SceneIntent::LaunchStandalone);
+    s.ClearPending();
+    CHECK(s.Pending() == SceneIntent::None);
+}
+
+TEST_CASE("LaunchStandalone acts immediately on a saved clean scene", "[editor][scene]")
+{
+    Harness h;
+    SceneSession s;
+    s.Adopt("D:/Games/G/Content/scenes/level_one.arcscene",
+            Arcane::Guid::Generate(), h.stack);
+    CHECK(s.Request(SceneIntent::LaunchStandalone, {}, h.stack));
+    CHECK(s.Pending() == SceneIntent::None);
+}
+
+TEST_CASE("a second Request while LaunchStandalone is parked is ignored", "[editor][scene]")
+{
+    Harness h;
+    SceneSession s;
+    h.Edit(1.0f);
+    CHECK_FALSE(s.Request(SceneIntent::LaunchStandalone, {}, h.stack));
+    CHECK_FALSE(s.Request(SceneIntent::OpenScene, "other.arcscene", h.stack));
+    CHECK(s.Pending() == SceneIntent::LaunchStandalone);
+}

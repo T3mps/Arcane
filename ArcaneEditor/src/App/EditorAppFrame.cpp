@@ -292,6 +292,9 @@ namespace Arcane::Editor
             case Arcane::Editor::SceneIntent::Exit:
                 ls.running = false;
                 break;
+            case Arcane::Editor::SceneIntent::LaunchStandalone:
+                DoLaunchStandalone();
+                break;
             case Arcane::Editor::SceneIntent::None:
                 break;
         }
@@ -354,22 +357,6 @@ namespace Arcane::Editor
                 else
                 {
                     m_scene.ClearPending();
-                }
-            }
-
-            // Same shape, for LaunchStandalone's "Save and Play?" modal: its
-            // Save button falls back to this same dialog for a never-saved
-            // scene (see EditorAppScene.cpp), and the actual spawn was parked
-            // until the save the user just answered actually landed. Clear
-            // the gate either way -- a failed save must not go on to launch
-            // against whatever the registry happens to hold.
-            if (m_launchAfterSceneSave)
-            {
-                m_launchAfterSceneSave = false;
-                m_launchModalPending   = false;
-                if (saved)
-                {
-                    LaunchStandalone();   // re-entrant: now clean + a valid guid -> spawns
                 }
             }
         }
@@ -1255,11 +1242,17 @@ namespace Arcane::Editor
                                        &m_sceneRecents);
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
         // click (same "panel reports, app performs" split as ViewportPanelResult);
-        // LaunchStandalone owns the project/dirty-scene checks and the spawn.
+        // DoLaunchStandalone owns the project/dirty-scene checks and the spawn.
         if (Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime,
                                                m_plugin ? m_plugin->Vtable() : nullptr, m_playMode,
                                                (uint64_t)(intptr_t)m_toolbarLogo.Get()))
-            LaunchStandalone();
+        {
+            // Mid-ImGui-pass site -> the deferral convention (SceneSession::Request's
+            // comment): clean+saved acts next frame top; dirty/never-saved parks
+            // behind the shared confirm modal.
+            if (m_scene.Request(Arcane::Editor::SceneIntent::LaunchStandalone, {}, *m_undo))
+                ls.sceneAction = { Arcane::Editor::SceneIntent::LaunchStandalone, {} };
+        }
         // The toolbar's Play/Stop click is the only mid-frame PlayMode flip point
         // (sec 1's rule): re-derive so this frame's consume blocks and panels see
         // the true state, not last frame's.
@@ -1616,28 +1609,37 @@ namespace Arcane::Editor
         }
 
         // Unsaved-scene confirm. SceneSession parked the intent (New Scene, Open
-        // Scene, Open Project, Exit) because the scene is dirty; this popup is
-        // where it is answered. Same re-arm shape as the modal above.
-        if (m_scene.Pending() != Arcane::Editor::SceneIntent::None &&
+        // Scene, Open Project, Exit, LaunchStandalone) because the scene is dirty
+        // (or, for LaunchStandalone only, never saved); this popup is where it is
+        // answered. Same re-arm shape as the modal above. Computed once: every
+        // branch below reads the same snapshot, so a TakePending() mid-block
+        // cannot change what the rest of the frame's UI thinks is pending.
+        const Arcane::Editor::SceneIntent pending = m_scene.Pending();
+        const bool isLaunch = (pending == Arcane::Editor::SceneIntent::LaunchStandalone);
+        if (pending != Arcane::Editor::SceneIntent::None &&
             !ImGui::IsPopupOpen("Unsaved Scene"))
             ImGui::OpenPopup("Unsaved Scene");
         if (ImGui::BeginPopupModal("Unsaved Scene", nullptr,
                                    ImGuiWindowFlags_AlwaysAutoResize))
         {
-            if (m_scene.Pending() == Arcane::Editor::SceneIntent::None)
+            if (pending == Arcane::Editor::SceneIntent::None)
             {
                 // The intent was taken OUTSIDE this popup: the Save button's
                 // never-saved branch launches a file dialog and leaves the popup
                 // up, and the save (and with it the action) lands at the top of a
-                // later frame. Nothing left to ask about.
+                // later frame. Nothing left to ask about. Also covers a parked
+                // LaunchStandalone's dialog-in-flight frames the same way.
                 ImGui::CloseCurrentPopup();
             }
             else
             {
-                ImGui::TextUnformatted(("'" + m_scene.DisplayName() +
-                                        "' has unsaved changes.").c_str());
+                ImGui::TextUnformatted((isLaunch
+                    ? "'" + m_scene.DisplayName() +
+                      "' must be saved before playing in a separate window."
+                    : "'" + m_scene.DisplayName() + "' has unsaved changes.").c_str());
                 ImGui::Separator();
-                if (ImGui::Button("Save", ImVec2(90, 0)))
+                if (ImGui::Button(isLaunch ? "Save and Play" : "Save",
+                                  ImVec2(isLaunch ? 140.f : 90.f, 0)))
                 {
                     // Stop Play BEFORE saving, in both branches below. Stop
                     // restores the pre-Play snapshot, which IS the authored
@@ -1647,7 +1649,9 @@ namespace Arcane::Editor
                     // popup) is satisfied. Not a surprising side effect: no
                     // intent parkable here leaves Play running anyway -- New
                     // Scene, Open Scene and Open Project all stop it through
-                    // ClearSceneReferences, and Exit ends the process.
+                    // ClearSceneReferences, Exit ends the process, and a parked
+                    // LaunchStandalone only reaches here already saved-or-dirty,
+                    // never mid-Play in a way DoLaunchStandalone itself needs.
                     if (InPlayMode())
                         m_play.Stop(*m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
                     if (m_scene.Path().empty())
@@ -1672,87 +1676,23 @@ namespace Arcane::Editor
                         ImGui::CloseCurrentPopup();
                     }
                 }
-                ImGui::SameLine();
-                if (ImGui::Button("Discard", ImVec2(90, 0)))
+                // Discard: hidden for a launch -- the standalone runtime reads
+                // the scene from DISK, so "discard and play" would run a stale
+                // file.
+                if (!isLaunch)
                 {
-                    ls.sceneAction = m_scene.TakePending();
-                    ImGui::CloseCurrentPopup();
+                    ImGui::SameLine();
+                    if (ImGui::Button("Discard", ImVec2(90, 0)))
+                    {
+                        ls.sceneAction = m_scene.TakePending();
+                        ImGui::CloseCurrentPopup();
+                    }
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("Cancel", ImVec2(90, 0)) ||
                     ImGui::IsKeyPressed(ImGuiKey_Escape))
                 {
                     m_scene.ClearPending();
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-            ImGui::EndPopup();
-        }
-
-        // "Save and Play?" gate (Task 6, runtime-host-fold arc): LaunchStandalone
-        // parks m_launchModalPending when the active scene is dirty OR was never
-        // saved -- a nil scene guid gets the SAME treatment as dirty, because
-        // RuntimeLaunch::BuildArgs would otherwise silently omit --scene and the
-        // spawned runtime would boot the manifest's bootScene instead of what is
-        // on screen (see LaunchStandalone's header comment, EditorAppScene.cpp).
-        // Same re-arm shape as the Unsaved Scene modal above.
-        if (m_launchModalPending && !ImGui::IsPopupOpen("Save and Play?"))
-            ImGui::OpenPopup("Save and Play?");
-        if (ImGui::BeginPopupModal("Save and Play?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-        {
-            if (!m_launchModalPending)
-            {
-                // Resolved elsewhere: the never-saved branch below sets
-                // m_launchAfterSceneSave and leaves this open across frames
-                // (like the Unsaved Scene modal's own never-saved branch) until
-                // ConsumeSceneDialogResults' save actually lands and clears the
-                // gate. Nothing left to ask once that happens.
-                ImGui::CloseCurrentPopup();
-            }
-            else
-            {
-                ImGui::TextUnformatted(("'" + m_scene.DisplayName() +
-                                        "' must be saved before playing in a "
-                                        "separate window.").c_str());
-                ImGui::Separator();
-                if (ImGui::Button("Save and Play", ImVec2(140, 0)))
-                {
-                    if (m_scene.Path().empty())
-                    {
-                        // Never saved: no filename to save synchronously over.
-                        // Fall back to the async Save-As dialog and stay parked
-                        // -- ConsumeSceneDialogResults resumes the launch once
-                        // that dialog's save actually lands.
-                        m_launchAfterSceneSave = true;
-                        ShowSceneSaveDialog();
-                    }
-                    else if (DoSaveScene(m_scene.Path()))
-                    {
-                        m_launchModalPending = false;
-                        ImGui::CloseCurrentPopup();
-                        LaunchStandalone();   // re-entrant: now clean -> falls through to spawn
-                    }
-                    else
-                    {
-                        // Save failed; m_modalErrors carries why (its own modal).
-                        m_launchModalPending = false;
-                        ImGui::CloseCurrentPopup();
-                    }
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel", ImVec2(90, 0)) ||
-                    ImGui::IsKeyPressed(ImGuiKey_Escape))
-                {
-                    // BOTH gates, not just the modal's: the never-saved branch
-                    // above may already have armed m_launchAfterSceneSave and
-                    // opened the async Save-As dialog. Cancelling THAT dialog
-                    // stashes no path (PathPickedThunk returns early on a
-                    // null path, EditorAppFrame.cpp), so ConsumeSceneDialogResults
-                    // never runs and never clears the gate -- it would survive
-                    // here and fire LaunchStandalone off the next UNRELATED
-                    // successful save. Cancel means abandon the whole action.
-                    m_launchModalPending   = false;
-                    m_launchAfterSceneSave = false;
                     ImGui::CloseCurrentPopup();
                 }
             }

@@ -383,9 +383,9 @@ namespace Arcane::Editor
     // m_modalErrors: a dead project's modal must not pop post-switch.
     // m_materialMtimes / m_materialWatchNext: the outgoing project's
     // path-keyed watch cache -- grew unbounded across switches before this.
-    // m_launchModalPending / m_launchAfterSceneSave: a parked "Save and
-    // Play?" dies with its scene (both flags deleted entirely in the
-    // LaunchStandalone-intent task).
+    // (the two launch-modal flags this entry used to name are gone entirely --
+    // a parked LaunchStandalone now lives in m_scene, covered by the m_scene
+    // entry above; see the comment ahead of m_scene.Reset below.)
     void EditorApp::ResetPerProjectState()
     {
         m_documents.CloseAll();
@@ -400,8 +400,9 @@ namespace Arcane::Editor
         m_modalErrors.Clear();
         m_materialMtimes.clear();
         m_materialWatchNext = 0.0;
-        m_launchModalPending   = false;
-        m_launchAfterSceneSave = false;
+        // A parked LaunchStandalone cannot survive into a switch: OpenProject's
+        // own Request is ignored while any intent is parked, so the modal
+        // resolves first.
     }
 
     void EditorApp::SwitchProject(const std::filesystem::path& path)

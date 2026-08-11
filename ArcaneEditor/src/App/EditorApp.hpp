@@ -393,28 +393,17 @@ namespace Arcane::Editor
         std::string m_layoutIniPath;
         void RetargetLayoutIni();
 
-        // SeparateWindow's launch flow (LaunchStandalone, EditorAppScene.cpp).
-        // m_launchModalPending is the edge LaunchStandalone raises when the active
-        // scene is not ready to hand to ArcaneRuntime (dirty, OR never saved --
-        // see LaunchStandalone's own header comment for why a nil scene guid gets
-        // the same treatment as dirty); DrawModals opens the "Save and Play?"
-        // popup while it is true, same re-arm shape as the Unsaved Scene modal.
-        // m_launchAfterSceneSave covers the never-saved sub-case: the modal's
-        // Save button cannot save synchronously (no filename yet), so it falls
-        // back to the async Save-As dialog and sets this; ConsumeSceneDialogResults
-        // resumes the launch once that dialog's save actually lands. TWO sites
-        // clear it: that one, and the modal's Cancel -- a cancelled Save-As
-        // dialog stashes no path at all, so the former never runs and Cancel is
-        // the only thing standing between a stale gate and a launch fired off
-        // some later, unrelated save.
-        bool m_launchModalPending   = false;
-        bool m_launchAfterSceneSave = false;
-        // Entry point for the Play button's SeparateWindow branch (see
-        // DrawSimTimeToolbar's return value and its call site in DrawEditorUi).
-        // Re-entrant: DrawModals' Save button and ConsumeSceneDialogResults'
-        // deferred-save branch both call this again once the scene is clean and
-        // has a valid guid, and it falls straight through to the spawn.
-        void LaunchStandalone();
+        // SeparateWindow's launch flow (DoLaunchStandalone, EditorAppScene.cpp)
+        // is the LaunchStandalone SceneSession intent (Scene/SceneSession.hpp):
+        // the toolbar's Play click issues a Request, which parks behind the
+        // shared "Unsaved Scene" modal when the scene is dirty or never saved
+        // and otherwise proceeds immediately, per Request's completion-convention
+        // comment. The spawn effect itself lives only in DoLaunchStandalone,
+        // called from RunSceneAction's LaunchStandalone case.
+        //
+        // Effect for the LaunchStandalone intent (RunSceneAction's case). Not
+        // called directly outside that -- the SceneSession machine is the gate.
+        void DoLaunchStandalone();
 
         // Ordered multi-select source of truth (set + primary); slice-2 consumers
         // operate on Primary(), shared by the Hierarchy panel (and, later, the

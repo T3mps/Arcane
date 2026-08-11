@@ -29,7 +29,12 @@ namespace Arcane::Editor
         if (intent == SceneIntent::None) return false;
         if (m_pending != SceneIntent::None) return false;   // one at a time
 
-        if (!IsDirty(stack))
+        // LaunchStandalone ALSO parks on a nil id: the standalone runtime loads the
+        // scene from DISK by guid, so a never-saved scene is exactly as unready as
+        // a dirty one for this intent (the old LaunchStandalone guard, now here).
+        const bool unready = IsDirty(stack) ||
+            (intent == SceneIntent::LaunchStandalone && !m_id.IsValid());
+        if (!unready)
             return true;
 
         m_pending     = intent;

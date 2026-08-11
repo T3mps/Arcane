@@ -29,6 +29,7 @@ namespace Arcane::Editor
         OpenScene,     // PendingPath() = the .arcscene to open
         OpenProject,   // PendingPath() = the .arcproj to switch to
         Exit,
+        LaunchStandalone,   // payload unused; parks when dirty OR never saved
     };
 
     class SceneSession
@@ -88,6 +89,14 @@ namespace Arcane::Editor
         // A second request while one is pending is IGNORED and returns false --
         // the modal is app-modal, so replacing what the user is being asked
         // about would resolve their answer against the wrong action.
+        //
+        // COMPLETION CONVENTION (architecture pass sec 9): a top-of-frame consumer
+        // (ConsumeDeferredSceneAction / ConsumeSceneDialogResults /
+        // ConsumeProjectDialogResult / PumpFrameEvents) may act on `true`
+        // immediately; any site inside the ImGui pass defers via ls.sceneAction to
+        // the top of the next frame. Each intent's EFFECT lives in exactly one
+        // function (RunSceneAction's cases), called by both the immediate and the
+        // parked-resume path.
         bool Request(SceneIntent intent, std::filesystem::path payload,
                      const Arcane::CommandStack& stack);
 
