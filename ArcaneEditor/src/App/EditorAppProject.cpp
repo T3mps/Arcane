@@ -14,6 +14,7 @@
 #include "App/EditorApp.hpp"
 #include "Panels/AssetBrowser.hpp"
 
+#include <Arcane/Base/Assert.hpp>   // ARC_ASSERT (SwitchProject's EditorStages cherry-pick tripwire)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (pre-teardown ABI gate)
@@ -24,10 +25,12 @@
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Publish/Clear (the Build failure row)
 #include <Arcane/Host/ProjectBoot.hpp>
 
+#include <algorithm>   // std::ranges::find (SwitchProject's take() cherry-pick)
 #include <filesystem>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>   // take()'s id parameter
 
 namespace Arcane::Editor
 {
@@ -373,9 +376,10 @@ namespace Arcane::Editor
     // than at the end, where a later failure would skip it and leave a stale
     // path with a spurious dirty marker.
     // m_recents.scenes: the outgoing project's scene history means nothing to
-    // the incoming one. EditorRecents::NoteProjectOpened (switch_plugin_load)
-    // repopulates it for whichever project ends up open -- including the
-    // project-less fallback, which correctly leaves this empty.
+    // the incoming one. EditorRecents::NoteProjectOpened (SwitchProject's
+    // "plugin_load" stage, reused from EditorStages since Task 12) repopulates
+    // it for whichever project ends up open -- including the project-less
+    // fallback, which correctly leaves this empty.
     // m_assetBrowser: selection, search, and kind filter all belong to the
     // outgoing project's registry -- a Guid from it must not survive as the
     // Assets menu's tracked row.
@@ -497,171 +501,127 @@ namespace Arcane::Editor
         // its editor lock must be released whichever way the switch ends.
         // `lockedRoot` tracks whichever root WE currently hold the lock for --
         // starts as the outgoing root and is advanced to the new project's
-        // root the moment switch_render_bridge hands it over below, so the
-        // failure fallback (any stage, including one AFTER that handover)
+        // root the moment the "render_bridge" stage hands it over below (the
+        // shared EditorStages id, reused since Task 12 -- was switch_render_bridge),
+        // so the failure fallback (any stage, including one AFTER that handover)
         // always releases the lock we are actually holding, never a stale one.
         const std::filesystem::path outgoingRoot =
             m_runtime->CurrentProject() ? m_runtime->CurrentProject()->Root()
                                         : std::filesystem::path{};
         std::filesystem::path lockedRoot = outgoingRoot;
 
-        // Amendment 1 (2026-07-30 human ruling): the brief's stub assigned
-        // `ctx.projectPath = path.string().c_str()`, which dangles the moment
-        // that statement ends (path.string() is a temporary). No BootContext
-        // is built here at all -- this sequence is NOT CoreStages/EditorStages
-        // (it never calls HostBoot::CoreStages/EditorStages/RuntimeStages, so
-        // no shared stage body ever reads a ctx), and every stage below
-        // captures `path`/`this` directly via `[&]`, exactly like the brief's
-        // own stub stages already did. A ctx with nothing that reads it was
-        // dead weight carrying a live dangling pointer; dropping it removes
-        // the hazard at the source instead of papering over it with a named
-        // std::string local.
-        // Policy is an explicit parameter (not a hardcoded Fatal default) --
-        // matching BootStage's own field order (id, deps, thread, policy,
-        // weight, run) -- because switch_plugin_load below is Optional, not
-        // Fatal (2026-07-30 review correction; see that stage's own comment).
-        auto stage = [](std::string id, std::vector<std::string> deps,
-                        Arcane::BootThread thread, Arcane::BootPolicy policy,
-                        std::uint32_t weight, std::function<bool()> run)
+        // ONE shared stage source (architecture pass sec 5). The ctx and pathStr are
+        // NAMED locals -- ctx.projectPath is a c_str view and BootSequence::Run is
+        // synchronous inside this scope (Amendment 1's dangling-temporary hazard is
+        // why these are not inline temporaries).
+        const std::string pathStr = path.string();
+        Arcane::HostBoot::BootContext ctx{};
+        ctx.runtime     = &*m_runtime;
+        ctx.projectPath = pathStr.c_str();
+        ctx.pluginPath  = m_config.pluginPath.c_str();
+        ctx.moduleName  = "ArcaneEditor.exe";
+
+        std::vector<Arcane::BootStage> all = Arcane::HostBoot::EditorStages(ctx);
+        if (!PatchHostStages(all))
         {
-            Arcane::BootStage s;
-            s.id = std::move(id); s.dependsOn = std::move(deps);
-            s.thread = thread; s.policy = policy;
-            s.weight = weight; s.run = std::move(run);
-            return s;
+            // Table drift -- the same fail-loud contract Create() has. Refuse the
+            // switch; the session is still untouched (nothing torn down yet).
+            m_modalErrors.Push("Open Project Failed",
+                "Internal error: the host stage table no longer matches EditorStages() "
+                "(see Console). The current session is unchanged.");
+            return;
+        }
+
+        // Cherry-pick the reopen subset by id, in switch order. Boot-only stages
+        // (window/GPU/fonts/shell/finalize/splash) are skipped by omission.
+        auto take = [&all](std::string_view id) -> Arcane::BootStage
+        {
+            const auto it = std::ranges::find(all, id,
+                [](const Arcane::BootStage& s) { return std::string_view(s.id); });
+            ARC_ASSERT(it != all.end(), "EditorStages lost a stage the switch needs");
+            return std::move(*it);
         };
 
-        // NOT CoreStages: the process is already booted. This is the reopen
-        // subset only. switch_teardown/switch_project_open/switch_render_bridge
-        // are Fatal -- the caller already validated the project (the guards
-        // above) and is about to tear down the old one, so switch_project_open
-        // genuinely has nothing to fall back to; a failure there converges on
-        // the defined project-less fallback below (Runtime::CloseProject +
-        // EditorLock + EnsureScene). switch_plugin_load is Optional (2026-07-30
-        // review correction to the first draft's "unify every failure" call):
-        // a failed game-module load leaves m_plugin disengaged, which is
-        // ALREADY the exact same safe, defined state the "no game module for
-        // this project" branch two lines below it produces on purpose --
-        // every m_plugin-> use elsewhere is optional-guarded. Amendment 2
-        // requires a clean fallback when a stage genuinely has nothing to
-        // fall back to; it does not require turning an already-recoverable
-        // outcome (project open, no plugin, a detailed error banner) into a
-        // forced full revert that costs the whole project and a re-run of
-        // File -> Open Project over what could be a colleague's WIP DLL or a
-        // stale build.
         std::vector<Arcane::BootStage> stages;
-        stages.push_back(stage("switch_teardown", {}, Arcane::BootThread::Main,
-                               Arcane::BootPolicy::Fatal, 2, [&]
+
+        // switch_teardown stays switch-LOCAL: boot has no equivalent (nothing to
+        // tear down at boot), so there is no shared body to reuse.
         {
-            ResetPerProjectState();
-            // Idle the GPU before freeing plugin-owned GPU resources, then
-            // unload the plugin (dtor: Unload -> ClearSystems + ResetRegistry,
-            // DLL still mapped).
-            m_gpu->Device().Nvrhi()->waitForIdle();
-            m_plugin.reset();
-            return true;
-        }));
-        stages.push_back(stage("switch_project_open", {"switch_teardown"}, Arcane::BootThread::Worker,
-                               Arcane::BootPolicy::Fatal, 6, [&]
-        {
-            // Disjoint-ownership proof: this stage touches exactly two things
-            // -- `path` (a caller-local, read-only, and this stage's only
-            // input) and m_runtime->OpenProject, which itself only mutates
-            // Runtime-owned state (Impl::project/assets/config -- see
-            // Runtime::OpenProject/CloseProject). None of that is read or
-            // written by switch_teardown (already complete by construction --
-            // BootSequence does not start a Worker stage until its
-            // dependencies are done) or by switch_render_bridge/
-            // switch_plugin_load (Main stages that do not become ready until
-            // AFTER this one completes -- BootSequence is sequential-and-join
-            // per the DAG, not concurrent Main+Worker access to the same
-            // state). The one thing this overlaps with in practice is
-            // BootPresenter::Present pumping the window/ImGui on the Main
-            // thread while this runs -- disjoint by construction, since
-            // Present never touches Runtime. Same shape as CoreStages'
-            // project_open/gpu_core overlap (BootSequence.hpp's header
-            // comment: "the DAG exists for exactly ONE overlap").
-            return m_runtime->OpenProject(path);
-        }));
-        stages.push_back(stage("switch_render_bridge", {"switch_project_open"}, Arcane::BootThread::Main,
-                               Arcane::BootPolicy::Fatal, 1, [&]
-        {
-            // Hand the lock over: the old project is closed, the new one is
-            // ours. (A same-project re-open just rewrites its own lock --
-            // harmless.)
-            if (!lockedRoot.empty())
-                Arcane::EditorLock::Clear(lockedRoot);
-            lockedRoot.clear();
-            if (const Arcane::Project* proj = m_runtime->CurrentProject())
+            Arcane::BootStage teardown;
+            teardown.id = "switch_teardown";
+            teardown.thread = Arcane::BootThread::Main;
+            teardown.policy = Arcane::BootPolicy::Fatal;
+            teardown.weight = 2;
+            teardown.run = [&]
             {
-                Arcane::EditorLock::Write(proj->Root());
-                lockedRoot = proj->Root();   // now holding the NEW project's lock
-            }
-            if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
-                ARC_WARN("Open Project: input actions failed to load");
-            return true;
-        }));
-        stages.push_back(stage("switch_plugin_load", {"switch_render_bridge"}, Arcane::BootThread::Main,
-                               Arcane::BootPolicy::Optional, 4, [&]
+                ResetPerProjectState();
+                m_gpu->Device().Nvrhi()->waitForIdle();
+                m_plugin.reset();
+                return true;
+            };
+            stages.push_back(std::move(teardown));
+        }
+
+        // project_open: the SHARED CoreStages body, as-is (ctx.runtime->OpenProject
+        // over ctx.projectPath + scan-progress detail -- the switch overlay now
+        // shows content-scan progress, which the hand-rolled body never did).
+        // Policy tightened to Fatal: at boot a failed open falls back to
+        // project-less startup; here the old project is already torn down, so
+        // there is genuinely nothing to fall back to except the failure fallback
+        // below (unchanged).
         {
-            // Load the new game module (and/or the project's plugin modules)
-            // through the same ABI-versioned plugin host. An empty gameModule
-            // with plugins = a plugins-only host.
-            const std::string gameModule =
-                Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
-            const auto pluginModules = Arcane::HostBoot::PluginModules(m_runtime->CurrentProject());
-            if (!gameModule.empty() || !pluginModules.empty())
+            Arcane::BootStage projectOpen = take("project_open");
+            projectOpen.dependsOn = { "switch_teardown" };
+            projectOpen.policy    = Arcane::BootPolicy::Fatal;
+            stages.push_back(std::move(projectOpen));
+        }
+
+        // render_bridge: switch-LOCAL body (the boot body builds the viewport
+        // canvas/picker/outline, which already exist). The delta IS the switch:
+        // hand the editor lock over and load the new project's input config.
+        {
+            Arcane::BootStage bridge = take("render_bridge");
+            bridge.dependsOn = { "project_open" };
+            bridge.run = [&]
             {
-                m_plugin.emplace(*m_runtime,
-                    gameModule.empty() ? std::filesystem::path{} : std::filesystem::path(gameModule));
-                for (const auto& dll : pluginModules)
-                    m_plugin->AddPlugin(dll);
-                if (!m_plugin->Load())
+                if (!lockedRoot.empty())
+                    Arcane::EditorLock::Clear(lockedRoot);
+                lockedRoot.clear();
+                if (const Arcane::Project* proj = m_runtime->CurrentProject())
                 {
-                    // Optional, not Fatal (2026-07-30 review correction -- see
-                    // this stage's push_back comment above for the full
-                    // reasoning): m_plugin.reset() below leaves EXACTLY the
-                    // same safe, disengaged state the "no game module" branch
-                    // two lines below produces on purpose, so this falls
-                    // through to the SAME common tail (paused, boot scene,
-                    // EnsureScene, title) rather than aborting the switch.
-                    // Original SwitchProject's exact detailed banner restored
-                    // here -- it survives to the user because this stage
-                    // returning true (below) keeps BootSequence's overall
-                    // r.ok == true, so the generic "switching to X failed at
-                    // stage Y" message past seq.Run() never overwrites it.
-                    ARC_ERROR("Open Project: failed to load the game module / project plugins");
-                    m_modalErrors.Push("Open Project Failed",
-                                         "The project opened, but its game module / plugins "
-                                         "failed to load (see Console).\nCheck the DLL paths in "
-                                         "the manifest and that they are built against ABI " +
-                                         std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) + ".");
-                    m_plugin.reset();
+                    Arcane::EditorLock::Write(proj->Root());
+                    lockedRoot = proj->Root();
                 }
-            }
-            else
+                if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
+                    ARC_WARN("Open Project: input actions failed to load");
+                return true;
+            };
+            stages.push_back(std::move(bridge));
+        }
+
+        // plugin_load: REUSES the boot body (StagePluginLoad -- module resolve,
+        // host engage, failure banner, SetPaused are byte-identical needs), then
+        // runs the shared success tail. Policy stays Optional (a failed module
+        // load leaves the same safe disengaged state boot produces on purpose --
+        // see the 2026-07-30 ruling in this stage's old comment). DELIBERATE
+        // LOG-TEXT DELTA: the boot body's "no --project/--plugin" INFO line now
+        // also serves the switch (was "no game module / plugins for this
+        // project") -- ledgered, not hidden.
+        {
+            Arcane::BootStage plugin = take("plugin_load");
+            plugin.dependsOn = { "render_bridge" };
+            plugin.run = [this]
             {
-                ARC_INFO("Open Project: no game module / plugins for this project -- starting with no game loaded");
-            }
-
-            // Task 8: Arcane Editor boots in Edit mode -- the sim starts paused.
-            m_runtime->Loop().SetPaused(true);
-
-            // Same boot-scene handoff / EnsureScene / title / recents-record
-            // as the boot path's StageFinalize -- see OnProjectOpened. m_scene
-            // was already reset to Untitled in switch_teardown, so Adopt() here
-            // (inside OnProjectOpened) retargets it onto the new project's boot
-            // scene when it has one, using THIS project's plugin load (not the
-            // outgoing project's) so a component type the new game module
-            // registers deserializes rather than being dropped.
-            OnProjectOpened();
-
-            // Retarget the appdata layout ini at the incoming project (saves
-            // the outgoing project's layout on the way -- see the method). Not
-            // part of OnProjectOpened -- see StageFinalize's own call for why.
-            RetargetLayoutIni();
-            return true;
-        }));
+                // StagePluginLoad reads m_runtime->CurrentProject() + m_config.pluginPath
+                // directly and ignores its BootContext& parameter (verified against
+                // EditorApp.cpp) -- so passing m_bootCtx here (the BOOT context, not a
+                // switch-local one) is safe: nothing this call reads is boot-specific.
+                const bool ok = StagePluginLoad(m_bootCtx);   // ignores its ctx argument
+                OnProjectOpened();
+                return ok;
+            };
+            stages.push_back(std::move(plugin));
+        }
 
         // Overlay, not Fullscreen: the editor window is already up and this
         // must not erase its last frame (BootPresenter.cpp: only the
@@ -708,28 +668,35 @@ namespace Arcane::Editor
             // project (ProjectBoot.cpp's plugin_load "no game loaded" branch,
             // StageFinalize's EnsureScene()), not a second, ad hoc definition.
             //
-            // Reachability (2026-07-30 review correction): with
-            // switch_plugin_load now Optional (see its own push_back comment
-            // above), the ONLY ways `r.ok` can be false here are
-            // switch_project_open failing (Fatal -- it genuinely has nothing
-            // to fall back to, per the guards above having already validated
-            // the project and switch_teardown having already torn the old one
-            // down) or the presenter itself requesting quit
-            // (`r.quitRequested`, e.g. the window closing mid-switch). Either
-            // way, switch_render_bridge/switch_plugin_load never ran (Fatal
-            // failure skips dependents), so `m_plugin` is still exactly what
-            // switch_teardown left it (nullopt) and the registry is still
-            // exactly what that same PluginHost::Unload -> ResetRegistry left
-            // it (empty) -- this fallback's own m_plugin.reset()/
-            // ResetRegistry() calls below are therefore always no-ops TODAY,
-            // kept as a structural invariant-guard (this block converges on
-            // "project-less" regardless of HOW it was reached, not because a
-            // reader has to prove which stage failed) rather than because
-            // they currently do anything. switch_teardown above unconditionally
-            // already closed the documents, cleared the resolver caches,
-            // cleared the scene references, and reset the session to
-            // Untitled -- that alone gets most of the way there. What is
-            // still missing:
+            // Reachability (2026-07-30 review correction; ids updated for
+            // Task 12's cherry-pick-from-EditorStages unification -- this
+            // stage is now literally the SAME "plugin_load"/"project_open"/
+            // "render_bridge" ids EditorStages() and BootStageParityTest use,
+            // not switch-local aliases, so the watchdog/hang-report phase
+            // label and this fallback's own "failed at stage 'X'" banner now
+            // read e.g. "project_open" instead of "switch_project_open" --
+            // an accepted, ledgered delta, not a bug): with "plugin_load"
+            // still Optional (inherited from EditorStages' own override --
+            // see its own push_back comment above), the ONLY ways `r.ok` can
+            // be false here are "project_open" failing (tightened to Fatal
+            // just above -- it genuinely has nothing to fall back to, per the
+            // guards above having already validated the project and
+            // switch_teardown having already torn the old one down) or the
+            // presenter itself requesting quit (`r.quitRequested`, e.g. the
+            // window closing mid-switch). Either way, "render_bridge"/
+            // "plugin_load" never ran (Fatal failure skips dependents), so
+            // `m_plugin` is still exactly what switch_teardown left it
+            // (nullopt) and the registry is still exactly what that same
+            // PluginHost::Unload -> ResetRegistry left it (empty) -- this
+            // fallback's own m_plugin.reset()/ResetRegistry() calls below are
+            // therefore always no-ops TODAY, kept as a structural
+            // invariant-guard (this block converges on "project-less"
+            // regardless of HOW it was reached, not because a reader has to
+            // prove which stage failed) rather than because they currently do
+            // anything. switch_teardown above unconditionally already closed
+            // the documents, cleared the resolver caches, cleared the scene
+            // references, and reset the session to Untitled -- that alone
+            // gets most of the way there. What is still missing:
             //   - Runtime::CurrentProject() can still be the OUTGOING project
             //     (Runtime::OpenProject's OWN contract is "leaves ALL state
             //     untouched" on failure -- fine at boot, where "untouched"
@@ -741,7 +708,7 @@ namespace Arcane::Editor
             //     and the Config project/plugin layers, so nothing about the
             //     torn-down project lingers there either.
             //   - The outgoing project's editor lock: `lockedRoot` still
-            //     equals `outgoingRoot` here (switch_render_bridge, the only
+            //     equals `outgoingRoot` here ("render_bridge", the only
             //     stage that ever advances it, never ran) -- named via
             //     `lockedRoot` rather than `outgoingRoot` directly so this
             //     block stays correct even if a future stage is added after
@@ -911,7 +878,8 @@ namespace Arcane::Editor
         }
 
         // No host is watching: the module was REFUSED at open (stale ABI),
-        // and StagePluginLoad/switch_plugin_load left the host disengaged.
+        // and StagePluginLoad -- reused directly by SwitchProject's "plugin_load"
+        // stage since Task 12 (was switch_plugin_load) -- left the host disengaged.
         // Re-engage exactly the way StagePluginLoad does.
         const std::string gameModule =
             Arcane::HostBoot::GameModule(proj, m_config.pluginPath);
