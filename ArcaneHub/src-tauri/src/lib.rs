@@ -694,6 +694,17 @@ pub fn run() {
             reveal_hub_data_dir,
             hub_version
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running the Arcane Hub");
+        .build(tauri::generate_context!())
+        .expect("error while running the Arcane Hub")
+        .run(|app, event| {
+            // Catch-all half of the tray-ghost fix (the quit handler's
+            // remove-before-exit in tray.rs is the direct half): whatever
+            // path requests exit while the Hub is parked, take the icon
+            // down while the process is still alive to do it. A dead
+            // process cannot un-register a tray icon -- Windows keeps the
+            // corpse until the tray repaints (2026-08-11 incident).
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                crate::tray::remove(app);
+            }
+        });
 }

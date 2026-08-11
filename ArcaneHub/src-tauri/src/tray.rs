@@ -81,7 +81,16 @@ pub fn park(app: &AppHandle) -> tauri::Result<()> {
             "open" => show_hub(app),
             // Quit quits the HUB. Editors are independent processes and
             // survive, same as closing the window would leave them.
-            "quit" => app.exit(0),
+            // remove() BEFORE exit: app.exit ends the process without
+            // reliably running the tray icon's Drop, and Windows then shows
+            // the dead icon until the tray next repaints. Quit is only
+            // reachable while parked (the menu lives on the icon), so
+            // without this every tray-quit left a ghost icon -- the
+            // 2026-08-11 tray-full-of-corpses incident.
+            "quit" => {
+                remove(app);
+                app.exit(0);
+            }
             id => {
                 if let Some(path) = id.strip_prefix("launch:") {
                     let _ = app.emit("tray-launch", path.to_string());
