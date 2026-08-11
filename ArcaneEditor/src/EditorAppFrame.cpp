@@ -1226,7 +1226,15 @@ namespace Arcane::Editor
         {
             if (const Arcane::Identity* info =
                     m_runtime->Registry().GetComponent<Arcane::Identity>(m_selection.Primary()))
+            {
+                // The rename box lives in the Outliner: un-hide it and pull its
+                // tab forward so the edit box appears where the user can see it,
+                // instead of latching a rename that ambushes them whenever the
+                // panel next shows (final-review Important 2).
+                m_panelVis.visible[static_cast<std::size_t>(Arcane::Editor::PanelId::Outliner)] = true;
+                Arcane::Editor::SelectDockTab("Outliner");
                 Arcane::Editor::BeginRename(m_outliner, m_selection.Primary(), info->name);
+            }
         }
         if (menuReq.deleteSelected)
             Arcane::Editor::DeleteSelection(m_runtime->Registry(), m_selection,
@@ -1258,7 +1266,9 @@ namespace Arcane::Editor
         };
         if (menuReq.copySelection)
             copySelectionToClipboard();
-        if (menuReq.cutSelection && copySelectionToClipboard())
+        // Copy only when the delete half can apply -- a Play-mode Cut must
+        // not clobber the clipboard with a cut that never happens.
+        if (menuReq.cutSelection && !m_play.IsPlaying() && copySelectionToClipboard())
         {
             // Delete the FULL captured subtrees -- DeleteEntities splices
             // children up, so passing only the roots would orphan what the

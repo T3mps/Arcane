@@ -161,8 +161,10 @@ the default (visible). WriteAll emits every non-permanent panel.
   use: `BeginRename` / `DeleteSelection` are promoted from EditorPanels.cpp
   file-local statics (:892/:905) to declared panel functions, called with the
   app-owned `OutlinerState`. Rename enabled when a selection exists (renames
-  the primary, same as F2); Delete likewise. No extra Play gating beyond what
-  the existing bindings do.
+  the primary, same as F2); Delete likewise. REVISED at the final review
+  (user-ratified): the menu items grey during Play -- Cut/Copy/Duplicate/
+  Rename/Delete on `hasSelection && !playing`, Paste on `!playing` -- so the
+  refusal is visible before the click.
 
 ## II.B Entity clipboard (engine-side, `Arcane/Edit`)
 

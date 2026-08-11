@@ -184,21 +184,23 @@ namespace Arcane::Editor
                 if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", false, canUndo)) undo.Undo();
                 if (ImGui::MenuItem(redoLabel.c_str(), "Ctrl+Y", false, canRedo)) undo.Redo();
                 ImGui::Separator();
-                if (ImGui::MenuItem("Cut", "Ctrl+X", false, hasSelection))
+                // Play greys the whole group: structural edits refuse in Play
+                // (ApplyStructural's editMode gate), and the affordance rule is
+                // that a refusal is visible before the click -- 2026-08-10
+                // final review, user-ratified over the spec's old "no extra
+                // Play gating" line.
+                if (ImGui::MenuItem("Cut", "Ctrl+X", false, hasSelection && !playing))
                     requests.cutSelection = true;
-                if (ImGui::MenuItem("Copy", "Ctrl+C", false, hasSelection))
+                if (ImGui::MenuItem("Copy", "Ctrl+C", false, hasSelection && !playing))
                     requests.copySelection = true;
-                // Always enabled: parsing the clipboard every frame to grey
-                // this is not worth it -- a foreign-clipboard paste no-ops
-                // with a Console INFO instead.
-                if (ImGui::MenuItem("Paste", "Ctrl+V"))
+                if (ImGui::MenuItem("Paste", "Ctrl+V", false, !playing))
                     requests.paste = true;
-                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, hasSelection))
+                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, hasSelection && !playing))
                     requests.duplicateSelection = true;
                 // Same code paths as the Outliner's F2/Del bindings.
-                if (ImGui::MenuItem("Rename", "F2", false, hasSelection))
+                if (ImGui::MenuItem("Rename", "F2", false, hasSelection && !playing))
                     requests.renameSelected = true;
-                if (ImGui::MenuItem("Delete", "Del", false, hasSelection))
+                if (ImGui::MenuItem("Delete", "Del", false, hasSelection && !playing))
                     requests.deleteSelected = true;
                 ImGui::Separator();
                 if (ImGui::MenuItem("Select All"))       requests.selectAll = true;

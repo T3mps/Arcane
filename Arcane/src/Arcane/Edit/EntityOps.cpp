@@ -431,9 +431,20 @@ namespace Arcane::Edit
             if (!payload.is_object() || !payload.contains("entities"))
                 return {};
             const auto vit = payload.find("version");
-            if (vit == payload.end() || !vit->is_number_integer() ||
-                vit->get<int>() != Scene::kSceneJsonVersion)
+            if (vit == payload.end() || !vit->is_number_integer())
+            {
+                ARC_WARN("paste: clipboard payload has no valid \"version\" field "
+                         "(this build's scene version is {}) -- nothing pasted",
+                         Scene::kSceneJsonVersion);
                 return {};
+            }
+            if (vit->get<int>() != Scene::kSceneJsonVersion)
+            {
+                ARC_WARN("paste: payload version {} does not match this build's "
+                         "scene version {} -- nothing pasted",
+                         vit->get<int>(), Scene::kSceneJsonVersion);
+                return {};
+            }
             const auto& entities = payload["entities"];
             if (!entities.is_array() || entities.empty())
                 return {};
