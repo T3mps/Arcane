@@ -1,9 +1,11 @@
 // D3D12 backend: DXGI factory + adapter + device + direct queue, wrapped
 // by nvrhi::d3d12::createDevice. Swapchain: DXGI flip-discard, 3 backbuffers.
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/DeviceFactories.hpp>
+#include <Arcane/Render/IGpuCrashBackend.hpp>
 #include <Arcane/Render/NvrhiMessageCallback.hpp>
 #include <Arcane/Render/Swapchain.hpp>
 
@@ -14,7 +16,9 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
+#include <atomic>
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -28,14 +32,41 @@ namespace Arcane
         constexpr DXGI_FORMAT kSwapchainFormatDxgi = DXGI_FORMAT_B8G8R8A8_UNORM;
         constexpr nvrhi::Format kSwapchainFormat = nvrhi::Format::BGRA8_UNORM;
 
+        // F-3: the ONE device-removed observation point. Both observables
+        // funnel here -- F-3b's cross-backend NVRHI message hook (fires on
+        // submit, the earliest signal) and F-3c's Present, the only
+        // first-party DXGI_ERROR_DEVICE_REMOVED site in the tree.
+        //
+        // Once-only per armed device: a removed device keeps reporting removal
+        // on every submit and every Present, and the second report is worthless
+        // -- the marker buffer and DRED state belong to the FIRST one. Reset
+        // when a new backend arms (project switch recreates the device).
+        std::atomic<bool> g_deviceRemovedReported{ false };
+
+        void ObserveDeviceRemoved()
+        {
+            if (g_deviceRemovedReported.exchange(true, std::memory_order_acq_rel))
+                return;
+
+            // The reason string is load-bearing: Diagnostics::DeriveKind
+            // classifies the .arcdiag "kind" by case-sensitive substring, and
+            // only a reason containing lowercase "gpu" resolves to a gpu kind
+            // (here "gpu-crash", which is what makes the .gpudump sibling get
+            // written). Do not reword.
+            Diagnostics::WriteReport("gpu-crash: device removed");
+        }
+
         class DeviceD3D12 final : public RenderDevice
         {
         public:
+            ~DeviceD3D12() override;
+
             bool Init(const RenderDeviceDesc& desc);
 
             GraphicsBackend Backend() const override { return GraphicsBackend::D3D12; }
             nvrhi::IDevice* Nvrhi() const override { return m_nvrhi.Get(); }
             std::string AdapterName() const override { return m_adapterName; }
+            IGpuCrashBackend* GpuCrashBackend() const override { return m_crashBackend.get(); }
 
             IDXGIFactory6* Factory() const { return m_factory.Get(); }
             ID3D12CommandQueue* GraphicsQueue() const { return m_graphicsQueue.Get(); }
@@ -54,7 +85,23 @@ namespace Arcane
             ComPtr<ID3D12CommandQueue> m_graphicsQueue;
             nvrhi::DeviceHandle        m_nvrhi;
             std::string                m_adapterName;
+            // LAST on purpose, so it is destroyed FIRST: the crash backend
+            // holds an ID3D12Heap + placed resource created off m_device, and
+            // those must release before the device does.
+            std::unique_ptr<IGpuCrashBackend> m_crashBackend;
         };
+
+        DeviceD3D12::~DeviceD3D12()
+        {
+            if (m_crashBackend)
+            {
+                // Symmetric with Init's install. Both slots are process-wide
+                // and point INTO m_crashBackend, so they must be emptied
+                // before the member below goes away.
+                Diagnostics::ClearGpuSectionProvider();
+                NvrhiMessageCallback::Instance().SetDeviceRemovedHook(nullptr);
+            }
+        }
 
         bool DeviceD3D12::Init(const RenderDeviceDesc& desc)
         {
@@ -92,6 +139,15 @@ namespace Arcane
             size_t converted = 0;
             wcstombs_s(&converted, name, adapterDesc.Description, _TRUNCATE);
             m_adapterName = name;
+
+            // F-2b: DRED settings are process-global and "you must configure
+            // them prior to creating a Direct3D 12 Device" -- modifications
+            // have no effect on devices already created. This must therefore
+            // sit BEFORE D3D12CreateDevice, and it is deliberately independent
+            // of enableD3D12DebugLayer (D3D12GetDebugInterface fetches the DRED
+            // settings object without enabling the debug layer). Never fatal:
+            // every failure inside degrades the tier and logs one WARN.
+            EnableD3D12Dred();
 
             if (FAILED(D3D12CreateDevice(m_adapter.Get(), D3D_FEATURE_LEVEL_12_0,
                                          IID_PPV_ARGS(&m_device))))
@@ -138,6 +194,26 @@ namespace Arcane
 
             if (desc.enableValidation)
                 m_nvrhi = nvrhi::validation::createValidationLayer(m_nvrhi);
+
+            // GPU crash backend (F-1/F-4). Built against the OUTER nvrhi
+            // device: the validation layer forwards getNativeObject verbatim
+            // (validation-device.cpp:83, validation-commandlist.cpp:131), so
+            // the native ID3D12Device and the native command lists resolve the
+            // same either way, and every command list a caller hands to
+            // WriteMarker is the one this device handed out.
+            m_crashBackend = MakeD3D12CrashBackend(m_nvrhi.Get());
+            if (m_crashBackend)
+            {
+                g_deviceRemovedReported.store(false, std::memory_order_release);
+                // F-3b: the cross-backend observable, armed now that there is
+                // something to collect with.
+                NvrhiMessageCallback::Instance().SetDeviceRemovedHook(&ObserveDeviceRemoved);
+                // The ONE SetGpuSectionProvider call per host lifetime. The
+                // device layer owns the slot because it owns the backend the
+                // slot's `user` pointer names; ~DeviceD3D12 clears it.
+                Diagnostics::SetGpuSectionProvider(&D3D12GpuSectionProvider, m_crashBackend.get());
+                ARC_INFO("GPU crash backend armed: {}", m_crashBackend->Name());
+            }
 
             ARC_INFO("D3D12 device created on '{}'", m_adapterName);
             return true;
@@ -282,6 +358,12 @@ namespace Arcane
                 ARC_ERROR("Present failed: device removed/reset (0x{:08X}), reason 0x{:08X}",
                           (uint32_t)hr,
                           (uint32_t)m_device->D3D12Device()->GetDeviceRemovedReason());
+                // F-3c: this is the only first-party device-removed site in
+                // the tree, and it used to log and continue. It now runs the
+                // capture path -- markers + DRED are read while they still
+                // describe THIS removal. Once-guarded inside, and a no-op if
+                // F-3b's submit-side hook already fired for the same removal.
+                ObserveDeviceRemoved();
             }
 
             // Mark this slot's command-work completion point (the display-side
