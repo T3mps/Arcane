@@ -78,8 +78,7 @@ namespace Arcane::Editor
         // bare launch. `scene` is SceneSession::DisplayName ("Untitled" until the
         // scene has been saved somewhere); the trailing * is the unsaved marker,
         // matching the one on File -> Save Scene.
-        std::string EditorTitle(const Arcane::Project* project, const std::string& scene,
-                                bool sceneDirty, const char* backend)
+        std::string EditorTitle(const Arcane::Project* project, const std::string& scene, bool sceneDirty, const char* backend)
         {
             std::string title;
             if (project)
@@ -109,7 +108,6 @@ namespace Arcane::Editor
             // BuildInfo is the DLL's own "<version> [Debug|Release|Dist]" --
             // compiled into Arcane.dll (Engine.cpp), so the title reports the
             // engine actually loaded, never this exe's header copy.
-            title += "Arcane Editor ";
             title += Arcane::BuildInfo();
             if (backend && *backend)
             {
