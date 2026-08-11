@@ -283,6 +283,17 @@ project "ArcaneClient"
         optimize "speed"
         symbols "off"
 
+-- ArcaneServer: empty skeleton for the engine-server host (servers consume
+-- Arcane tooling -- capability lands here as it gets built). Stub main only.
+project "ArcaneServer"
+    location "ArcaneServer"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    files { "%{prj.location}/src/**.hpp", "%{prj.location}/src/**.cpp" }
+
 -- ============================================================================
 -- ArcaneRuntime: the thin standalone host (ArcaneRuntime.exe). Engine boot +
 -- RunLoop + PluginHost. Hosts a project's gameModule (--project; --plugin
@@ -705,14 +716,3 @@ test_plugin("HotReloadPluginV2",  { "GAME_BUILD_DLL", "HOTRELOAD_STEP=10", "_CRT
 test_plugin("HotReloadPluginBad", { "GAME_BUILD_DLL", "HOTRELOAD_ABI_OFFSET=999", "_CRT_SECURE_NO_WARNINGS" })
 
 group ""
-
--- ArcaneServer: empty skeleton for the engine-server host (servers consume
--- Arcane tooling -- capability lands here as it gets built). Stub main only.
-project "ArcaneServer"
-    location "ArcaneServer"
-    kind "ConsoleApp"
-    language "C++"
-    cppdialect "C++23"
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
-    files { "%{prj.location}/src/**.hpp", "%{prj.location}/src/**.cpp" }
