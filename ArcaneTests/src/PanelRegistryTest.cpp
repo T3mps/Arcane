@@ -1,4 +1,4 @@
-// Arcane/Tests/src/PanelRegistryTest.cpp
+// Arcane/ArcaneTests/src/PanelRegistryTest.cpp
 // Window-menu panel registry invariants + the visibility ini-line parse
 // (spec 2026-08-10 editor-menu-wiring, Part I). Headless -- no ImGui.
 

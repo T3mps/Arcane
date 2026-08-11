@@ -535,7 +535,7 @@ project "ArcaneEditor"
 -- directly -- ArcaneCore links into exactly ONE module per process.
 -- ============================================================================
 project "ArcaneTests"
-    location "Tests"
+    location "ArcaneTests"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++23"
@@ -733,12 +733,12 @@ project "ArcaneTests"
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/PlaygroundGame/PlaygroundGame.dll" "%{cfg.buildtarget.directory}/PlaygroundGame.dll"',
-        -- Test data fixtures: copy Tests/data's CONTENTS into the test output
+        -- Test data fixtures: copy ArcaneTests/data's CONTENTS into the test output
         -- dir's data/ so tests find their fixtures by relative path. {COPYDIR}
         -- copies the directory's contents, merging with the data/fonts dir the
         -- lines above create. (The M6 physics_oracle fixtures were retired in
         -- v2 T8; physics_feel_reference/ now holds the Phase-B Lua feel traces.)
-        '{COPYDIR} "%{wks.location}/Tests/data" "%{cfg.buildtarget.directory}/data"',
+        '{COPYDIR} "%{wks.location}/ArcaneTests/data" "%{cfg.buildtarget.directory}/data"',
         -- Vendored dxc trio (minus dxc.exe): the runtime compile service
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
         '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
@@ -783,7 +783,7 @@ project "ArcaneTests"
 -- ============================================================================
 local function test_plugin(name, defs)
     project(name)
-        location "Tests/plugins"
+        location "ArcaneTests/plugins"
         kind "SharedLib"
         language "C++"
         cppdialect "C++23"

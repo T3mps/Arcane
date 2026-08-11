@@ -60,7 +60,7 @@ TEST_CASE("A DLL that cannot be loaded reports the OS error", "[plugin][diagnost
 TEST_CASE("An ABI-mismatched plugin reports BOTH version numbers", "[plugin][diagnostics]")
 {
     // HotReloadPluginBad exports ABI = kGamePluginABIVersion + 999 on purpose
-    // (Tests/plugins/HotReloadPlugin.cpp:4,48), so this is unambiguously the
+    // (ArcaneTests/plugins/HotReloadPlugin.cpp:4,48), so this is unambiguously the
     // AbiMismatch cause -- not a missing export and not a load failure.
     Arcane::PluginResolveError error;
     auto plugin = Arcane::Plugin::Load(std::filesystem::path("HotReloadPluginBad.dll"), &error);

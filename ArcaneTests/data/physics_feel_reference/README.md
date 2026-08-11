@@ -18,7 +18,7 @@ These traces are:
 - **A Phase-B reference, captured from the Lua engine.** They describe what the
   current (shipping) overworld feels like.
 - **NOT a C++ correctness gate.** They are not loaded by any `[physics]` test.
-  The C++ invariant gate is `Arcane/Tests/src/PhysicsInvariantsTest.cpp`
+  The C++ invariant gate is `Arcane/ArcaneTests/src/PhysicsInvariantsTest.cpp`
   (`[physics][invariant]`) plus the analytic V2 tests (PhysicsShapesV2 /
   PhysicsGjkV2 / PhysicsManifoldV2 / PhysicsRotation / PhysicsQueryRotation).
 - **NOT the retired M6 oracle.** The old bit-match oracle

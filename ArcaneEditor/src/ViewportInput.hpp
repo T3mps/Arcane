@@ -1,7 +1,7 @@
 #pragma once
 
 // Scene-in-a-panel input gating: pure predicates with no ImGui dependency, so
-// they are unit-testable headlessly (see Tests/src/EditorViewportInputTest.cpp,
+// they are unit-testable headlessly (see ArcaneTests/src/EditorViewportInputTest.cpp,
 // source-compiled straight into ArcaneTests). Consumed by EditorApp to decide
 // whether the plugin sees live scene input this frame and, if so, where the
 // cursor lands in viewport-local pixels.

@@ -548,7 +548,7 @@ namespace Arcane::Editor
 
     // CURVE IS MIRRORED in two other places -- keep all three in step:
     //   shaders/tonemap.hlsl        (HLSL, branchless min form)
-    //   Tests/src/TonemapTest.cpp   (CPU golden reference, branchless)
+    //   ArcaneTests/src/TonemapTest.cpp   (CPU golden reference, branchless)
     // Those two both cite THIS file, so an edit here changes rendered output.
     float SrgbToLinear(float srgb) noexcept
     {

@@ -1,5 +1,5 @@
 // ArcaneTests runner entry point (Server CommonTests convention).
-// Add new test files under Arcane/Tests/src; premake picks them up via the glob.
+// Add new test files under Arcane/ArcaneTests/src; premake picks them up via the glob.
 
 #include <catch2/catch_session.hpp>
 

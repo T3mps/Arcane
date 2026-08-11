@@ -3,7 +3,7 @@
 // Pure predicates for arbitrating viewport pointer input between the editor
 // (gizmo/pick), the game's in-viewport debug ImGui, and the plugin's gameplay.
 // No ImGui/GPU dependency -> headlessly unit-testable (see
-// Tests/src/ViewportImGuiInputTest.cpp). Consumed by EditorApp.
+// ArcaneTests/src/ViewportImGuiInputTest.cpp). Consumed by EditorApp.
 
 namespace Arcane::Editor
 {
