@@ -242,6 +242,66 @@ TEST_CASE("InstantiateSubtrees refuses on a schema version mismatch",
     CHECK(IdentityCount(w.reg) == before);
 }
 
+TEST_CASE("InstantiateSubtrees rolls back everything created so far on a malformed mid-walk entry",
+          "[outliner][json]")
+{
+    World w;
+    Astra::Entity root = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+    w.reg.SetResource<SceneRoot>(SceneRoot{ root });
+    Astra::Entity a = Edit::CreateEntity(w.reg, root);
+    Astra::Entity b = Edit::CreateEntity(w.reg, a);
+    (void)b;
+
+    const std::array<Astra::Entity, 1> selection{ a };
+    nlohmann::json payload = Edit::SerializeSubtrees(w.reg, selection);
+    REQUIRE(payload["entities"].size() == 2);
+    payload["entities"][1] = 42;   // corrupt the SECOND entry -- entry 0 already
+                                    // created an entity by the time this is hit
+
+    const std::size_t before = IdentityCount(w.reg);
+    const std::vector<Astra::Entity> roots = Edit::InstantiateSubtrees(w.reg, payload);
+    CHECK(roots.empty());
+    CHECK(IdentityCount(w.reg) == before);   // entry 0's entity was rolled back too
+}
+
+TEST_CASE("SerializeSubtrees/InstantiateSubtrees keep an internal link, drop an external one",
+          "[outliner][json]")
+{
+    World w;
+    Astra::Entity root = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+    w.reg.SetResource<SceneRoot>(SceneRoot{ root });
+    Astra::Entity a = Edit::CreateEntity(w.reg, root);
+    Astra::Entity b = Edit::CreateEntity(w.reg, root);
+    Astra::Entity c = Edit::CreateEntity(w.reg, root);
+    w.reg.AddLink(a, b);
+    w.reg.AddLink(a, c);
+
+    const std::array<Astra::Entity, 2> selection{ a, b };   // c stays outside the copy
+    nlohmann::json payload = Edit::SerializeSubtrees(w.reg, selection);
+    REQUIRE(payload["entities"].size() == 2);
+
+    // Exactly one internal link entry (the a-b edge): the forward-edge rule
+    // keeps it on whichever side has the smaller payload index, and the
+    // external a-c edge is dropped because indexOf(c) == -1 never satisfies
+    // "j > self".
+    std::size_t linkEntries = 0, linkTotal = 0;
+    for (const auto& entry : payload["entities"])
+        if (entry.contains("links"))
+        {
+            ++linkEntries;
+            linkTotal += entry["links"].size();
+        }
+    CHECK(linkEntries == 1);
+    CHECK(linkTotal == 1);
+
+    const std::vector<Astra::Entity> roots = Edit::InstantiateSubtrees(w.reg, payload);
+    REQUIRE(roots.size() == 2);   // a and b are independent selection roots (siblings)
+
+    CHECK(w.reg.GetRelationshipGraph().AreLinked(roots[0], roots[1]));   // new a'-b' link
+    CHECK_FALSE(w.reg.GetRelationshipGraph().AreLinked(roots[0], c));    // nothing links to c
+    CHECK_FALSE(w.reg.GetRelationshipGraph().AreLinked(roots[1], c));
+}
+
 TEST_CASE("SubtreeEntities: a root's whole subtree, duplicates collapse, dead roots skip",
           "[outliner]")
 {

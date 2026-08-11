@@ -166,7 +166,12 @@ namespace Arcane::Edit
     // Returns the created ROOT entities. Refuses (returns {}, creates
     // nothing lasting) when the registry has no SceneRoot, on a version
     // mismatch, on a malformed document, or on a component field error --
-    // partial creations are destroyed (all-or-nothing).
+    // partial creations are destroyed (all-or-nothing). A component type the
+    // destination registry cannot instantiate (unknown or reflected-but-
+    // unregistered -- likely on a cross-plugin-roster paste) does NOT refuse
+    // the paste; it is skipped and reported the way LoadJson reports the same
+    // two cases (SceneSerializer.hpp) -- ARC_WARN plus an Arcane::Diagnostic
+    // published under the "clipboard" key.
     ARCANE_API std::vector<Astra::Entity> InstantiateSubtrees(Astra::Registry& reg,
                                                               const nlohmann::json& payload);
 

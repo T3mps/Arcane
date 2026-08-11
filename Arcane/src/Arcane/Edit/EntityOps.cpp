@@ -1,5 +1,7 @@
 #include <Arcane/Edit/EntityOps.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>    // InstantiateSubtrees mirrors LoadJson's skip reporting
+#include <Arcane/Base/Log.hpp>            // ARC_WARN
 #include <Arcane/Edit/CommandStack.hpp>   // RenameWithUndo brackets its own transaction
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
@@ -451,6 +453,14 @@ namespace Arcane::Edit
 
             Astra::ComponentRegistry* creg = reg.GetComponentRegistry();
 
+            // Accumulated across Pass 1 and published ONCE right after it, same
+            // placement as LoadJson's own publish (SceneSerializer.hpp:339):
+            // a skip mid-walk that later triggers destroyPartial() must not
+            // leave stale rows pointing at destroyed entities, so this is
+            // never published on an early return, only on Pass 1 completing.
+            std::vector<Arcane::Diagnostic> diagnostics;
+            std::size_t entityIndex = 0;
+
             // Pass 1: create + components (LoadJson's tolerant per-entry walk).
             for (const auto& entry : entities)
             {
@@ -461,7 +471,10 @@ namespace Arcane::Edit
 
                 const auto cit = entry.find("components");
                 if (cit == entry.end() || !cit->is_object())
+                {
+                    ++entityIndex;
                     continue;
+                }
                 static const nlohmann::json kEmptyFields = nlohmann::json::object();
                 for (auto it = cit->begin(); it != cit->end(); ++it)
                 {
@@ -469,11 +482,62 @@ namespace Arcane::Edit
                     if (it.value().is_object())    fields = &it.value();
                     else if (it.value().is_null()) fields = &kEmptyFields;
                     else                            continue;
-                    if (Scene::Detail::AddComponentByTypeName(reg, creg, e, it.key(), *fields)
-                        == Scene::Detail::AddComponentResult::Error)
+                    const Scene::Detail::AddComponentResult r =
+                        Scene::Detail::AddComponentByTypeName(reg, creg, e, it.key(), *fields);
+                    if (r == Scene::Detail::AddComponentResult::Error)
                         return destroyPartial();   // unsupported field type: fail loud
+
+                    // A paste is MORE likely than a scene load to meet a type
+                    // the destination process doesn't know: the payload was
+                    // authored under whatever plugin roster the SOURCE
+                    // registry had loaded, which the paste target need not
+                    // share. Silently dropping it here would be the exact
+                    // "no trace anywhere" loss LoadJson's own WARN was added
+                    // to fix (SceneSerializer.hpp:145-151) -- mirror it.
+                    if (r == Scene::Detail::AddComponentResult::SkippedUnknownType)
+                    {
+                        ARC_WARN("paste: unknown component \"{}\" skipped on "
+                                 "entity #{} (id {}, v{}) -- pasted without it",
+                                 it.key(), entityIndex, e.GetID(),
+                                 static_cast<unsigned>(e.GetVersion()));
+                        Arcane::Diagnostic d;
+                        d.severity = Arcane::DiagSeverity::Error;
+                        d.scope    = Arcane::DiagScope::Scene;
+                        d.code     = "clipboard.component.unknown";
+                        d.message  = "Unknown component \"" + std::string(it.key()) +
+                                     "\" on pasted entity #" + std::to_string(entityIndex);
+                        d.detail   = "Pasted without this component.";
+                        d.locator  = Arcane::DiagLocator::Entity(
+                                         static_cast<std::uint64_t>(e.GetValue()));
+                        diagnostics.push_back(std::move(d));
+                    }
+                    else if (r == Scene::Detail::AddComponentResult::SkippedUnregistered)
+                    {
+                        ARC_WARN("paste: component \"{}\" is reflected but not "
+                                 "registered (plugin not loaded?) -- skipped on "
+                                 "entity #{} (id {}, v{}); pasted without it",
+                                 it.key(), entityIndex, e.GetID(),
+                                 static_cast<unsigned>(e.GetVersion()));
+                        Arcane::Diagnostic d;
+                        d.severity = Arcane::DiagSeverity::Error;
+                        d.scope    = Arcane::DiagScope::Scene;
+                        d.code     = "clipboard.component.unregistered";
+                        d.message  = "Component \"" + std::string(it.key()) +
+                                     "\" is reflected but not registered (plugin not "
+                                     "loaded?) on pasted entity #" + std::to_string(entityIndex);
+                        d.detail   = "Pasted without this component.";
+                        d.locator  = Arcane::DiagLocator::Entity(
+                                         static_cast<std::uint64_t>(e.GetValue()));
+                        diagnostics.push_back(std::move(d));
+                    }
                 }
+                ++entityIndex;
             }
+
+            // Unconditional, like LoadJson's own publish: an empty vector
+            // retracts a previous paste's rows under this key (the clean-
+            // paste case).
+            Arcane::Diagnostics::Publish("clipboard", diagnostics);
 
             // Pass 2: fresh identity -- new Guid, uniquified name (paste/
             // duplicate unique-ify; the taken set grows so N pastes of "Foo"
