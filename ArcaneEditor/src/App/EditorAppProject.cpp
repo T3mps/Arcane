@@ -372,10 +372,10 @@ namespace Arcane::Editor
     // an .arcscene -- so the session goes back to Untitled/clean here rather
     // than at the end, where a later failure would skip it and leave a stale
     // path with a spurious dirty marker.
-    // m_sceneRecents: the outgoing project's scene history means nothing to
-    // the incoming one. ReloadSceneRecents (switch_plugin_load) repopulates
-    // it for whichever project ends up open -- including the project-less
-    // fallback, which correctly leaves this empty.
+    // m_recents.scenes: the outgoing project's scene history means nothing to
+    // the incoming one. EditorRecents::NoteProjectOpened (switch_plugin_load)
+    // repopulates it for whichever project ends up open -- including the
+    // project-less fallback, which correctly leaves this empty.
     // m_assetBrowser: selection, search, and kind filter all belong to the
     // outgoing project's registry -- a Guid from it must not survive as the
     // Assets menu's tracked row.
@@ -395,7 +395,7 @@ namespace Arcane::Editor
         m_consoleDiag.store.ClearAll();
         ClearSceneReferences();
         if (m_undo) m_scene.Reset(*m_undo);
-        m_sceneRecents = {};
+        m_recents.scenes = {};
         m_assetBrowser = {};
         m_dialogs.ClearAll();
         m_modalErrors.Clear();
@@ -669,8 +669,7 @@ namespace Arcane::Editor
             // The switch SUCCEEDED -- record it as most-recently-opened. Only
             // the success paths do this: a refused open must never reorder the
             // list (the failure fallback below deliberately does not call it).
-            NoteProjectOpened();
-            ReloadSceneRecents();
+            m_recents.NoteProjectOpened(m_runtime->CurrentProject());
             // Retarget the appdata layout ini at the incoming project (saves
             // the outgoing project's layout on the way -- see the method).
             RetargetLayoutIni();

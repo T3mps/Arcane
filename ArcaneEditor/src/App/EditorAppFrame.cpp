@@ -1247,8 +1247,8 @@ namespace Arcane::Editor
                                        m_panelVis,
                                        m_selection.HasSelection(),
                                        m_assetBrowser.selected.IsValid(),
-                                       &m_recents,
-                                       &m_sceneRecents);
+                                       &m_recents.projects,
+                                       &m_recents.scenes);
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
         // click (same "panel reports, app performs" split as ViewportPanelResult);
         // DoLaunchStandalone owns the project/dirty-scene checks and the spawn.
@@ -1344,12 +1344,9 @@ namespace Arcane::Editor
         // project opened in the Hub while this editor runs appear without a
         // restart, without paying a file read plus a stat per project on every
         // frame of a session where the menu is never touched.
-        if (menuReq.fileMenuOpen && !m_fileMenuWasOpen)
-        {
-            RefreshRecents();
-            ReloadSceneRecents();
-        }
-        m_fileMenuWasOpen = menuReq.fileMenuOpen;
+        if (menuReq.fileMenuOpen && !m_recents.fileMenuWasOpen)
+            m_recents.RefreshAll(m_runtime->CurrentProject());
+        m_recents.fileMenuWasOpen = menuReq.fileMenuOpen;
         // Build -> Rebuild Game Module: spawn the worker right here (no
         // dialog, no teardown -- nothing about starting a build needs the
         // frame-boundary deferral the scene/project requests above use). The

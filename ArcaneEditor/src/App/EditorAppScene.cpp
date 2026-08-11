@@ -213,7 +213,7 @@ namespace Arcane::Editor
         }
 
         m_scene.Adopt(file, doc->id, *m_undo);
-        NoteSceneOpened(file);
+        m_recents.NoteSceneOpened(m_runtime->CurrentProject(), file);
         m_frameOnSceneOpen = true;
         ARC_INFO("Opened scene {}", file.generic_string());
         return true;
@@ -278,7 +278,7 @@ namespace Arcane::Editor
         m_runtime->RegisterCreatedAsset(file);
 
         m_scene.Adopt(file, id, *m_undo);
-        NoteSceneOpened(file);
+        m_recents.NoteSceneOpened(m_runtime->CurrentProject(), file);
         ARC_INFO("Saved scene {}", file.generic_string());
 
         // A save is the moment the project's cover thumbnail is most honest

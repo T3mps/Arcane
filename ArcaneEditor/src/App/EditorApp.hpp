@@ -33,8 +33,7 @@
 #include "Project/ModuleBuild.hpp"
 #include "App/PlayMode.hpp"
 #include "Panels/ProblemsPanel.hpp"
-#include "Project/RecentProjects.hpp"
-#include "Project/SceneRecents.hpp"
+#include "Project/EditorRecents.hpp"
 #include "Scene/SceneSession.hpp"
 #include "Scene/SelectionContext.hpp"
 #include "Documents/ShaderEditorDocument.hpp"
@@ -768,44 +767,26 @@ namespace Arcane::Editor
         std::string m_windowTitle;
         void        UpdateWindowTitle();
 
-        // ---- File -> Open Recent -------------------------------------------
-        // The Hub's shared recents list, already filtered to what THIS editor
-        // can open (RecentProjects.hpp). Cached rather than rebuilt per frame:
-        // building it reads a file and stats every candidate, and the menu bar
-        // draws every frame whether or not File is ever opened.
+        // ---- File -> Open Recent / Open Recent Scene ------------------------
+        // Both recents lists live behind one facade (EditorRecents.hpp,
+        // architecture pass sec 10, B8): the Hub's shared machine-wide project
+        // list (m_recents.projects, RecentProjects.hpp) and the PER-PROJECT
+        // scene list (m_recents.scenes, <root>/Saved/recent_scenes.json,
+        // SceneRecents.hpp) were two fully parallel ~10-site call ladders,
+        // always invoked in adjacent lines -- these used to be separate
+        // members (m_recents/m_fileMenuWasOpen/m_sceneRecents) with four
+        // methods between them.
         //
-        // Refreshed at exactly two moments -- a successful project open, and
-        // the frame the File menu is first opened. The second is what lets a
-        // project opened in the HUB while this editor runs show up without a
-        // restart; the first is what makes the list correct on the very first
-        // open rather than one frame late.
-        RecentSelection m_recents;
-        bool            m_fileMenuWasOpen = false;
-        void            RefreshRecents();
-        // Record this project as most-recently-opened (in the Hub's own file)
-        // and refresh the cache. Called ONLY from the two success paths -- a
-        // refused open must never reorder the list.
-        void            NoteProjectOpened();
-
-        // ---- File -> Open Recent Scene --------------------------------------
-        // PER-PROJECT scene history (SceneRecents.hpp), unlike m_recents above
-        // -- a scene only means something inside the project that owns it, so
-        // this lives at <root>/Saved/recent_scenes.json rather than the Hub's
-        // shared, machine-wide file. Refreshed on project open (ReloadSceneRecents,
-        // beside NoteProjectOpened) and on the File menu's rising edge (beside
-        // RefreshRecents); pushed ONLY from the two scene success paths --
-        // DoOpenScene and DoSaveScene, after m_scene.Adopt -- so a refused open
-        // or a failed save never reorders or pollutes the list.
-        Arcane::Editor::SceneRecents::List m_sceneRecents;
-        // Reload from <CurrentProject root>/Saved/recent_scenes.json and prune
-        // entries whose file no longer exists. Empties the cache (not a no-op)
-        // when there is no open project, so a project-less session never shows
-        // a stale prior project's scenes.
-        void ReloadSceneRecents();
-        // Push `file` to the front of m_sceneRecents and persist it. No-op
-        // without an open project: a project-less session has nowhere durable
-        // to record a scene history.
-        void NoteSceneOpened(const std::filesystem::path& file);
+        // Cached rather than rebuilt per frame: building the project list
+        // reads a file and stats every candidate, and the menu bar draws
+        // every frame whether or not File is ever opened. Both lists are
+        // refreshed at exactly two moments -- a successful project open
+        // (NoteProjectOpened) and the frame the File menu is first opened
+        // (RefreshAll, m_recents.fileMenuWasOpen tracks the rising edge). The
+        // scene list is pushed ONLY from the two scene success paths --
+        // DoOpenScene and DoSaveScene, after m_scene.Adopt -- so a refused
+        // open or a failed save never reorders or pollutes either list.
+        Arcane::Editor::EditorRecents m_recents;
 
         // The dock node the Viewport occupied LAST frame (0 = floating):
         // where new document windows dock as sibling tabs (DrawAll).
