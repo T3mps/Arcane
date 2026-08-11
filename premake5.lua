@@ -282,116 +282,11 @@ project "ArcaneClient"
         symbols "off"
 
 -- ============================================================================
--- PlaygroundGame: the M4 scene as a game plugin (the first live ABI consumer).
--- SharedLib, /MD, links Arcane (NOT ArcaneCore). Loaded by ArcaneRuntime at runtime.
--- The reserved Game/ slot stays empty for the future Aphelyon client port.
--- ============================================================================
-project "PlaygroundGame"
-    location "PlaygroundGame"
-    kind "SharedLib"
-    language "C++"
-    cppdialect "C++23"
-    staticruntime "off"
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
-    files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
-    includedirs {
-        "%{wks.location}/ArcaneClient/src",
-        "%{IncludeDir.ArcaneCore}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
-        "%{IncludeDir.glm}",
-        "%{IncludeDir.nvrhi}",
-        "%{IncludeDir.Astra}",
-        "%{IncludeDir.enkiTS}",
-        "%{IncludeDir.imgui}",
-        "%{IncludeDir.spdlog}",
-        "%{IncludeDir.Mosaic}",
-    }
-    links { "ArcaneClient" }
-    -- ABI v2: the plugin draws ImGui via the host's exported context. imgui is exported
-    -- from ArcaneClient.dll (IMGUI_API=dllexport there); the plugin imports it -- one GImGui per
-    -- process. The import lib arrives via "ArcaneClient" (imgui surface is /WHOLEARCHIVE-exported).
-    defines { "GAME_BUILD_DLL", "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
-    filter "system:windows"
-        systemversion "latest"
-        buildoptions { "/Zc:__cplusplus", "/bigobj" }
-        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
-    filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
-    filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
-    filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
-    filter {}
-
--- ============================================================================
--- Sandbox: the physics-sandbox game plugin (Arcane Physics Sandbox, Task 4).
--- SharedLib, /MD, v2 ABI. Mirrors PlaygroundGame (imgui import) but ALSO links
--- ArcaneCore: it is the first plugin to drive PhysicsSystem, whose header-only
--- body calls into the ArcaneCore PhysicsWorld implementation (see the links{}
--- note below). Loaded by
--- ArcaneRuntime (--plugin Sandbox.dll) and the SandboxSmokeTest; the DLL is copied
--- beside BOTH ArcaneRuntime.exe and ArcaneTests.exe (its own postbuild) so the host
--- and the test can load it.
--- ============================================================================
-project "Sandbox"
-    location "Sandbox"
-    kind "SharedLib"
-    language "C++"
-    cppdialect "C++23"
-    staticruntime "off"
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
-    files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
-    includedirs {
-        "%{wks.location}/ArcaneClient/src",
-        "%{IncludeDir.ArcaneCore}",
-        "%{IncludeDir.glm}",
-        "%{IncludeDir.nvrhi}",
-        "%{IncludeDir.Astra}",
-        "%{IncludeDir.enkiTS}",
-        "%{IncludeDir.imgui}",
-        "%{IncludeDir.Manifold2D}",
-        "%{IncludeDir.spdlog}",
-        "%{IncludeDir.Mosaic}",
-    }
-    -- Sandbox is the first plugin to drive physics. PhysicsSystem (header-only) is
-    -- instantiated in THIS module and calls Arcane::Physics::PhysicsWorld directly;
-    -- PhysicsWorld's implementation lives in ArcaneCore (.cpp, not ARCANE_API-exported
-    -- from ArcaneClient.dll), so the plugin must link ArcaneCore to resolve those symbols.
-    -- ArcaneCore is Astra-free and carries no mutable global state, so the duplicate
-    -- static copy is benign: the PhysicsWorld instance is owned entirely within this
-    -- module (created here, stepped by this module's PhysicsSystem); ArcaneClient.dll only
-    -- ever READS it via DrawPhysicsDebug through a const ref, and both modules compile
-    -- the identical ArcaneCore headers under identical flags (/MD, matching NDEBUG,
-    -- float-strict) so the layout matches -- the same identical-layout contract the
-    -- scene components already rely on.
-    links { "ArcaneClient", "ArcaneCore", "Manifold2D" }
-    -- ABI v2: the plugin imports imgui from ArcaneClient.dll (one GImGui per process), same
-    -- as PlaygroundGame. The import lib arrives via "ArcaneClient" (imgui surface is
-    -- /WHOLEARCHIVE-exported there).
-    defines { "GAME_BUILD_DLL", "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
-    floatingpoint "Strict"   -- physics determinism: match ArcaneCore's /fp:strict (no /fp:fast)
-    -- Copy Sandbox.dll beside ArcaneRuntime.exe (host) AND ArcaneTests.exe (smoke test).
-    -- The Arcane/ArcaneCore include dir is needed because SandboxApp.hpp includes
-    -- Arcane/Jobs/TaskExecutor.hpp (ITaskExecutor); PhysicsWorld itself lives in
-    -- Manifold2D, not ArcaneCore.
-    postbuildcommands {
-        '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/ArcaneRuntime"',
-        '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/ArcaneTests"',
-        '{COPYFILE} "%{cfg.buildtarget.abspath}" "%{wks.location}/bin/' .. outputdir .. '/ArcaneRuntime/Sandbox.dll"',
-        '{COPYFILE} "%{cfg.buildtarget.abspath}" "%{wks.location}/bin/' .. outputdir .. '/ArcaneTests/Sandbox.dll"',
-    }
-    filter "system:windows"
-        systemversion "latest"
-        buildoptions { "/Zc:__cplusplus", "/bigobj" }
-        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
-    filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
-    filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
-    filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
-    filter {}
-
--- ============================================================================
 -- ArcaneRuntime: the thin standalone host (ArcaneRuntime.exe). Engine boot +
--- RunLoop + PluginHost. Hosts Sandbox.dll by default (the physics/engine
--- showcase); PlaygroundGame.dll is also copied beside ArcaneRuntime.exe as the
--- minimal hot-reload fixture / swap target. Folded from "Loom" 2026-07-29.
+-- RunLoop + PluginHost. Hosts a project's gameModule (--project; --plugin
+-- overrides); nothing to host refuses boot. The SampleProject tree is copied
+-- beside the exe, so `ArcaneRuntime --project SampleProject --frames N` is
+-- the scripted GPU-verify. Folded from "Loom" 2026-07-29.
 -- ============================================================================
 project "ArcaneRuntime"
     location "ArcaneRuntime"
@@ -424,11 +319,9 @@ project "ArcaneRuntime"
     -- ONE module per PROCESS holds because ArcaneRuntime.exe and ArcaneClient.dll are
     -- distinct modules.
     links { "ArcaneCore", "ArcaneClient" }
-    dependson { "PlaygroundGame", "Sandbox" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/PlaygroundGame/PlaygroundGame.dll" "%{cfg.buildtarget.directory}/PlaygroundGame.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
@@ -452,7 +345,7 @@ project "ArcaneRuntime"
 
 -- ============================================================================
 -- Arcane Editor: the editor shell (ArcaneEditor.exe). Engine boot + RunLoop + PluginHost
--- + ImGui docking shell. Hosts Sandbox.dll by default. Consumes the engine's
+-- + ImGui docking shell. Hosts the open project's gameModule. Consumes the engine's
 -- host-boot helpers (Arcane::GpuContext/FramePerf/HostConfig, Arcane/Host/ --
 -- exported ARCANE_API from ArcaneClient.dll, same as ArcaneRuntime) rather than source-
 -- compiling its own copy. Consumes only ARCANE_API otherwise.
@@ -485,11 +378,9 @@ project "ArcaneEditor"
         "%{IncludeDir.Mosaic}",
     }
     links { "ArcaneCore", "ArcaneClient", "imgui-node-editor" }
-    dependson { "Sandbox" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Sandbox/Sandbox.dll" "%{cfg.buildtarget.directory}/Sandbox.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
@@ -553,24 +444,13 @@ project "ArcaneTests"
     files {
         "%{prj.location}/src/**.cpp",
         "%{prj.location}/src/**.hpp",
-        -- Task 7/8: the Sandbox helper UNITS compile straight into the test exe so the
-        -- CPU tests drive them directly (no plugin load): SandboxInteractionTest drives
-        -- Interaction::Tick against a hand-built PhysicsWorld; SandboxHudTest drives
-        -- SandboxApp + Hud::Draw under a throwaway ImGui context. Only the pure helper
-        -- TUs are pulled in -- NOT Sandbox.cpp (the plugin shell with the extern "C"
-        -- exports + g_app), which the SandboxSmokeTest exercises via DLL load.
-        "%{wks.location}/Sandbox/src/Interaction.cpp",
-        "%{wks.location}/Sandbox/src/Scenes.cpp",
-        "%{wks.location}/Sandbox/src/SandboxApp.cpp",
-        "%{wks.location}/Sandbox/src/Hud.cpp",
         -- HostConfig (the typed host CLI result over Arcane::Cli), GpuContext,
         -- FramePerf, and ProjectBoot all moved into Arcane/Host (ArcaneClient.dll,
         -- ARCANE_API) alongside Module/Plugin/PluginHost (Arcane/Plugin) -- the
         -- test exe now consumes all of them via the "Arcane" link, not source-
         -- compiled. [host] round-trips HostConfig::Parse without loading ArcaneRuntime.exe.
         -- Task 3: ConsoleBuffer (Arcane Editor's log ring buffer) source-compiles into the
-        -- test exe so the [editor] unit test drives it directly, mirroring the
-        -- Sandbox helper-unit pattern above.
+        -- test exe so the [editor] unit test drives it directly.
         "%{wks.location}/ArcaneEditor/src/ConsoleBuffer.cpp",
         -- Task 4: ViewportInput (pure input-gating predicates for the scene-in-a-
         -- panel viewport) source-compiles into the test exe so the [editor] unit
@@ -690,7 +570,6 @@ project "ArcaneTests"
     includedirs {
         "%{IncludeDir.ArcaneCore}",
         "%{wks.location}/ArcaneClient/src",
-        "%{wks.location}/Sandbox/src",   -- Interaction.hpp / Scenes.hpp / Camera.hpp for the [sandbox] tests
         "%{wks.location}/ArcaneEditor/src",  -- ConsoleBuffer.hpp for the [editor] test
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.picosha2}",
@@ -723,7 +602,7 @@ project "ArcaneTests"
     -- canvas calls it, and that TU source-compiles into the tests.
     links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "Manifold2D", "imgui-node-editor" }
 
-    dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad", "PlaygroundGame", "Sandbox" }
+    dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad" }
 
     -- The test exe loads ArcaneClient.dll from its own directory.
     postbuildcommands {
@@ -738,7 +617,6 @@ project "ArcaneTests"
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/PlaygroundGame/PlaygroundGame.dll" "%{cfg.buildtarget.directory}/PlaygroundGame.dll"',
         -- Test data fixtures: copy ArcaneTests/data's CONTENTS into the test output
         -- dir's data/ so tests find their fixtures by relative path. {COPYDIR}
         -- copies the directory's contents, merging with the data/fonts dir the

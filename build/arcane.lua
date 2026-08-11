@@ -20,12 +20,16 @@
 --
 -- The module implements the extern-C plugin ABI (Arcane/Plugin/PluginABI.hpp --
 -- see kGamePluginABIVersion there); the host's ABI gate refuses a cross-build
--- mismatch. The include + link + define set below MIRRORS the in-tree
--- PlaygroundGame module (the proven minimal game-module recipe) so an external
--- build matches an in-tree one.
+-- mismatch. The include + link + define set below is the proven minimal
+-- game-module recipe (SampleProject is the in-repo consumer; Aphelyon the
+-- external one) so an external build matches an in-tree one.
 -- ============================================================================
 
-ARCANE_SDK = os.getenv("ARCANE_SDK")
+-- A consumer may pre-set the ARCANE_SDK global before including this file
+-- (the in-repo SampleProject self-locates the SDK relatively so a fresh clone
+-- builds without any env setup); the env var remains the external-project
+-- contract (Aphelyon).
+ARCANE_SDK = ARCANE_SDK or os.getenv("ARCANE_SDK")
 if not ARCANE_SDK then
     error("ARCANE_SDK environment variable is not set.\n" ..
           "Point it at the Arcane engine workspace dir, e.g.:\n" ..

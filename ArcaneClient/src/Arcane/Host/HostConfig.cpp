@@ -9,7 +9,7 @@ namespace Arcane
         cli.Option("frames",  "0",           "render N frames then exit").Type(CliType::Uint);
         cli.Flag  ("no-vsync",               "present without vsync");
         cli.Flag  ("perf",                   "log per-phase ms every 60 frames");
-        cli.Option("plugin",  "",            "game DLL to host (empty = host default: ArcaneRuntime Sandbox.dll, editor none)");
+        cli.Option("plugin",  "",            "game DLL to host (empty = the project's gameModule; a runtime with nothing to host refuses boot)");
         cli.Option("project", "", "project folder or .arcproj to open (empty = data/-next-to-exe)");
         cli.Option("scene",   "", "asset Guid to boot instead of the manifest's bootScene (empty = follow the manifest)");
         cli.Option("screenshot", "", "write the last rendered frame to this PNG before exiting (pairs with --frames)");

@@ -149,18 +149,27 @@ bool RuntimeApp::StageRenderBridge(Arcane::HostBoot::BootContext&)
 
 bool RuntimeApp::StagePluginLoad(Arcane::HostBoot::BootContext&)
 {
-    // ArcaneRuntime's default game module is the physics Sandbox showcase: with no --project
-    // and no --plugin, host Sandbox.dll. ArcaneRuntime IS that showcase (the ArcaneRuntime --frames
-    // GPU-verify + CI depend on it), so it keeps the old default -- the editor, which
-    // leaves pluginPath empty, is the host that starts with no game (see EditorApp).
-    const std::string fallback = m_config.pluginPath.empty() ? "Sandbox.dll" : m_config.pluginPath;
+    // The runtime hosts whatever the project's manifest names (--plugin overrides,
+    // for bare-DLL workflows). NOTHING to host is a refusal, not an empty window:
+    // the editor is a workshop and meaningfully opens project-less, but this
+    // host's one job is running a game. (Until 2026-08-11 a bare run fell back
+    // to the retired physics Sandbox showcase; the in-repo module is now
+    // SampleProject's -- `ArcaneRuntime --project SampleProject`.)
     const std::string gameModule =
-        Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), fallback);
-    m_plugin.emplace(*m_runtime, std::filesystem::path(gameModule));
+        Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
     // Secondary plugins: each enabled project plugin that built a Plugins/<name>/Binaries
     // DLL loads alongside the game module through the same host (content-only plugins are
     // already mounted at Project::Open).
-    for (const auto& dll : Arcane::HostBoot::PluginModules(m_runtime->CurrentProject()))
+    const auto pluginModules = Arcane::HostBoot::PluginModules(m_runtime->CurrentProject());
+    if (gameModule.empty() && pluginModules.empty())
+    {
+        ARC_ERROR("ArcaneRuntime: nothing to host -- pass --project <dir> (a project whose "
+                  "manifest names a gameModule) or --plugin <dll>");
+        return false;
+    }
+    m_plugin.emplace(*m_runtime, gameModule.empty() ? std::filesystem::path{}
+                                                    : std::filesystem::path(gameModule));
+    for (const auto& dll : pluginModules)
         m_plugin->AddPlugin(dll);
     if (!m_plugin->Load())
     {
@@ -182,7 +191,7 @@ bool RuntimeApp::StagePluginLoad(Arcane::HostBoot::BootContext&)
     // BootScene already logs both the file it loaded and every reason it did
     // not, so a project with no/broken boot scene just keeps what the plugin
     // built rather than failing the host. No --project means no project,
-    // hence no call: the scripted Sandbox.dll GPU-verify is untouched.
+    // hence no call.
     if (const Arcane::Project* proj = m_runtime->CurrentProject())
     {
         // --scene overrides the project's manifest bootScene with an explicit
@@ -458,8 +467,8 @@ void RuntimeApp::MainLoop()
         // Scene camera: the ACTIVE Camera entity owns the view. Pushed HERE, after
         // the plugin's update ran, so a scene that ships a camera beats a plugin
         // that also pushes one -- the scene is the authored artifact. No camera
-        // leaves the stored camera untouched (a plugin-driven camera, e.g. the
-        // Sandbox showcase, therefore still works exactly as before) and says so
+        // leaves the stored camera untouched (a plugin that drives the camera
+        // itself via Runtime::SetCamera therefore still works) and says so
         // once, rather than substituting an identity view that would render an
         // older scene as an unexplained black window.
         {

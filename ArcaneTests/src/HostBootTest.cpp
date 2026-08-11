@@ -84,8 +84,8 @@ TEST_CASE("HostBoot::GameModule falls back with no/empty gameModule", "[host]")
     REQUIRE(Arcane::Project::Create(dir, "G").has_value());   // Create writes gameModule ""
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
-    REQUIRE(Arcane::HostBoot::GameModule(&*proj, "Sandbox.dll") == "Sandbox.dll");
-    REQUIRE(Arcane::HostBoot::GameModule(nullptr, "Sandbox.dll") == "Sandbox.dll");
+    REQUIRE(Arcane::HostBoot::GameModule(&*proj, "Fallback.dll") == "Fallback.dll");
+    REQUIRE(Arcane::HostBoot::GameModule(nullptr, "Fallback.dll") == "Fallback.dll");
     // Empty fallback + no project -> empty: the editor's "start with no game" signal
     // (bare ArcaneEditor leaves pluginPath empty, so nothing is loaded).
     REQUIRE(Arcane::HostBoot::GameModule(nullptr, "").empty());
@@ -103,7 +103,7 @@ TEST_CASE("HostBoot::GameModule returns the manifest gameModule when set", "[hos
         R"("gameModule":"Foo.dll","plugins":[],"bootScene":""})";
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
-    REQUIRE(Arcane::HostBoot::GameModule(&*proj, "Sandbox.dll") == "Foo.dll");
+    REQUIRE(Arcane::HostBoot::GameModule(&*proj, "Fallback.dll") == "Foo.dll");
     fs::remove_all(dir, ec);
 }
 
@@ -122,12 +122,12 @@ TEST_CASE("HostBoot::GameModule resolves the project's Binaries/ copy when built
 
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
-    REQUIRE(fs::path(Arcane::HostBoot::GameModule(&*proj, "Sandbox.dll"))
+    REQUIRE(fs::path(Arcane::HostBoot::GameModule(&*proj, "Fallback.dll"))
             == dir / "Binaries" / "Aphelyon.dll");
 
     // Without the built copy, it stays a bare name (borrowing path, resolved beside exe).
     fs::remove(dir / "Binaries" / "Aphelyon.dll", ec);
-    REQUIRE(Arcane::HostBoot::GameModule(&*proj, "Sandbox.dll") == "Aphelyon.dll");
+    REQUIRE(Arcane::HostBoot::GameModule(&*proj, "Fallback.dll") == "Aphelyon.dll");
     fs::remove_all(dir, ec);
 }
 

@@ -23,8 +23,9 @@ int main(int argc, char** argv)
 
     // Same probe as the editor: identity to stdout, no window, no device. The
     // flag lives in the SHARED HostConfig, so a flag that parsed on both hosts
-    // but only worked on one would be a trap. ArcaneRuntime does NOT get the editor's
-    // no-project gate -- it hosts Sandbox.dll by default with no flags, by design.
+    // but only worked on one would be a trap. A bare run (no --project, no
+    // --plugin) refuses at plugin_load with usage guidance -- the runtime's one
+    // job is running a game (the old Sandbox.dll default was retired 2026-08-11).
     if (parsed.config->printEngineInfo)
     {
         // ExecutablePathUtf8, NOT argv[0]: argv[0] is whatever the launcher typed

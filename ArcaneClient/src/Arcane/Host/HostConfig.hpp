@@ -15,8 +15,8 @@ namespace Arcane
         std::uint64_t   maxFrames = 0;             // 0 = run until quit
         bool            vsync     = true;
         bool            perf      = false;
-        // Empty = "no explicit --plugin"; each host supplies its own fallback (ArcaneRuntime ->
-        // Sandbox.dll, the editor -> no game loaded). A project's gameModule overrides both.
+        // Empty = "no explicit --plugin": the project's gameModule is what loads. The editor
+        // tolerates having nothing to host (project-less workshop); ArcaneRuntime refuses.
         std::string     pluginPath = "";
         std::string     projectPath = "";   // .arcproj or project folder; "" = data/-next-to-exe
         // Boot this scene (asset Guid text) instead of the manifest's bootScene. Empty = follow
