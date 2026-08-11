@@ -662,7 +662,7 @@ namespace Arcane::Editor
         // Sandbox: pluginPath defaults empty (HostConfig), so GameModule returns empty
         // here and the plugin host is left disengaged. Every m_plugin-> use in MainLoop
         // is optional-guarded, so a disengaged plugin is safe. Sandbox stays available on
-        // demand via --plugin Sandbox.dll or --project SampleProject.
+        // demand via --plugin Sandbox.dll or --project ReferenceProject.
         const std::string gameModule =
             Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
         const auto pluginModules = Arcane::HostBoot::PluginModules(m_runtime->CurrentProject());

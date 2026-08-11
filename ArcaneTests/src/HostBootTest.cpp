@@ -33,24 +33,24 @@ namespace
 {
     namespace fs = std::filesystem;
 
-    // Locate the repo's real Arcane/SampleProject from wherever this test exe
+    // Locate the repo's real Arcane/ReferenceProject from wherever this test exe
     // happens to run. No other test in this suite reaches into source-tree
     // content (no SOURCE_DIR-style define, no fixture-copy convention to
     // follow), so rather than hardcoding a fixed "../../.." depth this walks
-    // UP from the exe's own directory looking for the "SampleProject/
-    // SampleProject.arcproj" landmark. The premake layout
+    // UP from the exe's own directory looking for the "ReferenceProject/
+    // ReferenceProject.arcproj" landmark. The premake layout
     // (Arcane/bin/<cfg>-<os>-<arch>-md/<project>/) makes 3 levels the expected
     // answer today, but verifying-by-search survives a future bin/ layout
     // change instead of silently opening the wrong directory (or none) with
     // no diagnostic. Bounded to 8 levels; empty on failure.
-    fs::path FindSampleProjectDir()
+    fs::path FindReferenceProjectDir()
     {
         std::error_code ec;
         fs::path dir = fs::path(Arcane::ExecutablePathUtf8()).parent_path();
         for (int i = 0; i < 8 && !dir.empty(); ++i)
         {
-            const fs::path candidate = dir / "SampleProject";
-            if (fs::is_regular_file(candidate / "SampleProject.arcproj", ec))
+            const fs::path candidate = dir / "ReferenceProject";
+            if (fs::is_regular_file(candidate / "ReferenceProject.arcproj", ec))
                 return candidate;
             const fs::path parent = dir.parent_path();
             if (parent == dir)
@@ -589,20 +589,20 @@ TEST_CASE("BootSceneFile/BootScene(project, id) fall into the manifest path's em
     fs::remove_all(dir, ec);
 }
 
-// --- Task 9: SampleProject ships an authored scene and opens into it --------
+// --- Task 9: ReferenceProject ships an authored scene and opens into it --------
 // The end-to-end proof: the shipped Content/scenes/main.arcscene resolves
 // through the real .arcproj's bootScene Guid and loads into a real Runtime.
 // Opened IN PLACE, not a copy -- Project::Open only ever writes an asset file
 // back when it is missing/invalid a native "id" (AssetRegistry.cpp's
-// ResolveNativeId), and both SampleProject content files already carry one
+// ResolveNativeId), and both ReferenceProject content files already carry one
 // (main.arcscene's id was stamped by Scene::SaveSceneFile when it was
 // generated), so this is a read-only pass over the real repo tree -- no
 // mutation risk to source-controlled fixtures from running the test suite.
 
-TEST_CASE("SampleProject opens into its authored boot scene end to end", "[host][project]")
+TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[host][project]")
 {
-    const fs::path dir = FindSampleProjectDir();
-    REQUIRE_FALSE(dir.empty());   // if this fails, FindSampleProjectDir's search bound needs raising
+    const fs::path dir = FindReferenceProjectDir();
+    REQUIRE_FALSE(dir.empty());   // if this fails, FindReferenceProjectDir's search bound needs raising
 
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());

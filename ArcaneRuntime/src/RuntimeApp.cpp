@@ -154,7 +154,7 @@ bool RuntimeApp::StagePluginLoad(Arcane::HostBoot::BootContext&)
     // the editor is a workshop and meaningfully opens project-less, but this
     // host's one job is running a game. (Until 2026-08-11 a bare run fell back
     // to the retired physics Sandbox showcase; the in-repo module is now
-    // SampleProject's -- `ArcaneRuntime --project SampleProject`.)
+    // ReferenceProject's -- `ArcaneRuntime --project ReferenceProject`.)
     const std::string gameModule =
         Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
     // Secondary plugins: each enabled project plugin that built a Plugins/<name>/Binaries

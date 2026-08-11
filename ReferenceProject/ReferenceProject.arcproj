@@ -1,0 +1,12 @@
+{
+  "formatVersion": 1,
+  "name": "ReferenceProject",
+  "description": "The in-repo sample: an SDK-built game module (Source/ -> Binaries/ReferenceGame.dll) plus a simple data scene.",
+  "engine": {
+    "abi": 10
+  },
+  "gameModule": "ReferenceGame.dll",
+  "plugins": [],
+  "bootScene": "10d8ff06-45c2-47f2-90cb-ab7ac29cb51d",
+  "guid": "cfafaf09-86bb-4b4b-a99f-9ecb0771bc15"
+}

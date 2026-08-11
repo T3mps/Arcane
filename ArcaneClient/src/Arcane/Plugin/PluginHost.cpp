@@ -258,7 +258,7 @@ namespace Arcane
             // pointing into this image while the image is STILL MAPPED, turning
             // what used to be a dangling call into freed code (Diagnosed
             // 2026-07-31 from a hang/crash on project switch: Aphelyon ->
-            // SampleProject -> Aphelyon, faulting in AddComponentByTypeName ->
+            // ReferenceProject -> Aphelyon, faulting in AddComponentByTypeName ->
             // ComponentDescriptor::DefaultConstruct) into a clean
             // SkippedUnregistered miss in SceneSerializer instead.
             if (const Module::ImageSpan image = img.plugin->LoadedModule().Image(); image.size != 0)

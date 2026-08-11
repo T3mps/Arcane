@@ -1,4 +1,4 @@
-// SampleGame: SampleProject's game module -- the minimal end-to-end proof of
+// ReferenceGame: ReferenceProject's game module -- the minimal end-to-end proof of
 // the product flow. The SCENE is data (Content/scenes/main.arcscene, loaded by
 // the host through the manifest's bootScene); this module's whole job is the
 // plugin lifecycle: pin the shared TypeContext, register the engine systems

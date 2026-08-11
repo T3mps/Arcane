@@ -150,7 +150,7 @@ namespace Arcane::HostBoot
     // so when that built copy exists we return its absolute path -- the host loads the
     // project's OWN module rather than a same-named DLL sitting beside the exe. If the
     // Binaries/ copy isn't there (a demo project that BORROWS a host-adjacent DLL, e.g.
-    // SampleProject -> Sandbox.dll), we fall through to the bare name resolved beside the
+    // ReferenceProject -> Sandbox.dll), we fall through to the bare name resolved beside the
     // host exe -- keeping the borrowing path working.
     inline std::string GameModule(const Arcane::Project* project, const std::string& fallback)
     {

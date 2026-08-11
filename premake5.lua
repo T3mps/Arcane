@@ -284,8 +284,8 @@ project "ArcaneClient"
 -- ============================================================================
 -- ArcaneRuntime: the thin standalone host (ArcaneRuntime.exe). Engine boot +
 -- RunLoop + PluginHost. Hosts a project's gameModule (--project; --plugin
--- overrides); nothing to host refuses boot. The SampleProject tree is copied
--- beside the exe, so `ArcaneRuntime --project SampleProject --frames N` is
+-- overrides); nothing to host refuses boot. The ReferenceProject tree is copied
+-- beside the exe, so `ArcaneRuntime --project ReferenceProject --frames N` is
 -- the scripted GPU-verify. Folded from "Loom" 2026-07-29.
 -- ============================================================================
 project "ArcaneRuntime"
@@ -328,7 +328,7 @@ project "ArcaneRuntime"
         '{MKDIR} "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{COPYDIR} "%{wks.location}/data/EngineConfig" "%{cfg.buildtarget.directory}/data/EngineConfig"',
-        '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
+        '{COPYDIR} "%{wks.location}/ReferenceProject" "%{cfg.buildtarget.directory}/ReferenceProject"',
         -- Vendored dxc trio (minus dxc.exe): the runtime compile service
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
         '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
@@ -388,7 +388,7 @@ project "ArcaneEditor"
         '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data"',
         '{COPYDIR} "%{wks.location}/data/EngineConfig" "%{cfg.buildtarget.directory}/data/EngineConfig"',
-        '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
+        '{COPYDIR} "%{wks.location}/ReferenceProject" "%{cfg.buildtarget.directory}/ReferenceProject"',
         -- Editor fonts: Inter (default) + Roboto faces + lucide icon font, merged into
         -- the ImGui atlas by EditorFonts.cpp (exe-relative paths -- must align w/ dests).
         '{MKDIR} "%{cfg.buildtarget.directory}/data/font/lucide"',
