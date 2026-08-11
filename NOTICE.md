@@ -40,5 +40,8 @@ Fonts shipped under `data/font/`:
 - **Inter** -- SIL Open Font License 1.1 (`data/font/inter/OFL.txt`)
 - **Roboto** -- SIL Open Font License 1.1 (`data/font/roboto/OFL.txt`)
 - **Lucide** (icon font) -- ISC license (lucide.dev)
-- **Aldo the Apache** (`data/font/aldotheapache`) -- freeware display font;
-  redistribution terms not vendored -- verify before shipping it in a product.
+- **Aldo the Apache** (`data/font/aldotheapache`) -- freeware display font by
+  AJ Paglia; distributed as free for personal and commercial use with
+  modification and redistribution permitted (per its distribution listings,
+  e.g. dafont/blogfonts, verified 2026-08-11). No formal license text ships
+  with the font upstream.
