@@ -1,6 +1,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 
-#include <Arcane/Base/Engine.hpp>   // ExecutablePathUtf8() -- exe-relative report dir
+#include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope, WriteFile -- the .arcdiag sibling
+#include <Arcane/Base/Engine.hpp>         // ExecutablePathUtf8(), BuildInfo()
 #include <Arcane/Base/Log.hpp>
 
 #include <atomic>
@@ -58,6 +59,15 @@ namespace
     // the main thread faults); interleaved reports are worse than a late one.
     std::mutex g_reportMutex;
 
+    // GPU-section provider slot (Task 5/6 install their backend here). A
+    // separate mutex from g_reportMutex: WriteReportImpl only holds this one
+    // long enough to copy the two pointers out, then calls the provider
+    // unlocked -- an unknown callback must never run while holding a lock
+    // another thread might need in order to install/clear it.
+    std::mutex         g_gpuProviderMutex;
+    GpuSectionProvider g_gpuProvider     = nullptr;
+    void*              g_gpuProviderUser = nullptr;
+
     // DbgHelp is explicitly NOT thread-safe -- every Sym* call in the process
     // must be serialized, including ones the walk makes indirectly.
     std::mutex        g_symMutex;
@@ -111,10 +121,49 @@ namespace
 #endif
     }
 
+    // ISO-8601 UTC, for the .arcdiag envelope's timestampUtc -- distinct
+    // from TimeStampForFilename's local-time, filename-safe stamp above. A
+    // report a teammate opens in another timezone needs an unambiguous
+    // instant, not the reporter's local clock.
+    [[nodiscard]] std::string TimestampUtcIso8601()
+    {
+#if defined(_WIN32)
+        SYSTEMTIME st{};
+        GetSystemTime(&st);
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%04u-%02u-%02uT%02u:%02u:%02uZ",
+                      st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        return buf;
+#else
+        return "unknown-time";
+#endif
+    }
+
     [[nodiscard]] std::string CurrentPhase()
     {
         std::lock_guard lock(g_phaseMutex);
         return g_phase;
+    }
+
+    // Kind derivation for the .arcdiag envelope: substring match on the
+    // REASON string, never the trigger site. Covers every phrasing
+    // WriteReportImpl sees today -- "crash (unhandled exception)" (the
+    // crash filter, below) and "hang (main thread has not ticked for ...)"
+    // (WatchdogMain, below) -- plus the GPU vocabulary named in
+    // docs/specs/2026-08-11-gpu-crash-diagnostics-design.md: the planned
+    // GPU-progress watchdog (Task 7, not yet wired) reports exactly
+    // "gpu-stall", and a device-removed capture (Task 5/6) is expected to
+    // name "gpu-crash". A reason naming "gpu" always resolves to one of the
+    // two gpu kinds rather than falling through to plain crash/hang, and it
+    // is checked before "hang" so "gpu-stall" cannot misclassify as "hang".
+    [[nodiscard]] std::string DeriveKind(const char* reason)
+    {
+        const std::string_view r = reason ? reason : "";
+        if (r.find("gpu") != std::string_view::npos)
+            return r.find("stall") != std::string_view::npos ? "gpu-stall" : "gpu-crash";
+        if (r.find("hang") != std::string_view::npos)
+            return "hang";
+        return "crash";
     }
 
 #if defined(_WIN32)
@@ -335,8 +384,12 @@ namespace
         const std::string           base  = g_cfg.appName + "-" + stamp + "-pid" +
                                             std::to_string(GetCurrentProcessId());
 
-        const std::filesystem::path dmpPath = dir / (base + ".dmp");
-        const std::filesystem::path txtPath = dir / (base + ".txt");
+        const std::filesystem::path dmpPath  = dir / (base + ".dmp");
+        const std::filesystem::path txtPath  = dir / (base + ".txt");
+        const std::filesystem::path diagPath = dir / (base + ".arcdiag");
+        // Same stem, no extension -- what a GPU-section provider writes its
+        // own <reportStem>.gpudump against (F-6b).
+        const std::filesystem::path reportStem = dir / base;
 
         // Minidump FIRST, on purpose. The text walk below suspends threads and
         // calls DbgHelp in a process that is already misbehaving; if it wedges,
@@ -411,11 +464,53 @@ namespace
             append("<could not enumerate threads>");
         }
 
+        // .arcdiag envelope (GPU crash diagnostics arc, Task 4): ALWAYS
+        // emitted, with or without a GPU backend installed -- a plain CPU
+        // crash/hang report must be fully renderable by the future
+        // CrashReportDocument on its own, not an empty shell waiting on
+        // Task 5/6. guid is minted fresh here (never by Diag::WriteFile /
+        // Diag::Parse) because Parse rejects a nil guid.
+        Diag::Envelope envelope;
+        envelope.guid      = Guid::Generate();
+        envelope.kind      = DeriveKind(reason);
+        envelope.timestampUtc = TimestampUtcIso8601();
+        envelope.appName   = g_cfg.appName;
+        envelope.phase     = CurrentPhase();
+        envelope.buildInfo = BuildInfo();
+        // Same content the .txt sibling carries up to this point -- the
+        // symbolized all-thread walk above, snapshotted BEFORE any GPU
+        // section is appended below so this field stays CPU-only (F-6b).
+        envelope.cpuThreadSummary = out;
+
+        GpuSectionProvider gpuProvider     = nullptr;
+        void*              gpuProviderUser = nullptr;
+        {
+            std::lock_guard gpuLock(g_gpuProviderMutex);
+            gpuProvider     = g_gpuProvider;
+            gpuProviderUser = g_gpuProviderUser;
+        }
+        if (gpuProvider)
+        {
+            std::string gpuText;
+            gpuProvider(envelope, gpuText, reportStem, gpuProviderUser);
+            append("=== GPU ===");
+            if (!gpuText.empty())
+                append(gpuText);
+        }
+
         if (FILE* f = nullptr; fopen_s(&f, txtPath.string().c_str(), "wb") == 0 && f)
         {
             std::fwrite(out.data(), 1, out.size(), f);
             std::fclose(f);
         }
+
+        // Sibling paths: txt/dmp are always minted above regardless of write
+        // success (a WriteMiniDump failure is already logged into the body
+        // as "<failed to write>"); siblingGpuDump stays whatever the
+        // provider set directly on `envelope` (empty if it wrote nothing).
+        envelope.siblingTxt = txtPath.string();
+        envelope.siblingDmp = dmpPath.string();
+        Diag::WriteFile(envelope, diagPath);
 
         g_reportCount.fetch_add(1, std::memory_order_acq_rel);
 
@@ -559,6 +654,20 @@ std::string WriteReport(const char* reason)
 std::uint32_t ReportCount() noexcept
 {
     return g_reportCount.load(std::memory_order_acquire);
+}
+
+void SetGpuSectionProvider(GpuSectionProvider provider, void* user) noexcept
+{
+    std::lock_guard lock(g_gpuProviderMutex);
+    g_gpuProvider     = provider;
+    g_gpuProviderUser = user;
+}
+
+void ClearGpuSectionProvider() noexcept
+{
+    std::lock_guard lock(g_gpuProviderMutex);
+    g_gpuProvider     = nullptr;
+    g_gpuProviderUser = nullptr;
 }
 }   // namespace Arcane::Diagnostics
 

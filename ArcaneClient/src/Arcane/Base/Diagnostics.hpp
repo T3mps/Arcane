@@ -29,9 +29,11 @@
 // planned Linux port keeps linking.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Guid.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
@@ -85,6 +87,32 @@ namespace Arcane::Diagnostics
 
     // Reports written this process. The observable the watchdog test asserts on.
     [[nodiscard]] ARCANE_API std::uint32_t ReportCount() noexcept;
+
+    // -------------------------------------------------------------------
+    // GPU-section provider seam (GPU crash diagnostics arc, Task 4)
+    // -------------------------------------------------------------------
+    // Installed by a GPU crash backend (Task 5 = D3D12, Task 6 = Vulkan) so
+    // WriteReport can fill an .arcdiag envelope's gpu-side fields without
+    // Base/Diagnostics knowing anything about NVRHI/D3D12/Vulkan. Called at
+    // most once per report, with an envelope that already carries
+    // guid/kind/timestamp/appName/phase/buildInfo/cpuThreadSummary: the
+    // provider fills `envelope`'s queues/fault/activeLayers (and, if it
+    // wrote its own <reportStem>.gpudump, envelope.siblingGpuDump) and
+    // appends human-readable text to `humanText`, which WriteReport folds
+    // into the .txt report as a "=== GPU ===" block. `reportStem` is the
+    // same base path (no extension) that mints the .txt/.dmp/.arcdiag
+    // siblings (F-6b) -- e.g. a provider writes `<reportStem>.gpudump`.
+    using GpuSectionProvider = void (*)(Diag::Envelope& envelope,
+                                         std::string& humanText,
+                                         const std::filesystem::path& reportStem,
+                                         void* user);
+
+    // Install (or replace) the process-wide GPU-section provider. Last
+    // writer wins, mirroring the structured-diagnostics Sink slot below.
+    ARCANE_API void SetGpuSectionProvider(GpuSectionProvider provider, void* user) noexcept;
+
+    // Uninstall it. Idempotent; safe to call with none installed.
+    ARCANE_API void ClearGpuSectionProvider() noexcept;
 }
 
 // =============================================================================

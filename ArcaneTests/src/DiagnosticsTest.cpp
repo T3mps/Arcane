@@ -6,6 +6,12 @@
 // getting nothing -- the single most expensive way to learn it. So the walk, the
 // minidump, and the watchdog trigger are all exercised here, in the ordinary
 // gate, where a regression costs one test run instead of one lost repro.
+//
+// GPU crash diagnostics arc, Task 4: the .arcdiag emission + GPU-section
+// provider seam get the same treatment -- CPU-only here too (the provider in
+// these tests is a fake, no GPU calls), covering all three provider states
+// (installed / never installed / installed-then-cleared) plus the pinned CPU
+// path (every .arcdiag is fully renderable on its own).
 
 #include <chrono>
 #include <filesystem>
@@ -16,6 +22,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 
 #if defined(_WIN32)
@@ -55,6 +62,47 @@ namespace
         std::ostringstream ss;
         ss << in.rdbuf();
         return ss.str();
+    }
+
+    // RAII for the GPU-section provider slot: same reasoning as
+    // ArmedDiagnostics above -- it is process-global state and the suite
+    // runs in random order, so a test that installs a provider must clear
+    // it before the next test runs, even if an assertion fails first.
+    struct ArmedGpuProvider
+    {
+        ArmedGpuProvider(Arcane::Diagnostics::GpuSectionProvider fn, void* user)
+        {
+            Arcane::Diagnostics::SetGpuSectionProvider(fn, user);
+        }
+        ~ArmedGpuProvider() { Arcane::Diagnostics::ClearGpuSectionProvider(); }
+
+        ArmedGpuProvider(const ArmedGpuProvider&)            = delete;
+        ArmedGpuProvider& operator=(const ArmedGpuProvider&) = delete;
+    };
+
+    std::filesystem::path SiblingWithExt(const std::filesystem::path& txtPath, const char* ext)
+    {
+        std::filesystem::path p(txtPath);
+        p.replace_extension(ext);
+        return p;
+    }
+
+    // Fake GPU-section provider: no GPU calls, just proves the seam's data
+    // flow -- envelope fields it sets round-trip through WriteFile/ReadFile,
+    // humanText lands in the .txt's "=== GPU ===" block, and reportStem is
+    // the real sibling-path stem (a real backend would write
+    // <reportStem>.gpudump against exactly this path).
+    void FakeGpuSectionProvider(Arcane::Diag::Envelope& envelope, std::string& humanText,
+                                 const std::filesystem::path& reportStem, void* user)
+    {
+        if (auto* calls = static_cast<int*>(user)) ++(*calls);
+
+        envelope.queues.push_back({ "direct", "pass:tonemap", { "pass:imgui" } });
+        envelope.fault = { "page-fault", "0xDEADBEEF0000", "TestResource" };
+        envelope.activeLayers = { "breadcrumbs:pass" };
+        envelope.siblingGpuDump = reportStem.string() + ".gpudump";
+
+        humanText = "queue direct: last completed pass:tonemap, in-flight pass:imgui";
     }
 }
 
@@ -224,4 +272,156 @@ TEST_CASE("Diagnostics watchdog re-arms and does not spam a single stall", "[dia
     Arcane::Diagnostics::Heartbeat();
     REQUIRE(waitForCount(afterFirstStall + 1, std::chrono::seconds(15)));
     CHECK(Arcane::Diagnostics::ReportCount() > afterFirstStall);
+}
+
+TEST_CASE("Diagnostics emits an .arcdiag with a GPU section when a provider is installed", "[diag]")
+{
+    const std::filesystem::path dir = FreshReportDir("arcdiag-with-provider");
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "DiagTest";
+    cfg.dumpDir             = dir.string();
+    cfg.installCrashHandler = false;
+    cfg.startHangWatchdog   = false;
+
+    ArmedDiagnostics armed(cfg);
+
+    int providerCalls = 0;
+    ArmedGpuProvider provider(&FakeGpuSectionProvider, &providerCalls);
+
+    const std::string txtPath = Arcane::Diagnostics::WriteReport("gpu-crash: test");
+    REQUIRE_FALSE(txtPath.empty());
+    CHECK(providerCalls == 1);
+
+    const std::string body = ReadWholeFile(txtPath);
+    CHECK(body.find("=== GPU ===") != std::string::npos);
+
+    const std::filesystem::path diagPath = SiblingWithExt(txtPath, ".arcdiag");
+    REQUIRE(std::filesystem::exists(diagPath));
+
+    const auto env = Arcane::Diag::ReadFile(diagPath);
+    REQUIRE(env.has_value());
+    CHECK(env->guid.IsValid());
+    CHECK(env->kind == "gpu-crash");
+    CHECK(env->appName == "DiagTest");
+
+    REQUIRE(env->queues.size() == 1);
+    CHECK(env->queues[0].name == "direct");
+    CHECK(env->queues[0].lastCompleted == "pass:tonemap");
+    CHECK(env->fault.resource == "TestResource");
+
+    CHECK(env->siblingTxt == txtPath);
+    CHECK(env->siblingDmp == SiblingWithExt(txtPath, ".dmp").string());
+    CHECK(env->siblingGpuDump.find(".gpudump") != std::string::npos);
+
+    // CPU path pinned: every emitted .arcdiag -- with or without a provider
+    // -- carries the same all-thread walk that feeds the .txt, and names the
+    // registered main thread (mirrors the existing "(MAIN)" .txt assertion
+    // in the first TEST_CASE above).
+    CHECK_FALSE(env->cpuThreadSummary.empty());
+    CHECK(env->cpuThreadSummary.find("(MAIN)") != std::string::npos);
+    // The GPU block is a .txt-only convenience appended AFTER the walk;
+    // cpuThreadSummary is snapshotted before that and stays CPU-only.
+    CHECK(env->cpuThreadSummary.find("=== GPU ===") == std::string::npos);
+}
+
+TEST_CASE("Diagnostics emits an .arcdiag with an empty GPU section when no provider is installed", "[diag]")
+{
+    const std::filesystem::path dir = FreshReportDir("arcdiag-no-provider");
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "DiagTest";
+    cfg.dumpDir             = dir.string();
+    cfg.installCrashHandler = false;
+    cfg.startHangWatchdog   = false;
+
+    // Defensive: the provider slot is process-global and the suite runs in
+    // random order (project_arcanetests_random_order_typecontext) -- do not
+    // rely solely on another test's RAII having already unwound.
+    Arcane::Diagnostics::ClearGpuSectionProvider();
+
+    ArmedDiagnostics armed(cfg);
+
+    const std::string txtPath = Arcane::Diagnostics::WriteReport("unit-test-reason-no-provider");
+    REQUIRE_FALSE(txtPath.empty());
+
+    const std::string body = ReadWholeFile(txtPath);
+    CHECK(body.find("=== GPU ===") == std::string::npos);
+
+    const std::filesystem::path diagPath = SiblingWithExt(txtPath, ".arcdiag");
+    REQUIRE(std::filesystem::exists(diagPath));
+
+    const auto env = Arcane::Diag::ReadFile(diagPath);
+    REQUIRE(env.has_value());
+    CHECK(env->guid.IsValid());
+    CHECK(env->kind == "crash");
+    CHECK(env->queues.empty());
+    CHECK(env->fault.type.empty());
+    CHECK(env->siblingGpuDump.empty());
+
+    CHECK_FALSE(env->cpuThreadSummary.empty());
+    CHECK(env->cpuThreadSummary.find("(MAIN)") != std::string::npos);
+}
+
+TEST_CASE("Diagnostics omits the GPU section once a provider is cleared", "[diag]")
+{
+    const std::filesystem::path dir = FreshReportDir("arcdiag-cleared-provider");
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "DiagTest";
+    cfg.dumpDir             = dir.string();
+    cfg.installCrashHandler = false;
+    cfg.startHangWatchdog   = false;
+
+    ArmedDiagnostics armed(cfg);
+
+    int providerCalls = 0;
+    {
+        ArmedGpuProvider provider(&FakeGpuSectionProvider, &providerCalls);
+        // provider clears itself at the end of this scope
+    }
+    CHECK(providerCalls == 0);   // never invoked -- no WriteReport happened yet
+
+    // Kind derivation reads the REASON string, not provider presence -- keep
+    // a "gpu-crash" reason here to prove that distinction: the kind survives
+    // the provider going away, the GPU fields do not.
+    const std::string txtPath = Arcane::Diagnostics::WriteReport("gpu-crash: cleared-provider");
+    REQUIRE_FALSE(txtPath.empty());
+    CHECK(providerCalls == 0);
+
+    const std::string body = ReadWholeFile(txtPath);
+    CHECK(body.find("=== GPU ===") == std::string::npos);
+
+    const std::filesystem::path diagPath = SiblingWithExt(txtPath, ".arcdiag");
+    REQUIRE(std::filesystem::exists(diagPath));
+
+    const auto env = Arcane::Diag::ReadFile(diagPath);
+    REQUIRE(env.has_value());
+    CHECK(env->kind == "gpu-crash");
+    CHECK(env->queues.empty());
+    CHECK(env->siblingGpuDump.empty());
+}
+
+TEST_CASE("Diagnostics kind derivation covers gpu-stall, not just gpu-crash", "[diag]")
+{
+    // Task 7 (not yet wired) reports a GPU-progress stall via exactly
+    // WriteReport("gpu-stall") -- see docs/specs/2026-08-11-gpu-crash-
+    // diagnostics-design.md. "gpu" alone must not collapse both gpu kinds
+    // into "gpu-crash".
+    const std::filesystem::path dir = FreshReportDir("arcdiag-gpu-stall-kind");
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "DiagTest";
+    cfg.dumpDir             = dir.string();
+    cfg.installCrashHandler = false;
+    cfg.startHangWatchdog   = false;
+
+    ArmedDiagnostics armed(cfg);
+
+    const std::string txtPath = Arcane::Diagnostics::WriteReport("gpu-stall");
+    REQUIRE_FALSE(txtPath.empty());
+
+    const auto env = Arcane::Diag::ReadFile(SiblingWithExt(txtPath, ".arcdiag"));
+    REQUIRE(env.has_value());
+    CHECK(env->kind == "gpu-stall");
 }
