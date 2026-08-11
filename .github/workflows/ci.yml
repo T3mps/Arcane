@@ -1,0 +1,61 @@
+name: CI
+
+# Manifold2D-style hosted windows lane: generate, build Debug+Release, run the
+# suite EXCLUDING [gpu] (hosted runners have no capable GPU). The Jenkins
+# multibranch pipeline on windows-1 is the full gate (3 configs, [gpu] tests,
+# the --frames scripted verify).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arcane-ci-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  windows-msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      # SDL3 builds from source under the repo's v143 static-md overlay triplet
+      # (~10 min) -- cache the installed tree keyed on the triplet.
+      - name: Cache vcpkg installed tree
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-sdl3-static-md-${{ hashFiles('vcpkg-triplets/x64-windows-static-md.cmake') }}
+
+      - name: Install SDL3 (vcpkg, overlay triplet)
+        shell: cmd
+        run: |
+          set _APH_NOPAUSE=1
+          call scripts\setup-vcpkg-deps.bat
+
+      - name: Generate
+        shell: cmd
+        run: |
+          set _APH_NOPAUSE=1
+          call GenerateProjects.bat
+
+      - name: Build Debug
+        run: msbuild Arcane.slnx /p:Configuration=Debug /m /nologo /v:minimal
+
+      - name: Build Release
+        run: msbuild Arcane.slnx /p:Configuration=Release /m /nologo /v:minimal
+
+      - name: Test Debug (~[gpu])
+        working-directory: bin/Debug-windows-x86_64-md/ArcaneTests
+        run: .\ArcaneTests.exe "~[gpu]"
+
+      - name: Test Release (~[gpu])
+        working-directory: bin/Release-windows-x86_64-md/ArcaneTests
+        run: .\ArcaneTests.exe "~[gpu]"

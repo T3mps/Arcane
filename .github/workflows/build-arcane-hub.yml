@@ -1,0 +1,92 @@
+name: build-arcane-hub
+
+# Test + build the Arcane Hub. Modelled on the old monorepo's wizard workflow
+# with two deliberate differences:
+#   1. It runs `cargo test` and clippy. The Hub's decision logic lives in pure
+#      Rust modules precisely so it can be tested.
+#   2. It does NOT commit a binary back to the repo. The Hub is an INSTALLED
+#      per-user product distributed as an NSIS installer, not a repo-root
+#      portable exe -- so the installer is uploaded as an artifact instead.
+#      That also means this workflow needs no `contents: write` and has no
+#      commit-loop to guard against.
+# Paths updated 2026-08-11: Arcane/Hub -> ArcaneHub (Great Rename) and the
+# repo extraction flattened the workspace to the repo root.
+on:
+  push:
+    branches:
+      - main
+      - 'milestone/**'
+    paths:
+      - 'ArcaneHub/**'
+      - '.github/workflows/build-arcane-hub.yml'
+  pull_request:
+    paths:
+      - 'ArcaneHub/**'
+      - '.github/workflows/build-arcane-hub.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arcane-hub-build-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: ArcaneHub/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # `-> ../../bin-int/hub-cargo`, not `-> target`: src-tauri/.cargo/config.toml
+      # redirects target-dir so cargo output lands beside every other Arcane
+      # build artifact. Pointing the cache at the cargo default would simply
+      # never hit -- slower, but not a failure, unlike the artifact path below.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ArcaneHub/src-tauri -> ../../bin-int/hub-cargo
+
+      # The pure modules (paths/state/engine/project) are the whole reason the
+      # Hub splits logic out of the Tauri command layer. Gate on them.
+      - name: Rust unit tests
+        working-directory: ArcaneHub/src-tauri
+        run: cargo test --locked
+
+      - name: Clippy
+        working-directory: ArcaneHub/src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: npm ci
+        working-directory: ArcaneHub
+        run: npm ci
+
+      # The frontend's own gates: svelte-check (types across every component)
+      # and the vitest units. The vite build is NOT a separate step:
+      # `npm run tauri build` runs it via beforeBuildCommand.
+      - name: svelte-check
+        working-directory: ArcaneHub
+        run: npm run check
+
+      - name: vitest
+        working-directory: ArcaneHub
+        run: npm test -- --run
+
+      - name: Build installer
+        working-directory: ArcaneHub
+        run: npm run tauri build
+
+      # bin-int/hub-cargo/, NOT src-tauri/target/: the target-dir redirect in
+      # src-tauri/.cargo/config.toml puts cargo output at the repo root. That
+      # directory is gitignored, so on a clean runner a wrong path here fails
+      # via `if-no-files-found: error`.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arcane-hub-installer
+          path: bin-int/hub-cargo/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
