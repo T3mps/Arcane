@@ -78,30 +78,45 @@ namespace Arcane::Editor
         // bare launch. `scene` is SceneSession::DisplayName ("Untitled" until the
         // scene has been saved somewhere); the trailing * is the unsaved marker,
         // matching the one on File -> Save Scene.
-        std::string EditorTitle(const Arcane::Project* project, const std::string& scene, bool sceneDirty)
+        std::string EditorTitle(const Arcane::Project* project, const std::string& scene,
+                                bool sceneDirty, const char* backend)
         {
             std::string title;
             if (project)
             {
                 title += project->Manifest().name;
             }
-            
+
             if (!scene.empty())
             {
-                title += " - " + scene;
+                if (!title.empty())
+                {
+                    title += " - ";
+                }
+                title += scene;
 
                 if (sceneDirty)
                 {
                     title += "*";
                 }
+            }
 
+            if (!title.empty())
+            {
                 title += " - ";
             }
 
-            title += "Arcane Editor";
-
-            title += " (" + Arcane::ToString(Arcane::BuildInfo()) + ")";
-
+            // BuildInfo is the DLL's own "<version> [Debug|Release|Dist]" --
+            // compiled into Arcane.dll (Engine.cpp), so the title reports the
+            // engine actually loaded, never this exe's header copy.
+            title += "Arcane Editor ";
+            title += Arcane::BuildInfo();
+            if (backend && *backend)
+            {
+                title += " <";
+                title += backend;
+                title += ">";
+            }
             return title;
         }
 
@@ -904,7 +919,9 @@ namespace Arcane::Editor
         // command stack yet has nothing authored, so it reads as clean.
         const bool dirty = m_undo && m_scene.IsDirty(*m_undo);
         std::string title = EditorTitle(m_runtime ? m_runtime->CurrentProject() : nullptr,
-                                        m_scene.DisplayName(), dirty);
+                                        m_scene.DisplayName(), dirty,
+                                        m_gpu ? Arcane::ToString(m_gpu->Device().Backend())
+                                              : "");
         if (title == m_windowTitle)
             return;
         m_windowTitle = std::move(title);
