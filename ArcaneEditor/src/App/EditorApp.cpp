@@ -126,9 +126,6 @@ namespace Arcane::Editor
         // NewFrame reads the ini).
         constexpr const char* kPlayModeIniType = "EditorPlayMode";
         constexpr const char* kPlayModeIniName = "State";
-
-        using StageFn = bool (Arcane::Editor::EditorApp::*)(Arcane::HostBoot::BootContext&);
-        struct HostStagePatch { std::string_view id; StageFn fn; };
     }
 
     EditorApp::EditorApp(HostConfig cfg, Arcane::BootSplashWindow* splash)
@@ -731,6 +728,29 @@ namespace Arcane::Editor
                                  "fallback instead (see Console).");
         }
 
+        // Task 7's boot-scene handoff / EnsureScene / title / recents-record --
+        // the project-open success tail, shared verbatim with SwitchProject's
+        // switch_plugin_load stage. See OnProjectOpened.
+        OnProjectOpened();
+
+        // Point ImGui's ini at this project's appdata layout file BEFORE the
+        // first NewFrame reads it (MainLoop starts after boot) -- ImGui then
+        // auto-loads the per-project layout on frame one. Not folded into
+        // OnProjectOpened: the switch failure fallback also calls that tail
+        // (recordRecents=false) but must retarget onto a DIFFERENT key (the
+        // reverted/project-less state, not "this boot's project"), so every
+        // call site keeps its own RetargetLayoutIni() immediately after.
+        RetargetLayoutIni();
+        return true;
+    }
+
+    // The project-open SUCCESS tail (architecture pass sec 5) -- previously
+    // duplicated verbatim in StageFinalize and switch_plugin_load, with a
+    // partial third copy in the switch failure fallback. recordRecents=false is
+    // the fallback's case: it re-establishes the PROJECT-LESS baseline (or the
+    // old project), and a refused open must never reorder the recents lists.
+    void EditorApp::OnProjectOpened(bool recordRecents)
+    {
         // Task 7: open into the project's boot scene, now that the plugin has
         // loaded (a scene naming a component the game module registers would
         // otherwise silently drop it) and m_undo exists (Adopt records the
@@ -738,31 +758,28 @@ namespace Arcane::Editor
         // that fails to resolve/load, keeps whatever the plugin's Init built --
         // code-spawned scenes are legacy, but nothing clears them unless a
         // scene actually takes ownership (BootScene already logged the reason).
-        if (const Arcane::Project* proj = m_runtime->CurrentProject())
+        if (m_undo)
         {
-            if (const auto boot = Arcane::HostBoot::BootScene(*m_runtime, *proj))
+            if (const Arcane::Project* proj = m_runtime->CurrentProject())
             {
-                m_scene.Adopt(boot->file, boot->id, *m_undo);
-                m_frameOnSceneOpen = true;
+                if (const auto boot = Arcane::HostBoot::BootScene(*m_runtime, *proj))
+                {
+                    m_scene.Adopt(boot->file, boot->id, *m_undo);
+                    m_frameOnSceneOpen = true;
+                }
             }
         }
         EnsureScene();
-
-        // Last: now that project/scene state is final, compute the real title
+        // Compute the real title now that project/scene state is final,
         // rather than the "Untitled" placeholder a mid-boot call would have
         // shown for one MainLoop tick (UpdateWindowTitle also runs every
         // frame -- EditorAppFrame.cpp -- so this is a courtesy, not the only
         // call site).
         UpdateWindowTitle();
-        // Boot SUCCEEDED with this project -- same recording the switch path
-        // does, so a project reached by --project (the Hub's normal launch)
-        // lands in the list exactly like one opened from the menu.
-        m_recents.NoteProjectOpened(m_runtime->CurrentProject());
-        // Point ImGui's ini at this project's appdata layout file BEFORE the
-        // first NewFrame reads it (MainLoop starts after boot) -- ImGui then
-        // auto-loads the per-project layout on frame one.
-        RetargetLayoutIni();
-        return true;
+        // Record a SUCCESSFUL open only -- a refused switch (recordRecents ==
+        // false) must never reorder Open Recent.
+        if (recordRecents && m_runtime->CurrentProject())
+            m_recents.NoteProjectOpened(m_runtime->CurrentProject());
     }
 
     void EditorApp::RetargetLayoutIni()
@@ -1025,30 +1042,18 @@ namespace Arcane::Editor
             ARC_INFO("Auto-screenshot {}", file.generic_string());
     }
 
-    bool EditorApp::Create()
+    namespace
     {
-        // Installed before HostBoot::EditorStages(ctx) builds the stage list
-        // and before any BootSequence exists -- see
-        // ConsoleDiagnostics::Install()'s doc comment for why this early,
-        // dependency-free point matters, and ConsoleDiagnostics::Uninstall()'s
-        // for why Shutdown() removes both sinks unconditionally.
-        m_consoleDiag.Install();
+        using StageFn = bool (Arcane::Editor::EditorApp::*)(Arcane::HostBoot::BootContext&);
+        struct HostStagePatch { std::string_view id; StageFn fn; };
+    }
 
-        m_bootCtx.runtime     = nullptr;              // stages populate as they go
-        m_bootCtx.splash      = m_splash;
-        m_bootCtx.projectPath = m_config.projectPath.c_str();
-        m_bootCtx.pluginPath  = m_config.pluginPath.c_str();
-        m_bootCtx.moduleName  = "ArcaneEditor.exe";
-
-        // Spec sec 6: the editor ALWAYS shows boot progress, regardless of any
-        // opened project's manifest (project_open's shared CoreStages body
-        // never touches showProgress at all -- only RuntimeStages' override
-        // does, see ProjectBoot.cpp). BootSplashWindow::ShowProgress already
-        // defaults true, so this is redundant with that default today; set
-        // explicitly anyway so the editor's intent reads from this file
-        // rather than depending on a default it does not own.
-        if (m_splash) m_splash->SetShowProgress(true);
-
+    // THE host-owned stage patch (architecture pass sec 5): Create() applies it
+    // to the boot list; SwitchProject applies it to the same shared
+    // EditorStages(ctx) list before cherry-picking its subset -- ONE patch
+    // path, both directions of drift still fail loudly (see the table comment).
+    bool EditorApp::PatchHostStages(std::vector<Arcane::BootStage>& stages)
+    {
         // THE host-owned stage set: every id whose real work touches an EditorApp
         // private member or an editor-exe-only type (EditorTheme/EditorFonts/
         // ShaderEditorDocument, none of which Arcane.dll can see), paired with the
@@ -1078,17 +1083,6 @@ namespace Arcane::Editor
             { "splash_ready",   &EditorApp::StageSplashReady },
         };
 
-        // HostBoot::EditorStages(ctx) is the SAME shared function
-        // BootStageParityTest exercises and RuntimeApp calls for its own list
-        // (RuntimeApp::Run) -- this is the literal call that keeps the two hosts
-        // from silently diverging on which steps exist. This is the one deviation
-        // from the brief's literal one-line Run(): a direct
-        // `BootSequence seq(EditorStages(ctx))` cannot reach EditorApp's private
-        // members from inside Arcane.dll, so the vector is captured, patched with
-        // the table above, then moved into BootSequence -- ids/deps/policy/thread/
-        // weight (the actual DAG shape the parity test polices) are untouched.
-        std::vector<Arcane::BootStage> stages = Arcane::HostBoot::EditorStages(m_bootCtx);
-
         // Iterate the TABLE, not the stage list: a patch that matches nothing is
         // then just a failed lookup at the point it mattered, with no parallel
         // "did I apply this one" array to keep in sync.
@@ -1098,14 +1092,53 @@ namespace Arcane::Editor
                 [](const Arcane::BootStage& s) { return std::string_view(s.id); });
             if (it == stages.end())
             {
-                ARC_ERROR("EditorApp::Create: host stage patch '{}' matched no "
-                    "stage in EditorStages() -- the id was renamed or "
-                    "removed in ProjectBoot.cpp without updating this table",
-                    patch.id);
+                ARC_ERROR("EditorApp::PatchHostStages: patch '{}' matched no stage in "
+                          "EditorStages() -- renamed/removed in ProjectBoot.cpp without "
+                          "updating this table", patch.id);
                 return false;
             }
             it->run = [this, fn = patch.fn] { return (this->*fn)(m_bootCtx); };
         }
+        return true;
+    }
+
+    bool EditorApp::Create()
+    {
+        // Installed before HostBoot::EditorStages(ctx) builds the stage list
+        // and before any BootSequence exists -- see
+        // ConsoleDiagnostics::Install()'s doc comment for why this early,
+        // dependency-free point matters, and ConsoleDiagnostics::Uninstall()'s
+        // for why Shutdown() removes both sinks unconditionally.
+        m_consoleDiag.Install();
+
+        m_bootCtx.runtime     = nullptr;              // stages populate as they go
+        m_bootCtx.splash      = m_splash;
+        m_bootCtx.projectPath = m_config.projectPath.c_str();
+        m_bootCtx.pluginPath  = m_config.pluginPath.c_str();
+        m_bootCtx.moduleName  = "ArcaneEditor.exe";
+
+        // Spec sec 6: the editor ALWAYS shows boot progress, regardless of any
+        // opened project's manifest (project_open's shared CoreStages body
+        // never touches showProgress at all -- only RuntimeStages' override
+        // does, see ProjectBoot.cpp). BootSplashWindow::ShowProgress already
+        // defaults true, so this is redundant with that default today; set
+        // explicitly anyway so the editor's intent reads from this file
+        // rather than depending on a default it does not own.
+        if (m_splash) m_splash->SetShowProgress(true);
+
+        // HostBoot::EditorStages(ctx) is the SAME shared function
+        // BootStageParityTest exercises and RuntimeApp calls for its own list
+        // (RuntimeApp::Run) -- this is the literal call that keeps the two hosts
+        // from silently diverging on which steps exist. This is the one deviation
+        // from the brief's literal one-line Run(): a direct
+        // `BootSequence seq(EditorStages(ctx))` cannot reach EditorApp's private
+        // members from inside Arcane.dll, so the vector is captured, patched via
+        // PatchHostStages, then moved into BootSequence -- ids/deps/policy/thread/
+        // weight (the actual DAG shape the parity test polices) are untouched.
+        std::vector<Arcane::BootStage> stages = Arcane::HostBoot::EditorStages(m_bootCtx);
+
+        if (!PatchHostStages(stages))
+            return false;
 
         m_bootSeq.emplace(std::move(stages));
         return true;

@@ -647,31 +647,18 @@ namespace Arcane::Editor
             // Task 8: Arcane Editor boots in Edit mode -- the sim starts paused.
             m_runtime->Loop().SetPaused(true);
 
-            // Task 7: same boot-scene handoff as Init, after THIS project's
-            // plugin load (not the outgoing project's) so a component type the
-            // new game module registers deserializes rather than being
-            // dropped. m_scene was already reset to Untitled in
-            // switch_teardown -- Adopt() here retargets it onto the new
-            // project's boot scene when it has one.
-            if (m_undo)
-            {
-                if (const Arcane::Project* proj = m_runtime->CurrentProject())
-                {
-                    if (const auto boot = Arcane::HostBoot::BootScene(*m_runtime, *proj))
-                    {
-                        m_scene.Adopt(boot->file, boot->id, *m_undo);
-                        m_frameOnSceneOpen = true;
-                    }
-                }
-            }
-            EnsureScene();
-            UpdateWindowTitle();
-            // The switch SUCCEEDED -- record it as most-recently-opened. Only
-            // the success paths do this: a refused open must never reorder the
-            // list (the failure fallback below deliberately does not call it).
-            m_recents.NoteProjectOpened(m_runtime->CurrentProject());
+            // Same boot-scene handoff / EnsureScene / title / recents-record
+            // as the boot path's StageFinalize -- see OnProjectOpened. m_scene
+            // was already reset to Untitled in switch_teardown, so Adopt() here
+            // (inside OnProjectOpened) retargets it onto the new project's boot
+            // scene when it has one, using THIS project's plugin load (not the
+            // outgoing project's) so a component type the new game module
+            // registers deserializes rather than being dropped.
+            OnProjectOpened();
+
             // Retarget the appdata layout ini at the incoming project (saves
-            // the outgoing project's layout on the way -- see the method).
+            // the outgoing project's layout on the way -- see the method). Not
+            // part of OnProjectOpened -- see StageFinalize's own call for why.
             RetargetLayoutIni();
             return true;
         }));
@@ -762,17 +749,24 @@ namespace Arcane::Editor
             //   - EnsureScene(): the boot path's finalize stage calls this
             //     unconditionally, project or not, so the registry has a
             //     SceneRoot the Outliner/save walk can root at instead of
-            //     silently refusing the first thing anyone does.
+            //     silently refusing the first thing anyone does (now reached
+            //     via OnProjectOpened below, same as every other call site).
             m_runtime->CloseProject();
             m_plugin.reset();
             m_runtime->ResetRegistry();
             if (!lockedRoot.empty())
                 Arcane::EditorLock::Clear(lockedRoot);
-            EnsureScene();
             m_runtime->Loop().SetPaused(true);   // back to Edit
-            UpdateWindowTitle();
+
+            // Converge on project-less (or kept-the-old-project) is complete
+            // above; the tail below re-establishes it as "an open" the same
+            // way a successful one would (EnsureScene/UpdateWindowTitle),
+            // MINUS recording it in Open Recent -- a refused switch must never
+            // reorder that list. See OnProjectOpened.
+            OnProjectOpened(/*recordRecents=*/false);
             // The failed switch converged on project-less (or kept the old
-            // project) -- keep the layout ini's key honest about it.
+            // project) -- keep the layout ini's key honest about it. Not part
+            // of OnProjectOpened -- see StageFinalize's own call for why.
             RetargetLayoutIni();
         }
     }

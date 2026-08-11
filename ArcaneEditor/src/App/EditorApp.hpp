@@ -127,6 +127,15 @@ namespace Arcane::Editor
             Quit,     // the user closed the splash mid-boot -> exit 0, not an error
         };
 
+        // THE host-owned stage patch (architecture pass sec 5): Create() applies it
+        // to the boot list; SwitchProject (Task 12) applies it to the same shared
+        // EditorStages(ctx) list before cherry-picking its subset -- ONE patch
+        // path, both directions of drift still fail loudly (see the table's own
+        // comment in the .cpp). False = a patch id matched no stage -- table
+        // drift; the caller must fail loud (Create() returns false; a future
+        // SwitchProject call is expected to do the same).
+        bool PatchHostStages(std::vector<Arcane::BootStage>& stages);
+
         bool       Create();
         InitResult Init();
         int        Main();
@@ -707,6 +716,18 @@ namespace Arcane::Editor
         // per-project members must join (architecture pass sec 3, audit
         // defect A3).
         void ResetPerProjectState();
+
+        // The project-open SUCCESS tail (architecture pass sec 5) -- previously
+        // duplicated verbatim in StageFinalize and switch_plugin_load, with a
+        // partial third copy in the switch failure fallback. recordRecents=false
+        // is the fallback's case: it re-establishes the PROJECT-LESS baseline (or
+        // the old project), and a refused open must never reorder the recents
+        // lists. Adopts the current project's boot scene (if m_undo and a
+        // project exist), then EnsureScene/UpdateWindowTitle/NoteProjectOpened.
+        // Does NOT call RetargetLayoutIni() -- every call site still owns that
+        // separately, immediately after, since it is not part of the "a project
+        // (or none) is now open" fact this tail represents (see each site).
+        void OnProjectOpened(bool recordRecents = true);
 
         // ---- Build -> Rebuild Game Module (ModuleBuild.hpp) -----------------
         // StartModuleRebuild composes the premake+msbuild line for the open
