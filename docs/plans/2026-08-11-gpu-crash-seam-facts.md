@@ -301,7 +301,61 @@ SetPageFaultEnablement(FORCED_OFF)      // or SYSTEM_CONTROLLED
 settings2->UseMarkersOnlyAutoBreadcrumbs(TRUE)
 ```
 
-i.e. genuine lightweight DRED, not full DRED and not nothing.
+i.e. genuine lightweight DRED, not full DRED and not nothing --
+**but only if the precondition in F-2c-bis below is met.**
+
+### F-2c-bis -- HARD PRECONDITION: markers-only DRED needs markers, and today there are NONE
+
+`UseMarkersOnlyAutoBreadcrumbs(TRUE)` suppresses every breadcrumb except at
+`SetMarker` / `BeginEvent` / `EndEvent`. **No first-party Arcane code emits any
+GPU marker today.** Verified: grep for
+`beginMarker|endMarker|BeginEvent|EndEvent|SetMarker` over `*.cpp`/`*.hpp` across
+`ArcaneClient/`, `ArcaneEditor/`, and `ArcaneRuntime/` returns **zero hits**.
+
+**Bound as written above, a Dist build would therefore get markers-only DRED with
+an EMPTY breadcrumb list** -- strictly worse than no DRED at all, because it costs
+the enablement overhead and yields nothing to read.
+
+**The marker-emission seam** (what Task 7 must call so the tier has content):
+
+- `virtual void beginMarker(const char* name) = 0;` --
+  `ThirdParty/nvrhi/include/nvrhi/nvrhi.h:3557`, on `nvrhi::ICommandList`
+  (class at `nvrhi.h:3182`). Its doc comment at `nvrhi.h:3554` states
+  "DX12: Maps to PIXBeginEvent."
+- `virtual void endMarker() = 0;` -- `nvrhi.h:3563`; doc comment `:3561`
+  "DX12: Maps to PIXEndEvent."
+- D3D12 implementation:
+  `ThirdParty/nvrhi/src/d3d12/d3d12-commandlist.cpp:174-176` --
+  `void CommandList::beginMarker(const char* name) { PIXBeginEvent(
+  m_ActiveCommandList->commandList, 0, name); ... }`. `#include <pix.h>` at
+  `d3d12-commandlist.cpp:24`.
+- `PIXBeginEvent` resolves to the Windows SDK inline. Because NVRHI passes a
+  `const char*`, the overload that binds is the **PCSTR** one --
+  `C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um\pix_win.h:253-258`,
+  whose body is `pCommandList->BeginEvent(PIX_EVENT_ANSI_VERSION, pFormat, size);`
+  at `:257`. (The PCWSTR overload at `:239-244` is the wide-string sibling and is
+  NOT the one NVRHI hits.) These inlines are gated only by
+  `#if defined(__d3d12_h__)` (`pix_win.h:237`) -- there is **no `USE_PIX` gate**
+  anywhere in the file, so `ID3D12GraphicsCommandList::BeginEvent` is reached
+  unconditionally in every configuration once `d3d12.h` is included.
+- Vulkan equivalent per the same doc comments (`nvrhi.h:3555`, `:3562`):
+  `cmdBeginDebugUtilsLabelEXT` / `cmdEndDebugUtilsLabelEXT`.
+
+**Binding rule -- state this in the spec, do not leave it implicit:**
+
+> Markers-only DRED in Dist is valid **only if** Task 7's pass-scope
+> instrumentation ALSO emits `nvrhi::ICommandList::beginMarker` /
+> `endMarker` at those same seams. If Task 7 emits only its own
+> `WriteBufferImmediate` markers (F-1) and no nvrhi markers, then Dist must
+> either keep FULL auto-breadcrumbs (`UseMarkersOnlyAutoBreadcrumbs(FALSE)` or
+> never called, paying the documented 2-5%) or accept an empty DRED
+> breadcrumb list. There is no third option.
+
+The cheap resolution is to have Task 7's scope RAII helper do both at once --
+`beginMarker(name)` + `WriteBufferImmediate(MARKER_IN)` on entry, `endMarker()` +
+`WriteBufferImmediate(MARKER_OUT)` on exit -- which makes the DRED breadcrumb list
+and the first-party marker buffer describe the SAME scope vocabulary, and makes
+the two independently corroborating rather than redundant.
 
 ### F-2d -- UNVERIFIED (needs desk check): runtime availability of DRED 1.3
 
@@ -817,7 +871,7 @@ phases only (each is a separate function; each is a scope-marker candidate):
 |---|---|---|---|
 | 10 | `RenderSceneToViewport()` | `EditorAppFrame.cpp:1041`, called `:220` | Scene -> `m_viewportTargets.canvas->Draw(...)` (`:1049`), which is open/clear/batcher/tonemap/close/execute -- see F-8c. Gizmo + camera-rect lines recorded inside the same lambda (`:1080-1125`). |
 | 11 | `CompositeGameUi()` | `:1132`, called `:221` | Play-mode only. `m_gpu->Cmd()->open()` `:1165`, `m_gameImgui->Render(...)` `:1166`, `close()` `:1167`, `executeCommandList` `:1168`. |
-| 12 | `RenderSelectionOutline()` | `:1175`, called `:222` | Edit-mode only, mutually exclusive with 11. `m_viewportTargets.pick->RenderIdPass(...)` `:1185`; then `Cmd()->open()` `:1204`, `m_viewportTargets.outline->Render(...)` `:1205-1206`, `close()` `:1207`, `executeCommandList` `:1208`. |
+| 12 | `RenderSelectionOutline()` | `:1175`, called `:222` | Edit-mode only, mutually exclusive with 11. **TWO submits:** (a) `m_viewportTargets.pick->RenderIdPass(...)` `:1185` -- submits on the PickBuffer's OWN command list, see F-8e; (b) `Cmd()->open()` `:1204`, `m_viewportTargets.outline->Render(...)` `:1205-1206`, `close()` `:1207`, `executeCommandList` `:1208`. |
 | 19 | `PresentFrame()` | `:1856`, called `:230` | `m_gpu->Swap().BeginFrame()` `:1858`; `Cmd()->open()` `:1861`; `clearTextureFloat(backbuffer, ...)` `:1864-1865`; `m_gpu->Imgui().Render(m_gpu->Cmd(), fb)` `:1867`; `close()` `:1868`; `executeCommandList` `:1869`; `m_gpu->Swap().Present()` `:1870`. |
 
 Non-GPU phases for completeness (still useful as CPU-side phase labels):
@@ -831,10 +885,8 @@ Non-GPU phases for completeness (still useful as CPU-side phase labels):
 `SyncCenterTabFocus` `:1750` (`:227`), `HandleViewportPick` `:1795` (`:228`),
 `DrawSelectionPanels` `:1834` (`:229`), `EndFrame` `:1875` (`:234`).
 
-Note: `RenderSceneToViewport`, `CompositeGameUi`, and `RenderSelectionOutline`
-each execute their own command list; `PresentFrame` executes a fourth. That is
-**four submits per editor frame**, so a marker buffer must be readable across all
-four -- one buffer with per-scope slots, not one per list.
+Submit-count derivation for this loop is F-8e below -- it is NOT one submit per
+GPU-bearing phase, and two of the submits do not go through `m_gpu->Cmd()` at all.
 
 ### F-8b -- ArcaneRuntime: `RuntimeApp.cpp` frame loop (`while (running)` at `:342`)
 
@@ -910,14 +962,64 @@ Also GPU-bearing, outside the frame loop: `BootPresenter`
 `:99`). Boot-time device removal is real; Task 7's markers should be armed before
 this runs, or the boot path explicitly excluded and said so.
 
+### F-8e -- editor submit count, derived correctly
+
+`EditorAppFrame.cpp` contains exactly **three** `m_gpu->Cmd()->open()` sites --
+`:1165` (phase 11), `:1204` (phase 12), `:1861` (phase 19) -- verified by grepping
+`Cmd()->open()|Cmd()->close()|executeCommandList` over that file, which returns
+those three triples and nothing else. But phases 11 and 12 are **mutually
+exclusive by mode** (`CompositeGameUi` is gated on `InPlayMode()` at
+`EditorAppFrame.cpp:1146`, `RenderSelectionOutline` on `!InPlayMode()` at
+`:1182`), so they never both submit in the same frame.
+
+Two further submits do NOT go through `m_gpu->Cmd()` at all and are invisible to
+that grep -- each owns a private `nvrhi::CommandListHandle`:
+
+1. **`OffscreenCanvas::Draw`** -- own `m_commandList` created at
+   `ArcaneClient/src/Arcane/Render/OffscreenCanvas.cpp:43`, submitted at `:78`
+   (`DrawPass` submits at `:102`). This is what phase 10
+   (`RenderSceneToViewport`, `EditorAppFrame.cpp:1049`) actually drives.
+2. **`PickBuffer::RenderIdPass`** -- own `m_commandList` created at
+   `ArcaneClient/src/Arcane/Render/PickBuffer.cpp:81` (inside
+   `class PickBufferImpl final : public PickBuffer`, `PickBuffer.cpp:73`).
+   `RenderIdPass` is defined at `PickBuffer.cpp:108`; `m_commandList->open()`
+   `:118`; `clearTextureUInt(m_target, nvrhi::AllSubresources, 0u)` `:120`;
+   vertex/index upload `:127-130`; `setGraphicsState` `:154`,
+   `setPushConstants` `:155`, `drawIndexed` `:156-157`; `m_commandList->close()`
+   `:161`; `m_device->executeCommandList(m_commandList)` `:162`.
+
+**Actual per-frame submit counts:**
+
+| Mode | Submits | Sites |
+|---|---|---|
+| **Edit** | **4** | canvas Draw (`OffscreenCanvas.cpp:78`) + pick id-pass (`PickBuffer.cpp:162`) + outline (`EditorAppFrame.cpp:1208`) + present (`:1869`) |
+| **Play** | **3** | canvas Draw (`OffscreenCanvas.cpp:78`) + game-UI composite (`EditorAppFrame.cpp:1168`) + present (`:1869`) |
+
+Plus one additional `OffscreenCanvas::Draw` submit per open document that renders
+a preview in phase 13 (`PumpEditorDocuments`, `EditorAppFrame.cpp:1221`) -- so the
+count is not even fixed within a mode.
+
+**Consequences for Task 7.**
+
+- **`PickBuffer::RenderIdPass` is an instrumentable submit seam in its own right**
+  and belongs in Task 7's scope list. It is a full draw pass over every pickable
+  in the scene -- exactly the kind of work a GPU hang lands in. The earlier F-8a
+  text buried it as inner detail of phase 12 and never flagged that it submits.
+- The submit count varies by mode (4 vs 3) **and** grows with open document
+  previews, so the marker buffer must be **one buffer with per-scope slots
+  addressed by a stable scope id** -- never a per-command-list buffer, and never a
+  ring sized to a hard-coded submit count.
+- `OffscreenCanvas`, `PickBuffer`, and `GpuContext` each own a separate command
+  list, so whatever holds the marker buffer must be reachable from all three.
+
 ---
 
 ## Summary of consequences for Tasks 5-7
 
 1. **Task 5 must bind against the vendored `ThirdParty/DirectX-Headers/include/directx/d3d12.h`**, not the Windows SDK header -- `#include <d3d12.h>` resolves there (empirically verified). Both carry identical DRED symbols, so this is a citation/robustness point, not an API difference.
-2. **The lightweight DRED tier EXISTS** (`UseMarkersOnlyAutoBreadcrumbs`, Settings2). The spec's Dist row does not need the anticipated breadcrumbs-only amendment -- unless F-2d's runtime QI check fails at desk, which the tier ladder must detect and log.
+2. **The lightweight DRED tier EXISTS** (`UseMarkersOnlyAutoBreadcrumbs`, Settings2), so the spec's Dist row does not need the anticipated breadcrumbs-only amendment -- subject to TWO conditions: (a) F-2c-bis, Task 7 must also emit `nvrhi::ICommandList::beginMarker`/`endMarker` at its pass scopes, because **no first-party code emits any GPU marker today** and markers-only DRED without markers yields an EMPTY breadcrumb list; (b) F-2d's runtime QI check must succeed at desk, which the tier ladder must detect and log.
 3. **The one cross-backend device-removed hook is `NvrhiMessageCallback::message`** (`NvrhiMessageCallback.hpp:26`, error branch `:36-39`) -- NVRHI reports `"Device Removed!"` from both `d3d12-device.cpp:630` and `vulkan-queue.cpp:200`. `DeviceD3D12.cpp:280` is the only first-party site and Vulkan has none.
 4. **Marker buffers go in `VirtualAlloc` + `OpenExistingHeapFromAddress` memory**, gated on `D3D12_FEATURE_EXISTING_HEAPS`; begin=`MARKER_IN`, end=`MARKER_OUT`; destination resource in `D3D12_RESOURCE_STATE_COPY_DEST`; command list must be QI'd up to `ID3D12GraphicsCommandList2`.
 5. **`.arcdiag` is a native embedded-GUID asset** -- add it at `AssetRegistry.cpp:242`; single-asset registration is `Runtime::RegisterCreatedAsset` (`Runtime.cpp:464`).
 6. **Reports land in `<exe dir>/diagnostics`** because no host sets `dumpDir`; the sibling stem is `Diagnostics.cpp:335-336`.
-7. **Editor = 4 submits/frame, Runtime = 1** -- the marker buffer must be shared across submits, not per-command-list.
+7. **Submit counts (F-8e): editor = 4 in Edit mode / 3 in Play mode (phases 11 and 12 are mutually exclusive), plus one per previewing document; runtime = 1.** Two of those submits bypass `m_gpu->Cmd()` entirely -- `OffscreenCanvas::Draw` (`OffscreenCanvas.cpp:78`) and **`PickBuffer::RenderIdPass` (`PickBuffer.cpp:162`), which is its own instrumentable pass and must appear in Task 7's scope list.** The marker buffer must therefore be one buffer with per-scope slots reachable from all three command-list owners -- never per-command-list, never sized to a fixed submit count.
