@@ -13,6 +13,8 @@
 
 #include <glm/glm.hpp>
 
+#include <Json.hpp>
+
 #include <cstddef>
 #include <span>
 #include <string>
@@ -135,6 +137,38 @@ namespace Arcane::Edit
     // collapse; surviving order follows `set`.
     ARCANE_API std::vector<Astra::Entity> SelectionRoots(Astra::Registry& reg,
                                                          std::span<const Astra::Entity> set);
+
+    // Every entity of every subtree rooted in `roots` (each root + all its
+    // descendants; duplicates collapse, dead roots skip). The set a Cut must
+    // hand DeleteEntities: DeleteEntities SPLICES children up to survivors,
+    // so cutting only the roots would orphan the children the clipboard just
+    // captured.
+    ARCANE_API std::vector<Astra::Entity> SubtreeEntities(Astra::Registry& reg,
+                                                          std::span<const Astra::Entity> roots);
+
+    // Serialize the subtrees rooted at SelectionRoots(set) -- a nested
+    // selection copies once. Same {"version","entities"} document SaveJson
+    // produces (components via the reflection walk, "parent" = payload-
+    // internal index, -1 for roots; internal "links" kept), plus each ROOT
+    // entry records "rootParentGuid" -- the Identity Guid of its ORIGINAL
+    // parent (key absent when the parent has no Identity or none exists).
+    // "entities" is empty when `set` holds nothing alive.
+    ARCANE_API nlohmann::json SerializeSubtrees(Astra::Registry& reg,
+                                                std::span<const Astra::Entity> set);
+
+    // Instantiate a SerializeSubtrees payload: fresh entities with fresh
+    // Identity GUIDs and names uniquified against the registry (paste/
+    // duplicate unique-ify, interactive rename does not -- the UE split
+    // documented on RenameEntity above). Internal parents/links remap to the
+    // new entities; each root re-parents to the live entity whose Identity
+    // Guid matches its recorded rootParentGuid, else under SceneRoot --
+    // one rule that makes Duplicate a sibling and cross-instance Paste sane.
+    // Returns the created ROOT entities. Refuses (returns {}, creates
+    // nothing lasting) when the registry has no SceneRoot, on a version
+    // mismatch, on a malformed document, or on a component field error --
+    // partial creations are destroyed (all-or-nothing).
+    ARCANE_API std::vector<Astra::Entity> InstantiateSubtrees(Astra::Registry& reg,
+                                                              const nlohmann::json& payload);
 
     // World matrix of `e`: the product of Transform::ToMatrix up the parent
     // chain (identity for a missing Transform at any level). Computed from the
