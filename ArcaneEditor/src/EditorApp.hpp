@@ -32,6 +32,7 @@
 #include "PlayMode.hpp"
 #include "ProblemsPanel.hpp"
 #include "RecentProjects.hpp"
+#include "SceneRecents.hpp"
 #include "SceneSession.hpp"
 #include "SelectionContext.hpp"
 #include "ShaderEditorDocument.hpp"
@@ -727,6 +728,26 @@ namespace Arcane::Editor
         // and refresh the cache. Called ONLY from the two success paths -- a
         // refused open must never reorder the list.
         void            NoteProjectOpened();
+
+        // ---- File -> Open Recent Scene --------------------------------------
+        // PER-PROJECT scene history (SceneRecents.hpp), unlike m_recents above
+        // -- a scene only means something inside the project that owns it, so
+        // this lives at <root>/Saved/recent_scenes.json rather than the Hub's
+        // shared, machine-wide file. Refreshed on project open (ReloadSceneRecents,
+        // beside NoteProjectOpened) and on the File menu's rising edge (beside
+        // RefreshRecents); pushed ONLY from the two scene success paths --
+        // DoOpenScene and DoSaveScene, after m_scene.Adopt -- so a refused open
+        // or a failed save never reorders or pollutes the list.
+        Arcane::Editor::SceneRecents::List m_sceneRecents;
+        // Reload from <CurrentProject root>/Saved/recent_scenes.json and prune
+        // entries whose file no longer exists. Empties the cache (not a no-op)
+        // when there is no open project, so a project-less session never shows
+        // a stale prior project's scenes.
+        void ReloadSceneRecents();
+        // Push `file` to the front of m_sceneRecents and persist it. No-op
+        // without an open project: a project-less session has nowhere durable
+        // to record a scene history.
+        void NoteSceneOpened(const std::filesystem::path& file);
 
         // The dock node the Viewport occupied LAST frame (0 = floating):
         // where new document windows dock as sibling tabs (DrawAll).

@@ -725,6 +725,7 @@ namespace Arcane::Editor
         // does, so a project reached by --project (the Hub's normal launch)
         // lands in the list exactly like one opened from the menu.
         NoteProjectOpened();
+        ReloadSceneRecents();
         return true;
     }
 
@@ -764,6 +765,32 @@ namespace Arcane::Editor
                            root.filename().string(),
                            static_cast<std::uint32_t>(Arcane::kGamePluginABIVersion));
         RefreshRecents();
+    }
+
+    void EditorApp::ReloadSceneRecents()
+    {
+        m_sceneRecents = {};
+        const Arcane::Project* proj = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!proj)
+            return;
+        m_sceneRecents = Arcane::Editor::SceneRecents::LoadFile(
+            Arcane::Editor::SceneRecents::FileFor(proj->Root()));
+        Arcane::Editor::SceneRecents::Prune(m_sceneRecents,
+            [](const std::string& p)
+            {
+                std::error_code ec;
+                return std::filesystem::exists(p, ec);
+            });
+    }
+
+    void EditorApp::NoteSceneOpened(const std::filesystem::path& file)
+    {
+        const Arcane::Project* proj = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!proj)
+            return;   // project-less session: nowhere durable to record
+        Arcane::Editor::SceneRecents::Push(m_sceneRecents, file);
+        Arcane::Editor::SceneRecents::SaveFile(
+            Arcane::Editor::SceneRecents::FileFor(proj->Root()), m_sceneRecents);
     }
 
     bool EditorApp::StageSplashReady(Arcane::HostBoot::BootContext&)

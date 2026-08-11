@@ -1134,7 +1134,8 @@ namespace Arcane::Editor
                                        m_moduleBuild.Running(), hasGameModule,
                                        m_panelVis,
                                        m_selection.HasSelection(),
-                                       &m_recents);
+                                       &m_recents,
+                                       &m_sceneRecents);
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
         // click (same "panel reports, app performs" split as ViewportPanelResult);
         // LaunchStandalone owns the project/dirty-scene checks and the spawn.
@@ -1167,12 +1168,24 @@ namespace Arcane::Editor
             std::lock_guard<std::mutex> lk(m_pendingProjectMutex);
             m_pendingProjectPath = menuReq.openRecentPath;
         }
+        // A picked recent scene lands in the SAME slot the Open Scene dialog's
+        // callback fills, so it flows through ConsumeSceneDialogResults and
+        // inherits the unsaved-scene guard -- a second open path would have to
+        // re-earn it.
+        if (!menuReq.openRecentScenePath.empty())
+        {
+            std::lock_guard<std::mutex> lk(m_pendingSceneMutex);
+            m_pendingSceneOpenPath = menuReq.openRecentScenePath;
+        }
         // Refresh on the RISING EDGE of the File menu only. That is what lets a
         // project opened in the Hub while this editor runs appear without a
         // restart, without paying a file read plus a stat per project on every
         // frame of a session where the menu is never touched.
         if (menuReq.fileMenuOpen && !m_fileMenuWasOpen)
+        {
             RefreshRecents();
+            ReloadSceneRecents();
+        }
         m_fileMenuWasOpen = menuReq.fileMenuOpen;
         // Build -> Rebuild Game Module: spawn the worker right here (no
         // dialog, no teardown -- nothing about starting a build needs the

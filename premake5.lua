@@ -650,6 +650,12 @@ project "ArcaneTests"
         -- EditorCamera above. This file writes to a file the HUB owns, so the
         -- refuse-to-clobber rules are the ones most worth pinning.
         "%{wks.location}/ArcaneEditor/src/RecentProjects.cpp",
+        -- File -> Open Recent Scene: SceneRecents' pure list ops (Parse/
+        -- Serialize/Push, and the file I/O around them) source-compile into
+        -- the test exe so the [editor] units drive them directly. Unlike
+        -- RecentProjects, this file has no "never clobber" contract to pin --
+        -- it is the editor's own per-project file, not the Hub's shared one.
+        "%{wks.location}/ArcaneEditor/src/SceneRecents.cpp",
         -- Build -> Rebuild Game Module: ModuleBuild's PURE halves (solution
         -- discovery, the SDK-root walk, the composed premake+msbuild line)
         -- source-compile into the test exe so the [editor] units drive them

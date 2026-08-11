@@ -553,6 +553,12 @@ namespace Arcane::Editor
             // here rather than at the end, where a later failure would skip it
             // and leave a stale path with a spurious dirty marker.
             if (m_undo) m_scene.Reset(*m_undo);
+            // Same reason: the outgoing project's scene history means nothing
+            // to the incoming one. ReloadSceneRecents (switch_plugin_load,
+            // below) repopulates it for whichever project ends up open --
+            // including the project-less fallback, which correctly leaves
+            // this empty.
+            m_sceneRecents = {};
 
             // Idle the GPU before freeing plugin-owned GPU resources, then
             // unload the plugin (dtor: Unload -> ClearSystems + ResetRegistry,
@@ -669,6 +675,7 @@ namespace Arcane::Editor
             // the success paths do this: a refused open must never reorder the
             // list (the failure fallback below deliberately does not call it).
             NoteProjectOpened();
+            ReloadSceneRecents();
             return true;
         }));
 

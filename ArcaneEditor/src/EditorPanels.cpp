@@ -34,6 +34,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -46,7 +47,8 @@ namespace Arcane::Editor
                         bool buildingModule, bool hasGameModule,
                         PanelVisibility& panels,
                         bool hasSelection,
-                        const RecentSelection* recents)
+                        const RecentSelection* recents,
+                        const SceneRecents::List* sceneRecents)
     {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
@@ -64,12 +66,12 @@ namespace Arcane::Editor
 
         // Editor menu bar (layout ratified 2026-08-10; a few items are still
         // VISUAL-only -- the wiring pass is landing them task by task).
-        // File's scene/project items, Save All, and Exit all land in
-        // `requests` now, as do Edit's clipboard and selection items. The
-        // remaining placeholders (Open Recent Scene, Preferences...,
-        // Project Settings..., Assets' Show in Explorer / Copy Path) stay in
-        // the file's established style (enabled no-ops) until later tasks
-        // wire them. Edit's Undo/Redo drive the CommandStack.
+        // File's scene/project items (including both Open Recent submenus),
+        // Save All, and Exit all land in `requests` now, as do Edit's
+        // clipboard and selection items. The remaining placeholders
+        // (Preferences..., Project Settings..., Assets' Show in Explorer /
+        // Copy Path) stay in the file's established style (enabled no-ops)
+        // until later tasks wire them. Edit's Undo/Redo drive the CommandStack.
         if (ImGui::BeginMenuBar())
         {
             if (ImGui::BeginMenu("File"))
@@ -77,12 +79,28 @@ namespace Arcane::Editor
                 requests.fileMenuOpen = true;
                 if (ImGui::MenuItem("New Scene", "Ctrl+N")) requests.newScene = true;
                 if (ImGui::MenuItem("Open Scene", "Ctrl+O")) requests.openScene = true;
-                // Visual-only until scene recents exist (UE's "Recent Levels"
-                // shape). The old project-recents submenu is parked, not
-                // dead: `recents` still arrives and the wiring pass decides
-                // where the Hub's shared list resurfaces.
-                if (ImGui::BeginMenu("Open Recent Scene", false))
+                // Open Recent Scene: PER-PROJECT history (SceneRecents.hpp),
+                // unlike Open Recent Project below (the Hub's shared,
+                // machine-wide list) -- UE's "Recent Levels" shape. Greyed
+                // when there is nothing to show (no project, or a project
+                // that has never opened/saved a scene).
+                const bool anySceneRecents = sceneRecents && !sceneRecents->paths.empty();
+                if (ImGui::BeginMenu("Open Recent Scene", anySceneRecents))
+                {
+                    for (const std::string& p : sceneRecents->paths)
+                    {
+                        // Stem as the label (its project-relative identity),
+                        // full path in the tooltip -- the recents-menu shape
+                        // Open Recent Project uses below.
+                        const std::string label =
+                            std::filesystem::path(p).stem().string() + "##" + p;
+                        if (ImGui::MenuItem(label.c_str()))
+                            requests.openRecentScenePath = p;
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("%s", p.c_str());
+                    }
                     ImGui::EndMenu();
+                }
                 ImGui::Separator();
                 // Disabled during Play: the authored scene is the pre-Play snapshot,
                 // and the live registry is play-time mutation that PlaySession::Stop

@@ -4,6 +4,7 @@
 #include "EntityList.hpp"
 #include "PanelRegistry.hpp"   // PanelVisibility (BeginDockSpace's Window menu)
 #include "RecentProjects.hpp"   // RecentSelection (File -> Open Recent)
+#include "SceneRecents.hpp"   // SceneRecents::List (File -> Open Recent Scene)
 #include "ViewportInput.hpp"
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
@@ -35,6 +36,11 @@ namespace Arcane::Editor
         // A picked recent-project path. Empty = nothing picked this frame.
         // A path rather than a bool because a submenu carries the choice.
         std::string openRecentPath;
+        // A picked recent-scene path (File -> Open Recent Scene). Empty =
+        // nothing picked this frame. Routed through the scene-open dialog
+        // slot (m_pendingSceneOpenPath) so it inherits the unsaved-scene
+        // guard rather than re-earning it.
+        std::string openRecentScenePath;
         // OUTPUT, not a request: the File menu is open this frame. The app uses
         // it to refresh the Open Recent cache on demand -- rebuilding it every
         // frame would re-read a file and stat every project for a menu almost
@@ -81,12 +87,16 @@ namespace Arcane::Editor
     // `hasSelection` gates the Edit menu's selection-dependent items
     // (Rename/Delete, and Cut/Copy/Duplicate -- Paste stays always-enabled,
     // see its MenuItem call).
+    // `sceneRecents` is the PER-PROJECT scene history (SceneRecents.hpp) that
+    // drives File -> Open Recent Scene -- unlike `recents` above, which is the
+    // Hub's shared, machine-wide project list.
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
                         bool sceneDirty, bool playing,
                         bool buildingModule, bool hasGameModule,
                         PanelVisibility& panels,
                         bool hasSelection,
-                        const RecentSelection* recents = nullptr);
+                        const RecentSelection* recents = nullptr,
+                        const SceneRecents::List* sceneRecents = nullptr);
 
     // Emit the DockSpace() into the host window opened by BeginDockSpace and close it.
     // Everything drawn in between becomes a fixed (non-dockable, tab-less) strip above
