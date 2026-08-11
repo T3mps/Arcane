@@ -176,6 +176,11 @@ namespace Arcane::Editor
     {
         char search[128] = {};
         int  kindFilter = -1;   // -1 = all
+
+        // Last-clicked row (nil = none): what the Assets menu's Show in
+        // Explorer / Copy Path act on. Reset with the whole state on project
+        // switch -- a Guid from the outgoing registry must not survive.
+        Arcane::Guid selected;
     };
 
     // Row actions the APP resolves after the draw (dialog launches never happen

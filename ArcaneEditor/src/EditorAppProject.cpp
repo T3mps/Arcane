@@ -559,6 +559,10 @@ namespace Arcane::Editor
             // including the project-less fallback, which correctly leaves
             // this empty.
             m_sceneRecents = {};
+            // Same reason: selection, search, and kind filter all belong to
+            // the outgoing project's registry -- a Guid from it must not
+            // survive as the Assets menu's tracked row.
+            m_assetBrowser = {};
 
             // Idle the GPU before freeing plugin-owned GPU resources, then
             // unload the plugin (dtor: Unload -> ClearSystems + ResetRegistry,

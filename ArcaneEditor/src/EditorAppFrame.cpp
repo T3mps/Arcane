@@ -46,6 +46,17 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>   // ShellExecuteW (Assets -> Show in Explorer)
+#endif
+
 namespace Arcane::Editor
 {
     namespace
@@ -1134,6 +1145,7 @@ namespace Arcane::Editor
                                        m_moduleBuild.Running(), hasGameModule,
                                        m_panelVis,
                                        m_selection.HasSelection(),
+                                       m_assetBrowser.selected.IsValid(),
                                        &m_recents,
                                        &m_sceneRecents);
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
@@ -1317,6 +1329,33 @@ namespace Arcane::Editor
             m_scene.Request(Arcane::Editor::SceneIntent::Exit, {}, *m_undo))
         {
             ls.sceneAction = { Arcane::Editor::SceneIntent::Exit, {} };
+        }
+
+        // Assets -> Show in Explorer / Copy Path, on the browser's tracked row.
+        if ((menuReq.showInExplorer || menuReq.copyAssetPath) &&
+            m_assetBrowser.selected.IsValid())
+        {
+            const Arcane::Project* proj = m_runtime->CurrentProject();
+            const auto assetPath = proj
+                ? proj->ResolveAsset(Arcane::AssetId::FromGuid(m_assetBrowser.selected))
+                : std::nullopt;
+            if (!assetPath)
+            {
+                ARC_WARN("Assets: the selected asset no longer resolves to a file");
+            }
+            else
+            {
+                if (menuReq.showInExplorer)
+                {
+                    // explorer /select opens the folder WITH the file focused.
+                    const std::wstring args =
+                        L"/select,\"" + assetPath->wstring() + L"\"";
+                    ShellExecuteW(nullptr, L"open", L"explorer.exe",
+                                  args.c_str(), nullptr, SW_SHOWNORMAL);
+                }
+                if (menuReq.copyAssetPath)
+                    ImGui::SetClipboardText(assetPath->string().c_str());
+            }
         }
 
         if (menuReq.newMaterial || menuReq.openMaterial)

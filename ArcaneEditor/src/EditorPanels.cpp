@@ -47,6 +47,7 @@ namespace Arcane::Editor
                         bool buildingModule, bool hasGameModule,
                         PanelVisibility& panels,
                         bool hasSelection,
+                        bool hasAssetSelection,
                         const RecentSelection* recents,
                         const SceneRecents::List* sceneRecents)
     {
@@ -67,11 +68,11 @@ namespace Arcane::Editor
         // Editor menu bar (layout ratified 2026-08-10; a few items are still
         // VISUAL-only -- the wiring pass is landing them task by task).
         // File's scene/project items (including both Open Recent submenus),
-        // Save All, and Exit all land in `requests` now, as do Edit's
-        // clipboard and selection items. The remaining placeholders
-        // (Preferences..., Project Settings..., Assets' Show in Explorer /
-        // Copy Path) stay in the file's established style (enabled no-ops)
-        // until later tasks wire them. Edit's Undo/Redo drive the CommandStack.
+        // Save All, Exit, and Assets' Show in Explorer / Copy Path all land
+        // in `requests` now, as do Edit's clipboard and selection items. The
+        // remaining placeholders (Preferences..., Project Settings...) stay
+        // in the file's established style (enabled no-ops) until later tasks
+        // wire them. Edit's Undo/Redo drive the CommandStack.
         if (ImGui::BeginMenuBar())
         {
             if (ImGui::BeginMenu("File"))
@@ -223,9 +224,13 @@ namespace Arcane::Editor
                     if (ImGui::MenuItem("Material...")) requests.newMaterial = true;
                     ImGui::EndMenu();
                 }
-                // Visual-only until wired to the Assets panel's selection.
-                ImGui::MenuItem("Show in Explorer");
-                ImGui::MenuItem("Copy Path");
+                // Act on the Assets panel's last-clicked row; greyed until one
+                // exists. Resolution (Guid -> mount -> file) happens app-side
+                // at the click -- a stale selection warns instead of acting.
+                if (ImGui::MenuItem("Show in Explorer", nullptr, false, hasAssetSelection))
+                    requests.showInExplorer = true;
+                if (ImGui::MenuItem("Copy Path", nullptr, false, hasAssetSelection))
+                    requests.copyAssetPath = true;
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Window"))

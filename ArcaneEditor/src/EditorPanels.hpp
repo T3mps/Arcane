@@ -68,6 +68,8 @@ namespace Arcane::Editor
         bool duplicateSelection = false;   // Edit -> Duplicate
         bool saveAll = false;        // File -> Save All (scene + every dirty document)
         bool exitEditor = false;     // File -> Exit
+        bool showInExplorer = false;   // Assets -> Show in Explorer (on the browser's tracked row)
+        bool copyAssetPath = false;    // Assets -> Copy Path        (on the browser's tracked row)
     };
 
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
@@ -87,6 +89,8 @@ namespace Arcane::Editor
     // `hasSelection` gates the Edit menu's selection-dependent items
     // (Rename/Delete, and Cut/Copy/Duplicate -- Paste stays always-enabled,
     // see its MenuItem call).
+    // `hasAssetSelection` gates the Assets menu's Show in Explorer / Copy
+    // Path (the Assets panel's last-clicked row -- AssetBrowserState::selected).
     // `sceneRecents` is the PER-PROJECT scene history (SceneRecents.hpp) that
     // drives File -> Open Recent Scene -- unlike `recents` above, which is the
     // Hub's shared, machine-wide project list.
@@ -95,6 +99,7 @@ namespace Arcane::Editor
                         bool buildingModule, bool hasGameModule,
                         PanelVisibility& panels,
                         bool hasSelection,
+                        bool hasAssetSelection,
                         const RecentSelection* recents = nullptr,
                         const SceneRecents::List* sceneRecents = nullptr);
 

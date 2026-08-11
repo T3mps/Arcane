@@ -101,9 +101,10 @@ namespace Arcane::Editor
                 ImGui::TableSetColumnIndex(0);
                 const std::string label = std::string(KindIcon(e.kind)) + "  " + e.name +
                                           "##" + e.mountPath;
-                ImGui::Selectable(label.c_str(), false,
-                                  ImGuiSelectableFlags_SpanAllColumns |
-                                  ImGuiSelectableFlags_AllowDoubleClick);
+                if (ImGui::Selectable(label.c_str(), state.selected == e.guid,
+                                      ImGuiSelectableFlags_SpanAllColumns |
+                                      ImGuiSelectableFlags_AllowDoubleClick))
+                    state.selected = e.guid;
 
                 // Drag source: any asset row; drop targets filter by kind.
                 if (ImGui::BeginDragDropSource())
