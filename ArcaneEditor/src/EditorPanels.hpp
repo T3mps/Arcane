@@ -60,6 +60,10 @@ namespace Arcane::Editor
         bool invertSelection = false;  // Edit -> Invert Selection
         bool renameSelected = false;   // Edit -> Rename (the Outliner's F2 code path)
         bool deleteSelected = false;   // Edit -> Delete (the Outliner's Del code path)
+        bool cutSelection = false;         // Edit -> Cut
+        bool copySelection = false;        // Edit -> Copy
+        bool paste = false;                // Edit -> Paste
+        bool duplicateSelection = false;   // Edit -> Duplicate
     };
 
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
@@ -79,8 +83,9 @@ namespace Arcane::Editor
     // `panels` drives the Window menu's toggles; only Reset Layout goes
     // through `requests` (it must run at EndDockSpace's DockBuilder-safe
     // point).
-    // `hasSelection` gates the Edit menu's selection-dependent items (Rename/
-    // Delete now, the clipboard items in a later wiring pass).
+    // `hasSelection` gates the Edit menu's selection-dependent items
+    // (Rename/Delete, and Cut/Copy/Duplicate -- Paste stays always-enabled,
+    // see its MenuItem call).
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
                         bool sceneDirty, bool playing,
                         bool buildingModule, bool hasGameModule,

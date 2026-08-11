@@ -25,9 +25,12 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
+#include "EntityClipboard.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 using namespace Arcane;
@@ -353,4 +356,31 @@ TEST_CASE("Cut hands DeleteEntities the whole subtree; undo restores it intact",
     REQUIRE(bi != nullptr);
     CHECK(w.reg->GetParent(a) == root);
     CHECK(w.reg->GetParent(b) == a);
+}
+
+// Task 7: the OS-clipboard envelope (EntityClipboard.hpp). Pure functions,
+// no registry -- headless.
+
+TEST_CASE("WrapEntityClipboard/ParseEntityClipboard round-trip a payload",
+          "[editor]")
+{
+    nlohmann::json payload;
+    payload["version"] = 2;
+    payload["entities"] = nlohmann::json::array();
+
+    const std::string wrapped = Editor::WrapEntityClipboard(payload);
+    const std::optional<nlohmann::json> parsed =
+        Editor::ParseEntityClipboard(wrapped.c_str());
+    REQUIRE(parsed.has_value());
+    CHECK(*parsed == payload);
+}
+
+TEST_CASE("ParseEntityClipboard returns nullopt for absent, foreign, or malformed clipboard text",
+          "[editor]")
+{
+    CHECK_FALSE(Editor::ParseEntityClipboard(nullptr).has_value());
+    CHECK_FALSE(Editor::ParseEntityClipboard("").has_value());
+    CHECK_FALSE(Editor::ParseEntityClipboard("plain prose").has_value());
+    CHECK_FALSE(Editor::ParseEntityClipboard("{}").has_value());
+    CHECK_FALSE(Editor::ParseEntityClipboard(R"({"arcane_entities": 3})").has_value());
 }

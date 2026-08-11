@@ -119,10 +119,17 @@ namespace Arcane::Editor
                 if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", false, canUndo)) undo.Undo();
                 if (ImGui::MenuItem(redoLabel.c_str(), "Ctrl+Y", false, canRedo)) undo.Redo();
                 ImGui::Separator();
-                ImGui::MenuItem("Cut");
-                ImGui::MenuItem("Copy");
-                ImGui::MenuItem("Paste");
-                ImGui::MenuItem("Duplicate");
+                if (ImGui::MenuItem("Cut", "Ctrl+X", false, hasSelection))
+                    requests.cutSelection = true;
+                if (ImGui::MenuItem("Copy", "Ctrl+C", false, hasSelection))
+                    requests.copySelection = true;
+                // Always enabled: parsing the clipboard every frame to grey
+                // this is not worth it -- a foreign-clipboard paste no-ops
+                // with a Console INFO instead.
+                if (ImGui::MenuItem("Paste", "Ctrl+V"))
+                    requests.paste = true;
+                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, hasSelection))
+                    requests.duplicateSelection = true;
                 // Same code paths as the Outliner's F2/Del bindings.
                 if (ImGui::MenuItem("Rename", "F2", false, hasSelection))
                     requests.renameSelected = true;

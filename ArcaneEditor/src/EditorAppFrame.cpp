@@ -13,6 +13,7 @@
 
 #include "EditorApp.hpp"
 #include "EditorPanels.hpp"
+#include "EntityClipboard.hpp"
 #include "SelectionOps.hpp"
 #include "ViewportImGuiInput.hpp"
 
@@ -71,6 +72,13 @@ namespace Arcane::Editor
         constexpr uint32_t kScN = 17;   // SDL_SCANCODE_N
         constexpr uint32_t kScO = 18;   // SDL_SCANCODE_O
         constexpr uint32_t kScS = 22;   // SDL_SCANCODE_S
+
+        // Edit-menu clipboard shortcuts: Ctrl+X/C/V/D (see
+        // HandleUndoRedoAndSceneShortcuts). Same table as kScY/kScZ above.
+        constexpr uint32_t kScX = 27;   // SDL_SCANCODE_X
+        constexpr uint32_t kScC = 6;    // SDL_SCANCODE_C
+        constexpr uint32_t kScV = 25;   // SDL_SCANCODE_V
+        constexpr uint32_t kScD = 7;    // SDL_SCANCODE_D
 
         // Viewport camera framing keys (see UpdateEditorCamera): F frames
         // the selection, Home frames the whole scene.
@@ -495,6 +503,23 @@ namespace Arcane::Editor
         m_prevKeyN = nDown;
         m_prevKeyO = oDown;
         m_prevKeyS = sDown;
+
+        // Ctrl+X/C/V/D -- the Edit menu's clipboard items. Same raised-as-
+        // request shape as Ctrl+N/O/S above: ONE handler at the menu-request
+        // site. `active` already suppresses these while ImGui captures the
+        // keyboard (text fields keep their own clipboard) and during Play.
+        const bool xDown = ctrl && !shift && snap.ScancodeDown(kScX);
+        const bool cDown = ctrl && !shift && snap.ScancodeDown(kScC);
+        const bool vDown = ctrl && !shift && snap.ScancodeDown(kScV);
+        const bool dDown = ctrl && !shift && snap.ScancodeDown(kScD);
+        fs.scCut       = active && xDown && !m_prevKeyX;
+        fs.scCopy      = active && cDown && !m_prevKeyC;
+        fs.scPaste     = active && vDown && !m_prevKeyV;
+        fs.scDuplicate = active && dDown && !m_prevKeyD;
+        m_prevKeyX = xDown;
+        m_prevKeyC = cDown;
+        m_prevKeyV = vDown;
+        m_prevKeyD = dDown;
     }
 
     // Phase 6b: gizmo mode keys. Pure state, but it runs before the gizmo
@@ -1181,6 +1206,85 @@ namespace Arcane::Editor
         if (menuReq.deleteSelected)
             Arcane::Editor::DeleteSelection(m_runtime->Registry(), m_selection,
                                             *m_undo, m_editBinding);
+
+        // Edit -> clipboard shortcuts (Ctrl+X/C/V/D, raised in the input phase
+        // above). Folded in HERE, before the clipboard consume block below reads
+        // menuReq -- same fold-in shape as the Ctrl+N/O/S scene shortcuts fold
+        // further down, just earlier in the frame so the request this edge
+        // raises cannot lag a frame behind its own keypress.
+        menuReq.cutSelection       |= fs.scCut;
+        menuReq.copySelection      |= fs.scCopy;
+        menuReq.paste              |= fs.scPaste;
+        menuReq.duplicateSelection |= fs.scDuplicate;
+        // Edit -> clipboard (spec II.B). Copy serializes the selection's
+        // subtree roots to a JSON envelope on the OS clipboard; every
+        // structural half wraps in ApplyStructural like the Outliner's ops.
+        const auto copySelectionToClipboard = [&]() -> bool
+        {
+            if (!m_selection.HasSelection())
+                return false;
+            nlohmann::json payload = Arcane::Edit::SerializeSubtrees(
+                m_runtime->Registry(), m_selection.Entities());
+            if (payload["entities"].empty())
+                return false;
+            ImGui::SetClipboardText(
+                Arcane::Editor::WrapEntityClipboard(std::move(payload)).c_str());
+            return true;
+        };
+        if (menuReq.copySelection)
+            copySelectionToClipboard();
+        if (menuReq.cutSelection && copySelectionToClipboard())
+        {
+            // Delete the FULL captured subtrees -- DeleteEntities splices
+            // children up, so passing only the roots would orphan what the
+            // clipboard just took (EntityOps.hpp, SubtreeEntities).
+            const std::vector<Astra::Entity> roots = Arcane::Edit::SelectionRoots(
+                m_runtime->Registry(), m_selection.Entities());
+            const std::vector<Astra::Entity> doomed =
+                Arcane::Edit::SubtreeEntities(m_runtime->Registry(), roots);
+            if (Arcane::Editor::ApplyStructural(*m_undo, m_editBinding, "Cut",
+                    [&] { return Arcane::Edit::DeleteEntities(m_runtime->Registry(),
+                                                              doomed) > 0; },
+                    &doomed))
+                m_selection.Clear();
+        }
+        const auto instantiateAndSelect = [&](const nlohmann::json& payload,
+                                              std::string label)
+        {
+            std::vector<Astra::Entity> roots;
+            std::vector<Astra::Entity> made;
+            if (Arcane::Editor::ApplyStructural(*m_undo, m_editBinding, std::move(label),
+                    [&]
+                    {
+                        roots = Arcane::Edit::InstantiateSubtrees(m_runtime->Registry(),
+                                                                  payload);
+                        if (!roots.empty())
+                            made = Arcane::Edit::SubtreeEntities(m_runtime->Registry(),
+                                                                 roots);
+                        return !roots.empty();
+                    },
+                    &made))
+            {
+                m_selection.Clear();
+                m_selection.AddRange(roots, roots.back());
+            }
+        };
+        if (menuReq.paste)
+        {
+            if (const auto payload =
+                    Arcane::Editor::ParseEntityClipboard(ImGui::GetClipboardText()))
+                instantiateAndSelect(*payload, "Paste");
+            else
+                ARC_INFO("Paste: the clipboard holds no Arcane entities");
+        }
+        if (menuReq.duplicateSelection && m_selection.HasSelection())
+        {
+            const nlohmann::json payload = Arcane::Edit::SerializeSubtrees(
+                m_runtime->Registry(), m_selection.Entities());
+            if (!payload["entities"].empty())
+                instantiateAndSelect(payload, "Duplicate");
+        }
+
         if (menuReq.newMaterial || menuReq.openMaterial)
         {
             // Material dialogs start in the project's Content/ (the only place

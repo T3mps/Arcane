@@ -163,8 +163,10 @@ namespace Arcane::Editor
             // File-menu scene shortcuts, raised in the input phase and folded
             // into this frame's MenuRequests at the menu-request site (the same shape
             // m_raiseOpenProjectOnStart uses) so the keybind and the menu item cannot
-            // drift apart.
+            // drift apart. Same shape for the Edit-menu clipboard shortcuts
+            // (Ctrl+X/C/V/D) below.
             bool scNewScene = false, scOpenScene = false, scSaveScene = false;
+            bool scCut = false, scCopy = false, scPaste = false, scDuplicate = false;
             // This frame's Viewport panel result, read by the click-pick phase.
             Arcane::Editor::ViewportPanelResult vp{};
         };
@@ -438,6 +440,12 @@ namespace Arcane::Editor
         bool m_prevKeyN = false;
         bool m_prevKeyO = false;
         bool m_prevKeyS = false;
+        // Ctrl+X / Ctrl+C / Ctrl+V / Ctrl+D edge-tracking for the Edit-menu
+        // clipboard shortcuts (same pattern as m_prevKeyN/O/S above).
+        bool m_prevKeyX = false;
+        bool m_prevKeyC = false;
+        bool m_prevKeyV = false;
+        bool m_prevKeyD = false;
         // Left-mouse edge-tracking, shared by the gizmo press/release detection.
         bool m_prevLmbDown = false;
 
