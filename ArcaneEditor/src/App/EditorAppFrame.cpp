@@ -1262,6 +1262,51 @@ namespace Arcane::Editor
         Arcane::Editor::EndDockSpace(menuReq.resetLayout);
         if (menuReq.resetLayout)
             m_panelVis = Arcane::Editor::PanelVisibility{};   // reset re-shows everything
+
+        ConsumeMenuRequests(menuReq, fs, ls);
+
+        Arcane::Editor::AssetBrowserActions browserActions;
+        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets))
+            browserActions = Arcane::Editor::DrawAssetBrowserPanel(
+                m_assetBrowser, m_runtime->CurrentProject(), m_documents,
+                m_panelVis.OpenFlag(Arcane::Editor::PanelId::Assets));
+        ConsumeBrowserActions(browserActions, ls);
+
+        if (static_cast<std::size_t>(m_consoleUi.lineCap) != m_console.Capacity())
+            m_console.SetCapacity(static_cast<std::size_t>(m_consoleUi.lineCap));
+        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Console))
+            Arcane::Editor::DrawConsolePanel(m_console, m_consoleUi,
+                m_panelVis.OpenFlag(Arcane::Editor::PanelId::Console));
+
+        // Problems panel: current diagnostic STATE (Console above is the
+        // append-only log stream). A clicked row's locator is routed here,
+        // mid-DrawEditorUi -- the same place browserActions.createSpriteFrom
+        // above already opens documents synchronously; only project/scene
+        // teardown needs the frame-boundary deferral this function's other
+        // effects use.
+        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems))
+            if (const std::optional<Arcane::DiagLocator> hit =
+                    Arcane::Editor::DrawProblemsPanel(m_diagnostics, m_problemsUi,
+                        m_panelVis.OpenFlag(Arcane::Editor::PanelId::Problems)))
+                RouteLocator(*hit);
+
+        // The Material panel draws BEFORE the documents, and that order is
+        // load-bearing rather than incidental: the panel's param rows and the
+        // document's graph widgets open gestures against the SAME
+        // EditGesture::GestureState, and each scope's ScopeGuard closes an
+        // abandoned one when it destructs. Drawing the panel first leaves
+        // ShaderEditorDocument::Draw's guard as the LAST one to run each frame,
+        // so a gesture the panel opened is never force-closed by the document
+        // before the panel's own EndOnDeactivate has had its say.
+        Arcane::Editor::DrawMaterialPanel(ResolveActiveMaterialDoc());
+
+        // New documents tab into the Viewport's node (captured last frame).
+        m_documents.DrawAll(m_viewportDockId);
+    }
+
+    void EditorApp::ConsumeMenuRequests(Arcane::Editor::MenuRequests& menuReq,
+                                        const FrameState& fs, LoopState& ls)
+    {
         // Bare interactive launch: raise the picker as if the user had clicked
         // File -> Open Project, once. Routed through menuReq (rather than
         // calling the dialog directly) so there is exactly ONE launch site and
@@ -1448,12 +1493,11 @@ namespace Arcane::Editor
             DoSaveScene(m_scene.Path());
         if (menuReq.saveSceneAs || (menuReq.saveScene && m_scene.Path().empty()))
             ShowSceneSaveDialog();
+    }
 
-        Arcane::Editor::AssetBrowserActions browserActions;
-        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets))
-            browserActions = Arcane::Editor::DrawAssetBrowserPanel(
-                m_assetBrowser, m_runtime->CurrentProject(), m_documents,
-                m_panelVis.OpenFlag(Arcane::Editor::PanelId::Assets));
+    void EditorApp::ConsumeBrowserActions(const Arcane::Editor::AssetBrowserActions& browserActions,
+                                          LoopState& ls)
+    {
         if (browserActions.createInstanceOf.IsValid())
         {
             const Arcane::Project* proj = m_runtime->CurrentProject();
@@ -1513,33 +1557,10 @@ namespace Arcane::Editor
             AssetPathAction(m_runtime->CurrentProject(), browserActions.showInExplorer, true, false);
         if (browserActions.copyPath.IsValid())
             AssetPathAction(m_runtime->CurrentProject(), browserActions.copyPath, false, true);
-        if (static_cast<std::size_t>(m_consoleUi.lineCap) != m_console.Capacity())
-            m_console.SetCapacity(static_cast<std::size_t>(m_consoleUi.lineCap));
-        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Console))
-            Arcane::Editor::DrawConsolePanel(m_console, m_consoleUi,
-                m_panelVis.OpenFlag(Arcane::Editor::PanelId::Console));
+    }
 
-        // Problems panel: current diagnostic STATE (Console above is the
-        // append-only log stream). A clicked row's locator is routed here,
-        // mid-DrawEditorUi -- the same place browserActions.createSpriteFrom
-        // above already opens documents synchronously; only project/scene
-        // teardown needs the frame-boundary deferral this function's other
-        // effects use.
-        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems))
-            if (const std::optional<Arcane::DiagLocator> hit =
-                    Arcane::Editor::DrawProblemsPanel(m_diagnostics, m_problemsUi,
-                        m_panelVis.OpenFlag(Arcane::Editor::PanelId::Problems)))
-                RouteLocator(*hit);
-
-        // The Material panel draws BEFORE the documents, and that order is
-        // load-bearing rather than incidental: the panel's param rows and the
-        // document's graph widgets open gestures against the SAME
-        // EditGesture::GestureState, and each scope's ScopeGuard closes an
-        // abandoned one when it destructs. Drawing the panel first leaves
-        // ShaderEditorDocument::Draw's guard as the LAST one to run each frame,
-        // so a gesture the panel opened is never force-closed by the document
-        // before the panel's own EndOnDeactivate has had its say.
-        //
+    Arcane::Editor::ShaderEditorDocument* EditorApp::ResolveActiveMaterialDoc()
+    {
         // Resolved from the guid every frame (documents are destroyed
         // synchronously on close), with a fallback to any open material
         // document so the panel is never empty while one exists -- e.g. after
@@ -1558,10 +1579,7 @@ namespace Arcane::Editor
             if (activeMat)
                 m_activeMaterialGuid = activeMat->AssetGuid();
         }
-        Arcane::Editor::DrawMaterialPanel(activeMat);
-
-        // New documents tab into the Viewport's node (captured last frame).
-        m_documents.DrawAll(m_viewportDockId);
+        return activeMat;
     }
 
     // Phase 15: the modals. Opened and drawn at DOCKSPACE level, outside any

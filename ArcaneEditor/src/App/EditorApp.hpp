@@ -207,6 +207,11 @@ namespace Arcane::Editor
         void RenderSelectionOutline();
         void PumpEditorDocuments();
         void DrawEditorUi(LoopState& ls, const FrameState& fs);
+        void ConsumeMenuRequests(Arcane::Editor::MenuRequests& menuReq,
+                                 const FrameState& fs, LoopState& ls);
+        void ConsumeBrowserActions(const Arcane::Editor::AssetBrowserActions& browserActions,
+                                   LoopState& ls);
+        Arcane::Editor::ShaderEditorDocument* ResolveActiveMaterialDoc();
         void DrawModals(LoopState& ls);
         void DrawViewportPanelPhase(FrameState& fs);
         // Center-tab -> side-panel focus follow. Reads the one-frame
