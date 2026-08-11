@@ -724,6 +724,14 @@ namespace Arcane::Editor
         // lock -- DialogSlot owns its own) runs SwitchProject at a safe point.
         // (Project::Open accepts the .arcproj file directly.)
         void SwitchProject(const std::filesystem::path& path);  // validate-then-soft-restart
+        // Reset every mutable member whose value refers to the current
+        // project. Called by SwitchProject's switch_teardown stage only --
+        // boot has no prior project to reset. Full per-member rationale is
+        // the comment block above this function's definition in
+        // EditorAppProject.cpp -- that is the single owned reset list new
+        // per-project members must join (architecture pass sec 3, audit
+        // defect A3).
+        void ResetPerProjectState();
 
         // ---- Build -> Rebuild Game Module (ModuleBuild.hpp) -----------------
         // StartModuleRebuild composes the premake+msbuild line for the open
@@ -747,6 +755,9 @@ namespace Arcane::Editor
         // The project root the RUNNING build was started for. Publish/Clear
         // key identity ("build:<root>") + the guard that skips restamp/
         // re-engage when the project switched mid-build.
+        // Survives a project switch ON PURPOSE: it guards an async worker --
+        // PollModuleBuild's root-mismatch check is the staleness guard. See
+        // ResetPerProjectState's rule.
         std::filesystem::path m_moduleBuildRoot;
 
         // Editor state naming entities of the OUTGOING scene, torn down before any
@@ -831,10 +842,16 @@ namespace Arcane::Editor
         // the unique_ptr), so a cached raw pointer would dangle for the rest of
         // the frame; the guid is re-resolved through FindByGuid every frame.
         // Nil = no material open, so the panel is not submitted at all.
+        // Survives a project switch ON PURPOSE: re-resolved from the (now
+        // empty) DocumentHost next frame -- the ResolveActiveMaterialDoc
+        // fallback self-heals it. See ResetPerProjectState's rule.
         Arcane::Guid m_activeMaterialGuid;
         // Open material-document count LAST frame, so "the last one closed" is
         // a detectable edge even when the Viewport does not report Appearing
         // (a document that was floating rather than tabbed over the scene).
+        // Survives a project switch ON PURPOSE: re-resolved from the (now
+        // empty) DocumentHost next frame -- the ResolveActiveMaterialDoc
+        // fallback self-heals it. See ResetPerProjectState's rule.
         std::size_t  m_materialDocCount = 0;
 
         // Failure surfacing for project-open, scene, and standalone-launch

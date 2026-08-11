@@ -347,6 +347,63 @@ namespace Arcane::Editor
         m_documents.OpenPath(path);
     }
 
+    // EVERY mutable EditorApp member whose value refers to the current project
+    // must appear in this function -- or carry a comment at its declaration
+    // saying why it survives a switch (architecture pass sec 3; audit defect
+    // A3 was three implicit reset lists, one of them unowned). Called from
+    // SwitchProject's switch_teardown stage only: boot has no prior project
+    // to reset.
+    //
+    // m_documents: every open document (material/shader/etc.) is opened
+    // against the outgoing project's registry.
+    // m_resolver: sprites, materials and the post chain all resolve against
+    // the OUTGOING project's registry, so all three caches drop together
+    // (one Clear since the sprite-resolution lift).
+    // m_diagnostics: Problems is current STATE, rebuilt by producers on load
+    // (spec sec 10), not a log -- stale rows from the outgoing project
+    // (asset/plugin/material/scene diagnostics keyed by paths and Guids that
+    // belong to THAT project's registry) must not survive into the incoming
+    // one.
+    // ClearSceneReferences(): editor state naming entities of the outgoing
+    // scene, torn down before any registry swap.
+    // m_scene: the scene the session named belonged to the OUTGOING project,
+    // and the new project's registry is built by its plugin, not loaded from
+    // an .arcscene -- so the session goes back to Untitled/clean here rather
+    // than at the end, where a later failure would skip it and leave a stale
+    // path with a spurious dirty marker.
+    // m_sceneRecents: the outgoing project's scene history means nothing to
+    // the incoming one. ReloadSceneRecents (switch_plugin_load) repopulates
+    // it for whichever project ends up open -- including the project-less
+    // fallback, which correctly leaves this empty.
+    // m_assetBrowser: selection, search, and kind filter all belong to the
+    // outgoing project's registry -- a Guid from it must not survive as the
+    // Assets menu's tracked row.
+    // -- previously in NO list (the A3 gap): --
+    // m_dialogs: in-flight dialogs die with their project (sec 2).
+    // m_modalErrors: a dead project's modal must not pop post-switch.
+    // m_materialMtimes / m_materialWatchNext: the outgoing project's
+    // path-keyed watch cache -- grew unbounded across switches before this.
+    // m_launchModalPending / m_launchAfterSceneSave: a parked "Save and
+    // Play?" dies with its scene (both flags deleted entirely in the
+    // LaunchStandalone-intent task).
+    void EditorApp::ResetPerProjectState()
+    {
+        m_documents.CloseAll();
+        if (m_resolver)
+            m_resolver->Clear();
+        m_diagnostics.ClearAll();
+        ClearSceneReferences();
+        if (m_undo) m_scene.Reset(*m_undo);
+        m_sceneRecents = {};
+        m_assetBrowser = {};
+        m_dialogs.ClearAll();
+        m_modalErrors.Clear();
+        m_materialMtimes.clear();
+        m_materialWatchNext = 0.0;
+        m_launchModalPending   = false;
+        m_launchAfterSceneSave = false;
+    }
+
     void EditorApp::SwitchProject(const std::filesystem::path& path)
     {
         // Another live editor already holds it -> refuse and surface THAT
@@ -494,41 +551,7 @@ namespace Arcane::Editor
         stages.push_back(stage("switch_teardown", {}, Arcane::BootThread::Main,
                                Arcane::BootPolicy::Fatal, 2, [&]
         {
-            m_documents.CloseAll();
-            // Sprites, materials and the post chain all resolved against the
-            // OUTGOING project's registry, so all three caches drop together
-            // (one Clear since the sprite-resolution lift; it was three calls,
-            // and the sprite one had to be added as a review fix after being
-            // forgotten).
-            if (m_resolver)
-                m_resolver->Clear();
-
-            // Problems is current STATE, rebuilt by producers on load (spec
-            // sec 10), not a log -- stale rows from the outgoing project
-            // (asset/plugin/material/scene diagnostics keyed by paths and
-            // Guids that belong to THAT project's registry) must not survive
-            // into the incoming one.
-            m_diagnostics.ClearAll();
-
-            // Return to Edit + clear editor state that references the outgoing scene.
-            ClearSceneReferences();
-            // The scene the session named belonged to the OUTGOING project, and
-            // the new project's registry is built by its plugin, not loaded
-            // from an .arcscene -- so the session goes back to Untitled/clean
-            // here rather than at the end, where a later failure would skip it
-            // and leave a stale path with a spurious dirty marker.
-            if (m_undo) m_scene.Reset(*m_undo);
-            // Same reason: the outgoing project's scene history means nothing
-            // to the incoming one. ReloadSceneRecents (switch_plugin_load,
-            // below) repopulates it for whichever project ends up open --
-            // including the project-less fallback, which correctly leaves
-            // this empty.
-            m_sceneRecents = {};
-            // Same reason: selection, search, and kind filter all belong to
-            // the outgoing project's registry -- a Guid from it must not
-            // survive as the Assets menu's tracked row.
-            m_assetBrowser = {};
-
+            ResetPerProjectState();
             // Idle the GPU before freeing plugin-owned GPU resources, then
             // unload the plugin (dtor: Unload -> ClearSystems + ResetRegistry,
             // DLL still mapped).
