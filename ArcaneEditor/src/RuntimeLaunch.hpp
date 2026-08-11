@@ -57,7 +57,7 @@ namespace Arcane::Editor::RuntimeLaunch
     // fire-and-forget, no tracking, no waiting (the Play button does not need
     // a handle back). Working directory = exe's parent: the same shader-
     // resolution rule ArcaneRuntime/ArcaneEditor already rely on (their
-    // ShaderLibrary/ShaderCompiler resolve "shaders/" and friends relative to
+    // ShaderLibrary/ShaderCompiler resolve "data/shaders/" and friends relative to
     // the process's own directory), and the same rule the Hub's own launch of
     // ArcaneEditor.exe follows. Returns false and logs ARC_ERROR naming `exe`
     // on failure (missing file, or CreateProcessW itself failing).

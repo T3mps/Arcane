@@ -25,7 +25,7 @@ namespace
         REQUIRE(device != nullptr);
 
         auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend,
-                                                     "shaders");
+                                                     "data/shaders");
         REQUIRE(shaders != nullptr);
         REQUIRE(shaders->Generation() == 1);
 
@@ -52,12 +52,12 @@ namespace
     // files without disturbing the build output other tests read.
     //
     // Adaptation vs. spec: the spec's CopyShaderTree uses
-    //   std::filesystem::copy("shaders", dst, ...)
-    // which resolves "shaders" against the CWD, while ShaderLibrary::Create
+    //   std::filesystem::copy("data/shaders", dst, ...)
+    // which resolves "data/shaders" against the CWD, while ShaderLibrary::Create
     // resolves relative dirs against the EXE directory (GetModuleFileNameW).
     // Tests run from the repo root, not the exe dir, so the CWD path does not
     // find the artifacts. We replicate the same resolution here: build the
-    // source from the exe's parent / "shaders" so the copy matches what
+    // source from the exe's parent / "data/shaders" so the copy matches what
     // ShaderLibrary::Create would load. The destination is an absolute path
     // (temp_directory_path()/"arcane-hotreload"), and passing an absolute path
     // to ShaderLibrary::Create bypasses exe-relative resolution by design.
@@ -69,7 +69,7 @@ namespace
         if (GetModuleFileNameW(nullptr, modulePath, MAX_PATH) != 0)
             exeDir = std::filesystem::path(modulePath).parent_path();
 #endif
-        const auto src = exeDir / "shaders";
+        const auto src = exeDir / "data/shaders";
         const auto dst = std::filesystem::temp_directory_path() / "arcane-hotreload";
         std::filesystem::remove_all(dst);
         std::filesystem::copy(src, dst,

@@ -52,7 +52,7 @@ namespace
         REQUIRE(device != nullptr);
 
         // ShaderLibrary only feeds the OffscreenCanvas's batcher/tonemap.
-        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "shaders");
+        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "data/shaders");
         REQUIRE(shaders != nullptr);
 
         constexpr uint32_t kSize = 64;
@@ -61,7 +61,7 @@ namespace
 
         // Author a solid-color material through the real seams.
         Arcane::ShaderSourceProvider provider;
-        provider.AddRoot("shaders");
+        provider.AddRoot("data/shaders");
         const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
         REQUIRE(templateText.has_value());
 
@@ -172,7 +172,7 @@ namespace
         desc.backend = backend;
         auto device = Arcane::RenderDevice::Create(desc);
         REQUIRE(device != nullptr);
-        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "shaders");
+        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "data/shaders");
         REQUIRE(shaders != nullptr);
         constexpr uint32_t kSize = 64;
         auto oc = Arcane::OffscreenCanvas::Create(device->Nvrhi(), *shaders, kSize, kSize);
@@ -209,7 +209,7 @@ namespace
             [p = &*project](const Arcane::AssetId& id) { return p->ResolveAsset(id); });
 
         Arcane::ShaderSourceProvider provider;
-        provider.AddRoot("shaders");
+        provider.AddRoot("data/shaders");
         const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
         REQUIRE(templateText.has_value());
         const char* snippet =

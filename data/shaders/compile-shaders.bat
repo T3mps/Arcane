@@ -16,7 +16,7 @@
 :: the entry point's <type>_main prefix (2nd arg) -- ShaderLibrary derives the
 :: SPIR-V entry name from the stem suffix. Mismatch = late Vulkan failure.
 setlocal
-set DXC=%~dp0..\..\ThirdParty\tools\dxc\dxc.exe
+set DXC=%~dp0..\..\..\ThirdParty\tools\dxc\dxc.exe
 set SRC=%~dp0
 set OUT=%~dp0generated
 if not exist "%OUT%\dxil"  mkdir "%OUT%\dxil"

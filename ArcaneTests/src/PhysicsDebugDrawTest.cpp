@@ -46,7 +46,7 @@ namespace
         auto device = Arcane::RenderDevice::Create(desc);
         REQUIRE(device != nullptr);
 
-        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "shaders");
+        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "data/shaders");
         REQUIRE(shaders != nullptr);
 
         auto canvas = Arcane::CreateCanvas(device->Nvrhi(), 128, 128);

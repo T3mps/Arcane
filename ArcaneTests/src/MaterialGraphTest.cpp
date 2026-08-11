@@ -1895,7 +1895,7 @@ TEST_CASE(".arcmat carries the graph; graph-only files self-heal a snippet", "[m
 TEST_CASE("Graph-generated snippets compile on both targets and surfaces", "[shadercompile]")
 {
     ShaderSourceProvider provider;
-    provider.AddRoot("shaders");
+    provider.AddRoot("data/shaders");
     ShaderCompiler sc;
     REQUIRE(sc.Initialize(0.0));
 

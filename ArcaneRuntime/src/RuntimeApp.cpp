@@ -248,7 +248,7 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
     if (!m_shaderCompiler.Initialize(/*debounceSeconds=*/0.2))
         ARC_WARN("ArcaneRuntime: dxcompiler.dll unavailable -- sprite materials "
                  "and the scene post chain will not bind");
-    m_shaderSources.AddRoot("shaders");
+    m_shaderSources.AddRoot("data/shaders");
 
     Arcane::SceneRenderResolver::Services rs;
     rs.runtime  = &*m_runtime;

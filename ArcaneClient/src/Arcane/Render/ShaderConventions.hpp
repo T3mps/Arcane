@@ -2,7 +2,7 @@
 
 // Shader toolchain conventions -- THE single source of truth shared by the
 // runtime compile service (ShaderCompiler) and referenced by the offline AOT
-// script (Arcane/shaders/compile-shaders.bat; it cannot include this header,
+// script (Arcane/data/shaders/compile-shaders.bat; it cannot include this header,
 // so its lines carry a pointer back here). The SPIR-V register shifts MUST
 // match nvrhi::VulkanBindingOffsets defaults (t=0, s=128, b=256, u=384;
 // DeviceVulkan does not override them) -- if either side changes, change it

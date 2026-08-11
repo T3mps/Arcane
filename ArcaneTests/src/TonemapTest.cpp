@@ -1,7 +1,7 @@
 // Color-pipeline golden test: linear HDR canvas -> ACES -> TRUE sRGB encode must
 // byte-match the CPU reference. The curve is the IEC 61966-2-1 piecewise one,
 // deliberately NOT pow(1/2.2) -- it matches what SRGBA8_UNORM applies in hardware
-// on input, so the pipeline is symmetric. MIRRORS shaders/tonemap.hlsl; keep the
+// on input, so the pipeline is symmetric. MIRRORS data/shaders/tonemap.hlsl; keep the
 // two in step (and ArcaneEditor/src/EditorWidgets.cpp's branching copy).
 
 #include <catch2/catch_test_macros.hpp>
@@ -45,7 +45,7 @@ namespace
         REQUIRE(device != nullptr);
         nvrhi::IDevice* nv = device->Nvrhi();
 
-        auto shaders = Arcane::ShaderLibrary::Create(nv, backend, "shaders");
+        auto shaders = Arcane::ShaderLibrary::Create(nv, backend, "data/shaders");
         REQUIRE(shaders != nullptr);
 
         auto canvas = Arcane::CreateCanvas(nv, 8, 8);

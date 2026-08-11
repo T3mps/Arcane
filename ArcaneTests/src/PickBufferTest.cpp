@@ -317,7 +317,7 @@ namespace
         REQUIRE(device != nullptr);
 
         auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend,
-                                                     "shaders");
+                                                     "data/shaders");
         REQUIRE(shaders != nullptr);
 
         auto pick = Arcane::PickBuffer::Create(device->Nvrhi(), *shaders, 64, 64);
@@ -413,7 +413,7 @@ namespace
         REQUIRE(device != nullptr);
         nvrhi::IDevice* nv = device->Nvrhi();
 
-        auto shaders = Arcane::ShaderLibrary::Create(nv, backend, "shaders");
+        auto shaders = Arcane::ShaderLibrary::Create(nv, backend, "data/shaders");
         REQUIRE(shaders != nullptr);
         auto pick = Arcane::PickBuffer::Create(nv, *shaders, kSize, kSize);
         REQUIRE(pick != nullptr);
@@ -480,7 +480,7 @@ namespace
         desc.backend = backend;
         auto device = Arcane::RenderDevice::Create(desc);
         REQUIRE(device != nullptr);
-        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "shaders");
+        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "data/shaders");
         REQUIRE(shaders != nullptr);
         auto pick = Arcane::PickBuffer::Create(device->Nvrhi(), *shaders, kSize, kSize);
         REQUIRE(pick != nullptr);

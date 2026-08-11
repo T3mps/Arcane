@@ -34,7 +34,7 @@ namespace
             device = Arcane::RenderDevice::Create(desc);
             REQUIRE(device != nullptr);
             shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend,
-                                                    "shaders");
+                                                    "data/shaders");
             REQUIRE(shaders != nullptr);
             canvas = Arcane::CreateCanvas(device->Nvrhi(), size, size);
             REQUIRE(canvas != nullptr);

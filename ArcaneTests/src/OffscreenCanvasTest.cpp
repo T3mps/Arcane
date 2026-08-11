@@ -25,7 +25,7 @@ namespace
         REQUIRE(device != nullptr);
 
         auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend,
-                                                     "shaders");
+                                                     "data/shaders");
         REQUIRE(shaders != nullptr);
 
         auto oc = Arcane::OffscreenCanvas::Create(device->Nvrhi(), *shaders,
@@ -73,7 +73,7 @@ namespace
         REQUIRE(device != nullptr);
 
         auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend,
-                                                     "shaders");
+                                                     "data/shaders");
         REQUIRE(shaders != nullptr);
 
         constexpr uint32_t kSize = 128;

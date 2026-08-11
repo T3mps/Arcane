@@ -164,7 +164,7 @@ namespace Arcane::Editor
     // anything.
     //
     // CURVE IS MIRRORED in two other places -- keep all three in step:
-    //   shaders/tonemap.hlsl        (HLSL, branchless min form)
+    //   data/shaders/tonemap.hlsl        (HLSL, branchless min form)
     //   ArcaneTests/src/TonemapTest.cpp   (CPU golden reference, branchless)
     [[nodiscard]] float SrgbToLinear(float srgb) noexcept;
     [[nodiscard]] float LinearToSrgb(float linear) noexcept;

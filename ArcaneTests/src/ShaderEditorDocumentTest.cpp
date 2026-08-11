@@ -176,7 +176,7 @@ TEST_CASE("ShaderEditorDocument::ConsumeResult routes only its own job ids", "[e
     Arcane::ShaderCompiler compiler;
     REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
-    sources.AddRoot("shaders");
+    sources.AddRoot("data/shaders");
     REQUIRE(sources.Get("materials/fullscreen_material.hlsl").has_value());
 
     DocServices services;
@@ -240,7 +240,7 @@ TEST_CASE("ShaderEditorDocument compiles a pass chain per-pass and routes result
     Arcane::ShaderCompiler compiler;
     REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
-    sources.AddRoot("shaders");
+    sources.AddRoot("data/shaders");
 
     DocServices services;
     services.compiler = &compiler;
@@ -412,7 +412,7 @@ TEST_CASE("A base-only scene-reading material compiles through the chain path",
     Arcane::ShaderCompiler compiler;
     REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
-    sources.AddRoot("shaders");
+    sources.AddRoot("data/shaders");
 
     DocServices services;
     services.compiler = &compiler;

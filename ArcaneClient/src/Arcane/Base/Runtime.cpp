@@ -39,7 +39,7 @@ namespace Arcane
     namespace
     {
         // Directory of the running executable, so exe-relative engine assets (here the
-        // shipped EngineConfig/ defaults) resolve regardless of CWD -- mirrors the
+        // shipped data/EngineConfig defaults) resolve regardless of CWD -- mirrors the
         // exe-relative pattern in Assets.cpp / ShaderLibrary.cpp.
         std::filesystem::path ExeDir()
         {
@@ -86,7 +86,7 @@ namespace Arcane
         InputSnapshot                               input{};   // latest host-supplied snapshot; plugins read via Input()
         std::unique_ptr<Assets>                     assets;
         Config                                      config;          // layered engine+project config (Slice 3)
-        std::filesystem::path                       engineConfigDir; // <exe>/EngineConfig (shipped defaults)
+        std::filesystem::path                       engineConfigDir; // <exe>/data/EngineConfig (shipped defaults)
         std::optional<Project>                      project;   // open project (Slice 1b); empty = none
         Audio::AudioDeviceDesc                      audioDesc{};
         Audio::AudioDevice                          audio;
@@ -192,7 +192,7 @@ namespace Arcane
             // Engine-default config layer (shipped beside the exe). A host with no
             // project still gets this base (e.g. input bindings for bare ArcaneRuntime);
             // OpenProject re-layers the project + user files on top.
-            engineConfigDir = ExeDir() / "EngineConfig";
+            engineConfigDir = ExeDir() / "data" / "EngineConfig";
             config.LoadEngineDefaults(engineConfigDir);
             InitAudio();
         }

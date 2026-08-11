@@ -153,7 +153,7 @@ TEST_CASE("BuildMaterialShaderSource stitches a compilable dual-target SPRITE sh
     // params t1..) coexist on BOTH targets, and that a snippet can use the
     // sprite texture + vertex color + params + Time together.
     ShaderSourceProvider provider;
-    provider.AddRoot("shaders");
+    provider.AddRoot("data/shaders");
     const auto templateText = provider.Get("materials/sprite_material.hlsl");
     REQUIRE(templateText.has_value());
 
@@ -198,7 +198,7 @@ TEST_CASE("BuildMaterialShaderSource stitches a compilable dual-target shader", 
     // The REAL template file (copied beside the test exe by the postbuild),
     // through the same provider seam the editor uses.
     ShaderSourceProvider provider;
-    provider.AddRoot("shaders");
+    provider.AddRoot("data/shaders");
     const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
     REQUIRE(templateText.has_value());
 
@@ -279,7 +279,7 @@ TEST_CASE("The vertex stage stitches %{VERTEX_BODY} (passthrough by default)", "
 TEST_CASE("Vertex-stage sources compile on both targets and surfaces", "[shadercompile]")
 {
     ShaderSourceProvider provider;
-    provider.AddRoot("shaders");
+    provider.AddRoot("data/shaders");
     ShaderCompiler sc;
     REQUIRE(sc.Initialize(0.0));
 
@@ -579,7 +579,7 @@ TEST_CASE("BuildMaterialChainSource merges params and binds InputTexture", "[mat
 TEST_CASE("Pass-chain sources compile on both targets", "[shadercompile]")
 {
     ShaderSourceProvider provider;
-    provider.AddRoot("shaders");
+    provider.AddRoot("data/shaders");
     const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
     REQUIRE(templateText.has_value());
 

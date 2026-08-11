@@ -1039,7 +1039,7 @@ namespace Arcane
                     // literals. speed going through arg() is the point: a pin
                     // literal alone can drive the scroll, no Const node.
                     // `Time` is a Globals cbuffer member declared ABOVE both
-                    // stitched seams (shaders/materials/fullscreen_material.hlsl:
+                    // stitched seams (data/shaders/materials/fullscreen_material.hlsl:
                     // cbuffer at :26-31, %{MATERIAL_BODY} :39, %{VERTEX_BODY}
                     // :41), so a Panner may also drive the vertex stage.
                     //

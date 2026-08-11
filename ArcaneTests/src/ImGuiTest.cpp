@@ -63,7 +63,7 @@ namespace
         REQUIRE(device != nullptr);
         nvrhi::IDevice* nv = device->Nvrhi();
 
-        auto shaders = Arcane::ShaderLibrary::Create(nv, backend, "shaders");
+        auto shaders = Arcane::ShaderLibrary::Create(nv, backend, "data/shaders");
         REQUIRE(shaders != nullptr);
 
         auto imgui = Arcane::ImGuiLayer::Create(window, *device, *shaders);

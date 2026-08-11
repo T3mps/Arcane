@@ -109,13 +109,13 @@ namespace
         REQUIRE(device != nullptr);
         nvrhi::IDevice* nv = device->Nvrhi();
 
-        auto shaders = Arcane::ShaderLibrary::Create(nv, backend, "shaders");
+        auto shaders = Arcane::ShaderLibrary::Create(nv, backend, "data/shaders");
         REQUIRE(shaders != nullptr);
         auto oc = Arcane::OffscreenCanvas::Create(nv, *shaders, kSize, kSize);
         REQUIRE(oc != nullptr);
 
         Arcane::ShaderSourceProvider provider;
-        provider.AddRoot("shaders");
+        provider.AddRoot("data/shaders");
         const auto templateText =
             provider.Get(Arcane::MaterialTemplateFile(Arcane::MaterialSurface::Fullscreen));
         REQUIRE(templateText.has_value());

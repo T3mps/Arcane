@@ -108,7 +108,7 @@ namespace Arcane::Editor::RuntimeLaunch
         }
 
         // Same shader-resolution rule ArcaneRuntime/ArcaneEditor already rely
-        // on: ShaderLibrary/ShaderCompiler resolve "shaders/" and friends
+        // on: ShaderLibrary/ShaderCompiler resolve "data/shaders/" and friends
         // relative to the PROCESS's own directory, not the caller's cwd.
         const std::wstring workDir = exe.parent_path().wstring();
 

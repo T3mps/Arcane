@@ -22,7 +22,7 @@ namespace
         auto device = Arcane::RenderDevice::Create(desc);
         REQUIRE(device != nullptr);
         auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend,
-                                                     "shaders");
+                                                     "data/shaders");
         REQUIRE(shaders != nullptr);
         auto canvas = Arcane::CreateCanvas(device->Nvrhi(), 64, 64);
         auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), *shaders);
@@ -95,7 +95,7 @@ namespace
         auto device = Arcane::RenderDevice::Create(desc);
         REQUIRE(device != nullptr);
         auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend,
-                                                     "shaders");
+                                                     "data/shaders");
         REQUIRE(shaders != nullptr);
         auto canvas = Arcane::CreateCanvas(device->Nvrhi(), 64, 64);
         auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), *shaders);

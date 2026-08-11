@@ -187,7 +187,7 @@ project "ArcaneClient"
     -- Shaders are data: compiled at build time, loaded by name at runtime,
     -- hot-reloadable. The script is the single swap point for ShaderMake.
     prebuildcommands {
-        'call "%{wks.location}/shaders/compile-shaders.bat"',
+        'call "%{wks.location}/data/shaders/compile-shaders.bat"',
     }
 
     includedirs {
@@ -322,12 +322,12 @@ project "ArcaneRuntime"
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
-        '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        '{COPYDIR} "%{wks.location}/data/shaders/generated" "%{cfg.buildtarget.directory}/data/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
-        '{MKDIR} "%{cfg.buildtarget.directory}/shaders/materials"',
-        '{COPYDIR} "%{wks.location}/shaders/materials" "%{cfg.buildtarget.directory}/shaders/materials"',
-        '{COPYDIR} "%{wks.location}/EngineConfig" "%{cfg.buildtarget.directory}/EngineConfig"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/shaders/materials"',
+        '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
+        '{COPYDIR} "%{wks.location}/data/EngineConfig" "%{cfg.buildtarget.directory}/data/EngineConfig"',
         '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
         -- Vendored dxc trio (minus dxc.exe): the runtime compile service
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
@@ -381,13 +381,13 @@ project "ArcaneEditor"
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
-        '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        '{COPYDIR} "%{wks.location}/data/shaders/generated" "%{cfg.buildtarget.directory}/data/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
-        '{MKDIR} "%{cfg.buildtarget.directory}/shaders/materials"',
-        '{COPYDIR} "%{wks.location}/shaders/materials" "%{cfg.buildtarget.directory}/shaders/materials"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/shaders/materials"',
+        '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data"',
-        '{COPYDIR} "%{wks.location}/EngineConfig" "%{cfg.buildtarget.directory}/EngineConfig"',
+        '{COPYDIR} "%{wks.location}/data/EngineConfig" "%{cfg.buildtarget.directory}/data/EngineConfig"',
         '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
         -- Editor fonts: Inter (default) + Roboto faces + lucide icon font, merged into
         -- the ImGui atlas by EditorFonts.cpp (exe-relative paths -- must align w/ dests).
@@ -607,11 +607,11 @@ project "ArcaneTests"
     -- The test exe loads ArcaneClient.dll from its own directory.
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
-        '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        '{COPYDIR} "%{wks.location}/data/shaders/generated" "%{cfg.buildtarget.directory}/data/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
-        '{MKDIR} "%{cfg.buildtarget.directory}/shaders/materials"',
-        '{COPYDIR} "%{wks.location}/shaders/materials" "%{cfg.buildtarget.directory}/shaders/materials"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/shaders/materials"',
+        '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
         '{COPYFILE} "%{wks.location}/../Client/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',

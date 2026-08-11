@@ -45,7 +45,7 @@ namespace
         auto device = Arcane::RenderDevice::Create(desc);
         REQUIRE(device != nullptr);
 
-        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "shaders");
+        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "data/shaders");
         REQUIRE(shaders != nullptr);
 
         constexpr uint32_t kSize = 64;
@@ -53,7 +53,7 @@ namespace
         REQUIRE(oc != nullptr);
 
         Arcane::ShaderSourceProvider provider;
-        provider.AddRoot("shaders");
+        provider.AddRoot("data/shaders");
         const auto templateText = provider.Get("materials/sprite_material.hlsl");
         REQUIRE(templateText.has_value());
 

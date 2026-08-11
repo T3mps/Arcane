@@ -546,7 +546,7 @@ namespace Arcane::Editor
         m_shaderCompiler = std::make_unique<Arcane::ShaderCompiler>();
         if (!m_shaderCompiler->Initialize(/*debounceSeconds=*/0.2))
             ARC_WARN("Arcane Editor: dxcompiler.dll unavailable -- material editing disabled");
-        m_shaderSources.AddRoot("shaders");
+        m_shaderSources.AddRoot("data/shaders");
         const auto materialFactory =
             [this](const std::filesystem::path& p)
                 -> std::unique_ptr<Arcane::Editor::EditorDocument>

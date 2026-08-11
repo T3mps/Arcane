@@ -5,7 +5,7 @@
 // Poll() re-stats the files and reloads changed ones (hot reload);
 // Generation() bumps on every reload so pipeline caches can lazily rebuild.
 // The ARCANE_SHADER_DIR environment variable overrides the directory --
-// point it at Arcane/shaders/generated for the recompile-while-running loop.
+// point it at Arcane/data/shaders/generated for the recompile-while-running loop.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/Device.hpp>

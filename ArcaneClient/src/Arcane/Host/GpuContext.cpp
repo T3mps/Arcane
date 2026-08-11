@@ -35,7 +35,7 @@ namespace Arcane
         ctx->m_swapchain = ctx->m_device->CreateSwapchain(ctx->m_window, cfg.vsync);
         if (!ctx->m_swapchain) { ARC_ERROR("GpuContext: swapchain create failed"); return nullptr; }
 
-        ctx->m_shaders = ShaderLibrary::Create(ctx->m_device->Nvrhi(), cfg.backend, "shaders");
+        ctx->m_shaders = ShaderLibrary::Create(ctx->m_device->Nvrhi(), cfg.backend, "data/shaders");
         if (!ctx->m_shaders) { ARC_ERROR("GpuContext: shader library create failed"); return nullptr; }
 
         ctx->m_canvas = CreateCanvas(ctx->m_device->Nvrhi(),

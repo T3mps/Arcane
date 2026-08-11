@@ -40,7 +40,7 @@ namespace
 
         PostChainCache MakeCache()
         {
-            provider.AddRoot("shaders");
+            provider.AddRoot("data/shaders");
             PostChainCache::Services s;
             s.compiler = &compiler;
             s.sources = &provider;
