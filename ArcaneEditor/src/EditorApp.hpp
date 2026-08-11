@@ -363,6 +363,19 @@ namespace Arcane::Editor
         static void  PanelVisibilitySettingsWriteAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
                                                      ImGuiTextBuffer* buf);
 
+        // ---- Editor layout ini (imgui.ini), per project ---------------------
+        // %LOCALAPPDATA%\Arcane\editor\layouts\<project-guid>.ini ("default"
+        // project-less). io.IniFilename BORROWS this string (ImGui never
+        // copies it), so it lives here, never in a local. Retargeted at boot
+        // (StageFinalize, before the first NewFrame auto-loads it) and on
+        // project switch. Switch rule, on purpose: the LIVE layout follows
+        // you -- each project remembers the layout you last had open in it,
+        // and a project's own saved layout applies on the next BOOT into it.
+        // No mid-session ini reload: ImGui applies loaded dock data only to
+        // windows as they appear, so a live reload would half-apply.
+        std::string m_layoutIniPath;
+        void RetargetLayoutIni();
+
         // SeparateWindow's launch flow (LaunchStandalone, EditorAppScene.cpp).
         // m_launchModalPending is the edge LaunchStandalone raises when the active
         // scene is not ready to hand to ArcaneRuntime (dirty, OR never saved --

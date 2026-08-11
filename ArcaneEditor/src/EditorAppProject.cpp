@@ -680,6 +680,9 @@ namespace Arcane::Editor
             // list (the failure fallback below deliberately does not call it).
             NoteProjectOpened();
             ReloadSceneRecents();
+            // Retarget the appdata layout ini at the incoming project (saves
+            // the outgoing project's layout on the way -- see the method).
+            RetargetLayoutIni();
             return true;
         }));
 
@@ -778,6 +781,9 @@ namespace Arcane::Editor
             EnsureScene();
             m_runtime->Loop().SetPaused(true);   // back to Edit
             UpdateWindowTitle();
+            // The failed switch converged on project-less (or kept the old
+            // project) -- keep the layout ini's key honest about it.
+            RetargetLayoutIni();
         }
     }
 

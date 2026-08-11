@@ -759,7 +759,56 @@ namespace Arcane::Editor
         // lands in the list exactly like one opened from the menu.
         NoteProjectOpened();
         ReloadSceneRecents();
+        // Point ImGui's ini at this project's appdata layout file BEFORE the
+        // first NewFrame reads it (MainLoop starts after boot) -- ImGui then
+        // auto-loads the per-project layout on frame one.
+        RetargetLayoutIni();
         return true;
+    }
+
+    void EditorApp::RetargetLayoutIni()
+    {
+        // %LOCALAPPDATA%\Arcane\editor\layouts\<project-guid>.ini ("default"
+        // for a project-less session) -- the editor's slot under the same
+        // family root the Hub already uses (%LOCALAPPDATA%\Arcane\hub,
+        // RecentProjects.cpp). With LOCALAPPDATA unset or unwritable, ImGui's
+        // exe-dir imgui.ini default stands -- degraded, never broken.
+        std::filesystem::path dir;
+        if (const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA"); localAppData && *localAppData)
+            dir = std::filesystem::path(localAppData) / L"Arcane" / L"editor" / L"layouts";
+        if (dir.empty())
+            return;
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        if (ec)
+            return;
+
+        const Arcane::Project* proj = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        const std::string key = (proj && !proj->Manifest().guid.empty())
+                                    ? proj->Manifest().guid : std::string("default");
+        const std::filesystem::path target = dir / (key + ".ini");
+        if (m_layoutIniPath == target.string())
+            return;   // same project (or a re-open of it): nothing to retarget
+
+        ImGuiIO& io = ImGui::GetIO();
+        // Flush the OUTGOING layout first -- but only on a real project
+        // SWITCH (m_layoutIniPath already set). At boot nothing has drawn
+        // yet, and saving here would write an EMPTY settings file over the
+        // legacy exe-dir imgui.ini before the seed below could read it.
+        if (!m_layoutIniPath.empty() && io.IniFilename && *io.IniFilename)
+            ImGui::SaveIniSettingsToDisk(io.IniFilename);
+
+        // One-time migration: seed a project's first appdata layout from the
+        // legacy exe-dir imgui.ini so a hand-tuned layout survives the move.
+        // The legacy file is left in place (bin/ is untracked scratch).
+        if (!std::filesystem::exists(target, ec))
+            if (std::filesystem::exists("imgui.ini", ec))
+                std::filesystem::copy_file("imgui.ini", target, ec);
+
+        // io.IniFilename is a BORROWED pointer (ImGui never copies it) -- the
+        // member string is its stable storage for the context's lifetime.
+        m_layoutIniPath = target.string();
+        io.IniFilename  = m_layoutIniPath.c_str();
     }
 
     void EditorApp::RefreshRecents()
