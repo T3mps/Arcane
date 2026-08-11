@@ -28,6 +28,16 @@ workspace "Arcane"
         buildoptions { "-mavx2", "-mfma" }         -- gcc/clang x64 parity; ARM port supplies NEON flags later
     filter {}
 
+    -- C4251 ("needs to have dll-interface"): disabled workspace-wide, deliberately.
+    -- Every hit is an ARCANE_API class holding STL members. The warning exists for
+    -- DLL/client CRT-layout mismatches; this workspace's foundational rule is /MD
+    -- everywhere + one toolset + one shared heap (memory crosses the
+    -- Arcane.dll/Game.dll boundary by design), so the mismatch it warns about is
+    -- structurally impossible here. The "real" fixes (pimpl-everything, function-
+    -- only exports) buy nothing under that contract; Unreal ships with 4251
+    -- disabled engine-wide for the same reason.
+    disablewarnings { "4251" }
+
     -- "-md" suffix keeps ThirdParty wrapper outputs (each dep builds into
     -- bin/ under its own dir) separate from the static-CRT flavors the
     -- Server workspace builds from the same wrapper scripts.

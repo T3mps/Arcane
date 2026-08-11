@@ -36,6 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -123,10 +124,12 @@ extern "C"
         //                 Transform -> WorldTransform derived for the render phase.
         //    render: sprites first, then the physics-debug overlay on top.
         auto& sch = ctx->engine->Schedulers();
-        sch.update.AddSystem<Arcane::TransformPropagationSystem>();
-        sch.render.AddSystem<Arcane::RenderSubmissionSystem>();
-        sch.render.AddSystem<Arcane::Sandbox::PhysicsDebugRenderSystem>();
-        sch.render.AddSystem<Arcane::Sandbox::PolygonDraftRenderSystem>();
+        // Fresh scheduler, first-ever registration: AddSystem's Result can't
+        // meaningfully fail here, so the return value is intentionally unused.
+        std::ignore = sch.update.AddSystem<Arcane::TransformPropagationSystem>();
+        std::ignore = sch.render.AddSystem<Arcane::RenderSubmissionSystem>();
+        std::ignore = sch.render.AddSystem<Arcane::Sandbox::PhysicsDebugRenderSystem>();
+        std::ignore = sch.render.AddSystem<Arcane::Sandbox::PolygonDraftRenderSystem>();
 
         // 3. Build the scene (fresh boot only; a hot-reload-with-state restores it).
         //    BuildInitialScene mints its OWN fresh PhysicsResource (via the clean-rebuild

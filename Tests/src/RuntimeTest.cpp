@@ -120,9 +120,11 @@ TEST_CASE("Runtime RestoreRegistry keeps the RunLoop object stable", "[runtime]"
 TEST_CASE("Runtime ClearSystems empties all phase schedulers", "[runtime]")
 {
     Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
-    rt.Schedulers().fixedUpdate.AddSystem<NoOpSystem>();   // each scheduler has its own
-    rt.Schedulers().update.AddSystem<NoOpSystem>();        // type index, so reusing the
-    rt.Schedulers().render.AddSystem<NoOpSystem>();        // same type across them is fine
+    // Registration must actually succeed, or Empty() below would already be
+    // true before ClearSystems() runs and the test would pass vacuously.
+    REQUIRE(rt.Schedulers().fixedUpdate.AddSystem<NoOpSystem>().IsOk());   // each scheduler has its own
+    REQUIRE(rt.Schedulers().update.AddSystem<NoOpSystem>().IsOk());        // type index, so reusing the
+    REQUIRE(rt.Schedulers().render.AddSystem<NoOpSystem>().IsOk());        // same type across them is fine
     rt.ClearSystems();
     CHECK(rt.Schedulers().fixedUpdate.Empty());
     CHECK(rt.Schedulers().update.Empty());

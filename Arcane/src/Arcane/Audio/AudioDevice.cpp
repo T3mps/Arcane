@@ -2,8 +2,18 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Assets/Assets.hpp>
 
+// C4244 (size_t truncation): upstream narrowing inside miniaudio's own
+// implementation. Vendored single-header code -- not ours to patch; scope
+// the suppression to just this include, not our surrounding TU.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4244)
+#endif
 #define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio.h>
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 #include <atomic>
 #include <cassert>

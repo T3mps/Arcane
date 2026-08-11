@@ -45,8 +45,11 @@ namespace
         Arcane::RegisterSceneComponents(reg);
 
         Arcane::SystemSchedulers schedulers(sched);
-        schedulers.fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>();
-        schedulers.render.AddSystem<Arcane::RenderSubmissionSystem>();
+        // These two systems are what the sprite-count/validation assertions
+        // below actually exercise; a silent registration failure would make
+        // this slice test pass without submitting anything.
+        REQUIRE(schedulers.fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>().IsOk());
+        REQUIRE(schedulers.render.AddSystem<Arcane::RenderSubmissionSystem>().IsOk());
 
         Astra::Entity root = reg.CreateEntity();
         reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});

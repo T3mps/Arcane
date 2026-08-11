@@ -401,10 +401,13 @@ TEST_CASE("Arcane Editor Stop: real SandboxApp runs post-Stop Update+render fram
     // drive them exactly like production (fixedUpdate stays empty -- the sandbox owns
     // its physics step via SandboxApp::FixedUpdate, called as the plugin-fixed hook).
     Arcane::SystemSchedulers& sch = runtime.Schedulers();
-    sch.update.AddSystem<Arcane::TransformPropagationSystem>();
-    sch.render.AddSystem<Arcane::RenderSubmissionSystem>();
-    sch.render.AddSystem<Sbx::PhysicsDebugRenderSystem>();
-    sch.render.AddSystem<Sbx::PolygonDraftRenderSystem>();
+    // Registration must succeed for this test to actually exercise the
+    // production system set below -- a silent failure here would make the
+    // "runs without crashing" claim vacuous (nothing would run).
+    REQUIRE(sch.update.AddSystem<Arcane::TransformPropagationSystem>().IsOk());
+    REQUIRE(sch.render.AddSystem<Arcane::RenderSubmissionSystem>().IsOk());
+    REQUIRE(sch.render.AddSystem<Sbx::PhysicsDebugRenderSystem>().IsOk());
+    REQUIRE(sch.render.AddSystem<Sbx::PolygonDraftRenderSystem>().IsOk());
 
     Sbx::SandboxApp app;
     app.Configure(kSandboxGravityY);

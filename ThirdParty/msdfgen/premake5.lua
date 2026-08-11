@@ -34,6 +34,12 @@ project "msdfgen"
 
     defines { "MSDFGEN_PUBLIC=", "_CRT_SECURE_NO_WARNINGS" }
 
+    -- C4005 ("macro redefinition"): save-bmp.cpp, save-tiff.cpp, and
+    -- shape-description.cpp each #define _CRT_SECURE_NO_WARNINGS unguarded,
+    -- colliding with the command-line define above. Upstream vendored code
+    -- -- not ours to patch.
+    disablewarnings { "4005" }
+
     filter "system:windows"
         systemversion "latest"
 

@@ -23,6 +23,7 @@
 #include <imgui.h>   // ABI v2: adopt the host's ImGui context/allocators (imported from Arcane.dll)
 
 #include <cstddef>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -121,8 +122,10 @@ extern "C"
         // would restore it automatically on unload.)
 
         auto& sch = ctx->engine->Schedulers();                 // 2. register systems (functors in this module)
-        sch.fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>();
-        sch.render.AddSystem<Arcane::RenderSubmissionSystem>();
+        // Fresh scheduler, first-ever registration: AddSystem's Result can't
+        // meaningfully fail here, so the return value is intentionally unused.
+        std::ignore = sch.fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>();
+        std::ignore = sch.render.AddSystem<Arcane::RenderSubmissionSystem>();
 
         Astra::Registry& reg = ctx->engine->Registry();
         if (!reg.GetResource<Arcane::SceneRoot>())             // build only on a fresh boot

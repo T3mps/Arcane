@@ -51,7 +51,10 @@ TEST_CASE("RunLoop interleaves plugin callbacks with engine fixedUpdate", "[sim]
     int engineFixed = 0;
     std::vector<char> order;
     Arcane::SystemSchedulers sch(nullptr);
-    sch.fixedUpdate.AddSystem<EngineStep>(engineFixed, order);
+    // Registration success is load-bearing: engineFixed/order are the test's
+    // only observable signal, so a silent AddSystem failure would read as a
+    // (wrong) assertion failure below instead of a clear setup error here.
+    REQUIRE(sch.fixedUpdate.AddSystem<EngineStep>(engineFixed, order).IsOk());
 
     Arcane::RunLoop loop(reg, sch);
     int pluginFixed = 0, pluginUpdate = 0;
@@ -75,7 +78,7 @@ TEST_CASE("RunLoop runs a fixed-rate scheduler and clamps spikes", "[sim][runloo
     reg.SetResource<Ticks>(Ticks{});
 
     Arcane::SystemSchedulers schedulers(nullptr);  // null -> sequential executor
-    schedulers.fixedUpdate.AddSystem<IncrementTicks>();
+    REQUIRE(schedulers.fixedUpdate.AddSystem<IncrementTicks>().IsOk());
 
     Arcane::RunLoop::Config cfg;   // 60 Hz, maxStepsPerFrame default 5
     Arcane::RunLoop loop(reg, schedulers, cfg);
@@ -105,7 +108,7 @@ TEST_CASE("RunLoop paused: fixed phase frozen, Update still runs", "[sim][runloo
     Astra::Registry reg;
     reg.SetResource<Ticks>(Ticks{});
     Arcane::SystemSchedulers sch(nullptr);
-    sch.fixedUpdate.AddSystem<IncrementTicks>();
+    REQUIRE(sch.fixedUpdate.AddSystem<IncrementTicks>().IsOk());
     Arcane::RunLoop loop(reg, sch);
 
     loop.SetPaused(true);
@@ -124,7 +127,7 @@ TEST_CASE("RunLoop single-step: exactly one canonical fixed step while paused", 
     Astra::Registry reg;
     reg.SetResource<Ticks>(Ticks{});
     Arcane::SystemSchedulers sch(nullptr);
-    sch.fixedUpdate.AddSystem<IncrementTicks>();
+    REQUIRE(sch.fixedUpdate.AddSystem<IncrementTicks>().IsOk());
     Arcane::RunLoop loop(reg, sch);
 
     loop.SetPaused(true);
@@ -147,7 +150,7 @@ TEST_CASE("RunLoop time-scale scales the sim clock, not the step dt", "[sim][run
         Astra::Registry reg;
         reg.SetResource<Ticks>(Ticks{});
         Arcane::SystemSchedulers sch(nullptr);
-        sch.fixedUpdate.AddSystem<IncrementTicks>();
+        REQUIRE(sch.fixedUpdate.AddSystem<IncrementTicks>().IsOk());
         Arcane::RunLoop loop(reg, sch);
         loop.SetTimeScale(scale);
         for (int i = 0; i < 60; ++i) loop.Advance(1.0 / 60.0);  // 1s of real time
@@ -171,7 +174,7 @@ TEST_CASE("RunLoop unpause does not burst catch-up steps", "[sim][runloop]")
     Astra::Registry reg;
     reg.SetResource<Ticks>(Ticks{});
     Arcane::SystemSchedulers sch(nullptr);
-    sch.fixedUpdate.AddSystem<IncrementTicks>();
+    REQUIRE(sch.fixedUpdate.AddSystem<IncrementTicks>().IsOk());
     Arcane::RunLoop loop(reg, sch);
 
     loop.SetPaused(true);

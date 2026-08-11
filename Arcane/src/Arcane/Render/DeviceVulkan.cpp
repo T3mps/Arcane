@@ -50,14 +50,17 @@ namespace Arcane
         // Routes VK validation-layer output into the SAME latch as NVRHI
         // diagnostics: errors increment RenderErrorCount(), so a raw VUID
         // fails the GPU tests exactly like an [nvrhi] error would.
-        VKAPI_ATTR VkBool32 VKAPI_CALL VkDebugCallback(
-            VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-            VkDebugUtilsMessageTypeFlagsEXT /*types*/,
-            const VkDebugUtilsMessengerCallbackDataEXT* data,
+        // Typed vk:: signature (vk::PFN_DebugUtilsMessengerCallbackEXT), not the
+        // raw C PFN_vkDebugUtilsMessengerCallbackEXT: setPfnUserCallback's
+        // C-signature overload is deprecated in favor of this one.
+        VKAPI_ATTR vk::Bool32 VKAPI_CALL VkDebugCallback(
+            vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
+            vk::DebugUtilsMessageTypeFlagsEXT /*types*/,
+            const vk::DebugUtilsMessengerCallbackDataEXT* data,
             void* /*userData*/)
         {
             const char* text = (data && data->pMessage) ? data->pMessage : "";
-            if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+            if (severity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError)
                 NvrhiMessageCallback::Instance().message(
                     nvrhi::MessageSeverity::Error, text);
             else
