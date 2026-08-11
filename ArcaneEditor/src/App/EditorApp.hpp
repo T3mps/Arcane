@@ -552,8 +552,8 @@ namespace Arcane::Editor
             std::unique_ptr<Arcane::PickBuffer>       pick;
             std::unique_ptr<Arcane::SelectionOutline> outline;
             std::uint32_t pendingW = 0, pendingH = 0;   // measured last frame, applied at frame top
-            void ApplyPendingResize(GpuContext& gpu);   // body: the current
-                                                        // EditorApp::ApplyPendingViewportResize
+            void ApplyPendingResize();   // body: the current
+                                         // EditorApp::ApplyPendingViewportResize
         };
         ViewportTargets m_viewportTargets;
         Arcane::Editor::ViewportRect                   m_viewportRect{};
@@ -718,12 +718,17 @@ namespace Arcane::Editor
         void ResetPerProjectState();
 
         // The project-open SUCCESS tail (architecture pass sec 5) -- previously
-        // duplicated verbatim in StageFinalize and switch_plugin_load, with a
-        // partial third copy in the switch failure fallback. recordRecents=false
-        // is the fallback's case: it re-establishes the PROJECT-LESS baseline (or
-        // the old project), and a refused open must never reorder the recents
-        // lists. Adopts the current project's boot scene (if m_undo and a
-        // project exist), then EnsureScene/UpdateWindowTitle/NoteProjectOpened.
+        // duplicated verbatim across StageFinalize and a hand-rolled
+        // switch_plugin_load stage, with a partial third copy in the switch
+        // failure fallback. Now a single function called from all three sites:
+        // StageFinalize, SwitchProject's plugin_load stage (which since Task 12
+        // reuses the same StagePluginLoad body -- switch_plugin_load no longer
+        // exists as a separate stage), and the switch failure fallback.
+        // recordRecents=false is the fallback's case: it re-establishes the
+        // PROJECT-LESS baseline (or the old project), and a refused open must
+        // never reorder the recents lists. Adopts the current project's boot
+        // scene (if m_undo and a project exist), then
+        // EnsureScene/UpdateWindowTitle/NoteProjectOpened.
         // Does NOT call RetargetLayoutIni() -- every call site still owns that
         // separately, immediately after, since it is not part of the "a project
         // (or none) is now open" fact this tail represents (see each site).

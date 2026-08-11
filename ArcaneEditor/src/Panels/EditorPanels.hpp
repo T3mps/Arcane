@@ -127,9 +127,12 @@ namespace Arcane::Editor
     // rows set it directly. In Viewport mode the Play button behaves exactly as
     // before (play.Play/Stop). In SeparateWindow mode, clicking Play does NOT touch
     // `play` at all (fire-and-forget: nothing to Stop) -- instead this returns true
-    // for that one frame, and the caller (EditorApp::LaunchStandalone) owns the
-    // project/dirty-scene checks and the actual ArcaneRuntime spawn, the same
-    // "panel reports, app performs" split ViewportPanelResult's clicks already use.
+    // for that one frame, and the caller performs the actual ArcaneRuntime spawn
+    // via EditorApp::DoLaunchStandalone, the same "panel reports, app performs"
+    // split ViewportPanelResult's clicks already use. The project/dirty-scene
+    // checks are NOT owned by that spawn step -- they live in the SceneSession
+    // intent machine (SceneSession::Request, run by RunSceneAction before this
+    // ever returns true); DoLaunchStandalone keeps only a defensive backstop.
     [[nodiscard]] bool DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
                                           const Arcane::PluginVTable* plugin,
                                           PlayLaunchMode& mode, uint64_t logoTex = 0);

@@ -761,8 +761,8 @@ namespace Arcane::Editor
             // the project and switch_teardown having already torn the old
             // one down. Or the presenter itself requesting quit
             // (`r.quitRequested`, e.g. the window closing mid-switch). Either
-            // way, "render_bridge"/
-            // "plugin_load" never ran (Fatal failure skips dependents), so
+            // way, "render_bridge"/"plugin_load" never ran (Fatal failure
+            // skips dependents), so
             // `m_plugin` is still exactly what switch_teardown left it
             // (nullopt) and the registry is still exactly what that same
             // PluginHost::Unload -> ResetRegistry left it (empty) -- this

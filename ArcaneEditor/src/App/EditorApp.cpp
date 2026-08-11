@@ -682,16 +682,18 @@ namespace Arcane::Editor
                 // Load() failed partway through and only a generic "optional stage
                 // 'plugin_load' failed; continuing" line in the log -- worse than
                 // the Fatal path it replaced, which at least failed loudly even
-                // though it never let the developer in to fix anything. Instead this
-                // mirrors SwitchProject's switch_plugin_load stage exactly
-                // (EditorAppProject.cpp): m_plugin.reset() leaves EXACTLY the same
-                // safe, disengaged state the "no game module" branch below produces
-                // on purpose (every m_plugin-> use in MainLoop is optional-guarded,
-                // per this function's opening comment), and a detailed banner --
-                // naming the required ABI, the same wording switch_plugin_load uses
-                // -- surfaces through m_modalErrors as the "Open Project
-                // Failed" modal (EditorAppFrame.cpp) once MainLoop starts, rather
-                // than only a Console line.
+                // though it never let the developer in to fix anything. Instead:
+                // m_plugin.reset() leaves EXACTLY the same safe, disengaged state
+                // the "no game module" branch below produces on purpose (every
+                // m_plugin-> use in MainLoop is optional-guarded, per this
+                // function's opening comment), and a detailed banner -- naming
+                // the required ABI -- surfaces through m_modalErrors as the
+                // "Open Project Failed" modal (EditorAppFrame.cpp) once MainLoop
+                // starts, rather than only a Console line. Since Task 12
+                // (EditorAppProject.cpp) SwitchProject no longer has its own
+                // switch_plugin_load stage -- it MOVES this exact StagePluginLoad
+                // body (this whole function) and runs it verbatim, so a switch
+                // failure hits this SAME branch rather than a mirrored copy.
                 ARC_ERROR("Arcane Editor: failed to load the game module / project plugins");
                 m_modalErrors.Push("Open Project Failed",
                                      "The project opened, but its game module / plugins "
@@ -729,8 +731,11 @@ namespace Arcane::Editor
         }
 
         // Task 7's boot-scene handoff / EnsureScene / title / recents-record --
-        // the project-open success tail, shared verbatim with SwitchProject's
-        // switch_plugin_load stage. See OnProjectOpened.
+        // the project-open success tail. SwitchProject's plugin_load stage
+        // (EditorAppProject.cpp, which since Task 12 reuses this exact
+        // StagePluginLoad body -- there is no separate switch_plugin_load
+        // stage anymore) calls this same OnProjectOpened function directly,
+        // not a duplicated copy. See OnProjectOpened.
         OnProjectOpened();
 
         // Point ImGui's ini at this project's appdata layout file BEFORE the
@@ -745,10 +750,15 @@ namespace Arcane::Editor
     }
 
     // The project-open SUCCESS tail (architecture pass sec 5) -- previously
-    // duplicated verbatim in StageFinalize and switch_plugin_load, with a
-    // partial third copy in the switch failure fallback. recordRecents=false is
-    // the fallback's case: it re-establishes the PROJECT-LESS baseline (or the
-    // old project), and a refused open must never reorder the recents lists.
+    // duplicated verbatim across StageFinalize and a hand-rolled
+    // switch_plugin_load stage, with a partial third copy in the switch
+    // failure fallback. Now a single function called from all three sites:
+    // StageFinalize, SwitchProject's plugin_load stage (which since Task 12
+    // reuses this same StagePluginLoad body -- switch_plugin_load no longer
+    // exists as a separate stage), and the switch failure fallback.
+    // recordRecents=false is the fallback's case: it re-establishes the
+    // PROJECT-LESS baseline (or the old project), and a refused open must
+    // never reorder the recents lists.
     void EditorApp::OnProjectOpened(bool recordRecents)
     {
         // Task 7: open into the project's boot scene, now that the plugin has
@@ -776,9 +786,13 @@ namespace Arcane::Editor
         // frame -- EditorAppFrame.cpp -- so this is a courtesy, not the only
         // call site).
         UpdateWindowTitle();
-        // Record a SUCCESSFUL open only -- a refused switch (recordRecents ==
-        // false) must never reorder Open Recent.
-        if (recordRecents && m_runtime->CurrentProject())
+        // Record every call except a refused switch -- recordRecents == false
+        // remains the refused-open case (must never reorder Open Recent). A
+        // null project (project-less boot) now flows through to
+        // NoteProjectOpened's null-project prefill branch (EditorRecents.cpp),
+        // restoring the pre-pass behavior: the first File-menu frame is
+        // already populated instead of showing an empty cache.
+        if (recordRecents)
             m_recents.NoteProjectOpened(m_runtime->CurrentProject());
     }
 

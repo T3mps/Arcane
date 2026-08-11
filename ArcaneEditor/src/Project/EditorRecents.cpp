@@ -19,6 +19,12 @@ namespace Arcane::Editor
                 return std::filesystem::exists(p, ec);
             });
 
+        // Project-less boot's File-menu prefill path: reached via
+        // OnProjectOpened(nullptr) (EditorApp.cpp) so the very first File-menu
+        // frame is already populated. A project-less call still needs both
+        // lists in a defined state -- projects is refreshed unconditionally
+        // above; scenes has nothing durable to reload without a project, but
+        // still gets cleared here rather than left stale from a prior one.
         scenes = {};
         if (!proj)
             return;

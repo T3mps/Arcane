@@ -86,8 +86,13 @@ namespace Arcane
         // Open a project folder or .arcproj: validate-then-commit. On success the
         // Project is adopted and the Assets facade's content root is set to the
         // project's game:// mount (root/Content); returns false and leaves ALL state
-        // untouched on a missing/invalid manifest OR an engineAbi that does not match
-        // this engine (kGamePluginABIVersion). Both hosts open a project through here.
+        // untouched only on a missing/invalid manifest (Project::Open failure). An
+        // engineAbi that does not match this engine (kGamePluginABIVersion) does NOT
+        // block the open -- it ARC_WARNs and proceeds, since the manifest stamp only
+        // describes what the game DLL was built against and the project's data is
+        // ABI-agnostic. The one dangerous act, loading that stale DLL, is refused
+        // separately by the module-level ABI gate at plugin load (Plugin.cpp), not
+        // by this function. Both hosts open a project through here.
         //
         // `onProgress`, when non-empty, is forwarded straight through to
         // Project::Open (and from there to AssetRegistry::ScanContent) -- this

@@ -25,10 +25,11 @@ namespace Arcane::Editor
 
     // Play-mode dropdown (Task 6, runtime-host-fold arc): where the transport's
     // Play button sends the click. Viewport = PlaySession above, unchanged
-    // (snapshot/restore, tinted toggle). SeparateWindow = EditorApp::
-    // LaunchStandalone -- a fire-and-forget spawn of ArcaneRuntime.exe on the
-    // active scene; PlaySession/the toggle are never touched by it (there is
-    // nothing for Stop to restore). Declared here (rather than inline in
+    // (snapshot/restore, tinted toggle). SeparateWindow = the SceneSession
+    // LaunchStandalone intent, whose effect is EditorApp::DoLaunchStandalone
+    // -- a fire-and-forget spawn of ArcaneRuntime.exe on the active scene;
+    // PlaySession/the toggle are never touched by it (there is nothing for
+    // Stop to restore). Declared here (rather than inline in
     // EditorApp.hpp, where the persisted m_playMode member lives) so
     // EditorPanels.hpp's DrawSimTimeToolbar can see it without EditorPanels
     // depending on EditorApp.hpp (which itself includes EditorPanels.hpp --

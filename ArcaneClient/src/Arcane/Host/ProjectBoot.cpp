@@ -372,12 +372,14 @@ namespace Arcane::HostBoot
         // comment for the same "nothing useful to fall back to" reasoning).
         //
         // StagePluginLoad's failure branch was brought into line with this
-        // (EditorApp.cpp): it now leaves the SAME defined, disengaged state
-        // SwitchProject's switch_plugin_load stage already produces for the
-        // identical failure (EditorAppProject.cpp) -- m_plugin.reset() plus a
-        // detailed Console + modal banner naming the required ABI -- instead
-        // of the bare "stage 'plugin_load' failed" a merely-Optional policy
-        // would have left behind on its own.
+        // (EditorApp.cpp): it leaves a defined, disengaged state --
+        // m_plugin.reset() plus a detailed Console + modal banner naming the
+        // required ABI -- instead of the bare "stage 'plugin_load' failed" a
+        // merely-Optional policy would have left behind on its own. Since
+        // Task 12, SwitchProject's plugin_load stage (EditorAppProject.cpp)
+        // reuses this exact StagePluginLoad body rather than a separately
+        // mirrored switch_plugin_load stage, so a switch failure hits the
+        // SAME branch, not a duplicated copy.
         for (BootStage& stage : s)
         {
             if (stage.id != "plugin_load")

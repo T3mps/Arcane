@@ -920,7 +920,7 @@ namespace Arcane::Editor
     // Phase 8: deferred viewport resize. Must stay before the scene render.
     void EditorApp::ApplyPendingViewportResize()
     {
-        m_viewportTargets.ApplyPendingResize(*m_gpu);
+        m_viewportTargets.ApplyPendingResize();
     }
 
     // Deferred resize: the Viewport panel's content-region size measured LAST
@@ -930,7 +930,7 @@ namespace Arcane::Editor
     // (called right after ImGui::Image bakes the current texture pointer into
     // this frame's draw list) synchronously frees that very texture before
     // ImGui replays the draw list at Render time.
-    void EditorApp::ViewportTargets::ApplyPendingResize(GpuContext&)
+    void EditorApp::ViewportTargets::ApplyPendingResize()
     {
         if (pendingW != 0 && pendingH != 0 &&
             (pendingW != canvas->Width() || pendingH != canvas->Height()))
