@@ -230,13 +230,21 @@ namespace Arcane::Editor
         c[ImGuiCol_NavWindowingDimBg]      = ImVec4(0.02f, 0.02f, 0.02f, 0.55f);
         c[ImGuiCol_ModalWindowDimBg]       = ImVec4(0.02f, 0.02f, 0.02f, 0.55f);
 
-        // The ONE metric this theme changes. Default is 0 (imgui.cpp:1533):
-        // with no frame border a near-black well on a dark panel has only its
-        // fill to separate it, and small fields lose their edge entirely. One
-        // pixel of kBorder (darker than both) is the inset line the reference
-        // shows around every field. Everything else -- FrameRounding 0,
-        // GrabRounding 0, the paddings -- is left at ImGui's default, which is
-        // already the near-square shape the reference wants.
+        // The first of TWO metrics this theme changes. Default is 0
+        // (imgui.cpp:1533): with no frame border a near-black well on a dark
+        // panel has only its fill to separate it, and small fields lose their
+        // edge entirely. One pixel of kBorder (darker than both) is the inset
+        // line the reference shows around every field. Everything else --
+        // FrameRounding 0, GrabRounding 0, the paddings -- is left at ImGui's
+        // default, which is already the near-square shape the reference wants.
         style.FrameBorderSize = 1.0f;
+
+        // The second: kill the dock node's OWN close button (the X at the
+        // right end of every tab bar, which closes the node's visible window).
+        // Each docked tab already carries its own X (window->HasCloseButton,
+        // per-tab at imgui.cpp:19661, independent of this) -- two X's per
+        // panel read as clutter, and the corner one closes whichever tab
+        // happens to be selected, which is never what the user aimed at.
+        style.DockingNodeHasCloseButton = false;
     }
 }
