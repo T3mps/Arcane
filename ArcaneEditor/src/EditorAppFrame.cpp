@@ -102,7 +102,9 @@ namespace Arcane::Editor
         {
             std::string ext = p.extension().string();
             for (char& c : ext)
+            {
                 c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            }
             return ext;
         }
 
@@ -115,7 +117,9 @@ namespace Arcane::Editor
             for (const Astra::Registry::ComponentInfo& ci : reg.InspectEntity(e))
             {
                 if (ci.meta && ci.meta->typeName == "Arcane::Transform")
+                {
                     return ci.descriptor;
+                }
             }
             return nullptr;
         }
@@ -167,8 +171,14 @@ namespace Arcane::Editor
             Arcane::Diagnostics::Heartbeat();
 
             const FramePump pump = PumpFrameEvents();
-            if (pump == FramePump::Exit)      break;
-            if (pump == FramePump::SkipFrame) continue;
+            if (pump == FramePump::Exit)
+            {
+                break;
+            }
+            if (pump == FramePump::SkipFrame)
+            {
+                continue;
+            }
 
             ConsumeDeferredSceneAction(ls);
             ConsumeSceneDialogResults(ls);
@@ -195,7 +205,10 @@ namespace Arcane::Editor
             SyncCenterTabFocus(fs);
             HandleViewportPick(fs);
             DrawSelectionPanels();
-            if (!PresentFrame()) continue;
+            if (!PresentFrame())
+            {
+                continue;
+            }
             EndFrame(ls);
         }
     }
@@ -241,16 +254,24 @@ namespace Arcane::Editor
     // Perform a scene intent SceneSession parked (or one that needed no
     // confirmation). Only ever called from the top-of-frame phases below -- see
     // sceneAction.
-    void EditorApp::RunSceneAction(const Arcane::Editor::SceneSession::PendingRequest& req,
-                                   LoopState& ls)
+    void EditorApp::RunSceneAction(const Arcane::Editor::SceneSession::PendingRequest& req, LoopState& ls)
     {
         switch (req.intent)
         {
-            case Arcane::Editor::SceneIntent::NewScene:    DoNewScene(); break;
-            case Arcane::Editor::SceneIntent::OpenScene:   DoOpenScene(req.path); break;
-            case Arcane::Editor::SceneIntent::OpenProject: SwitchProject(req.path); break;
-            case Arcane::Editor::SceneIntent::Exit:        ls.running = false; break;
-            case Arcane::Editor::SceneIntent::None:        break;
+            case Arcane::Editor::SceneIntent::NewScene:
+                DoNewScene();
+                break;
+            case Arcane::Editor::SceneIntent::OpenScene:
+                DoOpenScene(req.path);
+                break;
+            case Arcane::Editor::SceneIntent::OpenProject:
+                SwitchProject(req.path);
+                break;
+            case Arcane::Editor::SceneIntent::Exit:
+                ls.running = false;
+                break;
+            case Arcane::Editor::SceneIntent::None:
+                break;
         }
     }
 
@@ -288,7 +309,9 @@ namespace Arcane::Editor
             // Guarded: opening over unsaved work parks the intent for the confirm
             // modal (drawn later this frame) instead of discarding it.
             if (m_scene.Request(Arcane::Editor::SceneIntent::OpenScene, sceneOpen, *m_undo))
+            {
                 DoOpenScene(sceneOpen);
+            }
         }
         if (!sceneSave.empty())
         {
@@ -298,7 +321,9 @@ namespace Arcane::Editor
             // a hand-typed "MyScene.ARCSCENE" must not become
             // "MyScene.ARCSCENE.arcscene".
             if (LowerExtension(p) != Arcane::Scene::kSceneExt)
+            {
                 p += Arcane::Scene::kSceneExt;
+            }
             const bool saved = DoSaveScene(p);
 
             // This save may be the confirm modal's "Save" answer on a never-saved
@@ -308,8 +333,14 @@ namespace Arcane::Editor
             // work it was meant to preserve.
             if (m_scene.Pending() != Arcane::Editor::SceneIntent::None)
             {
-                if (saved) RunSceneAction(m_scene.TakePending(), ls);
-                else       m_scene.ClearPending();
+                if (saved)
+                {
+                    RunSceneAction(m_scene.TakePending(), ls);
+                }
+                else
+                {
+                    m_scene.ClearPending();
+                }
             }
 
             // Same shape, for LaunchStandalone's "Save and Play?" modal: its
@@ -322,7 +353,10 @@ namespace Arcane::Editor
             {
                 m_launchAfterSceneSave = false;
                 m_launchModalPending   = false;
-                if (saved) LaunchStandalone();   // re-entrant: now clean + a valid guid -> spawns
+                if (saved)
+                {
+                    LaunchStandalone();   // re-entrant: now clean + a valid guid -> spawns
+                }
             }
         }
     }
@@ -346,7 +380,9 @@ namespace Arcane::Editor
             // Same guard as Open Scene: the outgoing project's scene may have
             // unsaved changes, and switching would drop them.
             if (m_scene.Request(Arcane::Editor::SceneIntent::OpenProject, pending, *m_undo))
+            {
                 SwitchProject(pending);
+            }
         }
     }
 
@@ -364,11 +400,17 @@ namespace Arcane::Editor
             instanceNew.swap(m_pendingInstanceNewPath);
         }
         if (!materialNew.empty())
+        {
             CreateMaterialAt(materialNew);
+        }
         if (!materialOpen.empty())
+        {
             m_documents.OpenPath(materialOpen);
+        }
         if (!instanceNew.empty())
+        {
             CreateInstanceAt(instanceNew, m_pendingInstanceParent);
+        }
     }
 
     // Phase 6: input sample + the editor's own keybinds + gizmo interaction.
@@ -386,9 +428,7 @@ namespace Arcane::Editor
         const auto now = std::chrono::steady_clock::now();
         const double frameDt = std::chrono::duration<double>(now - ls.lastFrameTime).count();
         ls.lastFrameTime = now;
-        const Arcane::InputSnapshot snap =
-            m_gpu->InDevices().Sample(m_gpu->Imgui().WantCaptureKeyboard(),
-                                      m_gpu->Imgui().WantCaptureMouse());
+        const Arcane::InputSnapshot snap = m_gpu->InDevices().Sample(m_gpu->Imgui().WantCaptureKeyboard(), m_gpu->Imgui().WantCaptureMouse());
 
         // The plugin only sees scene-relevant input when the Viewport panel
         // is active (hovered/focused), with the cursor remapped into
@@ -398,9 +438,7 @@ namespace Arcane::Editor
         // and spawn/drag does not fire while editing panels.
         Arcane::InputSnapshot pluginSnap = snap;
         float lx = 0, ly = 0;
-        const bool inViewport =
-            m_viewportActive &&
-            Arcane::Editor::ToViewportLocal(m_viewportRect, snap.mouseX, snap.mouseY, lx, ly);
+        const bool inViewport = m_viewportActive && Arcane::Editor::ToViewportLocal(m_viewportRect, snap.mouseX, snap.mouseY, lx, ly);
         if (inViewport)
         {
             pluginSnap.mouseX = lx;      // plugin camera works in viewport-local px
@@ -431,8 +469,7 @@ namespace Arcane::Editor
         // 1-frame lag matches the one already inherent to inViewport/
         // m_viewportActive (both computed from the previous frame's panel
         // hover/focus).
-        fs.gameUiClaims = Arcane::Editor::GameUiClaimsPointer(
-            m_play.IsPlaying(), inViewport, m_gameImgui->WantCaptureMouse());
+        fs.gameUiClaims = Arcane::Editor::GameUiClaimsPointer(m_play.IsPlaying(), inViewport, m_gameImgui->WantCaptureMouse());
 
         // Snapshot the viewport-local cursor + RAW buttons/wheel + dt for the
         // game ImGui pass, which composites into the viewport AFTER this input
@@ -455,7 +492,9 @@ namespace Arcane::Editor
         // (Play + cursor over a game HUD widget) -- otherwise a HUD click
         // would fall through and spawn/drag gameplay underneath it.
         if (!m_play.IsPlaying() || fs.gameUiClaims)
+        {
             pluginSnap.mouseButtons &= ~static_cast<uint8_t>(0x1u);
+        }
         // Edit mode: the EDITOR camera owns RMB-drag pan and wheel zoom
         // (see UpdateEditorCamera below), so the plugin must not see those
         // either. Both cameras write the SAME Runtime slot, and the
@@ -481,8 +520,7 @@ namespace Arcane::Editor
     // Phase 6a: undo/redo + the Ctrl+N/O/S scene shortcuts. Runs EARLIER in the
     // frame than the gizmo phase below, which is why the open-transaction guard
     // is here rather than there.
-    void EditorApp::HandleUndoRedoAndSceneShortcuts(const Arcane::InputSnapshot& snap,
-                                                    FrameState& fs)
+    void EditorApp::HandleUndoRedoAndSceneShortcuts(const Arcane::InputSnapshot& snap, FrameState& fs)
     {
         // Undo/redo keybinds: Ctrl+Z undo, Ctrl+Shift+Z / Ctrl+Y redo.
         // Edge-triggered off the raw hardware snapshot (InputSnapshot has
@@ -500,8 +538,7 @@ namespace Arcane::Editor
         const bool ctrl  = snap.ScancodeDown(kScLCtrl) || snap.ScancodeDown(kScRCtrl);
         const bool shift = snap.ScancodeDown(kScLShift) || snap.ScancodeDown(kScRShift);
         const bool undoKeyDown = ctrl && !shift && snap.ScancodeDown(kScZ);
-        const bool redoKeyDown = ctrl && ((shift && snap.ScancodeDown(kScZ)) ||
-                                           (!shift && snap.ScancodeDown(kScY)));
+        const bool redoKeyDown = ctrl && ((shift && snap.ScancodeDown(kScZ)) || (!shift && snap.ScancodeDown(kScY)));
 
         const bool active = !m_play.IsPlaying() && !snap.wantCaptureKeyboard;
         // Also refuse while a transaction is open (e.g. a live gizmo drag):
@@ -573,10 +610,22 @@ namespace Arcane::Editor
         const bool qDown = snap.ScancodeDown(kScQ);
         const bool keysActive = !m_play.IsPlaying() && !snap.wantCaptureKeyboard && m_viewportActive;
         // Q = Select (no gizmo); W/E/R activate a transform gizmo (UE5 tools).
-        if (keysActive && qDown && !m_prevKeyQ) m_gizmoEnabled = false;
-        if (keysActive && wDown && !m_prevKeyW) { m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Translate; }
-        if (keysActive && eDown && !m_prevKeyE) { m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Rotate; }
-        if (keysActive && rDown && !m_prevKeyR) { m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Scale; }
+        if (keysActive && qDown && !m_prevKeyQ)
+        {
+            m_gizmoEnabled = false;
+        }
+        if (keysActive && wDown && !m_prevKeyW)
+        {
+            m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Translate;
+        }
+        if (keysActive && eDown && !m_prevKeyE)
+        {
+            m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Rotate;
+        }
+        if (keysActive && rDown && !m_prevKeyR)
+        {
+            m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Scale;
+        }
         m_prevKeyW = wDown;
         m_prevKeyE = eDown;
         m_prevKeyR = rDown;
@@ -586,8 +635,7 @@ namespace Arcane::Editor
     // Phase 6c: editor viewport camera. Its tail holds the FIRST of the frame's
     // two SetCamera pushes -- see the comment there; the gizmo phase below reads
     // what it writes.
-    void EditorApp::UpdateEditorCamera(const Arcane::InputSnapshot& snap, bool inViewport,
-                                       float lx, float ly)
+    void EditorApp::UpdateEditorCamera(const Arcane::InputSnapshot& snap, bool inViewport, float lx, float ly)
     {
         // Editor viewport camera (Edit mode): RMB-drag pans, wheel zooms
         // at the cursor, F frames the selection (everything when nothing
@@ -603,15 +651,21 @@ namespace Arcane::Editor
             // gizmo drag, so crossing the panel edge mid-drag does
             // not strand the view.
             if (rmbDown && !m_prevRmbDown && inViewport)
+            {
                 m_camPanning = true;
+            }
             if (!rmbDown)
+            {
                 m_camPanning = false;
+            }
             // RMB held across BOTH frames, so m_camPanLastMouse is a
             // real previous cursor and the press edge cannot jump the
             // view by the whole distance from wherever the cursor last
             // was (same guard as Sandbox's Interaction pan).
             if (m_camPanning && m_prevRmbDown)
+            {
                 m_camera.Pan(mouseWindow - m_camPanLastMouse);
+            }
 
             // Zoom anchors on the viewport-local cursor, the space
             // the camera offset itself lives in. Deliberately NOT
@@ -620,7 +674,9 @@ namespace Arcane::Editor
             // above); inViewport already folds in m_viewportActive,
             // which is false whenever another panel owns the cursor.
             if (inViewport && snap.wheelY != 0.0f)
+            {
                 m_camera.ZoomAt(glm::vec2(lx, ly), snap.wheelY);
+            }
         }
         else
         {

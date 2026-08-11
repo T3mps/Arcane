@@ -119,8 +119,20 @@ namespace Arcane::Editor
         bool StageFinalize(Arcane::HostBoot::BootContext& ctx);
         bool StageSplashReady(Arcane::HostBoot::BootContext& ctx);
 
+        enum class InitResult
+        {
+            Ok,       // boot completed; run the frame loop
+            Failed,   // a Fatal stage failed, or the patch table drifted -> exit 1
+            Quit,     // the user closed the splash mid-boot -> exit 0, not an error
+        };
+
+        bool       Create();
+        InitResult Init();
+        int        Main();
+        void       Shutdown();
+        void       Destroy();
+
         void MainLoop();
-        void Shutdown();
         void InstallConsoleSink();   // attach a callback sink on Arcane::Log::Engine() -> m_console
 
         // ---- Frame loop (EditorAppFrame.cpp) --------------------------------
@@ -268,6 +280,33 @@ namespace Arcane::Editor
         std::optional<Arcane::PluginHost> m_plugin;                 // destructs before m_runtime
         FramePerf                         m_perf;
         std::uint64_t                     m_frameCount = 0;
+
+        // ---- Boot state (EditorApp::Create/Init) ----------------------------
+        // Deliberately declared HERE, outside the m_gpu/m_runtime/m_plugin
+        // block above: those three participate in the load-bearing reverse-
+        // declaration teardown contract documented in Shutdown(), and these two
+        // take no part in it (Destroy() releases m_bootSeq explicitly, before
+        // any member destructor runs).
+        //
+        // Both must outlive Create(): every patched stage's `run` captures
+        // `this` and reads m_bootCtx, and those closures live inside m_bootSeq,
+        // which Init() drives after Create() has returned.
+        //
+        // CONSTRAINT: m_bootCtx holds c_str() views into m_config
+        // (projectPath/pluginPath) for this object's whole lifetime, so
+        // m_config must not be mutated after construction. It is not today --
+        // the only writes are in the ctor's initializer list -- and that is now
+        // load-bearing rather than incidental.
+        Arcane::HostBoot::BootContext       m_bootCtx{};
+        // emplace-only: BootSequence deletes its copy constructor, which
+        // suppresses the implicit move too, so it is neither copyable nor
+        // movable -- optional can still hold it, but only via emplace().
+        std::optional<Arcane::BootSequence> m_bootSeq;
+        // Set by Init() on a successful BootSequence::Run. Read by Shutdown()
+        // to decide whether this process owns the editor lock it is about to
+        // clear -- see that call site.
+        bool                                m_bootCompleted = false;
+
         ConsoleBuffer                     m_console{512};
         // Handle to the callback sink pushed onto Arcane::Log::Engine() in
         // InstallConsoleSink(); erased at the top of Shutdown() so the sink cannot

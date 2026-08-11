@@ -78,15 +78,30 @@ namespace Arcane::Editor
         // bare launch. `scene` is SceneSession::DisplayName ("Untitled" until the
         // scene has been saved somewhere); the trailing * is the unsaved marker,
         // matching the one on File -> Save Scene.
-        std::string EditorTitle(const Arcane::Project* project,
-                                const std::string& scene, bool sceneDirty)
+        std::string EditorTitle(const Arcane::Project* project, const std::string& scene, bool sceneDirty)
         {
-            std::string title = "Arcane";
+            std::string title;
             if (project)
-                title += " | " + project->Manifest().name;
-            title += " | " + scene;
-            if (sceneDirty)
-                title += "*";
+            {
+                title += project->Manifest().name;
+            }
+            
+            if (!scene.empty())
+            {
+                title += " - " + scene;
+
+                if (sceneDirty)
+                {
+                    title += "*";
+                }
+
+                title += " - ";
+            }
+
+            title += "Arcane Editor";
+
+            title += " (" + Arcane::ToString(Arcane::BuildInfo()) + ")";
+
             return title;
         }
 
@@ -98,6 +113,9 @@ namespace Arcane::Editor
         // NewFrame reads the ini).
         constexpr const char* kPlayModeIniType = "EditorPlayMode";
         constexpr const char* kPlayModeIniName = "State";
+
+        using StageFn = bool (Arcane::Editor::EditorApp::*)(Arcane::HostBoot::BootContext&);
+        struct HostStagePatch { std::string_view id; StageFn fn; };
     }
 
     EditorApp::EditorApp(HostConfig cfg, Arcane::BootSplashWindow* splash)
@@ -933,7 +951,9 @@ namespace Arcane::Editor
     // refuse to register it, and the asset registry has no business knowing.
     void EditorApp::WriteAutoScreenshot()
     {
+        if (m_frameCount == 0) return;
         if (!m_runtime || !m_viewport || !m_gpu) return;
+
         const Arcane::Project* proj = m_runtime->CurrentProject();
         if (!proj) return;
 
@@ -950,6 +970,157 @@ namespace Arcane::Editor
         // cannot be written must not turn a save or a shutdown into an error.
         if (Arcane::SaveTexturePng(m_gpu->Device().Nvrhi(), tex, file, 512))
             ARC_INFO("Auto-screenshot {}", file.generic_string());
+    }
+
+    bool EditorApp::Create()
+    {
+        // Installed here -- before HostBoot::EditorStages(ctx) builds the stage
+        // list and before any BootSequence exists -- rather than from inside
+        // StageEditorShell as it used to be (2026-07-31 review, Critical 1).
+        // project_open (Worker) logs from ScanContent/plugin-descriptor warnings,
+        // and editor_lock (Worker) logs on a failed lock write; both run BEFORE
+        // editor_shell in the DAG. spdlog's vendored callback_sink_mt protects
+        // ITS OWN invocation, but Log::Engine()->sinks() is a plain unlocked
+        // std::vector (logger-inl.h's broadcast loop takes no lock) -- pushing
+        // onto it from the main thread while a worker is mid-iteration over the
+        // same vector is a data race (reallocation frees memory the worker is
+        // still walking). Installing the sink before any worker stage exists
+        // removes the race structurally instead of trying to serialize around
+        // it. Needs only Log::Engine() and m_console, both live at this point,
+        // so it has no stage dependency of its own. Bonus: this also means the
+        // Console now captures runtime_create/gpu_core's banner lines, which it
+        // used to miss because the sink installed after they ran.
+        //
+        // Both sinks are installed in Create(), not Init(), and Shutdown()
+        // removes them unconditionally -- so the Create-failed path below still
+        // gets its ARC_ERROR captured by the Console and the diagnostics store.
+        InstallConsoleSink();
+        // Same reasoning as InstallConsoleSink above -- Arcane::Diagnostics'
+        // sink slot is mutex-guarded (unlike Log::Engine()->sinks()), but a
+        // worker stage (e.g. project_open's content scan) can still publish
+        // diagnostics before any BootSequence exists, so this installs from
+        // the same early, dependency-free point.
+        m_diagnostics.InstallAsEngineSink();
+
+        m_bootCtx.runtime     = nullptr;              // stages populate as they go
+        m_bootCtx.splash      = m_splash;
+        m_bootCtx.projectPath = m_config.projectPath.c_str();
+        m_bootCtx.pluginPath  = m_config.pluginPath.c_str();
+        m_bootCtx.moduleName  = "ArcaneEditor.exe";
+
+        // Spec sec 6: the editor ALWAYS shows boot progress, regardless of any
+        // opened project's manifest (project_open's shared CoreStages body
+        // never touches showProgress at all -- only RuntimeStages' override
+        // does, see ProjectBoot.cpp). BootSplashWindow::ShowProgress already
+        // defaults true, so this is redundant with that default today; set
+        // explicitly anyway so the editor's intent reads from this file
+        // rather than depending on a default it does not own.
+        if (m_splash) m_splash->SetShowProgress(true);
+
+        // THE host-owned stage set: every id whose real work touches an EditorApp
+        // private member or an editor-exe-only type (EditorTheme/EditorFonts/
+        // ShaderEditorDocument, none of which Arcane.dll can see), paired with the
+        // method that supplies it. This table IS the list EditorApp.hpp's boot
+        // comment describes -- prefer editing it over restating it in prose.
+        //
+        // Membership here is the whole contract: an id in this table is patched
+        // below, an id NOT in it keeps whatever body EditorStages built. Both
+        // directions of drift now fail loudly rather than silently:
+        //   - id in EditorStages but missing here -> Make()'s Unpatched(id)
+        //     sentinel fires when the stage runs (ProjectBoot.cpp).
+        //   - id here but gone from EditorStages (renamed/removed upstream, with
+        //     a live Stage* method left behind) -> the lookup below fails and
+        //     Create() aborts. Nothing used to catch this half; BootStageParityTest
+        //     cannot see it either, since it compares ids and never invokes `.run`.
+        static constexpr HostStagePatch kHostStages[] =
+        {
+            { "runtime_create", &EditorApp::StageRuntimeCreate },
+            { "gpu_core",       &EditorApp::StageGpuCore },
+            { "editor_fonts",   &EditorApp::StageEditorFonts },
+            { "editor_shell",   &EditorApp::StageEditorShell },
+            { "render_bridge",  &EditorApp::StageRenderBridge },
+            { "edit_core",      &EditorApp::StageEditCore },
+            { "sprite_tables",  &EditorApp::StageSpriteTables },
+            { "plugin_load",    &EditorApp::StagePluginLoad },
+            { "finalize",       &EditorApp::StageFinalize },
+            { "splash_ready",   &EditorApp::StageSplashReady },
+        };
+
+        // HostBoot::EditorStages(ctx) is the SAME shared function
+        // BootStageParityTest exercises and RuntimeApp calls for its own list
+        // (RuntimeApp::Run) -- this is the literal call that keeps the two hosts
+        // from silently diverging on which steps exist. This is the one deviation
+        // from the brief's literal one-line Run(): a direct
+        // `BootSequence seq(EditorStages(ctx))` cannot reach EditorApp's private
+        // members from inside Arcane.dll, so the vector is captured, patched with
+        // the table above, then moved into BootSequence -- ids/deps/policy/thread/
+        // weight (the actual DAG shape the parity test polices) are untouched.
+        std::vector<Arcane::BootStage> stages = Arcane::HostBoot::EditorStages(m_bootCtx);
+
+        // Iterate the TABLE, not the stage list: a patch that matches nothing is
+        // then just a failed lookup at the point it mattered, with no parallel
+        // "did I apply this one" array to keep in sync.
+        for (const HostStagePatch& patch : kHostStages)
+        {
+            const auto it = std::ranges::find(stages, patch.id,
+                [](const Arcane::BootStage& s) { return std::string_view(s.id); });
+            if (it == stages.end())
+            {
+                ARC_ERROR("EditorApp::Create: host stage patch '{}' matched no "
+                    "stage in EditorStages() -- the id was renamed or "
+                    "removed in ProjectBoot.cpp without updating this table",
+                    patch.id);
+                return false;
+            }
+            it->run = [this, fn = patch.fn] { return (this->*fn)(m_bootCtx); };
+        }
+
+        m_bootSeq.emplace(std::move(stages));
+        return true;
+    }
+
+    EditorApp::InitResult EditorApp::Init()
+    {
+        ARC_ASSERT(m_bootSeq.has_value(), "EditorApp::Init called before Create()");
+
+        // m_splashPresenter is BootSequence's presenter for the WHOLE run
+        // (Task 8c) -- from runtime_create through finalize, every per-stage
+        // present() call reports into m_splash's status text + taskbar
+        // progress rather than the swapchain, AND (2026-07-30 review round 2,
+        // finding 2) arms/checks the splash's own open/closed state so
+        // IBootPresenter's documented quit contract (BootSequence.hpp:65)
+        // still fires if the user closes the splash mid-boot -- see
+        // BootSplashPresenter::Present's own comment. Safe to run
+        // unconditionally: it tolerates m_splash == nullptr, same never-fail
+        // contract as BootSplashWindow itself. It is a class member, not
+        // constructed here, so StageSplashReady can Disarm() it before
+        // closing the splash intentionally -- see that method.
+        const Arcane::BootResult boot = m_bootSeq->Run(&m_splashPresenter);
+        if (boot.ok)
+        {
+            m_bootCompleted = true;   // see Shutdown()'s EditorLock::Clear
+            return InitResult::Ok;
+        }
+
+        // Boot did not reach StageSplashReady, so nothing has closed the splash
+        // and nothing ever will draw into it again. Close it HERE rather than
+        // leaving it to Destroy(): Run() calls Shutdown() first, and Shutdown()
+        // can block for a long time (m_moduleBuild.Join waits on a child
+        // msbuild; WriteAutoScreenshot encodes a PNG), during all of which the
+        // splash would sit on screen showing a stale status line -- the exact
+        // unresponsive-window shape this whole arc exists to prevent.
+        // Idempotent: Destroy() repeats it as a backstop, and Close() is a
+        // no-op on a window that was never created or is already gone.
+        if (m_splash)
+            m_splash->Close();
+
+        return boot.quitRequested ? InitResult::Quit : InitResult::Failed;
+    }
+
+    int EditorApp::Main()
+    {
+        MainLoop();
+        return 0;
     }
 
     void EditorApp::Shutdown()
@@ -987,13 +1158,20 @@ namespace Arcane::Editor
         WriteAutoScreenshot();
 
         // Release the editor lock: this project is no longer open anywhere.
-        if (m_runtime)
+        if (m_bootCompleted && m_runtime)
+        {
             if (const Arcane::Project* proj = m_runtime->CurrentProject())
+            {
                 Arcane::EditorLock::Clear(proj->Root());
+            }
+        }
 
         // defensive: today Shutdown only runs after a successful Init, so m_gpu is non-null;
         // the guard covers a future partial-init/destructor path.
-        if (m_gpu) m_gpu->Device().Nvrhi()->waitForIdle();
+        if (m_gpu)
+        {
+            m_gpu->Device().Nvrhi()->waitForIdle();
+        }
         ARC_INFO("Arcane Editor exiting after {} frames", m_frameCount);
 
         // The member destructors then run (after Run returns + ~EditorApp), in
@@ -1008,99 +1186,43 @@ namespace Arcane::Editor
         // m_typeContext is intentionally NOT freed (heap-leaked, see Init).
     }
 
+    void EditorApp::Destroy()
+    {
+        // Runs after Shutdown(), and after a failed Create() where it is empty.
+        // Ordered before member teardown deliberately: the stage closures inside
+        // hold `this` and reference m_bootCtx, and while nothing re-invokes them
+        // at this point, releasing them here keeps that lifetime question from
+        // ever being load-bearing on member destruction order.
+        m_bootSeq.reset();
+
+        // Belt and braces for the paths that never reached StageSplashReady --
+        // a failed Create(), or a Fatal stage aborting before the reveal. Close()
+        // is idempotent and a no-op when the window was never created, so the
+        // normal success path (where splash_ready already closed it) is unaffected.
+        // Without this, a boot that fails at, say, gpu_core leaves the splash on
+        // screen with a stale status line until the process unwinds.
+        if (m_splash)
+        {
+            m_splash->Close();
+        }
+    }
+
     int EditorApp::Run()
     {
-        // Installed here -- before HostBoot::EditorStages(ctx) builds the stage
-        // list and before any BootSequence exists -- rather than from inside
-        // StageEditorShell as it used to be (2026-07-31 review, Critical 1).
-        // project_open (Worker) logs from ScanContent/plugin-descriptor warnings,
-        // and editor_lock (Worker) logs on a failed lock write; both run BEFORE
-        // editor_shell in the DAG. spdlog's vendored callback_sink_mt protects
-        // ITS OWN invocation, but Log::Engine()->sinks() is a plain unlocked
-        // std::vector (logger-inl.h's broadcast loop takes no lock) -- pushing
-        // onto it from the main thread while a worker is mid-iteration over the
-        // same vector is a data race (reallocation frees memory the worker is
-        // still walking). Installing the sink before any worker stage exists
-        // removes the race structurally instead of trying to serialize around
-        // it. Needs only Log::Engine() and m_console, both live at this point,
-        // so it has no stage dependency of its own. Bonus: this also means the
-        // Console now captures runtime_create/gpu_core's banner lines, which it
-        // used to miss because the sink installed after they ran.
-        InstallConsoleSink();
-        // Same reasoning as InstallConsoleSink above -- Arcane::Diagnostics'
-        // sink slot is mutex-guarded (unlike Log::Engine()->sinks()), but a
-        // worker stage (e.g. project_open's content scan) can still publish
-        // diagnostics before any BootSequence exists, so this installs from
-        // the same early, dependency-free point.
-        m_diagnostics.InstallAsEngineSink();
+        int exitCode = 1;
 
-        Arcane::HostBoot::BootContext ctx{};
-        ctx.runtime     = nullptr;              // stages populate as they go
-        ctx.splash      = m_splash;
-        ctx.projectPath = m_config.projectPath.c_str();
-        ctx.pluginPath  = m_config.pluginPath.c_str();
-        ctx.moduleName  = "ArcaneEditor.exe";
-
-        // Spec sec 6: the editor ALWAYS shows boot progress, regardless of any
-        // opened project's manifest (project_open's shared CoreStages body
-        // never touches showProgress at all -- only RuntimeStages' override
-        // does, see ProjectBoot.cpp). BootSplashWindow::ShowProgress already
-        // defaults true, so this is redundant with that default today; set
-        // explicitly anyway so the editor's intent reads from this file
-        // rather than depending on a default it does not own.
-        if (m_splash) m_splash->SetShowProgress(true);
-
-        // HostBoot::EditorStages(ctx) is the SAME shared function
-        // BootStageParityTest exercises and RuntimeApp calls for its own list
-        // (RuntimeApp::Run) -- this is the literal call that keeps the two
-        // hosts from silently diverging on which steps exist. The stages whose
-        // real work needs a private EditorApp member or an editor-exe-only
-        // type (EditorTheme/EditorFonts/ShaderEditorDocument, none of which
-        // Arcane.dll can see) get their `run` overwritten below with the
-        // matching Stage* method; type_context_install/project_open/
-        // input_config/editor_lock are left exactly as EditorStages built
-        // them -- their body is genuinely shared. splash_ready moved into
-        // this overridden set in Task 8c (see StageSplashReady's own comment
-        // for why -- it now needs m_presenter, host-owned state). This is
-        // the one deviation from the brief's literal one-line Run(): a direct
-        // `BootSequence seq(EditorStages(ctx))` cannot reach these private
-        // members from inside Arcane.dll, so the vector is captured, patched,
-        // then moved into BootSequence -- ids/deps/policy/thread/weight
-        // (the actual DAG shape the parity test polices) are untouched.
-        std::vector<Arcane::BootStage> stages = Arcane::HostBoot::EditorStages(ctx);
-        for (Arcane::BootStage& stage : stages)
+        if (Create())
         {
-            if (stage.id == "runtime_create")        stage.run = [this, &ctx] { return StageRuntimeCreate(ctx); };
-            else if (stage.id == "gpu_core")         stage.run = [this, &ctx] { return StageGpuCore(ctx); };
-            else if (stage.id == "editor_fonts")     stage.run = [this, &ctx] { return StageEditorFonts(ctx); };
-            else if (stage.id == "editor_shell")     stage.run = [this, &ctx] { return StageEditorShell(ctx); };
-            else if (stage.id == "render_bridge")    stage.run = [this, &ctx] { return StageRenderBridge(ctx); };
-            else if (stage.id == "edit_core")        stage.run = [this, &ctx] { return StageEditCore(ctx); };
-            else if (stage.id == "sprite_tables")    stage.run = [this, &ctx] { return StageSpriteTables(ctx); };
-            else if (stage.id == "plugin_load")      stage.run = [this, &ctx] { return StagePluginLoad(ctx); };
-            else if (stage.id == "finalize")         stage.run = [this, &ctx] { return StageFinalize(ctx); };
-            else if (stage.id == "splash_ready")     stage.run = [this, &ctx] { return StageSplashReady(ctx); };
+            switch (Init())
+            {
+            case InitResult::Ok:     exitCode = Main(); break;
+            case InitResult::Quit:   exitCode = 0;      break;   // user closed the splash
+            case InitResult::Failed: exitCode = 1;      break;
+            }
         }
 
-        Arcane::BootSequence seq(std::move(stages));
-        // m_splashPresenter is BootSequence's presenter for the WHOLE run
-        // (Task 8c) -- from runtime_create through finalize, every per-stage
-        // present() call reports into m_splash's status text + taskbar
-        // progress rather than the swapchain, AND (2026-07-30 review round 2,
-        // finding 2) arms/checks the splash's own open/closed state so
-        // IBootPresenter's documented quit contract (BootSequence.hpp:65)
-        // still fires if the user closes the splash mid-boot -- see
-        // BootSplashPresenter::Present's own comment. Safe to run
-        // unconditionally: it tolerates m_splash == nullptr, same never-fail
-        // contract as BootSplashWindow itself. It is a class member, not
-        // constructed here, so StageSplashReady can Disarm() it before
-        // closing the splash intentionally -- see that method.
-        const Arcane::BootResult boot = seq.Run(&m_splashPresenter);
-        if (!boot.ok)
-            return boot.quitRequested ? 0 : 1;
-
-        MainLoop();
         Shutdown();
-        return 0;
+        Destroy();
+        return exitCode;
     }
 }
