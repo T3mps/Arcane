@@ -122,7 +122,7 @@ namespace Arcane::Editor::ModuleBuild
     std::filesystem::path ResolvePremake(const std::filesystem::path& sdkRoot)
     {
         const std::filesystem::path bundled =
-            sdkRoot / ".." / "ThirdParty" / "premake5" / "premake5.exe";
+            sdkRoot / "ThirdParty" / "premake5" / "premake5.exe";
         std::error_code ec;
         if (std::filesystem::is_regular_file(bundled, ec))
             return bundled.lexically_normal();

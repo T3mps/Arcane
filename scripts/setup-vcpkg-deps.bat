@@ -39,7 +39,7 @@ echo   vcpkg: %VCPKG_PATH%
 :: -------------------------------------------------------------------
 echo [2/2] Installing sdl3[vulkan]:x64-windows-static-md...
 
-"%VCPKG_PATH%\vcpkg.exe" install "sdl3[vulkan]:x64-windows-static-md" --overlay-triplets="%~dp0..\..\vcpkg-triplets"
+"%VCPKG_PATH%\vcpkg.exe" install "sdl3[vulkan]:x64-windows-static-md" --overlay-triplets="%~dp0..\vcpkg-triplets"
 if %ERRORLEVEL% NEQ 0 (
     echo ERROR: vcpkg install failed.
     echo.

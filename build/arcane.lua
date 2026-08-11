@@ -6,8 +6,8 @@
 -- IN PLACE via the ARCANE_SDK env var (a packaged/installed SDK with a
 -- multi-version registry is a later nicety -- spec 2026-07-22 S10/S12):
 --
---   ARCANE_SDK  ->  the Arcane engine workspace dir (e.g. D:\dev\starworks\Gacha\Arcane)
---                   include surface = $ARCANE_SDK/Arcane/src (+ ThirdParty header-only)
+--   ARCANE_SDK  ->  the Arcane engine repo root (e.g. D:\dev\starworks\Arcane)
+--                   include surface = $ARCANE_SDK/ArcaneClient/src (+ ThirdParty header-only)
 --                   import lib       = $ARCANE_SDK/bin/<cfg>-<sys>-x86_64-md/ArcaneClient/ArcaneClient.lib
 --                   ArcaneClient.dll        ships beside the host exe (host copies it)
 --
@@ -32,15 +32,15 @@
 ARCANE_SDK = ARCANE_SDK or os.getenv("ARCANE_SDK")
 if not ARCANE_SDK then
     error("ARCANE_SDK environment variable is not set.\n" ..
-          "Point it at the Arcane engine workspace dir, e.g.:\n" ..
-          "  setx ARCANE_SDK D:\\dev\\starworks\\Gacha\\Arcane\n" ..
+          "Point it at the Arcane engine repo root, e.g.:\n" ..
+          "  setx ARCANE_SDK D:\\dev\\starworks\\Arcane\n" ..
           "then restart the terminal and re-generate.")
 end
 ARCANE_SDK = ARCANE_SDK:gsub("\\", "/")             -- normalize separators for premake tokens
-local ARCANE_TP = ARCANE_SDK .. "/../ThirdParty"    -- vendored header-only deps live beside the workspace
+local ARCANE_TP = ARCANE_SDK .. "/ThirdParty"       -- vendored header-only deps live inside the SDK repo
 
 -- The engine's per-config bin flavor. Must byte-match the engine's own outputdir
--- literal in Arcane/premake5.lua ("-md" = the dynamic-CRT flavor; /MD everywhere so
+-- literal in the SDK root premake5.lua ("-md" = the dynamic-CRT flavor; /MD everywhere so
 -- one heap crosses the ArcaneClient.dll/Game.dll boundary).
 local ARCANE_BIN = ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-md"
 

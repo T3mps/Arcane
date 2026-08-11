@@ -1,0 +1,74 @@
+# =============================================================================
+# Arcane -- root .gitattributes
+# Pins line-ending behavior so Windows checkouts stop emitting LF<->CRLF
+# warnings on every commit, and binaries don't get accidentally diffed.
+# =============================================================================
+
+# Default: auto-detect text. `eol=lf` is set per-extension below instead of on
+# the wildcard -- when set on the wildcard, the attribute leaks onto explicit
+# `binary` types (e.g. *.png) and triggers spurious CRLF->LF warnings.
+* text=auto
+
+# -- Windows-only scripts (must stay CRLF on disk) -----------------------------
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# -- Cross-platform scripts and source -----------------------------------------
+*.sh    text eol=lf
+*.lua   text eol=lf
+*.cpp   text eol=lf
+*.hpp   text eol=lf
+*.h     text eol=lf
+*.c     text eol=lf
+*.hlsl  text eol=lf
+*.glsl  text eol=lf
+*.rs    text eol=lf
+*.py    text eol=lf
+*.ts    text eol=lf
+*.js    text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.svelte text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.toml  text eol=lf
+
+# -- Binaries (no diff, no eol conversion) -------------------------------------
+*.exe   binary
+*.dll   binary
+*.lib   binary
+*.pdb   binary
+*.obj   binary
+*.so    binary
+
+# Images
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.bmp   binary
+*.tga   binary
+*.psd   binary
+*.svg   text eol=lf
+
+# Audio
+*.wav   binary
+*.ogg   binary
+*.mp3   binary
+*.flac  binary
+
+# Fonts
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+
+# Archives
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.7z    binary

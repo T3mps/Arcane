@@ -83,7 +83,7 @@ namespace Arcane::Editor::ModuleBuild
     // walk above starts from it.
     std::filesystem::path ExeDir();
 
-    // The engine's bundled premake: <sdkRoot>/../ThirdParty/premake5/
+    // The engine's bundled premake: <sdkRoot>/ThirdParty/premake5/
     // premake5.exe (the repo layout arcane.lua documents), falling back to
     // bare "premake5" (PATH) when the bundled copy is not there -- a packaged
     // SDK may ship it elsewhere, and cmd's own resolution is the honest

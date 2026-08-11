@@ -5,7 +5,7 @@
 -- gameModule names). The editor's Build -> Rebuild Game Module drives this
 -- same file; manually:
 --
---   ..\..\ThirdParty\premake5\premake5.exe vs2026     (from this dir)
+--   ..\ThirdParty\premake5\premake5.exe vs2026     (from this dir)
 --   msbuild ReferenceProject.slnx /p:Configuration=Debug
 --
 -- ARCANE_SDK is self-located relatively (this project lives INSIDE the engine

@@ -62,40 +62,40 @@ workspace "Arcane"
 
     IncludeDir = {}
     IncludeDir["ArcaneCore"]       = "%{wks.location}/ArcaneCore/src"
-    IncludeDir["nlohmann"]         = "%{wks.location}/../ThirdParty/nlohmann"
-    IncludeDir["picosha2"]         = "%{wks.location}/../ThirdParty/picosha2"
-    IncludeDir["spdlog"]           = "%{wks.location}/../ThirdParty/spdlog/include"
-    IncludeDir["Catch2"]           = "%{wks.location}/../ThirdParty/Catch2/src"
-    IncludeDir["rapidcheck"]       = "%{wks.location}/../ThirdParty/rapidcheck/include"
-    IncludeDir["rapidcheck_catch"] = "%{wks.location}/../ThirdParty/rapidcheck/extras/catch/include"
-    IncludeDir["glm"]              = "%{wks.location}/../ThirdParty/glm"
-    IncludeDir["stb"]              = "%{wks.location}/../ThirdParty/stb"
-    IncludeDir["miniaudio"]        = "%{wks.location}/../ThirdParty/miniaudio"
-    IncludeDir["Astra"]            = "%{wks.location}/../ThirdParty/Astra/include"
-    IncludeDir["enkiTS"]           = "%{wks.location}/../ThirdParty/enkiTS/src"
-    IncludeDir["tracy"]            = "%{wks.location}/../ThirdParty/tracy/public"
-    IncludeDir["freetype"]         = "%{wks.location}/../ThirdParty/freetype/include"
-    IncludeDir["msdfgen"]          = "%{wks.location}/../ThirdParty/msdfgen"
-    IncludeDir["nvrhi"]            = "%{wks.location}/../ThirdParty/nvrhi/include"
-    IncludeDir["VulkanHeaders"]    = "%{wks.location}/../ThirdParty/Vulkan-Headers/include"
-    IncludeDir["DirectXHeaders"]   = "%{wks.location}/../ThirdParty/DirectX-Headers/include"
+    IncludeDir["nlohmann"]         = "%{wks.location}/ThirdParty/nlohmann"
+    IncludeDir["picosha2"]         = "%{wks.location}/ThirdParty/picosha2"
+    IncludeDir["spdlog"]           = "%{wks.location}/ThirdParty/spdlog/include"
+    IncludeDir["Catch2"]           = "%{wks.location}/ThirdParty/Catch2/src"
+    IncludeDir["rapidcheck"]       = "%{wks.location}/ThirdParty/rapidcheck/include"
+    IncludeDir["rapidcheck_catch"] = "%{wks.location}/ThirdParty/rapidcheck/extras/catch/include"
+    IncludeDir["glm"]              = "%{wks.location}/ThirdParty/glm"
+    IncludeDir["stb"]              = "%{wks.location}/ThirdParty/stb"
+    IncludeDir["miniaudio"]        = "%{wks.location}/ThirdParty/miniaudio"
+    IncludeDir["Astra"]            = "%{wks.location}/ThirdParty/Astra/include"
+    IncludeDir["enkiTS"]           = "%{wks.location}/ThirdParty/enkiTS/src"
+    IncludeDir["tracy"]            = "%{wks.location}/ThirdParty/tracy/public"
+    IncludeDir["freetype"]         = "%{wks.location}/ThirdParty/freetype/include"
+    IncludeDir["msdfgen"]          = "%{wks.location}/ThirdParty/msdfgen"
+    IncludeDir["nvrhi"]            = "%{wks.location}/ThirdParty/nvrhi/include"
+    IncludeDir["VulkanHeaders"]    = "%{wks.location}/ThirdParty/Vulkan-Headers/include"
+    IncludeDir["DirectXHeaders"]   = "%{wks.location}/ThirdParty/DirectX-Headers/include"
     IncludeDir["SDL3"]             = VCPKG_INSTALLED_MD .. "/include"
-    IncludeDir["imgui"]            = "%{wks.location}/../ThirdParty/imgui"
-    IncludeDir["imguinodeeditor"]  = "%{wks.location}/../ThirdParty/imgui-node-editor"
-    IncludeDir["Manifold2D"]       = "%{wks.location}/../ThirdParty/Manifold2D/include"
-    IncludeDir["Mosaic"]           = "%{wks.location}/../ThirdParty/Mosaic/include"
+    IncludeDir["imgui"]            = "%{wks.location}/ThirdParty/imgui"
+    IncludeDir["imguinodeeditor"]  = "%{wks.location}/ThirdParty/imgui-node-editor"
+    IncludeDir["Manifold2D"]       = "%{wks.location}/ThirdParty/Manifold2D/include"
+    IncludeDir["Mosaic"]           = "%{wks.location}/ThirdParty/Mosaic/include"
 
 group "Dependencies"
-    include "../ThirdParty/Catch2"
-    include "../ThirdParty/rapidcheck"
-    include "../ThirdParty/enkiTS"
-    include "../ThirdParty/tracy"
-    include "../ThirdParty/freetype"
-    include "../ThirdParty/msdfgen"
-    include "../ThirdParty/nvrhi"
-    include "../ThirdParty/imgui"
-    include "../ThirdParty/imgui-node-editor"
-    include "../ThirdParty/Manifold2D"
+    include "ThirdParty/Catch2"
+    include "ThirdParty/rapidcheck"
+    include "ThirdParty/enkiTS"
+    include "ThirdParty/tracy"
+    include "ThirdParty/freetype"
+    include "ThirdParty/msdfgen"
+    include "ThirdParty/nvrhi"
+    include "ThirdParty/imgui"
+    include "ThirdParty/imgui-node-editor"
+    include "ThirdParty/Manifold2D"
 group ""
 
 -- ============================================================================
@@ -331,8 +331,8 @@ project "ArcaneRuntime"
         '{COPYDIR} "%{wks.location}/ReferenceProject" "%{cfg.buildtarget.directory}/ReferenceProject"',
         -- Vendored dxc trio (minus dxc.exe): the runtime compile service
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
-        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
-        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
+        '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
+        '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
     }
     filter "system:windows"
         systemversion "latest"
@@ -405,8 +405,8 @@ project "ArcaneEditor"
         '{COPYFILE} "%{wks.location}/data/images/arcane_logo.png" "%{cfg.buildtarget.directory}/data/images/arcane_logo.png"',
         -- Vendored dxc trio (minus dxc.exe): the runtime compile service
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
-        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
-        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
+        '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
+        '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
     }
     filter "system:windows"
         systemversion "latest"
@@ -613,7 +613,7 @@ project "ArcaneTests"
         '{MKDIR} "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
-        '{COPYFILE} "%{wks.location}/../Client/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/roboto/static/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',
@@ -625,8 +625,8 @@ project "ArcaneTests"
         '{COPYDIR} "%{wks.location}/ArcaneTests/data" "%{cfg.buildtarget.directory}/data"',
         -- Vendored dxc trio (minus dxc.exe): the runtime compile service
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
-        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
-        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
+        '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
+        '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
     }
 
     defines {

@@ -8,7 +8,7 @@
 :: (t=0, s=128, b=256, u=384). ShaderMake (vendored) replaces this script
 :: when the shader count outgrows explicit lines.
 ::
-:: SHARED TRUTH: Arcane/src/Arcane/Render/ShaderConventions.hpp holds the
+:: SHARED TRUTH: ArcaneClient/src/Arcane/Render/ShaderConventions.hpp holds the
 :: canonical shift flags + entry/profile conventions for the runtime compile
 :: service (ShaderCompiler). SPIRV_FLAGS below must mirror kSpirvArgs there.
 ::
@@ -16,7 +16,7 @@
 :: the entry point's <type>_main prefix (2nd arg) -- ShaderLibrary derives the
 :: SPIR-V entry name from the stem suffix. Mismatch = late Vulkan failure.
 setlocal
-set DXC=%~dp0..\..\..\ThirdParty\tools\dxc\dxc.exe
+set DXC=%~dp0..\..\ThirdParty\tools\dxc\dxc.exe
 set SRC=%~dp0
 set OUT=%~dp0generated
 if not exist "%OUT%\dxil"  mkdir "%OUT%\dxil"

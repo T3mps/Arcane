@@ -43,7 +43,7 @@ set "VCPKG_ROOT=%VCPKG_PATH%"
 :: -------------------------------------------------------------------
 echo [2/2] Generating Visual Studio 2026 solution...
 
-set "PREMAKE5=%PROJECT_ROOT%\..\ThirdParty\premake5\premake5.exe"
+set "PREMAKE5=%PROJECT_ROOT%\ThirdParty\premake5\premake5.exe"
 if not exist "%PREMAKE5%" (
     echo ERROR: premake5 not found at %PREMAKE5%
     echo Ensure ThirdParty\premake5\premake5.exe exists in the repo.
