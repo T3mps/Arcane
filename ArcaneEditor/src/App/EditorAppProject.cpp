@@ -359,11 +359,12 @@ namespace Arcane::Editor
     // m_resolver: sprites, materials and the post chain all resolve against
     // the OUTGOING project's registry, so all three caches drop together
     // (one Clear since the sprite-resolution lift).
-    // m_diagnostics: Problems is current STATE, rebuilt by producers on load
-    // (spec sec 10), not a log -- stale rows from the outgoing project
+    // m_consoleDiag.store: Problems is current STATE, rebuilt by producers on
+    // load (spec sec 10), not a log -- stale rows from the outgoing project
     // (asset/plugin/material/scene diagnostics keyed by paths and Guids that
     // belong to THAT project's registry) must not survive into the incoming
-    // one.
+    // one. m_consoleDiag.console/.ui are NOT cleared here: the log stream is
+    // process-wide, not project-scoped.
     // ClearSceneReferences(): editor state naming entities of the outgoing
     // scene, torn down before any registry swap.
     // m_scene: the scene the session named belonged to the OUTGOING project,
@@ -391,7 +392,7 @@ namespace Arcane::Editor
         m_documents.CloseAll();
         if (m_resolver)
             m_resolver->Clear();
-        m_diagnostics.ClearAll();
+        m_consoleDiag.store.ClearAll();
         ClearSceneReferences();
         if (m_undo) m_scene.Reset(*m_undo);
         m_sceneRecents = {};

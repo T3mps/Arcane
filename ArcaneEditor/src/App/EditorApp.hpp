@@ -135,7 +135,6 @@ namespace Arcane::Editor
         void       Destroy();
 
         void MainLoop();
-        void InstallConsoleSink();   // attach a callback sink on Arcane::Log::Engine() -> m_console
 
         // ---- Frame loop (EditorAppFrame.cpp) --------------------------------
         // MainLoop is a straight sequence of the phase methods below, called in
@@ -314,21 +313,24 @@ namespace Arcane::Editor
         // clear -- see that call site.
         bool                                m_bootCompleted = false;
 
-        ConsoleBuffer                     m_console{512};
-        // Handle to the callback sink pushed onto Arcane::Log::Engine() in
-        // InstallConsoleSink(); erased at the top of Shutdown() so the sink cannot
-        // fire (and Push into a destroyed m_console) during member teardown -- e.g.
-        // ~GpuContext's Vulkan device destruction logs validation messages.
-        std::shared_ptr<spdlog::sinks::callback_sink_mt> m_consoleSink;
-        Arcane::Editor::ConsoleUiState     m_consoleUi;
-
-        // Problems panel (Task 5): current diagnostic STATE, distinct from
-        // m_console's append-only log stream. Fed by Arcane::Diagnostics via
-        // InstallAsEngineSink, installed beside InstallConsoleSink in Run() and
-        // uninstalled at the top of Shutdown() (same "nothing may dispatch into
-        // a half-torn-down editor" reason as the console sink's erase).
-        Arcane::Editor::DiagnosticStore m_diagnostics;
-        Arcane::Editor::ProblemsUiState m_problemsUi;
+        // Console buffer + engine sink, and the Problems-panel diagnostic
+        // STATE (distinct from the console's append-only log stream), grouped
+        // together because Install()/Uninstall() are called from the same two
+        // sites (Create()/Shutdown()) for the same "nothing may dispatch into
+        // a half-torn-down editor" reason. See those methods (EditorApp.cpp)
+        // for the create/shutdown timing rationale.
+        struct ConsoleDiagnostics
+        {
+            ConsoleBuffer                                    console{512};
+            std::shared_ptr<spdlog::sinks::callback_sink_mt> sink;      // erased in Uninstall
+            Arcane::Editor::ConsoleUiState                   ui;
+            Arcane::Editor::DiagnosticStore                  store;
+            Arcane::Editor::ProblemsUiState                  problemsUi;
+            void Install();     // console sink + store.InstallAsEngineSink (was
+                                // InstallConsoleSink + the Create() call beside it)
+            void Uninstall();   // the Shutdown-top erase/uninstall pair
+        };
+        ConsoleDiagnostics m_consoleDiag;
 
         // Play-in-editor (Task 8): Edit|Play state machine. Play() snapshots the
         // registry + unpauses the RunLoop; Stop() restores the snapshot + re-pauses.
@@ -502,15 +504,14 @@ namespace Arcane::Editor
         // the Runtime in Edit mode only; in Play the plugin's camera wins.
         // See EditorCamera.hpp for the transform convention.
         Arcane::Editor::EditorCamera m_camera;
-        // RMB-drag pan gesture. Starts only inside the viewport but keeps
-        // tracking once started (same rule as the gizmo drag), so a pan does not
-        // stall the moment the cursor crosses the panel edge. The cursor is
-        // kept in WINDOW px: the pan only needs the frame-to-frame DELTA, which
-        // is identical in window and viewport-local space (they differ by a
-        // translation), and window px are written every frame regardless of
-        // whether the viewport is active.
-        bool      m_camPanning = false;
-        glm::vec2 m_camPanLastMouse{0.0f, 0.0f};
+        // RMB-drag pan gesture (rules: starts only inside the viewport, keeps
+        // tracking once started -- see UpdateEditorCamera).
+        struct CameraPanGesture
+        {
+            bool      panning = false;
+            glm::vec2 lastMouse{0.0f, 0.0f};   // WINDOW px -- only the delta is used
+        };
+        CameraPanGesture m_camPan;
         // Point the editor camera at the selection (selectionOnly) or at the
         // whole scene. A no-op when there is nothing framable, so the user's
         // view is never thrown away by an F press that had no target.
@@ -531,35 +532,38 @@ namespace Arcane::Editor
         // to the Viewport panel's content region each frame; input into the plugin
         // is gated on m_viewportActive and remapped through m_viewportRect (see
         // ViewportInput.hpp + FrameInput).
-        std::unique_ptr<Arcane::OffscreenCanvas> m_viewport;
+        // The viewport render-target triple -- canvas, GPU picker, selection
+        // outline -- created and RESIZED IN LOCKSTEP (ApplyPendingResize), plus the
+        // deferred size measured last frame. Declared after m_gpu: all three hold
+        // NVRHI handles and must destruct before the device. m_resolver (below)
+        // holds the canvas's batcher and must destruct first -- keep this struct
+        // declared BEFORE m_resolver.
+        struct ViewportTargets
+        {
+            std::unique_ptr<Arcane::OffscreenCanvas>  canvas;
+            std::unique_ptr<Arcane::PickBuffer>       pick;
+            std::unique_ptr<Arcane::SelectionOutline> outline;
+            std::uint32_t pendingW = 0, pendingH = 0;   // measured last frame, applied at frame top
+            void ApplyPendingResize(GpuContext& gpu);   // body: the current
+                                                        // EditorApp::ApplyPendingViewportResize
+        };
+        ViewportTargets m_viewportTargets;
         Arcane::Editor::ViewportRect                   m_viewportRect{};
         bool                                     m_viewportActive = false;
 
         // Viewport-local input snapshot for the game ImGui pass, captured inside
-        // FrameInput (whose locals are out of scope at the render
-        // site) and read where the game UI is composited into the viewport. Only
-        // the few values the game context needs are hoisted -- the input phase's
-        // scope is deliberately NOT widened.
-        glm::vec2 m_lastViewportMouse{0.0f, 0.0f};   // viewport-local cursor px
-        std::uint8_t m_lastMouseButtons = 0;         // raw snap.mouseButtons (LMB=bit0)
-        float     m_lastWheel   = 0.0f;              // raw snap.wheelY
-        bool      m_lastInViewport = false;          // cursor over the viewport this frame
-        double    m_lastFrameDt = 0.0;               // per-frame dt (seconds)
-
-        // GPU hit-proxy picker, a sibling of m_viewport: created and resized at the
-        // same size, it renders each pickable entity's silhouette into an R32_UINT
-        // id buffer and reads back the pixel under a viewport click to select the
-        // entity there (sprites + physics colliders; front-most wins). Replaces the
-        // CPU sprite-OBB PickEntitiesAt. See PickBuffer.hpp.
-        std::unique_ptr<Arcane::PickBuffer>       m_pick;
-
-        // Per-frame selection + hover outline (Edit-mode only), a sibling of m_pick:
-        // created and resized at the same viewport size, it edge-detects m_pick's
-        // (supersampled) id buffer into the viewport's post-tonemap output texture
-        // (amber selected, cyan hovered). See RenderSelectionOutline, right after
-        // RenderSceneToViewport -- the same slot the Play-only game-imgui overlay
-        // pass uses (the two are mutually exclusive by mode).
-        std::unique_ptr<Arcane::SelectionOutline> m_outline;
+        // FrameInput (whose locals are out of scope at the render site) and read
+        // where the game UI is composited. Only what the game context needs is
+        // hoisted -- the input phase's scope stays narrow.
+        struct GameUiInputHandoff
+        {
+            glm::vec2    viewportMouse{0.0f, 0.0f};  // viewport-local cursor px
+            std::uint8_t mouseButtons = 0;           // raw snap.mouseButtons (LMB=bit0)
+            float        wheel        = 0.0f;        // raw snap.wheelY
+            bool         inViewport   = false;
+            double       frameDt      = 0.0;         // per-frame dt (seconds)
+        };
+        GameUiInputHandoff m_gameUi;
 
         // Shader-editor services + open documents (Slice 5). The compiler is the
         // app-shared compile service: documents Submit through it, and the
@@ -579,7 +583,7 @@ namespace Arcane::Editor
         // registry's SpriteTable/SpriteMaterialTable, whose pointers are
         // non-owning, so it MUST destruct before m_runtime -- which it does,
         // being declared after it (reverse-order destruction), and before
-        // m_viewport, whose batcher it holds.
+        // m_viewportTargets, whose batcher it holds.
         // ONE trap if this ever changes: m_documents below destructs FIRST, so
         // the consumeFirst hook installed on the resolver (which reaches into
         // m_documents) is dead by the time ~SceneRenderResolver runs. That is
@@ -688,16 +692,6 @@ namespace Arcane::Editor
         // image is missing (the toolbar simply omits it). Holds an NVRHI handle, so like
         // the other render resources it is declared after m_gpu (destructs before the device).
         nvrhi::TextureHandle m_toolbarLogo;
-
-        // Deferred resize: the Viewport panel's content-region size measured LAST
-        // frame, applied at the START of THIS frame (before m_viewport->Draw). This
-        // mirrors the m_viewportRect/m_viewportActive one-frame lag above -- it avoids
-        // a same-frame use-after-free where OffscreenCanvas::Resize (called right after
-        // ImGui::Image bakes the current texture pointer into this frame's draw list)
-        // synchronously frees that very texture before ImGui replays the draw list at
-        // Render time. See ApplyPendingViewportResize for the full sequencing rationale.
-        std::uint32_t m_pendingViewportW = 0;
-        std::uint32_t m_pendingViewportH = 0;
 
         // File -> Open Project (soft-restart). The menu sets menuReq.openProject;
         // DrawEditorUi launches the async .arcproj FILE dialog via the shared

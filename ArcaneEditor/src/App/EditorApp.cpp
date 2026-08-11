@@ -32,7 +32,7 @@
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputActions.hpp>
-#include <Panels/ConsoleModel.hpp>   // ConsoleEntry / CategoryForMessage (InstallConsoleSink)
+#include <Panels/ConsoleModel.hpp>   // ConsoleEntry / CategoryForMessage (ConsoleDiagnostics::Install)
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
@@ -468,13 +468,13 @@ namespace Arcane::Editor
         // DEVIATION from the brief's literal Init-block mapping: moved here from
         // its original, later position in Init() (it used to run right after
         // the plugin loaded) because StageSpriteTables's SceneRenderResolver
-        // needs m_viewport->Batch() to already exist, and sprite_tables's DAG
-        // dependency is on render_bridge (not on plugin_load or a separate
-        // "viewport" stage that does not exist). Pure reordering -- no field
-        // gains or loses a dependency it did not already have; m_viewport only
-        // ever needed m_gpu.
-        m_viewport = Arcane::OffscreenCanvas::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(), 1280, 720);
-        if (!m_viewport)
+        // needs m_viewportTargets.canvas->Batch() to already exist, and
+        // sprite_tables's DAG dependency is on render_bridge (not on
+        // plugin_load or a separate "viewport" stage that does not exist).
+        // Pure reordering -- no field gains or loses a dependency it did not
+        // already have; the canvas only ever needed m_gpu.
+        m_viewportTargets.canvas = Arcane::OffscreenCanvas::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(), 1280, 720);
+        if (!m_viewportTargets.canvas)
         {
             ARC_ERROR("Arcane Editor: OffscreenCanvas create failed");
             return false;
@@ -483,20 +483,21 @@ namespace Arcane::Editor
         // GPU hit-proxy picker, sized to match the viewport (resized together).
         // Supersampled 2x: the id target feeds the JFA outline below, which needs
         // sub-pixel silhouette coverage to seed a smooth distance field.
-        m_pick = Arcane::PickBuffer::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(),
+        m_viewportTargets.pick = Arcane::PickBuffer::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(),
                                             1280, 720, /*supersample*/ 2);
-        if (!m_pick)
+        if (!m_viewportTargets.pick)
         {
             ARC_ERROR("Arcane Editor: PickBuffer create failed");
             return false;
         }
 
         // Selection + hover outline (Edit-mode viewport pass), a sibling of
-        // m_pick: created and resized at the same viewport size (its own targets
-        // are 1x -- it derives the id buffer's supersample factor internally).
-        m_outline = Arcane::SelectionOutline::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(),
+        // the picker: created and resized at the same viewport size (its own
+        // targets are 1x -- it derives the id buffer's supersample factor
+        // internally).
+        m_viewportTargets.outline = Arcane::SelectionOutline::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(),
                                                      1280, 720);
-        if (!m_outline)
+        if (!m_viewportTargets.outline)
         {
             ARC_ERROR("Arcane Editor: SelectionOutline creation failed");
             return false;
@@ -621,7 +622,7 @@ namespace Arcane::Editor
         {
             Arcane::SceneRenderResolver::Services rs;
             rs.runtime  = &*m_runtime;
-            rs.batcher  = &m_viewport->Batch();   // scene batcher: material binds + texture eviction
+            rs.batcher  = &m_viewportTargets.canvas->Batch();   // scene batcher: material binds + texture eviction
             rs.device   = m_gpu->Device().Nvrhi();
             rs.backend  = m_gpu->Device().Backend();
             rs.compiler = m_shaderCompiler.get();
@@ -976,7 +977,34 @@ namespace Arcane::Editor
         m_gpu->Win().SetTitle(m_windowTitle);
     }
 
-    void EditorApp::InstallConsoleSink()
+    // Installed here -- before HostBoot::EditorStages(ctx) builds the stage
+    // list and before any BootSequence exists -- rather than from inside
+    // StageEditorShell as it used to be (2026-07-31 review, Critical 1).
+    // project_open (Worker) logs from ScanContent/plugin-descriptor warnings,
+    // and editor_lock (Worker) logs on a failed lock write; both run BEFORE
+    // editor_shell in the DAG. spdlog's vendored callback_sink_mt protects
+    // ITS OWN invocation, but Log::Engine()->sinks() is a plain unlocked
+    // std::vector (logger-inl.h's broadcast loop takes no lock) -- pushing
+    // onto it from the main thread while a worker is mid-iteration over the
+    // same vector is a data race (reallocation frees memory the worker is
+    // still walking). Installing the sink before any worker stage exists
+    // removes the race structurally instead of trying to serialize around
+    // it. Needs only Log::Engine() and `console`, both live at this point, so
+    // it has no stage dependency of its own. Bonus: this also means the
+    // Console now captures runtime_create/gpu_core's banner lines, which it
+    // used to miss because the sink installed after they ran.
+    //
+    // Both sinks are installed from Create(), not Init(), and Uninstall()
+    // (called from the top of Shutdown()) removes them unconditionally -- so
+    // a Create-failed path still gets its ARC_ERROR captured by the Console
+    // and the diagnostics store.
+    //
+    // The diagnostics-store half (the store.InstallAsEngineSink() call
+    // below): Arcane::Diagnostics' sink slot is mutex-guarded (unlike
+    // Log::Engine()->sinks()), but a worker stage (e.g. project_open's
+    // content scan) can still publish diagnostics before any BootSequence
+    // exists, so it installs from the same early, dependency-free point.
+    void EditorApp::ConsoleDiagnostics::Install()
     {
         auto cb = std::make_shared<spdlog::sinks::callback_sink_mt>(
             [this](const spdlog::details::log_msg& m)
@@ -998,10 +1026,35 @@ namespace Arcane::Editor
                 e.message  = std::string(m.payload.data(), m.payload.size());
                 e.category = std::string(CategoryForMessage(e.message));
                 if (m.source.filename) { e.file = m.source.filename; e.line = m.source.line; }
-                m_console.Push(std::move(e));
+                console.Push(std::move(e));
             });
-        m_consoleSink = cb;
+        sink = cb;
         Arcane::Log::Engine()->sinks().push_back(cb);
+        store.InstallAsEngineSink();
+    }
+
+    // Deregister the diagnostics sink FIRST, same reason as the console sink
+    // erase right below: nothing may dispatch into a half-torn-down editor.
+    // UninstallEngineSink is identity-guarded (ClearSinkIfCurrent), so this
+    // is a no-op if some other DiagnosticStore has since become the
+    // process-wide sink.
+    //
+    // Deregister the console sink SECOND, before anything below can log
+    // through Arcane::Log::Engine(). ConsoleDiagnostics is declared after
+    // m_runtime/m_plugin/m_gpu in EditorApp.hpp, so it destructs BEFORE them;
+    // if the sink outlived this point, a log emitted during ~GpuContext's
+    // Vulkan device teardown (validation messages) would invoke the callback
+    // and Push into an already-destroyed console deque.
+    void EditorApp::ConsoleDiagnostics::Uninstall()
+    {
+        store.UninstallEngineSink();
+
+        if (sink)
+        {
+            auto& sinks = Arcane::Log::Engine()->sinks();
+            sinks.erase(std::remove(sinks.begin(), sinks.end(), sink), sinks.end());
+            sink.reset();
+        }
     }
 
     // The Hub reads <root>/Saved/AutoScreenshot.png as the project's cover
@@ -1017,7 +1070,7 @@ namespace Arcane::Editor
     void EditorApp::WriteAutoScreenshot()
     {
         if (m_frameCount == 0) return;
-        if (!m_runtime || !m_viewport || !m_gpu) return;
+        if (!m_runtime || !m_viewportTargets.canvas || !m_gpu) return;
 
         const Arcane::Project* proj = m_runtime->CurrentProject();
         if (!proj) return;
@@ -1025,7 +1078,7 @@ namespace Arcane::Editor
         // TextureId() round-trips the output texture pointer -- the same seam
         // ImGui::Image consumes (precedent: OffscreenCanvasTest.cpp).
         auto* tex = reinterpret_cast<nvrhi::ITexture*>(
-            static_cast<uintptr_t>(m_viewport->TextureId()));
+            static_cast<uintptr_t>(m_viewportTargets.canvas->TextureId()));
         if (!tex) return;
 
         const std::filesystem::path file = proj->Root() / "Saved" / "AutoScreenshot.png";
@@ -1039,33 +1092,12 @@ namespace Arcane::Editor
 
     bool EditorApp::Create()
     {
-        // Installed here -- before HostBoot::EditorStages(ctx) builds the stage
-        // list and before any BootSequence exists -- rather than from inside
-        // StageEditorShell as it used to be (2026-07-31 review, Critical 1).
-        // project_open (Worker) logs from ScanContent/plugin-descriptor warnings,
-        // and editor_lock (Worker) logs on a failed lock write; both run BEFORE
-        // editor_shell in the DAG. spdlog's vendored callback_sink_mt protects
-        // ITS OWN invocation, but Log::Engine()->sinks() is a plain unlocked
-        // std::vector (logger-inl.h's broadcast loop takes no lock) -- pushing
-        // onto it from the main thread while a worker is mid-iteration over the
-        // same vector is a data race (reallocation frees memory the worker is
-        // still walking). Installing the sink before any worker stage exists
-        // removes the race structurally instead of trying to serialize around
-        // it. Needs only Log::Engine() and m_console, both live at this point,
-        // so it has no stage dependency of its own. Bonus: this also means the
-        // Console now captures runtime_create/gpu_core's banner lines, which it
-        // used to miss because the sink installed after they ran.
-        //
-        // Both sinks are installed in Create(), not Init(), and Shutdown()
-        // removes them unconditionally -- so the Create-failed path below still
-        // gets its ARC_ERROR captured by the Console and the diagnostics store.
-        InstallConsoleSink();
-        // Same reasoning as InstallConsoleSink above -- Arcane::Diagnostics'
-        // sink slot is mutex-guarded (unlike Log::Engine()->sinks()), but a
-        // worker stage (e.g. project_open's content scan) can still publish
-        // diagnostics before any BootSequence exists, so this installs from
-        // the same early, dependency-free point.
-        m_diagnostics.InstallAsEngineSink();
+        // Installed before HostBoot::EditorStages(ctx) builds the stage list
+        // and before any BootSequence exists -- see
+        // ConsoleDiagnostics::Install()'s doc comment for why this early,
+        // dependency-free point matters, and ConsoleDiagnostics::Uninstall()'s
+        // for why Shutdown() removes both sinks unconditionally.
+        m_consoleDiag.Install();
 
         m_bootCtx.runtime     = nullptr;              // stages populate as they go
         m_bootCtx.splash      = m_splash;
@@ -1190,25 +1222,10 @@ namespace Arcane::Editor
 
     void EditorApp::Shutdown()
     {
-        // Deregister the diagnostics sink FIRST, same reason as the console sink
-        // erase right below: nothing may dispatch into a half-torn-down editor.
-        // UninstallEngineSink is identity-guarded (ClearSinkIfCurrent), so this
-        // is a no-op if some other DiagnosticStore has since become the
-        // process-wide sink.
-        m_diagnostics.UninstallEngineSink();
-
-        // Deregister the console sink FIRST, before anything below can log through
-        // Arcane::Log::Engine(). m_console is declared before m_runtime/m_plugin/m_gpu
-        // in EditorApp.hpp, so it destructs BEFORE them; if the sink outlived this
-        // point, a log emitted during ~GpuContext's Vulkan device teardown (validation
-        // messages) would invoke the callback and Push into an already-destroyed
-        // m_console deque.
-        if (m_consoleSink)
-        {
-            auto& sinks = Arcane::Log::Engine()->sinks();
-            sinks.erase(std::remove(sinks.begin(), sinks.end(), m_consoleSink), sinks.end());
-            m_consoleSink.reset();
-        }
+        // Deregister both sinks FIRST, before anything below can dispatch into
+        // a half-torn-down editor -- see ConsoleDiagnostics::Uninstall()'s doc
+        // comment for the ordering rationale (diagnostics store, then console).
+        m_consoleDiag.Uninstall();
 
         // Reclaim the module-rebuild worker before member teardown: it only
         // touches its own mutex-guarded queue, but a thread outliving the

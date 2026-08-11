@@ -473,11 +473,11 @@ namespace Arcane::Editor
         // context needs are hoisted -- the input phase stays narrow. Off the
         // viewport, hasInput is false so the game context reads the cursor as
         // off-target (BeginFrame injects -FLT_MAX).
-        m_lastViewportMouse = glm::vec2(lx, ly);
-        m_lastInViewport    = inViewport;
-        m_lastMouseButtons  = snap.mouseButtons;
-        m_lastWheel         = snap.wheelY;
-        m_lastFrameDt       = frameDt;
+        m_gameUi.viewportMouse = glm::vec2(lx, ly);
+        m_gameUi.inViewport    = inViewport;
+        m_gameUi.mouseButtons  = snap.mouseButtons;
+        m_gameUi.wheel         = snap.wheelY;
+        m_gameUi.frameDt       = frameDt;
 
         // Edit mode: the editor owns the left mouse button in the viewport
         // (click-pick + gizmo), so the hosted plugin must not also see it --
@@ -659,25 +659,25 @@ namespace Arcane::Editor
             // not strand the view.
             if (m_edges.rmb.pressed && inViewport)
             {
-                m_camPanning = true;
+                m_camPan.panning = true;
             }
             if (!rmbDown)
             {
-                m_camPanning = false;
+                m_camPan.panning = false;
             }
-            // RMB held across BOTH frames, so m_camPanLastMouse is a
+            // RMB held across BOTH frames, so m_camPan.lastMouse is a
             // real previous cursor and the press edge cannot jump the
             // view by the whole distance from wherever the cursor last
             // was (same guard as Sandbox's Interaction pan). Equivalence:
-            // m_camPanning && m_edges.rmb.down && !m_edges.rmb.pressed has
+            // m_camPan.panning && m_edges.rmb.down && !m_edges.rmb.pressed has
             // the same truth table as the old m_camPanning && m_prevRmbDown
-            // -- m_camPanning implies rmbDown this frame (the `!rmbDown`
+            // -- m_camPan.panning implies rmbDown this frame (the `!rmbDown`
             // branch above clears it otherwise), so `down` is redundant and
             // `!pressed` (not a fresh rising edge) is exactly "was also down
             // last frame".
-            if (m_camPanning && m_edges.rmb.down && !m_edges.rmb.pressed)
+            if (m_camPan.panning && m_edges.rmb.down && !m_edges.rmb.pressed)
             {
-                m_camera.Pan(mouseWindow - m_camPanLastMouse);
+                m_camera.Pan(mouseWindow - m_camPan.lastMouse);
             }
 
             // Zoom anchors on the viewport-local cursor, the space
@@ -693,9 +693,9 @@ namespace Arcane::Editor
         }
         else
         {
-            m_camPanning = false;   // Play owns the pointer; drop any live pan
+            m_camPan.panning = false;   // Play owns the pointer; drop any live pan
         }
-        m_camPanLastMouse = mouseWindow;
+        m_camPan.lastMouse = mouseWindow;
 
         // F / Home framing. Gated on wantCaptureKeyboard exactly like
         // the Ctrl+N/O/S shortcuts above, so F does not fire while a
@@ -920,15 +920,24 @@ namespace Arcane::Editor
     // Phase 8: deferred viewport resize. Must stay before the scene render.
     void EditorApp::ApplyPendingViewportResize()
     {
-        // Apply the viewport panel's size from LAST frame BEFORE rendering the scene,
-        // so this frame's ImGui::Image() captures a texture that is not destroyed later
-        // in the same frame (OffscreenCanvas::Resize synchronously frees the old texture).
-        if (m_pendingViewportW != 0 && m_pendingViewportH != 0 &&
-            (m_pendingViewportW != m_viewport->Width() || m_pendingViewportH != m_viewport->Height()))
+        m_viewportTargets.ApplyPendingResize(*m_gpu);
+    }
+
+    // Deferred resize: the Viewport panel's content-region size measured LAST
+    // frame, applied at the START of THIS frame (before canvas->Draw). This
+    // mirrors the m_viewportRect/m_viewportActive one-frame lag on EditorApp --
+    // it avoids a same-frame use-after-free where OffscreenCanvas::Resize
+    // (called right after ImGui::Image bakes the current texture pointer into
+    // this frame's draw list) synchronously frees that very texture before
+    // ImGui replays the draw list at Render time.
+    void EditorApp::ViewportTargets::ApplyPendingResize(GpuContext&)
+    {
+        if (pendingW != 0 && pendingH != 0 &&
+            (pendingW != canvas->Width() || pendingH != canvas->Height()))
         {
-            m_viewport->Resize(m_pendingViewportW, m_pendingViewportH);
-            m_pick->Resize(m_pendingViewportW, m_pendingViewportH);
-            m_outline->Resize(m_pendingViewportW, m_pendingViewportH);
+            canvas->Resize(pendingW, pendingH);
+            pick->Resize(pendingW, pendingH);
+            outline->Resize(pendingW, pendingH);
         }
     }
 
@@ -955,7 +964,7 @@ namespace Arcane::Editor
         // The compile clock advances here (phase 13 advanced it pre-lift) because
         // everything downstream -- Request debounce, material globals, document
         // Submits -- reads it, and it must advance exactly ONCE per frame.
-        m_editorClock += m_lastFrameDt;
+        m_editorClock += m_gameUi.frameDt;
 
         Arcane::FullscreenMaterialChain* postChain = nullptr;
         const Arcane::MaterialInstance* postInst = nullptr;
@@ -964,9 +973,9 @@ namespace Arcane::Editor
         {
             Arcane::SceneRenderResolver::FrameInfo frame;
             frame.now            = m_editorClock;
-            frame.dt             = m_lastFrameDt;
-            frame.viewportWidth  = (float)m_viewport->Width();
-            frame.viewportHeight = (float)m_viewport->Height();
+            frame.dt             = m_gameUi.frameDt;
+            frame.viewportWidth  = (float)m_viewportTargets.canvas->Width();
+            frame.viewportHeight = (float)m_viewportTargets.canvas->Height();
             m_resolver->Refresh(frame);
 
             // Read AFTER Refresh: a drain may have swapped the bound instance
@@ -1016,13 +1025,13 @@ namespace Arcane::Editor
         }
         else if (const auto sceneCam = Arcane::ActiveSceneCamera(
                      m_runtime->Registry(),
-                     (float)m_viewport->Width(), (float)m_viewport->Height()))
+                     (float)m_viewportTargets.canvas->Width(), (float)m_viewportTargets.canvas->Height()))
         {
             m_runtime->SetCamera(sceneCam->offset, sceneCam->zoom);
         }
 
-        m_viewport->SetPostGlobals(postGlobals);
-        m_viewport->SetPostChain(postChain, postInst,
+        m_viewportTargets.canvas->SetPostGlobals(postGlobals);
+        m_viewportTargets.canvas->SetPostChain(postChain, postInst,
                                  &m_runtime->AssetsFacade());
     }
 
@@ -1037,7 +1046,7 @@ namespace Arcane::Editor
         // render scheduler (sprite submission + physics debug overlay) into this
         // batcher. Runs BEFORE ImGui builds the Viewport panel's Image so the texture
         // is ready when ImGui samples it at backbuffer-render time.
-        m_viewport->Draw(
+        m_viewportTargets.canvas->Draw(
             [&](Arcane::Batcher2D& b)
             {
                 // Globals for registered sprite materials (Time/Delta/
@@ -1070,8 +1079,8 @@ namespace Arcane::Editor
                 // instead of looking through it.
                 if (!InPlayMode())
                 {
-                    const float vw = (float)m_viewport->Width();
-                    const float vh = (float)m_viewport->Height();
+                    const float vw = (float)m_viewportTargets.canvas->Width();
+                    const float vh = (float)m_viewportTargets.canvas->Height();
                     if (const auto cam = Arcane::ActiveSceneCamera(m_runtime->Registry(), vw, vh))
                     {
                         const float aspect = (vh > 0.0f) ? (vw / vh) : 1.0f;
@@ -1126,7 +1135,7 @@ namespace Arcane::Editor
         // viewport's output texture (Play only). Runs the plugin's DrawUI in the
         // GAME context and blends it OVER the tonemapped scene -- so the HUD lives
         // inside the Viewport panel, never over the editor chrome. Runs AFTER
-        // m_viewport->Draw (scene -> tonemap -> output texture) and BEFORE the
+        // m_viewportTargets.canvas->Draw (scene -> tonemap -> output texture) and BEFORE the
         // editor's BeginFrame below. The game context is fully bracketed by the
         // OffscreenImGuiLayer calls (each SetCurrentContext internally), so the
         // editor context is untouched. Edit mode: not run (clean viewport); the
@@ -1137,14 +1146,14 @@ namespace Arcane::Editor
         if (InPlayMode() && vtGame && vtGame->DrawUI)
         {
             Arcane::OffscreenImGuiLayer::Input gi;
-            gi.displaySize  = glm::vec2((float)m_viewport->Width(), (float)m_viewport->Height());
-            gi.deltaTime    = (float)m_lastFrameDt;
-            gi.hasInput     = m_lastInViewport;
-            gi.mousePos     = m_lastViewportMouse;
-            gi.mouseDown[0] = (m_lastMouseButtons & 0x1u) != 0;   // LMB
-            gi.mouseDown[1] = (m_lastMouseButtons & 0x2u) != 0;   // RMB
-            gi.mouseDown[2] = (m_lastMouseButtons & 0x4u) != 0;   // MMB
-            gi.wheel        = m_lastWheel;
+            gi.displaySize  = glm::vec2((float)m_viewportTargets.canvas->Width(), (float)m_viewportTargets.canvas->Height());
+            gi.deltaTime    = (float)m_gameUi.frameDt;
+            gi.hasInput     = m_gameUi.inViewport;
+            gi.mousePos     = m_gameUi.viewportMouse;
+            gi.mouseDown[0] = (m_gameUi.mouseButtons & 0x1u) != 0;   // LMB
+            gi.mouseDown[1] = (m_gameUi.mouseButtons & 0x2u) != 0;   // RMB
+            gi.mouseDown[2] = (m_gameUi.mouseButtons & 0x4u) != 0;   // MMB
+            gi.wheel        = m_gameUi.wheel;
             m_gameImgui->SetInput(gi);
             m_gameImgui->BeginFrame();
             m_plugin->DrawUIAll();   // game module + any secondary plugins, into the game context
@@ -1154,7 +1163,7 @@ namespace Arcane::Editor
             // idle here; NVRHI auto-transitions the output texture (RenderTarget for
             // this pass, back to ShaderResource for the editor's ImGui::Image).
             m_gpu->Cmd()->open();
-            m_gameImgui->Render(m_gpu->Cmd(), m_viewport->OutputFramebuffer());
+            m_gameImgui->Render(m_gpu->Cmd(), m_viewportTargets.canvas->OutputFramebuffer());
             m_gpu->Cmd()->close();
             m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
         }
@@ -1170,10 +1179,10 @@ namespace Arcane::Editor
         // texture (amber selected, cyan hovered). Skipped entirely when there is nothing
         // to outline. Play mode: not run (the game-imgui overlay owns this slot instead,
         // see above -- the two are mutually exclusive by mode).
-        if (!InPlayMode() && (m_selection.HasSelection() || m_lastInViewport))
+        if (!InPlayMode() && (m_selection.HasSelection() || m_gameUi.inViewport))
         {
             const Arcane::PickView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
-            m_pick->RenderIdPass(m_runtime->Registry(), view);
+            m_viewportTargets.pick->RenderIdPass(m_runtime->Registry(), view);
 
             // Every selected entity that made it into this frame's id pass.
             // SelectionOutline caps and warns; no clamping needed here.
@@ -1181,20 +1190,20 @@ namespace Arcane::Editor
             selectedIds.reserve(m_selection.Count());
             for (Astra::Entity e : m_selection.Entities())
             {
-                const uint32_t id = m_pick->PassIdOf(e);
+                const uint32_t id = m_viewportTargets.pick->PassIdOf(e);
                 if (id != 0u)
                     selectedIds.push_back(id);
             }
 
             Arcane::SelectionOutline::Params op;
             op.selectedIds = selectedIds;
-            op.cursorPx   = m_lastInViewport
-                          ? glm::ivec2((int)m_lastViewportMouse.x, (int)m_lastViewportMouse.y)
+            op.cursorPx   = m_gameUi.inViewport
+                          ? glm::ivec2((int)m_gameUi.viewportMouse.x, (int)m_gameUi.viewportMouse.y)
                           : glm::ivec2(-1, -1);
 
             m_gpu->Cmd()->open();
-            m_outline->Render(m_gpu->Cmd(), m_pick->IdTarget(),
-                              m_viewport->OutputFramebuffer(), op);
+            m_viewportTargets.outline->Render(m_gpu->Cmd(), m_viewportTargets.pick->IdTarget(),
+                              m_viewportTargets.canvas->OutputFramebuffer(), op);
             m_gpu->Cmd()->close();
             m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
         }
@@ -1212,7 +1221,7 @@ namespace Arcane::Editor
     void EditorApp::PumpEditorDocuments()
     {
         PollMaterialWatch();   // external .arcmat edits (~1 Hz mtime sweep)
-        m_documents.TickAll(m_lastFrameDt);
+        m_documents.TickAll(m_gameUi.frameDt);
     }
 
     // Phase 14: the editor ImGui pass -- dockspace, menus, dialogs, panels.
@@ -1270,10 +1279,10 @@ namespace Arcane::Editor
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::Assets));
         ConsumeBrowserActions(browserActions, ls);
 
-        if (static_cast<std::size_t>(m_consoleUi.lineCap) != m_console.Capacity())
-            m_console.SetCapacity(static_cast<std::size_t>(m_consoleUi.lineCap));
+        if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
+            m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Console))
-            Arcane::Editor::DrawConsolePanel(m_console, m_consoleUi,
+            Arcane::Editor::DrawConsolePanel(m_consoleDiag.console, m_consoleDiag.ui,
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::Console));
 
         // Problems panel: current diagnostic STATE (Console above is the
@@ -1284,7 +1293,7 @@ namespace Arcane::Editor
         // effects use.
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems))
             if (const std::optional<Arcane::DiagLocator> hit =
-                    Arcane::Editor::DrawProblemsPanel(m_diagnostics, m_problemsUi,
+                    Arcane::Editor::DrawProblemsPanel(m_consoleDiag.store, m_consoleDiag.problemsUi,
                         m_panelVis.OpenFlag(Arcane::Editor::PanelId::Problems)))
                 RouteLocator(*hit);
 
@@ -1705,13 +1714,13 @@ namespace Arcane::Editor
     // input phase and resize phase read (the deliberate one-frame lag).
     void EditorApp::DrawViewportPanelPhase(FrameState& fs)
     {
-        fs.vp = Arcane::Editor::DrawViewportPanel(m_viewport->TextureId(),
-                                            m_viewport->Width(), m_viewport->Height(),
+        fs.vp = Arcane::Editor::DrawViewportPanel(m_viewportTargets.canvas->TextureId(),
+                                            m_viewportTargets.canvas->Width(), m_viewportTargets.canvas->Height(),
                                             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
                                             /*showToolOverlay=*/!InPlayMode());
         m_viewportDockId = fs.vp.dockId;
-        m_pendingViewportW = fs.vp.desiredW;
-        m_pendingViewportH = fs.vp.desiredH;
+        m_viewportTargets.pendingW = fs.vp.desiredW;
+        m_viewportTargets.pendingH = fs.vp.desiredH;
         m_viewportRect     = fs.vp.imageRect;
         m_viewportActive   = Arcane::Editor::SceneInputActive(fs.vp.hovered, fs.vp.focused);
     }
@@ -1802,7 +1811,7 @@ namespace Arcane::Editor
         {
             const Arcane::PickView view{ m_runtime->CameraOffset(),
                                          m_runtime->CameraZoom() };
-            const Astra::Entity picked = m_pick->Pick(
+            const Astra::Entity picked = m_viewportTargets.pick->Pick(
                 m_runtime->Registry(), view,
                 glm::vec2(fs.vp.clickLocalX, fs.vp.clickLocalY));
             if (picked.IsValid())
