@@ -91,6 +91,9 @@ namespace Arcane::HostBoot
         // one of a content tree's files would put that cost on the worker
         // thread for a status line nothing reads faster than present()'s own
         // ~8ms pump cadence (BootSequence.cpp) actually repaints it.
+        // LOCKSTEP: the editor's SwitchProject hand-mirrors this throttle in
+        // its switch-local project_open body (EditorAppProject.cpp) -- this
+        // helper is TU-private, so a change here must be mirrored there.
         void ReportScanProgress(BootStageDetail& box, std::size_t done, std::size_t total)
         {
             constexpr std::size_t kStride = 32;

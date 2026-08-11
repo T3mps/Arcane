@@ -1251,7 +1251,9 @@ namespace Arcane::Editor
                                        &m_recents.scenes);
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
         // click (same "panel reports, app performs" split as ViewportPanelResult);
-        // DoLaunchStandalone owns the project/dirty-scene checks and the spawn.
+        // the readiness checks live in SceneSession::Request's park condition
+        // (dirty OR never-saved) and DoLaunchStandalone keeps only a loud
+        // backstop before the spawn.
         if (Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime,
                                                m_plugin ? m_plugin->Vtable() : nullptr, m_playMode,
                                                (uint64_t)(intptr_t)m_toolbarLogo.Get()))

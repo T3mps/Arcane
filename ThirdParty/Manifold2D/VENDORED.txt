@@ -1,0 +1,1 @@
+Vendored from github.com/T3mps/Manifold2D @ 5523f77fd09df28c3aba1d646e8fae582946af18 on 2026-08-11T10:30:54 -- include/ + src/ + LICENSE only; the premake5.lua here is the CONSUMER's wrapper, never synced.
