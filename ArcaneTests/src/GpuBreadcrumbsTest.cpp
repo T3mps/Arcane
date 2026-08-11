@@ -45,8 +45,8 @@ TEST_CASE("GpuBreadcrumbs reports a begun-not-ended scope in inFlight together w
 
     // "A" is opened but never gets a marker report of its own (simulating a
     // backend that only confirmed the deepest marker before the device
-    // died) and its EndScope is never called -- it must still surface via
-    // the ancestor-by-depth rule, not via any marker evidence of its own.
+    // died) -- it must still surface via the ancestor-by-depth rule (no
+    // end marker observed), not via any begin-marker evidence of its own.
     const std::uint32_t idA = bc.BeginScope("A");
     const std::uint32_t idB = bc.BeginScope("B"); // nested inside A
     bc.OnMarkerWritten(idB, true);
@@ -56,6 +56,32 @@ TEST_CASE("GpuBreadcrumbs reports a begun-not-ended scope in inFlight together w
     REQUIRE(snap.inFlight.size() == 2);
     CHECK(snap.inFlight[0] == "A");
     CHECK(snap.inFlight[1] == "B");
+    CHECK(snap.lastCompleted.empty());
+}
+
+TEST_CASE("GpuBreadcrumbs includes a CPU-closed ancestor in inFlight when its own end marker was never observed", "[diag]")
+{
+    GpuBreadcrumbs bc;
+
+    // The realistic crash scenario this tool exists for: the CPU races
+    // ahead of the GPU, so EndScope fires for BOTH Outer and Inner
+    // immediately, back-to-back, long before the GPU catches up. A backend
+    // then confirms only Inner's begin marker before the device dies --
+    // Outer never gets ANY marker report of its own, and its EndScope
+    // (CPU-side) already fired. Outer must still surface as in-flight: GPU
+    // execution order guarantees an enclosing scope's end marker is
+    // written after its descendants', so Inner still running means Outer
+    // is too -- CPU-side EndScope state must not gate this.
+    const std::uint32_t outer = bc.BeginScope("Outer");
+    const std::uint32_t inner = bc.BeginScope("Inner"); // nested inside Outer
+    bc.EndScope(inner);
+    bc.EndScope(outer);
+    bc.OnMarkerWritten(inner, true);
+
+    const GpuBreadcrumbs::Snapshot snap = bc.Capture();
+    REQUIRE(snap.inFlight.size() == 2);
+    CHECK(snap.inFlight[0] == "Outer");
+    CHECK(snap.inFlight[1] == "Inner");
     CHECK(snap.lastCompleted.empty());
 }
 

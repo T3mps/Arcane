@@ -43,11 +43,12 @@ namespace Arcane
 
         // Closes the scope `token` refers to: CPU-side bookkeeping only --
         // pops the open-scope stack so later BeginScope calls compute the
-        // right depth/ancestor. Does NOT imply the scope's end marker was
-        // ever observed on the GPU (see OnMarkerWritten) -- a scope can be
-        // EndScope'd here yet still show up in a later Capture()'s inFlight
-        // if its end marker never arrived (the GPU died before reaching
-        // it). A stale/unknown/already-evicted token is a safe no-op.
+        // right depth/ancestor. Does NOT feed Capture() at all -- the CPU
+        // routinely races ahead of the GPU and calls this immediately for
+        // every scope, so it carries no information about what the GPU
+        // actually reached (see OnMarkerWritten, which is the only signal
+        // Capture() trusts). A stale/unknown/already-evicted token is a
+        // safe no-op.
         void EndScope(std::uint32_t token);
 
         // Reported by a backend as it observes GPU marker state: `begin`
@@ -61,10 +62,15 @@ namespace Arcane
         // Derived queue-timeline state. lastCompleted names the
         // highest-id scope whose end marker was observed ("" if none).
         // inFlight names every scope whose begin marker was observed but
-        // not its end, plus -- for each -- its still-open ancestors (an
-        // ancestor with no EndScope call of its own yet, regardless of
-        // whether the ancestor ever got its own marker report), emitted
-        // oldest-first.
+        // not its end, plus -- for each -- its ancestor chain up to the
+        // root, EXCEPT any ancestor whose own end marker WAS observed.
+        // GPU execution order guarantees an enclosing scope's end marker
+        // is written after its descendants' -- so a descendant still in
+        // flight means every enclosing scope without a written end marker
+        // is still executing too, regardless of what CPU-side EndScope
+        // bookkeeping says (the CPU routinely races ahead and closes a
+        // scope long before the GPU reaches its end marker, or dies before
+        // it does). Emitted oldest-first.
         struct Snapshot
         {
             std::string lastCompleted;
@@ -91,7 +97,6 @@ namespace Arcane
             std::uint32_t depth = 0;
             std::uint32_t parentId = 0; // meaningful only if hasParent
             bool hasParent = false;
-            bool closed = false;        // EndScope called (CPU-side intent)
             bool beginWritten = false;  // OnMarkerWritten(id, true) observed
             bool endWritten = false;    // OnMarkerWritten(id, false) observed
         };

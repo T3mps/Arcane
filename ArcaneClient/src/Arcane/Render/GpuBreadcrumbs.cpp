@@ -28,7 +28,11 @@ namespace Arcane
     void GpuBreadcrumbs::EndScope(std::uint32_t token)
     {
         // Well-nested callers always end LIFO; scan from the back but
-        // defensively search the whole stack in case of misuse.
+        // defensively search the whole stack in case of misuse. This is
+        // pure open-stack bookkeeping (for later BeginScope depth/parent
+        // computation) -- it deliberately does not touch the ring entry
+        // itself. See the header comment: EndScope carries no information
+        // Capture() can trust about what the GPU actually reached.
         for (auto it = m_openStack.rbegin(); it != m_openStack.rend(); ++it)
         {
             if (*it == token)
@@ -37,10 +41,6 @@ namespace Arcane
                 break;
             }
         }
-
-        const std::size_t idx = FindIndex(token);
-        if (idx < m_ring.size())
-            m_ring[idx].closed = true;
     }
 
     void GpuBreadcrumbs::OnMarkerWritten(std::uint32_t id, bool begin)
@@ -71,12 +71,17 @@ namespace Arcane
         }
 
         // inFlight: every entry whose begin marker was observed but not
-        // its end (directly in flight), plus -- for each -- its still-open
-        // ancestor chain (an ancestor with no EndScope call yet, whether or
-        // not it has any marker evidence of its own). A closed or evicted
-        // ancestor stops that step of the walk but not the ones above it --
-        // an intermediate scope closing says nothing about whether ITS
-        // ancestors are still open.
+        // its end (directly in flight), plus -- for each -- its ancestor
+        // chain up to the root, EXCEPT any ancestor whose own end marker
+        // WAS observed. This is marker-evidence-only: GPU execution order
+        // guarantees an enclosing scope's end marker is written after its
+        // descendants', so a descendant still in flight means every
+        // enclosing scope without a written end marker is still executing
+        // -- independent of whether the ancestor has any BEGIN marker
+        // evidence of its own, and independent of CPU-side EndScope state
+        // (the CPU routinely races ahead and closes a scope long before
+        // the GPU reaches, or ever reaches, its end marker). An evicted
+        // ancestor stops that step of the walk but not the ones above it.
         std::vector<bool> included(m_ring.size(), false);
         for (std::size_t i = 0; i < m_ring.size(); ++i)
         {
@@ -93,7 +98,7 @@ namespace Arcane
                 if (pIdx >= m_ring.size())
                     break; // ancestor evicted -- can't see further up
 
-                if (!m_ring[pIdx].closed)
+                if (!m_ring[pIdx].endWritten)
                     included[pIdx] = true;
 
                 hasParent = m_ring[pIdx].hasParent;
