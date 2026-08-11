@@ -11,7 +11,7 @@
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
-#include "EditorApp.hpp"
+#include "App/EditorApp.hpp"
 
 #include <cstdio>
 #include <filesystem>

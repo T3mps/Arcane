@@ -8,7 +8,7 @@
 #include <Arcane/Material/MaterialSource.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>
 
-#include <DiagnosticStore.hpp>
+#include <Panels/DiagnosticStore.hpp>
 
 #include <Json.hpp>   // nlohmann::json -- the vendored single header lives at
                        // ThirdParty/nlohmann/Json.hpp, NOT <nlohmann/json.hpp>

@@ -2,7 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "SelectionOps.hpp"
+#include "Scene/SelectionOps.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/EntityOps.hpp>

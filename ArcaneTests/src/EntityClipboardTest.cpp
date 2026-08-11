@@ -30,7 +30,7 @@
 #include <string>
 #include <vector>
 
-#include "EntityClipboard.hpp"
+#include "Scene/EntityClipboard.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 using namespace Arcane;

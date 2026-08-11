@@ -7,7 +7,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <ConsoleModel.hpp>
+#include <Panels/ConsoleModel.hpp>
 
 namespace
 {

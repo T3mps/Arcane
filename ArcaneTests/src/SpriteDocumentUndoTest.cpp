@@ -14,7 +14,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "SpriteDocument.hpp"
+#include "Documents/SpriteDocument.hpp"
 
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Guid.hpp>

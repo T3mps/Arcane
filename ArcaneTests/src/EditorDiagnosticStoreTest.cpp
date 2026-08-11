@@ -6,7 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <DiagnosticStore.hpp>
+#include <Panels/DiagnosticStore.hpp>
 
 namespace
 {

@@ -4,8 +4,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "DocumentHost.hpp"
-#include "MaterialParamWidgets.hpp"
+#include "Documents/DocumentHost.hpp"
+#include "Widgets/MaterialParamWidgets.hpp"
 
 #include <filesystem>
 #include <memory>

@@ -4,7 +4,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "AssetBrowser.hpp"
+#include "Panels/AssetBrowser.hpp"
 
 #include <Arcane/Project/AssetRegistry.hpp>
 

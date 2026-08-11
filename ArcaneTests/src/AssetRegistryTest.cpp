@@ -9,7 +9,7 @@
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>
 
-#include <DiagnosticStore.hpp>
+#include <Panels/DiagnosticStore.hpp>
 
 #include <filesystem>
 #include <fstream>

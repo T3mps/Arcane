@@ -5,7 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "EntityList.hpp"
+#include "Panels/EntityList.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>

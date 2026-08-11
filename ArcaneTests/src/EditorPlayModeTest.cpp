@@ -35,7 +35,7 @@
 
 #include "Helpers/TestTypeContext.hpp"
 
-#include <PlayMode.hpp>
+#include <App/PlayMode.hpp>
 
 TEST_CASE("Play snapshots and Stop restores the authored registry", "[editor]")
 {

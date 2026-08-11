@@ -13,7 +13,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "RecentProjects.hpp"
+#include "Project/RecentProjects.hpp"
 
 using Arcane::Editor::RecentProject;
 using Arcane::Editor::RecentSelection;

@@ -4,7 +4,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "InspectorMeta.hpp"
+#include "Panels/InspectorMeta.hpp"
 
 using namespace Arcane::Editor;
 

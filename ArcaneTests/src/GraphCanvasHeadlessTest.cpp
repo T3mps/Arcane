@@ -10,8 +10,8 @@
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialGraph.hpp>
 
-#include "DocumentHost.hpp"
-#include "ShaderEditorDocument.hpp"
+#include "Documents/DocumentHost.hpp"
+#include "Documents/ShaderEditorDocument.hpp"
 
 #include <imgui.h>
 

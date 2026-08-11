@@ -2,7 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <ViewportInput.hpp>
+#include <Viewport/ViewportInput.hpp>
 
 TEST_CASE("SceneInputActive is hovered OR focused", "[editor]")
 {

@@ -27,7 +27,7 @@
 #include <string_view>
 #include <vector>
 
-#include "ComponentCatalog.hpp"
+#include "Scene/ComponentCatalog.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 using namespace Arcane;

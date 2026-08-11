@@ -4,7 +4,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "PanelRegistry.hpp"
+#include "Panels/PanelRegistry.hpp"
 
 #include <cstring>
 #include <set>

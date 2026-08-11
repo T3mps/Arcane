@@ -13,7 +13,7 @@
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/Reflection/Reflection.hpp>
 
-#include <DiagnosticStore.hpp>
+#include <Panels/DiagnosticStore.hpp>
 
 #include <memory>
 #include <string>

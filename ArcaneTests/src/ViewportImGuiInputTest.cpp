@@ -1,6 +1,6 @@
 // Arcane Editor viewport ImGui input arbitration ([editor], CPU-only, no ImGui/GPU).
 #include <catch2/catch_test_macros.hpp>
-#include "ViewportImGuiInput.hpp"
+#include "Viewport/ViewportImGuiInput.hpp"
 
 TEST_CASE("GameUiClaimsPointer: only in Play, in viewport, when game UI wants the mouse", "[editor]")
 {

@@ -7,8 +7,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "DiagnosticStore.hpp"
-#include "ShaderEditorDocument.hpp"
+#include "Panels/DiagnosticStore.hpp"
+#include "Documents/ShaderEditorDocument.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>

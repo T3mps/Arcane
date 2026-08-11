@@ -7,7 +7,7 @@
 // only: no test here creates a process (CreateProcessW is out of scope for
 // CPU-only coverage, per the task brief's "no spawn test" rule).
 
-#include "RuntimeLaunch.hpp"
+#include "Project/RuntimeLaunch.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 

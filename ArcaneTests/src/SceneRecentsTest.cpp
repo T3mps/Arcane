@@ -9,7 +9,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "SceneRecents.hpp"
+#include "Project/SceneRecents.hpp"
 
 using Arcane::Editor::SceneRecents::List;
 namespace SceneRecents = Arcane::Editor::SceneRecents;

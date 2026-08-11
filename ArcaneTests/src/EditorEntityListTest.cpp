@@ -11,8 +11,8 @@
 
 #include <Arcane/Scene/SceneModule.hpp>
 
-#include <EntityList.hpp>
-#include <SelectionContext.hpp>
+#include <Panels/EntityList.hpp>
+#include <Scene/SelectionContext.hpp>
 
 namespace
 {

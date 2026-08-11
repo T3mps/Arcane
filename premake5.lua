@@ -98,6 +98,8 @@ group "Dependencies"
     include "ThirdParty/Manifold2D"
 group ""
 
+
+group "Engine"
 -- ============================================================================
 -- ArcaneCore: Arcane.Core static lib (presentation-free; also compiled by the
 -- Server workspace as project "ArcaneCore" with static CRT -- same project
@@ -420,6 +422,7 @@ project "ArcaneEditor"
     filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
     filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
     filter {}
+group ""
 
 -- ============================================================================
 -- ArcaneTests: Catch2 + rapidcheck (Server conventions). Links ArcaneCore
@@ -451,99 +454,99 @@ project "ArcaneTests"
         -- compiled. [host] round-trips HostConfig::Parse without loading ArcaneRuntime.exe.
         -- Task 3: ConsoleBuffer (Arcane Editor's log ring buffer) source-compiles into the
         -- test exe so the [editor] unit test drives it directly.
-        "%{wks.location}/ArcaneEditor/src/ConsoleBuffer.cpp",
+        "%{wks.location}/ArcaneEditor/src/Panels/ConsoleBuffer.cpp",
         -- Task 4: ViewportInput (pure input-gating predicates for the scene-in-a-
         -- panel viewport) source-compiles into the test exe so the [editor] unit
         -- tests drive it directly, same pattern as ConsoleBuffer above.
-        "%{wks.location}/ArcaneEditor/src/ViewportInput.cpp",
+        "%{wks.location}/ArcaneEditor/src/Viewport/ViewportInput.cpp",
         -- Task 5: EntityList (entity enumeration for the Hierarchy panel)
         -- source-compiles into the test exe so the [editor] unit tests drive it
         -- directly, same pattern as ConsoleBuffer/ViewportInput above.
-        "%{wks.location}/ArcaneEditor/src/EntityList.cpp",
+        "%{wks.location}/ArcaneEditor/src/Panels/EntityList.cpp",
         -- Task 6: InspectorFields (reflected field classification + pure write-backs
         -- for the Inspector panel) source-compiles into the test exe so the
         -- [editor] unit tests drive it directly -- no ImGui dependency, same
         -- pattern as ConsoleBuffer/ViewportInput/EntityList above.
-        "%{wks.location}/ArcaneEditor/src/InspectorFields.cpp",
+        "%{wks.location}/ArcaneEditor/src/Panels/InspectorFields.cpp",
         -- Task 8: PlayMode (play-in-editor snapshot/restore state machine)
         -- source-compiles into the test exe so the [editor] round-trip test
         -- drives it directly against a real Arcane::Runtime, same pattern as
         -- ConsoleBuffer/ViewportInput/EntityList/InspectorFields above.
-        "%{wks.location}/ArcaneEditor/src/PlayMode.cpp",
+        "%{wks.location}/ArcaneEditor/src/App/PlayMode.cpp",
         -- Shader-editor Slice 5: DocumentHost (open-document list + unsaved-
         -- close confirm state machine + asset->editor routing) source-compiles
         -- into the test exe so the [editor] units drive the PURE close flow
         -- with fake documents -- DrawAll (the only ImGui method) is not called.
-        "%{wks.location}/ArcaneEditor/src/DocumentHost.cpp",
+        "%{wks.location}/ArcaneEditor/src/Documents/DocumentHost.cpp",
         -- Shader-editor review fixes: ShaderEditorDocument source-compiles into
         -- the test exe so the [editor] units drive its HEADLESS halves directly
         -- (save-before-bind, parent-chain resolution, compile-result routing).
         -- Draw (the ImGui half) is never called; device-less services skip the
         -- preview resources in the ctor.
-        "%{wks.location}/ArcaneEditor/src/ShaderEditorDocument.cpp",
+        "%{wks.location}/ArcaneEditor/src/Documents/ShaderEditorDocument.cpp",
         -- Outliner slice 4: ComponentCatalog (registry enumeration + the one
         -- system-managed hide-list + selection-aware missing counts) source-
         -- compiles into the test exe so the [editor] units drive it directly --
         -- no ImGui dependency, same pattern as EntityList/InspectorFields above.
-        "%{wks.location}/ArcaneEditor/src/ComponentCatalog.cpp",
+        "%{wks.location}/ArcaneEditor/src/Scene/ComponentCatalog.cpp",
         -- Scene authoring: SceneSession (scene identity + dirty state + the
         -- unsaved-changes confirm machine) source-compiles into the test exe so
         -- the [editor] units drive the PURE state machine directly -- there is
         -- no ImGui in it at all, same pattern as DocumentHost above.
-        "%{wks.location}/ArcaneEditor/src/SceneSession.cpp",
+        "%{wks.location}/ArcaneEditor/src/Scene/SceneSession.cpp",
         -- Inspector polish: InspectorMeta (display-name derivation, attribute
         -- extraction, filter matching) source-compiles into the test exe so the
         -- [editor] units drive it directly. It is the whole surface the user
         -- reads in the Inspector, and EditorPanels.cpp is not compiled here --
         -- so anything left in the draw loop would have no coverage at all.
-        "%{wks.location}/ArcaneEditor/src/InspectorMeta.cpp",
+        "%{wks.location}/ArcaneEditor/src/Panels/InspectorMeta.cpp",
         -- Scene authoring: EditorCamera (the editor's own viewport pan/zoom/
         -- framing math + the framing-bounds sweep) source-compiles into the
         -- test exe so the [editor] units drive the PURE math headlessly -- no
         -- ImGui and no engine calls in it, same pattern as SceneSession above.
-        "%{wks.location}/ArcaneEditor/src/EditorCamera.cpp",
+        "%{wks.location}/ArcaneEditor/src/Viewport/EditorCamera.cpp",
         -- Widget layer: EditGesture's PURE decision core (gesture ownership +
         -- close-path verdicts) source-compiles into the test exe so the
         -- [editor] units drive the full decision table headlessly -- the ImGui
         -- skin in the same TU is never called, same pattern as
         -- ShaderEditorDocument above.
-        "%{wks.location}/ArcaneEditor/src/EditGesture.cpp",
+        "%{wks.location}/ArcaneEditor/src/Scene/EditGesture.cpp",
         -- Widget layer: EditorWidgets is here as a LINK dependency, not a unit
         -- surface -- ShaderEditorDocument.cpp (compiled above) calls
         -- StableTextEdit for its four inline rename rows, and without this the
         -- test exe fails to link (LNK2019). Nothing in it is called headlessly;
         -- it is pure ImGui, like the skin half of EditGesture.cpp.
-        "%{wks.location}/ArcaneEditor/src/EditorWidgets.cpp",
+        "%{wks.location}/ArcaneEditor/src/Widgets/EditorWidgets.cpp",
         -- Colour pipeline + dense picker Task 7: ColorPickerPopup is here as a
         -- LINK dependency, not a unit surface, same reason as EditorWidgets.cpp
         -- above -- ShaderEditorDocument.cpp (compiled above) now calls
         -- ColorPopupId/ColorSwatchButton/ColorPopupBody for the material-param
         -- row and the ConstColor node, and without this the test exe fails to
         -- link (LNK2019). Nothing in it is called headlessly; it is pure ImGui.
-        "%{wks.location}/ArcaneEditor/src/ColorPickerPopup.cpp",
+        "%{wks.location}/ArcaneEditor/src/Widgets/ColorPickerPopup.cpp",
         -- Widget layer Task 7: SpriteDocument source-compiles into the test exe
         -- so the [editor] units drive its UNDO half directly (ApplySpriteData,
         -- the before/after step builder, and the doc-identity anchor after the
         -- document closes). Draw (the only ImGui method) is never called --
         -- same precedent as ShaderEditorDocument above.
-        "%{wks.location}/ArcaneEditor/src/SpriteDocument.cpp",
+        "%{wks.location}/ArcaneEditor/src/Documents/SpriteDocument.cpp",
         -- Task 5 (runtime-host-fold arc): RuntimeLaunch's PURE candidate-list/
         -- argv builder (ExeCandidates/BuildArgs) source-compiles into the test
         -- exe so the [editor] units drive them directly. SpawnDetached (the
         -- one CreateProcessW call in the file) is compiled here too but never
         -- invoked by any test -- process creation is desk-verify territory,
         -- same "no spawn test" rule the task brief states outright.
-        "%{wks.location}/ArcaneEditor/src/RuntimeLaunch.cpp",
+        "%{wks.location}/ArcaneEditor/src/Project/RuntimeLaunch.cpp",
         -- Diagnostics arc: DiagnosticStore (key -> current diagnostic set, the
         -- publication-group replace semantics, filter/sort/count) source-compiles
         -- into the test exe so the [diagnostics] units drive it directly -- no
         -- ImGui in it at all, same pattern as SceneSession/EditorCamera above.
-        "%{wks.location}/ArcaneEditor/src/DiagnosticStore.cpp",
+        "%{wks.location}/ArcaneEditor/src/Panels/DiagnosticStore.cpp",
         -- Diagnostics arc: ConsoleModel (category derivation from the engine's
         -- "Subsystem: " log prefixes + identical-row collapsing) source-compiles
         -- into the test exe so the [editor] units drive the pure functions the
         -- Console panel draws with -- EditorPanels.cpp is not compiled here.
-        "%{wks.location}/ArcaneEditor/src/ConsoleModel.cpp",
+        "%{wks.location}/ArcaneEditor/src/Panels/ConsoleModel.cpp",
         -- File -> Open Recent: RecentProjects source-compiles into the test exe
         -- so the [editor] units drive its PURE half directly -- parsing the
         -- Hub's shared recents.archub, ABI/current/missing selection, and the
@@ -551,20 +554,20 @@ project "ArcaneTests"
         -- model. No ImGui in it at all, same pattern as SceneSession/
         -- EditorCamera above. This file writes to a file the HUB owns, so the
         -- refuse-to-clobber rules are the ones most worth pinning.
-        "%{wks.location}/ArcaneEditor/src/RecentProjects.cpp",
+        "%{wks.location}/ArcaneEditor/src/Project/RecentProjects.cpp",
         -- File -> Open Recent Scene: SceneRecents' pure list ops (Parse/
         -- Serialize/Push, and the file I/O around them) source-compile into
         -- the test exe so the [editor] units drive them directly. Unlike
         -- RecentProjects, this file has no "never clobber" contract to pin --
         -- it is the editor's own per-project file, not the Hub's shared one.
-        "%{wks.location}/ArcaneEditor/src/SceneRecents.cpp",
+        "%{wks.location}/ArcaneEditor/src/Project/SceneRecents.cpp",
         -- Build -> Rebuild Game Module: ModuleBuild's PURE halves (solution
         -- discovery, the SDK-root walk, the composed premake+msbuild line)
         -- source-compile into the test exe so the [editor] units drive them
         -- directly. The Runner/_wpopen half and the vswhere probe are compiled
         -- too but never invoked by any test -- process creation is desk-verify
         -- territory, the same rule as RuntimeLaunch's SpawnDetached above.
-        "%{wks.location}/ArcaneEditor/src/ModuleBuild.cpp",
+        "%{wks.location}/ArcaneEditor/src/Project/ModuleBuild.cpp",
     }
 
     includedirs {

@@ -21,7 +21,7 @@
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 
-#include <EditorCamera.hpp>
+#include <Viewport/EditorCamera.hpp>
 
 using Catch::Approx;
 using Arcane::Editor::EditorCamera;

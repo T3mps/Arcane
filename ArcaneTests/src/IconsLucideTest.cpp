@@ -1,7 +1,7 @@
 // Guards IconsLucide.h against a bad regeneration ([editor], CPU-only).
 #include <catch2/catch_test_macros.hpp>
 
-#include "IconsLucide.h"
+#include "Widgets/IconsLucide.h"
 
 namespace
 {

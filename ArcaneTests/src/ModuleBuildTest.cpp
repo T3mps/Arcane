@@ -10,7 +10,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <ModuleBuild.hpp>
+#include <Project/ModuleBuild.hpp>
 
 namespace
 {

@@ -13,7 +13,7 @@
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 
-#include <InspectorFields.hpp>
+#include <Panels/InspectorFields.hpp>
 
 #include <array>
 #include <cstdint>
