@@ -8,8 +8,8 @@
 --
 --   ARCANE_SDK  ->  the Arcane engine workspace dir (e.g. D:\dev\starworks\Gacha\Arcane)
 --                   include surface = $ARCANE_SDK/Arcane/src (+ ThirdParty header-only)
---                   import lib       = $ARCANE_SDK/bin/<cfg>-<sys>-x86_64-md/Arcane/Arcane.lib
---                   Arcane.dll        ships beside the host exe (host copies it)
+--                   import lib       = $ARCANE_SDK/bin/<cfg>-<sys>-x86_64-md/ArcaneClient/ArcaneClient.lib
+--                   ArcaneClient.dll        ships beside the host exe (host copies it)
 --
 -- Usage from a project's premake5.lua:
 --   workspace "MyGame"
@@ -37,7 +37,7 @@ local ARCANE_TP = ARCANE_SDK .. "/../ThirdParty"    -- vendored header-only deps
 
 -- The engine's per-config bin flavor. Must byte-match the engine's own outputdir
 -- literal in Arcane/premake5.lua ("-md" = the dynamic-CRT flavor; /MD everywhere so
--- one heap crosses the Arcane.dll/Game.dll boundary).
+-- one heap crosses the ArcaneClient.dll/Game.dll boundary).
 local ARCANE_BIN = ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-md"
 
 -- Declare + fully configure a game module (the project's primary plugin).
@@ -47,7 +47,7 @@ function arcane_game_module(name)
         kind "SharedLib"
         language "C++"
         cppdialect "C++23"
-        staticruntime "off"                         -- /MD: share one CRT heap with Arcane.dll
+        staticruntime "off"                         -- /MD: share one CRT heap with ArcaneClient.dll
         targetname(name)
         -- Flat Binaries/ (config-agnostic, matching the manifest's gameModule name).
         -- Dev + the host run Debug; Binaries/ holds the config the host loads.
@@ -61,12 +61,12 @@ function arcane_game_module(name)
         -- spdlog via Log.hpp, nvrhi via the render context, the Mosaic threading seam).
         includedirs {
             "%{wks.location}/Source",
-            ARCANE_SDK .. "/Arcane/src",
+            ARCANE_SDK .. "/ArcaneClient/src",
             -- Core's namespaced include root (<Arcane/Guid.hpp> etc.) -- engine
             -- headers a game module includes transitively reach into it
             -- (Runtime.hpp includes Guid.hpp since the asset-registration work);
             -- include-only, no Core link (Core links into ONE module per process).
-            ARCANE_SDK .. "/Core/src",
+            ARCANE_SDK .. "/ArcaneCore/src",
             ARCANE_TP .. "/glm",
             ARCANE_TP .. "/nvrhi/include",
             ARCANE_TP .. "/Astra/include",
@@ -77,15 +77,15 @@ function arcane_game_module(name)
         }
 
         -- Link the engine import lib by name out of the per-config SDK bin dir.
-        -- "Arcane" is not a project in this workspace, so premake treats it as a
+        -- "ArcaneClient" is not a project in this workspace, so premake treats it as a
         -- library link resolved against libdirs (-> Arcane.lib). imgui's exported
         -- surface arrives through this same import lib (/WHOLEARCHIVE in the engine).
-        libdirs { ARCANE_BIN .. "/Arcane" }
-        links   { "Arcane" }
+        libdirs { ARCANE_BIN .. "/ArcaneClient" }
+        links   { "ArcaneClient" }
 
         defines {
             "GAME_BUILD_DLL",                         -- GAME_API -> dllexport (GameApi.hpp)
-            "IMGUI_API=__declspec(dllimport)",        -- adopt Arcane.dll's single GImGui
+            "IMGUI_API=__declspec(dllimport)",        -- adopt ArcaneClient.dll's single GImGui
             "_CRT_SECURE_NO_WARNINGS",
             "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
         }
@@ -98,7 +98,7 @@ function arcane_game_module(name)
         filter { "system:linux or system:macosx", "architecture:x86_64" }
             buildoptions { "-mavx2", "-mfma" }
 
-        -- Per-config: runtime + NDEBUG must match Arcane.dll's flavor (the vulkan.hpp
+        -- Per-config: runtime + NDEBUG must match ArcaneClient.dll's flavor (the vulkan.hpp
         -- dispatcher layout + inline header layouts are NDEBUG-conditional).
         filter "configurations:Debug"
             defines { "ARCANE_DEBUG" }

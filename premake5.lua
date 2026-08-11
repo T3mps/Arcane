@@ -2,7 +2,7 @@
 -- premake5 for Visual Studio 2026 (generates Arcane.slnx)
 --
 -- CRT rule (architecture spec 2026-06-11, decision 3): the entire Arcane
--- workspace builds /MD (dynamic CRT) -- memory crosses the Arcane.dll /
+-- workspace builds /MD (dynamic CRT) -- memory crosses the ArcaneClient.dll /
 -- Game.dll boundary, so all modules must share one heap. Server/ and
 -- Tools/ keep their static-runtime conventions, unaffected.
 
@@ -32,7 +32,7 @@ workspace "Arcane"
     -- Every hit is an ARCANE_API class holding STL members. The warning exists for
     -- DLL/client CRT-layout mismatches; this workspace's foundational rule is /MD
     -- everywhere + one toolset + one shared heap (memory crosses the
-    -- Arcane.dll/Game.dll boundary by design), so the mismatch it warns about is
+    -- ArcaneClient.dll/Game.dll boundary by design), so the mismatch it warns about is
     -- structurally impossible here. The "real" fixes (pimpl-everything, function-
     -- only exports) buy nothing under that contract; Unreal ships with 4251
     -- disabled engine-wide for the same reason.
@@ -50,14 +50,14 @@ workspace "Arcane"
     -- imgui wrapper: SDL3 backend includes come from the same vcpkg -md install
     -- used by the rest of the workspace (identical path to IncludeDir["SDL3"]).
     THIRDPARTY_SDL3_INCLUDE     = VCPKG_INSTALLED_MD .. "/include"
-    -- imgui lives inside Arcane.dll (ImGuiLayer + first-party imgui_impl_nvrhi).
+    -- imgui lives inside ArcaneClient.dll (ImGuiLayer + first-party imgui_impl_nvrhi).
     -- Export it so GImGui and the sdl3 backend symbols live in ONE module:
     -- the imgui static lib builds with dllexport, the DLL's own TUs match,
     -- and consumers (ArcaneTests/ArcaneRuntime) import. Without this each module
     -- keeps its own null GImGui and ShowDemoWindow() from the test exe asserts.
     THIRDPARTY_IMGUI_API        = "__declspec(dllexport)"
     -- imgui-node-editor links into ArcaneEditor.exe, which IMPORTS imgui from
-    -- Arcane.dll -- its ImGui calls must be dllimport (see the wrapper).
+    -- ArcaneClient.dll -- its ImGui calls must be dllimport (see the wrapper).
     THIRDPARTY_NODE_EDITOR_IMGUI_API = "__declspec(dllimport)"
 
     IncludeDir = {}
@@ -169,8 +169,8 @@ project "ArcaneCore"
 -- relative paths are disjoint from ArcaneCore's root (Net/Crypto/Types/Util),
 -- so <Arcane/...> resolves unambiguously across both.
 -- ============================================================================
-project "Arcane"
-    location "Arcane"
+project "ArcaneClient"
+    location "ArcaneClient"
     kind "SharedLib"
     language "C++"
     cppdialect "C++23"
@@ -268,7 +268,7 @@ project "Arcane"
     filter "configurations:Release"
         -- NDEBUG must match NVRHI's Release build (nvrhi/premake5.lua defines
         -- NDEBUG in Release). DispatchLoaderDynamic has NDEBUG-gated fields;
-        -- a layout mismatch between Arcane.dll and the statically-linked NVRHI
+        -- a layout mismatch between ArcaneClient.dll and the statically-linked NVRHI
         -- causes every Vulkan function-pointer lookup to read the wrong offset.
         defines { "ARCANE_RELEASE", "NDEBUG" }
         runtime "Release"
@@ -296,7 +296,7 @@ project "PlaygroundGame"
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
     files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
     includedirs {
-        "%{wks.location}/Arcane/src",
+        "%{wks.location}/ArcaneClient/src",
         "%{IncludeDir.ArcaneCore}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
         "%{IncludeDir.glm}",
         "%{IncludeDir.nvrhi}",
@@ -306,10 +306,10 @@ project "PlaygroundGame"
         "%{IncludeDir.spdlog}",
         "%{IncludeDir.Mosaic}",
     }
-    links { "Arcane" }
+    links { "ArcaneClient" }
     -- ABI v2: the plugin draws ImGui via the host's exported context. imgui is exported
-    -- from Arcane.dll (IMGUI_API=dllexport there); the plugin imports it -- one GImGui per
-    -- process. The import lib arrives via "Arcane" (imgui surface is /WHOLEARCHIVE-exported).
+    -- from ArcaneClient.dll (IMGUI_API=dllexport there); the plugin imports it -- one GImGui per
+    -- process. The import lib arrives via "ArcaneClient" (imgui surface is /WHOLEARCHIVE-exported).
     defines { "GAME_BUILD_DLL", "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     filter "system:windows"
         systemversion "latest"
@@ -340,7 +340,7 @@ project "Sandbox"
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
     files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
     includedirs {
-        "%{wks.location}/Arcane/src",
+        "%{wks.location}/ArcaneClient/src",
         "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.glm}",
         "%{IncludeDir.nvrhi}",
@@ -354,17 +354,17 @@ project "Sandbox"
     -- Sandbox is the first plugin to drive physics. PhysicsSystem (header-only) is
     -- instantiated in THIS module and calls Arcane::Physics::PhysicsWorld directly;
     -- PhysicsWorld's implementation lives in ArcaneCore (.cpp, not ARCANE_API-exported
-    -- from Arcane.dll), so the plugin must link ArcaneCore to resolve those symbols.
+    -- from ArcaneClient.dll), so the plugin must link ArcaneCore to resolve those symbols.
     -- ArcaneCore is Astra-free and carries no mutable global state, so the duplicate
     -- static copy is benign: the PhysicsWorld instance is owned entirely within this
-    -- module (created here, stepped by this module's PhysicsSystem); Arcane.dll only
+    -- module (created here, stepped by this module's PhysicsSystem); ArcaneClient.dll only
     -- ever READS it via DrawPhysicsDebug through a const ref, and both modules compile
     -- the identical ArcaneCore headers under identical flags (/MD, matching NDEBUG,
     -- float-strict) so the layout matches -- the same identical-layout contract the
     -- scene components already rely on.
-    links { "Arcane", "ArcaneCore", "Manifold2D" }
-    -- ABI v2: the plugin imports imgui from Arcane.dll (one GImGui per process), same
-    -- as PlaygroundGame. The import lib arrives via "Arcane" (imgui surface is
+    links { "ArcaneClient", "ArcaneCore", "Manifold2D" }
+    -- ABI v2: the plugin imports imgui from ArcaneClient.dll (one GImGui per process), same
+    -- as PlaygroundGame. The import lib arrives via "ArcaneClient" (imgui surface is
     -- /WHOLEARCHIVE-exported there).
     defines { "GAME_BUILD_DLL", "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     floatingpoint "Strict"   -- physics determinism: match ArcaneCore's /fp:strict (no /fp:fast)
@@ -404,7 +404,7 @@ project "ArcaneRuntime"
     files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
     includedirs {
         "%{prj.location}/src",           -- RuntimeApp.hpp (self-resolving quoted include; kept for any future local header)
-        "%{wks.location}/Arcane/src",
+        "%{wks.location}/ArcaneClient/src",
         "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.spdlog}",
@@ -417,17 +417,17 @@ project "ArcaneRuntime"
     }
     -- ArcaneCore is linked directly (alongside the Arcane DLL) even though the
     -- host-boot layer (HostConfig/GpuContext/FramePerf/ProjectBoot) moved INTO
-    -- Arcane.dll as Arcane/Host -- ArcaneRuntime.exe no longer source-compiles
+    -- ArcaneClient.dll as Arcane/Host -- ArcaneRuntime.exe no longer source-compiles
     -- any of it. ArcaneCore stays: it's a cheap, established two-static-copies
     -- pattern (see the ArcaneTests links comment), and other exe TUs may still
     -- want un-exported ArcaneCore APIs directly. ArcaneCore links into exactly
-    -- ONE module per PROCESS holds because ArcaneRuntime.exe and Arcane.dll are
+    -- ONE module per PROCESS holds because ArcaneRuntime.exe and ArcaneClient.dll are
     -- distinct modules.
-    links { "ArcaneCore", "Arcane" }
+    links { "ArcaneCore", "ArcaneClient" }
     dependson { "PlaygroundGame", "Sandbox" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/PlaygroundGame/PlaygroundGame.dll" "%{cfg.buildtarget.directory}/PlaygroundGame.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
@@ -454,7 +454,7 @@ project "ArcaneRuntime"
 -- Arcane Editor: the editor shell (ArcaneEditor.exe). Engine boot + RunLoop + PluginHost
 -- + ImGui docking shell. Hosts Sandbox.dll by default. Consumes the engine's
 -- host-boot helpers (Arcane::GpuContext/FramePerf/HostConfig, Arcane/Host/ --
--- exported ARCANE_API from Arcane.dll, same as ArcaneRuntime) rather than source-
+-- exported ARCANE_API from ArcaneClient.dll, same as ArcaneRuntime) rather than source-
 -- compiling its own copy. Consumes only ARCANE_API otherwise.
 -- ============================================================================
 project "ArcaneEditor"
@@ -471,7 +471,7 @@ project "ArcaneEditor"
     }
     includedirs {
         "%{prj.location}/src",
-        "%{wks.location}/Arcane/src",
+        "%{wks.location}/ArcaneClient/src",
         "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.spdlog}",
@@ -484,11 +484,11 @@ project "ArcaneEditor"
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
     }
-    links { "ArcaneCore", "Arcane", "imgui-node-editor" }
+    links { "ArcaneCore", "ArcaneClient", "imgui-node-editor" }
     dependson { "Sandbox" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Sandbox/Sandbox.dll" "%{cfg.buildtarget.directory}/Sandbox.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
@@ -558,7 +558,7 @@ project "ArcaneTests"
         "%{wks.location}/Sandbox/src/SandboxApp.cpp",
         "%{wks.location}/Sandbox/src/Hud.cpp",
         -- HostConfig (the typed host CLI result over Arcane::Cli), GpuContext,
-        -- FramePerf, and ProjectBoot all moved into Arcane/Host (Arcane.dll,
+        -- FramePerf, and ProjectBoot all moved into Arcane/Host (ArcaneClient.dll,
         -- ARCANE_API) alongside Module/Plugin/PluginHost (Arcane/Plugin) -- the
         -- test exe now consumes all of them via the "Arcane" link, not source-
         -- compiled. [host] round-trips HostConfig::Parse without loading ArcaneRuntime.exe.
@@ -683,7 +683,7 @@ project "ArcaneTests"
 
     includedirs {
         "%{IncludeDir.ArcaneCore}",
-        "%{wks.location}/Arcane/src",
+        "%{wks.location}/ArcaneClient/src",
         "%{wks.location}/Sandbox/src",   -- Interaction.hpp / Scenes.hpp / Camera.hpp for the [sandbox] tests
         "%{wks.location}/ArcaneEditor/src",  -- ConsoleBuffer.hpp for the [editor] test
         "%{IncludeDir.nlohmann}",
@@ -707,21 +707,21 @@ project "ArcaneTests"
     }
 
     -- msdfgen and freetype are static libs compiled separately; the smoke test
-    -- calls them directly (not via Arcane.dll), so both appear in links here.
+    -- calls them directly (not via ArcaneClient.dll), so both appear in links here.
     -- Two static copies in different modules is the established pattern for this workspace.
-    -- imgui is NOT linked here: it is exported from Arcane.dll (IMGUI_API =
+    -- imgui is NOT linked here: it is exported from ArcaneClient.dll (IMGUI_API =
     -- dllimport below), so the test exe shares the DLL's single GImGui rather
-    -- than carrying a second null context. The import lib comes via "Arcane".
+    -- than carrying a second null context. The import lib comes via "ArcaneClient".
     -- imgui-node-editor IS linked (a plain static lib compiled with
     -- IMGUI_API=dllimport, same as this exe): ShaderEditorDocument.cpp's graph
     -- canvas calls it, and that TU source-compiles into the tests.
-    links { "ArcaneCore", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "Manifold2D", "imgui-node-editor" }
+    links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "Manifold2D", "imgui-node-editor" }
 
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad", "PlaygroundGame", "Sandbox" }
 
-    -- The test exe loads Arcane.dll from its own directory.
+    -- The test exe loads ArcaneClient.dll from its own directory.
     postbuildcommands {
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
@@ -748,7 +748,7 @@ project "ArcaneTests"
     defines {
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
-        -- imgui is exported from Arcane.dll; this exe imports it (matches the
+        -- imgui is exported from ArcaneClient.dll; this exe imports it (matches the
         -- DLL's dllexport so <imgui.h> here resolves to the DLL's symbols).
         "IMGUI_API=__declspec(dllimport)",
     }
@@ -793,7 +793,7 @@ local function test_plugin(name, defs)
         objdir ("bin-int/" .. outputdir .. "/" .. name)
         files { "%{prj.location}/HotReloadPlugin.cpp", "%{prj.location}/PluginExport.hpp", "%{prj.location}/HotReloadShared.hpp" }
         includedirs {
-            "%{wks.location}/Arcane/src",
+            "%{wks.location}/ArcaneClient/src",
             "%{IncludeDir.ArcaneCore}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
             "%{IncludeDir.glm}",
             "%{IncludeDir.nvrhi}",
@@ -801,7 +801,7 @@ local function test_plugin(name, defs)
             "%{IncludeDir.enkiTS}",
             "%{IncludeDir.Mosaic}",   -- Astra headers now #include <Mosaic/...> (Mosaic-seam adoption)
         }
-        links { "Arcane" }
+        links { "ArcaneClient" }
         defines (defs)
         filter "system:windows"
             systemversion "latest"
@@ -816,3 +816,14 @@ end
 test_plugin("HotReloadPluginV1",  { "GAME_BUILD_DLL", "HOTRELOAD_STEP=1",  "_CRT_SECURE_NO_WARNINGS" })
 test_plugin("HotReloadPluginV2",  { "GAME_BUILD_DLL", "HOTRELOAD_STEP=10", "_CRT_SECURE_NO_WARNINGS" })
 test_plugin("HotReloadPluginBad", { "GAME_BUILD_DLL", "HOTRELOAD_ABI_OFFSET=999", "_CRT_SECURE_NO_WARNINGS" })
+
+-- ArcaneServer: empty skeleton for the engine-server host (servers consume
+-- Arcane tooling -- capability lands here as it gets built). Stub main only.
+project "ArcaneServer"
+    location "ArcaneServer"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    files { "%{prj.location}/src/**.hpp", "%{prj.location}/src/**.cpp" }
