@@ -534,6 +534,12 @@ project "ArcaneEditor"
 -- ArcaneTests: Catch2 + rapidcheck (Server conventions). Links ArcaneCore
 -- directly -- ArcaneCore links into exactly ONE module per process.
 -- ============================================================================
+-- Solution folder for the test exe + its three hot-reload fixture DLLs, so
+-- the fixtures stop reading as top-level products. "Tests", not
+-- "ArcaneTests": a folder with the same name as a sibling project collides
+-- in the solution tree.
+group "Tests"
+
 project "ArcaneTests"
     location "ArcaneTests"
     kind "ConsoleApp"
@@ -816,6 +822,8 @@ end
 test_plugin("HotReloadPluginV1",  { "GAME_BUILD_DLL", "HOTRELOAD_STEP=1",  "_CRT_SECURE_NO_WARNINGS" })
 test_plugin("HotReloadPluginV2",  { "GAME_BUILD_DLL", "HOTRELOAD_STEP=10", "_CRT_SECURE_NO_WARNINGS" })
 test_plugin("HotReloadPluginBad", { "GAME_BUILD_DLL", "HOTRELOAD_ABI_OFFSET=999", "_CRT_SECURE_NO_WARNINGS" })
+
+group ""
 
 -- ArcaneServer: empty skeleton for the engine-server host (servers consume
 -- Arcane tooling -- capability lands here as it gets built). Stub main only.
