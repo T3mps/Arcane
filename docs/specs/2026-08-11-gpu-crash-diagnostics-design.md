@@ -80,12 +80,21 @@ when it died.
   "cpu": { "threadSummary": [ ... ] },
   "gpu": {
     "queues": [ { "name": "...", "lastCompleted": "...", "inFlight": ["..."] } ],
-    "fault": { "type": "...", "address": "...", "resource": "..." },
-    "backendBlob": "<path or null>"
+    "fault": { "type": "...", "address": "...", "resource": "..." }
   },
-  "siblings": { "txt": "...", "dmp": "..." }
+  "siblings": { "txt": "...", "dmp": "...", "gpuDump": "<gpu kinds only>" }
 }
 ```
+
+- **`.gpudump` (gpu kinds, ALWAYS):** every `gpu-crash`/`gpu-stall` report
+  also writes `<stem>.gpudump` -- the raw-capture analog of `.dmp`. A
+  versioned tagged-section container (magic `AGPU`, u32 version, section
+  table of `{tag[16], offset, size}`): raw marker-buffer bytes, raw DRED
+  output, VK device-fault info, vendor blob -- whatever the backend
+  captured, one section each, written even on partial collection (the
+  section table doubles as the inventory). Uniform across D3D12/Vulkan/
+  degraded paths; the `.arcdiag` stays the PARSED summary. (This replaces
+  the earlier Vulkan-only `.vkfault.bin`.)
 
 - **Write location:** hosts set `Config::dumpDir`. Editor + runtime point
   it at `<project>/Saved/Diagnostics/` when a project opens (retargeted on
