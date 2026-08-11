@@ -464,6 +464,24 @@ namespace
             append("<could not enumerate threads>");
         }
 
+        // The .txt goes down BEFORE the GPU provider runs, not after: the
+        // provider is now the single riskiest step in this function (a real
+        // backend touches a just-removed/hung device -- GetDeviceRemovedReason,
+        // DRED retrieval, a raw .gpudump write), and the whole point of the
+        // "minidump first" comment above is that a report already on disk
+        // survives whatever happens next. If this write fails, txtOk stays
+        // false and siblingTxt records that honestly below instead of
+        // claiming a file that doesn't exist.
+        const bool txtOk = [&]() {
+            if (FILE* f = nullptr; fopen_s(&f, txtPath.string().c_str(), "wb") == 0 && f)
+            {
+                std::fwrite(out.data(), 1, out.size(), f);
+                std::fclose(f);
+                return true;
+            }
+            return false;
+        }();
+
         // .arcdiag envelope (GPU crash diagnostics arc, Task 4): ALWAYS
         // emitted, with or without a GPU backend installed -- a plain CPU
         // crash/hang report must be fully renderable by the future
@@ -477,7 +495,7 @@ namespace
         envelope.appName   = g_cfg.appName;
         envelope.phase     = CurrentPhase();
         envelope.buildInfo = BuildInfo();
-        // Same content the .txt sibling carries up to this point -- the
+        // Same content the .txt sibling's CPU portion carries -- the
         // symbolized all-thread walk above, snapshotted BEFORE any GPU
         // section is appended below so this field stays CPU-only (F-6b).
         envelope.cpuThreadSummary = out;
@@ -491,25 +509,34 @@ namespace
         }
         if (gpuProvider)
         {
+            const std::size_t cpuLen = out.size();
             std::string gpuText;
             gpuProvider(envelope, gpuText, reportStem, gpuProviderUser);
             append("=== GPU ===");
             if (!gpuText.empty())
                 append(gpuText);
+
+            // Append-only: the CPU portion is already durable on disk from
+            // the write above. Only the newly appended GPU slice goes out
+            // here, so a provider that blocks or faults never re-risks the
+            // CPU report that already succeeded.
+            if (txtOk)
+            {
+                if (FILE* f = nullptr; fopen_s(&f, txtPath.string().c_str(), "ab") == 0 && f)
+                {
+                    std::fwrite(out.data() + cpuLen, 1, out.size() - cpuLen, f);
+                    std::fclose(f);
+                }
+            }
         }
 
-        if (FILE* f = nullptr; fopen_s(&f, txtPath.string().c_str(), "wb") == 0 && f)
-        {
-            std::fwrite(out.data(), 1, out.size(), f);
-            std::fclose(f);
-        }
-
-        // Sibling paths: txt/dmp are always minted above regardless of write
-        // success (a WriteMiniDump failure is already logged into the body
-        // as "<failed to write>"); siblingGpuDump stays whatever the
-        // provider set directly on `envelope` (empty if it wrote nothing).
-        envelope.siblingTxt = txtPath.string();
-        envelope.siblingDmp = dmpPath.string();
+        // Sibling paths reflect what actually landed on disk, per
+        // DiagEnvelope.hpp's contract ("Empty when a given sibling wasn't
+        // produced") -- never claim a path Task 10's shell-open button would
+        // fail to open. siblingGpuDump stays whatever the provider set
+        // directly on `envelope` (empty if it wrote nothing).
+        envelope.siblingTxt = txtOk  ? txtPath.string() : std::string{};
+        envelope.siblingDmp = dumpOk ? dmpPath.string() : std::string{};
         Diag::WriteFile(envelope, diagPath);
 
         g_reportCount.fetch_add(1, std::memory_order_acq_rel);
