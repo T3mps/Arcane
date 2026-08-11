@@ -168,7 +168,7 @@ namespace Arcane::Editor
         // ResetRegistry, or PlaySession::Stop's RestoreRegistry). Play is stopped
         // FIRST because Stop restores the pre-Play snapshot: left running, it would
         // later overwrite whatever scene is loaded after this.
-        if (m_play.IsPlaying())
+        if (InPlayMode())
             m_play.Stop(*m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
         m_selection.Clear();
         m_outliner = {};
@@ -248,7 +248,7 @@ namespace Arcane::Editor
         // now stops Play first, and satisfies this rather than tripping it), and
         // Play can still begin between a Save As dialog's launch and the frame its
         // result arrives on. From here, no call site can bypass the invariant.
-        if (m_play.IsPlaying())
+        if (InPlayMode())
         {
             ARC_ERROR("Save Scene: refused -- play mode is running");
             m_sceneError = "Cannot save while play mode is running.\n"

@@ -799,7 +799,7 @@ namespace Arcane::Editor
             ARC_ERROR("Build: no open project with a game module -- nothing to rebuild");
             return;
         }
-        if (m_play.IsPlaying())
+        if (InPlayMode())
         {
             ARC_ERROR("Build: refused while Play is running -- stop to rebuild");
             return;
@@ -955,7 +955,7 @@ namespace Arcane::Editor
         // scenes only: a reload must never discard edits. Not during Play
         // either -- a build started in Edit mode can finish after the user
         // pressed Play, and Stop's registry restore must stay authoritative.
-        if (!m_play.IsPlaying() && !m_scene.Path().empty() && !m_scene.IsDirty(*m_undo))
+        if (!InPlayMode() && !m_scene.Path().empty() && !m_scene.IsDirty(*m_undo))
             DoOpenScene(m_scene.Path());
     }
 }

@@ -425,6 +425,16 @@ namespace Arcane::Editor
         // checks it to avoid treating a gizmo-handle click as a selection change.
         m_gizmoCapturedClick = false;
 
+        // Play/edit authority (architecture pass sec 1): re-derived HERE -- before
+        // any phase that reads it -- and again immediately after the toolbar draw
+        // in DrawEditorUi, the one site that can START Play mid-frame. RULE: every
+        // site that can call PlayMode Start/Stop within the frame must be followed
+        // by this same re-derivation. (A mid-frame STOP elsewhere leaves edit
+        // affordances off for the rest of that frame -- the safe direction; a
+        // mid-frame START without re-derivation is the A1 memento-vs-play-registry
+        // bug this write exists to kill.)
+        m_editBinding.editMode = !InPlayMode();
+
         const auto now = std::chrono::steady_clock::now();
         const double frameDt = std::chrono::duration<double>(now - ls.lastFrameTime).count();
         ls.lastFrameTime = now;
@@ -469,7 +479,7 @@ namespace Arcane::Editor
         // 1-frame lag matches the one already inherent to inViewport/
         // m_viewportActive (both computed from the previous frame's panel
         // hover/focus).
-        fs.gameUiClaims = Arcane::Editor::GameUiClaimsPointer(m_play.IsPlaying(), inViewport, m_gameImgui->WantCaptureMouse());
+        fs.gameUiClaims = Arcane::Editor::GameUiClaimsPointer(InPlayMode(), inViewport, m_gameImgui->WantCaptureMouse());
 
         // Snapshot the viewport-local cursor + RAW buttons/wheel + dt for the
         // game ImGui pass, which composites into the viewport AFTER this input
@@ -491,7 +501,7 @@ namespace Arcane::Editor
         // when the game's viewport debug UI claims the pointer this frame
         // (Play + cursor over a game HUD widget) -- otherwise a HUD click
         // would fall through and spawn/drag gameplay underneath it.
-        if (!m_play.IsPlaying() || fs.gameUiClaims)
+        if (!InPlayMode() || fs.gameUiClaims)
         {
             pluginSnap.mouseButtons &= ~static_cast<uint8_t>(0x1u);
         }
@@ -503,7 +513,7 @@ namespace Arcane::Editor
         // whose result reappears the moment Play starts, from a viewpoint
         // the user never chose. RMB=bit1; InputSnapshot.hpp. Play is
         // untouched: the plugin keeps RMB + wheel and its camera wins.
-        if (!m_play.IsPlaying())
+        if (!InPlayMode())
         {
             pluginSnap.mouseButtons &= ~static_cast<uint8_t>(0x2u);
             pluginSnap.wheelY = 0.0f;
@@ -515,6 +525,16 @@ namespace Arcane::Editor
         HandleGizmoModeKeys(snap);
         UpdateEditorCamera(snap, inViewport, lx, ly);
         UpdateGizmoInteraction(snap, inViewport, lx, ly, fs.gameUiClaims);
+    }
+
+    // The one "may editor shortcuts fire" predicate (architecture pass sec 1):
+    // collapses the three near-identical gates the phase methods below used to
+    // hand-roll (undo/redo+scene shortcuts, gizmo mode keys, camera framing).
+    bool EditorApp::ShortcutsLive(const Arcane::InputSnapshot& snap,
+                                  bool requireViewportFocus) const
+    {
+        return !InPlayMode() && !snap.wantCaptureKeyboard
+            && (!requireViewportFocus || m_viewportActive);
     }
 
     // Phase 6a: undo/redo + the Ctrl+N/O/S scene shortcuts. Runs EARLIER in the
@@ -540,7 +560,7 @@ namespace Arcane::Editor
         const bool undoKeyDown = ctrl && !shift && snap.ScancodeDown(kScZ);
         const bool redoKeyDown = ctrl && ((shift && snap.ScancodeDown(kScZ)) || (!shift && snap.ScancodeDown(kScY)));
 
-        const bool active = !m_play.IsPlaying() && !snap.wantCaptureKeyboard;
+        const bool active = ShortcutsLive(snap, false);
         // Also refuse while a transaction is open (e.g. a live gizmo drag):
         // CommandStack::Undo()/Redo() have no open-transaction guard, and this
         // keybind block runs earlier in the frame than the gizmo block below,
@@ -608,7 +628,7 @@ namespace Arcane::Editor
         const bool eDown = snap.ScancodeDown(kScE);
         const bool rDown = snap.ScancodeDown(kScR);
         const bool qDown = snap.ScancodeDown(kScQ);
-        const bool keysActive = !m_play.IsPlaying() && !snap.wantCaptureKeyboard && m_viewportActive;
+        const bool keysActive = ShortcutsLive(snap, true);
         // Q = Select (no gizmo); W/E/R activate a transform gizmo (UE5 tools).
         if (keysActive && qDown && !m_prevKeyQ)
         {
@@ -644,7 +664,7 @@ namespace Arcane::Editor
         // two cameras cannot fight over the same gesture.
         const bool      rmbDown = (snap.mouseButtons & 0x2u) != 0;
         const glm::vec2 mouseWindow(snap.mouseX, snap.mouseY);
-        if (!m_play.IsPlaying())
+        if (!InPlayMode())
         {
             // A pan may only START over the viewport, but once
             // started it keeps tracking anywhere -- same rule as the
@@ -694,7 +714,7 @@ namespace Arcane::Editor
         // pressing F is the point of the shortcut.
         const bool fDown    = snap.ScancodeDown(kScF);
         const bool homeDown = snap.ScancodeDown(kScHome);
-        const bool framingActive = !m_play.IsPlaying() && !snap.wantCaptureKeyboard;
+        const bool framingActive = ShortcutsLive(snap, false);
         if (framingActive && fDown && !m_prevKeyF)
             FrameCamera(m_selection.HasSelection());
         if (framingActive && homeDown && !m_prevKeyHome)
@@ -710,7 +730,7 @@ namespace Arcane::Editor
         // the identity (zoom 1), placing the handles 100x off the
         // sprite. The click-pick and gizmo DRAW sites run after the
         // later push and are already consistent with it.
-        if (!m_play.IsPlaying())
+        if (!InPlayMode())
             m_runtime->SetCamera(m_camera.offset, m_camera.zoom);
     }
 
@@ -747,7 +767,7 @@ namespace Arcane::Editor
         // defensive: gameUiClaims is Play-only and this is already
         // !IsPlaying()-gated, so it is a no-op today, but it keeps this
         // gate correct if the gizmo is ever allowed to run in Play.
-        const bool gizmoActive = !m_play.IsPlaying() && !gameUiClaims &&
+        const bool gizmoActive = !InPlayMode() && !gameUiClaims &&
                                  m_gizmoEnabled && m_selection.HasSelection() &&
                                  (m_gizmoDrag.active || inViewport);
         Astra::Registry*        regPtr = nullptr;
@@ -978,7 +998,7 @@ namespace Arcane::Editor
         //
         // World transforms are DERIVED data: whoever reads them is responsible
         // for them being current, and in Edit mode that is the editor.
-        if (!m_play.IsPlaying())
+        if (!InPlayMode())
         {
             Arcane::TransformPropagationSystem{}(m_runtime->Registry());
             FrameSceneIfPending();
@@ -999,7 +1019,7 @@ namespace Arcane::Editor
         // Falls through to the plugin's own camera when the scene has no
         // active Camera entity, which is what keeps the Sandbox showcase
         // (a plugin that drives its own camera) working unchanged.
-        if (!m_play.IsPlaying())
+        if (!InPlayMode())
         {
             m_runtime->SetCamera(m_camera.offset, m_camera.zoom);
         }
@@ -1057,7 +1077,7 @@ namespace Arcane::Editor
                 // through the EDITOR's camera: ActiveSceneCamera reports the authored
                 // worldCenter/halfHeight precisely so a caller can draw the camera
                 // instead of looking through it.
-                if (!m_play.IsPlaying())
+                if (!InPlayMode())
                 {
                     const float vw = (float)m_viewport->Width();
                     const float vh = (float)m_viewport->Height();
@@ -1086,7 +1106,7 @@ namespace Arcane::Editor
                     }
                 }
 
-                if (!m_play.IsPlaying() && m_gizmoEnabled && m_selection.HasSelection())
+                if (!InPlayMode() && m_gizmoEnabled && m_selection.HasSelection())
                 {
                     Astra::Registry& drawReg = m_runtime->Registry();
                     Arcane::Transform* lt = drawReg.GetComponent<Arcane::Transform>(
@@ -1120,10 +1140,10 @@ namespace Arcane::Editor
         // OffscreenImGuiLayer calls (each SetCurrentContext internally), so the
         // editor context is untouched. Edit mode: not run (clean viewport); the
         // input is reset so a stray draw sees no cursor/buttons.
-        if (!m_play.IsPlaying())
+        if (!InPlayMode())
             m_gameImgui->SetInput({});
         const Arcane::PluginVTable* vtGame = m_plugin ? m_plugin->Vtable() : nullptr;
-        if (m_play.IsPlaying() && vtGame && vtGame->DrawUI)
+        if (InPlayMode() && vtGame && vtGame->DrawUI)
         {
             Arcane::OffscreenImGuiLayer::Input gi;
             gi.displaySize  = glm::vec2((float)m_viewport->Width(), (float)m_viewport->Height());
@@ -1159,7 +1179,7 @@ namespace Arcane::Editor
         // texture (amber selected, cyan hovered). Skipped entirely when there is nothing
         // to outline. Play mode: not run (the game-imgui overlay owns this slot instead,
         // see above -- the two are mutually exclusive by mode).
-        if (!m_play.IsPlaying() && (m_selection.HasSelection() || m_lastInViewport))
+        if (!InPlayMode() && (m_selection.HasSelection() || m_lastInViewport))
         {
             const Arcane::PickView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
             m_pick->RenderIdPass(m_runtime->Registry(), view);
@@ -1222,7 +1242,7 @@ namespace Arcane::Editor
         const Arcane::Project* menuProj = m_runtime->CurrentProject();
         const bool hasGameModule = menuProj && !menuProj->Manifest().gameModule.empty();
         Arcane::Editor::BeginDockSpace(*m_undo, menuReq, m_scene.IsDirty(*m_undo),
-                                       m_play.IsPlaying(),
+                                       InPlayMode(),
                                        m_moduleBuild.Running(), hasGameModule,
                                        m_panelVis,
                                        m_selection.HasSelection(),
@@ -1236,6 +1256,10 @@ namespace Arcane::Editor
                                                m_plugin ? m_plugin->Vtable() : nullptr, m_playMode,
                                                (uint64_t)(intptr_t)m_toolbarLogo.Get()))
             LaunchStandalone();
+        // The toolbar's Play/Stop click is the only mid-frame PlayMode flip point
+        // (sec 1's rule): re-derive so this frame's consume blocks and panels see
+        // the true state, not last frame's.
+        m_editBinding.editMode = !InPlayMode();
         Arcane::Editor::EndDockSpace(menuReq.resetLayout);
         if (menuReq.resetLayout)
             m_panelVis = Arcane::Editor::PanelVisibility{};   // reset re-shows everything
@@ -1336,9 +1360,7 @@ namespace Arcane::Editor
         // route through the same four, so they cannot drift.
         if (menuReq.copySelection)
             Arcane::Editor::CopySelectionToClipboard(m_runtime->Registry(), m_selection);
-        // Copy only when the delete half can apply -- a Play-mode Cut must not
-        // clobber the clipboard with a cut that never happens.
-        if (menuReq.cutSelection && !m_play.IsPlaying())
+        if (menuReq.cutSelection)
             Arcane::Editor::CutSelection(m_runtime->Registry(), m_selection, *m_undo, m_editBinding);
         if (menuReq.paste)
             Arcane::Editor::PasteFromClipboard(m_runtime->Registry(), m_selection, *m_undo, m_editBinding);
@@ -1602,7 +1624,7 @@ namespace Arcane::Editor
                     // intent parkable here leaves Play running anyway -- New
                     // Scene, Open Scene and Open Project all stop it through
                     // ClearSceneReferences, and Exit ends the process.
-                    if (m_play.IsPlaying())
+                    if (InPlayMode())
                         m_play.Stop(*m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
                     if (m_scene.Path().empty())
                     {
@@ -1762,7 +1784,7 @@ namespace Arcane::Editor
         fs.vp = Arcane::Editor::DrawViewportPanel(m_viewport->TextureId(),
                                             m_viewport->Width(), m_viewport->Height(),
                                             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
-                                            /*showToolOverlay=*/!m_play.IsPlaying());
+                                            /*showToolOverlay=*/!InPlayMode());
         m_viewportDockId = fs.vp.dockId;
         m_pendingViewportW = fs.vp.desiredW;
         m_pendingViewportH = fs.vp.desiredH;
@@ -1881,7 +1903,6 @@ namespace Arcane::Editor
     {
         m_selection.Prune([reg = &m_runtime->Registry()](Astra::Entity e)
                           { return reg->IsValid(e); });
-        m_editBinding.editMode = !m_play.IsPlaying();
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Outliner))
             Arcane::Editor::DrawOutlinerPanel(m_runtime->Registry(), m_selection,
                                               *m_undo, m_editBinding, m_outliner,

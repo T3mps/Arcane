@@ -329,6 +329,16 @@ namespace Arcane::Editor
         // plugin loads).
         Arcane::Editor::PlaySession m_play;
 
+        // THE Play/edit predicate (architecture pass sec 1). Editor code asks this,
+        // never m_play.IsPlaying() raw, so the predicate has one greppable name.
+        [[nodiscard]] bool InPlayMode() const noexcept { return m_play.IsPlaying(); }
+        // The one "may editor shortcuts fire" predicate (three near-duplicates
+        // collapsed): Edit mode, ImGui not capturing the keyboard, and -- for keys
+        // that switch a viewport TOOL rather than act on the selection -- viewport
+        // focus.
+        [[nodiscard]] bool ShortcutsLive(const Arcane::InputSnapshot& snap,
+                                         bool requireViewportFocus) const;
+
         // Play-mode dropdown (Task 6, runtime-host-fold arc): which action the
         // transport's Play button performs (see DrawSimTimeToolbar). Viewport =
         // m_play above, unchanged. SeparateWindow = LaunchStandalone (below) --
