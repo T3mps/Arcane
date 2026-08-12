@@ -8,9 +8,11 @@
 // All Arcane configs that link NVRHI must define NDEBUG in Release (done in
 // premake5.lua) so both sides agree on the struct layout.
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/DeviceFactories.hpp>
+#include <Arcane/Render/IGpuCrashBackend.hpp>
 #include <Arcane/Render/NvrhiMessageCallback.hpp>
 #include <Arcane/Render/Swapchain.hpp>
 
@@ -23,7 +25,9 @@
 #include <vulkan/vulkan.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -39,10 +43,42 @@ namespace Arcane
             VK_KHR_SURFACE_EXTENSION_NAME,
             VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
         };
+        // F-5a: the REQUIRED device extensions. The optional GPU-crash
+        // diagnostics extensions are appended to a copy of this list only when
+        // the physical device actually enumerates them -- see F-5c's sweep in
+        // Init. Requesting an unsupported device extension is a hard
+        // vkCreateDevice failure, which is precisely what must never happen
+        // for a diagnostics nicety.
         const char* kDeviceExtensions[] = {
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         };
         constexpr const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
+
+        // F-3: the ONE device-removed observation point for this backend.
+        // Both observables funnel here -- F-3b's cross-backend NVRHI message
+        // hook (NVRHI catches vk::DeviceLostError on submit and reports
+        // "Device Removed!", vulkan-queue.cpp:195-201) and F-3d's swapchain
+        // sites, which until now let a DeviceLostError escape as an unhandled
+        // C++ exception.
+        //
+        // Once-only per armed device: a lost device keeps reporting loss on
+        // every submit and every present, and the second report is worthless
+        // -- the marker buffer and fault state belong to the FIRST one. Reset
+        // when a new backend arms (project switch recreates the device).
+        std::atomic<bool> g_deviceRemovedReported{ false };
+
+        void ObserveDeviceRemoved()
+        {
+            if (g_deviceRemovedReported.exchange(true, std::memory_order_acq_rel))
+                return;
+
+            // The reason string is load-bearing: Diagnostics::DeriveKind
+            // classifies the .arcdiag "kind" by case-sensitive substring, and
+            // only a reason containing lowercase "gpu" resolves to a gpu kind
+            // (here "gpu-crash", which is what makes the .gpudump sibling get
+            // written). Same wording as the D3D12 backend. Do not reword.
+            Diagnostics::WriteReport("gpu-crash: device removed");
+        }
 
         constexpr nvrhi::Format kSwapchainFormat    = nvrhi::Format::BGRA8_UNORM;
         constexpr vk::Format    kSwapchainFormatVk  = vk::Format::eB8G8R8A8Unorm;
@@ -77,6 +113,7 @@ namespace Arcane
             GraphicsBackend Backend() const override { return GraphicsBackend::Vulkan; }
             nvrhi::IDevice* Nvrhi() const override { return m_nvrhi.Get(); }
             std::string AdapterName() const override { return m_adapterName; }
+            IGpuCrashBackend* GpuCrashBackend() const override { return m_crashBackend.get(); }
 
             vk::Instance Instance() const { return m_instance; }
             vk::PhysicalDevice PhysicalDevice() const { return m_physicalDevice; }
@@ -106,6 +143,11 @@ namespace Arcane
             nvrhi::DeviceHandle m_nvrhiBackend;  // the real vulkan device
             nvrhi::DeviceHandle m_nvrhi;         // possibly validation-wrapped
             std::string         m_adapterName;
+            // Holds a VkBuffer + VkDeviceMemory created off m_device, so it
+            // must be released BEFORE m_device.destroy() -- ~DeviceVulkan
+            // resets it explicitly rather than relying on member order,
+            // because that destructor tears the device down in its BODY.
+            std::unique_ptr<IGpuCrashBackend> m_crashBackend;
         };
 
         // ----------------------------------------------------------------
@@ -344,6 +386,17 @@ namespace Arcane
                     return nullptr;
                 m_currentImage = acquired.value;
             }
+            catch (const vk::DeviceLostError&)
+            {
+                // F-3d: acquireNextImageKHR caught ONLY OutOfDateKHRError, so
+                // a VK_ERROR_DEVICE_LOST here left Present()'s caller staring
+                // at an unhandled C++ exception and no report at all. Capture
+                // instead. Once-guarded inside, and a no-op if F-3b's
+                // submit-side hook already fired for the same loss.
+                ARC_ERROR("acquireNextImageKHR failed: device lost");
+                ObserveDeviceRemoved();
+                return nullptr;
+            }
             catch (const vk::OutOfDateKHRError&)
             {
                 // Surface changed under us: rebuild at the current size and
@@ -390,6 +443,17 @@ namespace Arcane
             try
             {
                 (void)m_device->GraphicsQueue().presentKHR(presentInfo);
+            }
+            catch (const vk::DeviceLostError&)
+            {
+                // F-3d: presentKHR caught ONLY OutOfDateKHRError, so a
+                // DeviceLostError from present escaped Present() entirely --
+                // Vulkan's analogue of F-3c's D3D12 present-path observable,
+                // which the D3D12 side already routes into capture. Same
+                // treatment here: log, then collect while markers and fault
+                // state still describe THIS loss.
+                ARC_ERROR("presentKHR failed: device lost");
+                ObserveDeviceRemoved();
             }
             catch (const vk::OutOfDateKHRError&)
             {
@@ -584,6 +648,83 @@ namespace Arcane
                 return false;
             }
 
+            // ------------------------------------------------------------
+            // F-5c step 1+2: device-extension availability sweep.
+            // ------------------------------------------------------------
+            // Device extensions were previously passed through UNFILTERED --
+            // fine for VK_KHR_swapchain (required anyway; its absence should
+            // fail loudly) but fatal as a policy for optional diagnostics.
+            // This mirrors the instance-extension shape already used above.
+            std::vector<const char*> deviceExtensions(
+                std::begin(kDeviceExtensions), std::end(kDeviceExtensions));
+
+            bool haveBufferMarker  = false;
+            bool haveDeviceFaultExt = false;
+            bool haveDeviceFaultKhr = false;
+            try
+            {
+                for (const auto& ext : m_physicalDevice.enumerateDeviceExtensionProperties())
+                {
+                    const std::string_view name(ext.extensionName);
+                    if (name == VK_AMD_BUFFER_MARKER_EXTENSION_NAME)  haveBufferMarker   = true;
+                    // F-5d lists only the EXT spelling, but the KHR promotion
+                    // is in the vendored headers too (vulkan_core.h:14372) and
+                    // a newer driver may expose only that one. Accept EITHER;
+                    // the feature struct and the query differ per spelling, so
+                    // which one won is recorded and carried to the backend.
+                    else if (name == VK_EXT_DEVICE_FAULT_EXTENSION_NAME) haveDeviceFaultExt = true;
+                    else if (name == VK_KHR_DEVICE_FAULT_EXTENSION_NAME) haveDeviceFaultKhr = true;
+                }
+            }
+            catch (const vk::SystemError& e)
+            {
+                ARC_WARN("vk::PhysicalDevice::enumerateDeviceExtensionProperties threw: {}; "
+                         "continuing without GPU-crash diagnostics extensions", e.what());
+            }
+
+            // An extension being present is not the same as its feature being
+            // supported, and vkCreateDevice fails if a chained feature struct
+            // asks for a VK_FALSE feature. Ask before enabling.
+            vk::PhysicalDeviceFaultFeaturesEXT faultFeaturesExt;
+            vk::PhysicalDeviceFaultFeaturesKHR faultFeaturesKhr;
+            if (haveDeviceFaultExt)
+            {
+                vk::PhysicalDeviceFeatures2 supported;
+                supported.pNext = &faultFeaturesExt;
+                m_physicalDevice.getFeatures2(&supported);
+                faultFeaturesExt.pNext = nullptr;  // queried as a leaf; re-chained below
+                if (!faultFeaturesExt.deviceFault) haveDeviceFaultExt = false;
+            }
+            if (haveDeviceFaultKhr)
+            {
+                vk::PhysicalDeviceFeatures2 supported;
+                supported.pNext = &faultFeaturesKhr;
+                m_physicalDevice.getFeatures2(&supported);
+                faultFeaturesKhr.pNext = nullptr;
+                if (!faultFeaturesKhr.deviceFault) haveDeviceFaultKhr = false;
+            }
+            // Prefer EXT when both are advertised: it is the mature spelling
+            // (spec version 2 vs 1) and the one F-5d binds against.
+            if (haveDeviceFaultExt) haveDeviceFaultKhr = false;
+
+            auto deviceFaultSpelling = VulkanCrashDesc::DeviceFault::None;
+            if (haveDeviceFaultExt)
+            {
+                deviceExtensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+                deviceFaultSpelling = VulkanCrashDesc::DeviceFault::Ext;
+            }
+            else if (haveDeviceFaultKhr)
+            {
+                deviceExtensions.push_back(VK_KHR_DEVICE_FAULT_EXTENSION_NAME);
+                deviceFaultSpelling = VulkanCrashDesc::DeviceFault::Khr;
+            }
+            if (haveBufferMarker)
+                deviceExtensions.push_back(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
+
+            ARC_INFO("Vulkan GPU-crash extensions: VK_AMD_buffer_marker={}, device_fault={}",
+                     haveBufferMarker ? "yes" : "no",
+                     haveDeviceFaultExt ? "EXT" : (haveDeviceFaultKhr ? "KHR" : "no"));
+
             const float priority = 1.0f;
             auto queueInfo = vk::DeviceQueueCreateInfo()
                 .setQueueFamilyIndex((uint32_t)m_graphicsQueueFamily)
@@ -607,11 +748,29 @@ namespace Arcane
                 .setTimelineSemaphore(true)
                 .setPNext(&vulkan13Features);
 
+            // F-5c step 4: VK_EXT/KHR_device_fault requires its feature to be
+            // enabled at device creation, so the matching struct is appended
+            // to the TAIL of the existing chain (deviceInfo -> vulkan12 ->
+            // vulkan13 -> fault). The two structs are distinct types, not
+            // aliases -- chain the one whose spelling was enabled above.
+            // deviceFaultVendorBinary is opt-in on top and is what makes the
+            // opaque vendor blob retrievable; take it only where advertised.
+            if (deviceFaultSpelling == VulkanCrashDesc::DeviceFault::Ext)
+            {
+                faultFeaturesExt.deviceFault = VK_TRUE;
+                vulkan13Features.setPNext(&faultFeaturesExt);
+            }
+            else if (deviceFaultSpelling == VulkanCrashDesc::DeviceFault::Khr)
+            {
+                faultFeaturesKhr.deviceFault = VK_TRUE;
+                vulkan13Features.setPNext(&faultFeaturesKhr);
+            }
+
             auto deviceInfo = vk::DeviceCreateInfo()
                 .setQueueCreateInfoCount(1)
                 .setPQueueCreateInfos(&queueInfo)
-                .setEnabledExtensionCount((uint32_t)std::size(kDeviceExtensions))
-                .setPpEnabledExtensionNames(kDeviceExtensions)
+                .setEnabledExtensionCount((uint32_t)deviceExtensions.size())
+                .setPpEnabledExtensionNames(deviceExtensions.data())
                 .setPNext(&vulkan12Features);
 
             try
@@ -640,8 +799,12 @@ namespace Arcane
             nvrhiDesc.graphicsQueueIndex = m_graphicsQueueFamily;
             nvrhiDesc.instanceExtensions = instanceExtensions.data();
             nvrhiDesc.numInstanceExtensions = instanceExtensions.size();
-            nvrhiDesc.deviceExtensions = kDeviceExtensions;
-            nvrhiDesc.numDeviceExtensions = std::size(kDeviceExtensions);
+            // F-5c step 3: BOTH consumers of the extension list get the
+            // filtered vector. Leaving this at the constant array would tell
+            // NVRHI the diagnostics extensions are absent even though the
+            // device was created with them.
+            nvrhiDesc.deviceExtensions = deviceExtensions.data();
+            nvrhiDesc.numDeviceExtensions = deviceExtensions.size();
 
             m_nvrhiBackend = nvrhi::vulkan::createDevice(nvrhiDesc);
             if (!m_nvrhiBackend)
@@ -654,17 +817,56 @@ namespace Arcane
             if (desc.enableValidation)
                 m_nvrhi = nvrhi::validation::createValidationLayer(m_nvrhi);
 
+            // GPU crash backend (F-5/F-4). Built against the OUTER nvrhi
+            // device for getNativeObject (the validation layer forwards it
+            // verbatim), plus the UNWRAPPED one for queueGetCompletedInstance,
+            // which is declared on nvrhi::vulkan::IDevice only.
+            VulkanCrashDesc crashDesc;
+            crashDesc.device        = m_nvrhi.Get();
+            crashDesc.backendDevice = VulkanNvrhi();
+            crashDesc.deviceFault   = deviceFaultSpelling;
+            crashDesc.bufferMarker  = haveBufferMarker;
+            m_crashBackend = MakeVulkanCrashBackend(crashDesc);
+            if (m_crashBackend)
+            {
+                g_deviceRemovedReported.store(false, std::memory_order_release);
+                // F-3b: the cross-backend observable, armed now that there is
+                // something to collect with.
+                NvrhiMessageCallback::Instance().SetDeviceRemovedHook(&ObserveDeviceRemoved);
+                // The ONE SetGpuSectionProvider call per host lifetime. Only
+                // one RenderDevice backend is live per process, so this and
+                // DeviceD3D12's call are two TEXTUAL sites of a single runtime
+                // install. The device layer owns the slot because it owns the
+                // backend the slot's `user` pointer names; ~DeviceVulkan
+                // clears it.
+                Diagnostics::SetGpuSectionProvider(&VulkanGpuSectionProvider, m_crashBackend.get());
+                ARC_INFO("GPU crash backend armed: {}", m_crashBackend->Name());
+            }
+
             ARC_INFO("Vulkan device created on '{}'", m_adapterName);
             return true;
         }
 
         DeviceVulkan::~DeviceVulkan()
         {
+            if (m_crashBackend)
+            {
+                // Symmetric with Init's install. Both slots are process-wide
+                // and point INTO m_crashBackend, so they must be emptied
+                // before it goes away.
+                Diagnostics::ClearGpuSectionProvider();
+                NvrhiMessageCallback::Instance().SetDeviceRemovedHook(nullptr);
+            }
             if (m_nvrhi)
             {
                 m_nvrhi->waitForIdle();
                 m_nvrhi->runGarbageCollection();
             }
+            // BEFORE m_device.destroy(): the backend owns a VkBuffer and a
+            // VkDeviceMemory allocated from that device. Member-declaration
+            // order cannot save us here -- this destructor destroys the device
+            // in its own body, which runs first.
+            m_crashBackend.reset();
             m_nvrhi = nullptr;
             m_nvrhiBackend = nullptr;
             if (m_device)

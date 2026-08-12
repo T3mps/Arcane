@@ -28,6 +28,15 @@
 #include <string_view>
 #include <vector>
 
+// Forward declaration only -- MakeVulkanCrashBackend needs the UNWRAPPED
+// nvrhi Vulkan device (queueGetCompletedInstance is declared there, not on
+// nvrhi::IDevice), but this header is also included by the D3D12 device TU
+// and must not drag <nvrhi/vulkan.h> / <vulkan/vulkan.h> in behind it.
+namespace nvrhi::vulkan
+{
+    class IDevice;
+}
+
 namespace Arcane::Diag
 {
     struct Envelope; // <Arcane/Base/DiagEnvelope.hpp> -- forward-declared to keep this header light
@@ -299,4 +308,57 @@ namespace Arcane
                                             std::string& humanText,
                                             const std::filesystem::path& reportStem,
                                             void* user);
+
+    // ---------------------------------------------------------------------
+    // Vulkan backend (Task 6) -- implemented in GpuCrashVulkan.cpp
+    // ---------------------------------------------------------------------
+
+    // What DeviceVulkan actually managed to enable at device creation (F-5).
+    // Both diagnostics extensions are request-if-available: an absent one
+    // degrades exactly one layer and NEVER fails device creation, so the
+    // backend is TOLD which rungs it got rather than re-deriving them (it
+    // cannot -- a VkDevice does not report the extension list it was created
+    // with, and re-enumerating the physical device would only say what was
+    // AVAILABLE, not what was enabled).
+    struct VulkanCrashDesc
+    {
+        // `VK_EXT_device_fault` and its `VK_KHR_device_fault` promotion are
+        // DISTINCT surfaces, not aliases: the feature structs differ
+        // (VkPhysicalDeviceFaultFeaturesEXT vs ...KHR) and so do the queries
+        // (vkGetDeviceFaultInfoEXT vs vkGetDeviceFaultReportsKHR). Which
+        // spelling was enabled therefore has to travel with the flag.
+        enum class DeviceFault : std::uint8_t { None, Ext, Khr };
+
+        // Possibly validation-wrapped -- getNativeObject forwards verbatim
+        // (validation-device.cpp:85, validation-commandlist.cpp:131), so the
+        // native VkDevice/VkPhysicalDevice and every native command buffer
+        // resolve the same either way.
+        nvrhi::IDevice* device = nullptr;
+
+        // The UNWRAPPED backend device. `queueGetCompletedInstance`
+        // (nvrhi/vulkan.h:45) is declared on nvrhi::vulkan::IDevice only, and
+        // it is the fence-progress source the `breadcrumbs:fence` degrade path
+        // derives scope completion from when VK_AMD_buffer_marker is absent.
+        nvrhi::vulkan::IDevice* backendDevice = nullptr;
+
+        DeviceFault deviceFault  = DeviceFault::None;
+        bool        bufferMarker = false;
+    };
+
+    // The Vulkan crash backend. Null only if `desc.device` is null: a backend
+    // whose marker buffer failed to arm, or that got neither optional
+    // extension, is still returned, still collects whatever remains, and says
+    // exactly which layers engaged in the envelope's activeLayers.
+    ARCANE_API std::unique_ptr<IGpuCrashBackend> MakeVulkanCrashBackend(const VulkanCrashDesc& desc);
+
+    // The Diagnostics::GpuSectionProvider for a backend made above -- pass the
+    // IGpuCrashBackend* as `user`. Same contract as D3D12GpuSectionProvider:
+    // runs CollectFault, appends the human-readable GPU block, and writes
+    // <reportStem>.gpudump for gpu kinds, recording siblingGpuDump ONLY when
+    // the file actually landed. Installed by the device layer, which owns the
+    // one SetGpuSectionProvider call per host lifetime.
+    ARCANE_API void VulkanGpuSectionProvider(Diag::Envelope& envelope,
+                                             std::string& humanText,
+                                             const std::filesystem::path& reportStem,
+                                             void* user);
 }
