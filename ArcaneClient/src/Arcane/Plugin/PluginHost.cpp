@@ -106,8 +106,8 @@ namespace Arcane
             ImGuiContext* saved;
         };
 
-        // Publishes the ONE diagnostic row naming WHICH of the three load causes
-        // (OS-level load failure, missing export, ABI mismatch) sank a plugin load,
+        // Publishes the ONE diagnostic row naming WHICH load cause (OS-level load
+        // failure, missing export, ABI mismatch, CRT-flavor mismatch) sank a plugin load,
         // keyed "plugin:<name>" so the matching success site's Diagnostics::Clear
         // retracts it once the plugin is fixed. Deliberately NOT called for an
         // Init()-returned-false failure (the module loaded fine; that is a
@@ -134,6 +134,17 @@ namespace Arcane
                                 std::to_string(resolveError.pluginAbi) + ", but this engine is ABI " +
                                 std::to_string(resolveError.engineAbi) + ".";
                     d.detail  = "Rebuild the game DLL against this engine and update its manifest.";
+                    break;
+                case PluginResolveError::Kind::CrtFlavorMismatch:
+                    d.code    = "plugin.crt.mismatch";
+                    d.message = "Plugin '" + name + "' is a " +
+                                std::string(resolveError.pluginDebugCrt ? "Debug" : "Release") +
+                                "-CRT build (imports " + resolveError.symbol + "), but this host is a " +
+                                std::string(resolveError.hostDebugCrt ? "Debug" : "Release") + " build.";
+                    d.detail  = "Debug and Release modules cannot be mixed -- the first cross-boundary "
+                                "call is undefined behavior, and the DLL was refused before LoadLibrary "
+                                "could run its initializers. Rebuild the game module in the host's "
+                                "configuration (Binaries/ holds ONE configuration at a time).";
                     break;
                 case PluginResolveError::Kind::None:
                     d.code    = "plugin.module.load-failed";

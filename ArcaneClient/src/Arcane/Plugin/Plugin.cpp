@@ -87,6 +87,34 @@ namespace Arcane
 
     std::optional<Plugin> Plugin::Load(std::filesystem::path path, PluginResolveError* error)
     {
+#if defined(_WIN32)
+        // Build-flavor gate, from the FILE bytes and BEFORE Module::Load: a
+        // config-mismatched DLL's static initializers run inside LoadLibrary
+        // itself, so by the time an export could be checked the damage is done
+        // (the desk signature was an AV inside VCRUNTIME140_1 at plugin_load).
+        // Unknown fails OPEN -- only a positive cross-flavor verdict refuses.
+        {
+#if defined(_DEBUG)
+            constexpr bool hostDebugCrt = true;
+#else
+            constexpr bool hostDebugCrt = false;
+#endif
+            std::string matched;
+            const CrtFlavor flavor = Module::ScanFileCrtFlavor(path, &matched);
+            if (flavor != CrtFlavor::Unknown && (flavor == CrtFlavor::Debug) != hostDebugCrt)
+            {
+                if (error)
+                {
+                    error->kind           = PluginResolveError::Kind::CrtFlavorMismatch;
+                    error->symbol         = std::move(matched);
+                    error->pluginDebugCrt = (flavor == CrtFlavor::Debug);
+                    error->hostDebugCrt   = hostDebugCrt;
+                }
+                return std::nullopt;
+            }
+        }
+#endif
+
         std::optional<Module> module = Module::Load(std::move(path));
         if (!module)
             return std::nullopt;   // Kind::None; caller reads Module::LastLoadError()

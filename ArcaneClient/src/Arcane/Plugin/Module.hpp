@@ -7,12 +7,20 @@
 #include <Arcane/Base/Api.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
 
 namespace Arcane
 {
+    // Which C runtime family a PE image links, read from its import table
+    // WITHOUT loading it (see Module::ScanFileCrtFlavor). Unknown means "no
+    // verdict" -- not a PE, unreadable, or no recognizable CRT import -- and
+    // callers must fail OPEN on it (let the OS loader produce its own error),
+    // never treat it as a mismatch.
+    enum class CrtFlavor : std::uint8_t { Unknown, Release, Debug };
+
     class ARCANE_API Module
     {
     public:
@@ -35,6 +43,25 @@ namespace Arcane
         // which runs on BootThread::Main -- but the seam itself makes no
         // assumption about which thread calls it).
         [[nodiscard]] static const std::string& LastLoadError() noexcept;
+
+        // Classifies the CRT family a PE file on disk links against by walking
+        // its import table -- WITHOUT LoadLibrary, because a config-mismatched
+        // DLL's static initializers run inside LoadLibrary itself (the desk
+        // signature was an AV inside VCRUNTIME140_1 at plugin_load, before any
+        // export could be checked). Debug = any debug-CRT import (ucrtbased,
+        // vcruntime140d, ...); Release = a release-CRT import with no debug
+        // evidence; Unknown = anything else, including I/O failure. When
+        // `matchedImport` is non-null it receives the import that decided the
+        // verdict. Windows-only; always Unknown elsewhere. Never throws.
+        [[nodiscard]] static CrtFlavor ScanFileCrtFlavor(const std::filesystem::path& path,
+                                                         std::string* matchedImport = nullptr) noexcept;
+
+        // The pure core of ScanFileCrtFlavor: same classification over an
+        // in-memory copy of the FILE bytes (disk layout, not a loaded image).
+        // Defensive against truncated/corrupt input -- any inconsistency yields
+        // Unknown rather than a read past `size`.
+        [[nodiscard]] static CrtFlavor DetectCrtFlavorFromImage(const unsigned char* data, std::size_t size,
+                                                                std::string* matchedImport = nullptr) noexcept;
 
         void* Symbol(const char* name) const noexcept;
         void Unload() noexcept;

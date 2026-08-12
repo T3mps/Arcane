@@ -8,10 +8,22 @@
 // Diagnostics seam -- via a raw capture sink, same pattern as
 // DiagnosticSeamTest.cpp's Capture/CaptureSink.
 
+#include <cstring>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
+
+#if defined(_WIN32)
+    #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+    #endif
+    #ifndef NOMINMAX
+    #define NOMINMAX
+    #endif
+    #include <windows.h>   // IMAGE_* PE structs for the synthetic-image case
+#endif
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -82,6 +94,117 @@ TEST_CASE("A missing required export is named", "[plugin][diagnostics]")
     CHECK(error.kind == Arcane::PluginResolveError::Kind::MissingExport);
     CHECK(error.symbol == std::string(Arcane::PluginEntry::kABIVersion));   // the first checked
 }
+
+TEST_CASE("CRT-flavor scan classifies in-tree binaries without loading them", "[plugin][diagnostics]")
+{
+    // HotReloadPluginBad.dll and ArcaneClient.dll are built by THIS build, so
+    // their CRT family is the test's own -- the scan must agree with the
+    // compile-time truth in both configurations. (A genuine cross-flavor DLL
+    // cannot exist in-tree; the synthetic-image case below covers the other
+    // family's detection path.)
+#if defined(_DEBUG)
+    constexpr auto expected = Arcane::CrtFlavor::Debug;
+#else
+    constexpr auto expected = Arcane::CrtFlavor::Release;
+#endif
+    std::string matched;
+    CHECK(Arcane::Module::ScanFileCrtFlavor("HotReloadPluginBad.dll", &matched) == expected);
+    CHECK_FALSE(matched.empty());
+    CHECK(Arcane::Module::ScanFileCrtFlavor("ArcaneClient.dll") == expected);
+}
+
+TEST_CASE("CRT-flavor scan yields Unknown for missing, empty, and non-PE input",
+          "[plugin][diagnostics]")
+{
+    CHECK(Arcane::Module::ScanFileCrtFlavor("this-path-does-not-exist-arcane.dll") ==
+          Arcane::CrtFlavor::Unknown);
+    CHECK(Arcane::Module::DetectCrtFlavorFromImage(nullptr, 0) == Arcane::CrtFlavor::Unknown);
+
+    const unsigned char junk[] = { 'n', 'o', 't', ' ', 'a', ' ', 'P', 'E' };
+    CHECK(Arcane::Module::DetectCrtFlavorFromImage(junk, sizeof junk) == Arcane::CrtFlavor::Unknown);
+
+    // A truthful DOS magic followed by garbage must be Unknown, not a fault.
+    unsigned char truncated[64] = { 'M', 'Z' };
+    CHECK(Arcane::Module::DetectCrtFlavorFromImage(truncated, sizeof truncated) ==
+          Arcane::CrtFlavor::Unknown);
+}
+
+#if defined(_WIN32)
+namespace
+{
+    // The smallest well-formed PE32+ image whose import table names exactly
+    // `importName` -- lets the classifier's Debug path run in a Release test
+    // build (and vice versa), which no real in-tree DLL can.
+    std::vector<unsigned char> SyntheticPeImporting(std::string_view importName)
+    {
+        std::vector<unsigned char> img(0x600, 0);
+        const auto put = [&](std::size_t off, const auto& v)
+        { std::memcpy(img.data() + off, &v, sizeof v); };
+
+        IMAGE_DOS_HEADER dos{};
+        dos.e_magic  = IMAGE_DOS_SIGNATURE;
+        dos.e_lfanew = 0x40;
+        put(0, dos);
+
+        const DWORD sig = IMAGE_NT_SIGNATURE;
+        put(0x40, sig);
+
+        IMAGE_FILE_HEADER fh{};
+        fh.Machine              = IMAGE_FILE_MACHINE_AMD64;
+        fh.NumberOfSections     = 1;
+        fh.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
+        put(0x44, fh);
+
+        IMAGE_OPTIONAL_HEADER64 oh{};
+        oh.Magic               = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+        oh.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
+        oh.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress = 0x1000;
+        oh.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size =
+            2 * sizeof(IMAGE_IMPORT_DESCRIPTOR);
+        const std::size_t ohOff = 0x44 + sizeof(IMAGE_FILE_HEADER);
+        put(ohOff, oh);
+
+        IMAGE_SECTION_HEADER sh{};
+        sh.VirtualAddress   = 0x1000;
+        sh.Misc.VirtualSize = 0x200;
+        sh.SizeOfRawData    = 0x200;
+        sh.PointerToRawData = 0x400;
+        put(ohOff + sizeof(IMAGE_OPTIONAL_HEADER64), sh);
+
+        // Section raw data at 0x400 == RVA 0x1000: descriptor[0], the all-zero
+        // terminator, then the import-name string at RVA 0x1030.
+        IMAGE_IMPORT_DESCRIPTOR desc{};
+        desc.Name = 0x1030;
+        put(0x400, desc);
+        std::memcpy(img.data() + 0x430, importName.data(), importName.size());
+        return img;
+    }
+}
+
+TEST_CASE("CRT-flavor detection classifies both families, case-insensitively",
+          "[plugin][diagnostics]")
+{
+    std::string matched;
+
+    const auto dbg = SyntheticPeImporting("ucrtbased.dll");
+    CHECK(Arcane::Module::DetectCrtFlavorFromImage(dbg.data(), dbg.size(), &matched) ==
+          Arcane::CrtFlavor::Debug);
+    CHECK(matched == "ucrtbased.dll");
+
+    const auto rel = SyntheticPeImporting("VCRUNTIME140.dll");   // mixed case on purpose
+    CHECK(Arcane::Module::DetectCrtFlavorFromImage(rel.data(), rel.size(), &matched) ==
+          Arcane::CrtFlavor::Release);
+    CHECK(matched == "VCRUNTIME140.dll");
+
+    const auto ucrt = SyntheticPeImporting("api-ms-win-crt-runtime-l1-1-0.dll");
+    CHECK(Arcane::Module::DetectCrtFlavorFromImage(ucrt.data(), ucrt.size()) ==
+          Arcane::CrtFlavor::Release);
+
+    const auto other = SyntheticPeImporting("KERNEL32.dll");   // imports, but no CRT evidence
+    CHECK(Arcane::Module::DetectCrtFlavorFromImage(other.data(), other.size()) ==
+          Arcane::CrtFlavor::Unknown);
+}
+#endif
 
 TEST_CASE("PluginHost::Load publishes the ABI-mismatch diagnostic under plugin:<name>",
           "[plugin][diagnostics][hotreload]")

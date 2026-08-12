@@ -17,19 +17,25 @@
 
 namespace Arcane
 {
-    // WHICH of the three plugin-resolve causes occurred, once the module itself
-    // loaded (a Module::Load failure is reported separately via
-    // Module::LastLoadError() -- this struct stays at Kind::None for that case,
-    // since ResolveGamePluginAbi never runs). Populated by Plugin::Load's
-    // PluginResolveError* overload; the plain single-argument overload is a
-    // thin wrapper that discards this detail (existing callers keep compiling).
+    // WHICH plugin-resolve cause occurred (a Module::Load failure is reported
+    // separately via Module::LastLoadError() -- this struct stays at Kind::None
+    // for that case, since neither gate below ran). CrtFlavorMismatch is the
+    // one cause detected BEFORE the module loads: a Debug-CRT DLL in a Release
+    // host (or vice versa) detonates inside LoadLibrary's static-initializer
+    // pass, so it must be refused from the file bytes (Module::ScanFileCrtFlavor).
+    // Populated by Plugin::Load's PluginResolveError* overload; the plain
+    // single-argument overload is a thin wrapper that discards this detail
+    // (existing callers keep compiling).
     struct PluginResolveError
     {
-        enum class Kind : std::uint8_t { None, MissingExport, AbiMismatch };
+        enum class Kind : std::uint8_t { None, MissingExport, AbiMismatch, CrtFlavorMismatch };
         Kind          kind      = Kind::None;
-        std::string   symbol;              // Kind::MissingExport: the first missing export, by declaration order
+        std::string   symbol;              // MissingExport: the first missing export, by declaration order.
+                                           // CrtFlavorMismatch: the CRT import that decided the verdict (e.g. "ucrtbased.dll").
         std::uint32_t pluginAbi = 0;       // Kind::AbiMismatch: what the plugin was built against
         std::uint32_t engineAbi = 0;       // Kind::AbiMismatch: what this engine enforces
+        bool pluginDebugCrt = false;       // Kind::CrtFlavorMismatch: the plugin's CRT family
+        bool hostDebugCrt   = false;       // Kind::CrtFlavorMismatch: this host's CRT family
     };
 
     class ARCANE_API Plugin
