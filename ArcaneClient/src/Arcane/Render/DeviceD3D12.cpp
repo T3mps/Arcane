@@ -67,7 +67,6 @@ namespace Arcane
             GraphicsBackend Backend() const override { return GraphicsBackend::D3D12; }
             nvrhi::IDevice* Nvrhi() const override { return m_nvrhi.Get(); }
             std::string AdapterName() const override { return m_adapterName; }
-            IGpuCrashBackend* GpuCrashBackend() const override { return m_crashBackend.get(); }
 
             IDXGIFactory6* Factory() const { return m_factory.Get(); }
             ID3D12CommandQueue* GraphicsQueue() const { return m_graphicsQueue.Get(); }
@@ -350,7 +349,13 @@ namespace Arcane
             {
                 nvrhi::IEventQuery* slotQuery =
                     m_frameQueries[m_frameCounter % kSwapchainFramesInFlight];
-                m_device->Nvrhi()->waitEventQuery(slotQuery);
+                // Same completion semantics as the waitEventQuery this replaced
+                // -- it never returns early -- but it polls and republishes the
+                // diagnostics beats while waiting, which is what makes a wedged
+                // GPU observable as `gpu-stall` instead of parking the main
+                // thread somewhere the watchdog cannot see it. Cost analysis in
+                // GpuInstrumentation.hpp; the non-GPU-bound frame pays one poll.
+                WaitForGpuFrameSlot(m_device->Nvrhi(), slotQuery);
                 m_device->Nvrhi()->resetEventQuery(slotQuery);
             }
             return m_backbuffers[m_swapchain->GetCurrentBackBufferIndex()];

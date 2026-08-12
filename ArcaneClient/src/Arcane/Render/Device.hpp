@@ -16,7 +16,6 @@ namespace Arcane
 {
     class Window;
     class Swapchain;
-    class IGpuCrashBackend;
 
     enum class GraphicsBackend : uint8_t
     {
@@ -61,12 +60,14 @@ namespace Arcane
         virtual nvrhi::IDevice* Nvrhi() const = 0;
         virtual std::string AdapterName() const = 0;
 
-        // The GPU crash backend armed alongside this device, or null when the
-        // backend could not be created (no D3D12 backend on this build, no
-        // native device). It owns the marker buffer and the scope ring that
-        // pass-level instrumentation writes markers into; it is destroyed with
-        // the device, so never outlive the returned pointer.
-        virtual IGpuCrashBackend* GpuCrashBackend() const { return nullptr; }
+        // NOTE: there is deliberately NO GpuCrashBackend() accessor here. The
+        // instrumentation that consumes the backend (Render/GpuInstrumentation.hpp)
+        // must be reachable from OffscreenCanvas and PickBuffer too, and those
+        // hold only an nvrhi::IDevice* -- so the device layer publishes the
+        // backend to a process-wide slot instead, installed and cleared beside
+        // the Diagnostics GPU-section provider it shares a lifetime with. ONE
+        // access path on purpose: an accessor here would be a second one, and
+        // when both existed the accessor had zero callers repo-wide.
 
         // The window must outlive the swapchain. For Vulkan, the window
         // must have been created with WindowDesc::vulkan = true.

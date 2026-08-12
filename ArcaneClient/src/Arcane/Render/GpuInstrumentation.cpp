@@ -2,7 +2,10 @@
 
 #include <Arcane/Base/Diagnostics.hpp>
 
+#include <SDL3/SDL_timer.h>
+
 #include <atomic>
+#include <chrono>
 
 namespace Arcane
 {
@@ -18,6 +21,21 @@ namespace Arcane
         // Read once per DRAW when enabled; relaxed because a toggle observed one
         // frame late is meaningless and this must not fence the render path.
         std::atomic<bool> g_drawMarkers{ false };
+
+        // One millisecond, expressed where SDL wants it. Not smaller: below the
+        // OS scheduling quantum a "sleep" degrades into a spin, and burning a
+        // core to shave sub-millisecond latency off a frame that is already
+        // waiting on the GPU is a bad trade.
+        constexpr Uint64 kSlotPollSleepNs = 1'000'000;
+
+        // How long to keep polling before parking in the blocking wait. Chosen
+        // comfortably above Config::gpuStallSeconds' default of 8 so the GPU rule
+        // has fired long before the fallback, and short enough that a genuinely
+        // dead device is not woken every millisecond for the rest of the session.
+        // A host configuring a gpuStallSeconds ABOVE this would lose the polling
+        // window's benefit -- that is the one coupling here, and it is why this
+        // constant lives next to that comment rather than in a header.
+        constexpr std::chrono::seconds kSlotPollWindow{ 15 };
     }
 
     void SetActiveGpuCrashBackend(IGpuCrashBackend* backend) noexcept
@@ -164,5 +182,44 @@ namespace Arcane
         }
 
         Diagnostics::GpuHeartbeat(m_completed);
+    }
+
+    // ---------------------------------------------------------------------
+    // WaitForGpuFrameSlot
+    // ---------------------------------------------------------------------
+
+    void WaitForGpuFrameSlot(nvrhi::IDevice* device, nvrhi::IEventQuery* query)
+    {
+        if (!device || !query)
+            return;
+
+        // Fast path, before any sleep: every frame that is not GPU-bound takes
+        // this and pays exactly one poll. Skipping it would tax the common case
+        // a full sleep quantum for a wait that was never going to happen.
+        if (device->pollEventQuery(query))
+            return;
+
+        const auto start = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - start < kSlotPollWindow)
+        {
+            // The two beats are the entire point of polling instead of
+            // blocking. Heartbeat: this thread is alive and deliberately
+            // waiting, so the hang rule must not call it wedged.
+            // GpuHeartbeatRefresh: the counter has not moved AND somebody is
+            // still watching it -- the exact state the GPU rule fires on, and
+            // the exact state a blocking wait made invisible.
+            Diagnostics::Heartbeat();
+            Diagnostics::GpuHeartbeatRefresh();
+
+            SDL_DelayNS(kSlotPollSleepNs);
+
+            if (device->pollEventQuery(query))
+                return;
+        }
+
+        // Past the window. Park properly rather than waking forever; the beats
+        // stop here too, which is what lets a permanently wedged GPU still
+        // produce the hang rule's parked-stack report after the gpu-stall one.
+        device->waitEventQuery(query);
     }
 }

@@ -189,4 +189,44 @@ namespace Arcane
         std::size_t             m_live      = 0;   // stamps outstanding
         std::uint64_t           m_completed = 0;   // monotone: sync points the GPU has passed
     };
+
+    // -----------------------------------------------------------------
+    // WaitForGpuFrameSlot -- the frame-slot pacing wait, made observable
+    // -----------------------------------------------------------------
+    //
+    // Both swapchains gate slot reuse on "frame N - kSwapchainFramesInFlight has
+    // retired". That gate used to be a bare `waitEventQuery`, and it is where
+    // the GPU-progress rule went to die: a wedged GPU parks the main thread
+    // INSIDE the wait, so the render path stops publishing, the freshness gate
+    // disarms the GPU rule, and the only report that could ever land was a plain
+    // `hang`. The rule was unreachable in BOTH hosts -- two frames of headroom is
+    // far under even the 2s freshness window, let alone 8s.
+    //
+    // Polling with the beats republished each iteration makes "the counter is
+    // frozen while the render path is demonstrably alive" the observable it was
+    // always supposed to be, and keeps the hang rule quiet through an ordinary
+    // long wait (the main thread is not wedged -- it is waiting, on purpose).
+    //
+    // COST, honestly. The first poll happens before any sleep, so the common
+    // case -- the slot's frame retired long ago, which is every frame that is
+    // not GPU-bound -- costs one `pollEventQuery` and nothing else. Only a frame
+    // that ACTUALLY had to wait pays, and it pays at most one sleep quantum
+    // (~1ms) of extra latency, on a frame where the CPU was already idle waiting
+    // for the GPU. The sleep is SDL_DelayNS and NOT std::this_thread::sleep_for,
+    // deliberately: MSVC's sleep_for lowers to Sleep(), whose granularity is the
+    // process timer resolution -- ~15.6ms by default on Windows, which would
+    // have turned a 1ms intent into most of a 60Hz frame. SDL3's delay uses a
+    // high-resolution waitable timer, so the quantum stays ~1ms without raising
+    // the global timer resolution for the whole process.
+    //
+    // After a bounded window it falls back to the blocking wait: by then any
+    // report has long been written, there is no point waking every millisecond
+    // forever, and a permanently wedged GPU then stops beating again -- so the
+    // hang rule still eventually captures the parked stack. Completion semantics
+    // are identical either way: this NEVER returns before `query` has completed.
+    //
+    // Shared by both backends rather than copied into each: a pacing wait that
+    // drifted between D3D12 and Vulkan is exactly the kind of host divergence
+    // this codebase has been bitten by before.
+    ARCANE_API void WaitForGpuFrameSlot(nvrhi::IDevice* device, nvrhi::IEventQuery* query);
 }

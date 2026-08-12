@@ -114,7 +114,6 @@ namespace Arcane
             GraphicsBackend Backend() const override { return GraphicsBackend::Vulkan; }
             nvrhi::IDevice* Nvrhi() const override { return m_nvrhi.Get(); }
             std::string AdapterName() const override { return m_adapterName; }
-            IGpuCrashBackend* GpuCrashBackend() const override { return m_crashBackend.get(); }
 
             vk::Instance Instance() const { return m_instance; }
             vk::PhysicalDevice PhysicalDevice() const { return m_physicalDevice; }
@@ -374,7 +373,13 @@ namespace Arcane
             // retired before the slot's binary semaphores are reused.
             if (m_frameCounter >= kSwapchainFramesInFlight)
             {
-                m_device->Nvrhi()->waitEventQuery(m_frameQueries[slot]);
+                // Same completion semantics as the waitEventQuery this replaced
+                // -- it never returns early -- but it polls and republishes the
+                // diagnostics beats while waiting, which is what makes a wedged
+                // GPU observable as `gpu-stall` instead of parking the main
+                // thread somewhere the watchdog cannot see it. ONE shared
+                // implementation with the D3D12 path, deliberately.
+                WaitForGpuFrameSlot(m_device->Nvrhi(), m_frameQueries[slot]);
                 m_device->Nvrhi()->resetEventQuery(m_frameQueries[slot]);
             }
 

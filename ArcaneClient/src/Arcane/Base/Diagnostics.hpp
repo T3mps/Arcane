@@ -56,12 +56,27 @@ namespace Arcane::Diagnostics
         std::uint32_t hangSeconds = 12;
 
         // GPU-progress stall that counts as a GPU hang (GpuHeartbeat below).
-        // TIGHTER than hangSeconds on purpose: when a wedged GPU also parks the
-        // main thread (a swapchain slot wait is a blocking wait), BOTH rules
-        // become true and the one that fires first names the cause. 8 < 12 makes
-        // that the GPU rule, which is the report worth having -- its kind is
-        // "gpu-stall", so the GPU-section provider engages and the report
-        // carries markers/DRED/device-fault instead of reading as a CPU hang.
+        //
+        // The rule fires only while the render path is DEMONSTRABLY ALIVE and
+        // the GPU-progress counter has stopped moving -- it disarms outright
+        // when publishing stops, because a frozen counter nobody is publishing
+        // is a host that is not rendering (minimized), not a stalled GPU. The
+        // case that makes it reachable is the swapchain's frame-slot wait,
+        // which polls and republishes rather than blocking (see
+        // Render/GpuInstrumentation.hpp, WaitForGpuFrameSlot) precisely so a
+        // wedged GPU is visible as "still waiting, still not retiring".
+        //
+        // TIGHTER than hangSeconds on purpose, and this is the whole reason
+        // both numbers exist: a long frame-slot wait keeps the main-thread beat
+        // flowing, so the hang rule stays quiet through it by design. 8 < 12
+        // means a GPU that has stopped retiring is named as such after 8s,
+        // rather than surfacing 4s later as a main-thread hang it is not.
+        //
+        // What it does NOT buy: a GPU-section in the report. The provider runs
+        // for EVERY report kind (see WriteReportImpl), so a plain `hang` already
+        // carries markers/DRED/device-fault. What the kind changes is the CLAIM
+        // the report makes about the cause -- "gpu-stall" vs "hang" -- and which
+        // of the two a reader should believe.
         std::uint32_t gpuStallSeconds = 8;
 
         bool installCrashHandler = true;
@@ -114,6 +129,19 @@ namespace Arcane::Diagnostics
     // never renders (a test, a headless tool) gets silence, not a spurious
     // report gpuStallSeconds after boot.
     ARCANE_API void GpuHeartbeat(std::uint64_t fenceValue) noexcept;
+
+    // "The render path is still alive and still watching the SAME counter."
+    // Refreshes the freshness stamp GpuHeartbeat sets, without changing the
+    // value and without arming the rule (a host that has never published a
+    // value stays silent no matter how often this is called).
+    //
+    // Exists for exactly one caller shape: a render path that is BLOCKED
+    // waiting for the GPU to retire work, and therefore cannot publish a new
+    // value -- but is emphatically not idle. Without it, the frame-slot wait
+    // would look identical to a minimized host (frozen counter, no publisher)
+    // and the GPU rule would disarm on the one case it exists to catch. See
+    // Render/GpuInstrumentation.hpp, WaitForGpuFrameSlot.
+    ARCANE_API void GpuHeartbeatRefresh() noexcept;
 
     // The pure staleness rule the GPU watchdog runs, extracted so the part
     // that can actually be WRONG -- one report per stall, re-armed on progress

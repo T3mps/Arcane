@@ -812,6 +812,14 @@ void GpuHeartbeat(std::uint64_t fenceValue) noexcept
     g_gpuBeatSeen.store(true, std::memory_order_release);
 }
 
+void GpuHeartbeatRefresh() noexcept
+{
+    // Time only. Deliberately does NOT touch g_gpuFence -- there is no new
+    // value, and that IS the signal -- and does NOT set g_gpuBeatSeen: a
+    // refresh must never arm a rule that has no published value to judge.
+    g_lastGpuBeat.store(NowTicks(), std::memory_order_release);
+}
+
 bool ProgressStallRule::Poll(std::uint64_t value, double nowSeconds) noexcept
 {
     // A first observation only seeds. Reporting here would call every armed

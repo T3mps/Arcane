@@ -612,6 +612,109 @@ TEST_CASE("Diagnostics GPU watchdog writes a gpu-stall report when the fence sto
     REQUIRE(pumpUntilCount(43, afterFirstStall + 1, std::chrono::seconds(20)));
 }
 
+TEST_CASE("Diagnostics GPU watchdog fires while the render path is parked in a frame-slot wait", "[diag]")
+{
+#if defined(_WIN32)
+    if (IsDebuggerPresent())
+    {
+        SUCCEED("watchdog is suppressed under a debugger by design");
+        return;
+    }
+#endif
+
+    // THE case the rule exists for, and the one it could not see before
+    // WaitForGpuFrameSlot: a wedged GPU parks the main thread inside the
+    // swapchain's slot wait, so no new counter value can ever be published --
+    // the host is blocked producing one. A blocking wait made that
+    // indistinguishable from "not rendering", the freshness gate disarmed on
+    // it, and gpu-stall was unreachable in both hosts. The polling wait
+    // republishes GpuHeartbeatRefresh() (freshness, same value) and
+    // Heartbeat() (this thread is alive and waiting on purpose) each
+    // iteration; this test IS that loop, minus the GPU.
+    const std::filesystem::path dir = FreshReportDir("gpu-stall-slot-wait");
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "DiagTest";
+    cfg.dumpDir             = dir.string();
+    cfg.installCrashHandler = false;
+    cfg.gpuStallSeconds     = 1;
+    // The shipped ordering is gpuStallSeconds < hangSeconds so the GPU rule
+    // names the cause first. Keep that relationship rather than letting a hang
+    // report race in and pass this test for the wrong reason.
+    cfg.hangSeconds         = 3600;
+    cfg.startHangWatchdog   = true;
+
+    const std::uint32_t base = Arcane::Diagnostics::ReportCount();
+
+    ArmedDiagnostics armed(cfg);
+
+    // One value published (the last frame that completed), then the "wait
+    // loop": refresh-only, never a new value.
+    Arcane::Diagnostics::GpuHeartbeat(4242);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (Arcane::Diagnostics::ReportCount() < base + 1 &&
+           std::chrono::steady_clock::now() < deadline)
+    {
+        Arcane::Diagnostics::Heartbeat();
+        Arcane::Diagnostics::GpuHeartbeatRefresh();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    REQUIRE(Arcane::Diagnostics::ReportCount() == base + 1);
+
+    // And it is a gpu-stall, not a hang: that distinction is the entire claim
+    // the report makes about the cause.
+    bool foundGpuStall = false;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(dir, ec))
+    {
+        if (e.path().extension() != ".arcdiag") continue;
+        const auto env = Arcane::Diag::ReadFile(e.path());
+        if (env && env->kind == "gpu-stall") { foundGpuStall = true; break; }
+    }
+    CHECK(foundGpuStall);
+}
+
+TEST_CASE("Diagnostics GpuHeartbeatRefresh alone never arms the GPU rule", "[diag]")
+{
+#if defined(_WIN32)
+    if (IsDebuggerPresent())
+    {
+        SUCCEED("watchdog is suppressed under a debugger by design");
+        return;
+    }
+#endif
+
+    // Refresh carries no value -- it only says "same counter, still watching".
+    // If it armed the rule, a host that reached a frame-slot wait before ever
+    // completing a frame (a device that never retired anything) would be
+    // reported as stalled on a counter nobody ever published.
+    const std::filesystem::path dir = FreshReportDir("gpu-refresh-only");
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "DiagTest";
+    cfg.dumpDir             = dir.string();
+    cfg.installCrashHandler = false;
+    cfg.gpuStallSeconds     = 1;
+    cfg.hangSeconds         = 3600;
+    cfg.startHangWatchdog   = true;
+
+    const std::uint32_t base = Arcane::Diagnostics::ReportCount();
+
+    ArmedDiagnostics armed(cfg);
+
+    // Refresh only -- GpuHeartbeat is never called, so no value ever exists.
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(2500);
+    while (std::chrono::steady_clock::now() < until)
+    {
+        Arcane::Diagnostics::GpuHeartbeatRefresh();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    CHECK(Arcane::Diagnostics::ReportCount() == base);
+}
+
 TEST_CASE("Diagnostics arming discards beats published before Install", "[diag]")
 {
 #if defined(_WIN32)
