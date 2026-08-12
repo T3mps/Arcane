@@ -47,6 +47,7 @@
 #include <Arcane/ImGui/OffscreenImGuiLayer.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
+#include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only Build -> Diagnostics -> Crash GPU
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/PickBuffer.hpp>
 #include <Arcane/Render/SelectionOutline.hpp>
@@ -811,6 +812,32 @@ namespace Arcane::Editor
         // only, like the queue above -- PollDiagnosticReports is the only
         // writer.
         std::vector<Arcane::Diagnostic>    m_reportDiagnostics;
+
+#if !defined(ARCANE_DIST)
+        // ---- Deliberate GPU fault (GPU crash diagnostics arc, Task 11) ------
+        // The desk battery's trigger: Build -> Diagnostics -> Crash GPU
+        // (diagnostics test) raises MenuRequests::crashGpu, ConsumeMenuRequests
+        // calls this, and everything downstream of the dispatch is the arc's own
+        // capture path with nothing special about having been asked for.
+        //
+        // Built LAZILY at the first click rather than at boot: a compute
+        // pipeline plus a UAV that exist in every session only to be used in
+        // approximately none of them is a cost with no reader.
+        //
+        // NOT on ResetPerProjectState's list, on purpose: it holds DEVICE
+        // resources, not project ones, and the device outlives a project switch
+        // -- the switch-staleness rule that governs m_reportDiagnostics above
+        // does not reach it.
+        //
+        // Declared after m_gpu (top of the member block) so it releases its
+        // NVRHI handles before the device that made them.
+        void FireDeliberateGpuFault();
+        std::unique_ptr<Arcane::GpuFaultInjector> m_gpuFault;
+        // --crash-gpu N fired already. The menu item is deliberately NOT
+        // latched by this -- a user who clicks twice meant it twice; the latch
+        // exists only so a per-frame schedule fires once.
+        bool                                      m_gpuFaultFired = false;
+#endif
 
         // Editor state naming entities of the OUTGOING scene, torn down before any
         // registry swap. Shared by SwitchProject and the scene effects below.

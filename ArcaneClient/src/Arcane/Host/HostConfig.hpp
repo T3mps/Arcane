@@ -41,6 +41,26 @@ namespace Arcane
         // must stamp into a new .arcproj -- see HostBoot::EngineInfoJson.
         bool            printEngineInfo = false;
 
+#if !defined(ARCANE_DIST)
+        // DEV ONLY: fire the deliberate GPU fault (Render/GpuFaultInjector.hpp)
+        // ONCE, on the first frame recorded after this many frames have
+        // completed -- `--crash-gpu 30` faults during frame 31, which is the
+        // point of the number: enough warm-up that the device, swapchain and
+        // shaders are all genuinely live. 0 = off.
+        //
+        // The editor reaches the same injector through a menu item; ArcaneRuntime
+        // has no menu, and the desk battery's item 2 -- "same, via ArcaneRuntime
+        // (project-less fallback dir)" -- is unrunnable without a trigger. A flag
+        // rather than a keybind because the battery is a scripted, repeatable
+        // check: `ArcaneRuntime --project ReferenceProject --crash-gpu 30` is one
+        // line, and it pairs with --frames the way --screenshot does.
+        //
+        // Honoured by BOTH hosts. The editor also has the menu item, but a flag
+        // that one host parses and silently ignores is a trap, and scripting the
+        // editor's battery items beats clicking them.
+        std::uint64_t   crashGpuFrame = 0;
+#endif
+
         // Forward-declared here so it names HostConfig::ParseOutcome and can be the
         // return type of Parse; DEFINED below (after the class closes) because its
         // std::optional<HostConfig> member needs HostConfig to be a complete type,

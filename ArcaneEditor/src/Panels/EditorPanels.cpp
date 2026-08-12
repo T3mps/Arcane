@@ -283,6 +283,39 @@ namespace Arcane::Editor
                     ImGui::SetTooltip(playing        ? "Stop to rebuild"
                                       : buildingModule ? "A rebuild is already running (see Console)"
                                                        : "This project has no game module");
+#if !defined(ARCANE_DIST)
+                // GPU crash diagnostics arc, Task 11: the desk battery's
+                // trigger. Build is the developer-actions menu (it already owns
+                // Rebuild Game Module) and this arc ratified no new top-level
+                // menu, so it lands here rather than inventing a Debug menu for
+                // one item.
+                //
+                // Behind a SUBMENU, deliberately. Every other item in this menu
+                // bar is recoverable; this one deliberately loses the device and
+                // ends the session, so it should not sit one stray click away
+                // from Rebuild Game Module. Two intentional steps is the whole
+                // guard -- no confirm modal, because a command whose label says
+                // "Crash GPU (diagnostics test)" and whose tooltip spells out the
+                // consequence has already asked.
+                //
+                // NOT gated on Play: faulting during Play is a legitimate case to
+                // capture. NOT gated on the injector existing either -- creation
+                // is lazy at the click, and a failure logs ARC_ERROR rather than
+                // silently greying an item nobody could explain.
+                ImGui::Separator();
+                if (ImGui::BeginMenu("Diagnostics"))
+                {
+                    if (ImGui::MenuItem("Crash GPU (diagnostics test)"))
+                        requests.crashGpu = true;
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "Dispatches a deliberately faulting compute shader.\n"
+                            "The OS watchdog (TDR) resets the GPU, the device is lost,\n"
+                            "and THIS EDITOR SESSION ENDS -- on purpose.\n"
+                            "A crash report lands in Saved/Diagnostics/.");
+                    ImGui::EndMenu();
+                }
+#endif
                 ImGui::EndMenu();
             }
             ImGui::EndMenuBar();

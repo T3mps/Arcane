@@ -44,6 +44,11 @@ call :compile outline_composite vs_main vs_6_5 outline_composite_vs || exit /b 1
 call :compile outline_composite ps_main ps_6_5 outline_composite_ps || exit /b 1
 call :compile graph_grid vs_main vs_6_5 graph_grid_vs || exit /b 1
 call :compile graph_grid ps_main ps_6_5 graph_grid_ps || exit /b 1
+:: The deliberate GPU-fault dispatch (GpuFaultInjector.hpp) -- the ONLY compute
+:: entry point in the tree, and not part of any render path. Built in every
+:: configuration because this script has no configuration awareness; the code
+:: that loads it is compiled out of Dist, so the artifact is inert there.
+call :compile gpu_fault cs_main cs_6_5 gpu_fault_cs || exit /b 1
 echo Shaders compiled to %OUT%
 exit /b 0
 

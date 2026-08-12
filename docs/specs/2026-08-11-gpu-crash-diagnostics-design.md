@@ -139,18 +139,77 @@ provider seam (fake provider -> report contains section); registry scan
 classifies `.arcdiag` under the mount; DocumentHost routes `.arcdiag` ->
 CrashReportDocument (existing document-routing test pattern).
 
+**The trigger (Task 11, landed).** Every fault item below is caused by ONE
+command, `Arcane::GpuFaultInjector` (`ArcaneClient/src/Arcane/Render/`,
+`#if !defined(ARCANE_DIST)`), reached two ways:
+
+- **Editor:** Build -> Diagnostics -> **Crash GPU (diagnostics test)**.
+- **Either host:** `--crash-gpu N` -- fault on the first frame after N
+  complete (N buys warm-up). ArcaneRuntime has no menu, so item 2 would be
+  unrunnable without it; the editor honours it too, both because a flag one
+  host silently ignores is a trap and because a scripted battery beats a
+  clicked one.
+
+It dispatches `data/shaders/gpu_fault.hlsl`, whose mechanism is NOT the
+"OOB dispatch" this spec assumed at plan time. That recipe is folklore on
+D3D12/Vulkan: both REQUIRE a bounds check against the view for
+structured-buffer access, so an out-of-bounds UAV store is discarded and
+faults nothing on a conformant device. What the shader actually relies on
+is a **long, serially dependent loop whose bound is a constant-buffer
+value** -- un-foldable, un-unrollable, and un-elidable (its body stores to
+a UAV) -- which runs the GPU past the OS TDR window and gets the adapter
+reset. That path is decided by the OS, not the driver, so it is
+vendor-agnostic, and it is plain portable NVRHI (no native handles), so
+the SAME command serves the Vulkan item unchanged. The out-of-bounds store
+is kept as the loop's un-elidable side effect and as an opportunistic
+upgrade to a real page fault wherever the bounds check is absent. Nothing
+in it trips CPU-side validation: an OOB store is a GPU-side condition the
+D3D12 debug layer never sees, and Arcane never enables GBV.
+
 **Desk battery (user -- the arc is not done until these run):**
-1. Hidden dev command faults the GPU deliberately (OOB dispatch) in
-   ReferenceProject under the editor: report lands in `Saved/Diagnostics/`,
-   Problems pane notifies, Assets browser shows it, double-click opens the
-   document with a sane breadcrumb timeline naming the faulting pass.
+1. Dev command faults the GPU deliberately in ReferenceProject under the
+   editor: report lands in `Saved/Diagnostics/`, Problems pane notifies,
+   Assets browser shows it, double-click opens the document with a sane
+   breadcrumb timeline naming the faulting pass (`pass:gpu-fault`).
+   *Trigger: the menu item.*
 2. Same via ArcaneRuntime (project-less fallback dir).
-3. GPU-stall path: infinite-loop shader -> gpu-stall report without device
-   removal (TDR may race it; either artifact acceptable, noted in report).
+   *Trigger: `ArcaneRuntime --crash-gpu 30` with no `--project`.*
+3. GPU-stall path: the same long-running shader -> gpu-stall report without
+   device removal. At stock settings this does NOT happen and cannot: TDR
+   fires at 2 s and the gpu-stall rule at 8 s, so the device is always gone
+   first. To reach the rule at all, **raise `TdrDelay` above the gpu-stall
+   threshold** (or lower the threshold) -- otherwise item 3 is only ever
+   observed as item 1 and the rule stays unproven. Either artifact is
+   acceptable per run; what is NOT acceptable is closing the arc without
+   having seen a gpu-stall report once.
+   *Trigger: the same command, with TdrDelay raised.*
 4. Vulkan backend run of (1) -- degraded detail is expected on non-AMD/NV
    extension sets; the report must say what was unavailable.
+   *Trigger: the same command, host launched `--backend vulkan`. No
+   separate trigger exists or is needed -- the dispatch is portable NVRHI.*
 5. Project switch retargets the dump dir (crash in B never lands in A's
-   Saved/).
+   `Saved/`).
+   *Trigger: the same menu item, after switching projects. No separate
+   trigger needed.*
+
+**Added by the implementation's fix rounds (same standing: user, at the
+desk). These are regression checks on seams this arc CHANGED, and none of
+them needs the fault command:**
+
+6. Vulkan drag-resize / swapchain out-of-date storm: resize the window
+   continuously on `--backend vulkan`. No freeze, and **no false
+   `gpu-stall` report** -- an unstarted frame-slot query used to spin its
+   whole window and report a stall for a device that had never been asked
+   to do anything (`GpuFrameSlot`, and the reason it is a type rather than
+   a loose bool).
+7. `--perf` before/after pacing comparison. The swapchain's frame-slot wait
+   was converted from a blocking `waitEventQuery` to a heartbeat-publishing
+   poll so the GPU rules are reachable at all; confirm the per-phase ms
+   have not regressed on an ordinary GPU-bound scene. Expected cost is at
+   most ~1 ms on frames that genuinely waited.
+8. Prove `gpu-stall` actually fires -- the standing form of item 3's caveat.
+   Extended `TdrDelay` or an overlong workload; the rule is unproven until a
+   `gpu-stall` `.arcdiag` has been read once.
 
 ## Non-goals
 

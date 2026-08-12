@@ -218,6 +218,22 @@ namespace Arcane::Editor
             // EditorApp.hpp's Report-written notify section.
             PollDiagnosticReports();
 
+#if !defined(ARCANE_DIST)
+            // --crash-gpu N: the same deliberate fault Build -> Diagnostics ->
+            // Crash GPU fires, on a schedule, so the desk battery's editor items
+            // can be SCRIPTED rather than clicked -- and so a flag both hosts
+            // parse is not silently inert in one of them. Here rather than at the
+            // menu-request site because this is the frame's provably safe point:
+            // m_gpu->Cmd() is idle before any render phase has opened it. Fires
+            // exactly once.
+            if (m_config.crashGpuFrame != 0 && !m_gpuFaultFired &&
+                m_frameCount >= m_config.crashGpuFrame)
+            {
+                m_gpuFaultFired = true;   // set FIRST: a failed build must not retry every frame
+                FireDeliberateGpuFault();
+            }
+#endif
+
             FrameState fs;
             FrameInput(ls, fs);
             AdvanceSim(ls);
@@ -1372,6 +1388,19 @@ namespace Arcane::Editor
         // finish-side effects all live in PollModuleBuild.
         if (menuReq.rebuildModule)
             StartModuleRebuild();
+#if !defined(ARCANE_DIST)
+        // Build -> Diagnostics -> Crash GPU: fired RIGHT HERE, mid-ImGui-pass,
+        // rather than deferred to a frame boundary the way the scene/project
+        // requests above are. It needs no teardown and no dialog, and the one
+        // resource it touches -- m_gpu->Cmd() -- is idle at this point in the
+        // frame (phases 11/12 opened, closed and executed it already; the ImGui
+        // pass does not reach for it again until PresentFrame). Deferring would
+        // also make the capture LESS representative rather than more: a device
+        // lost while the host is mid-frame is exactly the shape this arc exists
+        // to survive.
+        if (menuReq.crashGpu)
+            FireDeliberateGpuFault();
+#endif
         // Edit -> selection ops. Pure selection state -- no undo step (UE
         // does not undo selection either).
         if (menuReq.deselectAll)

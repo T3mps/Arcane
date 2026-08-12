@@ -482,6 +482,27 @@ void RuntimeApp::MainLoop()
         m_gpu->Cmd()->clearTextureFloat(m_gpu->Cnv().Texture(), nvrhi::AllSubresources,
                                         nvrhi::Color(0.02f, 0.02f, 0.04f, 1.0f));
 
+#if !defined(ARCANE_DIST)
+        // --crash-gpu N: the deliberate fault, nested inside pass:frame so the
+        // breadcrumb ring shows the real timeline this host records rather than
+        // a lone synthetic scope. INSIDE the frame's own command list, not on a
+        // private one, for the same reason -- the capture should see the host's
+        // ordinary recording shape, with pass:gpu-fault as the last scope the
+        // GPU ever begins. Fires exactly once.
+        if (m_config.crashGpuFrame != 0 && !m_gpuFaultFired &&
+            m_frameCount >= m_config.crashGpuFrame)
+        {
+            m_gpuFaultFired = true;   // set FIRST: a failed build must not retry every frame
+            if (!m_gpuFault)
+                m_gpuFault = Arcane::GpuFaultInjector::Create(m_gpu->Device().Nvrhi(),
+                                                              m_gpu->Shaders());
+            if (m_gpuFault)
+                m_gpuFault->Fire(m_gpu->Cmd());
+            else
+                ARC_ERROR("--crash-gpu: fault injector unavailable -- nothing dispatched");
+        }
+#endif
+
         m_gpu->Batch().Begin(m_gpu->Cmd(), m_gpu->Cnv().Framebuffer(),
                              m_gpu->Cnv().Width(), m_gpu->Cnv().Height());
         // Engine-global material constants (Time/Delta/Viewport) for registered

@@ -18,6 +18,7 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
+#include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only --crash-gpu N
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 namespace Astra { class TypeContext; }
@@ -81,6 +82,17 @@ private:
     std::optional<Arcane::PluginHost>   m_plugin;       // destructs before m_runtime
     Arcane::FramePerf                   m_perf;
     std::uint64_t                       m_frameCount = 0;
+
+#if !defined(ARCANE_DIST)
+    // --crash-gpu N (GPU crash diagnostics arc, Task 11): the desk battery's
+    // item-2 trigger -- the same deliberate fault the editor's Build ->
+    // Diagnostics menu item fires, on the host that has no menu. Built lazily at
+    // the firing frame, exactly like the editor's, so an ordinary run pays
+    // nothing. Declared AFTER m_gpu so its NVRHI handles release before the
+    // device (this file's teardown contract).
+    std::unique_ptr<Arcane::GpuFaultInjector> m_gpuFault;
+    bool                                      m_gpuFaultFired = false;
+#endif
 
     // Scene asset resolution (sprite-resolution lift, 2026-07-29): the sprite,
     // sprite-material and post-chain caches, plus the compile drain, in ONE

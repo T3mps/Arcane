@@ -70,6 +70,13 @@ namespace Arcane::Editor
         bool exitEditor = false;     // File -> Exit
         bool showInExplorer = false;   // Assets -> Show in Explorer (on the browser's tracked row)
         bool copyAssetPath = false;    // Assets -> Copy Path        (on the browser's tracked row)
+#if !defined(ARCANE_DIST)
+        // Build -> Diagnostics -> Crash GPU (diagnostics test). Dev-only, and
+        // the only menu request whose SUCCESS is this process dying: it
+        // dispatches Arcane::GpuFaultInjector and the device is expected to be
+        // lost. See the item's own comment in EditorPanels.cpp.
+        bool crashGpu = false;
+#endif
     };
 
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT

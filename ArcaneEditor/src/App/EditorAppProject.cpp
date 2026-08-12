@@ -1081,4 +1081,51 @@ namespace Arcane::Editor
         if (!m_reportDiagnostics.empty())
             Arcane::Diagnostics::Publish("diagnostics:reports", m_reportDiagnostics);
     }
+
+#if !defined(ARCANE_DIST)
+    // Build -> Diagnostics -> Crash GPU (diagnostics test). Task 11: the desk
+    // battery's trigger, and the ONLY thing in this arc that causes a fault
+    // rather than reacting to one.
+    //
+    // What happens after the dispatch is deliberately NOT handled here: the
+    // device dies inside NVRHI, NvrhiMessageCallback's device-removed hook runs
+    // ObserveDeviceRemoved, that calls Diagnostics::WriteReport("gpu-crash:
+    // device removed"), the GPU-section provider fills the envelope, and the
+    // `.arcdiag`/`.gpudump` pair lands in the project's Saved/Diagnostics.
+    // Whether THIS process survives long enough to drain PollDiagnosticReports
+    // and show the Problems row is exactly what the battery item measures --
+    // so nothing here tries to help it along.
+    void EditorApp::FireDeliberateGpuFault()
+    {
+        if (!m_gpu)
+        {
+            ARC_ERROR("Crash GPU: no GPU context");
+            return;
+        }
+
+        // Lazy build at the first click (see the member's comment). A failure
+        // here is loud and inert: the injector logs the failing step and the
+        // menu item simply does nothing, which is the honest outcome for a
+        // device that cannot run the dispatch.
+        if (!m_gpuFault)
+        {
+            m_gpuFault = Arcane::GpuFaultInjector::Create(m_gpu->Device().Nvrhi(),
+                                                          m_gpu->Shaders());
+            if (!m_gpuFault)
+            {
+                ARC_ERROR("Crash GPU: fault injector unavailable -- nothing dispatched");
+                return;
+            }
+        }
+
+        // The open/close/execute shape phases 11 and 12 use on this same command
+        // list (EditorAppFrame.cpp), minus the pass scope -- GpuFaultInjector
+        // opens its own, because the scope name is the payload here rather than
+        // a label (see GpuFaultInjector.hpp).
+        m_gpu->Cmd()->open();
+        m_gpuFault->Fire(m_gpu->Cmd());
+        m_gpu->Cmd()->close();
+        m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
+    }
+#endif
 }
