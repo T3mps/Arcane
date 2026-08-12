@@ -18,6 +18,7 @@
 #include <Arcane/Render/IGpuCrashBackend.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -89,6 +90,13 @@ TEST_CASE("CrashReportDocument headless construction from a Diag::WriteFile fixt
 
     // No .gpudump sibling recorded on this fixture -> no parsed inventory.
     CHECK(doc.GpuDumpSectionTags().empty());
+
+    // "r.txt" is recorded but no file exists at either resolved location
+    // (not the literal string relative to cwd, not beside this .arcdiag) --
+    // a "recorded but missing" verdict, distinct from "never recorded" (see
+    // the dedicated sibling-resolution tests below for both cases in
+    // isolation).
+    CHECK(doc.ResolvedSiblingTxt().empty());
 }
 
 TEST_CASE("CrashReportDocument hides CPU-report noise: empty queue timelines and a device-alive/empty fault",
@@ -145,6 +153,74 @@ TEST_CASE("CrashReportDocument.gpudump inventory stays empty when the sibling fi
 
     CrashReportDocument doc(dir / "r.arcdiag", e);
     CHECK(doc.GpuDumpSectionTags().empty());
+}
+
+TEST_CASE("CrashReportDocument resolves a sibling beside its own .arcdiag when the recorded absolute path is stale",
+          "[editor][diag]")
+{
+    // Simulates a moved/copied reports folder: the envelope's own recorded
+    // path points somewhere that no longer exists, but the actual sibling
+    // file sits right beside this document's .arcdiag (exactly where
+    // WriteReportImpl minted it in the first place -- Diagnostics.cpp:335-339).
+    const auto dir       = TempDir("sibling_resolve_beside");
+    const auto docPath   = dir / "r.arcdiag";
+    const auto besideTxt = dir / "r.txt";
+    {
+        std::ofstream out(besideTxt, std::ios::binary);
+        out << "symbolized stack text";
+    }
+
+    Envelope e;
+    e.guid = Arcane::Guid::Generate();
+    e.kind = "hang";
+    e.siblingTxt = (dir / "does-not-exist-anymore" / "r.txt").string();   // stale
+
+    CrashReportDocument doc(docPath, e);
+    CHECK(doc.ResolvedSiblingTxt() == besideTxt);
+}
+
+TEST_CASE("CrashReportDocument sibling resolution yields a missing verdict when neither location exists",
+          "[editor][diag]")
+{
+    const auto dir     = TempDir("sibling_resolve_missing");
+    const auto docPath = dir / "r.arcdiag";
+
+    Envelope e;
+    e.guid = Arcane::Guid::Generate();
+    e.kind = "hang";
+    // Recorded (non-empty -- a button would appear), but nothing exists at
+    // the stored path OR beside the .arcdiag.
+    e.siblingDmp = (dir / "does-not-exist-anymore" / "r.dmp").string();
+
+    CrashReportDocument doc(docPath, e);
+    CHECK_FALSE(e.siblingDmp.empty());
+    CHECK(doc.ResolvedSiblingDmp().empty());
+}
+
+TEST_CASE("CrashReportDocument::ResolveSibling covers empty/stored/fallback/neither directly",
+          "[editor][diag]")
+{
+    const auto dir     = TempDir("resolve_sibling_static");
+    const auto docPath = dir / "report.arcdiag";
+
+    // Never recorded -> always empty, regardless of docPath.
+    CHECK(CrashReportDocument::ResolveSibling("", docPath).empty());
+
+    // Recorded, and the stored path itself still exists -> used as-is.
+    const auto storedPath = dir / "stored.txt";
+    { std::ofstream out(storedPath, std::ios::binary); out << "x"; }
+    CHECK(CrashReportDocument::ResolveSibling(storedPath.string(), docPath) == storedPath);
+
+    // Recorded, stored path gone, but a same-named file sits beside docPath
+    // -> the fallback.
+    const auto besidePath = dir / "beside.txt";
+    { std::ofstream out(besidePath, std::ios::binary); out << "x"; }
+    const std::string staleStoredPath = (dir / "gone" / "beside.txt").string();
+    CHECK(CrashReportDocument::ResolveSibling(staleStoredPath, docPath) == besidePath);
+
+    // Recorded, neither location exists -> missing (empty).
+    const std::string neitherPath = (dir / "gone" / "neither.txt").string();
+    CHECK(CrashReportDocument::ResolveSibling(neitherPath, docPath).empty());
 }
 
 TEST_CASE("DocumentHost routes .arcdiag to CrashReportDocument and focuses instead of reopening",

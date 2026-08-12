@@ -15,12 +15,23 @@
 // SpriteDocument(Services, path, SpriteAssetData), both of which take their
 // asset data pre-loaded for the same reason (SpriteDocument.hpp:68-71).
 //
-// The ONE piece of secondary file IO this class owns: when
-// envelope.siblingGpuDump is non-empty, the constructor reads and parses
-// that .gpudump container once (Diag::ReadGpuDump, IGpuCrashBackend.hpp) so
-// Draw() never touches disk and the parsed section-tag inventory is exactly
-// what a headless test can assert on (CrashReportDocumentTest.cpp) without
-// touching ImGui.
+// The secondary file IO this class owns, both done ONCE at construction so
+// Draw() never touches disk:
+//   1. Sibling RESOLUTION (fix for a post-review finding: Diagnostics.cpp
+//      bakes an ABSOLUTE path into envelope.siblingTxt/siblingDmp/
+//      siblingGpuDump at capture time -- move or copy the reports folder,
+//      or open the project on another machine, and that path goes stale).
+//      ResolveSibling tries the stored path first, then falls back to a
+//      same-named file beside THIS document's own .arcdiag (siblings are
+//      minted at the same stem, beside each other, by WriteReportImpl --
+//      Diagnostics.cpp:335-339), then gives up (empty = missing). A report
+//      whose sibling appears LATER than this document's construction is an
+//      accepted non-goal.
+//   2. The .gpudump container itself: when the gpudump sibling RESOLVES,
+//      the constructor reads and parses it (Diag::ReadGpuDump,
+//      IGpuCrashBackend.hpp) so the parsed section-tag inventory is exactly
+//      what a headless test can assert on (CrashReportDocumentTest.cpp)
+//      without touching ImGui.
 //
 // Known CPU-report noise (Task 5 deferred minor, restated in the Task 10
 // brief): a plain crash/hang envelope today carries fault.type ==
@@ -88,9 +99,41 @@ namespace Arcane::Editor
         [[nodiscard]] std::vector<const Arcane::Diag::Envelope::Queue*> VisibleQueues() const;
         [[nodiscard]] bool HasVisibleFault() const noexcept { return !IsNoiseFault(m_envelope.fault); }
 
+        // Resolves a sibling field (e.g. envelope.siblingTxt) to an existing
+        // file: `recorded` (the stored, possibly-stale absolute path) if it
+        // still exists; else a same-named file beside `docPath` (this
+        // document's own .arcdiag directory -- see the class header
+        // comment); else an empty path ("recorded but missing"). An empty
+        // `recorded` (the sibling was never produced) always resolves to
+        // empty. Pure -- the only disk touch is std::filesystem::exists,
+        // and it never throws (error-code overload). Static + public so a
+        // headless test exercises the resolution rule directly.
+        [[nodiscard]] static std::filesystem::path ResolveSibling(
+            const std::string& recorded, const std::filesystem::path& docPath);
+
+        // Resolved-at-construction sibling locations (see ResolveSibling
+        // above). Empty means EITHER "not recorded" (check the envelope
+        // field itself, e.g. Envelope().siblingTxt.empty()) OR "recorded
+        // but missing" -- Draw() and any other caller must consult the
+        // envelope field to tell those two apart, exactly as Draw() does.
+        [[nodiscard]] const std::filesystem::path& ResolvedSiblingTxt() const noexcept
+        {
+            return m_siblingTxtResolved;
+        }
+        [[nodiscard]] const std::filesystem::path& ResolvedSiblingDmp() const noexcept
+        {
+            return m_siblingDmpResolved;
+        }
+        [[nodiscard]] const std::filesystem::path& ResolvedSiblingGpuDump() const noexcept
+        {
+            return m_siblingGpuDumpResolved;
+        }
+
         // Parsed section-tag inventory of the .gpudump sibling (empty when
-        // siblingGpuDump is empty, or the file doesn't exist/parse -- see
-        // the ctor comment above). Loaded once at construction.
+        // siblingGpuDump is empty, or ResolveSibling couldn't find it, or
+        // the file doesn't parse -- see the ctor comment above). Loaded
+        // once at construction, from the RESOLVED path, not the raw
+        // (possibly-stale) envelope field.
         [[nodiscard]] const std::vector<std::string>& GpuDumpSectionTags() const noexcept
         {
             return m_gpuDumpTags;
@@ -102,6 +145,10 @@ namespace Arcane::Editor
         std::string              m_title;         // Title() -- the file stem (already unique: appName-stamp-pidN)
         std::string              m_windowLabel;    // "title (Crash Report)###crashdoc_<guid>"
         bool                     m_windowFocused = false;
+        // Resolved once at construction (ResolveSibling); see the accessors above.
+        std::filesystem::path    m_siblingTxtResolved;
+        std::filesystem::path    m_siblingDmpResolved;
+        std::filesystem::path    m_siblingGpuDumpResolved;
         std::vector<std::string> m_gpuDumpTags;    // parsed at construction; see GpuDumpSectionTags
     };
 }
