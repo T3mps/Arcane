@@ -47,6 +47,7 @@
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/GpuBreadcrumbs.hpp>
+#include <Arcane/Render/GpuCrashReport.hpp>
 
 #include <nvrhi/vulkan.h>
 
@@ -54,7 +55,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -66,41 +66,20 @@ namespace Arcane
     namespace
     {
         // ------------------------------------------------------------------
-        // Marker geometry -- identical to the D3D12 backend's on purpose
+        // Marker geometry -- SHARED with the D3D12 backend by construction
         // ------------------------------------------------------------------
+        // Diag::kGpuMarker* (GpuCrashReport.hpp) is the single definition;
+        // Diag::ReplayMarkerBuffer reads this backend's region back with those
+        // same constants. Local aliases only, to keep the code below readable.
+        constexpr std::uint32_t kMarkerSlots     = Diag::kGpuMarkerSlots;
+        constexpr std::uint32_t kValuesPerSlot   = Diag::kGpuMarkerValuesPerSlot;
+        constexpr std::size_t   kMarkerBytes     = Diag::kGpuMarkerBytes;
+        constexpr std::uint32_t kMarkerUnwritten = Diag::kGpuMarkerUnwritten;
 
-        // One 2-value entry (begin, end) per scope, indexed `id % kMarkerSlots`
-        // and sized to GpuBreadcrumbs' ring so a marker slot recycles exactly
-        // when the ring entry that names it does (F-8e: one buffer with
-        // per-scope slots addressed by a stable scope id -- never one buffer
-        // per command list, never sized to a submit count).
-        constexpr std::uint32_t kMarkerSlots   = static_cast<std::uint32_t>(GpuBreadcrumbs::kRingCapacity);
-        constexpr std::uint32_t kValuesPerSlot = 2;
-        constexpr std::size_t   kMarkerBytes   = std::size_t{ kMarkerSlots } * kValuesPerSlot * sizeof(std::uint32_t);
-
-        // Written value is `id + 1` so that 0 -- what the buffer and the fence
-        // table are zeroed to at arm time -- unambiguously means "never
-        // reached / never recorded".
-        constexpr std::uint32_t kMarkerUnwritten = 0;
-
-        // ------------------------------------------------------------------
-        // Small formatting helpers (no fmt in a post-mortem path by choice --
-        // these run inside a process that is already misbehaving)
-        // ------------------------------------------------------------------
-
-        [[nodiscard]] std::string HexU32(std::uint32_t v)
-        {
-            char buffer[16];
-            std::snprintf(buffer, sizeof(buffer), "0x%08X", v);
-            return buffer;
-        }
-
-        [[nodiscard]] std::string HexU64(std::uint64_t v)
-        {
-            char buffer[32];
-            std::snprintf(buffer, sizeof(buffer), "0x%016llX", static_cast<unsigned long long>(v));
-            return buffer;
-        }
+        // Hex formatting is shared with the D3D12 backend. Only HexU64 is used
+        // here -- Vulkan reports 64-bit device addresses and vendor codes, and
+        // has no 32-bit HRESULT analogue to format.
+        using Diag::HexU64;
 
         // Vulkan hands back fixed-size char arrays that the spec says are
         // NUL-terminated. A crash-time reader trusts nothing: bounded, and
@@ -213,8 +192,16 @@ namespace Arcane
             std::uint64_t QueueCompletedInstance();
 
             void CollectMarkers(Diag::Envelope& envelope, std::uint64_t completedInstance);
-            void CollectDeviceFaultExt(Diag::Envelope& envelope, std::string& out);
-            void CollectDeviceFaultKhr(Diag::Envelope& envelope, std::string& out);
+
+            // Both return whether the query ACTUALLY ANSWERED -- i.e. the
+            // entry point resolved and the driver returned SUCCESS/INCOMPLETE.
+            // False means the layer engaged nothing, however healthily it was
+            // enabled; `out` still records why. An answer with zero faults in
+            // it is still an answer, so that returns true (same rule as the
+            // D3D12 backend's dred-data tier, which reports which interface
+            // answered rather than whether it had content).
+            [[nodiscard]] bool CollectDeviceFaultExt(Diag::Envelope& envelope, std::string& out);
+            [[nodiscard]] bool CollectDeviceFaultKhr(Diag::Envelope& envelope, std::string& out);
 
             [[nodiscard]] const char* DeviceFaultLayer() const
             {
@@ -499,30 +486,14 @@ namespace Arcane
         {
             if (m_markerMapped)
             {
-                // Volatile because the GPU may still be writing into it -- an
-                // observation of foreign memory, not a value the compiler may
-                // cache or reorder. Host-coherent, so no invalidate is owed.
-                const auto* slots = static_cast<const volatile std::uint32_t*>(m_markerMapped);
-                for (std::uint32_t slot = 0; slot < kMarkerSlots; ++slot)
-                {
-                    const std::uint32_t beginValue = slots[slot * kValuesPerSlot + 0];
-                    const std::uint32_t endValue   = slots[slot * kValuesPerSlot + 1];
-                    if (beginValue != kMarkerUnwritten) m_breadcrumbs.OnMarkerWritten(beginValue - 1, true);
-                    if (endValue   != kMarkerUnwritten) m_breadcrumbs.OnMarkerWritten(endValue   - 1, false);
-                }
-                m_raw.Add("markers", m_markerMapped, kMarkerBytes);
-
-                // activeLayers is the report's declared truth channel for
-                // "what engaged", so the claim tracks the RUNTIME kill switch,
-                // not merely the buffer's existence: WriteMarker latches
-                // markers off when the entry point or command buffer goes
-                // missing, which leaves this mapping FROZEN at whatever it
-                // last held. The raw section still ships either way (partial
-                // data beats none); `disarmed` is what tells a reader not to
-                // trust it as a pass timeline.
-                envelope.activeLayers.emplace_back(
-                    m_markersArmed.load(std::memory_order_acquire) ? "breadcrumbs:pass"
-                                                                   : "breadcrumbs:disarmed");
+                // Host-coherent, so no vkInvalidateMappedMemoryRanges is owed
+                // before the replay. The replay itself, the "markers" section,
+                // and the breadcrumbs:pass/disarmed keys are backend-agnostic
+                // -- Diag::ReplayMarkerBuffer. Guarded rather than called
+                // unconditionally (as D3D12 does) because a null mapping here
+                // means "try the fence path", not `breadcrumbs:off`.
+                Diag::ReplayMarkerBuffer(m_breadcrumbs, m_raw, envelope, m_markerMapped,
+                                         m_markersArmed.load(std::memory_order_acquire));
                 return;
             }
 
@@ -571,14 +542,14 @@ namespace Arcane
             envelope.activeLayers.emplace_back("breadcrumbs:off");
         }
 
-        void VulkanCrashBackend::CollectDeviceFaultExt(Diag::Envelope& envelope, std::string& out)
+        bool VulkanCrashBackend::CollectDeviceFaultExt(Diag::Envelope& envelope, std::string& out)
         {
             const PFN_vkGetDeviceFaultInfoEXT query = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceFaultInfoEXT;
             if (!query)
             {
                 out += "vkGetDeviceFaultInfoEXT=unresolved\n";
                 m_humanText += "device fault : entry point unresolved\n";
-                return;
+                return false;
             }
 
             // F-5d: "vkGetDeviceFaultInfoEXT is the two-call idiom: call once
@@ -592,7 +563,7 @@ namespace Arcane
                 out += std::string("vkGetDeviceFaultInfoEXT(counts)=") + VkResultName(result) + "\n";
                 m_humanText += std::string("device fault : counts query failed (") +
                                VkResultName(result) + ")\n";
-                return;
+                return false;
             }
 
             std::vector<VkDeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);
@@ -611,7 +582,7 @@ namespace Arcane
                 out += std::string("vkGetDeviceFaultInfoEXT(info)=") + VkResultName(result) + "\n";
                 m_humanText += std::string("device fault : info query failed (") +
                                VkResultName(result) + ")\n";
-                return;
+                return false;
             }
 
             out += "description=\"" + AsciiField(info.description, VK_MAX_DESCRIPTION_SIZE) + "\"\n";
@@ -657,9 +628,10 @@ namespace Arcane
                            "\" (" + std::to_string(counts.addressInfoCount) + " address, " +
                            std::to_string(counts.vendorInfoCount) + " vendor, " +
                            std::to_string(vendorBinary.size()) + "-byte blob)\n";
+            return true;
         }
 
-        void VulkanCrashBackend::CollectDeviceFaultKhr(Diag::Envelope& envelope, std::string& out)
+        bool VulkanCrashBackend::CollectDeviceFaultKhr(Diag::Envelope& envelope, std::string& out)
         {
             // The KHR promotion is NOT an alias of the EXT surface: the query
             // is vkGetDeviceFaultReportsKHR (a timeout + an ARRAY of
@@ -672,7 +644,7 @@ namespace Arcane
             {
                 out += "vkGetDeviceFaultReportsKHR=unresolved\n";
                 m_humanText += "device fault : entry point unresolved\n";
-                return;
+                return false;
             }
 
             std::uint32_t reportCount = 0;
@@ -682,7 +654,7 @@ namespace Arcane
                 out += std::string("vkGetDeviceFaultReportsKHR(count)=") + VkResultName(result) + "\n";
                 m_humanText += std::string("device fault : count query failed (") +
                                VkResultName(result) + ")\n";
-                return;
+                return false;
             }
 
             std::vector<VkDeviceFaultInfoKHR> reports(reportCount);
@@ -697,7 +669,7 @@ namespace Arcane
                     out += std::string("vkGetDeviceFaultReportsKHR(reports)=") + VkResultName(result) + "\n";
                     m_humanText += std::string("device fault : report query failed (") +
                                    VkResultName(result) + ")\n";
-                    return;
+                    return false;
                 }
             }
 
@@ -750,6 +722,7 @@ namespace Arcane
             }
 
             m_humanText += "device fault : " + std::to_string(reportCount) + " KHR report(s)\n";
+            return true;
         }
 
         void VulkanCrashBackend::CollectFault(Diag::Envelope& envelope)
@@ -766,30 +739,23 @@ namespace Arcane
 
             CollectMarkers(envelope, completedInstance);
 
-            const GpuBreadcrumbs::Snapshot snapshot = m_breadcrumbs.Capture();
-            Diag::Envelope::Queue queue;
-            queue.name          = "graphics";
-            queue.lastCompleted = snapshot.lastCompleted;
-            queue.inFlight      = snapshot.inFlight;
-            envelope.queues.push_back(std::move(queue));
+            Diag::EmitQueueSnapshot(m_breadcrumbs, "graphics", envelope, m_humanText);
 
-            m_humanText += "queue graphics\n";
-            m_humanText += "  last completed : " +
-                           (snapshot.lastCompleted.empty() ? std::string("<none>") : snapshot.lastCompleted) + "\n";
-            if (snapshot.inFlight.empty())
-            {
-                m_humanText += "  in flight      : <none>\n";
-            }
-            else
-            {
-                for (const std::string& scope : snapshot.inFlight)
-                    m_humanText += "  in flight      : " + scope + "\n";
-            }
-
+            // TWO keys, mirroring the D3D12 backend's dred: / dred-data: pair.
+            // This one is ENABLEMENT -- which spelling (if any) the device was
+            // actually created with. It says nothing about whether the query
+            // answered, which is why the engagement key below exists and why
+            // it is emitted on EVERY exit path from here on.
             envelope.activeLayers.emplace_back(DeviceFaultLayer());
 
             if (!m_device)
             {
+                // Enabled-but-unreachable is a real outcome: the extension may
+                // have been enabled at device creation and yet there is no
+                // native VkDevice to query through. Without this key the
+                // report would claim `devicefault:ext` and nothing would
+                // contradict it.
+                envelope.activeLayers.emplace_back("devicefault-data:none");
                 m_humanText += "device       : <no native VkDevice>\n";
                 m_raw.Add("vk.device", std::string_view{ "no native VkDevice\n" });
                 return;
@@ -827,17 +793,30 @@ namespace Arcane
             m_humanText += std::string("device state : ") + (lost ? "lost" : "responding") +
                            " (last completed submission " + std::to_string(completedInstance) + ")\n";
 
+            // The ENGAGEMENT key: what actually answered, as opposed to what
+            // was enabled. An enabled extension whose entry point did not
+            // resolve, or whose query returned an error, engages nothing --
+            // and a report that only carried the enablement key would still
+            // claim `devicefault:ext` while vk.fault said "unresolved".
             std::string faultSection;
+            const char* faultData = "devicefault-data:none";
             switch (m_deviceFault)
             {
-            case VulkanCrashDesc::DeviceFault::Ext: CollectDeviceFaultExt(envelope, faultSection); break;
-            case VulkanCrashDesc::DeviceFault::Khr: CollectDeviceFaultKhr(envelope, faultSection); break;
+            case VulkanCrashDesc::DeviceFault::Ext:
+                if (CollectDeviceFaultExt(envelope, faultSection)) faultData = "devicefault-data:ext";
+                break;
+            case VulkanCrashDesc::DeviceFault::Khr:
+                if (CollectDeviceFaultKhr(envelope, faultSection)) faultData = "devicefault-data:khr";
+                break;
             default:
                 faultSection += "extension=none\n";
                 m_humanText += "device fault : unavailable (neither VK_EXT_device_fault nor "
                                "VK_KHR_device_fault was enabled)\n";
                 break;
             }
+            envelope.activeLayers.emplace_back(faultData);
+            deviceSection += std::string("deviceFaultData=") + faultData + "\n";
+
             // Added even when empty: "queried and had nothing" is a different
             // answer from "never queried", and the section table is the
             // inventory that distinguishes them.
@@ -854,29 +833,7 @@ namespace Arcane
                                             const std::filesystem::path& reportStem)
         {
             CollectFault(envelope);
-
-            // The container is written for GPU kinds ALWAYS, partial
-            // collection included -- the section table doubles as the capture
-            // inventory. A CPU-only crash/hang report gets no `.gpudump`.
-            if (envelope.kind.starts_with("gpu"))
-            {
-                std::filesystem::path dumpPath = reportStem;
-                dumpPath += ".gpudump";
-                if (m_raw.Write(dumpPath))
-                {
-                    // Truthful sibling: recorded only because the file landed.
-                    envelope.siblingGpuDump = dumpPath.string();
-                    m_humanText += "gpu dump     : " + dumpPath.string() +
-                                   " (" + std::to_string(m_raw.SectionCount()) + " sections: " +
-                                   m_raw.Inventory() + ")\n";
-                }
-                else
-                {
-                    ARC_WARN("GPU crash backend: failed to write {}", dumpPath.string());
-                    m_humanText += "gpu dump     : <failed to write>\n";
-                }
-            }
-
+            Diag::EmitGpuDumpSibling(m_raw, envelope, m_humanText, reportStem);
             humanText += m_humanText;
         }
     }

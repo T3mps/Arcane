@@ -28,6 +28,7 @@
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/GpuBreadcrumbs.hpp>
+#include <Arcane/Render/GpuCrashReport.hpp>
 
 #include <d3d12.h>
 #include <dxgi.h>
@@ -36,7 +37,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -57,20 +57,13 @@ namespace Arcane
         // ------------------------------------------------------------------
         // Marker buffer geometry (F-1a / F-8e)
         // ------------------------------------------------------------------
-
-        // One 2-value entry (begin, end) per scope, indexed `id % kMarkerSlots`.
-        // Sized to GpuBreadcrumbs' ring so a marker slot is recyclable exactly
-        // when the ring entry that names it is -- F-8e's "one buffer with
-        // per-scope slots addressed by a stable scope id", never one buffer per
-        // command list and never sized to a submit count.
-        constexpr std::uint32_t kMarkerSlots        = static_cast<std::uint32_t>(GpuBreadcrumbs::kRingCapacity);
-        constexpr std::uint32_t kValuesPerSlot      = 2;
-        constexpr std::size_t   kMarkerBytes        = std::size_t{ kMarkerSlots } * kValuesPerSlot * sizeof(std::uint32_t);
-
-        // Written value is `id + 1` so that 0 -- the state VirtualAlloc zeroes
-        // the region to, and what we re-zero it to at arm time -- unambiguously
-        // means "the GPU never reached this marker".
-        constexpr std::uint32_t kMarkerUnwritten = 0;
+        // The geometry itself is SHARED (Diag::kGpuMarker*, GpuCrashReport.hpp)
+        // because Diag::ReplayMarkerBuffer reads this region back with those
+        // same constants -- a writer and reader that could disagree would
+        // silently replay garbage. These aliases keep the local code readable.
+        constexpr std::uint32_t kMarkerSlots     = Diag::kGpuMarkerSlots;
+        constexpr std::uint32_t kValuesPerSlot   = Diag::kGpuMarkerValuesPerSlot;
+        constexpr std::size_t   kMarkerBytes     = Diag::kGpuMarkerBytes;
 
         // F-1a: Microsoft documents exactly one constraint on the region handed
         // to OpenExistingHeapFromAddress -- "The heap is created in system
@@ -99,24 +92,10 @@ namespace Arcane
             return ((kMarkerBytes + alignment - 1) / alignment) * alignment;
         }
 
-        // ------------------------------------------------------------------
-        // Small formatting helpers (no fmt in a post-mortem path by choice --
-        // these run inside a process that is already misbehaving)
-        // ------------------------------------------------------------------
-
-        [[nodiscard]] std::string HexU32(std::uint32_t v)
-        {
-            char buffer[16];
-            std::snprintf(buffer, sizeof(buffer), "0x%08X", v);
-            return buffer;
-        }
-
-        [[nodiscard]] std::string HexU64(std::uint64_t v)
-        {
-            char buffer[32];
-            std::snprintf(buffer, sizeof(buffer), "0x%016llX", static_cast<unsigned long long>(v));
-            return buffer;
-        }
+        // Hex formatting is shared with the Vulkan backend -- Diag::HexU32 /
+        // Diag::HexU64 (GpuCrashReport.hpp).
+        using Diag::HexU32;
+        using Diag::HexU64;
 
         [[nodiscard]] const char* RemovedReasonName(HRESULT hr)
         {
@@ -403,7 +382,7 @@ namespace Arcane
             }
 
             m_markerGpuVa = m_markerResource->GetGPUVirtualAddress();
-            std::memset(m_markerMemory, 0, m_regionBytes);  // 0 == kMarkerUnwritten
+            std::memset(m_markerMemory, 0, m_regionBytes);  // 0 == Diag::kGpuMarkerUnwritten
             ARC_INFO("GPU markers armed: {} slots in a {}-byte diagnostic heap",
                      kMarkerSlots, m_regionBytes);
             return true;
@@ -477,59 +456,16 @@ namespace Arcane
             m_humanText += "backend      : D3D12\n";
 
             // ---- markers -------------------------------------------------
-            // F-1a step 4: read through the ORIGINAL VirtualAlloc pointer.
-            // Volatile because the GPU may still be writing into it -- this is
-            // an observation of foreign memory, not a value the compiler may
-            // cache or reorder.
-            if (m_markerMemory)
-            {
-                const auto* slots = static_cast<const volatile std::uint32_t*>(m_markerMemory);
-                for (std::uint32_t slot = 0; slot < kMarkerSlots; ++slot)
-                {
-                    const std::uint32_t beginValue = slots[slot * kValuesPerSlot + 0];
-                    const std::uint32_t endValue   = slots[slot * kValuesPerSlot + 1];
-                    if (beginValue != kMarkerUnwritten) m_breadcrumbs.OnMarkerWritten(beginValue - 1, true);
-                    if (endValue   != kMarkerUnwritten) m_breadcrumbs.OnMarkerWritten(endValue   - 1, false);
-                }
-                m_raw.Add("markers", m_markerMemory, kMarkerBytes);
+            // F-1a step 4: replay through the ORIGINAL VirtualAlloc pointer --
+            // never a Map() on a device-owned heap. The replay itself, the
+            // "markers" section, and the breadcrumbs:pass/disarmed/off keys are
+            // backend-agnostic and live in Diag::ReplayMarkerBuffer; a null
+            // region there means `breadcrumbs:off`, which is exactly this
+            // backend's no-marker-layer answer.
+            Diag::ReplayMarkerBuffer(m_breadcrumbs, m_raw, envelope, m_markerMemory,
+                                     m_markersArmed.load(std::memory_order_acquire));
 
-                // activeLayers is the report's declared truth channel for "what
-                // engaged", so the claim tracks the RUNTIME kill switch
-                // (m_markersArmed), not merely the buffer's existence.
-                // WriteMarker latches markers off when the ...List2 QI fails,
-                // which leaves this region allocated but FROZEN at whatever it
-                // last held -- claiming `breadcrumbs:pass` there would sell a
-                // stale timeline as a live one. The raw section still ships
-                // either way (partial data beats none); `disarmed` is what tells
-                // a reader not to trust it as a pass timeline.
-                envelope.activeLayers.emplace_back(
-                    m_markersArmed.load(std::memory_order_acquire) ? "breadcrumbs:pass"
-                                                                  : "breadcrumbs:disarmed");
-            }
-            else
-            {
-                envelope.activeLayers.emplace_back("breadcrumbs:off");
-            }
-
-            const GpuBreadcrumbs::Snapshot snapshot = m_breadcrumbs.Capture();
-            Diag::Envelope::Queue queue;
-            queue.name          = "graphics";
-            queue.lastCompleted = snapshot.lastCompleted;
-            queue.inFlight      = snapshot.inFlight;
-            envelope.queues.push_back(std::move(queue));
-
-            m_humanText += "queue graphics\n";
-            m_humanText += "  last completed : " +
-                           (snapshot.lastCompleted.empty() ? std::string("<none>") : snapshot.lastCompleted) + "\n";
-            if (snapshot.inFlight.empty())
-            {
-                m_humanText += "  in flight      : <none>\n";
-            }
-            else
-            {
-                for (const std::string& scope : snapshot.inFlight)
-                    m_humanText += "  in flight      : " + scope + "\n";
-            }
+            Diag::EmitQueueSnapshot(m_breadcrumbs, "graphics", envelope, m_humanText);
 
             // ---- device state --------------------------------------------
             std::string deviceSection;
@@ -684,29 +620,7 @@ namespace Arcane
                                            const std::filesystem::path& reportStem)
         {
             CollectFault(envelope);
-
-            // The container is written for GPU kinds ALWAYS, partial collection
-            // included -- the section table doubles as the capture inventory.
-            // A CPU-only crash/hang report gets no `.gpudump` at all.
-            if (envelope.kind.starts_with("gpu"))
-            {
-                std::filesystem::path dumpPath = reportStem;
-                dumpPath += ".gpudump";
-                if (m_raw.Write(dumpPath))
-                {
-                    // Truthful sibling: recorded only because the file landed.
-                    envelope.siblingGpuDump = dumpPath.string();
-                    m_humanText += "gpu dump     : " + dumpPath.string() +
-                                   " (" + std::to_string(m_raw.SectionCount()) + " sections: " +
-                                   m_raw.Inventory() + ")\n";
-                }
-                else
-                {
-                    ARC_WARN("GPU crash backend: failed to write {}", dumpPath.string());
-                    m_humanText += "gpu dump     : <failed to write>\n";
-                }
-            }
-
+            Diag::EmitGpuDumpSibling(m_raw, envelope, m_humanText, reportStem);
             humanText += m_humanText;
         }
     }
