@@ -492,7 +492,19 @@ namespace Arcane
                     if (endValue   != kMarkerUnwritten) m_breadcrumbs.OnMarkerWritten(endValue   - 1, false);
                 }
                 m_raw.Add("markers", m_markerMemory, kMarkerBytes);
-                envelope.activeLayers.emplace_back("breadcrumbs:pass");
+
+                // activeLayers is the report's declared truth channel for "what
+                // engaged", so the claim tracks the RUNTIME kill switch
+                // (m_markersArmed), not merely the buffer's existence.
+                // WriteMarker latches markers off when the ...List2 QI fails,
+                // which leaves this region allocated but FROZEN at whatever it
+                // last held -- claiming `breadcrumbs:pass` there would sell a
+                // stale timeline as a live one. The raw section still ships
+                // either way (partial data beats none); `disarmed` is what tells
+                // a reader not to trust it as a pass timeline.
+                envelope.activeLayers.emplace_back(
+                    m_markersArmed.load(std::memory_order_acquire) ? "breadcrumbs:pass"
+                                                                  : "breadcrumbs:disarmed");
             }
             else
             {
@@ -736,8 +748,21 @@ namespace Arcane
             // Wanted in every tier: it is what turns a breadcrumb op stream
             // into named scopes, and it is the ONLY readable content the
             // markers-only tier produces at all.
+            //
+            // The WARN sits ABOVE the tier split on purpose: losing Settings1
+            // degrades BOTH arms, and it hurts the Dist arm hardest (numeric-
+            // only ops from an already-sparse breadcrumb list). Every tier
+            // label below therefore carries a `-nocontext` variant, so
+            // activeLayers distinguishes the degrade in either build.
             if (hasSettings1)
+            {
                 settings1->SetBreadcrumbContextEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+            }
+            else
+            {
+                ARC_WARN("DRED Settings1 unavailable (no SetBreadcrumbContextEnablement); "
+                         "breadcrumbs will carry no PIX marker strings (F-2d)");
+            }
 
 #if defined(ARCANE_DIST)
             // Dist = the lightweight tier (F-2c): breadcrumbs only at
@@ -755,26 +780,20 @@ namespace Arcane
             if (hasSettings2)
             {
                 settings2->UseMarkersOnlyAutoBreadcrumbs(TRUE);
-                g_dredTier.store("dred:markers-only", std::memory_order_release);
+                g_dredTier.store(hasSettings1 ? "dred:markers-only" : "dred:markers-only-nocontext",
+                                 std::memory_order_release);
             }
             else
             {
                 ARC_WARN("DRED Settings2 unavailable (no UseMarkersOnlyAutoBreadcrumbs); "
                          "Dist falls back to full auto-breadcrumbs (F-2d)");
-                g_dredTier.store("dred:breadcrumbs", std::memory_order_release);
+                g_dredTier.store(hasSettings1 ? "dred:breadcrumbs" : "dred:breadcrumbs-nocontext",
+                                 std::memory_order_release);
             }
 #else
             settings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-            if (hasSettings1)
-            {
-                g_dredTier.store("dred:full", std::memory_order_release);
-            }
-            else
-            {
-                ARC_WARN("DRED Settings1 unavailable (no SetBreadcrumbContextEnablement); "
-                         "breadcrumbs will carry no PIX marker strings (F-2d)");
-                g_dredTier.store("dred:full-nocontext", std::memory_order_release);
-            }
+            g_dredTier.store(hasSettings1 ? "dred:full" : "dred:full-nocontext",
+                             std::memory_order_release);
             (void)hasSettings2;
 #endif
             ARC_INFO("DRED enabled: {}", g_dredTier.load(std::memory_order_acquire));
