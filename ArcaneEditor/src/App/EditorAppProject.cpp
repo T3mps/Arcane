@@ -691,6 +691,10 @@ namespace Arcane::Editor
                 // (retargets io.IniFilename) is safe here, same as StageFinalize's
                 // own call immediately after its OnProjectOpened() (EditorApp.cpp).
                 RetargetLayoutIni();
+                // Same call-site family (GPU crash diagnostics arc, Task 8):
+                // a switch that lands on a NEW project must not keep filing
+                // crash/hang reports under the OLD one's Saved/Diagnostics.
+                RetargetDumpDir();
                 return ok;
             };
             stages.push_back(std::move(plugin));
@@ -813,6 +817,13 @@ namespace Arcane::Editor
             // project) -- keep the layout ini's key honest about it. Not part
             // of OnProjectOpened -- see StageFinalize's own call for why.
             RetargetLayoutIni();
+            // Same call-site family (GPU crash diagnostics arc, Task 8): the
+            // switch-failure fallback above already closed the outgoing
+            // project (Runtime::CloseProject()), so CurrentProject() is null
+            // here -- this converges dumpDir back onto the exe-relative
+            // default the same way it converges everything else onto the
+            // project-less baseline.
+            RetargetDumpDir();
         }
     }
 

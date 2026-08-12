@@ -323,6 +323,25 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
     // comment for why this specific ordering is required.
     m_splashPresenter.Disarm();
     if (m_splash) m_splash->Close();
+
+    // Diagnostics dump dir (GPU crash diagnostics arc, Task 8; F-6 in the
+    // seam-facts survey). The editor's equivalent call sits immediately
+    // after RetargetLayoutIni() at each of ITS call sites (EditorApp.cpp /
+    // EditorAppProject.cpp) -- ArcaneRuntime has no layout ini to retarget
+    // (no ImGui settings file of its own) and no runtime project-switch
+    // capability (one --project, decided once at boot, per RuntimeApp.hpp's
+    // teardown-contract comment), so there is exactly ONE call site: here,
+    // in "finalize", the same terminal core-stage id the editor's own boot
+    // path retargets from (ProjectBoot.cpp's CoreStages -- "finalize" is the
+    // last stage both hosts run). project_open (a "finalize" DAG ancestor
+    // via plugin_load) has already settled CurrentProject() by this point,
+    // one way or the other -- see ProjectBoot.cpp's RuntimeStages Fatal-ABI-
+    // refusal override for what "settled" means on this host: an opened
+    // project, or none, never a partial one.
+    Arcane::Diagnostics::RetargetDumpDir(
+        m_runtime && m_runtime->CurrentProject()
+            ? m_runtime->CurrentProject()->Root() / "Saved" / "Diagnostics"
+            : std::filesystem::path{});
     return true;
 }
 

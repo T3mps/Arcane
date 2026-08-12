@@ -29,6 +29,7 @@
 
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Base/Assert.hpp>   // ARC_ASSERT (StageEditorShell's context tripwire)
+#include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::RetargetDumpDir (RetargetDumpDir, beside RetargetLayoutIni)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputActions.hpp>
@@ -746,6 +747,12 @@ namespace Arcane::Editor
         // reverted/project-less state, not "this boot's project"), so every
         // call site keeps its own RetargetLayoutIni() immediately after.
         RetargetLayoutIni();
+        // Same call-site family (GPU crash diagnostics arc, Task 8): a crash/
+        // hang report from THIS boot must land under THIS project's own
+        // Saved/Diagnostics, not the exe-relative default a project-less
+        // boot would otherwise leave armed. See RetargetDumpDir's own
+        // comment below for the <project>/Saved/Diagnostics vs default split.
+        RetargetDumpDir();
         return true;
     }
 
@@ -839,6 +846,23 @@ namespace Arcane::Editor
         // member string is its stable storage for the context's lifetime.
         m_layoutIniPath = target.string();
         io.IniFilename  = m_layoutIniPath.c_str();
+    }
+
+    void EditorApp::RetargetDumpDir()
+    {
+        // <project>/Saved/Diagnostics: same "Saved/ is per-project, untracked
+        // scratch" precedent WriteAutoScreenshot already uses (proj->Root() /
+        // "Saved" / "AutoScreenshot.png", below) -- a crash/hang report keeps
+        // company with the project it came from. project-less (boot with no
+        // --project, or a failed switch's fallback -- see every call site of
+        // this function) converges on an EMPTY path, which
+        // Diagnostics::RetargetDumpDir forwards straight into
+        // Config::dumpDir; ReportDir() already treats an empty dumpDir as
+        // "<exe dir>/diagnostics" (Diagnostics.hpp's Config comment), so this
+        // never re-derives that fallback itself.
+        const Arcane::Project* proj = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        Arcane::Diagnostics::RetargetDumpDir(proj ? proj->Root() / "Saved" / "Diagnostics"
+                                                   : std::filesystem::path{});
     }
 
     bool EditorApp::StageSplashReady(Arcane::HostBoot::BootContext&)

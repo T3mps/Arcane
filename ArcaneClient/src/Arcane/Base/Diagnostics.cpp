@@ -800,6 +800,17 @@ void Shutdown() noexcept
     g_gpuBeatSeen.store(false, std::memory_order_release);
 }
 
+void RetargetDumpDir(const std::filesystem::path& dir)
+{
+    // Same lock WriteReportImpl holds for its ENTIRE body, including its
+    // ReportDir() read of g_cfg.dumpDir (Diagnostics.cpp: WriteReportImpl,
+    // `std::lock_guard reportLock(g_reportMutex)` then `ReportDir()`) -- a
+    // live retarget from a host's main thread must never race a report the
+    // watchdog thread or the crash filter is mid-way through writing.
+    std::lock_guard reportLock(g_reportMutex);
+    g_cfg.dumpDir = dir.string();
+}
+
 void Heartbeat() noexcept
 {
     g_lastBeat.store(NowTicks(), std::memory_order_release);

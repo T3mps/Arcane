@@ -92,8 +92,29 @@ namespace Arcane::Diagnostics
     ARCANE_API void Install(const Config& cfg);
 
     // Disarms both triggers and joins the watchdog. Idempotent; safe to skip
-    // (the process exiting is also fine).
+    // (the process exiting is also fine). Does NOT reset Config::dumpDir --
+    // a dumpDir retargeted live (RetargetDumpDir, below) is host state, not
+    // arming state, and must survive a Shutdown/Install cycle the same way
+    // appName does.
     ARCANE_API void Shutdown() noexcept;
+
+    // Switches WHERE reports land, live -- no Shutdown()/Install() cycle
+    // needed (GPU crash diagnostics arc, Task 8; F-6 in the seam-facts
+    // survey). A host calls this immediately after whatever per-project state
+    // it already retargets on the same event -- the editor's
+    // RetargetLayoutIni (ArcaneEditor/src/App/EditorApp.cpp) and its
+    // ArcaneRuntime equivalent -- with `<project>/Saved/Diagnostics` on
+    // project open. An empty path reverts to Config::dumpDir's own default
+    // (empty => "<exe dir>/diagnostics", see the Config comment above) --
+    // ReportDir() already implements that fallback for an empty string, so
+    // this never re-derives it; it is exactly what a project-less
+    // convergence (a failed project switch, or no --project at all) passes.
+    //
+    // Thread-safe against a concurrent watchdog/crash report: takes the same
+    // lock WriteReportImpl holds for its own g_cfg.dumpDir read (via
+    // ReportDir()), so a live retarget can never race a report already
+    // mid-write.
+    ARCANE_API void RetargetDumpDir(const std::filesystem::path& dir);
 
     // "The main thread is alive." One relaxed atomic store -- cheap enough for
     // every frame, which is where it belongs. A hang is DEFINED as this not

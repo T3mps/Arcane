@@ -403,6 +403,17 @@ namespace Arcane::Editor
         std::string m_layoutIniPath;
         void RetargetLayoutIni();
 
+        // ---- Diagnostics dump dir, per project (GPU crash diagnostics arc,
+        // Task 8; F-6 in the seam-facts survey) -----------------------------
+        // Same call-site family as RetargetLayoutIni immediately above --
+        // every site that retargets the layout ini also retargets where a
+        // crash/hang report lands, right after, so a report from THIS
+        // project always lands under THIS project's Saved/Diagnostics
+        // instead of a stale one another project left behind. See
+        // RetargetDumpDir's own definition (EditorApp.cpp) for the
+        // <project>/Saved/Diagnostics vs exe-relative-default split.
+        void RetargetDumpDir();
+
         // SeparateWindow's launch flow (DoLaunchStandalone, EditorAppScene.cpp)
         // is the LaunchStandalone SceneSession intent (Scene/SceneSession.hpp):
         // the toolbar's Play click issues a Request, which parks behind the

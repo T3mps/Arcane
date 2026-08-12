@@ -89,6 +89,24 @@ namespace
         return p;
     }
 
+    // RAII for a live RetargetDumpDir call (GPU crash diagnostics arc, Task
+    // 8): Config::dumpDir is process-global (g_cfg) and Shutdown() does NOT
+    // reset it (by design -- see Shutdown's own comment), so a test that
+    // retargets it live must put it back itself, even if a REQUIRE below
+    // fails first -- same reasoning as ArmedGpuProvider above, and doubly so
+    // here since the suite runs in random order and the NEXT test's own
+    // ArmedDiagnostics assumes whatever dumpDir ITS OWN cfg named.
+    struct RetargetedDumpDir
+    {
+        explicit RetargetedDumpDir(std::filesystem::path restoreTo) : m_restoreTo(std::move(restoreTo)) {}
+        ~RetargetedDumpDir() { Arcane::Diagnostics::RetargetDumpDir(m_restoreTo); }
+
+        RetargetedDumpDir(const RetargetedDumpDir&)            = delete;
+        RetargetedDumpDir& operator=(const RetargetedDumpDir&) = delete;
+
+        std::filesystem::path m_restoreTo;
+    };
+
     // Fake GPU-section provider: no GPU calls, just proves the seam's data
     // flow -- envelope fields it sets round-trip through WriteFile/ReadFile,
     // humanText lands in the .txt's "=== GPU ===" block, and reportStem is
@@ -156,6 +174,45 @@ TEST_CASE("Diagnostics writes a symbolized all-thread report on demand", "[diag]
     REQUIRE(std::filesystem::exists(dmp));
     std::error_code ec;
     CHECK(std::filesystem::file_size(dmp, ec) > 0u);
+}
+
+TEST_CASE("Diagnostics RetargetDumpDir switches the live write location", "[diag]")
+{
+    // Two DISTINCT dirs -- the whole point is proving the report set follows
+    // the retarget rather than the dir Install() was originally armed with.
+    const std::filesystem::path originalDir = FreshReportDir("retarget-original");
+    const std::filesystem::path newDir      = FreshReportDir("retarget-new");
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "DiagTest";
+    cfg.dumpDir             = originalDir.string();
+    cfg.installCrashHandler = false;   // never hijack the suite's own fault handling
+    cfg.startHangWatchdog   = false;   // this case drives WriteReport directly
+
+    ArmedDiagnostics armed(cfg);
+    // Constructed AFTER armed, so it destructs BEFORE armed's own Shutdown()
+    // -- the restore runs first, then Shutdown() disarms on top of it.
+    RetargetedDumpDir restore(originalDir);
+
+    Arcane::Diagnostics::RetargetDumpDir(newDir);
+
+    const std::string txtPath = Arcane::Diagnostics::WriteReport("retarget-test-reason");
+    REQUIRE_FALSE(txtPath.empty());
+    REQUIRE(std::filesystem::exists(txtPath));
+    CHECK(std::filesystem::path(txtPath).parent_path() == newDir);
+
+    // The .arcdiag sibling follows the retarget too -- both files WriteReport
+    // mints share ReportDir()'s one call site (F-6b).
+    const std::filesystem::path diagPath = SiblingWithExt(txtPath, ".arcdiag");
+    REQUIRE(std::filesystem::exists(diagPath));
+    CHECK(diagPath.parent_path() == newDir);
+
+    // And nothing landed in the dir Install() originally named -- the switch
+    // is a real retarget, not an additional write location.
+    std::error_code ec;
+    const bool originalHasEntries =
+        std::filesystem::directory_iterator(originalDir, ec) != std::filesystem::directory_iterator{};
+    CHECK_FALSE(originalHasEntries);
 }
 
 TEST_CASE("Diagnostics hang watchdog fires when the main thread stops beating", "[diag]")
