@@ -1,5 +1,6 @@
 #include <Arcane/Project/AssetRegistry.hpp>
 
+#include <Arcane/Base/DiagEnvelope.hpp>   // Diag::ReadFile -- .arcdiag's own guid reader (F-7/Task 9)
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 
@@ -126,6 +127,37 @@ namespace Arcane
             }
             return id;
         }
+
+        // .arcdiag: a crash/hang/gpu-stall report (GPU crash diagnostics arc,
+        // Task 9). It is "native" in the sense that it carries an embedded
+        // guid rather than a sidecar -- like .arcmat/.arcscene/.arcsprite --
+        // but it is deliberately its OWN function, never folded into
+        // ResolveNativeId above.
+        //
+        // CRITICAL cross-task contract: the envelope's guid lives under the
+        // top-level key "guid" (DiagEnvelope.hpp's Envelope::guid / Parse
+        // contract), NOT "id" -- the key ResolveNativeId reads. Routing
+        // .arcdiag through ResolveNativeId would find no "id" field in a
+        // real report file, MINT a second, unrelated guid, and WRITE IT BACK
+        // into a report nothing should ever mutate after Diagnostics wrote
+        // it -- silently minting the wrong identity rather than failing
+        // loudly. Diag::ReadFile is the only parser that knows the
+        // envelope's real field name and versioning rules (kFormatVersion),
+        // so this reads through it and NEVER mints or writes back: a
+        // report's guid is fixed the instant WriteReportImpl minted it
+        // (Diagnostics.cpp), not at scan time, and Diag::Parse already
+        // refuses a missing/unparsable/nil guid on its own.
+        Guid ResolveDiagId(const std::filesystem::path& file)
+        {
+            auto envelope = Diag::ReadFile(file);
+            if (!envelope)
+            {
+                ARC_WARN("AssetRegistry: '{}' is not a valid .arcdiag envelope -- skipped",
+                         file.generic_string());
+                return {};
+            }
+            return envelope->guid;
+        }
     }
 
     std::size_t AssetRegistry::ScanContent(const std::filesystem::path& contentDir, std::string_view scheme,
@@ -237,10 +269,20 @@ namespace Arcane
         // .arcsprite is native for the same reason .arcmat is: SaveSpriteAsset
         // embeds a top-level "id" (SpriteAsset.cpp:14), so it rides the same
         // ResolveNativeId path rather than a sidecar.
+        //
+        // .arcdiag (GPU crash diagnostics arc, Task 9) carries an embedded
+        // guid too, so it is "native" in the same guid-not-sidecar sense --
+        // but it is its OWN branch below, never folded into the
+        // ResolveNativeId list above: the envelope's guid lives under
+        // "guid" (DiagEnvelope.hpp), not "id", so it needs ResolveDiagId,
+        // not ResolveNativeId. See ResolveDiagId's own comment for why
+        // conflating the two would be wrong, not just redundant.
         Guid id;
         bool idWriteFailed = false;
         if (ext == ".json" || ext == ".arcmat" || ext == ".arcscene" || ext == ".arcsprite")
             id = ResolveNativeId(file, &idWriteFailed);
+        else if (ext == ".arcdiag")
+            id = ResolveDiagId(file);   // F-7 CRITICAL: never ResolveNativeId -- see above
         else if (IsImportedBinary(ext))
             id = ResolveSidecarId(file, &idWriteFailed);
         else

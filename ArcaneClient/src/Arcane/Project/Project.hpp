@@ -22,7 +22,12 @@ namespace Arcane
     {
     public:
         // Open a project folder (finds the single *.arcproj inside) or a direct
-        // .arcproj file. Loads the manifest and mounts game:// -> <root>/Content.
+        // .arcproj file. Loads the manifest and mounts game:// -> <root>/Content,
+        // plus diag:// -> <root>/Saved/Diagnostics WHEN that directory already
+        // exists (GPU crash diagnostics arc, Task 9) -- a project that has never
+        // crashed has no Saved/Diagnostics yet, and stays unmounted rather than
+        // an empty-but-mounted scheme; see Project.cpp for the incremental path
+        // a report written mid-session takes instead (RegisterAsset).
         // nullopt on: no/multiple .arcproj, or an invalid manifest.
         //
         // `onProgress`, when non-empty, is forwarded to the primary game://

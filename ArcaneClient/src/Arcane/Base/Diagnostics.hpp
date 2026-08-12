@@ -235,6 +235,41 @@ namespace Arcane::Diagnostics
 
     // Uninstall it. Idempotent; safe to call with none installed.
     ARCANE_API void ClearGpuSectionProvider() noexcept;
+
+    // -------------------------------------------------------------------
+    // Report-written hook (GPU crash diagnostics arc, Task 9)
+    // -------------------------------------------------------------------
+    // Fired once, at the very end of WriteReportImpl -- after every sibling
+    // (.dmp/.txt/.arcdiag, F-6b) has finished writing and the report count/
+    // log echo above are done -- with the path of the .arcdiag that was
+    // just written. Exists so a host can register the new report as an
+    // asset (AssetRegistry::AddFile, via Project::RegisterAsset/
+    // Runtime::RegisterCreatedAsset -- F-7's single-asset call) and surface
+    // it in Problems, without polling ReportCount() and re-deriving the
+    // path itself.
+    //
+    // Runs on WHATEVER thread called WriteReportImpl: the watchdog thread
+    // for hang/gpu-stall (WatchdogMain -- SURVIVABLE, the process keeps
+    // running afterward) or the faulting thread for a crash (about to
+    // terminate -- registering an asset at that point is moot: there is no
+    // next frame left for a host to drain a queue into). The hook still
+    // fires uniformly for every report kind, the same way GpuSectionProvider
+    // runs for every report kind above -- it is the CONSUMER's job to
+    // recognize the crash case is moot, not this seam's.
+    //
+    // A hook that touches anything not itself thread-safe (an AssetRegistry
+    // has no lock of its own -- see AssetRegistry.hpp/.cpp; ImGui state;
+    // ...) MUST marshal to its own safe thread first. This seam does no
+    // marshaling itself, mirroring GpuSectionProvider immediately above.
+    using ReportWrittenHook = void (*)(const std::filesystem::path& diagPath, void* user);
+
+    // Install (or replace) the process-wide report-written hook. Last
+    // writer wins, mirroring GpuSectionProvider -- one call per host
+    // lifetime is the expected shape.
+    ARCANE_API void SetReportWrittenHook(ReportWrittenHook hook, void* user) noexcept;
+
+    // Uninstall it. Idempotent; safe to call with none installed.
+    ARCANE_API void ClearReportWrittenHook() noexcept;
 }
 
 // =============================================================================

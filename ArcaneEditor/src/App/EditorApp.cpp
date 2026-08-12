@@ -1149,6 +1149,16 @@ namespace Arcane::Editor
         // for why Shutdown() removes both sinks unconditionally.
         m_consoleDiag.Install();
 
+        // Report-written hook (GPU crash diagnostics arc, Task 9): mirrors
+        // GpuSectionProvider's install pattern (Diagnostics.hpp) -- one call
+        // per host lifetime, installed at this same early, dependency-free
+        // point so a report written during boot (a boot-stage hang) is
+        // still caught, not just one written mid-session. OnReportWritten
+        // only ever touches m_pendingReportsMutex/m_pendingReports (see
+        // EditorApp.hpp's Report-written notify section), so it is safe to
+        // arm before m_runtime or anything else below exists.
+        Arcane::Diagnostics::SetReportWrittenHook(&EditorApp::OnReportWritten, this);
+
         m_bootCtx.runtime     = nullptr;              // stages populate as they go
         m_bootCtx.splash      = m_splash;
         m_bootCtx.projectPath = m_config.projectPath.c_str();
@@ -1232,6 +1242,16 @@ namespace Arcane::Editor
         // a half-torn-down editor -- see ConsoleDiagnostics::Uninstall()'s doc
         // comment for the ordering rationale (diagnostics store, then console).
         m_consoleDiag.Uninstall();
+
+        // Uninstall the report-written hook too, same reason and same
+        // ordering: the hang/gpu-stall watchdog thread keeps running until
+        // Diagnostics::Shutdown() (called from main(), after this object is
+        // gone) joins it, so a report written in that window must not
+        // dispatch into an EditorApp mid-teardown or already destroyed.
+        // OnReportWritten's `user` is `this` -- clearing the slot here,
+        // before any member below starts tearing down, is what makes that
+        // pointer safe to have handed out.
+        Arcane::Diagnostics::ClearReportWrittenHook();
 
         // Reclaim the module-rebuild worker before member teardown: it only
         // touches its own mutex-guarded queue, but a thread outliving the

@@ -7,6 +7,12 @@
 // model): native JSON assets carry a top-level "id"; imported binary originals
 // (.png/.wav/.ttf/...) that cannot embed one keep it in a sibling "<file>.meta" sidecar.
 // In both cases a missing/invalid id is minted and written back (Unity-style auto-import).
+//
+// One exception to both rules: .arcdiag crash/hang/gpu-stall reports (GPU crash
+// diagnostics arc, Task 9) carry an embedded guid too, but under a DIFFERENT top-level
+// key ("guid", DiagEnvelope.hpp's Envelope -- never "id") and are NEVER minted or written
+// back here, since a report's identity is fixed the moment Diagnostics wrote it. See
+// AddFile's .arcdiag branch (AssetRegistry.cpp).
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Base/Diagnostics.hpp>

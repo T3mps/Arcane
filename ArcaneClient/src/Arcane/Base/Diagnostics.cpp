@@ -102,6 +102,15 @@ namespace
     GpuSectionProvider g_gpuProvider     = nullptr;
     void*              g_gpuProviderUser = nullptr;
 
+    // Report-written hook slot (Task 9). Same shape/rationale as the
+    // GPU-section provider slot immediately above: a separate mutex from
+    // g_reportMutex, held only long enough to copy the pointer pair out,
+    // then the hook runs unlocked -- an unknown callback must never run
+    // while holding a lock another thread might need to install/clear it.
+    std::mutex        g_reportWrittenMutex;
+    ReportWrittenHook g_reportWrittenHook = nullptr;
+    void*             g_reportWrittenUser = nullptr;
+
     // DbgHelp is explicitly NOT thread-safe -- every Sym* call in the process
     // must be serialized, including ones the walk makes indirectly.
     std::mutex        g_symMutex;
@@ -579,6 +588,24 @@ namespace
         // open, and a report nobody notices is a report that did not happen.
         ARC_ERROR("Diagnostics: {} -- report written\n{}", reason ? reason : "report", out);
 
+        // Report-written hook (Task 9): fires LAST, after every sibling has
+        // finished writing and the count/log echo above are done, with the
+        // exact .arcdiag path regardless of whether Diag::WriteFile actually
+        // succeeded (it is best-effort, same as the rest of this function --
+        // a hook that then fails to read the file back simply skips it, the
+        // same way AssetRegistry::AddFile skips an unreadable file today).
+        // Copy the slot out under its own lock, then call unlocked -- same
+        // discipline as the GPU-section provider above.
+        ReportWrittenHook reportHook     = nullptr;
+        void*             reportHookUser = nullptr;
+        {
+            std::lock_guard reportHookLock(g_reportWrittenMutex);
+            reportHook     = g_reportWrittenHook;
+            reportHookUser = g_reportWrittenUser;
+        }
+        if (reportHook)
+            reportHook(diagPath, reportHookUser);
+
         return txtPath.string();
 #else
         (void)reason; (void)exceptionPointers;
@@ -908,6 +935,20 @@ void ClearGpuSectionProvider() noexcept
     std::lock_guard lock(g_gpuProviderMutex);
     g_gpuProvider     = nullptr;
     g_gpuProviderUser = nullptr;
+}
+
+void SetReportWrittenHook(ReportWrittenHook hook, void* user) noexcept
+{
+    std::lock_guard lock(g_reportWrittenMutex);
+    g_reportWrittenHook = hook;
+    g_reportWrittenUser = user;
+}
+
+void ClearReportWrittenHook() noexcept
+{
+    std::lock_guard lock(g_reportWrittenMutex);
+    g_reportWrittenHook = nullptr;
+    g_reportWrittenUser = nullptr;
 }
 }   // namespace Arcane::Diagnostics
 

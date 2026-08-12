@@ -228,6 +228,29 @@ namespace Arcane
         proj.m_mounts.Mount("game", root / "Content");
         proj.m_registry.ScanContent(root / "Content", "game", onProgress);
 
+        // diag:// -- GPU crash diagnostics arc, Task 9. Crash/hang/gpu-stall
+        // reports (.arcdiag, minted by Diagnostics::WriteReportImpl) land
+        // under <root>/Saved/Diagnostics once Task 8's RetargetDumpDir has
+        // pointed a live host's dumpDir there. Mounted + folded into the
+        // SAME registry (AddContent, not a second ScanContent -- this must
+        // not clear the game:// scan already done above) ONLY when the
+        // directory already exists: a project that has never crashed has no
+        // Saved/Diagnostics yet, and that must stay silent -- no mount, no
+        // scan attempt, no warning -- rather than an empty-but-mounted
+        // scheme. (A report written mid-session, the FIRST time this
+        // project ever crashes, cannot go through this gate -- Open() only
+        // runs once at boot/switch -- so it registers incrementally instead
+        // via Runtime::RegisterCreatedAsset/EditorApp::PollDiagnosticReports;
+        // RegisterAsset lists this same root as a candidate unconditionally,
+        // regardless of whether it existed at open time, and mounts it
+        // there if this branch never did.)
+        const std::filesystem::path diagDir = root / "Saved" / "Diagnostics";
+        if (std::filesystem::is_directory(diagDir, ec))
+        {
+            proj.m_mounts.Mount("diag", diagDir);
+            proj.m_registry.AddContent(diagDir, "diag");
+        }
+
         // KEY OWNERSHIP: "project" (fixed key) -- accumulated across the
         // WHOLE plugin loop below and published ONCE, unconditionally, right
         // before returning (so a clean re-open with no plugin problems
@@ -404,9 +427,21 @@ namespace Arcane
         const std::filesystem::path& target = ec ? file : canon;
 
         // Candidate content roots, game:// first (mirrors Open's mount order).
+        //
+        // diag:// (GPU crash diagnostics arc, Task 9) is listed
+        // UNCONDITIONALLY, not gated on Saved/Diagnostics existing on disk:
+        // Open()'s own diag:// mount IS gated on existence (see its
+        // comment), so a project's FIRST-EVER report -- written mid-session,
+        // after Open() already ran with no Saved/Diagnostics on disk yet --
+        // would otherwise match no candidate here and warn "outside every
+        // content root" even though the file plainly sits under this
+        // project's own Saved/ tree. The path math below (weakly_canonical +
+        // relative) needs no directory to actually exist, so listing it
+        // unconditionally is safe.
         struct ContentRoot { std::string scheme; std::filesystem::path dir; };
         std::vector<ContentRoot> roots;
         roots.push_back({ "game", m_root / "Content" });
+        roots.push_back({ "diag", m_root / "Saved" / "Diagnostics" });
         for (const auto& pluginRoot : m_activePluginRoots)
             roots.push_back({ "plugin/" + pluginRoot.filename().string(),
                               pluginRoot / "Content" });
@@ -419,6 +454,22 @@ namespace Arcane
             const auto rel = std::filesystem::relative(target, rootDir, relEc);
             if (relEc || rel.empty() || rel.is_absolute() || *rel.begin() == "..")
                 continue;   // not under this root
+            // Ensure the winning root is mounted before registering, but
+            // ONLY if it is not ALREADY mounted -- and with the ORIGINAL
+            // root.dir (Open()'s own convention, e.g. "game" -> root /
+            // "Content"), never the weakly_canonical'd rootDir used for the
+            // relative-path match just above. "game"/"plugin" roots are
+            // always already mounted by Open() (Content/ exists from
+            // Project::Create's scaffold), so HasMount short-circuits this
+            // for them and their Open()-time mount form is left untouched
+            // -- re-mounting with a canonicalized (possibly short-name,
+            // e.g. 8.3 "ETHANT~1") path previously broke ResolveAsset()
+            // callers comparing against the original long-form path. Only
+            // diag:// can reach this Mount() call in practice, the one root
+            // that may not have existed yet at Open() time (see the roots
+            // comment above).
+            if (!m_mounts.HasMount(root.scheme))
+                m_mounts.Mount(root.scheme, root.dir);
             return m_registry.AddFile(target, rootDir, root.scheme);
         }
 

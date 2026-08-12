@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -771,6 +772,33 @@ namespace Arcane::Editor
         // PollModuleBuild's root-mismatch check is the staleness guard. See
         // ResetPerProjectState's rule.
         std::filesystem::path m_moduleBuildRoot;
+
+        // ---- Report-written notify (GPU crash diagnostics arc, Task 9) -----
+        // Diagnostics::ReportWrittenHook (Diagnostics.hpp) fires on WHATEVER
+        // thread wrote the report -- the hang/gpu-stall watchdog thread for
+        // the two survivable kinds, or the faulting thread for a crash
+        // (about to terminate; registering an asset there is moot -- there
+        // is no next frame left to drain the queue into, so it simply never
+        // happens, which is the honest boundary rather than a special case).
+        // AssetRegistry has no lock of its own (see AssetRegistry.hpp), and
+        // the Problems row's locator needs the Guid RegisterCreatedAsset
+        // mints, so BOTH the registration and the Publish happen on the
+        // main thread, never inside the hook itself. Same worker-writes/
+        // main-drains shape as ModuleBuild::Runner (DrainLines() /
+        // PollModuleBuild, above) -- OnReportWritten only pushes a path
+        // into this mutex-guarded queue; PollDiagnosticReports (per-frame,
+        // called beside PollModuleBuild) drains it and does the real work.
+        static void OnReportWritten(const std::filesystem::path& diagPath, void* user);
+        void PollDiagnosticReports();
+        std::mutex                         m_pendingReportsMutex;
+        std::vector<std::filesystem::path> m_pendingReports;      // guarded by m_pendingReportsMutex
+        // KEY OWNERSHIP: "diagnostics:reports" -- accumulated across the
+        // WHOLE session (one row per report successfully registered while
+        // this editor ran), never cleared elsewhere, so an earlier report's
+        // row survives a later report's Publish (publication-group replace
+        // semantics -- Diagnostics.hpp). Main-thread only, like the queue
+        // above -- PollDiagnosticReports is the only writer.
+        std::vector<Arcane::Diagnostic>    m_reportDiagnostics;
 
         // Editor state naming entities of the OUTGOING scene, torn down before any
         // registry swap. Shared by SwitchProject and the scene effects below.

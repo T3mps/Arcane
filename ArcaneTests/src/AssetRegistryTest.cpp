@@ -6,8 +6,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>
+#include <Arcane/Project/Project.hpp>
 
 #include <Panels/DiagnosticStore.hpp>
 
@@ -179,5 +181,100 @@ TEST_CASE("A clean rescan retracts a previous duplicate-id diagnostic", "[diagno
 
     store.UninstallEngineSink();
 
+    std::filesystem::remove_all(dir, ec);
+}
+
+// ---------------------------------------------------------------------------
+// GPU crash diagnostics arc, Task 9: diag:// mount + .arcdiag classification.
+// Tagged [project] (not the arc's usual [diag] family) to match this file's
+// own convention -- every other TEST_CASE here about scan/mount mechanics
+// carries [project]; [diagnostics] is reserved (above) for cases that assert
+// on the structured Diagnostics::Publish/Sink seam specifically.
+// ---------------------------------------------------------------------------
+
+// CRITICAL cross-task contract: a .arcdiag's guid lives under the top-level
+// key "guid" (DiagEnvelope.hpp's Envelope::guid / Parse), NOT "id" -- the key
+// ResolveNativeId reads for .json/.arcmat/.arcscene/.arcsprite. Diag::WriteFile
+// never writes an "id" field, so if AddFile ever regresses to routing
+// .arcdiag through ResolveNativeId, this test catches it directly: Resolve
+// would come up empty (ResolveNativeId minted a DIFFERENT, unrelated guid
+// instead of reading the real one), never a coincidental pass.
+TEST_CASE("AssetRegistry classifies .arcdiag by its envelope guid, not a top-level id field", "[project]")
+{
+    const auto dir = TempDir("diag_classify");
+
+    Arcane::Diag::Envelope env;
+    env.guid = Arcane::Guid::Generate();
+    env.kind = "hang";
+    REQUIRE(Arcane::Diag::WriteFile(env, dir / "x.arcdiag"));
+
+    Arcane::AssetRegistry reg;
+    const std::size_t n = reg.ScanContent(dir, "diag");
+
+    CHECK(n == 1);
+    const auto mountPath = reg.Resolve(env.guid);
+    REQUIRE(mountPath.has_value());
+    CHECK(*mountPath == "diag://x.arcdiag");
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+// The Project-level half of the same contract: a temp project fixture with
+// Saved/Diagnostics/x.arcdiag ALREADY on disk (written via Diag::WriteFile,
+// the same call WriteReportImpl makes -- Diagnostics.cpp) scans into the
+// registry under diag://x.arcdiag with the envelope's guid, AND the diag://
+// scheme itself is mounted (Project::Open, not just AssetRegistry) so
+// ResolveAsset can turn that guid back into a real path.
+TEST_CASE("Project::Open mounts diag:// and registers an existing .arcdiag by its envelope guid", "[project]")
+{
+    const auto dir = TempDir("diag_mount_present");
+
+    // Project::Create's own internal Open() runs before Saved/Diagnostics
+    // exists -- that first open is not what this test is about; the SECOND
+    // Open() below, after the report file lands on disk, is.
+    auto created = Arcane::Project::Create(dir, "DiagMountPresent");
+    REQUIRE(created.has_value());
+
+    const std::filesystem::path diagDir = dir / "Saved" / "Diagnostics";
+    std::filesystem::create_directories(diagDir);
+
+    Arcane::Diag::Envelope env;
+    env.guid = Arcane::Guid::Generate();
+    env.kind = "gpu-stall";
+    REQUIRE(Arcane::Diag::WriteFile(env, diagDir / "x.arcdiag"));
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    CHECK(proj->Mounts().HasMount("diag"));
+
+    const auto mountPath = proj->Registry().Resolve(env.guid);
+    REQUIRE(mountPath.has_value());
+    CHECK(*mountPath == "diag://x.arcdiag");
+
+    const auto resolved = proj->Mounts().Resolve(*mountPath);
+    REQUIRE(resolved.has_value());
+    CHECK(resolved->filename() == "x.arcdiag");
+    CHECK(std::filesystem::exists(*resolved));
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+// The negative half of the same binding constraint: a project that has never
+// crashed has no Saved/Diagnostics yet, and Open() must stay silent about it
+// -- no mount, no scan attempt, no error/failed Open.
+TEST_CASE("Project::Open with no Saved/Diagnostics mounts nothing and does not fail", "[project]")
+{
+    const auto dir = TempDir("diag_mount_absent");
+
+    auto proj = Arcane::Project::Create(dir, "DiagMountAbsent");
+    REQUIRE(proj.has_value());   // Create()'s own Open() must still succeed
+
+    CHECK_FALSE(std::filesystem::is_directory(dir / "Saved" / "Diagnostics"));
+    CHECK_FALSE(proj->Mounts().HasMount("diag"));
+
+    std::error_code ec;
     std::filesystem::remove_all(dir, ec);
 }

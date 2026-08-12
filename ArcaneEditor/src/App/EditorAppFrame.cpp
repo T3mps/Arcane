@@ -212,6 +212,11 @@ namespace Arcane::Editor
             // effects (plugin re-engage, scene reload) that must never land
             // mid-render. See EditorApp.hpp's Build section.
             PollModuleBuild();
+            // Watchdog/faulting-thread -> main-thread drain of the report-
+            // written queue, same safe point: registers each new .arcdiag
+            // as an asset and publishes one Problems row per report. See
+            // EditorApp.hpp's Report-written notify section.
+            PollDiagnosticReports();
 
             FrameState fs;
             FrameInput(ls, fs);

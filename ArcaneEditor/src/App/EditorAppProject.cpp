@@ -999,4 +999,66 @@ namespace Arcane::Editor
         if (!InPlayMode() && !m_scene.Path().empty() && !m_scene.IsDirty(*m_undo))
             DoOpenScene(m_scene.Path());
     }
+
+    // ---- Report-written notify (GPU crash diagnostics arc, Task 9) --------
+
+    void EditorApp::OnReportWritten(const std::filesystem::path& diagPath, void* user)
+    {
+        // Runs on whatever thread WriteReportImpl ran on (the hang/gpu-stall
+        // watchdog, or a faulting thread about to terminate) -- see
+        // Diagnostics.hpp's ReportWrittenHook doc comment. Touches nothing
+        // but this mutex-guarded queue; PollDiagnosticReports (main thread,
+        // per frame) does the real work -- same worker/main split as
+        // ModuleBuild::Runner's line queue.
+        auto* self = static_cast<EditorApp*>(user);
+        std::lock_guard<std::mutex> lock(self->m_pendingReportsMutex);
+        self->m_pendingReports.push_back(diagPath);
+    }
+
+    void EditorApp::PollDiagnosticReports()
+    {
+        std::vector<std::filesystem::path> pending;
+        {
+            std::lock_guard<std::mutex> lock(m_pendingReportsMutex);
+            pending.swap(m_pendingReports);
+        }
+        if (pending.empty())
+            return;
+
+        // F-7's single-asset call: the same RegisterCreatedAsset ->
+        // Project::RegisterAsset -> AssetRegistry::AddFile chain
+        // CreateMaterialAt/CreateInstanceAt (above) use for an asset minted
+        // mid-session. A report written before any project is open (a
+        // boot-stage hang) or with the diag directory outside every content
+        // root warns and is skipped -- RegisterCreatedAsset already logs
+        // the specific cause; this is the crash-path boundary being honest
+        // rather than special-cased -- there is usually no open project by
+        // the time a boot-stage report reaches here, and RegisterAsset just
+        // says so.
+        for (const std::filesystem::path& diagPath : pending)
+        {
+            const std::optional<Arcane::Guid> id =
+                m_runtime ? m_runtime->RegisterCreatedAsset(diagPath) : std::nullopt;
+            if (!id)
+                continue;
+
+            // KEY OWNERSHIP: "diagnostics:reports" -- accumulate (never
+            // clear here) across the whole session; each report gets its
+            // own row with its own Asset locator, so RouteLocator's
+            // Kind::Asset branch (OpenAssetDocument) opens exactly the
+            // report that was clicked -- the same "open from the Assets
+            // browser" action a double-click in the Asset Browser performs.
+            Arcane::Diagnostic d;
+            d.severity = Arcane::DiagSeverity::Info;
+            d.scope    = Arcane::DiagScope::Assets;
+            d.code     = "diagnostics.report.written";
+            d.message  = "Crash report written -- open from the Assets browser";
+            d.detail   = diagPath.filename().generic_string();
+            d.locator  = Arcane::DiagLocator::Asset(*id);
+            m_reportDiagnostics.push_back(std::move(d));
+        }
+
+        if (!m_reportDiagnostics.empty())
+            Arcane::Diagnostics::Publish("diagnostics:reports", m_reportDiagnostics);
+    }
 }
