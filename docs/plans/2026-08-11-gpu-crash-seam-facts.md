@@ -818,10 +818,17 @@ back into the file (`:77-79`), and sets `*writeFailed` if the write fails
 (`:82-83`). Sidecar equivalent is `ResolveSidecarId` (`AssetRegistry.cpp:95`, doc comment
 `:88-94`; `hero.png` -> `hero.png.meta`, extension APPENDED not replaced).
 
-**=> A new `.arcdiag` extension must be added to the native list at
-`AssetRegistry.cpp:242` (it carries an embedded top-level `"id"`, exactly like
-`.arcmat`/`.arcsprite`).** The comment block at `:229-239` is where the reason
-gets recorded, alongside the existing `.arcscene` and `.arcsprite` rationales.
+**CORRECTED post-Task-9: the conclusion above is WRONG and was refused.** The
+`.arcdiag` envelope's on-disk top-level key is `"guid"`, not `"id"` (see the
+`DiagEnvelope` schema) -- so `.arcdiag` does NOT carry what `ResolveNativeId`
+(`AssetRegistry.cpp:73-74`, `ReadGuidField(doc, "id")`) reads, and joining the
+native list at `AssetRegistry.cpp:242` would silently fall through to
+`Guid::Generate()` (`:76`) and WRITE that bogus guid back into what is
+supposed to be an immutable crash/hang report (`:77-79`). Task 9 correctly
+did NOT add `.arcdiag` to the native-id list; the shipped route is a
+dedicated `ResolveDiagId` (via `Diag::ReadFile`, which reads the `"guid"`
+field directly), never `ResolveNativeId` --
+`ArcaneClient/src/Arcane/Project/AssetRegistry.cpp`.
 
 ### F-7b -- the exact incremental-registration call for one new asset
 
@@ -1020,6 +1027,6 @@ count is not even fixed within a mode.
 2. **The lightweight DRED tier EXISTS** (`UseMarkersOnlyAutoBreadcrumbs`, Settings2), so the spec's Dist row does not need the anticipated breadcrumbs-only amendment -- subject to TWO conditions: (a) F-2c-bis, Task 7 must also emit `nvrhi::ICommandList::beginMarker`/`endMarker` at its pass scopes, because **no first-party code emits any GPU marker today** and markers-only DRED without markers yields an EMPTY breadcrumb list; (b) F-2d's runtime QI check must succeed at desk, which the tier ladder must detect and log.
 3. **The one cross-backend device-removed hook is `NvrhiMessageCallback::message`** (`NvrhiMessageCallback.hpp:26`, error branch `:36-39`) -- NVRHI reports `"Device Removed!"` from both `d3d12-device.cpp:630` and `vulkan-queue.cpp:200`. `DeviceD3D12.cpp:280` is the only first-party site and Vulkan has none.
 4. **Marker buffers go in `VirtualAlloc` + `OpenExistingHeapFromAddress` memory**, gated on `D3D12_FEATURE_EXISTING_HEAPS`; begin=`MARKER_IN`, end=`MARKER_OUT`; destination resource in `D3D12_RESOURCE_STATE_COPY_DEST`; command list must be QI'd up to `ID3D12GraphicsCommandList2`.
-5. **`.arcdiag` is a native embedded-GUID asset** -- add it at `AssetRegistry.cpp:242`; single-asset registration is `Runtime::RegisterCreatedAsset` (`Runtime.cpp:464`).
+5. **CORRECTED post-Task-9: `.arcdiag` must NOT join the native embedded-GUID list at `AssetRegistry.cpp:242`** -- its on-disk key is `"guid"`, not the `"id"` field `ResolveNativeId` reads, so joining that list would silently mint and write back a bogus id (see F-7a). The shipped route is a dedicated `ResolveDiagId` (via `Diag::ReadFile`); single-asset registration is still `Runtime::RegisterCreatedAsset` (`Runtime.cpp:464`).
 6. **Reports land in `<exe dir>/diagnostics`** because no host sets `dumpDir`; the sibling stem is `Diagnostics.cpp:335-336`.
 7. **Submit counts (F-8e): editor = 4 in Edit mode / 3 in Play mode (phases 11 and 12 are mutually exclusive), plus one per previewing document; runtime = 1.** Two of those submits bypass `m_gpu->Cmd()` entirely -- `OffscreenCanvas::Draw` (`OffscreenCanvas.cpp:78`) and **`PickBuffer::RenderIdPass` (`PickBuffer.cpp:162`), which is its own instrumentable pass and must appear in Task 7's scope list.** The marker buffer must therefore be one buffer with per-scope slots reachable from all three command-list owners -- never per-command-list, never sized to a fixed submit count.

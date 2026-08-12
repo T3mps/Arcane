@@ -226,6 +226,13 @@ namespace Arcane
     class ARCANE_API GpuFrameSlot
     {
     public:
+        GpuFrameSlot() = default;
+
+        // A copy would desync the stamped flag from the query it describes --
+        // exactly what the class comment above says cannot happen.
+        GpuFrameSlot(const GpuFrameSlot&)            = delete;
+        GpuFrameSlot& operator=(const GpuFrameSlot&) = delete;
+
         // Creates the event query. Returns false -- and leaves a permanently
         // unstamped slot -- if the device could not make one, which degrades
         // WaitAndReset to nvrhi's immediate return rather than to a poll loop

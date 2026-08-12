@@ -1,8 +1,8 @@
 #pragma once
 
-// MountTable: maps a mount scheme ("game", "engine", "plugin/<name>") to a physical
-// root directory, and resolves a logical mount path ("game://a/b.png") to a filesystem
-// path. Decouples logical asset addresses from where the project sits on disk.
+// MountTable: maps a mount scheme ("game", "engine", "plugin/<name>", "diag") to a
+// physical root directory, and resolves a logical mount path ("game://a/b.png") to a
+// filesystem path. Decouples logical asset addresses from where the project sits on disk.
 
 #include <Arcane/Base/Api.hpp>
 

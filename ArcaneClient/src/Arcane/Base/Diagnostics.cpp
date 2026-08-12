@@ -594,8 +594,18 @@ namespace
         // succeeded (it is best-effort, same as the rest of this function --
         // a hook that then fails to read the file back simply skips it, the
         // same way AssetRegistry::AddFile skips an unreadable file today).
-        // Copy the slot out under its own lock, then call unlocked -- same
-        // discipline as the GPU-section provider above.
+        // Copy the slot out under its own g_reportWrittenMutex, then call --
+        // same discipline as the GPU-section provider above.
+        //
+        // CORRECTED: "unlocked" above means unlocked with respect to
+        // g_reportWrittenMutex/g_gpuProviderMutex only. Both the hook and the
+        // GPU-section provider actually run while g_reportMutex -- taken at
+        // the top of this function and held for its entire body -- is STILL
+        // LOCKED. That is not an oversight; it is exactly what makes
+        // Diagnostics::FenceReports() sound as a teardown fence: a caller
+        // that acquires g_reportMutex there cannot proceed until a report
+        // already inside this function, hook/provider call included, has
+        // completely finished.
         ReportWrittenHook reportHook     = nullptr;
         void*             reportHookUser = nullptr;
         {
@@ -935,6 +945,18 @@ void ClearGpuSectionProvider() noexcept
     std::lock_guard lock(g_gpuProviderMutex);
     g_gpuProvider     = nullptr;
     g_gpuProviderUser = nullptr;
+}
+
+void FenceReports() noexcept
+{
+    // Empty critical section, deliberately. WriteReportImpl takes
+    // g_reportMutex at the very top of its body and holds it until it
+    // returns -- report write, GPU-section provider call, and
+    // report-written hook call all happen inside that one lock (see the
+    // comment at the report-written hook call site below). Acquiring and
+    // immediately releasing the same mutex here therefore cannot return
+    // until any report already in flight has fully finished.
+    std::lock_guard<std::mutex> lock(g_reportMutex);
 }
 
 void SetReportWrittenHook(ReportWrittenHook hook, void* user) noexcept

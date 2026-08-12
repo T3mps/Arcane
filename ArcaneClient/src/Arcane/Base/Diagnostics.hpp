@@ -236,6 +236,21 @@ namespace Arcane::Diagnostics
     // Uninstall it. Idempotent; safe to call with none installed.
     ARCANE_API void ClearGpuSectionProvider() noexcept;
 
+    // Teardown fence: returns only after any WriteReport already in flight
+    // (watchdog thread or crash filter) has finished. WriteReportImpl holds
+    // g_reportMutex for its ENTIRE body -- report write, GPU-section
+    // provider call, and report-written hook call all included -- so this is
+    // simply an empty critical section on that same mutex.
+    //
+    // A device dtor calling ClearGpuSectionProvider() only uninstalls the
+    // slot for the NEXT report; a report that copied the provider pointer
+    // out before the clear can still be mid-FillReport against the backend
+    // as the dtor goes on to free it (gpu-stall report in progress + host
+    // shutdown). Call this immediately after clearing the provider slot and
+    // BEFORE destroying anything the provider touches -- see
+    // DeviceD3D12::~DeviceD3D12 / DeviceVulkan::~DeviceVulkan.
+    ARCANE_API void FenceReports() noexcept;
+
     // -------------------------------------------------------------------
     // Report-written hook (GPU crash diagnostics arc, Task 9)
     // -------------------------------------------------------------------

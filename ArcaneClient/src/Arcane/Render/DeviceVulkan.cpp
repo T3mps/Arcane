@@ -878,6 +878,11 @@ namespace Arcane
                 // conditionally: a second device that installed after this one
                 // must keep its registration.
                 Diagnostics::ClearGpuSectionProvider();
+                // Wait out a report already mid-flight against this backend
+                // (watchdog thread) before m_crashBackend.reset() below --
+                // clearing the provider slot above only stops the NEXT
+                // report from seeing it. See Diagnostics::FenceReports.
+                Diagnostics::FenceReports();
                 (void)ClearActiveGpuCrashBackendIfCurrent(m_crashBackend.get());
                 NvrhiMessageCallback::Instance().SetDeviceRemovedHook(nullptr);
             }
