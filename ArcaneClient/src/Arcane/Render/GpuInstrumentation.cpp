@@ -22,6 +22,10 @@ namespace Arcane
         // frame late is meaningless and this must not fence the render path.
         std::atomic<bool> g_drawMarkers{ false };
 
+        // The device-lost latch (see the header). Written by the device layer
+        // after the gpu-crash report lands; read once per host frame.
+        std::atomic<bool> g_deviceLost{ false };
+
         // One millisecond, expressed where SDL wants it. Not smaller: below the
         // OS scheduling quantum a "sleep" degrades into a spin, and burning a
         // core to shave sub-millisecond latency off a frame that is already
@@ -54,6 +58,21 @@ namespace Arcane
         return g_activeBackend.compare_exchange_strong(expected, nullptr,
                                                        std::memory_order_acq_rel,
                                                        std::memory_order_acquire);
+    }
+
+    void NoteGpuDeviceLost() noexcept
+    {
+        g_deviceLost.store(true, std::memory_order_release);
+    }
+
+    bool GpuDeviceLostObserved() noexcept
+    {
+        return g_deviceLost.load(std::memory_order_acquire);
+    }
+
+    void ResetGpuDeviceLost() noexcept
+    {
+        g_deviceLost.store(false, std::memory_order_release);
     }
 
     void SetGpuDrawMarkersEnabled(bool enabled) noexcept

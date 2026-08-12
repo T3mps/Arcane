@@ -72,6 +72,28 @@ namespace Arcane
     [[nodiscard]] ARCANE_API bool GpuDrawMarkersEnabled() noexcept;
 
     // -----------------------------------------------------------------
+    // The process-wide device-lost latch
+    // -----------------------------------------------------------------
+    //
+    // Set by the device layer's ObserveDeviceRemoved AFTER the gpu-crash
+    // report is written -- so "observed" always means "the report exists".
+    // Hosts poll it once per frame (top of MainLoop, both hosts) and shut
+    // down cleanly: there is no device-recovery path today, and a host that
+    // keeps pumping frames at a dead device either spins in a Present-fail
+    // loop (runtime) or walks into an nvrhi access violation on the next
+    // resource-creating path (editor's PickBuffer was the desk repro).
+    // Same slot idiom as the backend slot above: one process-wide atomic in
+    // Arcane.dll, device layer writes, hosts read.
+    ARCANE_API void NoteGpuDeviceLost() noexcept;
+    [[nodiscard]] ARCANE_API bool GpuDeviceLostObserved() noexcept;
+
+    // Cleared where the once-per-removal report guard is re-armed: when a
+    // NEW device comes up (project switch recreates the device). A latch
+    // that outlived the dead device it described would instantly quit the
+    // host the moment a healthy replacement started presenting.
+    ARCANE_API void ResetGpuDeviceLost() noexcept;
+
+    // -----------------------------------------------------------------
     // GpuPassScope -- one render pass, both marker channels
     // -----------------------------------------------------------------
 

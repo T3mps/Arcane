@@ -79,6 +79,10 @@ namespace Arcane
             // (here "gpu-crash", which is what makes the .gpudump sibling get
             // written). Same wording as the D3D12 backend. Do not reword.
             Diagnostics::WriteReport("gpu-crash: device removed");
+
+            // AFTER the report, deliberately: hosts poll this latch and shut
+            // down on it, and "observed" must always mean "the report exists".
+            NoteGpuDeviceLost();
         }
 
         constexpr nvrhi::Format kSwapchainFormat    = nvrhi::Format::BGRA8_UNORM;
@@ -409,8 +413,12 @@ namespace Arcane
                 // a VK_ERROR_DEVICE_LOST here left Present()'s caller staring
                 // at an unhandled C++ exception and no report at all. Capture
                 // instead. Once-guarded inside, and a no-op if F-3b's
-                // submit-side hook already fired for the same loss.
-                ARC_ERROR("acquireNextImageKHR failed: device lost");
+                // submit-side hook already fired for the same loss. Log-once
+                // for the same reason as the D3D12 Present site: repeats
+                // between observation and the host's latch-driven exit are
+                // pure spam.
+                if (!g_deviceRemovedReported.load(std::memory_order_acquire))
+                    ARC_ERROR("acquireNextImageKHR failed: device lost");
                 ObserveDeviceRemoved();
                 return nullptr;
             }
@@ -467,9 +475,10 @@ namespace Arcane
                 // DeviceLostError from present escaped Present() entirely --
                 // Vulkan's analogue of F-3c's D3D12 present-path observable,
                 // which the D3D12 side already routes into capture. Same
-                // treatment here: log, then collect while markers and fault
-                // state still describe THIS loss.
-                ARC_ERROR("presentKHR failed: device lost");
+                // treatment here: log (once), then collect while markers and
+                // fault state still describe THIS loss.
+                if (!g_deviceRemovedReported.load(std::memory_order_acquire))
+                    ARC_ERROR("presentKHR failed: device lost");
                 ObserveDeviceRemoved();
             }
             catch (const vk::OutOfDateKHRError&)
@@ -846,6 +855,10 @@ namespace Arcane
             if (m_crashBackend)
             {
                 g_deviceRemovedReported.store(false, std::memory_order_release);
+                // A new device means the loss the latch described is over; a
+                // stale latch would quit the host the moment this healthy
+                // device started presenting.
+                ResetGpuDeviceLost();
                 // F-3b: the cross-backend observable, armed now that there is
                 // something to collect with.
                 NvrhiMessageCallback::Instance().SetDeviceRemovedHook(&ObserveDeviceRemoved);

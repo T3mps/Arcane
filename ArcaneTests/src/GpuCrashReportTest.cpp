@@ -15,6 +15,7 @@
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Render/GpuBreadcrumbs.hpp>
 #include <Arcane/Render/GpuCrashReport.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>   // the device-lost latch
 #include <Arcane/Render/IGpuCrashBackend.hpp>
 
 #include <algorithm>
@@ -293,4 +294,57 @@ TEST_CASE("gpudump sibling: a failed write never names a sibling that does not e
 
     CHECK(envelope.siblingGpuDump.empty());
     CHECK(humanText.find("gpu dump     : <failed to write>") != std::string::npos);
+}
+
+TEST_CASE("device-loss freeze: only a real loss verdict freezes the ring", "[diag]")
+{
+    // The rule lands ONCE for both backends (this suite's charter): any
+    // non-empty fault.type other than the shared healthy verdict
+    // "device-alive" is a loss. A stall on a live device keeps recording.
+    using Arcane::Diag::FreezeBreadcrumbsOnDeviceLoss;
+
+    GpuBreadcrumbs bc;
+    Envelope envelope;
+
+    SECTION("an unclassified envelope does not freeze")
+    {
+        FreezeBreadcrumbsOnDeviceLoss(bc, envelope);   // fault.type empty
+        CHECK_FALSE(bc.IsFrozen());
+    }
+
+    SECTION("device-alive (the gpu-stall case) does not freeze")
+    {
+        envelope.fault.type = "device-alive";
+        FreezeBreadcrumbsOnDeviceLoss(bc, envelope);
+        CHECK_FALSE(bc.IsFrozen());
+    }
+
+    SECTION("every loss verdict freezes")
+    {
+        for (const char* verdict : { "device-removed", "device-hung", "device-reset",
+                                     "driver-internal-error", "page-fault" })
+        {
+            GpuBreadcrumbs fresh;
+            Envelope e;
+            e.fault.type = verdict;
+            FreezeBreadcrumbsOnDeviceLoss(fresh, e);
+            CHECK(fresh.IsFrozen());
+        }
+    }
+}
+
+TEST_CASE("device-lost latch: set-after-report semantics, host-visible, re-armable", "[diag]")
+{
+    // The latch itself is trivial by design -- the contract that matters is
+    // lifecycle: hosts poll it every frame, the device layer sets it after
+    // the gpu-crash report lands, and a NEW device (project switch) clears
+    // it so a healthy replacement does not inherit the dead one's verdict.
+    Arcane::ResetGpuDeviceLost();   // other [diag] cases must not leak into this one
+    CHECK_FALSE(Arcane::GpuDeviceLostObserved());
+
+    Arcane::NoteGpuDeviceLost();
+    CHECK(Arcane::GpuDeviceLostObserved());
+
+    Arcane::ResetGpuDeviceLost();
+    CHECK_FALSE(Arcane::GpuDeviceLostObserved());
 }

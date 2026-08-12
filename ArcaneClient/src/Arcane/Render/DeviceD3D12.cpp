@@ -55,6 +55,10 @@ namespace Arcane
             // (here "gpu-crash", which is what makes the .gpudump sibling get
             // written). Do not reword.
             Diagnostics::WriteReport("gpu-crash: device removed");
+
+            // AFTER the report, deliberately: hosts poll this latch and shut
+            // down on it, and "observed" must always mean "the report exists".
+            NoteGpuDeviceLost();
         }
 
         class DeviceD3D12 final : public RenderDevice
@@ -213,6 +217,10 @@ namespace Arcane
             if (m_crashBackend)
             {
                 g_deviceRemovedReported.store(false, std::memory_order_release);
+                // A new device means the loss the latch described is over; a
+                // stale latch would quit the host the moment this healthy
+                // device started presenting.
+                ResetGpuDeviceLost();
                 // F-3b: the cross-backend observable, armed now that there is
                 // something to collect with.
                 NvrhiMessageCallback::Instance().SetDeviceRemovedHook(&ObserveDeviceRemoved);
@@ -380,9 +388,14 @@ namespace Arcane
             const HRESULT hr = m_swapchain->Present(m_vsync ? 1 : 0, 0);
             if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
             {
-                ARC_ERROR("Present failed: device removed/reset (0x{:08X}), reason 0x{:08X}",
-                          (uint32_t)hr,
-                          (uint32_t)m_device->D3D12Device()->GetDeviceRemovedReason());
+                // Log-once: the host quits on the latch a frame later, but a
+                // per-frame ERROR in the window between observation and exit
+                // (or in any future recovery path) is pure spam -- the first
+                // one said everything this one would.
+                if (!g_deviceRemovedReported.load(std::memory_order_acquire))
+                    ARC_ERROR("Present failed: device removed/reset (0x{:08X}), reason 0x{:08X}",
+                              (uint32_t)hr,
+                              (uint32_t)m_device->D3D12Device()->GetDeviceRemovedReason());
                 // F-3c: this is the only first-party device-removed site in
                 // the tree, and it used to log and continue. It now runs the
                 // capture path -- markers + DRED are read while they still

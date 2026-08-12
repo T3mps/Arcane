@@ -366,6 +366,16 @@ void RuntimeApp::MainLoop()
         // EditorApp::MainLoop -- the two hosts must not diverge on liveness.
         Arcane::Diagnostics::Heartbeat();
 
+        // Device-lost exit: the latch is set only AFTER the gpu-crash report
+        // was written, so breaking here is "report captured, stop cleanly" --
+        // the alternative was spinning in a Present-fail loop forever.
+        // Mirrors EditorApp::MainLoop.
+        if (Arcane::GpuDeviceLostObserved())
+        {
+            ARC_ERROR("GPU device lost -- crash report written; shutting down");
+            break;
+        }
+
         auto events = m_gpu->Win().PumpEvents();
         if (events.quitRequested) break;
         if (events.resized)
@@ -771,5 +781,7 @@ int RuntimeApp::Run()
 
     MainLoop();
     Shutdown();
-    return 0;
+    // A device-loss exit is an abnormal end even though it was orderly: the
+    // report exists, but the session did not do what it was asked to.
+    return Arcane::GpuDeviceLostObserved() ? 1 : 0;
 }

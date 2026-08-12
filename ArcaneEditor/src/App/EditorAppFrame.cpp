@@ -193,6 +193,19 @@ namespace Arcane::Editor
             // sit on the loop itself rather than inside any one phase.
             Arcane::Diagnostics::Heartbeat();
 
+            // Device-lost exit: the latch is set only AFTER the gpu-crash
+            // report was written, so breaking here is "report captured, stop
+            // cleanly". Checked at the frame top so no phase downstream ever
+            // records against the dead device -- the next resource-creating
+            // path (PickBuffer's internal command list was the desk repro)
+            // is an access violation inside nvrhi, not an error code.
+            // Mirrors RuntimeApp::MainLoop.
+            if (Arcane::GpuDeviceLostObserved())
+            {
+                ARC_ERROR("GPU device lost -- crash report written; shutting down");
+                break;
+            }
+
             const FramePump pump = PumpFrameEvents();
             if (pump == FramePump::Exit)
             {
