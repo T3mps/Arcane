@@ -147,3 +147,50 @@ TEST_CASE("GpuBreadcrumbs ring capacity is 256 scopes per queue", "[diag]")
 {
     CHECK(GpuBreadcrumbs::kRingCapacity == 256);
 }
+
+TEST_CASE("GpuBreadcrumbs freeze pins the crash-time timeline against post-removal frames", "[diag]")
+{
+    // The device-loss scenario: a scope is mid-flight when the device dies,
+    // the ring freezes at report time, and the host keeps pumping frames the
+    // dead GPU never executes. The SECOND report of the cascade must see the
+    // same timeline the first one did.
+    GpuBreadcrumbs bc;
+    const std::uint32_t idA = bc.BeginScope("pass:gpu-fault");
+    bc.OnMarkerWritten(idA, true);
+
+    bc.Freeze();
+    CHECK(bc.IsFrozen());
+
+    SECTION("post-freeze scopes mint unique tokens but never enter the ring")
+    {
+        const std::uint32_t idB = bc.BeginScope("pass:post-removal");
+        CHECK(idB > idA);   // the never-reused token contract survives the freeze
+        bc.EndScope(idB);
+        bc.OnMarkerWritten(idB, true);   // un-ringed id: safe no-op, as ever
+
+        const GpuBreadcrumbs::Snapshot snap = bc.Capture();
+        REQUIRE(snap.inFlight.size() == 1);
+        CHECK(snap.inFlight[0] == "pass:gpu-fault");
+        CHECK(snap.lastCompleted.empty());
+    }
+
+    SECTION("even a ring-capacity flood of post-freeze frames evicts nothing")
+    {
+        for (std::size_t i = 0; i < GpuBreadcrumbs::kRingCapacity * 2; ++i)
+        {
+            const std::uint32_t id = bc.BeginScope("pass:post-removal");
+            bc.EndScope(id);
+        }
+        const GpuBreadcrumbs::Snapshot snap = bc.Capture();
+        REQUIRE(snap.inFlight.size() == 1);
+        CHECK(snap.inFlight[0] == "pass:gpu-fault");
+    }
+
+    SECTION("marker evidence for frozen entries stays live -- it only makes the picture more truthful")
+    {
+        bc.OnMarkerWritten(idA, false);   // e.g. a later marker-buffer replay
+        const GpuBreadcrumbs::Snapshot snap = bc.Capture();
+        CHECK(snap.inFlight.empty());
+        CHECK(snap.lastCompleted == "pass:gpu-fault");
+    }
+}

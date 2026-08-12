@@ -7,6 +7,14 @@ namespace Arcane
 {
     std::uint32_t GpuBreadcrumbs::BeginScope(std::string_view name)
     {
+        // Frozen: the token contract holds (monotonic, never reused, so the
+        // marker slot `id % capacity` stays well-defined for callers already
+        // holding tokens) but the ring and open stack stay exactly as they
+        // were when the device was lost. EndScope/OnMarkerWritten already
+        // treat an un-ringed token as a safe no-op.
+        if (m_frozen.load(std::memory_order_acquire))
+            return m_nextId++;
+
         Entry e;
         e.id = m_nextId++;
         e.name = std::string(name);
@@ -27,6 +35,9 @@ namespace Arcane
 
     void GpuBreadcrumbs::EndScope(std::uint32_t token)
     {
+        if (m_frozen.load(std::memory_order_acquire))
+            return;   // see Freeze(): the open stack is part of the frozen picture
+
         // Well-nested callers always end LIFO; scan from the back but
         // defensively search the whole stack in case of misuse. This is
         // pure open-stack bookkeeping (for later BeginScope depth/parent

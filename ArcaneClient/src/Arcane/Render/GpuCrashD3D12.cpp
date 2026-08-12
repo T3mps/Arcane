@@ -627,6 +627,10 @@ namespace Arcane
                                            const std::filesystem::path& reportStem)
         {
             CollectFault(envelope);
+            // A lost device freezes the ring: the frames the host keeps
+            // pumping after removal must not evict the crash-time timeline
+            // out from under the LATER reports of the same cascade.
+            Diag::FreezeBreadcrumbsOnDeviceLoss(m_breadcrumbs, envelope);
             Diag::EmitGpuDumpSibling(m_raw, envelope, m_humanText, reportStem);
             humanText += m_humanText;
         }

@@ -118,6 +118,15 @@ namespace Arcane::Diag
                                       Envelope&             envelope,
                                       std::string&          humanText);
 
+    // Freezes `breadcrumbs` iff `envelope`'s fault classification says the
+    // device was actually LOST -- any non-empty fault.type other than the
+    // backends' shared healthy verdict "device-alive". Called by both
+    // backends' FillReport after CollectFault, so the rule lands ONCE (this
+    // header's charter). A gpu-stall on a live device must NOT freeze: the
+    // device is still executing and the ring should keep recording.
+    ARCANE_API void FreezeBreadcrumbsOnDeviceLoss(GpuBreadcrumbs& breadcrumbs,
+                                                  const Envelope& envelope);
+
     // Writes `raw` to `<reportStem>.gpudump` and records the sibling.
     //
     // The container is written for gpu kinds ALWAYS, partial collection

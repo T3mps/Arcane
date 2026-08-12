@@ -18,6 +18,7 @@
 
 #include <Arcane/Base/Api.hpp>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -77,6 +78,25 @@ namespace Arcane
             std::vector<std::string> inFlight;
         };
 
+        // Freezes the ring at its current content: BeginScope keeps minting
+        // monotonic tokens (the never-reused contract holds) but stops
+        // touching the ring and open stack, and EndScope becomes a no-op.
+        // OnMarkerWritten stays LIVE -- marker evidence is GPU-side fact and
+        // can only make the frozen timeline more truthful (a marker-buffer
+        // replay after the freeze still refines the same entries).
+        //
+        // Exists for device loss: the frames a host keeps pumping after the
+        // device is gone recycle the ring, so the SECOND report of a TDR
+        // cascade (stall -> hang -> crash) used to show an empty timeline --
+        // the crash-time entries had been evicted by frames the dead GPU
+        // never executed. Called by Diag::FreezeBreadcrumbsOnDeviceLoss once
+        // a report says the device was lost. One-way for the object's
+        // lifetime (no recovery path exists today); atomic because the
+        // report path runs on the watchdog thread while the record path
+        // keeps calling BeginScope.
+        void Freeze() noexcept { m_frozen.store(true, std::memory_order_release); }
+        [[nodiscard]] bool IsFrozen() const noexcept { return m_frozen.load(std::memory_order_acquire); }
+
         // Derives a Snapshot from the current ring + marker state. Pure,
         // const, never throws: an empty ring, or a ring with no marker
         // reports at all, yields an all-empty Snapshot.
@@ -108,5 +128,6 @@ namespace Arcane
         std::vector<Entry> m_ring;              // ascending id order; front = oldest
         std::vector<std::uint32_t> m_openStack;  // currently-open tokens, CPU side
         std::uint32_t m_nextId = 0;
+        std::atomic<bool> m_frozen{ false };     // see Freeze()
     };
 }

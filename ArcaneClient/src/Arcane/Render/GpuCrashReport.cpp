@@ -69,6 +69,18 @@ namespace Arcane::Diag
         }
     }
 
+    void FreezeBreadcrumbsOnDeviceLoss(GpuBreadcrumbs& breadcrumbs, const Envelope& envelope)
+    {
+        // "device-alive" is the one healthy verdict both backends share
+        // (GpuCrashD3D12's RemovedReasonKind, GpuCrashVulkan's lost-probe);
+        // an EMPTY type means no backend classified anything -- also not a
+        // loss. Everything else (device-removed/-hung/-reset, page-fault
+        // kinds, driver-internal-error) means the device is gone and the
+        // frames the host keeps pumping must not recycle the crash-time ring.
+        if (!envelope.fault.type.empty() && envelope.fault.type != "device-alive")
+            breadcrumbs.Freeze();
+    }
+
     void EmitGpuDumpSibling(const GpuDumpWriter&         raw,
                             Envelope&                    envelope,
                             std::string&                 humanText,
