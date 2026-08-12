@@ -157,23 +157,60 @@ structured-buffer access, so an out-of-bounds UAV store is discarded and
 faults nothing on a conformant device. What the shader actually relies on
 is a **long, serially dependent loop whose bound is a constant-buffer
 value** -- un-foldable, un-unrollable, and un-elidable (its body stores to
-a UAV) -- which runs the GPU past the OS TDR window and gets the adapter
-reset. That path is decided by the OS, not the driver, so it is
-vendor-agnostic, and it is plain portable NVRHI (no native handles), so
-the SAME command serves the Vulkan item unchanged. The out-of-bounds store
-is kept as the loop's un-elidable side effect and as an opportunistic
-upgrade to a real page fault wherever the bounds check is absent. Nothing
-in it trips CPU-side validation: an OOB store is a GPU-side condition the
-D3D12 debug layer never sees, and Arcane never enables GBV.
+a UAV) -- which is *expected* to run the GPU past the OS TDR window and get
+the adapter reset. It is plain portable NVRHI (no native handles), so the
+SAME command serves the Vulkan item unchanged. The out-of-bounds store is
+kept as the loop's un-elidable side effect and as an opportunistic upgrade
+to a real page fault wherever the bounds check is absent. Nothing in it
+trips CPU-side validation: an OOB store is a GPU-side condition the D3D12
+debug layer never sees, and Arcane never enables GBV.
+
+**"Expected", not guaranteed -- and unproven until the desk run.** The TDR
+watchdog is the OS's, which makes the mechanism vendor-*neutral*, but not
+vendor-*independent*: preemption-capable GPUs (compute preemption on
+Pascal-class and later, and the equivalents elsewhere) may honour the
+preempt request and yield instead of hanging, in which case the OS resets
+nothing and no device is ever lost. Whether this adapter preempts or hangs
+is a property of the desk machine and cannot be settled from here. If a run
+produces no fault at all, that is the expected first suspect -- turn up
+`kIterations` / `kThreadGroups` in `GpuFaultInjector.cpp` (see checklist
+item 0) rather than assuming the capture path is broken.
 
 **Desk battery (user -- the arc is not done until these run):**
+
+0. **Before anything else, check TDR.** Confirm the Windows default
+   (`HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers`, `TdrLevel=3`,
+   `TdrDelay=2`; absent values mean the default is in force). Two knobs
+   matter and both bite:
+   - **TDR disabled (`TdrLevel=0`)** -- the loop is bounded so the machine
+     *does* recover on its own, but the wait is **minutes to tens of
+     minutes**, not seconds. The loop is store-issue-bound (one UAV store
+     per iteration), not latency-bound, so the honest figure is far worse
+     than an instruction-latency estimate suggests. Do NOT reboot partway
+     through: the report is written at device loss, and a reboot mid-capture
+     destroys exactly the artifact the run exists to produce. Re-enable TDR
+     first instead.
+   - **No fault at all** -- see the preemption note above. Raise
+     `kIterations` / `kThreadGroups` in `GpuFaultInjector.cpp` and rebuild
+     before concluding anything about the capture path.
 1. Dev command faults the GPU deliberately in ReferenceProject under the
    editor: report lands in `Saved/Diagnostics/`, Problems pane notifies,
    Assets browser shows it, double-click opens the document with a sane
    breadcrumb timeline naming the faulting pass (`pass:gpu-fault`).
    *Trigger: the menu item.*
 2. Same via ArcaneRuntime (project-less fallback dir).
-   *Trigger: `ArcaneRuntime --crash-gpu 30` with no `--project`.*
+   *Trigger, from the runtime's exe dir:*
+   `ArcaneRuntime --plugin ReferenceProject/Binaries/ReferenceGame.dll --crash-gpu 30`
+   *-- and deliberately NO `--project`.*
+   **`--plugin`, not a bare run.** ArcaneRuntime refuses to boot with
+   neither `--project` nor `--plugin` ("nothing to host", `RuntimeApp.cpp`)
+   -- deliberate since the Sandbox retirement -- and the refusal returns
+   before `MainLoop`, so a bare run never reaches the frame the fault fires
+   on. `--plugin` alone still leaves `CurrentProject()` null (`ProjectBoot`:
+   "no `--project`: nothing to open, not a failure"), which is precisely the
+   project-less state this item exists to test: `RetargetDumpDir` gets an
+   empty path and the report must land in the **fallback** dir, not under
+   any project's `Saved/`.
 3. GPU-stall path: the same long-running shader -> gpu-stall report without
    device removal. At stock settings this does NOT happen and cannot: TDR
    fires at 2 s and the gpu-stall rule at 8 s, so the device is always gone
