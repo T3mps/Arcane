@@ -63,14 +63,18 @@ namespace Arcane::Diagnostics
         // is a host that is not rendering (minimized), not a stalled GPU. The
         // case that makes it reachable is the swapchain's frame-slot wait,
         // which polls and republishes rather than blocking (see
-        // Render/GpuInstrumentation.hpp, WaitForGpuFrameSlot) precisely so a
-        // wedged GPU is visible as "still waiting, still not retiring".
+        // Render/GpuInstrumentation.hpp, GpuFrameSlot) precisely so a wedged
+        // GPU is visible as "still waiting, still not retiring".
         //
         // TIGHTER than hangSeconds on purpose, and this is the whole reason
-        // both numbers exist: a long frame-slot wait keeps the main-thread beat
-        // flowing, so the hang rule stays quiet through it by design. 8 < 12
-        // means a GPU that has stopped retiring is named as such after 8s,
-        // rather than surfacing 4s later as a main-thread hang it is not.
+        // both numbers exist -- though NOT as a race between two live rules.
+        // The frame-slot wait keeps the main-thread beat flowing, so the hang
+        // rule cannot fire during it at all; it only becomes possible once the
+        // wait gives up polling and parks, and then only hangSeconds after
+        // that. 8 < 12 is what puts the GPU verdict INSIDE the polling window,
+        // so a GPU that stopped retiring is named while the evidence is still
+        // being published, rather than surfacing much later as a main-thread
+        // hang it is not.
         //
         // What it does NOT buy: a GPU-section in the report. The provider runs
         // for EVERY report kind (see WriteReportImpl), so a plain `hang` already
@@ -140,7 +144,7 @@ namespace Arcane::Diagnostics
     // value -- but is emphatically not idle. Without it, the frame-slot wait
     // would look identical to a minimized host (frozen counter, no publisher)
     // and the GPU rule would disarm on the one case it exists to catch. See
-    // Render/GpuInstrumentation.hpp, WaitForGpuFrameSlot.
+    // Render/GpuInstrumentation.hpp, GpuFrameSlot::WaitAndReset.
     ARCANE_API void GpuHeartbeatRefresh() noexcept;
 
     // The pure staleness rule the GPU watchdog runs, extracted so the part

@@ -186,7 +186,7 @@ namespace Arcane
             // presentation engine holds them asynchronously until the image
             // is released, so slot-based reuse would fire VUID-00067.
             std::vector<vk::Semaphore> m_presentSemaphores;
-            nvrhi::EventQueryHandle m_frameQueries[kSwapchainFramesInFlight];
+            GpuFrameSlot m_frameSlots[kSwapchainFramesInFlight];
             uint64_t m_frameCounter = 0;
             uint32_t m_currentImage = 0;
             uint32_t m_width = 0;
@@ -223,7 +223,11 @@ namespace Arcane
             for (uint32_t i = 0; i < kSwapchainFramesInFlight; ++i)
             {
                 m_acquireSemaphores[i] = device.Device().createSemaphore({});
-                m_frameQueries[i] = device.Nvrhi()->createEventQuery();
+                if (!m_frameSlots[i].Init(device.Nvrhi()))
+                {
+                    ARC_ERROR("Swapchain: frame-slot event query creation failed");
+                    return false;
+                }
             }
             // Present semaphores are per-image and created in CreateSwapchainObjects.
 
@@ -374,13 +378,20 @@ namespace Arcane
             if (m_frameCounter >= kSwapchainFramesInFlight)
             {
                 // Same completion semantics as the waitEventQuery this replaced
-                // -- it never returns early -- but it polls and republishes the
-                // diagnostics beats while waiting, which is what makes a wedged
-                // GPU observable as `gpu-stall` instead of parking the main
-                // thread somewhere the watchdog cannot see it. ONE shared
+                // -- never returns early -- but a STAMPED slot is waited on by
+                // polling, republishing the diagnostics beats, which is what
+                // makes a wedged GPU observable as `gpu-stall` instead of
+                // parking the main thread where the watchdog cannot see it.
+                //
+                // The UNSTAMPED case is not theoretical here, it is THIS
+                // function: the acquire below throws OutOfDateKHRError on an
+                // ordinary window resize and bails without advancing
+                // m_frameCounter, so Present -- the only stamp site -- is
+                // skipped, and the next BeginFrame meets this same slot holding
+                // a query nvrhi reports as incomplete forever. GpuFrameSlot
+                // takes the instant wait for that case. ONE shared
                 // implementation with the D3D12 path, deliberately.
-                WaitForGpuFrameSlot(m_device->Nvrhi(), m_frameQueries[slot]);
-                m_device->Nvrhi()->resetEventQuery(m_frameQueries[slot]);
+                m_frameSlots[slot].WaitAndReset(m_device->Nvrhi());
             }
 
             try
@@ -469,8 +480,7 @@ namespace Arcane
             // Completion point for this slot: covers the flush submit above,
             // i.e. every queue operation of this frame (the present signal is
             // folded into the flush submit; scan-out itself is outside the timeline).
-            m_device->Nvrhi()->setEventQuery(m_frameQueries[slot],
-                                             nvrhi::CommandQueue::Graphics);
+            m_frameSlots[slot].Stamp(m_device->Nvrhi(), nvrhi::CommandQueue::Graphics);
             ++m_frameCounter;
 
             m_device->Nvrhi()->runGarbageCollection();

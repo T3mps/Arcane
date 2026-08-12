@@ -191,7 +191,66 @@ namespace Arcane
     };
 
     // -----------------------------------------------------------------
-    // WaitForGpuFrameSlot -- the frame-slot pacing wait, made observable
+    // GpuFrameSlot -- one swapchain frame slot's completion fence
+    // -----------------------------------------------------------------
+    //
+    // An nvrhi event query plus the ONE bit of state nvrhi does not expose and
+    // that the pacing wait cannot be correct without: whether the query is
+    // currently STAMPED.
+    //
+    // That bit is load-bearing because nvrhi's poll and wait DISAGREE about an
+    // unstamped query, in opposite directions:
+    //
+    //   - Vulkan: pollEventQuery -> Queue::pollCommandList returns FALSE for
+    //     commandListID == 0 (vulkan-queue.cpp:429-431) -- forever -- while
+    //     waitEventQuery returns IMMEDIATELY for that same state
+    //     (vulkan-queries.cpp:57-58).
+    //   - D3D12: pollEventQuery returns false while !started
+    //     (d3d12-queries.cpp:53-54); waitEventQuery returns immediately
+    //     (d3d12-queries.cpp:75-76).
+    //
+    // So a poll loop over an unstamped query spins out its ENTIRE window and
+    // then reports a GPU stall for a device that was never asked to do
+    // anything -- where the plain blocking wait returned instantly. Not
+    // hypothetical and not exotic: on Vulkan, BeginFrame resets the slot, then
+    // acquireNextImageKHR throws OutOfDateKHRError -- an ordinary window resize
+    // -- and the frame bails without advancing the frame counter, so Present,
+    // the only stamp site, never runs. The next BeginFrame meets that same
+    // slot, unstamped. D3D12 has no such path today, which makes it a latent
+    // version of the identical trap rather than a safe one.
+    //
+    // Kept as a TYPE rather than a bool sitting beside each query so the flag
+    // cannot desync from the query it describes: every transition goes through
+    // this object, in both backends. A future present-skipping path then gets
+    // the right behaviour for free instead of resurrecting the trap.
+    class ARCANE_API GpuFrameSlot
+    {
+    public:
+        // Creates the event query. Returns false -- and leaves a permanently
+        // unstamped slot -- if the device could not make one, which degrades
+        // WaitAndReset to nvrhi's immediate return rather than to a poll loop
+        // with nothing to poll.
+        bool Init(nvrhi::IDevice* device);
+
+        // Present side: record this frame's completion point. Marks the slot
+        // stamped ONLY if the stamp actually went out, so a slot can never
+        // claim a fence it does not have.
+        void Stamp(nvrhi::IDevice* device, nvrhi::CommandQueue queue);
+
+        // BeginFrame side: wait until this slot's frame has retired, then clear
+        // the query for reuse. An UNSTAMPED slot skips the polling wait
+        // entirely and falls straight through to nvrhi's instant return.
+        void WaitAndReset(nvrhi::IDevice* device);
+
+        [[nodiscard]] bool IsStamped() const noexcept { return m_stamped; }
+
+    private:
+        nvrhi::EventQueryHandle m_query;
+        bool                    m_stamped = false;
+    };
+
+    // -----------------------------------------------------------------
+    // The pacing wait WaitAndReset performs, and what it costs
     // -----------------------------------------------------------------
     //
     // Both swapchains gate slot reuse on "frame N - kSwapchainFramesInFlight has
@@ -227,6 +286,8 @@ namespace Arcane
     //
     // Shared by both backends rather than copied into each: a pacing wait that
     // drifted between D3D12 and Vulkan is exactly the kind of host divergence
-    // this codebase has been bitten by before.
-    ARCANE_API void WaitForGpuFrameSlot(nvrhi::IDevice* device, nvrhi::IEventQuery* query);
+    // this codebase has been bitten by before. It is NOT exposed as a free
+    // function -- calling it requires knowing the stamped state above, and a
+    // second entry point taking that as a parameter would just be a second way
+    // to get it wrong. GpuFrameSlot is the only door.
 }

@@ -185,14 +185,17 @@ namespace Arcane
     }
 
     // ---------------------------------------------------------------------
-    // WaitForGpuFrameSlot
+    // GpuFrameSlot
     // ---------------------------------------------------------------------
 
-    void WaitForGpuFrameSlot(nvrhi::IDevice* device, nvrhi::IEventQuery* query)
+    namespace
     {
-        if (!device || !query)
-            return;
-
+    // The polling pacing wait. File-local on purpose: it is only correct for a
+    // query that is currently STAMPED, and GpuFrameSlot is the thing that knows
+    // whether it is. Exposing it would hand callers a way to poll an unstamped
+    // query, which nvrhi reports as incomplete forever -- see the header.
+    void PollingWaitForStampedQuery(nvrhi::IDevice* device, nvrhi::IEventQuery* query)
+    {
         // Fast path, before any sleep: every frame that is not GPU-bound takes
         // this and pays exactly one poll. Skipping it would tax the common case
         // a full sleep quantum for a wait that was never going to happen.
@@ -221,5 +224,49 @@ namespace Arcane
         // stop here too, which is what lets a permanently wedged GPU still
         // produce the hang rule's parked-stack report after the gpu-stall one.
         device->waitEventQuery(query);
+    }
+    }   // namespace
+
+    bool GpuFrameSlot::Init(nvrhi::IDevice* device)
+    {
+        m_stamped = false;
+        m_query   = device ? device->createEventQuery() : nvrhi::EventQueryHandle{};
+        return m_query != nullptr;
+    }
+
+    void GpuFrameSlot::Stamp(nvrhi::IDevice* device, nvrhi::CommandQueue queue)
+    {
+        if (!device || !m_query)
+            return;
+        device->setEventQuery(m_query, queue);
+        // Set only AFTER the stamp actually went out. A slot that claims a
+        // fence it does not have is exactly the state that sends the wait into
+        // a poll loop nvrhi will never satisfy.
+        m_stamped = true;
+    }
+
+    void GpuFrameSlot::WaitAndReset(nvrhi::IDevice* device)
+    {
+        if (!device || !m_query)
+            return;
+
+        if (m_stamped)
+        {
+            PollingWaitForStampedQuery(device, m_query);
+        }
+        else
+        {
+            // Nothing was ever submitted against this slot -- a frame that
+            // bailed between reset and Present (an out-of-date surface, a lost
+            // device). nvrhi's wait returns immediately for this state; its
+            // poll reports incomplete forever. Take the wait, exactly as the
+            // pre-polling code did, and do not touch the diagnostics beats:
+            // there is no GPU progress being waited on to have an opinion
+            // about.
+            device->waitEventQuery(m_query);
+        }
+
+        device->resetEventQuery(m_query);
+        m_stamped = false;
     }
 }

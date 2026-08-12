@@ -252,7 +252,7 @@ namespace Arcane
             DeviceD3D12* m_device = nullptr;
             ComPtr<IDXGISwapChain3> m_swapchain;
             std::vector<nvrhi::TextureHandle> m_backbuffers;
-            nvrhi::EventQueryHandle m_frameQueries[kSwapchainFramesInFlight];
+            GpuFrameSlot m_frameSlots[kSwapchainFramesInFlight];
             uint64_t m_frameCounter = 0;
             uint32_t m_width = 0;
             uint32_t m_height = 0;
@@ -294,7 +294,13 @@ namespace Arcane
             if (!CreateBackbufferHandles())
                 return false;
             for (uint32_t i = 0; i < kSwapchainFramesInFlight; ++i)
-                m_frameQueries[i] = m_device->Nvrhi()->createEventQuery();
+            {
+                if (!m_frameSlots[i].Init(m_device->Nvrhi()))
+                {
+                    ARC_ERROR("Swapchain: frame-slot event query creation failed");
+                    return false;
+                }
+            }
             return true;
         }
 
@@ -347,16 +353,16 @@ namespace Arcane
             // has retired on the GPU.
             if (m_frameCounter >= kSwapchainFramesInFlight)
             {
-                nvrhi::IEventQuery* slotQuery =
-                    m_frameQueries[m_frameCounter % kSwapchainFramesInFlight];
                 // Same completion semantics as the waitEventQuery this replaced
-                // -- it never returns early -- but it polls and republishes the
-                // diagnostics beats while waiting, which is what makes a wedged
-                // GPU observable as `gpu-stall` instead of parking the main
-                // thread somewhere the watchdog cannot see it. Cost analysis in
-                // GpuInstrumentation.hpp; the non-GPU-bound frame pays one poll.
-                WaitForGpuFrameSlot(m_device->Nvrhi(), slotQuery);
-                m_device->Nvrhi()->resetEventQuery(slotQuery);
+                // -- never returns early -- but a STAMPED slot is waited on by
+                // polling, republishing the diagnostics beats, which is what
+                // makes a wedged GPU observable as `gpu-stall` instead of
+                // parking the main thread where the watchdog cannot see it. An
+                // UNSTAMPED slot (a frame that bailed before Present) falls
+                // through to nvrhi's instant wait -- polling one would never
+                // complete. Both rules live in GpuFrameSlot, not here.
+                m_frameSlots[m_frameCounter % kSwapchainFramesInFlight]
+                    .WaitAndReset(m_device->Nvrhi());
             }
             return m_backbuffers[m_swapchain->GetCurrentBackBufferIndex()];
         }
@@ -383,9 +389,8 @@ namespace Arcane
             // Mark this slot's command-work completion point (the display-side
             // headroom comes from the backbuffer count, not this fence);
             // BeginFrame N+2 waits on it.
-            m_device->Nvrhi()->setEventQuery(
-                m_frameQueries[m_frameCounter % kSwapchainFramesInFlight],
-                nvrhi::CommandQueue::Graphics);
+            m_frameSlots[m_frameCounter % kSwapchainFramesInFlight]
+                .Stamp(m_device->Nvrhi(), nvrhi::CommandQueue::Graphics);
             ++m_frameCounter;
 
             // Recycle retired command-list instances and upload regions.

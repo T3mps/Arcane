@@ -651,13 +651,19 @@ namespace
         //   - a frozen counter that nobody is publishing (a minimized host
         //     renders no frames) is no evidence at all, so the freshness gate
         //     below disarms rather than inventing a stall;
-        //   - a wedged GPU that has also parked the main thread inside a
-        //     blocking swapchain wait stops publishing too, and is therefore
-        //     NOT this rule's case. That one belongs to the hang rule, whose
-        //     all-thread walk shows the main thread parked in the wait -- which
-        //     is the honest report. Trying to claim it here would mean calling
-        //     every ordinary main-thread hang a GPU stall, since an ordinary
-        //     hang also stops the render path.
+        //   - a wedged GPU that has parked the render path in the swapchain's
+        //     frame-slot wait IS this rule's primary case, and the reason the
+        //     wait polls instead of blocking (GpuFrameSlot::WaitAndReset): the
+        //     loop republishes both beats, so the counter stays visibly frozen
+        //     under a visibly live render path for as long as the poll window
+        //     lasts. Past that window the wait parks for real and publishing
+        //     stops, at which point this rule disarms and an ordinary hang
+        //     report -- with the main thread's parked stack -- is the honest
+        //     remaining signal.
+        //
+        // What this rule must NEVER claim is a main thread that stopped for its
+        // own reasons: an ordinary CPU hang also stops the render path, so
+        // "nobody is publishing" has to mean silence here, not a GPU verdict.
         const double gpuThreshold = static_cast<double>(g_cfg.gpuStallSeconds);
         const double gpuFreshness = GpuBeatFreshnessSeconds(gpuThreshold);
 

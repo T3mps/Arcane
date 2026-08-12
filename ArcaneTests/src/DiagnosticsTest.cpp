@@ -25,6 +25,7 @@
 
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>   // GpuFrameSlot -- stamped bookkeeping, testable with no device
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -612,6 +613,42 @@ TEST_CASE("Diagnostics GPU watchdog writes a gpu-stall report when the fence sto
     REQUIRE(pumpUntilCount(43, afterFirstStall + 1, std::chrono::seconds(20)));
 }
 
+TEST_CASE("GpuFrameSlot never claims a stamp that did not go out", "[diag]")
+{
+    // The invariant the whole poll/wait split rests on. nvrhi's pollEventQuery
+    // reports an UNSTAMPED query as incomplete FOREVER (Vulkan:
+    // Queue::pollCommandList returns false for commandListID == 0; D3D12:
+    // !started), while waitEventQuery returns from that same state instantly.
+    // So a slot that wrongly believes it is stamped sends the wait into a poll
+    // loop nvrhi will never satisfy -- a multi-second host freeze plus a
+    // gpu-stall report blaming the GPU for a frame that never submitted
+    // anything. Reachable on Vulkan via an ordinary window resize
+    // (OutOfDateKHRError bails BeginFrame before Present ever stamps).
+    //
+    // No device here on purpose: a slot whose query could not be created must
+    // behave like an unstamped slot, and that is exactly what a null device
+    // produces. The GPU-side half of this is desk-covered ([gpu] PacingTest /
+    // SwapchainTest, plus the resize storm in the desk battery).
+    Arcane::GpuFrameSlot slot;
+
+    // Fresh: nothing stamped.
+    CHECK_FALSE(slot.IsStamped());
+
+    // A failed Init leaves it unstamped rather than half-armed.
+    CHECK_FALSE(slot.Init(nullptr));
+    CHECK_FALSE(slot.IsStamped());
+
+    // Stamp with no device: the stamp did NOT go out, so the flag must not
+    // claim it did. This is the assertion that keeps the poll loop honest.
+    slot.Stamp(nullptr, nvrhi::CommandQueue::Graphics);
+    CHECK_FALSE(slot.IsStamped());
+
+    // And the wait over an unstamped/queryless slot returns rather than
+    // polling. If this ever hangs, the regression is back.
+    slot.WaitAndReset(nullptr);
+    CHECK_FALSE(slot.IsStamped());
+}
+
 TEST_CASE("Diagnostics GPU watchdog fires while the render path is parked in a frame-slot wait", "[diag]")
 {
 #if defined(_WIN32)
@@ -623,7 +660,7 @@ TEST_CASE("Diagnostics GPU watchdog fires while the render path is parked in a f
 #endif
 
     // THE case the rule exists for, and the one it could not see before
-    // WaitForGpuFrameSlot: a wedged GPU parks the main thread inside the
+    // GpuFrameSlot's polling wait: a wedged GPU parks the main thread in the
     // swapchain's slot wait, so no new counter value can ever be published --
     // the host is blocked producing one. A blocking wait made that
     // indistinguishable from "not rendering", the freshness gate disarmed on
