@@ -371,13 +371,20 @@ namespace Arcane
             bufferDesc.SampleDesc.Count   = 1;
             bufferDesc.SampleDesc.Quality = 0;
             bufferDesc.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            bufferDesc.Flags              = D3D12_RESOURCE_FLAG_NONE;
+            // F-1a (desk-verified 2026-08-12): heaps minted by
+            // OpenExistingHeapFromAddress carry SHARED | SHARED_CROSS_ADAPTER |
+            // ALLOW_ONLY_BUFFERS (0x421 observed, RTX 3070), and D3D12 requires
+            // ALLOW_CROSS_ADAPTER on any resource placed in a
+            // SHARED_CROSS_ADAPTER heap -- FLAG_NONE fails with E_INVALIDARG.
+            bufferDesc.Flags              = D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER;
 
-            if (FAILED(m_device->CreatePlacedResource(m_markerHeap.Get(), 0, &bufferDesc,
-                                                      D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                                                      IID_PPV_ARGS(&m_markerResource))))
+            const HRESULT placedHr = m_device->CreatePlacedResource(m_markerHeap.Get(), 0, &bufferDesc,
+                                                                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                                    IID_PPV_ARGS(&m_markerResource));
+            if (FAILED(placedHr))
             {
-                ARC_WARN("GPU markers disabled: CreatePlacedResource on the diagnostic heap failed");
+                ARC_WARN("GPU markers disabled: CreatePlacedResource on the diagnostic heap failed (hr=0x{:08x})",
+                         static_cast<std::uint32_t>(placedHr));
                 return false;
             }
 

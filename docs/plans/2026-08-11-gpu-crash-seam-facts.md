@@ -66,6 +66,15 @@ readable once the device is removed. Use the purpose-built diagnostic path:
 3. `ID3D12Device::CreatePlacedResource` a buffer on that heap
    (SDK `d3d12.h:9136`), initial state `D3D12_RESOURCE_STATE_COPY_DEST` (see
    F-1b -- `WriteBufferImmediate` requires it).
+   **CORRECTED post-desk-run 2026-08-12: the buffer desc MUST set
+   `D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER`.** Heaps minted by
+   `OpenExistingHeapFromAddress` come back flagged `D3D12_HEAP_FLAG_SHARED |
+   SHARED_CROSS_ADAPTER | ALLOW_ONLY_BUFFERS` (0x421 observed on RTX 3070,
+   headless repro with the debug layer: "D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER
+   must be specified if and only if D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER is
+   set"), so `FLAG_NONE` fails with `E_INVALIDARG`. Neither the MS page quoted
+   below nor this fact's original text recorded the heap's implicit flags; the
+   first desk run surfaced it via the `breadcrumbs:off` degrade.
 4. Read the marker values through the ORIGINAL `VirtualAlloc` pointer after
    device removal. Never through a `Map()`ed pointer on a device-owned heap.
 
