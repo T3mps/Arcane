@@ -790,14 +790,26 @@ namespace Arcane::Editor
         // called beside PollModuleBuild) drains it and does the real work.
         static void OnReportWritten(const std::filesystem::path& diagPath, void* user);
         void PollDiagnosticReports();
+        // Both members below are on ResetPerProjectState's reset list
+        // (EditorAppProject.cpp) -- see that function's member-rationale
+        // comment block for the entry. m_pendingReports because a path
+        // queued against the outgoing project and drained after the switch
+        // would try to RegisterCreatedAsset it into the WRONG (incoming)
+        // project's registry; m_reportDiagnostics because its rows carry
+        // DiagLocator::Asset(guid) values that exist only in the outgoing
+        // project's registry -- surviving a switch would resurrect stale
+        // rows whose click silently no-ops and whose detail line names a
+        // file from a project that is no longer open (the switch-staleness
+        // class ResetPerProjectState exists to institutionalize against).
         std::mutex                         m_pendingReportsMutex;
         std::vector<std::filesystem::path> m_pendingReports;      // guarded by m_pendingReportsMutex
         // KEY OWNERSHIP: "diagnostics:reports" -- accumulated across the
-        // WHOLE session (one row per report successfully registered while
-        // this editor ran), never cleared elsewhere, so an earlier report's
-        // row survives a later report's Publish (publication-group replace
-        // semantics -- Diagnostics.hpp). Main-thread only, like the queue
-        // above -- PollDiagnosticReports is the only writer.
+        // CURRENT project's session (one row per report successfully
+        // registered against it), so an earlier report's row survives a
+        // later report's Publish (publication-group replace semantics --
+        // Diagnostics.hpp) UNTIL a project switch resets it. Main-thread
+        // only, like the queue above -- PollDiagnosticReports is the only
+        // writer.
         std::vector<Arcane::Diagnostic>    m_reportDiagnostics;
 
         // Editor state naming entities of the OUTGOING scene, torn down before any

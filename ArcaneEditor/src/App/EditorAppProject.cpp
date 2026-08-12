@@ -384,6 +384,16 @@ namespace Arcane::Editor
     // m_assetBrowser: selection, search, and kind filter all belong to the
     // outgoing project's registry -- a Guid from it must not survive as the
     // Assets menu's tracked row.
+    // m_pendingReports / m_reportDiagnostics (GPU crash diagnostics arc,
+    // Task 9): m_pendingReports is a report path already queued against the
+    // outgoing project by OnReportWritten -- draining it post-switch would
+    // RegisterCreatedAsset it into the WRONG (incoming) project's registry.
+    // m_reportDiagnostics's rows carry DiagLocator::Asset(guid) values that
+    // exist only in the outgoing project's registry (m_consoleDiag.store
+    // above clears the PUBLISHED "diagnostics:reports" set, but this is the
+    // accumulator PollDiagnosticReports republishes THE WHOLE OF on the next
+    // report -- clearing only the store would let the very next post-switch
+    // report resurrect every stale row alongside it).
     // -- previously in NO list (the A3 gap): --
     // m_dialogs: in-flight dialogs die with their project (sec 2).
     // m_modalErrors: a dead project's modal must not pop post-switch.
@@ -409,6 +419,16 @@ namespace Arcane::Editor
         // A parked LaunchStandalone cannot survive into a switch: OpenProject's
         // own Request is ignored while any intent is parked, so the modal
         // resolves first.
+
+        // m_pendingReports / m_reportDiagnostics (Task 9) -- see the member-
+        // rationale block above. The mutex is taken even here: OnReportWritten
+        // can still push from the watchdog thread while a switch runs on the
+        // main thread, so this must not be a bare `.clear()` racing that push.
+        {
+            std::lock_guard<std::mutex> lock(m_pendingReportsMutex);
+            m_pendingReports.clear();
+        }
+        m_reportDiagnostics.clear();
     }
 
     void EditorApp::SwitchProject(const std::filesystem::path& path)
