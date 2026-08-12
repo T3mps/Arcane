@@ -4,9 +4,11 @@
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/ShaderLibrary.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <unordered_map>
@@ -393,11 +395,30 @@ namespace Arcane
                     glm::vec2(2.0f / m_viewport.x, 2.0f / m_viewport.y),
                     glm::vec2(0.0f) };
 
+                // Draw-level markers (Task 7): the batcher's per-run flush is the
+                // one genuinely draw-granular site in the 2D path -- every other
+                // pass in either host records a single draw, where a sub-marker
+                // would only restate its enclosing pass scope. Opt-in
+                // (`diagnostics.drawMarkers`, default false) and compiled out of
+                // Dist; nvrhi markers ONLY, never breadcrumb-ring entries, or a
+                // busy frame's runs would evict the pass scopes a crash report is
+                // built from.
                 for (const BatchRun& run : m_runs)
                 {
                     nvrhi::IGraphicsPipeline* pipeline = GetPipeline(run.material);
                     if (!pipeline)
                         continue;
+#if !defined(ARCANE_DIST)
+                    // Name built only when the toggle is on: this is the inner
+                    // loop of every 2D frame, and an snprintf per run for a
+                    // string nobody reads is not free.
+                    char drawName[48] = "draw:batch";
+                    if (GpuDrawMarkersEnabled())
+                        std::snprintf(drawName, sizeof(drawName), "draw:batch%lld/mat%u",
+                                      static_cast<long long>(&run - m_runs.data()),
+                                      run.material);
+                    ARC_GPU_DRAW_SCOPE(m_commandList, drawName);
+#endif
                     auto state = nvrhi::GraphicsState()
                         .setPipeline(pipeline)
                         .setFramebuffer(m_target)

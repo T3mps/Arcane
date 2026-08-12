@@ -14,6 +14,7 @@
 // path (every .arcdiag is fully renderable on its own).
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -424,4 +425,272 @@ TEST_CASE("Diagnostics kind derivation covers gpu-stall, not just gpu-crash", "[
     const auto env = Arcane::Diag::ReadFile(SiblingWithExt(txtPath, ".arcdiag"));
     REQUIRE(env.has_value());
     CHECK(env->kind == "gpu-stall");
+}
+
+// =============================================================================
+// GPU-progress watchdog (GPU crash diagnostics arc, Task 7)
+// =============================================================================
+// The staleness DECISION is extracted into Arcane::Diagnostics::ProgressStallRule
+// so it can be driven by hand -- no threads, no wall clock, no GPU. That matters
+// twice over: the rule is the part that can be wrong (one report per stall,
+// re-armed on progress), and the 2026-08-11 hosted-CI flake showed that timing
+// a watchdog against a deadline is how a correct rule ships a red build. Here
+// the clock is a parameter, so these cases are exact rather than generous.
+
+TEST_CASE("Diagnostics GPU stall rule fires once per stall and re-arms on progress", "[diag]")
+{
+    Arcane::Diagnostics::ProgressStallRule rule(8.0);
+
+    // First poll only seeds: a rule that fired on its first observation would
+    // report a "stall" the instant the watchdog started.
+    CHECK_FALSE(rule.Poll(100, 0.0));
+
+    // Same value, but not yet long enough.
+    CHECK_FALSE(rule.Poll(100, 4.0));
+    CHECK_FALSE(rule.Poll(100, 7.9));
+
+    // Threshold reached: exactly one true.
+    CHECK(rule.Poll(100, 8.0));
+
+    // Still stalled, arbitrarily far past the threshold: a watchdog that
+    // re-reports every poll buries the first (and most informative) capture.
+    CHECK_FALSE(rule.Poll(100, 8.25));
+    CHECK_FALSE(rule.Poll(100, 60.0));
+
+    // The GPU moved again: re-armed, and the stall clock restarts from HERE
+    // (not from the original value's first sighting).
+    CHECK_FALSE(rule.Poll(101, 60.5));
+    CHECK_FALSE(rule.Poll(101, 68.4));
+
+    // A NEW stall is a new report. Otherwise the first hang of a session would
+    // be the only one ever captured.
+    CHECK(rule.Poll(101, 68.5));
+    CHECK_FALSE(rule.Poll(101, 69.0));
+}
+
+TEST_CASE("Diagnostics GPU stall rule counts one report per stall across many polls", "[diag]")
+{
+    // The shape the watchdog thread actually runs: a fixed poll cadence over a
+    // long stall, then recovery, then another stall. Poll-driven rather than
+    // deadline-driven on purpose (2026-08-11 flake fix) -- the cadence here is
+    // simulated, so a loaded runner cannot change the answer.
+    constexpr double kPollSeconds  = 0.25;
+    constexpr double kStallSeconds = 2.0;
+
+    Arcane::Diagnostics::ProgressStallRule rule(kStallSeconds);
+
+    std::uint64_t fence   = 7;
+    int           reports = 0;
+    double        now     = 0.0;
+
+    // 40 polls (10s) with the fence frozen: one report, not forty.
+    for (int i = 0; i < 40; ++i, now += kPollSeconds)
+        if (rule.Poll(fence, now)) ++reports;
+    CHECK(reports == 1);
+    CHECK(rule.StalledSeconds(now) >= kStallSeconds);
+
+    // The fence advances every poll for a while: nothing reported, and the
+    // rule reports the stall age as ~0 while progress continues.
+    for (int i = 0; i < 20; ++i, now += kPollSeconds)
+        if (rule.Poll(++fence, now)) ++reports;
+    CHECK(reports == 1);
+    CHECK(rule.StalledSeconds(now) < kStallSeconds);
+
+    // Frozen again: exactly one more.
+    for (int i = 0; i < 40; ++i, now += kPollSeconds)
+        if (rule.Poll(fence, now)) ++reports;
+    CHECK(reports == 2);
+}
+
+TEST_CASE("Diagnostics GPU stall rule discards the stall clock on Reset", "[diag]")
+{
+    // Reset is what the watchdog runs when the render path stops publishing at
+    // all. The value is unchanged across it -- so a rule that only tracked the
+    // VALUE would fire the instant publishing resumed, blaming the GPU for a
+    // gap in which nothing was expected to move.
+    Arcane::Diagnostics::ProgressStallRule rule(2.0);
+
+    CHECK_FALSE(rule.Poll(9, 0.0));
+    CHECK_FALSE(rule.Poll(9, 1.9));
+
+    rule.Reset();
+    CHECK(rule.StalledSeconds(100.0) == 0.0);
+
+    // 100s later, same value: the first poll after a Reset only re-seeds.
+    CHECK_FALSE(rule.Poll(9, 100.0));
+    CHECK_FALSE(rule.Poll(9, 101.9));
+
+    // ...and the clock runs from the RESUME, not from the original sighting.
+    CHECK(rule.Poll(9, 102.0));
+}
+
+TEST_CASE("Diagnostics GPU watchdog writes a gpu-stall report when the fence stops advancing", "[diag]")
+{
+#if defined(_WIN32)
+    if (IsDebuggerPresent())
+    {
+        SUCCEED("watchdog is suppressed under a debugger by design");
+        return;
+    }
+#endif
+
+    const std::filesystem::path dir = FreshReportDir("gpu-stall");
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "DiagTest";
+    cfg.dumpDir             = dir.string();
+    cfg.installCrashHandler = false;
+    cfg.gpuStallSeconds     = 1;      // the shipped default is 8; 1 keeps the gate quick
+    cfg.startHangWatchdog   = true;
+
+    // Elastic wait, exact assertion -- same poll-not-deadline discipline as the
+    // CPU re-arm case above (a loaded shared runner can take seconds to
+    // symbolize + write a report). Publishing `fence` on every poll IS the
+    // simulated render path: the rule's signal is "still being published, still
+    // not moving", so a test that published once and slept would be simulating a
+    // host that stopped rendering instead -- a case the rule deliberately
+    // ignores.
+    const auto pumpUntilCount = [](std::uint64_t fence, std::uint32_t target,
+                                   std::chrono::seconds cap)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + cap;
+        while (Arcane::Diagnostics::ReportCount() < target)
+        {
+            Arcane::Diagnostics::GpuHeartbeat(fence);
+            if (std::chrono::steady_clock::now() >= deadline)
+                return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        return true;
+    };
+
+    const auto pumpFor = [](std::uint64_t fence, std::chrono::milliseconds span)
+    {
+        const auto until = std::chrono::steady_clock::now() + span;
+        while (std::chrono::steady_clock::now() < until)
+        {
+            Arcane::Diagnostics::GpuHeartbeat(fence);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    };
+
+    const std::uint32_t base = Arcane::Diagnostics::ReportCount();
+
+    ArmedDiagnostics armed(cfg);
+
+    // No GPU heartbeat yet: like the CPU trigger, the GPU rule stays silent
+    // until the render path has published at least one value, so a headless
+    // host that never renders gets silence rather than a spurious report.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    CHECK(Arcane::Diagnostics::ReportCount() == base);
+
+    // A frame loop that keeps running while the GPU stops retiring: the value
+    // republished every poll, never advancing. This thread deliberately never
+    // calls Heartbeat(), so the CPU trigger stays disarmed and the only report
+    // that can appear is the GPU one.
+    REQUIRE(pumpUntilCount(42, base + 1, std::chrono::seconds(20)));
+    const std::uint32_t afterFirstStall = Arcane::Diagnostics::ReportCount();
+
+    // One stall, one report -- still stalled, still publishing.
+    pumpFor(42, std::chrono::milliseconds(1500));
+    CHECK(Arcane::Diagnostics::ReportCount() == afterFirstStall);
+
+    // The report says gpu-stall, which is what Diagnostics::DeriveKind turns
+    // into the .arcdiag's "gpu-stall" kind -- the whole reason the GPU section
+    // provider engages for this report instead of it reading as a CPU hang.
+    bool foundReport = false;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(dir, ec))
+    {
+        if (e.path().extension() != ".arcdiag") continue;
+        const auto env = Arcane::Diag::ReadFile(e.path());
+        if (env && env->kind == "gpu-stall") { foundReport = true; break; }
+    }
+    CHECK(foundReport);
+
+    // The GPU moved again, then stalled again: a NEW stall is a NEW report.
+    REQUIRE(pumpUntilCount(43, afterFirstStall + 1, std::chrono::seconds(20)));
+}
+
+TEST_CASE("Diagnostics arming discards beats published before Install", "[diag]")
+{
+#if defined(_WIN32)
+    if (IsDebuggerPresent())
+    {
+        SUCCEED("watchdog is suppressed under a debugger by design");
+        return;
+    }
+#endif
+
+    // Heartbeat()/GpuHeartbeat() are unconditional stores -- they do not check
+    // whether diagnostics are installed, on purpose (they sit on the hot frame
+    // path). So a beat can be sitting in the globals, arbitrarily old, when a
+    // host arms. If arming inherited it, the watchdog would file a hang report
+    // seconds later for something that happened before it existed. This is not
+    // hypothetical: it is what a suite running in random order does to itself,
+    // and what a host that beats during boot before Install() would do in
+    // production.
+    const std::filesystem::path dir = FreshReportDir("stale-beat");
+
+    Arcane::Diagnostics::Heartbeat();
+    Arcane::Diagnostics::GpuHeartbeat(1234);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "DiagTest";
+    cfg.dumpDir             = dir.string();
+    cfg.installCrashHandler = false;
+    cfg.hangSeconds         = 1;
+    cfg.gpuStallSeconds     = 1;
+    cfg.startHangWatchdog   = true;
+
+    const std::uint32_t base = Arcane::Diagnostics::ReportCount();
+
+    ArmedDiagnostics armed(cfg);
+
+    // Both thresholds are 1s and the pre-Install beats are already older than
+    // that, so an inherited beat reports on the very first poll.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+
+    CHECK(Arcane::Diagnostics::ReportCount() == base);
+}
+
+TEST_CASE("Diagnostics GPU watchdog stays silent when the host stops rendering", "[diag]")
+{
+#if defined(_WIN32)
+    if (IsDebuggerPresent())
+    {
+        SUCCEED("watchdog is suppressed under a debugger by design");
+        return;
+    }
+#endif
+
+    // A minimized host renders no frames: the counter freezes because nothing
+    // is being submitted, not because the GPU stopped retiring. Publishing
+    // stops with it, and that -- not the frozen value -- is what tells the rule
+    // there is no evidence here. Without this gate, minimizing a window for
+    // gpuStallSeconds would file a GPU crash report.
+    const std::filesystem::path dir = FreshReportDir("gpu-stall-not-rendering");
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "DiagTest";
+    cfg.dumpDir             = dir.string();
+    cfg.installCrashHandler = false;
+    cfg.gpuStallSeconds     = 1;
+    // Takes the CPU rule out of the picture for the whole run: this case
+    // asserts that NO report appears, and the two rules share one watchdog
+    // thread, so a hang report would read as a GPU-rule failure it isn't.
+    cfg.hangSeconds         = 3600;
+    cfg.startHangWatchdog   = true;
+
+    const std::uint32_t base = Arcane::Diagnostics::ReportCount();
+
+    ArmedDiagnostics armed(cfg);
+
+    // One frame's worth of publishing, then the host "minimizes": no further
+    // GpuHeartbeat calls, for many multiples of the stall window.
+    Arcane::Diagnostics::GpuHeartbeat(7);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+
+    CHECK(Arcane::Diagnostics::ReportCount() == base);
 }

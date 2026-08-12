@@ -4,6 +4,7 @@
 #include <Arcane/Base/Engine.hpp>         // ExecutablePathUtf8(), BuildInfo()
 #include <Arcane/Base/Log.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -37,6 +38,13 @@ namespace
         return std::chrono::duration<double>(d).count();
     }
 
+    // Monotone seconds in an arbitrary epoch -- the clock ProgressStallRule is
+    // polled with. Its epoch is irrelevant; only differences are used.
+    [[nodiscard]] double NowSeconds() noexcept
+    {
+        return std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
+    }
+
     // ---- shared state -----------------------------------------------------
     // Deliberately file-static rather than a class: the crash filter is a raw
     // C callback and the watchdog outlives any owner we could hand it.
@@ -49,6 +57,32 @@ namespace
     // not a spurious report hangSeconds after boot.
     std::atomic<std::int64_t> g_lastBeat{0};
     std::atomic<bool>         g_beatSeen{false};
+
+    // GPU-side progress (Task 7). Same arming discipline as the pair above and
+    // for the same reason: a host that never renders publishes nothing here and
+    // must get silence. The VALUE is what matters (a monotone count of GPU sync
+    // points passed) -- its staleness, not its age, is the signal, so unlike
+    // g_lastBeat this is not a timestamp.
+    std::atomic<std::uint64_t> g_gpuFence{0};
+    std::atomic<bool>          g_gpuBeatSeen{false};
+    std::atomic<std::int64_t>  g_lastGpuBeat{0};
+
+    // How stale the last GpuHeartbeat CALL may be before the GPU rule stops
+    // evaluating. A frozen counter means "the GPU stopped" only while somebody
+    // is still publishing it; a minimized host renders no frames at all, and its
+    // frozen counter must read as "no data", not as a stall. Two seconds is ~120
+    // frames of grace at 60Hz.
+    constexpr double kGpuBeatFreshnessCapSeconds = 2.0;
+
+    // The gate has to trip BEFORE the stall threshold could, or a host that
+    // published once and then stopped rendering would be reported as stalled in
+    // the window between the two. Deriving the window from the configured
+    // threshold makes that structural for ANY gpuStallSeconds instead of an
+    // accident of the shipped default (which is 8, so this returns the 2s cap).
+    [[nodiscard]] double GpuBeatFreshnessSeconds(double stallSeconds) noexcept
+    {
+        return std::min(kGpuBeatFreshnessCapSeconds, stallSeconds * 0.5);
+    }
 
     std::mutex  g_phaseMutex;
     std::string g_phase;
@@ -565,6 +599,11 @@ namespace
     }
 #endif
 
+    // ONE thread, TWO rules (Task 7). The GPU-progress rule is a sibling loop
+    // body here rather than a second thread: it needs the same 250ms cadence,
+    // the same debugger suppression, and the same report serialization as the
+    // hang rule, and a second thread would buy nothing but a second way for the
+    // two to interleave reports for what is usually one incident.
     void WatchdogMain()
     {
 #if defined(_WIN32)
@@ -577,25 +616,24 @@ namespace
         std::int64_t reportedBeat = 0;
         bool         reported     = false;
 
-        while (!g_watchdogStop.load(std::memory_order_acquire))
+        // The GPU rule's state, in the extracted+tested form. Same shape --
+        // report once, re-arm on progress -- over a VALUE rather than an age.
+        ProgressStallRule gpuRule(static_cast<double>(g_cfg.gpuStallSeconds));
+
+        // Main-thread liveness rule. Unchanged in substance; lifted into a
+        // lambda only so its early-outs stop being `continue`s that would also
+        // skip the GPU rule below.
+        const auto checkMainThreadBeat = [&]()
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
-
-            if (!g_beatSeen.load(std::memory_order_acquire)) continue;
-
-#if defined(_WIN32)
-            // A breakpoint stops the main thread by design. Firing then would
-            // train the user to ignore the one signal that matters.
-            if (IsDebuggerPresent()) continue;
-#endif
+            if (!g_beatSeen.load(std::memory_order_acquire)) return;
 
             const std::int64_t beat = g_lastBeat.load(std::memory_order_acquire);
 
             if (reported && beat != reportedBeat)
                 reported = false;   // main thread moved again: re-arm
 
-            if (reported) continue;
-            if (SecondsSince(beat) < threshold) continue;
+            if (reported) return;
+            if (SecondsSince(beat) < threshold) return;
 
             char msg[160];
             std::snprintf(msg, sizeof(msg), "hang (main thread has not ticked for %.1fs)",
@@ -604,6 +642,89 @@ namespace
 
             reported     = true;
             reportedBeat = beat;
+        };
+
+        // GPU-progress rule. The signal it is built on is narrow and stated
+        // plainly: the render path is STILL PUBLISHING a counter that has
+        // STOPPED MOVING. Both halves matter --
+        //
+        //   - a frozen counter that nobody is publishing (a minimized host
+        //     renders no frames) is no evidence at all, so the freshness gate
+        //     below disarms rather than inventing a stall;
+        //   - a wedged GPU that has also parked the main thread inside a
+        //     blocking swapchain wait stops publishing too, and is therefore
+        //     NOT this rule's case. That one belongs to the hang rule, whose
+        //     all-thread walk shows the main thread parked in the wait -- which
+        //     is the honest report. Trying to claim it here would mean calling
+        //     every ordinary main-thread hang a GPU stall, since an ordinary
+        //     hang also stops the render path.
+        const double gpuThreshold = static_cast<double>(g_cfg.gpuStallSeconds);
+        const double gpuFreshness = GpuBeatFreshnessSeconds(gpuThreshold);
+
+        const auto checkGpuProgress = [&]()
+        {
+            if (!g_gpuBeatSeen.load(std::memory_order_acquire)) return;
+
+            if (SecondsSince(g_lastGpuBeat.load(std::memory_order_acquire)) >= gpuFreshness)
+            {
+                // Not rendering. Drop the accumulated stall age so a host that
+                // resumes starts a fresh clock instead of firing on the gap.
+                gpuRule.Reset();
+                return;
+            }
+
+            const std::uint64_t fence = g_gpuFence.load(std::memory_order_acquire);
+            const double        now   = NowSeconds();
+            if (!gpuRule.Poll(fence, now)) return;
+
+            const double beatAge = g_beatSeen.load(std::memory_order_acquire)
+                                 ? SecondsSince(g_lastBeat.load(std::memory_order_acquire))
+                                 : -1.0;
+
+            // "gpu-stall" is a CONTRACT, not prose: Diagnostics::DeriveKind
+            // reads this string and only a lowercase "gpu" + "stall" yields the
+            // .arcdiag kind that makes the GPU-section provider's output mean
+            // "the GPU stopped" rather than "the GPU died".
+            char msg[224];
+            if (beatAge >= 0.0)
+            {
+                std::snprintf(msg, sizeof(msg),
+                              "gpu-stall: GPU progress counter %llu has not advanced for %.1fs "
+                              "(main thread last ticked %.1fs ago)",
+                              static_cast<unsigned long long>(fence),
+                              gpuRule.StalledSeconds(now), beatAge);
+            }
+            else
+            {
+                std::snprintf(msg, sizeof(msg),
+                              "gpu-stall: GPU progress counter %llu has not advanced for %.1fs "
+                              "(main thread never ticked)",
+                              static_cast<unsigned long long>(fence),
+                              gpuRule.StalledSeconds(now));
+            }
+            WriteReportImpl(msg, nullptr);
+        };
+
+        while (!g_watchdogStop.load(std::memory_order_acquire))
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+#if defined(_WIN32)
+            // A breakpoint stops the main thread by design -- and with it every
+            // submission, so the GPU counter freezes too. Firing then would
+            // train the user to ignore the one signal that matters. Hoisted
+            // above both rules for that second reason.
+            if (IsDebuggerPresent()) continue;
+#endif
+
+            // The two rules are disjoint by construction -- both signals are
+            // published from the main thread, so "still publishing GPU
+            // progress" and "has not ticked for hangSeconds" cannot be true at
+            // once -- which is why running both every poll costs nothing and
+            // cannot double-report one incident. GPU first anyway: the more
+            // specific rule ahead of the general one.
+            checkGpuProgress();
+            checkMainThreadBeat();
         }
     }
 }   // namespace
@@ -613,6 +734,17 @@ void Install(const Config& cfg)
     if (g_installed.exchange(true, std::memory_order_acq_rel)) return;
 
     g_cfg = cfg;
+
+    // Arm from a CLEAN slate. Heartbeat()/GpuHeartbeat() set their seen-flags
+    // unconditionally -- they are one relaxed store each and deliberately do
+    // not test whether diagnostics are installed -- so a beat published before
+    // this arming (or by a previous arming that has since shut down) would
+    // otherwise be inherited here as a live, and by now ancient, timestamp. The
+    // watchdog would then report a hang seconds after boot for something that
+    // happened before it existed. Shutdown() clears these too; doing it on BOTH
+    // edges is what makes the state per-arming rather than per-process.
+    g_beatSeen.store(false, std::memory_order_release);
+    g_gpuBeatSeen.store(false, std::memory_order_release);
 
 #if defined(_WIN32)
     g_mainThreadId = GetCurrentThreadId();
@@ -627,10 +759,11 @@ void Install(const Config& cfg)
         g_watchdog = std::thread(&WatchdogMain);
     }
 
-    ARC_INFO("Diagnostics armed (crash handler {}, hang watchdog {} @ {}s) -> {}",
+    ARC_INFO("Diagnostics armed (crash handler {}, hang watchdog {} @ {}s, gpu-stall @ {}s) -> {}",
              cfg.installCrashHandler ? "on" : "off",
              cfg.startHangWatchdog ? "on" : "off",
              cfg.hangSeconds,
+             cfg.gpuStallSeconds,
              ReportDir().string());
 }
 
@@ -655,8 +788,10 @@ void Shutdown() noexcept
 #endif
 
     // Beat state is per-arming: a later Install() must not inherit a stale
-    // "already beating" flag from this one.
+    // "already beating" flag from this one. Both triggers, for both reasons --
+    // the GPU one would otherwise re-arm against a dead device's last counter.
     g_beatSeen.store(false, std::memory_order_release);
+    g_gpuBeatSeen.store(false, std::memory_order_release);
 }
 
 void Heartbeat() noexcept
@@ -665,6 +800,59 @@ void Heartbeat() noexcept
     // Release-store after the beat so the watchdog never sees "beating" with an
     // unset timestamp and fires on a zero.
     g_beatSeen.store(true, std::memory_order_release);
+}
+
+void GpuHeartbeat(std::uint64_t fenceValue) noexcept
+{
+    g_gpuFence.store(fenceValue, std::memory_order_release);
+    g_lastGpuBeat.store(NowTicks(), std::memory_order_release);
+    // Same ordering discipline as Heartbeat(): arm only after the value is
+    // visible, so the watchdog never seeds its rule on a zero the render path
+    // never published.
+    g_gpuBeatSeen.store(true, std::memory_order_release);
+}
+
+bool ProgressStallRule::Poll(std::uint64_t value, double nowSeconds) noexcept
+{
+    // A first observation only seeds. Reporting here would call every armed
+    // watchdog's very first poll a stall.
+    if (!m_seeded)
+    {
+        m_seeded = true;
+        m_value  = value;
+        m_since  = nowSeconds;
+        return false;
+    }
+
+    if (value != m_value)
+    {
+        // Progress: re-arm, and restart the stall clock from HERE rather than
+        // from when this value was first seen -- otherwise a counter that moved
+        // once after a long quiet period would look instantly stale.
+        m_value    = value;
+        m_since    = nowSeconds;
+        m_reported = false;
+        return false;
+    }
+
+    if (m_reported) return false;                        // one stall, one report
+    if (nowSeconds - m_since < m_stallSeconds) return false;
+
+    m_reported = true;
+    return true;
+}
+
+double ProgressStallRule::StalledSeconds(double nowSeconds) const noexcept
+{
+    return m_seeded ? nowSeconds - m_since : 0.0;
+}
+
+void ProgressStallRule::Reset() noexcept
+{
+    m_seeded   = false;
+    m_reported = false;
+    m_value    = 0;
+    m_since    = 0.0;
 }
 
 void SetPhase(std::string phase)

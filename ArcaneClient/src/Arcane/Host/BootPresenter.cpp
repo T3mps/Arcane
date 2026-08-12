@@ -84,16 +84,24 @@ namespace Arcane
 
         nvrhi::ICommandList* cmd = m_gpu.Cmd();
         cmd->open();
-        if (m_mode == BootPresenterMode::Fullscreen)
+        // F-8d: boot-time device removal is real, and this submit runs before
+        // any frame loop exists -- so it gets a pass scope of its own rather
+        // than being the one GPU-bearing site a crash report could not name.
+        // The crash backend is armed at device creation, which precedes the
+        // first Present() here, so the scope always has somewhere to write.
         {
-            // Fullscreen owns the whole backbuffer -- clear it first. Overlay
-            // must NOT clear: it draws over the last editor frame, which is
-            // still sitting in this backbuffer image from an earlier Present.
-            cmd->clearTextureFloat(backbuffer, nvrhi::AllSubresources,
-                                   nvrhi::Color(0.06f, 0.06f, 0.08f, 1.0f));
+            GpuPassScope pass(cmd, "pass:boot");
+            if (m_mode == BootPresenterMode::Fullscreen)
+            {
+                // Fullscreen owns the whole backbuffer -- clear it first. Overlay
+                // must NOT clear: it draws over the last editor frame, which is
+                // still sitting in this backbuffer image from an earlier Present.
+                cmd->clearTextureFloat(backbuffer, nvrhi::AllSubresources,
+                                       nvrhi::Color(0.06f, 0.06f, 0.08f, 1.0f));
+            }
+            nvrhi::FramebufferHandle& fb = m_gpu.FramebufferFor(backbuffer);
+            m_gpu.Imgui().Render(cmd, fb);
         }
-        nvrhi::FramebufferHandle& fb = m_gpu.FramebufferFor(backbuffer);
-        m_gpu.Imgui().Render(cmd, fb);
         cmd->close();
         m_gpu.Device().Nvrhi()->executeCommandList(cmd);
         m_gpu.Swap().Present();

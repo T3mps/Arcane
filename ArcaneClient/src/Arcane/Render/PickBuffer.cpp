@@ -1,6 +1,7 @@
 #include <Arcane/Render/PickBuffer.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/PickEmit.hpp>
 #include <Arcane/Render/ShaderLibrary.hpp>
 
@@ -116,45 +117,56 @@ namespace Arcane
                 BuildGeometry();
 
                 m_commandList->open();
-                // 0 == background; every pixel not covered by a silhouette stays 0.
-                m_commandList->clearTextureUInt(m_target, nvrhi::AllSubresources, 0u);
-
-                if (!m_indices.empty())
+                // F-8e: a submit seam in its own right, and the one most likely
+                // to be where a hang lands -- a full draw pass over every
+                // pickable in the scene, at up to ss^2 the viewport's pixel
+                // count. It submits on this class's OWN command list, which is
+                // why it is invisible to any grep of the editor's frame file.
+                // The braces are load-bearing: the scope's end marker must be
+                // recorded while the list is still OPEN. Letting it run out at
+                // function scope would put it after close().
                 {
-                    if (nvrhi::IGraphicsPipeline* pipeline = GetPipeline())
+                    GpuPassScope pass(m_commandList, "pass:pick");
+                    // 0 == background; every pixel not covered by a silhouette stays 0.
+                    m_commandList->clearTextureUInt(m_target, nvrhi::AllSubresources, 0u);
+
+                    if (!m_indices.empty())
                     {
-                        EnsureBuffers();
-                        m_commandList->writeBuffer(m_vertexBuffer, m_vertices.data(),
-                                                   m_vertices.size() * sizeof(IdVertex));
-                        m_commandList->writeBuffer(m_indexBuffer, m_indices.data(),
-                                                   m_indices.size() * sizeof(uint32_t));
+                        if (nvrhi::IGraphicsPipeline* pipeline = GetPipeline())
+                        {
+                            EnsureBuffers();
+                            m_commandList->writeBuffer(m_vertexBuffer, m_vertices.data(),
+                                                       m_vertices.size() * sizeof(IdVertex));
+                            m_commandList->writeBuffer(m_indexBuffer, m_indices.data(),
+                                                       m_indices.size() * sizeof(uint32_t));
 
-                        // Logical 1x dims: PickDrawable geometry (PickEmit) lives in
-                        // canvas px derived from PickView (world*scale+offset), which
-                        // carries no target-size dependency. Feeding the LOGICAL
-                        // width/height here (not the supersampled target's physical
-                        // size) keeps the world->NDC map identical to the ss=1 case;
-                        // only the viewport below grows, so the SAME logical content
-                        // rasterizes at higher density -- supersampling with zero
-                        // vertex-shader change (see Step 0 in the task brief).
-                        const IdPushConstants push{
-                            glm::vec2(2.0f / (float)m_width, 2.0f / (float)m_height),
-                            glm::vec2(0.0f) };
+                            // Logical 1x dims: PickDrawable geometry (PickEmit) lives in
+                            // canvas px derived from PickView (world*scale+offset), which
+                            // carries no target-size dependency. Feeding the LOGICAL
+                            // width/height here (not the supersampled target's physical
+                            // size) keeps the world->NDC map identical to the ss=1 case;
+                            // only the viewport below grows, so the SAME logical content
+                            // rasterizes at higher density -- supersampling with zero
+                            // vertex-shader change (see Step 0 in the task brief).
+                            const IdPushConstants push{
+                                glm::vec2(2.0f / (float)m_width, 2.0f / (float)m_height),
+                                glm::vec2(0.0f) };
 
-                        auto state = nvrhi::GraphicsState()
-                            .setPipeline(pipeline)
-                            .setFramebuffer(m_targetFb)
-                            .addBindingSet(m_bindingSet)
-                            .setIndexBuffer({ m_indexBuffer, nvrhi::Format::R32_UINT, 0 })
-                            .addVertexBuffer({ m_vertexBuffer, 0, 0 });
-                        // Viewport spans the PHYSICAL (supersampled) target so the
-                        // rasterizer samples the logical content at ss x density.
-                        state.viewport.addViewportAndScissorRect(
-                            nvrhi::Viewport((float)(m_width * m_ss), (float)(m_height * m_ss)));
-                        m_commandList->setGraphicsState(state);
-                        m_commandList->setPushConstants(&push, sizeof(push));
-                        m_commandList->drawIndexed(nvrhi::DrawArguments()
-                            .setVertexCount((uint32_t)m_indices.size()));
+                            auto state = nvrhi::GraphicsState()
+                                .setPipeline(pipeline)
+                                .setFramebuffer(m_targetFb)
+                                .addBindingSet(m_bindingSet)
+                                .setIndexBuffer({ m_indexBuffer, nvrhi::Format::R32_UINT, 0 })
+                                .addVertexBuffer({ m_vertexBuffer, 0, 0 });
+                            // Viewport spans the PHYSICAL (supersampled) target so the
+                            // rasterizer samples the logical content at ss x density.
+                            state.viewport.addViewportAndScissorRect(
+                                nvrhi::Viewport((float)(m_width * m_ss), (float)(m_height * m_ss)));
+                            m_commandList->setGraphicsState(state);
+                            m_commandList->setPushConstants(&push, sizeof(push));
+                            m_commandList->drawIndexed(nvrhi::DrawArguments()
+                                .setVertexCount((uint32_t)m_indices.size()));
+                        }
                     }
                 }
 

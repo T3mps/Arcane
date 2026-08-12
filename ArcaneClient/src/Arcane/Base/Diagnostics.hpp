@@ -55,6 +55,15 @@ namespace Arcane::Diagnostics
         // thread for seconds, and a false report that cries wolf gets ignored.
         std::uint32_t hangSeconds = 12;
 
+        // GPU-progress stall that counts as a GPU hang (GpuHeartbeat below).
+        // TIGHTER than hangSeconds on purpose: when a wedged GPU also parks the
+        // main thread (a swapchain slot wait is a blocking wait), BOTH rules
+        // become true and the one that fires first names the cause. 8 < 12 makes
+        // that the GPU rule, which is the report worth having -- its kind is
+        // "gpu-stall", so the GPU-section provider engages and the report
+        // carries markers/DRED/device-fault instead of reading as a CPU hang.
+        std::uint32_t gpuStallSeconds = 8;
+
         bool installCrashHandler = true;
         bool startHangWatchdog   = true;
     };
@@ -87,6 +96,66 @@ namespace Arcane::Diagnostics
 
     // Reports written this process. The observable the watchdog test asserts on.
     [[nodiscard]] ARCANE_API std::uint32_t ReportCount() noexcept;
+
+    // -------------------------------------------------------------------
+    // GPU-progress watchdog (GPU crash diagnostics arc, Task 7)
+    // -------------------------------------------------------------------
+
+    // "The GPU is still retiring work." One relaxed atomic store, called once
+    // per frame by the render path with a MONOTONE count of GPU-side sync
+    // points the device has actually passed (Arcane::GpuFrameProgress derives
+    // it from an nvrhi event-query chain -- see Render/GpuInstrumentation.hpp).
+    //
+    // Deliberately NOT folded into Heartbeat(): that one says only that the
+    // main thread is alive, which is exactly what a GPU hang can leave true.
+    // A frame loop that keeps ticking while the GPU has stopped retiring
+    // anything is invisible to the hang watchdog and is the case this exists
+    // for. Like Heartbeat(), the FIRST call arms the trigger -- a host that
+    // never renders (a test, a headless tool) gets silence, not a spurious
+    // report gpuStallSeconds after boot.
+    ARCANE_API void GpuHeartbeat(std::uint64_t fenceValue) noexcept;
+
+    // The pure staleness rule the GPU watchdog runs, extracted so the part
+    // that can actually be WRONG -- one report per stall, re-armed on progress
+    // -- is testable without threads, timers, or a GPU. (The 2026-08-11
+    // hosted-CI flake was a watchdog test timed against a deadline; here the
+    // clock is a parameter, so the cases are exact instead of generous.)
+    //
+    // Not thread-safe and not meant to be: one instance lives on the watchdog
+    // thread and is polled only from there.
+    class ARCANE_API ProgressStallRule
+    {
+    public:
+        // `stallSeconds` -- how long the counter must sit unchanged before the
+        // stall is real. Values <= 0 make every repeat poll a stall.
+        explicit ProgressStallRule(double stallSeconds) noexcept
+            : m_stallSeconds(stallSeconds) {}
+
+        // One observation. `value` is the latest counter, `nowSeconds` a
+        // monotone clock reading in the caller's own epoch. Returns true on
+        // EXACTLY the poll that should write a report; false on every other,
+        // including every subsequent poll of the same stall. A changed value
+        // re-arms and restarts the stall clock from THIS poll.
+        [[nodiscard]] bool Poll(std::uint64_t value, double nowSeconds) noexcept;
+
+        // How long the current value has been unchanged, for the report's
+        // reason string. Zero before the first Poll().
+        [[nodiscard]] double StalledSeconds(double nowSeconds) const noexcept;
+
+        // Back to the never-polled state. The watchdog calls this when the
+        // producer stops publishing altogether (a minimized host renders no
+        // frames): the counter is frozen, but nobody is claiming otherwise, and
+        // resuming must start a fresh stall clock rather than inherit the age of
+        // a gap during which nothing was expected to move.
+        void Reset() noexcept;
+
+    private:
+        double        m_stallSeconds;
+        std::uint64_t m_value    = 0;
+        double        m_since    = 0.0;
+        bool          m_seeded   = false;   // a first Poll only seeds; it never reports
+        bool          m_reported = false;   // this stall already produced its one report
+    };
 
     // -------------------------------------------------------------------
     // GPU-section provider seam (GPU crash diagnostics arc, Task 4)

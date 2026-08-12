@@ -19,6 +19,7 @@
 #include <Arcane/Render/Batcher2D.hpp>   // Arcane::Batch2DStats (loop HUD + perf tick)
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
 #include <Arcane/Render/FullscreenMaterialChain.hpp>   // scene post hook
+#include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuPassScope -- the F-8b pass seams
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (the scene owns the view)
 
 #include <Astra/Core/TypeContext.hpp>
@@ -29,6 +30,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <thread>
 
 RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
@@ -449,6 +451,15 @@ void RuntimeApp::MainLoop()
         }
 
         m_gpu->Cmd()->open();
+        // F-8b: the runtime records its WHOLE frame into one command list, so
+        // the outer scope is that recording -- everything below nests inside it,
+        // and the canvas clear (which has no scope of its own) is covered by it.
+        // Held in an optional because the scope must END while the list is still
+        // open, and close() is ~100 lines down at the bottom of this loop body:
+        // a plain block would mean reindenting the entire frame for one marker.
+        std::optional<Arcane::GpuPassScope> framePass;
+        framePass.emplace(m_gpu->Cmd(), "pass:frame");
+
         m_gpu->Cmd()->clearTextureFloat(m_gpu->Cnv().Texture(), nvrhi::AllSubresources,
                                         nvrhi::Color(0.02f, 0.02f, 0.04f, 1.0f));
 
@@ -509,6 +520,10 @@ void RuntimeApp::MainLoop()
         }
 
         {
+            // Scope names deliberately mirror FramePerf's acc* accumulators
+            // (F-8b): a CPU timeline and a GPU timeline that use two vocabularies
+            // for the same phases cannot be read side by side.
+            Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:rec");
             const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             m_runtime->SetRenderContext(&m_gpu->Batch());
             m_runtime->Loop().SubmitRender();
@@ -516,6 +531,9 @@ void RuntimeApp::MainLoop()
         }
 
         {
+            // Where the batcher's draws actually get recorded -- Begin() above
+            // only sets state, End() is the flush.
+            Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:end");
             const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             m_gpu->Batch().End();
             m_perf.Add(m_perf.accEnd, t0, m_perf.Now());
@@ -523,6 +541,7 @@ void RuntimeApp::MainLoop()
 
         nvrhi::FramebufferHandle& fb = m_gpu->FramebufferFor(backbuffer);
         {
+            Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:tone");
             const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             // Scene post hook (post arc): with a bound chain the linear canvas
             // feeds it as the external Scene input and the tonemap samples the
@@ -553,18 +572,29 @@ void RuntimeApp::MainLoop()
             m_perf.Add(m_perf.accTone, t0, m_perf.Now());
         }
         {
+            Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:imgui");
             const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             m_gpu->Imgui().Render(m_gpu->Cmd(), fb);
             m_perf.Add(m_perf.accImgui, t0, m_perf.Now());
         }
 
+        // Ends the frame scope BEFORE close(): a marker recorded into a closed
+        // list latches the D3D12 marker layer off for the rest of the process
+        // and is an access violation on Vulkan.
+        framePass.reset();
         m_gpu->Cmd()->close();
         {
+            // No pass scope here: submit + present happen with the list already
+            // closed, so there is nothing left to record markers into. F-8b's
+            // "close + submit + present" row is a CPU seam only.
             const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
             m_gpu->Swap().Present();
             m_perf.Add(m_perf.accPresent, t0, m_perf.Now());
         }
+
+        // GPU-progress heartbeat (Task 7): after the frame's last submit.
+        m_gpu->FrameProgress().EndFrame();
 
         // Debounced watcher: rebuild PlaygroundGame -> auto hot reload.
         {

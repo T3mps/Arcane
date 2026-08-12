@@ -16,6 +16,7 @@
 #include <Arcane/Plugin/PluginABI.hpp>   // kGamePluginABIVersion (engine identity probe)
 #include <Arcane/Project/AssetId.hpp>            // AssetId::FromGuid (BootSceneFile)
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>   // SetGpuDrawMarkersEnabled (ApplyDiagnosticsConfig)
 #include <Arcane/Scene/Components.hpp>            // Arcane::Transform (VerifySharedTypeContext's default probe)
 #include <Arcane/Serialization/SceneAsset.hpp>    // ReadSceneFile/ApplySceneDocument/CreateEmpty (BootScene)
 
@@ -141,6 +142,26 @@ namespace Arcane::HostBoot
             return false;
         input.SetBaseContext("demo");
         return true;
+    }
+
+    // Apply the layered config's "diagnostics" category (engine default
+    // EngineConfig/diagnostics.json, deep-merged with a project's
+    // Config/diagnostics.json) to the render-side instrumentation.
+    //
+    // Only `drawMarkers` today: per-draw GPU markers, off by default because
+    // they are a debugging aid, not telemetry -- they cost a marker pair per
+    // batch run and exist for the sessions where someone is chasing a hang with
+    // PIX/RenderDoc open. PASS-level scopes are unconditional and are NOT
+    // configurable: they are what a crash report is built from, so a config file
+    // must never be able to turn the diagnostics off.
+    inline void ApplyDiagnosticsConfig(const Arcane::Config& config)
+    {
+        // is_object() before value(): a category whose file was authored as an
+        // array or a scalar would make value() THROW, and a malformed config
+        // file must not take a host down over a debugging toggle.
+        const nlohmann::json& diagnostics = config.Category("diagnostics");
+        SetGpuDrawMarkersEnabled(diagnostics.is_object() &&
+                                 diagnostics.value("drawMarkers", false));
     }
 
     // The game module to host: the project's gameModule when a project is open and it

@@ -214,6 +214,13 @@ namespace Arcane::HostBoot
             if (!ctx.gpu || !ctx.runtime) return true;
             if (!LoadInputConfig(ctx.gpu->Input(), ctx.runtime->Configuration()))
                 ARC_WARN("{}: input actions failed to load", ctx.moduleName ? ctx.moduleName : "HostBoot");
+            // The layered config's other host-visible switch rides this stage
+            // rather than getting one of its own: this is where config becomes
+            // live host state, it already re-runs on every project switch (so a
+            // project's Config/diagnostics.json takes effect exactly the way its
+            // input map does), and a whole BootStage for one bool would be
+            // ceremony. See HostBoot::ApplyDiagnosticsConfig.
+            ApplyDiagnosticsConfig(ctx.runtime->Configuration());
             return true;
         }));
         // sprite_tables is Fatal, not Optional (2026-07-30 review, Fix 5):

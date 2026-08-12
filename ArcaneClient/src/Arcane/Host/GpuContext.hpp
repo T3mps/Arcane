@@ -21,6 +21,7 @@
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/Canvas.hpp>
 #include <Arcane/Render/Device.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/ShaderLibrary.hpp>
 #include <Arcane/Render/Swapchain.hpp>
 #include <Arcane/Render/TonemapPass.hpp>
@@ -72,6 +73,12 @@ namespace Arcane
         InputActions&  Input()     { return *m_input; }
         nvrhi::ICommandList*   Cmd()       { return m_commandList; }
 
+        // GPU-progress heartbeat source (GPU crash diagnostics arc, Task 7).
+        // Hosts call FrameProgress().EndFrame() once per frame, after the
+        // frame's last submit. Lives here because it is per-device state both
+        // hosts need and neither should own a private copy of.
+        GpuFrameProgress& FrameProgress() { return *m_frameProgress; }
+
     private:
         GpuContext() = default;
 
@@ -96,7 +103,10 @@ namespace Arcane
 
         // commandList + framebuffers LAST: they hold NVRHI handles that must release
         // before m_device (whose teardown uses the device's native handles).
+        // frameProgress joins them for the same reason -- it owns a chain of
+        // nvrhi::EventQueryHandles created off m_device.
         nvrhi::CommandListHandle m_commandList;
+        std::unique_ptr<GpuFrameProgress> m_frameProgress;
         std::unordered_map<nvrhi::ITexture*, nvrhi::FramebufferHandle> m_framebuffers;
     };
 }

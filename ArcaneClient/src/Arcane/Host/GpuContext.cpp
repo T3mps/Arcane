@@ -66,6 +66,12 @@ namespace Arcane
         // declared/destroyed before the device (see header).
         ctx->m_commandList = ctx->m_device->Nvrhi()->createCommandList();
 
+        // GPU-progress heartbeat (Task 7). Not fallible from the host's point of
+        // view: a device that cannot create event queries yields a no-op counter
+        // and the GPU watchdog simply never arms -- losing a diagnostic must
+        // never be a reason to fail boot.
+        ctx->m_frameProgress = std::make_unique<GpuFrameProgress>(ctx->m_device->Nvrhi());
+
         return ctx;
     }
 

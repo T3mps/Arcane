@@ -5,6 +5,7 @@
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/Canvas.hpp>
 #include <Arcane/Render/FullscreenMaterialChain.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/ShaderLibrary.hpp>
 #include <Arcane/Render/TonemapPass.hpp>
 
@@ -62,17 +63,27 @@ namespace Arcane
                 // NVRHI manages all framebuffer transitions; no manual
                 // barriers here.
                 m_commandList->open();
-                m_commandList->clearTextureFloat(
-                    m_canvas->Texture(), nvrhi::AllSubresources,
-                    nvrhi::Color(clear.r, clear.g, clear.b, clear.a));
+                // F-8c/F-8e: this ONE site covers the editor's viewport, every
+                // open document's preview, and any other offscreen consumer --
+                // and it is a submit the editor's own frame file never mentions,
+                // because this class owns a private command list. The scope is
+                // strictly inside open()/close(): a marker written to a not-open
+                // list latches the D3D12 marker layer off permanently and is an
+                // access violation on Vulkan.
+                {
+                    GpuPassScope pass(m_commandList, "pass:canvas");
+                    m_commandList->clearTextureFloat(
+                        m_canvas->Texture(), nvrhi::AllSubresources,
+                        nvrhi::Color(clear.r, clear.g, clear.b, clear.a));
 
-                m_batcher->Begin(m_commandList, m_canvas->Framebuffer(),
-                                 m_width, m_height);
-                if (fn)
-                    fn(*m_batcher);
-                m_batcher->End();
+                    m_batcher->Begin(m_commandList, m_canvas->Framebuffer(),
+                                     m_width, m_height);
+                    if (fn)
+                        fn(*m_batcher);
+                    m_batcher->End();
 
-                RunPostAndTonemap();
+                    RunPostAndTonemap();
+                }
 
                 m_commandList->close();
                 m_device->executeCommandList(m_commandList);
@@ -89,14 +100,20 @@ namespace Arcane
                 // Draw(), with the caller recording a raw pass against the
                 // linear canvas framebuffer instead of driving the Batcher2D.
                 m_commandList->open();
-                m_commandList->clearTextureFloat(
-                    m_canvas->Texture(), nvrhi::AllSubresources,
-                    nvrhi::Color(clear.r, clear.g, clear.b, clear.a));
+                // F-8c: named apart from Draw's scope on purpose -- the caller
+                // records raw here, so "the GPU died in pass:canvas.raw" points
+                // at a different body of code than "in pass:canvas".
+                {
+                    GpuPassScope pass(m_commandList, "pass:canvas.raw");
+                    m_commandList->clearTextureFloat(
+                        m_canvas->Texture(), nvrhi::AllSubresources,
+                        nvrhi::Color(clear.r, clear.g, clear.b, clear.a));
 
-                if (fn)
-                    fn(m_commandList.Get(), m_canvas->Framebuffer());
+                    if (fn)
+                        fn(m_commandList.Get(), m_canvas->Framebuffer());
 
-                m_tonemap->Run(m_commandList, m_canvas->Texture(), m_outputFb);
+                    m_tonemap->Run(m_commandList, m_canvas->Texture(), m_outputFb);
+                }
 
                 m_commandList->close();
                 m_device->executeCommandList(m_commandList);

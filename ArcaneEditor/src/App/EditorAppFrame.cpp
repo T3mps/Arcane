@@ -23,6 +23,7 @@
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuPassScope -- the F-8 pass seams
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
 #include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
@@ -1163,7 +1164,12 @@ namespace Arcane::Editor
             // idle here; NVRHI auto-transitions the output texture (RenderTarget for
             // this pass, back to ShaderResource for the editor's ImGui::Image).
             m_gpu->Cmd()->open();
-            m_gameImgui->Render(m_gpu->Cmd(), m_viewportTargets.canvas->OutputFramebuffer());
+            // F-8a phase 11 / F-8e: one of the editor's per-frame submits, and
+            // Play-mode only -- mutually exclusive with pass:outline below.
+            {
+                Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:gameui");
+                m_gameImgui->Render(m_gpu->Cmd(), m_viewportTargets.canvas->OutputFramebuffer());
+            }
             m_gpu->Cmd()->close();
             m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
         }
@@ -1202,8 +1208,14 @@ namespace Arcane::Editor
                           : glm::ivec2(-1, -1);
 
             m_gpu->Cmd()->open();
-            m_viewportTargets.outline->Render(m_gpu->Cmd(), m_viewportTargets.pick->IdTarget(),
-                              m_viewportTargets.canvas->OutputFramebuffer(), op);
+            // F-8a phase 12 / F-8e: the SECOND of this phase's two submits. The
+            // first is m_viewportTargets.pick->RenderIdPass above, which carries
+            // its own pass:pick scope on the PickBuffer's private command list.
+            {
+                Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:outline");
+                m_viewportTargets.outline->Render(m_gpu->Cmd(), m_viewportTargets.pick->IdTarget(),
+                                  m_viewportTargets.canvas->OutputFramebuffer(), op);
+            }
             m_gpu->Cmd()->close();
             m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
         }
@@ -1859,15 +1871,29 @@ namespace Arcane::Editor
         if (!backbuffer) { ImGui::EndFrame(); return false; }
 
         m_gpu->Cmd()->open();
-        // Clear the backbuffer directly (Arcane Editor's scene will live in a panel,
-        // so there is no scene->tonemap->backbuffer pass as in ArcaneRuntime).
-        m_gpu->Cmd()->clearTextureFloat(backbuffer, nvrhi::AllSubresources,
-                                        nvrhi::Color(0.06f, 0.06f, 0.08f, 1.0f));
-        nvrhi::FramebufferHandle& fb = m_gpu->FramebufferFor(backbuffer);
-        m_gpu->Imgui().Render(m_gpu->Cmd(), fb);
+        // F-8a phase 19 / F-8e: the one submit that happens in EVERY editor
+        // frame, in either mode.
+        {
+            Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:present");
+            // Clear the backbuffer directly (Arcane Editor's scene will live in a panel,
+            // so there is no scene->tonemap->backbuffer pass as in ArcaneRuntime).
+            m_gpu->Cmd()->clearTextureFloat(backbuffer, nvrhi::AllSubresources,
+                                            nvrhi::Color(0.06f, 0.06f, 0.08f, 1.0f));
+            nvrhi::FramebufferHandle& fb = m_gpu->FramebufferFor(backbuffer);
+            m_gpu->Imgui().Render(m_gpu->Cmd(), fb);
+        }
         m_gpu->Cmd()->close();
         m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
         m_gpu->Swap().Present();
+
+        // GPU-progress heartbeat (Task 7): after the frame's LAST submit, so a
+        // stamp cannot retire ahead of the work it is meant to follow. Placed
+        // in the success path only -- the early return above is a frame with no
+        // submits at all (a zero-sized window mid-resize), and stamping there
+        // would report progress the GPU was never asked to make. A host that
+        // stays in that state stops publishing entirely, which the watchdog
+        // reads as "not rendering" rather than as a stall.
+        m_gpu->FrameProgress().EndFrame();
         return true;
     }
 

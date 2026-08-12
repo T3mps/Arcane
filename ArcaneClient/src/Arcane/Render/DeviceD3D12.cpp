@@ -5,6 +5,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/DeviceFactories.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/IGpuCrashBackend.hpp>
 #include <Arcane/Render/NvrhiMessageCallback.hpp>
 #include <Arcane/Render/Swapchain.hpp>
@@ -95,10 +96,13 @@ namespace Arcane
         {
             if (m_crashBackend)
             {
-                // Symmetric with Init's install. Both slots are process-wide
-                // and point INTO m_crashBackend, so they must be emptied
-                // before the member below goes away.
+                // Symmetric with Init's install. All three slots are
+                // process-wide and point INTO m_crashBackend, so they must be
+                // emptied before the member below goes away. The pass-scope
+                // slot clears conditionally: a second device that installed
+                // after this one must keep its registration.
                 Diagnostics::ClearGpuSectionProvider();
+                (void)ClearActiveGpuCrashBackendIfCurrent(m_crashBackend.get());
                 NvrhiMessageCallback::Instance().SetDeviceRemovedHook(nullptr);
             }
         }
@@ -212,6 +216,11 @@ namespace Arcane
                 // device layer owns the slot because it owns the backend the
                 // slot's `user` pointer names; ~DeviceD3D12 clears it.
                 Diagnostics::SetGpuSectionProvider(&D3D12GpuSectionProvider, m_crashBackend.get());
+                // Task 7's pass scopes read the backend from here. Same owner,
+                // same lifetime, same clear site as the provider slot above --
+                // F-8e's three command-list owners sit in layers that cannot be
+                // handed a backend pointer.
+                SetActiveGpuCrashBackend(m_crashBackend.get());
                 ARC_INFO("GPU crash backend armed: {}", m_crashBackend->Name());
             }
 
