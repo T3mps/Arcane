@@ -27,6 +27,9 @@ namespace Arcane::Editor
                 // also present but STICKER reads as "sprite" and is preferred by the
                 // brief's fallback order).
                 case AssetKind::Sprite:   return ICON_LC_STICKER;
+                // ICON_LC_BUG exists in IconsLucide.h (grepped: IconsLucide.h:307) --
+                // no nearest-match fallback needed.
+                case AssetKind::Diagnostic: return ICON_LC_BUG;
                 case AssetKind::Other:    return ICON_LC_FILE;
             }
             return ICON_LC_FILE;
@@ -43,6 +46,7 @@ namespace Arcane::Editor
                 case AssetKind::Data:     return "Data";
                 case AssetKind::Scene:    return "Scene";
                 case AssetKind::Sprite:   return "Sprite";
+                case AssetKind::Diagnostic: return "Diagnostic";
                 case AssetKind::Other:    return "Other";
             }
             return "Other";

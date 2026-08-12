@@ -1,0 +1,212 @@
+// CrashReportDocument (GPU crash diagnostics arc, Task 10): the PURE model
+// half -- construction from an already-loaded Diag::Envelope, the
+// CPU-report-noise filtering rules (IsEmptyQueueTimeline/IsNoiseFault), and
+// the .gpudump sibling's parsed section inventory -- driven headless (Draw
+// is never called; ImGui is untouched by this file). Also pins the
+// DocumentHost .arcdiag routing (mirrors EditorDocumentHostTest.cpp's
+// .arcmat routing test) and the Asset Browser's Diagnostic classification
+// (mirrors AssetBrowserTest.cpp's kind cases).
+
+#include <catch2/catch_test_macros.hpp>
+
+#include "Documents/CrashReportDocument.hpp"
+#include "Documents/DocumentHost.hpp"
+#include "Panels/AssetBrowser.hpp"
+
+#include <Arcane/Base/DiagEnvelope.hpp>
+#include <Arcane/Guid.hpp>
+#include <Arcane/Render/IGpuCrashBackend.hpp>
+
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <string_view>
+
+using Arcane::Diag::Envelope;
+using Arcane::Editor::CrashReportDocument;
+using Arcane::Editor::DocumentHost;
+using Arcane::Editor::EditorDocument;
+
+namespace
+{
+    std::filesystem::path TempDir(const char* leaf)
+    {
+        std::filesystem::path d =
+            std::filesystem::temp_directory_path() / "arcane_crashreportdoc_test" / leaf;
+        std::error_code ec;
+        std::filesystem::remove_all(d, ec);
+        std::filesystem::create_directories(d);
+        return d;
+    }
+}
+
+TEST_CASE("CrashReportDocument headless construction from a Diag::WriteFile fixture exposes parsed fields",
+          "[editor][diag]")
+{
+    const auto dir  = TempDir("construct");
+    const auto path = dir / "ArcaneEditor-20260811-120000-pid4242.arcdiag";
+
+    Envelope e;
+    e.guid = Arcane::Guid::Generate();
+    e.kind = "gpu-crash";
+    e.timestampUtc = "2026-08-11T12:00:00Z";
+    e.appName = "ArcaneEditor";
+    e.phase = "editor frame loop";
+    e.buildInfo = "Debug@deadbeef";
+    e.cpuThreadSummary = "Main thread: RenderSceneToViewport\n";
+    // One real queue, plus Task 5's deferred CPU-report-noise shape (an
+    // empty timeline on an otherwise-unrelated queue) -- both round-trip;
+    // VisibleQueues() is what tells them apart.
+    e.queues.push_back({ "direct", "pass:tonemap", { "pass:outline" } });
+    e.queues.push_back({ "graphics", "", {} });
+    e.fault = { "page-fault", "0xDEADBEEF0000", "ParticleIndices" };
+    e.siblingTxt = "r.txt";
+    e.siblingDmp = "r.dmp";
+    e.activeLayers = { "breadcrumbs:pass", "dred:full" };
+
+    REQUIRE(Arcane::Diag::WriteFile(e, path));
+    const auto loaded = Arcane::Diag::ReadFile(path);
+    REQUIRE(loaded.has_value());
+
+    CrashReportDocument doc(path, *loaded);
+
+    CHECK(doc.AssetGuid() == e.guid);
+    CHECK(doc.Title() == path.stem().string());
+    CHECK_FALSE(doc.Dirty());
+    CHECK(doc.Save());   // read-only: unreachable via Dirty()-gated paths, trivially "succeeds"
+    CHECK(doc.Envelope().kind == "gpu-crash");
+    CHECK(doc.Envelope().phase == "editor frame loop");
+    CHECK(doc.Envelope().buildInfo == "Debug@deadbeef");
+    CHECK(doc.Envelope().activeLayers.size() == 2);
+
+    const auto visible = doc.VisibleQueues();
+    REQUIRE(visible.size() == 1);
+    CHECK(visible[0]->name == "direct");
+    CHECK(visible[0]->lastCompleted == "pass:tonemap");
+
+    CHECK(doc.HasVisibleFault());
+    CHECK(doc.Envelope().fault.resource == "ParticleIndices");
+
+    // No .gpudump sibling recorded on this fixture -> no parsed inventory.
+    CHECK(doc.GpuDumpSectionTags().empty());
+}
+
+TEST_CASE("CrashReportDocument hides CPU-report noise: empty queue timelines and a device-alive/empty fault",
+          "[editor][diag]")
+{
+    const Envelope::Queue emptyQueue{ "graphics", "", {} };
+    CHECK(CrashReportDocument::IsEmptyQueueTimeline(emptyQueue));
+
+    const Envelope::Queue realQueue{ "direct", "", { "pass:shadow" } };
+    CHECK_FALSE(CrashReportDocument::IsEmptyQueueTimeline(realQueue));
+
+    const Envelope::Fault noiseFault{ "device-alive", "", "" };
+    CHECK(CrashReportDocument::IsNoiseFault(noiseFault));
+
+    const Envelope::Fault emptyFault{};
+    CHECK(CrashReportDocument::IsNoiseFault(emptyFault));
+
+    const Envelope::Fault realFault{ "page-fault", "0x0", "Foo" };
+    CHECK_FALSE(CrashReportDocument::IsNoiseFault(realFault));
+}
+
+TEST_CASE("CrashReportDocument parses its .gpudump sibling's section inventory at construction",
+          "[editor][diag]")
+{
+    const auto dir         = TempDir("gpudump");
+    const auto gpuDumpPath = dir / "r.gpudump";
+
+    Arcane::Diag::GpuDumpWriter raw;
+    raw.Add("markers", "abcd", 4);
+    raw.Add("dred", std::string_view("breadcrumb-bytes"));
+    REQUIRE(raw.Write(gpuDumpPath));
+
+    Envelope e;
+    e.guid = Arcane::Guid::Generate();
+    e.kind = "gpu-crash";
+    e.siblingGpuDump = gpuDumpPath.string();
+
+    CrashReportDocument doc(dir / "r.arcdiag", e);
+    const auto& tags = doc.GpuDumpSectionTags();
+    REQUIRE(tags.size() == 2);
+    CHECK(tags[0] == "markers");
+    CHECK(tags[1] == "dred");
+}
+
+TEST_CASE("CrashReportDocument.gpudump inventory stays empty when the sibling file is missing",
+          "[editor][diag]")
+{
+    const auto dir = TempDir("gpudump_missing");
+
+    Envelope e;
+    e.guid = Arcane::Guid::Generate();
+    e.kind = "gpu-crash";
+    e.siblingGpuDump = (dir / "does-not-exist.gpudump").string();
+
+    CrashReportDocument doc(dir / "r.arcdiag", e);
+    CHECK(doc.GpuDumpSectionTags().empty());
+}
+
+TEST_CASE("DocumentHost routes .arcdiag to CrashReportDocument and focuses instead of reopening",
+          "[editor][diag]")
+{
+    const auto dir  = TempDir("host_route");
+    const auto path = dir / "ArcaneEditor-20260811-120000-pid1.arcdiag";
+
+    Envelope e;
+    e.guid = Arcane::Guid::Generate();
+    e.kind = "hang";
+    REQUIRE(Arcane::Diag::WriteFile(e, path));
+
+    // Same factory+peek shape EditorApp.cpp registers for ".arcdiag" (beside
+    // its ".arcmat" route) -- Diag::ReadFile stands in for LoadMaterialAsset.
+    DocumentHost host;
+    int factoryCalls = 0;
+    const auto crashReportFactory =
+        [&](const std::filesystem::path& p) -> std::unique_ptr<EditorDocument>
+        {
+            ++factoryCalls;
+            auto envelope = Arcane::Diag::ReadFile(p);
+            if (!envelope)
+                return nullptr;
+            return std::make_unique<CrashReportDocument>(p, std::move(*envelope));
+        };
+    const auto crashReportPeek =
+        [](const std::filesystem::path& p) -> Arcane::Guid
+        {
+            const auto envelope = Arcane::Diag::ReadFile(p);
+            return envelope ? envelope->guid : Arcane::Guid::Nil();
+        };
+    host.RegisterFactory(".arcdiag", crashReportFactory, crashReportPeek);
+
+    EditorDocument* first = host.OpenPath(path);
+    REQUIRE(first != nullptr);
+    CHECK(host.Count() == 1);
+    CHECK(first->AssetGuid() == e.guid);
+    CHECK_FALSE(first->Dirty());
+    CHECK(factoryCalls == 1);
+
+    // Same file, uppercase extension (case-insensitive match, same as the
+    // .arcmat routing test) -> the peek resolves the same guid and the open
+    // document is focused instead of a second one being constructed.
+    const auto upperExtPath = dir / (path.stem().string() + ".ARCDIAG");
+    EditorDocument* again = host.OpenPath(upperExtPath);
+    CHECK(again == first);
+    CHECK(host.Count() == 1);
+
+    // Unregistered extension -> null, nothing added.
+    CHECK(host.OpenPath(dir / "not-a-report.txt") == nullptr);
+    CHECK(host.Count() == 1);
+
+    CHECK(host.FindByGuid(e.guid) == first);
+    CHECK(host.FindByGuid(Arcane::Guid::Generate()) == nullptr);
+}
+
+TEST_CASE("AssetKindOf classifies .arcdiag as Diagnostic, case-insensitive", "[editor]")
+{
+    using namespace Arcane::Editor;
+    CHECK(AssetKindOf("diag://reports/ArcaneEditor-20260811-120000-pid1234.arcdiag") == AssetKind::Diagnostic);
+    CHECK(AssetKindOf("diag://reports/CRASH.ARCDIAG") == AssetKind::Diagnostic);
+    CHECK(AssetKindOf("diag://reports/CRASH.ARCDIAG") != AssetKind::Other);
+    CHECK(AssetKindOf("diag://reports/CRASH.ARCDIAG") != AssetKind::Data);
+}

@@ -25,10 +25,12 @@
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Panels/PanelRegistry.hpp"
+#include "Documents/CrashReportDocument.hpp"
 #include "Documents/SpriteDocument.hpp"
 
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Base/Assert.hpp>   // ARC_ASSERT (StageEditorShell's context tripwire)
+#include <Arcane/Base/DiagEnvelope.hpp>   // Diag::ReadFile (crashReportFactory/Peek, beside materialFactory)
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::RetargetDumpDir (RetargetDumpDir, beside RetargetLayoutIni)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
@@ -563,6 +565,31 @@ namespace Arcane::Editor
                 return data ? data->id : Arcane::Guid::Nil();
             };
         m_documents.RegisterFactory(".arcmat", materialFactory, materialPeek);
+
+        // GPU crash diagnostics arc, Task 10: .arcdiag -> CrashReportDocument
+        // routing, registered right beside the .arcmat route above (same
+        // factory+peek shape -- Diag::ReadFile stands in for LoadMaterialAsset,
+        // both independently re-read the file, same as materialFactory/
+        // materialPeek do today). CrashReportDocument is read-only (never
+        // dirty), so unlike the sprite/material routes it needs no
+        // DocServices/Services borrow from the app at all.
+        const auto crashReportFactory =
+            [](const std::filesystem::path& p)
+                -> std::unique_ptr<Arcane::Editor::EditorDocument>
+            {
+                auto envelope = Arcane::Diag::ReadFile(p);
+                if (!envelope)
+                    return nullptr;
+                return std::make_unique<Arcane::Editor::CrashReportDocument>(
+                    p, std::move(*envelope));
+            };
+        const auto crashReportPeek =
+            [](const std::filesystem::path& p) -> Arcane::Guid
+            {
+                const auto envelope = Arcane::Diag::ReadFile(p);
+                return envelope ? envelope->guid : Arcane::Guid::Nil();
+            };
+        m_documents.RegisterFactory(".arcdiag", crashReportFactory, crashReportPeek);
 
         // Sprite-asset arc, Task 5: .arcsprite -> SpriteDocument routing,
         // registered right beside the .arcmat route above (same

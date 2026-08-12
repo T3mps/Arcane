@@ -32,9 +32,15 @@ namespace Arcane::Editor
         Data,
         Scene,
         Sprite,
+        // GPU crash diagnostics arc, Task 10: .arcdiag crash/hang/gpu-crash/
+        // gpu-stall reports (Diag::Envelope). Kept right before Other, the
+        // same "newest kind slots in ahead of the catch-all" placement
+        // Sprite used when it was added (docs/specs/2026-07-28-sprite-
+        // asset-design.md:116).
+        Diagnostic,
         Other,
     };
-    inline constexpr int kAssetKindCount = 8;
+    inline constexpr int kAssetKindCount = 9;
 
     // The ImGui drag-drop payload type for browser rows (the params panel's
     // texture slots accept it). Payload bytes = AssetDragPayload (POD).
@@ -62,6 +68,8 @@ namespace Arcane::Editor
             return AssetKind::Scene;
         if (ext == ".arcsprite")
             return AssetKind::Sprite;
+        if (ext == ".arcdiag")
+            return AssetKind::Diagnostic;
         for (const char* e : { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr" })
             if (ext == e) return AssetKind::Texture;
         for (const char* e : { ".wav", ".ogg", ".mp3", ".flac" })

@@ -541,6 +541,14 @@ project "ArcaneTests"
         -- document closes). Draw (the only ImGui method) is never called --
         -- same precedent as ShaderEditorDocument above.
         "%{wks.location}/ArcaneEditor/src/Documents/SpriteDocument.cpp",
+        -- GPU crash diagnostics arc, Task 10: CrashReportDocument source-
+        -- compiles into the test exe so the [editor][diag] units drive its
+        -- PURE model half directly (construction from an already-loaded
+        -- Diag::Envelope, the CPU-report-noise filters, the .gpudump
+        -- sibling's parsed section inventory). Draw (the only ImGui method)
+        -- is never called -- same precedent as ShaderEditorDocument/
+        -- SpriteDocument above.
+        "%{wks.location}/ArcaneEditor/src/Documents/CrashReportDocument.cpp",
         -- Task 5 (runtime-host-fold arc): RuntimeLaunch's PURE candidate-list/
         -- argv builder (ExeCandidates/BuildArgs) source-compiles into the test
         -- exe so the [editor] units drive them directly. SpawnDetached (the
