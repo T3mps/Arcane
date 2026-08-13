@@ -2,3 +2,9 @@
 Binaries/
 Intermediate/
 Saved/
+
+# Golden harness failure artifacts -- the golden PNG itself IS committed;
+# only the failure-run byproducts (a mismatch's actual capture + diff viz)
+# are ignored.
+Goldens/*.actual.png
+Goldens/*.diff.png

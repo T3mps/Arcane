@@ -1,5 +1,6 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Cli/Cli.hpp>
+#include <cstdio>
 namespace Arcane
 {
     HostConfig::ParseOutcome HostConfig::Parse(int argc, char** argv)
@@ -41,6 +42,18 @@ namespace Arcane
 #if !defined(ARCANE_DIST)
         cfg.crashGpuFrame = r.GetAs<std::uint64_t>("crash-gpu");
 #endif
+
+        // Golden capture/compare only ever runs at the last frame (RuntimeApp
+        // gates it on `lastFrame`, which requires maxFrames != 0). Without
+        // --frames, --golden-capture/--golden-compare would silently exit 0
+        // having captured/compared nothing -- refuse at parse time instead,
+        // matching Cli's own error idiom (stderr + exit 2).
+        if (cfg.GoldenMode() && cfg.maxFrames == 0)
+        {
+            std::fprintf(stderr, "error: golden capture/compare requires --frames N\n");
+            return { std::nullopt, 2 };
+        }
+
         return { cfg, 0 };
     }
 }

@@ -744,7 +744,8 @@ void RuntimeApp::MainLoop()
                         (void)Arcane::WritePngRgba(dir / (name + ".actual.png"), w, h, actual.data());
                         if (r.dimensionsMatch)
                             (void)Arcane::WriteDiffPng(dir / (name + ".diff.png"),
-                                                       golden.data(), actual.data(), gw, gh, 2);
+                                                       golden.data(), actual.data(), gw, gh,
+                                                       Arcane::GoldenCompareParams{}.channelTolerance);
                         m_goldenExit = 3;
                     }
                 }
