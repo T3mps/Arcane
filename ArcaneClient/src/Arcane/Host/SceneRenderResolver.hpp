@@ -124,6 +124,40 @@ namespace Arcane
         FullscreenMaterialChain* PostChain() const;
         const MaterialInstance*  PostInstance() const;
 
+        // What the scene REFERENCES versus what is bound right now (NRI Phase 2).
+        //
+        // Materials bind asynchronously -- Refresh submits the compiles and a
+        // LATER Refresh drains whatever the compile worker finished in the
+        // meantime -- so "the scene declares a material" and "this frame can
+        // draw it" are different facts, separated by WALL-CLOCK time. For an
+        // interactive host that gap is invisible (a material appears a few
+        // frames in and nobody minds). For the golden harness it is the whole
+        // ballgame: a captured frame missing its materials is not a slower
+        // frame, it is a picture of DIFFERENT CONTENT, and freezing that as a
+        // baseline poisons every compare made against it afterwards.
+        //
+        // So this is the probe a host uses to answer "is what I am about to
+        // capture actually the scene?" -- read it AFTER draining the compile
+        // service to idle. Deliberately computed on demand (it re-walks the
+        // SpriteRenderer and PostProcess views) rather than accumulated every
+        // Refresh: only the golden path calls it, and no ordinary frame should
+        // pay for it. Both halves read the LIVE registry against the LIVE
+        // caches, so the answer never depends on whether a Refresh has run --
+        // a resolver that has never swept simply reports everything unbound.
+        //
+        // `spriteReferenced` counts sprite COMPONENTS carrying a valid material
+        // Guid, not distinct Guids -- "every referencing sprite can draw its
+        // material" is the property a host actually wants, and it stays correct
+        // when two sprites share one material.
+        struct MaterialCensus
+        {
+            int  spriteReferenced = 0;       // SpriteRenderers with a valid material Guid
+            int  spriteBound      = 0;       // ...whose material is registered with the batcher
+            bool postReferenced   = false;   // a PostProcess assignment was found
+            bool postBound        = false;   // ...and its chain is bound AND ready
+        };
+        MaterialCensus Materials() const;
+
         // A .arcsprite was re-saved: evict, then re-resolve SYNCHRONOUSLY, so no
         // frame can render the placeholder in the gap. (SpriteCache::Request has
         // no async step, so this costs one JSON load. The material caches get

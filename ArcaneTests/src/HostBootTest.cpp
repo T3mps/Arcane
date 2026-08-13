@@ -1,5 +1,6 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Host/SceneRenderResolver.hpp>   // MaterialCensus -- the golden warm-up's probe
 
 #include <Arcane/Base/Engine.hpp>        // ExecutablePathUtf8 (the argv[0] replacement)
 #include <Arcane/Base/Runtime.hpp>
@@ -679,6 +680,65 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
     const auto postMatPath = proj->ResolveAsset(Arcane::AssetId::FromGuid(post->material));
     REQUIRE(postMatPath.has_value());
     CHECK(postMatPath->filename() == "reference_post.arcmat");
+}
+
+// --- NRI Phase 2, Task 2 (fix round 1): the golden warm-up's probe -------------
+// ArcaneRuntime refuses a golden run whose scene did not bind every material it
+// declares, and SceneRenderResolver::Materials() is the fact it refuses on. The
+// gate cannot exercise the binding half (that needs a device and a compile
+// service) -- but the REFERENCED half is pure scene data, and it is the half
+// that decays silently: drop the PostProcess component or repoint the sprite's
+// material Guid and the stage goldens keep passing while quietly covering less.
+// Pinning it here means such an edit fails the gate instead.
+
+TEST_CASE("ReferenceProject's scene reports the materials the golden warm-up waits on",
+          "[host][project]")
+{
+    const fs::path dir = FindReferenceProjectDir();
+    REQUIRE_FALSE(dir.empty());
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    REQUIRE(Arcane::HostBoot::BootScene(runtime, *proj).has_value());
+
+    // Nested scope: the resolver's header contract is that it destructs BEFORE
+    // the Runtime it publishes non-owning table pointers through.
+    {
+        // Deliberately headless -- no batcher, no device, no compile service.
+        // Those disable BINDING (Refresh's `materialsReady`), which is exactly
+        // the shape that lets this case assert referenced-without-bound.
+        Arcane::SceneRenderResolver::Services services;
+        services.runtime = &runtime;
+        Arcane::SceneRenderResolver resolver(std::move(services));
+
+        // The census reads the LIVE scene, so it answers the same before and
+        // after a sweep -- only the BOUND side can ever move. The warm-up polls
+        // this around Refresh calls, so an answer that depended on sweep order
+        // would be a trap (and was: the first draft of this case latched the
+        // post half in Refresh and disagreed with itself here).
+        const auto cold = resolver.Materials();
+        CHECK(cold.spriteReferenced == 1);
+        CHECK(cold.postReferenced);
+        CHECK(cold.spriteBound == 0);
+        CHECK_FALSE(cold.postBound);
+
+        Arcane::SceneRenderResolver::FrameInfo frame;
+        frame.viewportWidth = 1280.0f;
+        frame.viewportHeight = 720.0f;
+        resolver.Refresh(frame);
+
+        const auto census = resolver.Materials();
+        // PulseBox is the one sprite carrying a material; Ground/BoxA/BoxB are
+        // deliberately plain, so this also pins that the enrichment did not
+        // quietly spread to the pre-existing content.
+        CHECK(census.spriteReferenced == 1);
+        CHECK(census.postReferenced);            // the scene root's PostProcess
+        // Nothing can bind without a compiler + batcher -- which is precisely
+        // the state ArcaneRuntime now refuses to capture a golden from.
+        CHECK(census.spriteBound == 0);
+        CHECK_FALSE(census.postBound);
+    }
 }
 
 // --- NRI Phase 2, Task 2: the golden scene's material content ------------------

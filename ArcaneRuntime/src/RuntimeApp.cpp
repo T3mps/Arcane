@@ -37,6 +37,74 @@
 #include <optional>
 #include <thread>
 
+namespace
+{
+    // Bound on the golden warm-up below. Generous -- a cold dxcompiler.dll plus
+    // a dozen first-time compiles is a few hundred ms at worst -- but BOUNDED:
+    // an unbounded wait turns a stuck compile into a hung capture, which is a
+    // worse outcome than a loud refusal.
+    constexpr double kGoldenWarmupTimeoutSeconds = 60.0;
+
+    // Bring the scene's asset resolution to QUIESCENCE before the first counted
+    // frame. False on timeout (the caller refuses the run).
+    //
+    // WHY THIS EXISTS. Golden mode pins the frame clock, which makes Time -- and
+    // therefore every animated shader input -- a pure function of the frame
+    // index. It does NOT pin what the frame CONTAINS. Sprite materials and post
+    // chains bind asynchronously: SceneRenderResolver::Refresh submits the
+    // compiles, the `shader.compile` worker finishes them in WALL CLOCK, and
+    // whichever later Refresh happens to run after that drains and binds them.
+    // The compile cache is in-memory only, so every process pays the cold cost.
+    // With --no-vsync on a four-quad scene the entire 120-frame run can be over
+    // in well under the time a cold dxc needs for the scene's ~12 compiles, so
+    // the captured frame would show an unshaded sprite and no post chain --
+    // silently, with no failed assertion anywhere, and differently on a faster
+    // or slower machine. A baseline captured from that is a baseline of the
+    // wrong picture, and every compare afterwards inherits the same race.
+    //
+    // Draining HERE rather than "letting the loop run more frames" is what keeps
+    // the pinned clock honest: this loop never advances m_hostClock, so Time at
+    // counted frame N stays exactly N/60 and --frames never quietly becomes part
+    // of the golden contract.
+    bool DrainSceneCompiles(Arcane::SceneRenderResolver& resolver,
+                            Arcane::ShaderCompiler& compiler,
+                            float viewportWidth, float viewportHeight)
+    {
+        // Nothing this loop writes can survive into a captured pixel: Refresh's
+        // only per-frame output is the material globals, and the frame loop's
+        // own Refresh overwrites them before anything is recorded.
+        Arcane::SceneRenderResolver::FrameInfo frame;
+        frame.now            = 0.0;
+        frame.dt             = 1.0 / 60.0;
+        frame.viewportWidth  = viewportWidth;
+        frame.viewportHeight = viewportHeight;
+
+        const auto start = std::chrono::steady_clock::now();
+        for (;;)
+        {
+            // Sweep -> request -> poll -> drain -> bind, the ordinary per-frame
+            // call. With the golden run's ZERO debounce the very first call also
+            // dispatches every job the scene declares (Poll's window is
+            // `now >= now + 0`), which is why a constant `now` is enough to make
+            // progress -- with the interactive 0.2 s window it never would be.
+            resolver.Refresh(frame);
+            if (compiler.IsIdle())
+                return true;   // nothing pending, in flight, or waiting to drain
+
+            // The hang watchdog's liveness signal. This loop legitimately blocks
+            // for a second or two on a cold toolchain, and a silent gap that
+            // long is precisely what Diagnostics reports as a hang.
+            Arcane::Diagnostics::Heartbeat();
+
+            if (std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - start).count() >
+                kGoldenWarmupTimeoutSeconds)
+                return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+}
+
 RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
     : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash),
       m_splashPresenter(m_splash) {}
@@ -251,9 +319,33 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
     // beside the exe for exactly this (premake5.lua). A missing DXC degrades to
     // a warn: sprites still resolve (no compile step), materials and the post
     // chain simply stay unbound.
-    if (!m_shaderCompiler.Initialize(/*debounceSeconds=*/0.2))
+    //
+    // Debounce is a HOT-RELOAD nicety: a 0.2 s quiet window keeps a designer
+    // holding Ctrl+S from firing a compile per keystroke. A golden run has no
+    // designer and no re-saves -- there the window is pure latency between "the
+    // scene declared a material" and "a frame that gets captured can contain
+    // it", and Poll measures it against the PINNED clock (1/60 per frame), so
+    // it spends a fixed 12 frames of the run's budget for nothing. Zero it, and
+    // let MainLoop's warm-up drain the compiles to quiescence before frame 1
+    // rather than racing them (see DrainSceneCompiles).
+    const bool golden = m_config.GoldenMode();
+    if (!m_shaderCompiler.Initialize(/*debounceSeconds=*/golden ? 0.0 : 0.2))
+    {
+        // A golden run whose materials CANNOT bind would capture a frame
+        // missing half its content and still exit 0 -- and that frame becomes
+        // the frozen baseline the rest of the phase is compared against.
+        // Refuse the boot instead. An interactive run keeps degrading to a
+        // warning, where the missing material is on screen and recoverable.
+        if (golden)
+        {
+            ARC_ERROR("ArcaneRuntime: dxcompiler.dll unavailable -- a golden run cannot bind "
+                      "sprite materials or the scene post chain, and would capture or compare "
+                      "a frame that is missing them");
+            return false;
+        }
         ARC_WARN("ArcaneRuntime: dxcompiler.dll unavailable -- sprite materials "
                  "and the scene post chain will not bind");
+    }
     m_shaderSources.AddRoot("data/shaders");
 
     Arcane::SceneRenderResolver::Services rs;
@@ -359,6 +451,48 @@ void RuntimeApp::MainLoop()
     auto lastFrameTime = simPrev;
     auto lastShaderPoll = simPrev;
     bool running = true;
+
+    // Golden warm-up (NRI Phase 2): settle the scene's material compiles BEFORE
+    // the frame counter starts, so what the captured/compared frame contains is
+    // a function of the scene, not of how fast this machine is. See
+    // DrainSceneCompiles for the failure this closes. Golden-mode-gated: an
+    // ordinary run keeps binding materials opportunistically a few frames in,
+    // exactly as before.
+    if (m_config.GoldenMode() && m_resolver)
+    {
+        Arcane::Diagnostics::SetPhase("golden compile warm-up");
+        if (!DrainSceneCompiles(*m_resolver, m_shaderCompiler,
+                                (float)m_gpu->Cnv().Width(),
+                                (float)m_gpu->Cnv().Height()))
+        {
+            ARC_ERROR("golden: shader compiles did not settle within {:.0f}s -- refusing to "
+                      "capture or compare a frame whose content is not bound yet",
+                      kGoldenWarmupTimeoutSeconds);
+            m_goldenExit = 3;
+            return;
+        }
+
+        // Quiescent is not the same as complete: a compile that FAILED also
+        // leaves the service idle. Check what the scene actually got, because
+        // the whole point of the warm-up is that the artifact contains the
+        // scene -- and a golden is the one place where "it rendered something"
+        // is not good enough.
+        const Arcane::SceneRenderResolver::MaterialCensus census = m_resolver->Materials();
+        if (census.spriteBound != census.spriteReferenced ||
+            (census.postReferenced && !census.postBound))
+        {
+            ARC_ERROR("golden: the scene's materials did not all bind ({}/{} sprite material(s), "
+                      "post chain {}) -- refusing rather than freezing an incomplete frame as "
+                      "the baseline; the compile failures are logged above",
+                      census.spriteBound, census.spriteReferenced,
+                      census.postReferenced ? (census.postBound ? "bound" : "UNBOUND") : "none");
+            m_goldenExit = 3;
+            return;
+        }
+        ARC_INFO("golden: scene materials settled before frame 1 -- {} sprite material(s), "
+                 "post chain {}", census.spriteBound,
+                 census.postReferenced ? "bound" : "none");
+    }
 
     // Boot is over; anything the watchdog reports from here on belongs to the
     // frame loop, not to a stale boot stage.

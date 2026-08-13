@@ -5,6 +5,7 @@
 #include <Arcane/Project/AssetId.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
+#include <Arcane/Render/FullscreenMaterialChain.hpp>   // Chain()->Ready() in Materials()
 #include <Arcane/Render/PostChainCache.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/SpriteCache.hpp>
@@ -123,6 +124,53 @@ namespace Arcane
 
     FullscreenMaterialChain* SceneRenderResolver::PostChain()    const { return m_impl->postChain; }
     const MaterialInstance*  SceneRenderResolver::PostInstance() const { return m_impl->postInstance; }
+
+    SceneRenderResolver::MaterialCensus SceneRenderResolver::Materials() const
+    {
+        // BOTH halves are a live read of the CURRENT registry against the
+        // CURRENT caches -- deliberately not a replay of what the last Refresh
+        // latched. A half-live census would answer differently depending on
+        // whether a Refresh had run yet, and the caller most in need of this
+        // (the golden warm-up, which polls it around Refresh calls) is exactly
+        // the caller that would trip over that ordering.
+        MaterialCensus census;
+        Impl& im = *m_impl;
+        if (!im.services.runtime)
+            return census;
+        Astra::Registry& reg = im.services.runtime->Registry();
+
+        reg.CreateView<SpriteRenderer>().ForEach(
+            [&](Astra::Entity, SpriteRenderer& s)
+        {
+            if (!s.material.IsValid())
+                return;
+            ++census.spriteReferenced;
+            // Table() IS the SpriteMaterialTable payload: present == registered
+            // with the batcher == this sprite draws through its material rather
+            // than the plain pipeline (RenderSystems.hpp's Resolve).
+            if (im.materials->Table().contains(s.material))
+                ++census.spriteBound;
+        });
+
+        // "First entity with a valid material wins" -- the SAME rule Refresh's
+        // post sweep applies, restated rather than shared because Refresh also
+        // owns the warn-once bookkeeping this must not touch. If that rule ever
+        // changes, both copies change together.
+        Guid postId{};
+        reg.CreateView<PostProcess>().ForEach(
+            [&](Astra::Entity, PostProcess& pp)
+        {
+            if (pp.material.IsValid() && !postId.IsValid())
+                postId = pp.material;
+        });
+        census.postReferenced = postId.IsValid();
+        // Ready(), not merely non-null: PostChainCache keeps a previously-bound
+        // chain object alive across a failed RE-compile (last-good), and the
+        // host's own hook tests Ready() before routing a frame through it.
+        FullscreenMaterialChain* chain = postId.IsValid() ? im.post->Chain(postId) : nullptr;
+        census.postBound = chain != nullptr && chain->Ready();
+        return census;
+    }
 
     void SceneRenderResolver::InvalidateSprite(const Guid& id)
     {
