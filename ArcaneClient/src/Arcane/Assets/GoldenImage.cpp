@@ -1,7 +1,6 @@
 #include <Arcane/Assets/GoldenImage.hpp>
 
-#include <Arcane/Assets/Assets.hpp>   // WritePngRgba (diff output)
-#include <Arcane/Base/Log.hpp>
+#include <Arcane/Assets/ImageIo.hpp>   // WritePngRgba (diff output)
 
 #include <cstdlib>
 
