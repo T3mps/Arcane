@@ -29,9 +29,18 @@
 -- "#include <nvapi.h>" / "#include <amd_ags.h>" guards in the D3D12
 -- sources with no header to satisfy them.
 --
--- Agility SDK: NRI_ENABLE_AGILITY_SDK_SUPPORT is written explicitly (=0,
--- not omitted) so Task 3 -- which turns it on -- has a single value to
--- flip rather than a new line to add.
+-- Agility SDK: NRI_ENABLE_AGILITY_SDK_SUPPORT=1 (Task 3). The redistributable
+-- is vendored at ThirdParty/AgilitySDK/ (binaries only -- see that dir's
+-- README.md for the version pin and why no headers were vendored), and the
+-- three host exes (ArcaneRuntime/ArcaneEditor/ArcaneTests) export
+-- D3D12SDKVersion/D3D12SDKPath in their own mains to hand the D3D12 loader
+-- the vendored D3D12Core.dll under .\D3D12\ (see each main.cpp/test_main.cpp).
+-- No companion "version" define is needed here: SharedD3D12.h's
+-- static_assert(D3D12_SDK_VERSION >= 3, ...) reads D3D12_SDK_VERSION from
+-- the already-vendored DirectX-Headers on this project's includedirs, which
+-- was already pinned at the same Agility major version (619) as the
+-- redistributable -- see ThirdParty/AgilitySDK/README.md's "Header
+-- comparison" section for the byte-identical diff that proved it.
 
 project "NRI"
     kind "StaticLib"

@@ -19,12 +19,22 @@ Validation, Creation** (the dispatch layer). Vendored files: `Include/`
 - **CMake files, tests, samples, `Shaders/`, `Resources/`, `*.natvis`,
   the `1-Deploy`/`2-Build`/`3-PrepareSDK`/`4-Clean` scripts** — build
   infrastructure this repo's premake wrapper replaces outright.
-- **NVAPI, AMDAGS, NVTX, Agility SDK, NGX/FFX/XeSS upscalers, ImGui
-  extension** — upstream `CMakeLists.txt` FetchContent-pulls each of these
-  from GitHub/NuGet on demand; none is part of this repo's vendor set, so
-  their `NRI_ENABLE_*` macros stay undefined (NVAPI/AMDAGS/NVTX) or
-  explicit `=0` (`NRI_ENABLE_AGILITY_SDK_SUPPORT` — Task 3 flips it to `1`
-  and adds the SDK vendor drop).
+- **NVAPI, AMDAGS, NVTX, NGX/FFX/XeSS upscalers, ImGui extension** —
+  upstream `CMakeLists.txt` FetchContent-pulls each of these from
+  GitHub/NuGet on demand; none is part of this repo's vendor set, so their
+  `NRI_ENABLE_*` macros stay undefined.
+
+**Agility SDK is NOT excluded** — as of Task 3,
+`NRI_ENABLE_AGILITY_SDK_SUPPORT=1` and the redistributable is vendored at
+`ThirdParty/AgilitySDK/` (binaries only: `D3D12Core.dll` +
+`d3d12SDKLayers.dll`; no headers — see that directory's `README.md` for
+the version pin and the header-comparison finding that made vendoring
+headers unnecessary). This unlocks `ID3D12Device10+`/`ID3D12Device15` and
+the `OPTIONS9..22` feature queries (incl. enhanced barriers) in NRI's
+D3D12 backend. The three host exes (`ArcaneRuntime`, `ArcaneEditor`,
+`ArcaneTests`) export `D3D12SDKVersion`/`D3D12SDKPath` from their own
+mains and the workspace `premake5.lua` copies both DLLs into each exe's
+`D3D12/` output subdirectory post-build.
 
 ## Update procedure
 
