@@ -14,6 +14,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Render/Nri/RenderGraph.hpp>
+#include <Arcane/Render/Nri/NriUploadRing.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -1457,4 +1458,195 @@ TEST_CASE("rendergraph compile: barrier resourceIndex is a decoded slot, not an 
     CHECK(compiled.nodes[0].preBarriers[0].resourceIndex == 0u);   // decoded slot
     REQUIRE(compiled.transients.size() == 1);
     CHECK(compiled.transients[0].resourceIndex == 0u);
+}
+
+// =====================================================================
+// Task 5 -- NriUploadRing: per-frame-slot upload arenas.
+//
+// RingLayout is the pure bump-allocator math NriUploadRing wraps -- no NRI
+// device, fully headless. NriUploadRing itself creates a REAL persistent-
+// mapped nri::Buffer per slot at Init(), which fails outright on the NONE
+// backend (ImplNONE's MapBuffer returns null unconditionally -- see
+// NriUploadRing.hpp's file header), so it -- and BeginFrame()/Allocate()/
+// HighWater(), which only ever operate on slots Init() populated -- is a
+// [gpu] desk-verify item and gets no test here. Every case below drives
+// Arcane::RingLayout directly: exactly the math NriUploadRing forwards a
+// per-slot instance of into.
+//
+// NOT tested here, and why: a non-power-of-two `align` trips RingLayout::
+// Allocate's ARC_ASSERT, which is FATAL in a debug build (same "assert is
+// fatal, cannot be exercised by a surviving test case" situation as
+// Graveyard's reentrancy contract, documented in NriSubstrateTest.cpp). The
+// self-review pass for this behaviour was a code-reading exercise, not a
+// test.
+// =====================================================================
+
+TEST_CASE("uploadring layout: alignment rounds the cursor up, not the size", "[nri]")
+{
+    Arcane::RingLayout layout;
+    layout.Init(64);
+
+    const auto first = layout.Allocate(1, 1);
+    REQUIRE(first.ok);
+    CHECK(first.offset == 0);
+    CHECK(layout.Cursor() == 1);
+
+    // cursor is 1; a 16-byte-aligned request must round UP to 16, not just
+    // add its size to the unaligned cursor.
+    const auto second = layout.Allocate(3, 16);
+    REQUIRE(second.ok);
+    CHECK(second.offset == 16);
+    CHECK(layout.Cursor() == 19);
+}
+
+TEST_CASE("uploadring layout: an allocation that exactly fits the remaining capacity succeeds", "[nri]")
+{
+    Arcane::RingLayout layout;
+    layout.Init(16);
+
+    const auto alloc = layout.Allocate(16, 1);
+    REQUIRE(alloc.ok);
+    CHECK(alloc.offset == 0);
+    CHECK(layout.Cursor() == 16);
+
+    // Capacity is now exactly exhausted -- even a 1-byte request overflows.
+    const auto overflow = layout.Allocate(1, 1);
+    CHECK_FALSE(overflow.ok);
+}
+
+TEST_CASE("uploadring layout: overflow returns failure and leaves the cursor UNCHANGED -- never wraps", "[nri]")
+{
+    Arcane::RingLayout layout;
+    layout.Init(8);
+
+    const auto first = layout.Allocate(4, 1);
+    REQUIRE(first.ok);
+    REQUIRE(layout.Cursor() == 4);
+
+    // 5 more bytes would need 9 total against an 8-byte capacity.
+    const auto overflow = layout.Allocate(5, 1);
+    CHECK_FALSE(overflow.ok);
+    CHECK(overflow.offset == 0);
+    // The failed call must not have moved the cursor at all -- a caller
+    // that ignores the failure and allocates again lands where a
+    // successful smaller request would have, never past the end.
+    CHECK(layout.Cursor() == 4);
+    CHECK(layout.OverflowCount() == 1);
+
+    // A request that actually fits still succeeds afterward -- one failure
+    // does not poison the layout.
+    const auto fits = layout.Allocate(4, 1);
+    REQUIRE(fits.ok);
+    CHECK(fits.offset == 4);
+    CHECK(layout.Cursor() == 8);
+}
+
+TEST_CASE("uploadring layout: a single allocation larger than the whole slot overflows immediately", "[nri]")
+{
+    // Self-review edge case: slotBytes smaller than one alloc.
+    Arcane::RingLayout layout;
+    layout.Init(16);
+
+    const auto alloc = layout.Allocate(17, 1);
+    CHECK_FALSE(alloc.ok);
+    CHECK(layout.Cursor() == 0);
+    CHECK(layout.OverflowCount() == 1);
+}
+
+TEST_CASE("uploadring layout: a zero-size allocation succeeds at the current cursor and claims nothing", "[nri]")
+{
+    // Self-review edge case: zero-size alloc.
+    Arcane::RingLayout layout;
+    layout.Init(16);
+
+    REQUIRE(layout.Allocate(4, 1).ok);
+    REQUIRE(layout.Cursor() == 4);
+
+    const auto zero = layout.Allocate(0, 1);
+    REQUIRE(zero.ok);
+    CHECK(zero.offset == 4);
+    CHECK(layout.Cursor() == 4);   // unchanged -- claimed nothing
+
+    // Even exactly at full capacity, a zero-size request still succeeds.
+    REQUIRE(layout.Allocate(12, 1).ok);
+    REQUIRE(layout.Cursor() == 16);
+    const auto zeroAtEnd = layout.Allocate(0, 1);
+    CHECK(zeroAtEnd.ok);
+    CHECK(zeroAtEnd.offset == 16);
+}
+
+TEST_CASE("uploadring layout: Reset (BeginFrame's half) zeroes the cursor but leaves highWater/overflowCount alone", "[nri]")
+{
+    Arcane::RingLayout layout;
+    layout.Init(16);
+
+    REQUIRE(layout.Allocate(10, 1).ok);
+    CHECK_FALSE(layout.Allocate(10, 1).ok);   // overflows: 10 + 10 > 16
+    REQUIRE(layout.HighWater() == 10);
+    REQUIRE(layout.OverflowCount() == 1);
+
+    layout.Reset();
+
+    CHECK(layout.Cursor() == 0);
+    CHECK(layout.HighWater() == 10);       // survives -- lifetime peak, logged at shutdown
+    CHECK(layout.OverflowCount() == 1);    // survives too
+
+    // The slot is fully usable again after Reset -- this is the whole point
+    // of a per-frame ring.
+    const auto afterReset = layout.Allocate(16, 1);
+    REQUIRE(afterReset.ok);
+    CHECK(afterReset.offset == 0);
+}
+
+TEST_CASE("uploadring layout: two independent slots never see each other's allocations", "[nri]")
+{
+    // NriUploadRing owns kSwapchainFramesInFlight of these; nothing in
+    // RingLayout itself is shared across instances -- this proves it.
+    Arcane::RingLayout slotA, slotB;
+    slotA.Init(16);
+    slotB.Init(16);
+
+    const auto a1 = slotA.Allocate(10, 1);
+    REQUIRE(a1.ok);
+    CHECK(a1.offset == 0);
+
+    // slotB starts fresh regardless of what slotA already claimed.
+    const auto b1 = slotB.Allocate(10, 1);
+    REQUIRE(b1.ok);
+    CHECK(b1.offset == 0);
+
+    CHECK(slotA.Cursor() == 10);
+    CHECK(slotB.Cursor() == 10);
+
+    // Overflowing slotA must not affect slotB's capacity or state at all.
+    const auto aOverflow = slotA.Allocate(10, 1);
+    CHECK_FALSE(aOverflow.ok);
+    CHECK(slotB.Cursor() == 10);
+    CHECK(slotB.OverflowCount() == 0);
+}
+
+TEST_CASE("uploadring layout: high-water tracks the peak cursor across multiple allocations, not just the latest", "[nri]")
+{
+    Arcane::RingLayout layout;
+    layout.Init(100);
+
+    CHECK(layout.HighWater() == 0);
+
+    REQUIRE(layout.Allocate(50, 1).ok);
+    CHECK(layout.HighWater() == 50);
+
+    REQUIRE(layout.Allocate(20, 1).ok);
+    CHECK(layout.HighWater() == 70);
+
+    layout.Reset();
+    CHECK(layout.HighWater() == 70);   // still the peak, even though cursor is back to 0
+
+    // A smaller frame after Reset must not LOWER the recorded high water.
+    REQUIRE(layout.Allocate(10, 1).ok);
+    CHECK(layout.HighWater() == 70);
+
+    // A frame that exceeds the previous peak DOES raise it.
+    REQUIRE(layout.Allocate(85, 1).ok);   // cursor: 10 + 85 = 95 > 70
+    CHECK(layout.Cursor() == 95);
+    CHECK(layout.HighWater() == 95);
 }
