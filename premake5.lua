@@ -77,6 +77,7 @@ workspace "Arcane"
     IncludeDir["freetype"]         = "%{wks.location}/ThirdParty/freetype/include"
     IncludeDir["msdfgen"]          = "%{wks.location}/ThirdParty/msdfgen"
     IncludeDir["nvrhi"]            = "%{wks.location}/ThirdParty/nvrhi/include"
+    IncludeDir["NRI"]              = "%{wks.location}/ThirdParty/NRI/Include"
     IncludeDir["VulkanHeaders"]    = "%{wks.location}/ThirdParty/Vulkan-Headers/include"
     IncludeDir["DirectXHeaders"]   = "%{wks.location}/ThirdParty/DirectX-Headers/include"
     IncludeDir["VMA"]              = "%{wks.location}/ThirdParty/VMA/include"
@@ -95,6 +96,7 @@ group "Dependencies"
     include "ThirdParty/freetype"
     include "ThirdParty/msdfgen"
     include "ThirdParty/nvrhi"
+    include "ThirdParty/NRI"
     include "ThirdParty/imgui"
     include "ThirdParty/imgui-node-editor"
     include "ThirdParty/Manifold2D"
@@ -201,6 +203,7 @@ project "ArcaneClient"
         "%{IncludeDir.picosha2}",
         "%{IncludeDir.spdlog}",
         "%{IncludeDir.nvrhi}",
+        "%{IncludeDir.NRI}",
         "%{IncludeDir.VulkanHeaders}",
         "%{IncludeDir.DirectXHeaders}",
         "%{IncludeDir.DirectXHeaders}/directx",
@@ -217,7 +220,7 @@ project "ArcaneClient"
         "%{IncludeDir.Mosaic}",
     }
 
-    links { "ArcaneCore", "nvrhi", "msdfgen", "freetype", "imgui", "enkiTS", "Manifold2D" }
+    links { "ArcaneCore", "nvrhi", "NRI", "msdfgen", "freetype", "imgui", "enkiTS", "Manifold2D" }
 
     -- Force EVERY imgui object (incl. imgui_demo's ShowDemoWindow) into the
     -- DLL so their dllexport symbols are emitted: a dllexport in a static-lib
