@@ -593,19 +593,22 @@ namespace Arcane
         }
     }
 
-    bool SaveTexturePng(nvrhi::IDevice* device, nvrhi::ITexture* texture,
-                        const std::filesystem::path& path, uint32_t maxWidth)
+    bool ReadTexturePixels(nvrhi::IDevice* device, nvrhi::ITexture* texture,
+                          std::uint32_t& width, std::uint32_t& height,
+                          std::vector<unsigned char>& rgba)
     {
+        width = height = 0;
+        rgba.clear();
         if (!device || !texture)
         {
-            ARC_WARN("SaveTexturePng: no device or texture for {}", path.string());
+            ARC_WARN("ReadTexturePixels: no device or texture");
             return false;
         }
         const nvrhi::TextureDesc& srcDesc = texture->getDesc();
         const bool bgra = srcDesc.format == nvrhi::Format::BGRA8_UNORM;
         if (!bgra && srcDesc.format != nvrhi::Format::RGBA8_UNORM)
         {
-            ARC_WARN("SaveTexturePng: unsupported source format for {}", path.string());
+            ARC_WARN("ReadTexturePixels: unsupported source format");
             return false;
         }
 
@@ -620,7 +623,7 @@ namespace Arcane
             device->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
         if (!staging)
         {
-            ARC_WARN("SaveTexturePng: createStagingTexture failed for {}", path.string());
+            ARC_WARN("ReadTexturePixels: createStagingTexture failed");
             return false;
         }
 
@@ -636,38 +639,43 @@ namespace Arcane
             staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
         if (!mapped)
         {
-            ARC_WARN("SaveTexturePng: mapStagingTexture failed for {}", path.string());
+            ARC_WARN("ReadTexturePixels: mapStagingTexture failed");
             return false;
         }
-        std::vector<unsigned char> rgba;
         RepackStagingToRgba(mapped, rowPitch, srcDesc.width, srcDesc.height, bgra, rgba);
         device->unmapStagingTexture(staging);
         device->runGarbageCollection();
 
-        int w = (int)srcDesc.width, h = (int)srcDesc.height;
-        const unsigned char* pixels = rgba.data();
-        std::vector<unsigned char> scaled;
-        if (maxWidth > 0 && (uint32_t)w > maxWidth)
+        width = srcDesc.width;
+        height = srcDesc.height;
+        return true;
+    }
+
+    bool SaveTexturePng(nvrhi::IDevice* device, nvrhi::ITexture* texture,
+                        const std::filesystem::path& path, uint32_t maxWidth)
+    {
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> rgba;
+        if (!ReadTexturePixels(device, texture, w, h, rgba))
+            return false;
+
+        if (maxWidth > 0 && w > maxWidth)
         {
             // Width-capped (not larger-dimension like the loader): the
             // consumer is a fixed-width thumbnail tile, and the source is a
             // viewport whose aspect the user chose.
-            int dw = (int)maxWidth;
-            int dh = (h * dw + w / 2) / w;
+            const std::uint32_t dw = maxWidth;
+            std::uint32_t dh = (h * dw + w / 2) / w;
             if (dh < 1) dh = 1;
-            DownsampleRGBA(pixels, w, h, scaled, dw, dh);
-            pixels = scaled.data();
+            std::vector<unsigned char> scaled;
+            DownsampleRGBA(rgba.data(), (int)w, (int)h, scaled, (int)dw, (int)dh);
+            rgba = std::move(scaled);
             w = dw;
             h = dh;
         }
 
-        std::error_code ec;
-        std::filesystem::create_directories(path.parent_path(), ec);
-        if (!stbi_write_png(path.string().c_str(), w, h, 4, pixels, w * 4))
-        {
-            ARC_WARN("SaveTexturePng: write failed: {}", path.string());
+        if (!WritePngRgba(path, w, h, rgba.data()))
             return false;
-        }
         return true;
     }
 

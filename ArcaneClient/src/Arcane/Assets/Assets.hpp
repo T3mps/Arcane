@@ -121,6 +121,16 @@ namespace Arcane
         const unsigned char* src, size_t rowPitch, uint32_t width, uint32_t height,
         bool bgraSource, std::vector<unsigned char>& out);
 
+    // The GPU half of SaveTexturePng, exported for the golden harness:
+    // staging copy + waitForIdle + map + RepackStagingToRgba into tight,
+    // alpha-opaque RGBA8. SYNCHRONOUS -- one deliberate stall, rare-event
+    // callers only, never the frame loop. Accepts BGRA8_UNORM (swizzled) and
+    // RGBA8_UNORM; anything else is refused (WARN). False on any failure.
+    ARCANE_API bool ReadTexturePixels(
+        nvrhi::IDevice* device, nvrhi::ITexture* texture,
+        std::uint32_t& width, std::uint32_t& height,
+        std::vector<unsigned char>& rgba);
+
     // Save a GPU texture as a PNG on disk -- the writer twin of
     // LoadDisplayTexture (the editor's Saved/AutoScreenshot.png, which the
     // Arcane Hub reads as the project's cover thumbnail, rides this).
