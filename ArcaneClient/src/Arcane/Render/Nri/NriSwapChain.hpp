@@ -144,6 +144,22 @@ namespace Arcane
         // survive this call (matching NRISamples' ResizeSwapChain(), which
         // leaves m_FrameFence untouched) -- only the swapchain, its textures,
         // and their per-image fences are destroyed and rebuilt.
+        //
+        // CALLER CONTRACT: must NOT be called between a successful
+        // AcquireNextTexture() and its matching Present(). Destroying the
+        // swapchain frees the nri::Texture* AcquireNextTexture() already
+        // handed out -- with no API signal, so calling this mid-acquire
+        // leaves the caller holding a silently dangling pointer. There is no
+        // cheap structurally-safe alternative (deferring the free until a
+        // Present() that a resize may have already made impossible is frame-
+        // graph machinery, not this class's job) -- the reference NVRHI
+        // Vulkan swapchain has the identical gap (SwapchainVulkan::Resize,
+        // DeviceVulkan.cpp, also unconditional). Task 9's frame loop (and
+        // every later caller) MUST sequence Resize() -- driven by the
+        // window's resize event -- at frame boundaries only, never between
+        // Acquire and Present. Debug builds ARC_ASSERT this; release builds
+        // ARC_WARN loudly and proceed (see the .cpp) -- there is no safe
+        // recovery once the caller already violated the contract.
         void Resize(uint32_t width, uint32_t height);
 
         // The format actually resolved by NRI (queried via GetTextureDesc on

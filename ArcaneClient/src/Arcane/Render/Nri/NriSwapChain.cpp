@@ -9,6 +9,7 @@
 
 #include "NriCommon.hpp"
 
+#include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Platform/Window.hpp>
@@ -233,6 +234,32 @@ namespace Arcane
     {
         if (width == m_width && height == m_height)
             return;
+
+        // Caller-contract enforcement (see the .hpp's doc-comment on this
+        // method): a resize landing between a successful AcquireNextTexture()
+        // and its Present() would free the nri::Texture* already handed to
+        // the caller inside DestroySwapChain below, with no API signal --
+        // a silent dangling pointer. No cheap structurally-safe fix exists
+        // (the reference NVRHI Vulkan swapchain has the identical gap,
+        // SwapchainVulkan::Resize in DeviceVulkan.cpp), so this is a loud
+        // contract violation rather than a handled case: fatal in debug
+        // (ARC_ASSERT, compiled out in release -- Mosaic/Assert.hpp), and an
+        // unconditional ARC_WARN on the release path so the violation is
+        // never silent in ANY config, matching Graveyard's own
+        // debug-fatal/release-warn idiom (Graveyard.cpp's ~Graveyard()).
+#if defined(ARCANE_DEBUG)
+        ARC_ASSERT(!m_acquired,
+                    "NriSwapChain::Resize: called with an outstanding un-Presented "
+                    "AcquireNextTexture() -- sequence Resize() at frame boundaries only");
+#else
+        if (m_acquired)
+        {
+            ARC_WARN("[nri] NriSwapChain::Resize: called with an outstanding un-Presented "
+                     "AcquireNextTexture() -- the acquired texture is about to dangle; "
+                     "sequence Resize() at frame boundaries only");
+        }
+#endif
+
         m_width  = width;
         m_height = height;
 
@@ -341,6 +368,13 @@ namespace Arcane
             (void)ARC_NRI_CHECK(result);   // genuine failure already logged; nothing else to do here
         }
 
+        // Deliberately UNCONDITIONAL past this point: the pacing signal and
+        // frameCounter advance even on a genuine QueuePresent failure. The
+        // slot this frame's pacing value represents was already consumed by
+        // AcquireNextTexture() (its acquire fence was handed out), so
+        // skipping the signal here would leave that slot's pacing wait
+        // permanently unsatisfiable on a future frame -- worse than the
+        // pacing counter briefly describing a frame whose present failed.
         // Frame-pacing signal: a small QueueSubmit carrying only the pacing
         // fence's signal -- "signal at submit". Mirrors NRISamples' trailing
         // signal-only submit ("Signaling after Present improves D3D11
