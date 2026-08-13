@@ -847,3 +847,31 @@ each with an NRI source citation (file:line).
    contract + ImGui brief.
 4. THEN the Phase 1 (substrate) plan gets written — the swap branch stays
    closed until 1–3 hold.
+
+## Calibration record (2026-08-12/13, desk: RTX 3070, 1280x720 windowed, Release)
+
+- **Self-compare (same backend):** bit-exact — maxDelta 0, bad 0.0000%,
+  exit 0 — on BOTH backends, two runs each, across TWO scene revisions
+  (pre- and post-enrichment). Fixed-dt determinism holds; the HUD carries
+  no per-run-variable text.
+- **Cross-backend (dx12 frame vs vulkan golden):** PASS at defaults —
+  maxDelta 239, bad 0.0130% (~120 of 921,600 px) — with IDENTICAL numbers
+  on the empty and the enriched scene. Conclusion: the entire delta is the
+  HUD's "Backend: D3D12"/"Vulkan" text cluster; sprite geometry, alpha
+  blending, and rotated-edge rasterization are bit-identical across the
+  two backends on this GPU/driver. Phase 2 must NOT rely on that
+  bit-identity (it is a property of this hardware): per-backend goldens
+  remain the contract; cross-backend numbers are informational.
+- **Deliberate mismatch:** enriched scene vs stale golden → FAIL, exit 3,
+  `main-dx12.actual.png` + `main-dx12.diff.png` written (and correctly
+  gitignored).
+- **Tolerances:** defaults kept (channelTolerance 2, bad-pixel budget
+  0.1%). Same-backend headroom is enormous (observed 0); retained for
+  driver updates. The deferred SSIM fallback was NOT needed — the simple
+  metric fully separates signal at current content.
+- **Scene enrichment (pre-capture):** `main.arcscene` gained a Camera
+  (orthographicSize 2.0) and coverage content — translucent red box
+  (alpha 0.65, blending over the ground bar), rotated blue box (0.35 rad,
+  angled raster edges), distinct tints. The empty-scene goldens were
+  discarded; a golden set where 99.9% of pixels are clear color would
+  have passed a broken sprite pipeline.
