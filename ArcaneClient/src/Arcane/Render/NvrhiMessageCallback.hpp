@@ -55,6 +55,33 @@ namespace Arcane
             m_deviceRemovedHook.store(hook, std::memory_order_release);
         }
 
+        // Phase 2, Task 1: the TAGGED error seam, for every producer that is
+        // NOT NVRHI (the D3D12 debug layer's InfoQueue1 callback today; the
+        // frame graph's `NoteError("nri-graph", ...)` next). It gives such a
+        // producer the two things it needs and withholds the one it must not
+        // have:
+        //
+        //   - It bumps the SAME atomic RenderErrorCount() reads, so a D3D12
+        //     VUID or a graph refusal fails the 0/0 gate exactly like an
+        //     NVRHI error does. That is the whole point of the latch.
+        //   - It logs under the producer's OWN tag. The D3D12 callback used
+        //     to reach the latch by calling message() below, which printed
+        //     debug-layer text as "[nvrhi] ..." -- a lie about the message's
+        //     origin, and the first thing to mislead whoever reads the log.
+        //   - It deliberately does NOT run NotifyIfDeviceRemoved. That hook
+        //     writes a diagnostic report and a minidump; the D3D12 debug
+        //     layer invokes its message callback on whatever thread tripped
+        //     the error, from INSIDE a D3D12 call, so letting a "Device
+        //     Removed" substring there re-enter removal handling is a
+        //     re-entrancy hazard for no gain. NVRHI's own submit-time feed
+        //     (see message()) stays the ONE device-removed observation
+        //     point -- F-3b, and the reason the hook lives on that path.
+        void NoteError(const char* tag, const char* text) noexcept
+        {
+            ++m_errorCount;
+            ARC_ERROR("[{}] {}", tag ? tag : "?", text ? text : "");
+        }
+
         void message(nvrhi::MessageSeverity severity, const char* messageText) override
         {
             switch (severity)

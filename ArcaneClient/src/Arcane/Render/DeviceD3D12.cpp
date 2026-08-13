@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <cstdlib>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -62,6 +63,36 @@ namespace Arcane
             NoteGpuDeviceLost();
         }
 
+        // Phase 2, Task 1 instrumentation. WHICH d3d12SDKLayers.dll is
+        // servicing the debug layer is the one fact that separates the two
+        // ways ID3D12InfoQueue1 can be missing, and it is observable only in
+        // a live run -- hence logged at the failure site rather than assumed.
+        //
+        // Background, because the old WARN here guessed wrong: the vendored
+        // Agility redistributable (ThirdParty/AgilitySDK 1.619.3, copied to
+        // <exedir>/D3D12/ beside D3D12Core.dll) DOES implement the interface,
+        // while the Windows 10 in-box layer (C:\Windows\System32\
+        // d3d12SDKLayers.dll, 10.0.19041.x) does not carry it at all -- the
+        // IID does not appear anywhere in that binary. So a failed QI means
+        // the in-box layer answered, NOT that the D3D12 runtime is
+        // "pre-Agility" (NRI logs "Using ID3D12Device15" in the same run,
+        // which only the Agility runtime can satisfy).
+        std::string LoadedD3D12SDKLayersModule()
+        {
+            const HMODULE module = GetModuleHandleW(L"d3d12SDKLayers.dll");
+            if (!module)
+                return "d3d12SDKLayers.dll not loaded";
+
+            wchar_t wide[MAX_PATH]{};
+            if (GetModuleFileNameW(module, wide, static_cast<DWORD>(std::size(wide))) == 0)
+                return "d3d12SDKLayers.dll loaded, path unavailable";
+
+            char narrow[MAX_PATH * 2]{};
+            size_t converted = 0;
+            wcstombs_s(&converted, narrow, wide, _TRUNCATE);
+            return narrow;
+        }
+
         // NRI capability contract item 12: the D3D12 debug layer's own channel
         // into our log and the RenderErrorCount latch.
         //
@@ -90,12 +121,15 @@ namespace Arcane
             case D3D12_MESSAGE_SEVERITY_CORRUPTION:
             case D3D12_MESSAGE_SEVERITY_ERROR:
                 // Same latch NVRHI's own errors increment, so a raw D3D12
-                // message fails the GPU tests exactly like an [nvrhi] error.
-                // (Routing through message() also means a debug-layer text
-                // containing "Device Removed" reaches ObserveDeviceRemoved --
-                // additive, and the same treatment the NVRHI feed gets.)
-                NvrhiMessageCallback::Instance().message(
-                    nvrhi::MessageSeverity::Error, text);
+                // message fails the GPU tests exactly like an [nvrhi] error --
+                // but through NoteError, which tags it "[d3d12]" (this text is
+                // the debug layer's, not NVRHI's) and skips the device-removed
+                // substring hook. This callback runs on whatever thread tripped
+                // the error, from inside a D3D12 call; ObserveDeviceRemoved
+                // writes a report + minidump and belongs on NVRHI's submit-time
+                // feed, which stays the ONE observation point (F-3b). See
+                // NvrhiMessageCallback::NoteError for the full argument.
+                NvrhiMessageCallback::Instance().NoteError("d3d12", text);
                 break;
             case D3D12_MESSAGE_SEVERITY_WARNING:
                 ARC_WARN("[d3d12] {}", text);
@@ -519,50 +553,99 @@ namespace Arcane
             return false;
         }
 
-        // The D3D12 debug layer defaults to break-on-error, which calls
-        // __fastfail when the info queue receives a D3D12_MESSAGE_SEVERITY_ERROR
-        // or CORRUPTION message. Route all validation through NVRHI's message
-        // callback (which logs them at the appropriate level) rather than
-        // aborting the process on first error.
+        // The device-side half of the debug layer. BOTH QueryInterface results
+        // are kept, because which one fails IS the diagnosis: the base
+        // ID3D12InfoQueue is implemented by the debug layer's device wrapper,
+        // so failing it means the debug layer is not on this device at all,
+        // while failing only ID3D12InfoQueue1 means the layer that answered is
+        // too old for the callback interface. The old WARN here could tell
+        // neither apart -- it discarded both HRESULTs -- and asserted a cause
+        // ("pre-Agility D3D12 runtime") that the same run's "Using
+        // ID3D12Device15" disproves. Each branch below now states only what it
+        // actually knows.
         if (desc.enableD3D12DebugLayer)
         {
             ComPtr<ID3D12InfoQueue> infoQueue;
-            if (SUCCEEDED(out.device.As(&infoQueue)))
+            const HRESULT infoQueueHr = out.device.As(&infoQueue);
+            if (SUCCEEDED(infoQueueHr))
             {
+                // The D3D12 debug layer defaults to break-on-error, which calls
+                // __fastfail when the info queue receives a
+                // D3D12_MESSAGE_SEVERITY_ERROR or CORRUPTION message. Route all
+                // validation through the callback below (which logs at the
+                // appropriate level and bumps the latch) rather than aborting
+                // the process on first error.
                 infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, FALSE);
                 infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, FALSE);
                 infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
+
+                // Phase 2, Task 1 (Phase 1 Task 6's deferred minor): deny
+                // INFO/MESSAGE at the info queue instead of dropping them in
+                // the callback. The debug layer emits one of each per resource
+                // create and destroy; filtering here means they are never
+                // stored and never cross into D3D12DebugLayerCallback at all.
+                // Same subscription as the Vulkan messenger, which takes Error
+                // and Warning only (DeviceVulkan.cpp) -- so "an error happened"
+                // and "the log is quiet" mean one thing on both backends.
+                D3D12_MESSAGE_SEVERITY denied[]{ D3D12_MESSAGE_SEVERITY_INFO,
+                                                 D3D12_MESSAGE_SEVERITY_MESSAGE };
+                D3D12_INFO_QUEUE_FILTER filter{};
+                filter.DenyList.NumSeverities = static_cast<UINT>(std::size(denied));
+                filter.DenyList.pSeverityList = denied;
+                if (FAILED(infoQueue->PushStorageFilter(&filter)))
+                {
+                    ARC_WARN("ID3D12InfoQueue::PushStorageFilter failed; D3D12 INFO/MESSAGE "
+                             "chatter will reach the debug-layer callback");
+                }
             }
 
             // NRI capability contract item 12: turning break-off is all the
             // block above ever did -- the messages themselves went nowhere.
-            // Register the callback that actually delivers them (see
-            // D3D12DebugLayerCallback). ID3D12InfoQueue1 is an Agility-era
-            // interface, so the QueryInterface can fail on an old runtime:
-            // that is a diagnostics degradation, never a create failure.
-            // (In practice the Agility redistributable makes it available;
-            // the proof line lands at the desk milestone.)
+            // ID3D12InfoQueue1::RegisterMessageCallback is what actually
+            // delivers them (see D3D12DebugLayerCallback). Missing it is a
+            // diagnostics degradation, never a create failure.
             ComPtr<ID3D12InfoQueue1> infoQueue1;
-            if (SUCCEEDED(out.device.As(&infoQueue1)))
+            const HRESULT infoQueue1Hr = out.device.As(&infoQueue1);
+            if (SUCCEEDED(infoQueue1Hr))
             {
-                DWORD cookie = 0;
-                if (SUCCEEDED(infoQueue1->RegisterMessageCallback(
-                        &D3D12DebugLayerCallback,
-                        D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie)))
+                DWORD         cookie     = 0;
+                const HRESULT registerHr = infoQueue1->RegisterMessageCallback(
+                    &D3D12DebugLayerCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie);
+                if (SUCCEEDED(registerHr))
                 {
-                    out.infoQueue = infoQueue1;
+                    out.infoQueue       = infoQueue1;
                     out.infoQueueCookie = cookie;
                 }
                 else
                 {
-                    ARC_WARN("ID3D12InfoQueue1::RegisterMessageCallback failed; "
-                             "D3D12 debug-layer messages will not reach the log");
+                    ARC_WARN("ID3D12InfoQueue1::RegisterMessageCallback failed (hr=0x{:08X}); "
+                             "D3D12 debug-layer messages will not reach the log",
+                             static_cast<uint32_t>(registerHr));
                 }
+            }
+            else if (FAILED(infoQueueHr))
+            {
+                // TRUE failure case 1: no info queue of any generation, i.e.
+                // the debug layer is not attached to this device. Either
+                // EnableDebugLayer above did not take effect for the runtime
+                // that created the device, or the device predates the enable.
+                ARC_WARN("the D3D12 debug layer is not active on this device (ID3D12InfoQueue "
+                         "QueryInterface failed, hr=0x{:08X}); D3D12 debug-layer messages will "
+                         "not reach the log",
+                         static_cast<uint32_t>(infoQueueHr));
             }
             else
             {
-                ARC_WARN("ID3D12InfoQueue1 unavailable (pre-Agility D3D12 runtime); "
-                         "D3D12 debug-layer messages will not reach the log");
+                // TRUE failure case 2: the debug layer IS attached (the base
+                // interface resolved) but the SDK layers servicing it predate
+                // ID3D12InfoQueue1. The module path is the actionable half --
+                // <exedir>/D3D12/ is the vendored Agility layer, which has the
+                // interface; System32 is the Windows 10 in-box layer, which
+                // does not carry the IID at all.
+                ARC_WARN("the loaded D3D12 debug layer does not implement ID3D12InfoQueue1 "
+                         "(hr=0x{:08X}); D3D12 debug-layer messages will not reach the log. "
+                         "Layer servicing this device: {}",
+                         static_cast<uint32_t>(infoQueue1Hr), LoadedD3D12SDKLayersModule());
             }
         }
 

@@ -51,6 +51,43 @@ TEST_CASE("nri: ARC_NRI_CHECK on a failure result returns false and bumps Render
     Arcane::ResetRenderErrorCount();
 }
 
+namespace
+{
+    // File scope, not a lambda: DeviceRemovedHook is a RAW function pointer
+    // with no context parameter, so nothing capturing can convert to it.
+    bool g_deviceRemovedHookFired = false;
+
+    void RecordDeviceRemovedHook() { g_deviceRemovedHookFired = true; }
+}
+
+TEST_CASE("nri: NoteError bumps RenderErrorCount by exactly 1 and never fires the device-removed hook", "[nri]")
+{
+    // Same bracket as the ARC_NRI_CHECK failure case above: this case
+    // deliberately trips the REAL shared 0/0 latch (that is the point --
+    // NoteError must reach the counter RenderErrorCount() reads, not a local
+    // copy), so it resets around itself rather than leaking a permanent +1.
+    Arcane::ResetRenderErrorCount();
+    REQUIRE(Arcane::RenderErrorCount() == 0);
+
+    g_deviceRemovedHookFired = false;
+    Arcane::SetRenderDeviceRemovedHookForTest(&RecordDeviceRemovedHook);
+
+    // The text carries the exact substring NvrhiMessageCallback matches on
+    // (NotifyIfDeviceRemoved looks for "Device Removed"). Pushed through
+    // message() this WOULD fire the hook -- and firing it from an InfoQueue1
+    // callback thread, mid-D3D12-call, is the re-entrancy hazard NoteError
+    // exists to kill. Through NoteError it must stay silent.
+    Arcane::NoteRenderErrorForTest("d3d12", "Device Removed! (synthetic, from a unit test)");
+
+    CHECK(Arcane::RenderErrorCount() == 1);
+    CHECK_FALSE(g_deviceRemovedHookFired);
+
+    // Clear before RecordDeviceRemovedHook could be reached by anything else,
+    // and restore the latch for every other case's RenderErrorCount()==0.
+    Arcane::SetRenderDeviceRemovedHookForTest(nullptr);
+    Arcane::ResetRenderErrorCount();
+}
+
 TEST_CASE("nri: NONE-backend device lifecycle via MakeNriCallbacks/LogNriIdentity leaves RenderErrorCount untouched", "[nri]")
 {
     const uint64_t before = Arcane::RenderErrorCount();

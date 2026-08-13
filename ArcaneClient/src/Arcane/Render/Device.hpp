@@ -25,7 +25,11 @@ namespace Arcane
 
     ARCANE_API const char* ToString(GraphicsBackend backend);
 
-    // Total NVRHI Error/Fatal diagnostics since process start (all devices).
+    // Total render-layer Error/Fatal diagnostics since process start, across
+    // all devices and EVERY producer -- not just NVRHI's own message callback:
+    // the Vulkan debug messenger, the D3D12 debug layer's InfoQueue1 callback,
+    // NRI's callback interface and ARC_NRI_CHECK, and anything else reporting
+    // through NvrhiMessageCallback::NoteError all land in this one counter.
     // GPU tests assert this stays zero -- the machine-enforced form of the
     // "validation must stay silent" foundation rule.
     ARCANE_API uint64_t RenderErrorCount();
@@ -39,6 +43,25 @@ namespace Arcane
     // assertion for the rest of the process. Same idiom as
     // ResetGpuDeviceLost() (GpuInstrumentation.hpp).
     ARCANE_API void ResetRenderErrorCount();
+
+    // Test support ONLY -- the two seams a [nri] case needs to prove that
+    // NvrhiMessageCallback::NoteError reaches THIS latch (and that it does
+    // NOT fire the device-removed hook). They exist because
+    // NvrhiMessageCallback is a header-only singleton -- a function-local
+    // static in NvrhiMessageCallback.hpp -- so a test exe that included that
+    // header would drive its OWN instance while RenderErrorCount(), exported
+    // from ArcaneClient.dll, kept reading the DLL's. Production code inside
+    // the DLL calls NvrhiMessageCallback::Instance().NoteError directly and
+    // must never reach for these.
+    ARCANE_API void NoteRenderErrorForTest(const char* tag, const char* text) noexcept;
+
+    // Installs (or, with nullptr, clears) the device-removed hook on the
+    // DLL-side NvrhiMessageCallback. Last-writer-wins, exactly like the
+    // class's own setter -- so a test MUST clear it before the function it
+    // names goes out of scope, and must not run while a real device holds
+    // the slot (no device exists in the ~[gpu] gate, which is where the one
+    // caller lives).
+    ARCANE_API void SetRenderDeviceRemovedHookForTest(void (*hook)()) noexcept;
 
     struct RenderDeviceDesc
     {

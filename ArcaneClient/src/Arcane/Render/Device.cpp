@@ -16,6 +16,16 @@ namespace Arcane
         NvrhiMessageCallback::Instance().ResetForTest();
     }
 
+    void NoteRenderErrorForTest(const char* tag, const char* text) noexcept
+    {
+        NvrhiMessageCallback::Instance().NoteError(tag, text);
+    }
+
+    void SetRenderDeviceRemovedHookForTest(void (*hook)()) noexcept
+    {
+        NvrhiMessageCallback::Instance().SetDeviceRemovedHook(hook);
+    }
+
     const char* ToString(GraphicsBackend backend)
     {
         switch (backend)
