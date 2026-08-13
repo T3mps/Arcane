@@ -351,6 +351,13 @@ project "ArcaneRuntime"
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
         '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
         '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
+        -- Agility SDK redistributable (NRI Phase 1 Task 3): the D3D12 loader
+        -- reads this exe's exported D3D12SDKPath (".\D3D12\", see main.cpp)
+        -- and looks there for D3D12Core.dll to unlock enhanced barriers /
+        -- ID3D12Device10+ in NRI's D3D12 backend.
+        '{MKDIR} "%{cfg.buildtarget.directory}/D3D12"',
+        '{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/D3D12Core.dll" "%{cfg.buildtarget.directory}/D3D12/D3D12Core.dll"',
+        '{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/d3d12SDKLayers.dll" "%{cfg.buildtarget.directory}/D3D12/d3d12SDKLayers.dll"',
     }
     filter "system:windows"
         systemversion "latest"
@@ -425,6 +432,13 @@ project "ArcaneEditor"
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
         '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
         '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
+        -- Agility SDK redistributable (NRI Phase 1 Task 3): the D3D12 loader
+        -- reads this exe's exported D3D12SDKPath (".\D3D12\", see main.cpp)
+        -- and looks there for D3D12Core.dll to unlock enhanced barriers /
+        -- ID3D12Device10+ in NRI's D3D12 backend.
+        '{MKDIR} "%{cfg.buildtarget.directory}/D3D12"',
+        '{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/D3D12Core.dll" "%{cfg.buildtarget.directory}/D3D12/D3D12Core.dll"',
+        '{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/d3d12SDKLayers.dll" "%{cfg.buildtarget.directory}/D3D12/d3d12SDKLayers.dll"',
     }
     filter "system:windows"
         systemversion "latest"
@@ -654,6 +668,13 @@ project "ArcaneTests"
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
         '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
         '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
+        -- Agility SDK redistributable (NRI Phase 1 Task 3): the D3D12 loader
+        -- reads this exe's exported D3D12SDKPath (".\D3D12\", see test_main.cpp)
+        -- and looks there for D3D12Core.dll to unlock enhanced barriers /
+        -- ID3D12Device10+ in NRI's D3D12 backend.
+        '{MKDIR} "%{cfg.buildtarget.directory}/D3D12"',
+        '{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/D3D12Core.dll" "%{cfg.buildtarget.directory}/D3D12/D3D12Core.dll"',
+        '{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/d3d12SDKLayers.dll" "%{cfg.buildtarget.directory}/D3D12/d3d12SDKLayers.dll"',
     }
 
     defines {

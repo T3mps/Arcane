@@ -92,8 +92,18 @@ project "NRI"
         "NRI_ENABLE_VK_SUPPORT=1",
         "NRI_ENABLE_NONE_SUPPORT=1",
         "NRI_ENABLE_VALIDATION_SUPPORT=1",
-        -- Task 3 flips this to 1 and wires the Agility SDK vendor drop.
-        "NRI_ENABLE_AGILITY_SDK_SUPPORT=0",
+        -- Task 3 flipped this to 1 and wired the Agility SDK vendor drop
+        -- (ThirdParty/AgilitySDK/). No companion "version" define is needed:
+        -- SharedD3D12.h:9's static_assert(D3D12_SDK_VERSION >= 3, ...) reads
+        -- D3D12_SDK_VERSION from the already-vendored DirectX-Headers
+        -- (IncludeDir.DirectXHeaders, on this project's includedirs above),
+        -- which is already pinned at the SAME Agility major version (619) as
+        -- ThirdParty/AgilitySDK -- see ThirdParty/AgilitySDK/README.md's
+        -- "Header comparison" section. NRI's own NRI_AGILITY_SDK_VERSION_MAJOR
+        -- is a CMake-only symbol that generates Include/NRIAgilitySDK.h (a
+        -- file this premake build never produces); it appears nowhere in
+        -- ThirdParty/NRI/Source or ThirdParty/NRI/Include.
+        "NRI_ENABLE_AGILITY_SDK_SUPPORT=1",
         -- NRI_Shared's PUBLIC compile definitions (CMakeLists.txt:417-423).
         "WIN32_LEAN_AND_MEAN",
         "NOMINMAX",

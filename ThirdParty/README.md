@@ -18,6 +18,7 @@ Prebuilt **tool binaries** live under `tools/` (shader pipeline, used from M2 on
 
 | Name | Version | License | Consumer | Purpose | Upstream |
 |---|---|---|---|---|---|
+| **AgilitySDK** | 1.619.3 | Microsoft SW License Terms (proprietary, redistribution permitted) | Arcane | D3D12 Agility SDK redistributable (binaries only — `D3D12Core.dll` + `d3d12SDKLayers.dll`; headers deliberately not vendored, see `ThirdParty/AgilitySDK/README.md`) — unlocks `ID3D12Device10+` and enhanced barriers for NRI's D3D12 backend | https://www.nuget.org/packages/Microsoft.Direct3D.D3D12 |
 | **Astra** | v3.1.0 | MIT | Arcane | Archetype ECS, in-house (tests run in its own repo and gate vendor pulls) | (own repo) |
 | **Catch2** | v3 | Boost 1.0 | Server, Arcane | Unit test framework (reducer tests, integration tests) | https://github.com/catchorg/Catch2 |
 | **D3D12MemoryAllocator** | 1d86c11 | MIT | Arcane | D3D12 allocator (include-only from a consumer's POV -- the `.cpp` is pulled in via `#include` by NRI's own D3D12 backend TU, not compiled standalone; NRI v180 pin) | https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator |

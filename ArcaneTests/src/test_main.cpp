@@ -8,6 +8,14 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Astra/Core/TypeContext.hpp>
 
+// Agility SDK handshake (NRI Phase 1, contract §2.3): the D3D12 loader
+// reads these EXPORTED symbols from the EXE to redirect device creation
+// into the vendored D3D12Core.dll under .\D3D12\. Version must match the
+// vendored package; the empirical proof is NRI logging "Using
+// ID3D12Device10+" (contract §6 item 3) at the desk milestone.
+extern "C" __declspec(dllexport) extern const unsigned D3D12SDKVersion = 619;
+extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D12\\";
+
 int main(int argc, char* argv[]) {
     // Install the shared context in the TEST module BEFORE any test computes a
     // component TypeID, so engine/plugin/test agree (TypeID caches per-module).
