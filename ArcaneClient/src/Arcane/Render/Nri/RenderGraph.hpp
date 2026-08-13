@@ -8,17 +8,27 @@
 // aliasing yet -- see the plan's Deadlock chassis criteria).
 //
 // Scope (plan: docs/plans/2026-08-13-nri-phase2-framegraph-2d-cutover.md,
-// Tasks 3+4): declaration AND compile -- handles, resource descs, node
-// declaration, the builder (Task 3); derived barriers, transient lifetimes
-// and transient pool-slot assignment (Task 4). No nri device calls in this
-// TU beyond desc/enum types (nri::Format, nri::AccessLayoutStage,
-// nri::AccessBits, nri::Layout, nri::StageBits, nri::BufferUsageBits are
-// pure data, never dereferenced as devices/queues/etc. here). Compile() is
-// PURE -- it derives everything from the declarations and nothing else, so
-// Task 6's executor can consume its RgCompiled verbatim. Execute() (the
-// executor that records real commands) is Task 6 --
-// RenderGraphNodeContext::Resolve/ColorView are declared below for their
-// std::function signature but defined in Task 6's TU, not this one.
+// Tasks 3+4+6): declaration (Task 3), compile (Task 4) and execution
+// (Task 6). The class is split across TWO translation units on purpose:
+//
+//   RenderGraph.cpp      declaration + Compile() -- PURE, no nri device
+//                        calls at all (desc/enum types only: nri::Format,
+//                        nri::AccessLayoutStage, nri::AccessBits,
+//                        nri::Layout, nri::StageBits, nri::BufferUsageBits
+//                        are pure data, never dereferenced as devices/
+//                        queues/etc. there). Compiling the same
+//                        declarations twice yields the same RgCompiled, so
+//                        the executor consumes it VERBATIM.
+//   RenderGraphExec.cpp  Execute() and everything that owns GPU state --
+//                        the transient pool, cached attachment views, the
+//                        per-frame-slot command buffers, the submission
+//                        fence, and RenderGraphNodeContext::Resolve/
+//                        ColorView. This is the ONLY TU on the graph path
+//                        that calls nri::CoreInterface::CmdBarrier.
+//
+// Keep that split: a device call creeping into Compile()'s TU would make
+// the derivation impure and untestable headless, which is what every Task-4
+// test depends on.
 //
 // Execution order = declaration order. Phase 2 does not reorder, cull, or
 // parallelize nodes: AddNode() appends to a flat vector and Task 6's
@@ -46,11 +56,16 @@
 
 namespace Arcane
 {
-    // Task 5 / Task 7: neither exists yet. RenderGraphNodeContext only ever
-    // needs a reference to these, which a forward declaration satisfies as
-    // long as nothing in this TU calls through one -- nothing does.
+    // RenderGraphNodeContext / RgExecuteDesc only ever need REFERENCES to
+    // these, which a forward declaration satisfies as long as nothing in
+    // this header calls through one -- nothing does. (NriPipelineCache is
+    // Task 7's; Task 6 landed the empty placeholder class in
+    // Nri/NriPipelineCache.hpp so RgExecuteDesc's frozen field type names a
+    // real, constructible type -- see that file.)
     class NriUploadRing;
     class NriPipelineCache;
+    class NriDevice;
+    class NriSwapChain;
 
     class RenderGraph;
 
@@ -120,9 +135,30 @@ namespace Arcane
         RgTexture CreateTexture(const char* name, const RgTextureDesc& desc);               // transient
         RgTexture ImportTexture(const char* name, nri::Texture* texture,
                                  nri::AccessLayoutStage entry, nri::AccessLayoutStage exit,
-                                 bool persistent);                                           // swapchain, history, canvas
+                                 bool persistent);                                           // history, canvas
         RgBuffer  CreateBuffer(const char* name, std::uint64_t size, nri::BufferUsageBits usage); // transient
         RgBuffer  ImportBuffer(const char* name, nri::Buffer* buffer, std::uint64_t size);
+
+        // THE swapchain backbuffer (Task 6). Deliberately NOT ImportTexture:
+        // there is no nri::Texture* to pass at declaration time, because the
+        // graph -- not the caller -- owns acquire/present sequencing, and the
+        // acquire happens inside Execute(), long after this call. Execute()
+        // resolves every handle minted here to the texture it acquired that
+        // frame (RgExecuteDesc::swapChain); Resolve() on one before an
+        // Execute has acquired yields null.
+        //
+        // Entry/exit states are fixed rather than caller-supplied, and that
+        // is the point: entry is the discarding {NONE, UNDEFINED, ALL} (a
+        // freshly acquired backbuffer's contents are not ours), and exit is
+        // the {NONE, PRESENT, NONE} triple nri::Layout::PRESENT's own comment
+        // mandates -- which is what makes "the graph presents" structural
+        // rather than a convention a caller could get wrong. Compile()'s exit
+        // barriers therefore always leave the backbuffer present-ready.
+        //
+        // More than one call per graph is legal but pointless -- every
+        // handle resolves to the SAME acquired texture. Execute() acquires
+        // exactly once per call regardless.
+        RgTexture ImportSwapChainTexture(const char* name);
 
         void Read (RgTexture texture, RgUsage usage);
         void Read (RgBuffer buffer, RgUsage usage);
@@ -138,22 +174,100 @@ namespace Arcane
         std::size_t  m_nodeIndex;
     };
 
-    // Handed to a node's Exec function -- Task 6's executor invokes it;
-    // nothing in this TU constructs or calls through one. Resolve/ColorView
-    // bodies belong to Task 6's executor TU: declared here (so this header
-    // is a complete, includable contract for every later task) but
-    // deliberately not defined by RenderGraph.cpp.
-    struct RenderGraphNodeContext
+    // Handed to a node's Exec function -- the executor (RenderGraphExec.cpp)
+    // constructs exactly ONE of these per Execute() call and hands the same
+    // object to every node in turn. Resolve/ColorView are defined in that TU,
+    // never in RenderGraph.cpp.
+    //
+    // The command buffer is already OPEN and stays open for the whole
+    // Execute() (one command buffer records every node -- the brief's
+    // frozen shape). For a Raster node the executor has already emitted the
+    // node's barriers AND CmdBeginRendering with its declared attachments
+    // before calling the exec fn, and issues CmdEndRendering after it
+    // returns: an exec fn must NOT begin/end rendering itself, and must not
+    // emit barriers (the executor is the only CmdBarrier call site on the
+    // graph path -- see RgCompiled's contract block below).
+    // ARCANE_API: Resolve/ColorView are DEFINED in RenderGraphExec.cpp inside
+    // ArcaneClient.dll and CALLED from node exec fns that live wherever the
+    // frame driver does -- the test exe today, a game module tomorrow. An
+    // unexported struct here linked fine until a node actually resolved a
+    // handle, and then failed at link time in the consumer, not here.
+    struct ARCANE_API RenderGraphNodeContext
     {
         nri::CommandBuffer&       cmd;
         const nri::CoreInterface& core;
 
+        // Both Resolve overloads decode through the graph's ONE handle seam
+        // and then read the executor's per-execution resolution table, so a
+        // handle from a previous generation resolves to null rather than to
+        // some other frame's resource. Null is also what a handle declared
+        // on a DIFFERENT graph, or a swapchain import in an Execute() that
+        // could not acquire, yields -- always check.
         [[nodiscard]] nri::Texture*    Resolve(RgTexture texture) const;
-        [[nodiscard]] nri::Descriptor* ColorView(RgTexture texture) const;  // cached attachment view
         [[nodiscard]] nri::Buffer*     Resolve(RgBuffer buffer) const;
 
-        NriUploadRing&    ring;       // Task 5
+        // The cached COLOR_ATTACHMENT view for `texture`, or null if no node
+        // declared it as a colour attachment. Views are created up front by
+        // Execute() (before the first node runs) for exactly the textures the
+        // declarations attach, and are owned/destroyed by the graph -- this
+        // is a lookup, never a creation point.
+        [[nodiscard]] nri::Descriptor* ColorView(RgTexture texture) const;
+
+        NriUploadRing&    ring;       // Task 5 -- the caller owes ring.BeginFrame(frameSlot) before Execute()
         NriPipelineCache& pipelines;  // Task 7
+
+        // The graph being executed. Set by Execute(); Resolve/ColorView read
+        // its per-execution tables through it.
+        const RenderGraph* graph = nullptr;
+    };
+
+    // What Execute() needs that the declarations cannot carry. Frozen shape
+    // (plan, Task 6).
+    struct RgExecuteDesc
+    {
+        // Owns the queue, the CoreInterface and the graveyard every transient
+        // is buried into. MUST outlive the graph: the graph's resources are
+        // destroyed through this device's function table, and a graph that
+        // outlived its device would bury thunks into freed memory. The same
+        // device must be passed to every Execute() on one graph (a second
+        // device is refused, not silently adopted).
+        NriDevice& device;
+
+        // Optional: null = headless/offscreen. Required as soon as any node
+        // declared ImportSwapChainTexture() -- Execute() refuses that
+        // combination rather than recording a frame whose backbuffer does not
+        // exist. Execute() NEVER resizes it: NriSwapChain's "no Resize
+        // between Acquire and Present" caller contract is retired for graph
+        // users precisely because the acquire/present pair now lives entirely
+        // inside one Execute() call, so a frame driver satisfies it by
+        // resizing strictly between Execute() calls.
+        //
+        // ONE contract a resize DOES place on the caller: Reset() the graph
+        // after NriSwapChain::Resize(). The graph caches attachment views by
+        // texture POINTER, and a resize destroys and recreates the swapchain's
+        // textures -- possibly at the same addresses, so the cache cannot
+        // detect it. A frame driver that re-declares per frame (the intended
+        // shape, and Task 7's) already satisfies this; one that holds a graph
+        // across a resize without Reset()ing would bind a view of a destroyed
+        // texture.
+        NriSwapChain* swapChain;
+
+        // Forwarded to node exec fns untouched -- Execute() never allocates
+        // from it and never calls BeginFrame() on it. Resetting the frame
+        // slot's arena is the caller's call, made once per frame beside the
+        // pacing wait that makes the slot safe to reuse at all.
+        NriUploadRing& ring;
+
+        NriPipelineCache& pipelines;  // Task 7 (forward-declared; NONE tests pass a stub)
+
+        // Which of the graph's kSwapchainFramesInFlight command-buffer slots
+        // this frame records into. CALLER CONTRACT, same one NriUploadRing::
+        // BeginFrame carries: a slot must not be reused until the submission
+        // it last carried has retired, because Execute() resets that slot's
+        // command allocator. NriSwapChain::AcquireNextTexture()'s pacing wait
+        // establishes exactly that for a presenting frame driver; a headless
+        // driver owes the equivalent discipline itself.
+        std::uint32_t frameSlot;
     };
 
     // =====================================================================
@@ -287,7 +401,28 @@ namespace Arcane
         enum class NodeKind : std::uint8_t { Raster, Compute, Copy };
 
         RenderGraph() = default;
-        ~RenderGraph() = default;
+
+        // Releases everything Execute() realized -- the transient pool, the
+        // cached attachment views, the per-frame-slot command buffers and the
+        // submission fence -- by BURYING it in the device's graveyard at the
+        // last submitted fence value, exactly as Reset() does. ~NriDevice
+        // drains that graveyard behind a DeviceWaitIdle, which is why the
+        // device must outlive the graph (RgExecuteDesc::device). A graph that
+        // never executed owns nothing and this is a no-op.
+        ~RenderGraph();
+
+        // Non-copyable, non-movable since Task 6: this object owns live NRI
+        // resources (pool textures/buffers, descriptors, command allocators,
+        // a fence). A copy would double-bury every one of them; the
+        // compiler's move would leave the source holding the SAME raw
+        // pointers rather than nulling them, so a moved-from graph's
+        // destructor would bury a second time. Neither has a caller -- the
+        // frame driver holds one graph for the process lifetime and Reset()s
+        // it per frame.
+        RenderGraph(const RenderGraph&)            = delete;
+        RenderGraph& operator=(const RenderGraph&) = delete;
+        RenderGraph(RenderGraph&&)                 = delete;
+        RenderGraph& operator=(RenderGraph&&)      = delete;
 
         // Declares one node in EXECUTION order (see the file-header comment
         // -- no reordering in Phase 2). Runs `setup` synchronously, right
@@ -352,10 +487,64 @@ namespace Arcane
         //      is compiled out (see that function).
         [[nodiscard]] std::optional<RgCompiled> Compile(std::string* outError = nullptr) const;
 
-        // Execute() lands in Task 6. Reset() clears every declared node and
-        // resource -- this graph is ready to declare the next frame's build
-        // -- and bumps Generation() (see the RgTexture/RgBuffer comment
-        // above for what that buys a stale handle).
+        // Records `compiled` into ONE command buffer and submits it. In
+        // order, per call:
+        //
+        //   1. reap the device graveyard up to this graph's completed
+        //      submissions, and (if a node imported the swapchain) acquire
+        //      the backbuffer -- a failed/skipped acquire returns false
+        //      having recorded and submitted nothing;
+        //   2. realize any pool slot the compile asked for that is not
+        //      already realized, and any attachment view that is not already
+        //      cached (both survive across Execute() calls -- a second
+        //      Execute of the same compiled graph creates ZERO resources);
+        //   3. reset `desc.frameSlot`'s command allocator, open its command
+        //      buffer, and walk compiled.nodes front to back: each node's
+        //      batched preBarriers as ONE CmdBarrier group, then (Raster
+        //      only) CmdBeginRendering with the node's declared attachments,
+        //      the node's exec fn, CmdEndRendering. Every node is bracketed
+        //      by a `pass:<name>` breadcrumb scope + GPU marker;
+        //   4. compiled.exitBarriers as one final CmdBarrier group, close,
+        //      submit (waiting on / signalling the swapchain's acquire and
+        //      release fences when a backbuffer was acquired, and always
+        //      signalling this graph's own submission fence);
+        //   5. Present(), if a backbuffer was acquired.
+        //
+        // Returns false -- having reported through the "nri-graph" tagged
+        // error seam, which bumps the same RenderErrorCount() latch the 0/0
+        // gate reads -- when the frame could not be recorded or submitted.
+        // A false return with an outstanding acquire is possible only on a
+        // failed submit, in which case nothing is presented (presenting a
+        // frame whose release fence nothing signalled parks the present
+        // engine forever -- the same hazard NriSmoke.cpp's bail-outs avoid).
+        //
+        // `compiled` MUST be the output of a Compile() on THIS graph's
+        // CURRENT declarations. That is checked structurally (node count,
+        // and every resource index in range) rather than assumed, because
+        // the cheap caller bug -- Reset(), re-declare, Execute() with last
+        // frame's RgCompiled -- would otherwise index this frame's resources
+        // with last frame's slots.
+        [[nodiscard]] bool Execute(const RgExecuteDesc& desc, const RgCompiled& compiled);
+
+        // Clears every declared node and resource -- this graph is ready to
+        // declare the next frame's build -- and bumps Generation() (see the
+        // RgTexture/RgBuffer comment above for what that buys a stale
+        // handle).
+        //
+        // Also BURIES every realized transient and cached view in the
+        // device's graveyard, keyed to this graph's last submitted fence
+        // value, since the declarations they were realized from are exactly
+        // what is being thrown away. The per-frame-slot command buffers and
+        // the submission fence are NOT touched -- they are execution
+        // machinery, not frame resources, and live until ~RenderGraph.
+        //
+        // COST, stated plainly: a frame driver that Reset()s every frame
+        // re-creates every transient every frame. That is the frozen Task-6
+        // contract (the pool exists to be shared WITHIN a frame and reused
+        // across back-to-back Executes of one compiled graph), and it is
+        // where to look first if Task 8+ sees per-frame allocator churn --
+        // the upgrade is a desc-keyed pool that survives Reset(), not a
+        // change to who owns the resources.
         void Reset();
 
         // -------------------------------------------------------------
@@ -388,8 +577,30 @@ namespace Arcane
         [[nodiscard]] bool IsHandleValid(RgTexture texture) const noexcept;
         [[nodiscard]] bool IsHandleValid(RgBuffer buffer) const noexcept;
 
+        // -------------------------------------------------------------
+        // Execution-side introspection. Test seams, not contract: they let
+        // the [nri] cases prove pool REUSE rather than merely pool
+        // existence, which a single count cannot distinguish from a
+        // destroy-and-recreate.
+        // -------------------------------------------------------------
+
+        // Pool slots currently realized -- equals RgCompiled::poolSlotCount
+        // after a successful Execute() of that compile, and 0 after Reset().
+        [[nodiscard]] std::size_t DebugTransientCount() const noexcept { return m_pool.size(); }
+
+        // Physical transients ever created by this graph, monotonically.
+        // Unchanged across a second Execute() of the same compiled graph --
+        // that is what "the pool is reused" means.
+        [[nodiscard]] std::uint64_t DebugTransientCreateCount() const noexcept { return m_transientCreateCount; }
+
+        // Successful QueueSubmits so far == the value this graph last
+        // signalled on its own fence, and the fence value every burial made
+        // by Reset()/~RenderGraph is keyed to.
+        [[nodiscard]] std::uint64_t DebugSubmitCount() const noexcept { return m_submitValue; }
+
     private:
         friend class RenderGraphBuilder;
+        friend struct RenderGraphNodeContext;
 
         enum class ResourceKind : std::uint8_t { Transient, Imported };
 
@@ -402,6 +613,12 @@ namespace Arcane
             nri::AccessLayoutStage  importEntry{};
             nri::AccessLayoutStage  importExit{};
             bool                    persistent = false;
+            // ImportSwapChainTexture(): `imported` stays null at declaration
+            // and Execute() resolves this resource to the texture it
+            // acquired. Compile() does not care -- an imported texture's
+            // barrier derivation reads importEntry/importExit only, never
+            // the pointer.
+            bool                    swapChain = false;
             // Imported resources always arrive with a defined incoming
             // state (the caller-supplied `entry`), so this starts true; a
             // transient starts false until its first declared Write().
@@ -424,6 +641,12 @@ namespace Arcane
         struct NodeDesc
         {
             std::string             name;
+            // "pass:<name>", built ONCE at declaration. The executor opens a
+            // breadcrumb scope and a GPU marker under this string every
+            // frame, for every node; composing it per node per frame would
+            // put a heap allocation on the record path for a string that
+            // never changes.
+            std::string             passLabel;
             NodeKind                 kind = NodeKind::Raster;
             Exec                     exec;
             std::vector<RgTexture>   colorAttachments;
@@ -450,7 +673,7 @@ namespace Arcane
         RgTexture CreateTextureInternal(const char* name, const RgTextureDesc& desc);
         RgTexture ImportTextureInternal(const char* name, nri::Texture* texture,
                                          nri::AccessLayoutStage entry, nri::AccessLayoutStage exit,
-                                         bool persistent);
+                                         bool persistent, bool swapChain);
         RgBuffer  CreateBufferInternal(const char* name, std::uint64_t size, nri::BufferUsageBits usage);
         RgBuffer  ImportBufferInternal(const char* name, nri::Buffer* buffer, std::uint64_t size);
         void      RecordAccess(std::size_t nodeIndex, std::uint32_t encodedHandle,
@@ -478,11 +701,107 @@ namespace Arcane
 
         static constexpr std::size_t kNoCurrentNode = static_cast<std::size_t>(-1);
 
+        // ---------------------------------------------------------------
+        // Execution state (Task 6, RenderGraphExec.cpp). Everything below
+        // this line is GPU-owning: it is why this class lost its copy and
+        // move operations, and why ~RenderGraph is no longer trivial.
+        // ---------------------------------------------------------------
+
+        // One realized physical resource per RgCompiled pool slot. Textures
+        // and buffers share one slot numbering (Compile()'s pass 4), so this
+        // vector is indexed by pool slot directly and each entry says which
+        // kind it holds.
+        //
+        // `desc` is the identity actually realized, kept so a re-Execute can
+        // prove the slot still matches what the compile asks for and
+        // re-realize when it does not. NRI v180 has no per-resource
+        // CAN_ALIAS flag (the brief's word for it): aliasing in this NRI is a
+        // MEMORY-object property -- several resources bound at overlapping
+        // offsets of one nri::Memory (NRIDescs.h, "Binding resources to a
+        // memory (resources can overlap, i.e. alias)") -- and Phase 2's graph
+        // does no memory aliasing at all (RenderGraph.hpp header: "no real
+        // aliasing yet"). What it DOES do is share one committed resource
+        // between transients with disjoint lifetimes, which is a pool-slot
+        // property and needs no flag.
+        struct PoolResource
+        {
+            bool             isTexture = true;
+            nri::Texture*    texture   = nullptr;
+            nri::Buffer*     buffer    = nullptr;
+            nri::TextureDesc textureDesc{};
+            nri::BufferDesc  bufferDesc{};
+        };
+
+        // An attachment view, cached by the texture it views. Keyed by
+        // POINTER, not by graph slot, so a swapchain backbuffer that rotates
+        // through kSwapchainFramesInFlight+1 textures accumulates one view
+        // per texture and reuses each. NriSmoke.cpp's ViewFor does the same.
+        struct CachedView
+        {
+            nri::Texture*    texture = nullptr;
+            bool             depth   = false;
+            nri::Descriptor* view    = nullptr;
+        };
+
+        // One command allocator + command buffer per frame slot. Reused
+        // every frame; see RgExecuteDesc::frameSlot for whose job it is to
+        // make a slot safe to reset.
+        struct GpuFrameSlot
+        {
+            nri::CommandAllocator* allocator = nullptr;
+            nri::CommandBuffer*    cmd       = nullptr;
+        };
+
+        bool RealizePool(const RgCompiled& compiled);
+        bool RealizeAttachmentViews();
+        bool EnsureExecutionResources();
+        // Buries the pool + views (Reset() and ~RenderGraph); buries the
+        // command slots + fence too when `all` (~RenderGraph only).
+        void ReleaseGpuResources(bool all);
+        // Translates one RgBarrier list into ONE nri CmdBarrier group. The
+        // ONLY CmdBarrier call site on the graph path -- see RgCompiled's
+        // contract block. Non-const because it fills the reused scratch
+        // vectors below rather than allocating per call.
+        void EmitBarriers(nri::CommandBuffer& cmd, std::span<const RgBarrier> barriers);
+
+        [[nodiscard]] nri::Texture* TextureForSlot(std::size_t slot) const noexcept;
+        [[nodiscard]] nri::Buffer*  BufferForSlot(std::size_t slot) const noexcept;
+        [[nodiscard]] nri::Descriptor* ViewForTexture(nri::Texture* texture, bool depth) const noexcept;
+
         std::vector<TextureResource> m_textures;
         std::vector<BufferResource>  m_buffers;
         std::vector<NodeDesc>        m_nodes;
         std::vector<Access>          m_accesses;
         std::size_t                  m_currentNodeIndex = kNoCurrentNode;
         std::uint32_t                m_generation = 0;
+
+        NriDevice*                m_device = nullptr;   // latched by the first Execute(); must outlive this graph
+        std::vector<PoolResource>  m_pool;
+        std::vector<CachedView>    m_views;
+        std::vector<GpuFrameSlot>  m_frames;            // kSwapchainFramesInFlight entries once realized
+        nri::Fence*                m_fence = nullptr;   // this graph's own submission timeline
+
+        // Per-execution resolution: which physical resource each declared
+        // texture/buffer slot maps to THIS frame. Rebuilt at the top of
+        // every Execute() (the swapchain entry changes every frame), read by
+        // RenderGraphNodeContext::Resolve.
+        std::vector<nri::Texture*> m_resolvedTextures;
+        std::vector<nri::Buffer*>  m_resolvedBuffers;
+
+        // Transient pool slot each declared resource maps to this frame, or
+        // kRgNoPoolSlot for imported resources / untouched transients.
+        std::vector<std::uint32_t> m_texturePoolSlot;
+        std::vector<std::uint32_t> m_bufferPoolSlot;
+
+        std::uint64_t m_submitValue           = 0;   // successful submits == last signalled fence value
+        std::uint64_t m_transientCreateCount  = 0;   // lifetime physical-transient creations
+
+        // Reused across every EmitBarriers call so translating a barrier
+        // group costs no allocation on the record path once the frame shape
+        // has settled (cleared, never shrunk). Same reason NodeDesc::
+        // passLabel is precomputed.
+        std::vector<nri::TextureBarrierDesc> m_scratchTextureBarriers;
+        std::vector<nri::BufferBarrierDesc>  m_scratchBufferBarriers;
+        std::vector<nri::AttachmentDesc>     m_scratchColorAttachments;
     };
 }

@@ -105,6 +105,30 @@ namespace Arcane
         char buffer[1024];
         std::snprintf(buffer, sizeof(buffer), "[nri] %s failed: %s (%s:%d)",
                       expr ? expr : "", NriResultName(result), file ? file : "", line);
+
+        // Phase 2, Task 6: TYPED device-loss observation, made here rather
+        // than at each call site because here is where the typed result
+        // actually is. NRIDescs.h documents DEVICE_LOST as returnable by
+        // "QueueSubmit*", "*WaitIdle", "AcquireNextTexture", "QueuePresent"
+        // and "WaitForPresent" -- every one of which this tree already funnels
+        // through ARC_NRI_CHECK (NriSwapChain's acquire/present/pacing-submit,
+        // the graph executor's submit, NriDevice's teardown wait). So one
+        // branch here upgrades the whole NRI path at once, from Phase 1's
+        // message-substring-only observation -- which could never match,
+        // since RouteNriError's text says "DEVICE_LOST" and
+        // NotifyIfDeviceRemoved looks for "Device Removed" -- to the real
+        // ObserveDeviceRemoved chain that writes the .arcdiag/.gpudump pair
+        // and latches the hosts' shutdown.
+        //
+        // Safe to fire the hook from here: every caller is our own code on
+        // its own thread, never a driver/validation callback re-entering us
+        // (which is the hazard NoteError exists to avoid).
+        if (result == nri::Result::DEVICE_LOST)
+        {
+            NvrhiMessageCallback::Instance().NoteDeviceLost("nri", buffer);
+            return false;
+        }
+
         RouteNriError(buffer);
         return false;
     }

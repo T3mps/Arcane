@@ -261,6 +261,22 @@ namespace Arcane
         // decides whether that's fatal.
         virtual bool WriteMarker(nvrhi::ICommandList*, std::uint32_t id, bool begin) = 0;
 
+        // The same marker, for a producer that holds no nvrhi::ICommandList:
+        // Phase 2's NRI frame graph, whose native command list comes from
+        // nri::CoreInterface::GetCommandBufferNativeObject instead of
+        // nvrhi::ICommandList::getNativeObject. `nativeCommandList` is the
+        // backend's own native type (ID3D12GraphicsCommandList* on D3D12,
+        // VkCommandBuffer on Vulkan) and must already be open, exactly as
+        // above.
+        //
+        // This is the SAME marker layer, not a parallel one: WriteMarker
+        // above resolves its native pointer and then calls straight into
+        // this, so both producers write into one marker buffer and one crash
+        // report. Passing the wrong backend's native pointer is undefined --
+        // there is nothing to type-check it against, which is why the two
+        // entry points stay separate rather than one void* overload.
+        virtual bool WriteMarkerNative(void* nativeCommandList, std::uint32_t id, bool begin) = 0;
+
         // Fills `envelope`'s fault-classification fields (and anything
         // else this backend can determine -- DRED breadcrumbs, device-fault
         // page/address, ...) from whatever GPU-side crash state it can

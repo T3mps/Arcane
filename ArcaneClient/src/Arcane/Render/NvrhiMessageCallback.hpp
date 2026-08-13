@@ -82,6 +82,29 @@ namespace Arcane
             ARC_ERROR("[{}] {}", tag ? tag : "?", text ? text : "");
         }
 
+        // Phase 2, Task 6: the TYPED device-lost seam. NoteError above
+        // deliberately withholds the removal hook because its producer (the
+        // D3D12 debug layer) reports from inside a D3D12 call on whatever
+        // thread tripped the error. This one is for the opposite case: a
+        // producer that holds a TYPED result -- nri::Result::DEVICE_LOST off
+        // its own QueueSubmit/AcquireNextTexture/QueuePresent call, on its
+        // own render thread, outside any driver callback -- where firing the
+        // hook is both safe and the whole point.
+        //
+        // It exists because the substring path cannot serve that producer:
+        // NotifyIfDeviceRemoved matches NVRHI's literal "Device Removed!"
+        // text, and NRI's failure text says "DEVICE_LOST", so before this an
+        // NRI-path device loss reached the latch but NEVER
+        // ObserveDeviceRemoved -- i.e. no .arcdiag, no .gpudump, no host
+        // shutdown latch. Same counter, same hook, one honest tag.
+        void NoteDeviceLost(const char* tag, const char* text) noexcept
+        {
+            ++m_errorCount;
+            ARC_ERROR("[{}] {}", tag ? tag : "?", text ? text : "");
+            if (const DeviceRemovedHook hook = m_deviceRemovedHook.load(std::memory_order_acquire))
+                hook();
+        }
+
         void message(nvrhi::MessageSeverity severity, const char* messageText) override
         {
             switch (severity)

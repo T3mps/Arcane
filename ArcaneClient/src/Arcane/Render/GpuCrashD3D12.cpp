@@ -244,6 +244,7 @@ namespace Arcane
             ~D3D12CrashBackend() override;
 
             bool WriteMarker(nvrhi::ICommandList* commandList, std::uint32_t id, bool begin) override;
+            bool WriteMarkerNative(void* nativeCommandList, std::uint32_t id, bool begin) override;
             void CollectFault(Diag::Envelope& envelope) override;
             GpuBreadcrumbs& Breadcrumbs() override { return m_breadcrumbs; }
             const char* Name() const override { return "D3D12"; }
@@ -411,13 +412,26 @@ namespace Arcane
 
         bool D3D12CrashBackend::WriteMarker(nvrhi::ICommandList* commandList, std::uint32_t id, bool begin)
         {
-            if (!commandList || !m_markersArmed.load(std::memory_order_acquire))
+            if (!commandList)
                 return false;
 
-            // F-4b: NVRHI exposes only the BASE ID3D12GraphicsCommandList, so
+            // F-4b: NVRHI exposes only the BASE ID3D12GraphicsCommandList.
+            // Resolving it is the ONLY thing this overload does that the
+            // native one cannot -- everything past here is shared, so the two
+            // producers (NVRHI passes and the NRI frame graph) write into one
+            // marker buffer through one code path.
+            return WriteMarkerNative(
+                commandList->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList).pointer,
+                id, begin);
+        }
+
+        bool D3D12CrashBackend::WriteMarkerNative(void* nativeCommandList, std::uint32_t id, bool begin)
+        {
+            if (!m_markersArmed.load(std::memory_order_acquire))
+                return false;
+
             // WriteBufferImmediate needs a QueryInterface up to ...List2.
-            auto* baseList = static_cast<ID3D12GraphicsCommandList*>(
-                commandList->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList).pointer);
+            auto* baseList = static_cast<ID3D12GraphicsCommandList*>(nativeCommandList);
             ComPtr<ID3D12GraphicsCommandList2> list2;
             if (!baseList || FAILED(baseList->QueryInterface(IID_PPV_ARGS(&list2))))
             {

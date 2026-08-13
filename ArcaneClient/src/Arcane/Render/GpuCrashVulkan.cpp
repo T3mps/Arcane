@@ -171,6 +171,7 @@ namespace Arcane
             ~VulkanCrashBackend() override;
 
             bool WriteMarker(nvrhi::ICommandList* commandList, std::uint32_t id, bool begin) override;
+            bool WriteMarkerNative(void* nativeCommandList, std::uint32_t id, bool begin) override;
             void CollectFault(Diag::Envelope& envelope) override;
             GpuBreadcrumbs& Breadcrumbs() override { return m_breadcrumbs; }
             const char* Name() const override { return "Vulkan"; }
@@ -421,12 +422,20 @@ namespace Arcane
         {
             if (!commandList) return false;
 
+            // F-4b: NVRHI hands out the raw VkCommandBuffer; nothing here
+            // wraps or owns the command list. Resolving it is the only thing
+            // this overload does that the native one cannot -- everything
+            // past here is shared, so the NVRHI passes and the NRI frame
+            // graph write into one marker buffer through one code path.
+            return WriteMarkerNative(
+                commandList->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer).pointer, id, begin);
+        }
+
+        bool VulkanCrashBackend::WriteMarkerNative(void* nativeCommandList, std::uint32_t id, bool begin)
+        {
             if (m_markersArmed.load(std::memory_order_acquire))
             {
-                // F-4b: NVRHI hands out the raw VkCommandBuffer; nothing here
-                // wraps or owns the command list.
-                const VkCommandBuffer commandBuffer = static_cast<VkCommandBuffer>(
-                    commandList->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer).pointer);
+                const VkCommandBuffer commandBuffer = static_cast<VkCommandBuffer>(nativeCommandList);
                 const PFN_vkCmdWriteBufferMarkerAMD write =
                     VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdWriteBufferMarkerAMD;
 

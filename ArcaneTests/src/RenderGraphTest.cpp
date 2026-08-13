@@ -9,12 +9,22 @@
 // "the node AddNode() is currently declaring") and every handle
 // CreateTexture/CreateBuffer/ImportTexture/ImportBuffer returns is
 // immediately usable by the time AddNode() returns.
+// Include order matters here for the same reason it does in
+// NriSubstrateTest.cpp: NriDevice.hpp pulls in Extensions/NRIDeviceCreation.h,
+// which declares nri::Message with an enumerator literally named ERROR, and
+// <windows.h> (reachable through Arcane/Render/Device.hpp -> spdlog) #defines
+// ERROR via wingdi.h. Keep the NRI includes first.
 #include <NRI.h>
+#include <Extensions/NRIDeviceCreation.h>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Render/Nri/RenderGraph.hpp>
+#include <Arcane/Render/Device.hpp>            // RenderErrorCount / ResetRenderErrorCount
+#include <Arcane/Render/Nri/NriDevice.hpp>
+#include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
+#include <Arcane/Render/Nri/RenderGraph.hpp>
+#include <Arcane/Render/Swapchain.hpp>         // kSwapchainFramesInFlight
 
 #include <cstdint>
 #include <optional>
@@ -1649,4 +1659,418 @@ TEST_CASE("uploadring layout: high-water tracks the peak cursor across multiple 
     REQUIRE(layout.Allocate(85, 1).ok);   // cursor: 10 + 85 = 95 > 70
     CHECK(layout.Cursor() == 95);
     CHECK(layout.HighWater() == 95);
+}
+
+// =========================================================================
+// Task 6: the EXECUTOR. NONE-backend integration -- still "[nri]", still
+// inside the ~[gpu] dev gate.
+//
+// What a NONE device buys and what it does not. ImplNONE.cpp answers every
+// CoreInterface entry these cases drive (CreateCommittedTexture/Buffer,
+// CreateTextureView, CreateCommandAllocator/Buffer, CreateFence,
+// Begin/EndCommandBuffer, CmdBarrier, CmdBeginRendering, QueueSubmit,
+// SetDebugName, the annotations) with a dummy non-null object and SUCCESS,
+// so what runs here is the executor's REAL control flow -- ordering,
+// refusals, pool reuse, burial -- against a device that records nothing.
+// Pixels, actual barriers and present are [gpu] desk items, per the plan.
+//
+// Three NONE footguns these cases are built around:
+//   * MapBuffer returns null unconditionally, so NriUploadRing::Init() cannot
+//     succeed -- the ring below is deliberately default-constructed and never
+//     Init()'d. Legal because the executor only FORWARDS it to node exec fns
+//     and never allocates from it (RgExecuteDesc::ring), and these exec fns
+//     do not allocate either.
+//   * GetFenceValue is hard-wired to 0, so the graph's own Reap (top of
+//     Execute) can only ever release value-0 burials. Every case that wants a
+//     burial released feeds the graveyard the value BY HAND, exactly as
+//     NriSubstrateTest.cpp's Graveyard case does.
+//   * Every CreateTexture hands back the SAME dummy pointer, so nothing here
+//     may assert that two distinct pool slots hold distinct nri::Texture*.
+//
+// The device is declared BEFORE the graph in every case on purpose: the
+// graph buries its resources in the device's graveyard on the way out, and
+// reverse declaration order is what makes the graph die first
+// (RgExecuteDesc::device's "must outlive the graph" contract, made
+// structural).
+// =========================================================================
+
+namespace
+{
+    // A 3-node write -> read -> copy graph, the brief's shape:
+    //
+    //   node 0 "write"  Raster : Write(color, ColorWrite) + colour attachment
+    //   node 1 "read"   Compute: Read(color, ShaderRead), Write(scratch, ShaderWriteCs)
+    //   node 2 "copy"   Copy   : Read(scratch, CopySrc), Write(dst, CopyDst)
+    //
+    // All three transients share one desc, and their lifetimes are
+    // color [0,1], scratch [1,2], dst [2,2] -- so Compile()'s greedy pool
+    // assignment gives color and scratch separate slots (they overlap at node
+    // 1) and hands dst color's slot (disjoint, identical desc). Two pool
+    // slots for three transients: the executor therefore has to realize a
+    // SHARED slot and replay a handover barrier, not just three independent
+    // textures.
+    struct ThreeNodeGraph
+    {
+        Arcane::RgTexture color, scratch, dst;
+        int               execCount[3] = { 0, 0, 0 };
+        nri::Texture*     resolvedColor = nullptr;
+        nri::Descriptor*  resolvedColorView = nullptr;
+
+        void Declare(Arcane::RenderGraph& graph)
+        {
+            graph.AddNode("write", Arcane::RenderGraph::NodeKind::Raster,
+                [&](Arcane::RenderGraphBuilder& builder)
+                {
+                    color = builder.CreateTexture("color", MakeColorDesc());
+                    builder.Write(color, Arcane::RgUsage::ColorWrite);
+                    const Arcane::RgTexture attachments[] = { color };
+                    graph.SetColorAttachments(attachments);
+                },
+                [this](Arcane::RenderGraphNodeContext& context)
+                {
+                    ++execCount[0];
+                    resolvedColor     = context.Resolve(color);
+                    resolvedColorView = context.ColorView(color);
+                });
+
+            graph.AddNode("read", Arcane::RenderGraph::NodeKind::Compute,
+                [&](Arcane::RenderGraphBuilder& builder)
+                {
+                    scratch = builder.CreateTexture("scratch", MakeColorDesc());
+                    builder.Read(color, Arcane::RgUsage::ShaderRead);
+                    builder.Write(scratch, Arcane::RgUsage::ShaderWriteCs);
+                },
+                [this](Arcane::RenderGraphNodeContext&) { ++execCount[1]; });
+
+            graph.AddNode("copy", Arcane::RenderGraph::NodeKind::Copy,
+                [&](Arcane::RenderGraphBuilder& builder)
+                {
+                    dst = builder.CreateTexture("dst", MakeColorDesc());
+                    builder.Read(scratch, Arcane::RgUsage::CopySrc);
+                    builder.Write(dst, Arcane::RgUsage::CopyDst);
+                },
+                [this](Arcane::RenderGraphNodeContext&) { ++execCount[2]; });
+        }
+    };
+}
+
+TEST_CASE("rendergraph exec: a 3-node write-read-copy graph records and submits on a NONE device with no latch growth", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;        // never Init()'d -- see the block comment above
+    Arcane::NriPipelineCache pipelines;   // Task 7's placeholder stub
+    Arcane::RenderGraph      graph;
+
+    ThreeNodeGraph shape;
+    shape.Declare(graph);
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.nodes.size() == 3);
+    REQUIRE(compiled.transients.size() == 3);
+    // The shared-slot shape this case exists to exercise; if Compile()'s
+    // packing ever changes, the rest of these numbers move with it.
+    REQUIRE(compiled.poolSlotCount == 2);
+
+    const Arcane::RgExecuteDesc desc{ *device, /*swapChain=*/nullptr, ring, pipelines, /*frameSlot=*/0 };
+    REQUIRE(graph.Execute(desc, compiled));
+
+    // Every node's exec fn ran exactly once, in one command buffer.
+    CHECK(shape.execCount[0] == 1);
+    CHECK(shape.execCount[1] == 1);
+    CHECK(shape.execCount[2] == 1);
+
+    // Exactly the compile's pool-slot count was realized -- not one per
+    // transient.
+    CHECK(graph.DebugTransientCount() == compiled.poolSlotCount);
+    CHECK(graph.DebugTransientCreateCount() == compiled.poolSlotCount);
+
+    // One submission, so the graph's fence timeline (and therefore every
+    // burial's key) advanced by exactly one.
+    CHECK(graph.DebugSubmitCount() == 1);
+
+    // Nothing was buried yet: a successful Execute realizes, it does not
+    // release.
+    CHECK(device->Graves().Pending() == 0);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("rendergraph exec: node exec fns resolve their declared handles to real resources", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+
+    ThreeNodeGraph shape;
+    shape.Declare(graph);
+
+    const Arcane::RgCompiled    compiled = CompileOk(graph);
+    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    REQUIRE(graph.Execute(desc, compiled));
+
+    // Resolve() went through the handle seam and landed on the pool texture
+    // the executor realized; ColorView() found the attachment view Execute()
+    // created up front (both are dummy-but-non-null on NONE, which is exactly
+    // the distinction being made -- null would mean "did not resolve").
+    CHECK(shape.resolvedColor != nullptr);
+    CHECK(shape.resolvedColorView != nullptr);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("rendergraph exec: a second Execute of the same compiled graph creates zero new transients", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+
+    ThreeNodeGraph shape;
+    shape.Declare(graph);
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+
+    const Arcane::RgExecuteDesc first{ *device, nullptr, ring, pipelines, 0 };
+    REQUIRE(graph.Execute(first, compiled));
+    const std::uint64_t created = graph.DebugTransientCreateCount();
+    REQUIRE(created == compiled.poolSlotCount);
+
+    // A different frame slot, same compiled graph -- the steady-state frame
+    // shape. Nothing about the pool may change.
+    const Arcane::RgExecuteDesc second{ *device, nullptr, ring, pipelines, 1 };
+    REQUIRE(graph.Execute(second, compiled));
+
+    // The lifetime CREATION counter is what proves reuse: a
+    // destroy-and-recreate would leave DebugTransientCount() identical and
+    // this one bumped.
+    CHECK(graph.DebugTransientCreateCount() == created);
+    CHECK(graph.DebugTransientCount() == compiled.poolSlotCount);
+    CHECK(graph.DebugSubmitCount() == 2);
+
+    // Reuse means nothing was released either.
+    CHECK(device->Graves().Pending() == 0);
+
+    CHECK(shape.execCount[0] == 2);
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("rendergraph exec: Reset buries every realized transient and view in the device graveyard", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+
+    ThreeNodeGraph shape;
+    shape.Declare(graph);
+
+    const Arcane::RgCompiled    compiled = CompileOk(graph);
+    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    REQUIRE(graph.Execute(desc, compiled));
+    REQUIRE(device->Graves().Pending() == 0);
+
+    graph.Reset();
+
+    // Two pool slots plus the one colour-attachment view node 0 declared.
+    // Buried, NOT destroyed: the submission that used them may still be in
+    // flight, which is the whole reason the graveyard exists.
+    CHECK(graph.DebugTransientCount() == 0);
+    CHECK(device->Graves().Pending() == compiled.poolSlotCount + 1);
+
+    // Reaping below the burial value releases nothing...
+    device->Graves().Reap(graph.DebugSubmitCount() - 1);
+    CHECK(device->Graves().Pending() == compiled.poolSlotCount + 1);
+
+    // ...and reaping AT it releases everything. NONE's GetFenceValue is
+    // hard-wired to 0, so the value is fed by hand here -- the graph's own
+    // Reap could never get there on this backend.
+    device->Graves().Reap(graph.DebugSubmitCount());
+    CHECK(device->Graves().Pending() == 0);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("rendergraph exec: a re-declared graph re-realizes its pool from scratch after Reset", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+
+    std::uint32_t firstPoolSlots = 0;
+    {
+        ThreeNodeGraph shape;
+        shape.Declare(graph);
+        const Arcane::RgCompiled    compiled = CompileOk(graph);
+        const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+        REQUIRE(graph.Execute(desc, compiled));
+        REQUIRE(graph.DebugTransientCreateCount() == compiled.poolSlotCount);
+        firstPoolSlots = compiled.poolSlotCount;
+    }
+
+    graph.Reset();
+    device->Graves().Reap(graph.DebugSubmitCount());
+
+    // The SAME shape declared again on the same graph object: the pool is
+    // gone (Reset buried it), so the second build realizes its own.
+    ThreeNodeGraph rebuilt;
+    rebuilt.Declare(graph);
+    const Arcane::RgCompiled    compiled = CompileOk(graph);
+    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    REQUIRE(graph.Execute(desc, compiled));
+
+    CHECK(graph.DebugTransientCount() == compiled.poolSlotCount);
+    CHECK(graph.DebugTransientCreateCount() == firstPoolSlots + compiled.poolSlotCount);
+    CHECK(rebuilt.execCount[0] == 1);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("rendergraph exec: a graph with no nodes still submits and advances the fence", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+
+    // Nothing declared at all. The empty submission is deliberate: the
+    // graph's fence is the graveyard's clock, and a frame that skipped the
+    // submit would leave burials from that frame keyed to a value nothing
+    // ever signals.
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    CHECK(compiled.nodes.empty());
+    CHECK(compiled.exitBarriers.empty());
+
+    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    REQUIRE(graph.Execute(desc, compiled));
+
+    CHECK(graph.DebugTransientCount() == 0);
+    CHECK(graph.DebugSubmitCount() == 1);
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("rendergraph exec: a swapchain-importing node refuses a null swapChain", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+
+    Arcane::RgTexture backbuffer;
+    graph.AddNode("clear", Arcane::RenderGraph::NodeKind::Raster,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            backbuffer = builder.ImportSwapChainTexture("backbuffer");
+            builder.Write(backbuffer, Arcane::RgUsage::ColorWrite);
+            const Arcane::RgTexture attachments[] = { backbuffer };
+            graph.SetColorAttachments(attachments);
+        },
+        [](Arcane::RenderGraphNodeContext&) { FAIL("a refused Execute must record nothing"); });
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    // ImportSwapChainTexture pins the exit state, so the graph always leaves
+    // the backbuffer present-ready without the caller choosing anything.
+    REQUIRE(compiled.exitBarriers.size() == 1);
+    CheckState(compiled.exitBarriers[0].after, kPresentState);
+
+    // No swapchain to acquire from: refused, loudly, before any recording.
+    const Arcane::RgExecuteDesc desc{ *device, /*swapChain=*/nullptr, ring, pipelines, 0 };
+    CHECK_FALSE(graph.Execute(desc, compiled));
+    CHECK(graph.DebugSubmitCount() == 0);
+
+    // The refusal reached the shared 0/0 gate latch through the "nri-graph"
+    // tagged seam -- restore it so no other case inherits the +1.
+    CHECK(Arcane::RenderErrorCount() == before + 1);
+    Arcane::ResetRenderErrorCount();
+}
+
+TEST_CASE("rendergraph exec: an RgCompiled from before a Reset is refused", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+
+    ThreeNodeGraph shape;
+    shape.Declare(graph);
+    const Arcane::RgCompiled stale = CompileOk(graph);
+
+    graph.Reset();
+
+    // One node now, three in `stale`. Executing the stale compile would walk
+    // three nodes against one declaration and index this frame's resources
+    // with last frame's slots.
+    Arcane::RgTexture tex;
+    graph.AddNode("only", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            tex = builder.CreateTexture("tex", MakeColorDesc());
+            builder.Write(tex, Arcane::RgUsage::ShaderWriteCs);
+        },
+        [](Arcane::RenderGraphNodeContext&) { FAIL("a refused Execute must record nothing"); });
+
+    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    CHECK_FALSE(graph.Execute(desc, stale));
+    CHECK(graph.DebugSubmitCount() == 0);
+
+    CHECK(Arcane::RenderErrorCount() == before + 1);
+    Arcane::ResetRenderErrorCount();
+}
+
+TEST_CASE("rendergraph exec: an out-of-range frame slot is refused", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+
+    ThreeNodeGraph shape;
+    shape.Declare(graph);
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+
+    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines,
+                                      Arcane::kSwapchainFramesInFlight };
+    CHECK_FALSE(graph.Execute(desc, compiled));
+    CHECK(graph.DebugSubmitCount() == 0);
+    CHECK(shape.execCount[0] == 0);
+
+    CHECK(Arcane::RenderErrorCount() == before + 1);
+    Arcane::ResetRenderErrorCount();
 }

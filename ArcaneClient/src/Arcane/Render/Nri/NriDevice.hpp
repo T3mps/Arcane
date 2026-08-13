@@ -98,6 +98,25 @@ namespace Arcane
         // Backend-dispatching convenience over the two above.
         static std::unique_ptr<NriDevice> Wrap(const NativeDeviceOwner& native);
 
+        // The NONE backend, for HEADLESS TESTS ONLY (Task 6's [nri] graph
+        // executor integration cases). It is the one carve-out from the
+        // wrapper-path rule stated at the top of this file: nriCreateDevice
+        // is a review defect for a REAL backend, but NONE has no native
+        // device to wrap -- there is nothing to wrap it FROM -- so that is
+        // the only creation path it has. NriSubstrateTest.cpp's NONE cases
+        // already call nriCreateDevice directly for the same reason.
+        //
+        // Why it must live HERE rather than in the test exe: ArcaneTests
+        // links its OWN static copy of NRI (premake5.lua's ArcaneTests
+        // links{} comment), so a device created by the exe's copy and driven
+        // through ArcaneClient.dll's CoreInterface would cross function
+        // tables. RenderGraph::Execute() runs inside the DLL, so its device
+        // has to be created inside the DLL too. Returns null on failure
+        // (already logged); Backend() reports D3D12 for a NONE device --
+        // GraphicsBackend has no NONE value and inventing one would leak a
+        // test-only concept into every backend switch in the tree.
+        static std::unique_ptr<NriDevice> CreateNoneForTests();
+
         // Destroys the NRI device ONLY. The native device it wrapped is the
         // caller's and is untouched. Drains the graveyard first, after an
         // NRI DeviceWaitIdle -- Graveyard's contract is "the caller has

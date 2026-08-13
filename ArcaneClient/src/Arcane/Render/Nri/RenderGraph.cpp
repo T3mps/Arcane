@@ -130,6 +130,10 @@ namespace Arcane
     {
         NodeDesc node;
         node.name = name != nullptr ? name : "";
+        // Composed once, here, and never again: the executor opens a
+        // breadcrumb scope + GPU marker under this exact string for this node
+        // on EVERY frame (see NodeDesc::passLabel).
+        node.passLabel = "pass:" + node.name;
         node.kind = kind;
         node.exec = std::move(exec);
 
@@ -622,6 +626,14 @@ namespace Arcane
 
     void RenderGraph::Reset()
     {
+        // The realized transients and cached views exist only to serve the
+        // declarations being thrown away here, so they go first -- buried,
+        // not destroyed, because the GPU may still be reading them (see
+        // ReleaseGpuResources in RenderGraphExec.cpp). The command slots and
+        // the submission fence deliberately survive: they are execution
+        // machinery, not frame resources.
+        ReleaseGpuResources(/*all=*/false);
+
         m_nodes.clear();
         m_textures.clear();
         m_buffers.clear();
@@ -745,7 +757,7 @@ namespace Arcane
 
     RgTexture RenderGraph::ImportTextureInternal(const char* name, nri::Texture* texture,
                                                   nri::AccessLayoutStage entry, nri::AccessLayoutStage exit,
-                                                  bool persistent)
+                                                  bool persistent, bool swapChain)
     {
         TextureResource resource;
         resource.name = name != nullptr ? name : "";
@@ -754,6 +766,7 @@ namespace Arcane
         resource.importEntry = entry;
         resource.importExit = exit;
         resource.persistent = persistent;
+        resource.swapChain = swapChain;
         resource.everWritten = true; // see TextureResource::everWritten in the header
 
         ARC_ASSERT(m_textures.size() < kIndexMask,
@@ -838,7 +851,26 @@ namespace Arcane
                                                  nri::AccessLayoutStage entry, nri::AccessLayoutStage exit,
                                                  bool persistent)
     {
-        return m_graph.ImportTextureInternal(name, texture, entry, exit, persistent);
+        return m_graph.ImportTextureInternal(name, texture, entry, exit, persistent, /*swapChain=*/false);
+    }
+
+    RgTexture RenderGraphBuilder::ImportSwapChainTexture(const char* name)
+    {
+        // Fixed entry/exit -- see the header for why they are not the
+        // caller's to choose. The exit triple is the one nri::Layout::PRESENT
+        // mandates ('NONE (use "after.stages = StageBits::NONE")'), which is
+        // also byte-for-byte what NriSmoke.cpp's third hand-written
+        // transition writes and what StateFor(RgUsage::Present) derives.
+        constexpr nri::AccessLayoutStage kAcquiredState{
+            nri::AccessBits::NONE, nri::Layout::UNDEFINED, nri::StageBits::ALL };
+        constexpr nri::AccessLayoutStage kPresentState{
+            nri::AccessBits::NONE, nri::Layout::PRESENT, nri::StageBits::NONE };
+
+        // No nri::Texture* yet: Execute() acquires it and fills the
+        // resolution table. Nothing between here and there dereferences it
+        // (Compile() reads importEntry/importExit only).
+        return m_graph.ImportTextureInternal(name, /*texture=*/nullptr, kAcquiredState, kPresentState,
+                                              /*persistent=*/false, /*swapChain=*/true);
     }
 
     RgBuffer RenderGraphBuilder::CreateBuffer(const char* name, std::uint64_t size, nri::BufferUsageBits usage)

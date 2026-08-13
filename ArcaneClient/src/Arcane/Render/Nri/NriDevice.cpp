@@ -334,6 +334,26 @@ namespace Arcane
         return nullptr;
     }
 
+    std::unique_ptr<NriDevice> NriDevice::CreateNoneForTests()
+    {
+        nri::DeviceCreationDesc desc{};
+        desc.graphicsAPI       = nri::GraphicsAPI::NONE;
+        desc.callbackInterface = MakeNriCallbacks();
+
+        nri::Device* device = nullptr;
+        if (!ARC_NRI_CHECK(nriCreateDevice(desc, device)) || !device)
+        {
+            ARC_ERROR("[nri] NONE-backend device creation failed");
+            return nullptr;
+        }
+
+        // Straight into the shared tail: ImplNONE answers GetQueue and
+        // nriGetInterface with dummy-but-non-null objects, so both post-wrap
+        // asserts hold and the identity log prints backend=NONE. Nothing
+        // downstream needs to know this device was not wrapped.
+        return FinishWrap(device, GraphicsBackend::D3D12);
+    }
+
     std::unique_ptr<NriDevice> NriDevice::FinishWrap(nri::Device* device, GraphicsBackend backend)
     {
         auto wrapped = std::unique_ptr<NriDevice>(new NriDevice());
