@@ -15,7 +15,7 @@ namespace Arcane
         cli.Option("screenshot", "", "write the last rendered frame to this PNG before exiting (pairs with --frames)");
         cli.Option("golden-capture", "", "write the last rendered frame to <dir>/<name>.png (pairs with --frames)");
         cli.Option("golden-compare", "", "compare the last rendered frame against <dir>/<name>.png; exit 3 on mismatch");
-        cli.Option("golden-name",    "", "golden artifact stem (default: <boot scene stem>-<backend>)");
+        cli.Option("golden-name",    "", "golden artifact stem (default: main-<backend>)");
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
 #if !defined(ARCANE_DIST)
         cli.Option("crash-gpu", "0", "DEV: deliberately fault the GPU on frame N (0 = off) -- "

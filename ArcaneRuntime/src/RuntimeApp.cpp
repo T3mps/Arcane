@@ -8,6 +8,7 @@
 
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Assets/Assets.hpp>      // Arcane::SaveTexturePng (--screenshot)
+#include <Arcane/Assets/GoldenImage.hpp> // Arcane::CompareRgbaImages / WriteDiffPng (golden harness)
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
@@ -392,8 +393,12 @@ void RuntimeApp::MainLoop()
         // so capture flags are set before the evaluator reads them.
         {
             const auto now = std::chrono::steady_clock::now();
-            const double frameDt = std::chrono::duration<double>(now - lastFrameTime).count();
+            const double wallDt = std::chrono::duration<double>(now - lastFrameTime).count();
             lastFrameTime = now;
+            // Golden runs pin the frame clock too, before m_lastFrameDt/m_hostClock
+            // consume it -- see the sim-advance block below for why (deterministic
+            // shader inputs).
+            const double frameDt = m_config.GoldenMode() ? 1.0 / 60.0 : wallDt;
             // The host clock the compile service debounces against + the frame dt
             // the material globals report. Advanced exactly once per frame, here,
             // because this is where the frame's wall-clock delta is measured (the
@@ -416,6 +421,11 @@ void RuntimeApp::MainLoop()
             double simDt = std::chrono::duration<double>(now - simPrev).count();
             simPrev = now;
             if (simDt > 0.25) simDt = 0.25;
+            // Golden runs are deterministic by construction: wall-clock dt would make
+            // every animated/timed shader input a per-run variable. One fixed 60 Hz
+            // step per rendered frame; --frames N gives N identical steps.
+            if (m_config.GoldenMode())
+                simDt = 1.0 / 60.0;
             const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             m_runtime->Loop().Advance(simDt,
                 [&](double dt)          { m_plugin->FixedUpdateAll(dt); },
@@ -676,6 +686,71 @@ void RuntimeApp::MainLoop()
                 ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
         }
 
+        // NRI Phase 0 golden harness: same last-frame/post-Present timing as
+        // --screenshot above (backbuffer is the exact presented pixels), but
+        // capture-to-<name>.png or compare-against-<name>.png. --golden-capture
+        // takes priority if both flags were somehow given; ordinary invocations
+        // pass exactly one, matching the harness scripts (Task 6).
+        if (lastFrame && m_config.GoldenMode())
+        {
+            const std::string name = !m_config.goldenName.empty()
+                ? m_config.goldenName
+                : std::string("main-") +
+                  (m_config.backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12");
+
+            std::uint32_t w = 0, h = 0;
+            std::vector<unsigned char> actual;
+            if (!Arcane::ReadTexturePixels(m_gpu->Device().Nvrhi(), backbuffer, w, h, actual))
+            {
+                ARC_ERROR("golden: backbuffer readback failed");
+                m_goldenExit = 3;
+            }
+            else if (!m_config.goldenCapturePath.empty())
+            {
+                const std::filesystem::path out =
+                    std::filesystem::path(m_config.goldenCapturePath) / (name + ".png");
+                if (Arcane::WritePngRgba(out, w, h, actual.data()))
+                    ARC_INFO("golden captured: {} ({}x{})", out.generic_string(), w, h);
+                else
+                {
+                    ARC_ERROR("golden capture FAILED: {}", out.generic_string());
+                    m_goldenExit = 3;
+                }
+            }
+            else
+            {
+                const std::filesystem::path dir(m_config.goldenComparePath);
+                const std::filesystem::path goldenPath = dir / (name + ".png");
+                std::uint32_t gw = 0, gh = 0;
+                std::vector<unsigned char> golden;
+                if (!Arcane::LoadPngRgba(goldenPath, gw, gh, golden))
+                {
+                    ARC_ERROR("golden: no golden at {}", goldenPath.generic_string());
+                    m_goldenExit = 3;
+                }
+                else
+                {
+                    const Arcane::GoldenCompareResult r = Arcane::CompareRgbaImages(
+                        golden.data(), gw, gh, actual.data(), w, h);
+                    if (r.ok)
+                        ARC_INFO("golden PASS: {} (maxDelta {}, bad {:.4f}%)",
+                                 name, r.maxChannelDelta, r.badPixelFraction * 100.0f);
+                    else
+                    {
+                        ARC_ERROR("golden FAIL: {} (dims {}, maxDelta {}, bad {:.4f}%, first ({},{}))",
+                                  name, r.dimensionsMatch ? "ok" : "MISMATCH",
+                                  r.maxChannelDelta, r.badPixelFraction * 100.0f,
+                                  r.firstBadX, r.firstBadY);
+                        (void)Arcane::WritePngRgba(dir / (name + ".actual.png"), w, h, actual.data());
+                        if (r.dimensionsMatch)
+                            (void)Arcane::WriteDiffPng(dir / (name + ".diff.png"),
+                                                       golden.data(), actual.data(), gw, gh, 2);
+                        m_goldenExit = 3;
+                    }
+                }
+            }
+        }
+
         if (lastFrame)
             running = false;
     }
@@ -783,5 +858,6 @@ int RuntimeApp::Run()
     Shutdown();
     // A device-loss exit is an abnormal end even though it was orderly: the
     // report exists, but the session did not do what it was asked to.
-    return Arcane::GpuDeviceLostObserved() ? 1 : 0;
+    if (Arcane::GpuDeviceLostObserved()) return 1;
+    return m_goldenExit;   // 0 ordinarily; 3 = golden capture/compare failure
 }

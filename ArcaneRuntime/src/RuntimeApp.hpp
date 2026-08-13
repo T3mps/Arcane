@@ -82,6 +82,11 @@ private:
     std::optional<Arcane::PluginHost>   m_plugin;       // destructs before m_runtime
     Arcane::FramePerf                   m_perf;
     std::uint64_t                       m_frameCount = 0;
+    // NRI Phase 0 golden harness: 0 ordinarily; set to 3 by the last-frame
+    // golden capture/compare block (RuntimeApp.cpp MainLoop) on any capture
+    // write failure or compare mismatch. Read by Run()'s tail as the process
+    // exit code (device-loss stays exit code 1, checked first).
+    int                                  m_goldenExit = 0;
 
 #if !defined(ARCANE_DIST)
     // --crash-gpu N (GPU crash diagnostics arc, Task 11): the desk battery's
