@@ -49,3 +49,17 @@ TEST_CASE("HostConfig parses --scene as a guid override", "[host]") {
     REQUIRE(def.config.has_value());
     CHECK(def.config->sceneOverride.empty());
 }
+TEST_CASE("host config: golden flags round-trip and imply golden mode", "[host][golden]") {
+    const auto o = Run({"--golden-capture", "goldens/out", "--golden-name", "main-dx12"});
+    REQUIRE(o.config.has_value());
+    CHECK(o.config->goldenCapturePath == "goldens/out");
+    CHECK(o.config->goldenComparePath.empty());
+    CHECK(o.config->goldenName == "main-dx12");
+    CHECK(o.config->GoldenMode());
+}
+TEST_CASE("host config: default is not golden mode; default name is empty", "[host][golden]") {
+    const auto o = Run({});
+    REQUIRE(o.config.has_value());
+    CHECK_FALSE(o.config->GoldenMode());
+    CHECK(o.config->goldenName.empty());   // resolved at use site: "main-<backend>"
+}

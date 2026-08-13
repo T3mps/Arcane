@@ -36,6 +36,15 @@ namespace Arcane
         // player sees, not an intermediate the eye never gets.
         std::string     screenshotPath = "";
 
+        // Golden image testing (Task 4 of NRI Phase 0 harness).
+        std::string     goldenCapturePath = "";   // --golden-capture <dir>: write <dir>/<name>.png on the last frame
+        std::string     goldenComparePath = "";   // --golden-compare <dir>: compare last frame vs <dir>/<name>.png; exit 3 on mismatch
+        std::string     goldenName        = "";   // --golden-name <name>: artifact stem (default "main-<backend>" at use site)
+
+        // True if either capture or compare mode is active.
+        [[nodiscard]] bool GoldenMode() const noexcept
+        { return !goldenCapturePath.empty() || !goldenComparePath.empty(); }
+
         // Print one line of engine-identity JSON to stdout and exit, without creating
         // a window or device. The Arcane Hub probes this to learn the plugin ABI it
         // must stamp into a new .arcproj -- see HostBoot::EngineInfoJson.

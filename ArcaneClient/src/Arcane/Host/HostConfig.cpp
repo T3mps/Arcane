@@ -13,6 +13,9 @@ namespace Arcane
         cli.Option("project", "", "project folder or .arcproj to open (empty = data/-next-to-exe)");
         cli.Option("scene",   "", "asset Guid to boot instead of the manifest's bootScene (empty = follow the manifest)");
         cli.Option("screenshot", "", "write the last rendered frame to this PNG before exiting (pairs with --frames)");
+        cli.Option("golden-capture", "", "write the last rendered frame to <dir>/<name>.png (pairs with --frames)");
+        cli.Option("golden-compare", "", "compare the last rendered frame against <dir>/<name>.png; exit 3 on mismatch");
+        cli.Option("golden-name",    "", "golden artifact stem (default: <boot scene stem>-<backend>)");
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
 #if !defined(ARCANE_DIST)
         cli.Option("crash-gpu", "0", "DEV: deliberately fault the GPU on frame N (0 = off) -- "
@@ -31,6 +34,9 @@ namespace Arcane
         cfg.projectPath = r.Get("project");
         cfg.sceneOverride = r.Get("scene");
         cfg.screenshotPath = r.Get("screenshot");
+        cfg.goldenCapturePath = r.Get("golden-capture");
+        cfg.goldenComparePath = r.Get("golden-compare");
+        cfg.goldenName        = r.Get("golden-name");
         cfg.printEngineInfo = r.Flag("print-engine-info");
 #if !defined(ARCANE_DIST)
         cfg.crashGpuFrame = r.GetAs<std::uint64_t>("crash-gpu");
