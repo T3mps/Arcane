@@ -55,6 +55,30 @@ namespace Arcane
         // enable this only when debugging D3D12 API parameter errors on a
         // machine without injected window hooks.
         bool enableD3D12DebugLayer = false;
+
+        // Opt-in: Vulkan SYNCHRONIZATION validation, on top of the ordinary
+        // VK_LAYER_KHRONOS_validation core checks `enableValidation` turns on.
+        // Vulkan-only -- D3D12's debug layer has no separate sync-validation
+        // switch (its closest analogue, GPU-Based Validation, is a different
+        // and far costlier thing), so `enableD3D12DebugLayer` above is the
+        // whole D3D12 story.
+        //
+        // DEFAULT FALSE, AND THE ENGINE'S OWN BOOT NEVER SETS IT. Its one
+        // caller today is the Phase-1 NRI triangle smoke (Render/Nri/
+        // NriSmoke.cpp, --nri-smoke), whose entire job is proving the wrapped
+        // device's hand-written barriers are correct -- exactly the class of
+        // defect sync validation catches and core validation does not. Sync
+        // validation is expensive and false-positive-prone on a full engine
+        // frame, which is why it is opt-in per device rather than folded into
+        // `enableValidation`: turning it on for the normal boot is a separate
+        // decision nobody has made yet.
+        //
+        // Requires `enableValidation` (it configures the validation layer; with
+        // no layer loaded there is nothing to configure) and the
+        // VK_EXT_validation_features instance extension. Missing either is a
+        // WARN and a degrade, never a create failure -- see
+        // DeviceVulkan.cpp's CreateVulkanNativeDevice.
+        bool enableSyncValidation = false;
     };
 
     class ARCANE_API RenderDevice

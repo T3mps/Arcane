@@ -68,6 +68,24 @@ namespace Arcane
         // that one host parses and silently ignores is a trap, and scripting the
         // editor's battery items beats clicking them.
         std::uint64_t   crashGpuFrame = 0;
+
+        // DEV ONLY, SCAFFOLDING (NRI Phase 1, Task 9): run the NRI triangle
+        // smoke instead of booting the engine. ArcaneRuntime::Run returns
+        // NriSmoke::Run(config)'s exit code BEFORE any NVRHI boot starts --
+        // window, wrapped NRI device, NRI swapchain, clear + one triangle.
+        // Honours --frames N and --screenshot <png> exactly as the normal boot
+        // does (same flags, deliberately -- a second vocabulary for "render N
+        // frames and capture the last one" would be a trap).
+        //
+        // Deleted with the rest of the smoke path in Phase 2, when the frame
+        // graph renders real content. Non-Dist for the same reason
+        // --crash-gpu is: a shipped build has no business carrying either.
+        //
+        // Unlike --crash-gpu this is ArcaneRuntime-only -- the editor's Run()
+        // does NOT honour it. Stated here rather than left implicit: the
+        // smoke owns its whole process (its own window, device and loop), so
+        // there is nothing for an editor session to host it inside.
+        bool            nriSmoke = false;
 #endif
 
         // Forward-declared here so it names HostConfig::ParseOutcome and can be the

@@ -22,6 +22,9 @@
 #include <Arcane/Render/FullscreenMaterialChain.hpp>   // scene post hook
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuPassScope -- the F-8b pass seams
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (the scene owns the view)
+#if !defined(ARCANE_DIST)
+#include <Arcane/Render/Nri/NriSmoke.hpp>   // --nri-smoke (Phase 1 scaffolding; deleted in Phase 2)
+#endif
 
 #include <Astra/Core/TypeContext.hpp>
 
@@ -783,6 +786,27 @@ void RuntimeApp::Shutdown()
 
 int RuntimeApp::Run()
 {
+#if !defined(ARCANE_DIST)
+    // --nri-smoke (NRI Phase 1, Task 9): SCAFFOLDING, deleted in Phase 2.
+    // FIRST statement in Run(), before the BootContext is even filled in, so
+    // the normal NVRHI boot never starts -- no GpuContext, no RenderDevice, no
+    // swapchain, no plugin, no project. The smoke owns the whole process from
+    // here: its own window, its own native device + NRI wrap, its own frame
+    // loop, its own exit code (documented on NriSmoke::Run).
+    //
+    // The splash is closed first because it is the NVRHI boot's progress
+    // story: main.cpp opens it before Run() is called, BootSequence's per-stage
+    // pump is what normally advances and closes it, and none of that machinery
+    // runs on this path -- leaving it up would put an orphan window in front of
+    // the smoke's own. Close() tolerates being called on a splash that never
+    // opened (BootSplashWindow's never-fail contract).
+    if (m_config.nriSmoke)
+    {
+        if (m_splash) m_splash->Close();
+        return Arcane::NriSmoke::Run(m_config);
+    }
+#endif
+
     Arcane::HostBoot::BootContext ctx{};
     ctx.runtime     = nullptr;              // stages populate as they go
     ctx.gpu         = nullptr;

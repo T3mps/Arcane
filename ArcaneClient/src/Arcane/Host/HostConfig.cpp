@@ -21,6 +21,8 @@ namespace Arcane
 #if !defined(ARCANE_DIST)
         cli.Option("crash-gpu", "0", "DEV: deliberately fault the GPU on frame N (0 = off) -- "
                                      "the crash-diagnostics desk trigger").Type(CliType::Uint);
+        cli.Flag  ("nri-smoke",      "DEV: run the NRI Phase-1 triangle smoke instead of "
+                                     "booting the engine (honours --frames/--screenshot)");
 #endif
 
         const Cli::Result r = cli.Parse(argc, argv);
@@ -41,6 +43,7 @@ namespace Arcane
         cfg.printEngineInfo = r.Flag("print-engine-info");
 #if !defined(ARCANE_DIST)
         cfg.crashGpuFrame = r.GetAs<std::uint64_t>("crash-gpu");
+        cfg.nriSmoke      = r.Flag("nri-smoke");
 #endif
 
         // Golden capture/compare only ever runs at the last frame (RuntimeApp

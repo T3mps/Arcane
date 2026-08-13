@@ -76,3 +76,30 @@ TEST_CASE("host config: golden mode without --frames is refused at parse time", 
     REQUIRE_FALSE(o.config.has_value());
     CHECK(o.exitCode == 2);
 }
+#if !defined(ARCANE_DIST)
+// NRI Phase 1, Task 9 -- SCAFFOLDING, deleted with the smoke itself in Phase 2.
+// Guarded exactly like the flag it covers: --nri-smoke is registered inside
+// HostConfig.cpp's `#if !defined(ARCANE_DIST)` block, so in a Dist build it is
+// an unknown argument (exit 2) and HostConfig has no nriSmoke member at all.
+//
+// This is the ONLY headless coverage the smoke can have: everything past the
+// flag needs a window and a real device (desk-only on this machine), so the
+// parse round-trip is what the ~[gpu] gate can actually prove.
+TEST_CASE("host config: --nri-smoke round-trips and defaults off", "[host][nri]") {
+    const auto o = Run({"--nri-smoke"});
+    REQUIRE(o.config.has_value());
+    CHECK(o.config->nriSmoke);
+    // The two flags the smoke shares with the normal boot -- same vocabulary,
+    // deliberately (the smoke reads maxFrames/screenshotPath, it does not
+    // define its own).
+    const auto paired = Run({"--nri-smoke", "--frames", "120", "--screenshot", "nri-tri.png"});
+    REQUIRE(paired.config.has_value());
+    CHECK(paired.config->nriSmoke);
+    CHECK(paired.config->maxFrames == 120u);
+    CHECK(paired.config->screenshotPath == "nri-tri.png");
+    // Absent flag = the normal NVRHI boot (today's behavior, unchanged).
+    const auto def = Run({});
+    REQUIRE(def.config.has_value());
+    CHECK_FALSE(def.config->nriSmoke);
+}
+#endif

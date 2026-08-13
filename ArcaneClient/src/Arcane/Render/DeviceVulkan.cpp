@@ -699,6 +699,54 @@ namespace Arcane
             debugUtils = true;
         }
 
+        // OPT-IN, DEFAULT OFF, AND INERT TO THE NVRHI BOOT (NRI Phase 1, Task
+        // 9): synchronization validation. `RenderDeviceDesc::enableSyncValidation`
+        // is false for every engine path -- RenderDevice::Create's callers all
+        // leave it defaulted -- so with the flag off this block is one
+        // false branch and the instance is created byte-identically to before
+        // (`syncFeatures` stays unreferenced and `instanceInfo.pNext` stays
+        // null). Its one caller is the --nri-smoke path, which needs the
+        // hazard checks core validation does not perform: the smoke's whole
+        // point is proving hand-written CmdBarrier placement on the wrapped
+        // device, and a missing barrier is silent to core validation.
+        //
+        // Mechanism: VK_EXT_validation_features + a VkValidationFeaturesEXT
+        // chained onto VkInstanceCreateInfo, the layer-configuration path the
+        // Vulkan SDK documents for turning sync validation on from inside the
+        // application (rather than via vk_layer_settings.txt or the
+        // VK_LAYER_* environment variables, neither of which a scripted desk
+        // command can rely on being set). Every miss degrades with a WARN --
+        // losing a diagnostic must never fail device creation.
+        bool syncValidation = false;
+        // Both must outlive vk::createInstance below (the struct is reachable
+        // from instanceInfo.pNext, and it points at this array) -- hence
+        // function scope rather than inside the `if`.
+        const vk::ValidationFeatureEnableEXT syncFeatureList[] = {
+            vk::ValidationFeatureEnableEXT::eSynchronizationValidation
+        };
+        vk::ValidationFeaturesEXT syncFeatures;
+        if (desc.enableSyncValidation)
+        {
+            if (layers.empty())
+            {
+                ARC_WARN("sync validation requested but {} is not loaded; "
+                         "continuing without it", kValidationLayer);
+            }
+            else if (!instanceExtensionAvailable(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME))
+            {
+                ARC_WARN("sync validation requested but instance extension '{}' is "
+                         "unavailable; continuing without it",
+                         VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+            }
+            else
+            {
+                instanceExtensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+                syncFeatures.setEnabledValidationFeatureCount(1)
+                            .setPEnabledValidationFeatures(syncFeatureList);
+                syncValidation = true;
+            }
+        }
+
         try
         {
             auto appInfo = vk::ApplicationInfo()
@@ -711,6 +759,13 @@ namespace Arcane
                 .setPpEnabledLayerNames(layers.data())
                 .setEnabledExtensionCount((uint32_t)instanceExtensions.size())
                 .setPpEnabledExtensionNames(instanceExtensions.data());
+            // Set only when the opt-in above actually took: an untouched
+            // pNext is what every pre-existing caller produces.
+            if (syncValidation)
+            {
+                instanceInfo.setPNext(&syncFeatures);
+                ARC_INFO("Vulkan synchronization validation ENABLED");
+            }
 
             out.instance = vk::createInstance(instanceInfo);
         }
