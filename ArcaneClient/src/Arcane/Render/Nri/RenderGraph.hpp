@@ -242,14 +242,18 @@ namespace Arcane
         // inside one Execute() call, so a frame driver satisfies it by
         // resizing strictly between Execute() calls.
         //
-        // ONE contract a resize DOES place on the caller: Reset() the graph
-        // after NriSwapChain::Resize(). The graph caches attachment views by
-        // texture POINTER, and a resize destroys and recreates the swapchain's
-        // textures -- possibly at the same addresses, so the cache cannot
-        // detect it. A frame driver that re-declares per frame (the intended
-        // shape, and Task 7's) already satisfies this; one that holds a graph
-        // across a resize without Reset()ing would bind a view of a destroyed
-        // texture.
+        // A resize places NO FURTHER CONTRACT on the caller -- there is
+        // nothing to remember. Every IMPORTED texture's attachment view is
+        // rebuilt inside each Execute() and the previous frame's is buried
+        // (RenderGraph::m_importedViews), so a destroyed-and-recreated
+        // backbuffer can never be bound through a view of its predecessor.
+        //
+        // That had to be made structural rather than documented, because no
+        // cache can be made correct here: views are found by texture POINTER,
+        // and NRI is free to hand a recreated texture the address a destroyed
+        // one just vacated. A stale nri::Descriptor still names the OLD native
+        // image, so binding it is a use-after-free that a pointer comparison
+        // reports as a cache hit.
         NriSwapChain* swapChain;
 
         // Forwarded to node exec fns untouched -- Execute() never allocates
@@ -807,10 +811,9 @@ namespace Arcane
             bool                   hasCarry = false;
         };
 
-        // An attachment view, cached by the texture it views. Keyed by
-        // POINTER, not by graph slot, so a swapchain backbuffer that rotates
-        // through kSwapchainFramesInFlight+1 textures accumulates one view
-        // per texture and reuses each. NriSmoke.cpp's ViewFor does the same.
+        // An attachment view, found by the texture it views. Two vectors hold
+        // these, and WHICH ONE a view lands in is a lifetime decision, not a
+        // filing convenience -- see m_views / m_importedViews.
         struct CachedView
         {
             nri::Texture*    texture = nullptr;
@@ -829,6 +832,9 @@ namespace Arcane
 
         bool RealizePool(const RgCompiled& compiled);
         bool RealizeAttachmentViews();
+        // Buries last frame's imported-texture views. Called once per
+        // Execute(), before this frame's are created -- see m_importedViews.
+        void ReleaseImportedViews();
         bool EnsureExecutionResources();
         // Buries the pool + views (the public ReleaseGpuResources() and
         // ~RenderGraph); buries the command slots + fence too when `all`
@@ -856,7 +862,37 @@ namespace Arcane
 
         NriDevice*                m_device = nullptr;   // latched by the first Execute(); must outlive this graph
         std::vector<PoolResource>  m_pool;
+
+        // Views over POOL textures. These persist across frames, because the
+        // graph OWNS the texture each one names: a pool texture only ever goes
+        // away through buryPoolResource(), which sweeps the views naming it in
+        // the same breath. Nothing can invalidate one behind the graph's back,
+        // so caching them is free and correct.
         std::vector<CachedView>    m_views;
+
+        // Views over IMPORTED textures. These are PER-EXECUTE: buried and
+        // rebuilt every frame, never carried.
+        //
+        // Not an oversight and not symmetry-breaking for its own sake -- it is
+        // the only correct treatment. The graph does not own an imported
+        // texture and gets no signal when its owner destroys it; the obvious
+        // one (NriSwapChain::Resize, which destroys and recreates every
+        // backbuffer) happens entirely outside the graph. Caching by pointer
+        // cannot survive that, because NRI may hand a recreated texture the
+        // address a destroyed one just vacated -- and a stale nri::Descriptor
+        // still names the OLD native image, so the pointer comparison reports
+        // a hit and the frame binds freed memory as a render target.
+        //
+        // COST, since this is a hot path: one CreateTextureView plus one
+        // deferred DestroyDescriptor per imported ATTACHMENT per frame -- ONE
+        // of each in Phase 2's frame (the backbuffer). The rejected
+        // alternatives were an epoch counter on NriSwapChain (covers the
+        // swapchain only, leaves every plain ImportTexture() caller exposed to
+        // the identical bug) and a documented "invalidate after resize" call
+        // (a contract the frame driver can silently get wrong, which is
+        // precisely what this replaced).
+        std::vector<CachedView>    m_importedViews;
+
         std::vector<GpuFrameSlot>  m_frames;            // kSwapchainFramesInFlight entries once realized
         nri::Fence*                m_fence = nullptr;   // this graph's own submission timeline
 

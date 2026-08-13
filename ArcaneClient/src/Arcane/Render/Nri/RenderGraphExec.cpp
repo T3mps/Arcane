@@ -246,6 +246,28 @@ namespace Arcane
         ReleaseGpuResourcesInternal(/*all=*/false);
     }
 
+    void RenderGraph::ReleaseImportedViews()
+    {
+        if (!m_device || m_importedViews.empty())
+            return;
+
+        Graveyard&                graves = m_device->Graves();
+        const nri::CoreInterface* core   = &m_device->Core();
+
+        // m_submitValue is the submission that last USED these views, so
+        // burial at it says exactly "free once that frame has retired" -- and
+        // it keeps every burial in this file keyed off the same monotonically
+        // growing counter, which is what makes Graveyard's nondecreasing
+        // invariant hold no matter how release, re-realization and this
+        // interleave.
+        for (const CachedView& cached : m_importedViews)
+        {
+            if (cached.view)
+                graves.Bury(m_submitValue, [core, view = cached.view] { core->DestroyDescriptor(view); });
+        }
+        m_importedViews.clear();
+    }
+
     void RenderGraph::ReleaseGpuResourcesInternal(bool all)
     {
         if (!m_device)
@@ -273,6 +295,10 @@ namespace Arcane
                 graves.Bury(fence, [core, view = cached.view] { core->DestroyDescriptor(view); });
         }
         m_views.clear();
+
+        // The imported half normally turns over inside Execute(); this catches
+        // the frame that never came (a release, or teardown).
+        ReleaseImportedViews();
 
         for (const PoolResource& slot : m_pool)
         {
@@ -642,7 +668,16 @@ namespace Arcane
     {
         if (!texture)
             return nullptr;
+        // Both halves, pool first. A pool texture and an imported one cannot
+        // share an address while both are alive, so which vector answers is
+        // never ambiguous at runtime -- the split is about LIFETIME (see
+        // m_importedViews), not about lookup.
         for (const CachedView& cached : m_views)
+        {
+            if (cached.texture == texture && cached.depth == depth)
+                return cached.view;
+        }
+        for (const CachedView& cached : m_importedViews)
         {
             if (cached.texture == texture && cached.depth == depth)
                 return cached.view;
@@ -653,6 +688,14 @@ namespace Arcane
     bool RenderGraph::RealizeAttachmentViews()
     {
         const nri::CoreInterface& core = m_device->Core();
+
+        // LAST frame's imported views die here, before this frame's are made.
+        // They cannot be carried: the graph does not own an imported texture
+        // and is never told when its owner destroys one (NriSwapChain::Resize
+        // destroys and recreates every backbuffer, entirely outside the
+        // graph), and a pointer-keyed cache cannot detect a recreated texture
+        // landing on a recycled address. See m_importedViews.
+        ReleaseImportedViews();
 
         // Created up front, for exactly the textures the declarations attach
         // -- so RenderGraphNodeContext::ColorView is a lookup and never a
@@ -694,7 +737,12 @@ namespace Arcane
                             + "' could not be created");
                 return false;
             }
-            m_views.push_back(CachedView{ texture, depth, view });
+            // Which vector decides the view's LIFETIME, so it follows the
+            // texture's ownership, not the call site: a pool texture's view is
+            // cached until the graph itself retires that texture, an imported
+            // texture's lives exactly this frame.
+            (m_textures[slot].kind == ResourceKind::Imported ? m_importedViews : m_views)
+                .push_back(CachedView{ texture, depth, view });
             return true;
         };
 

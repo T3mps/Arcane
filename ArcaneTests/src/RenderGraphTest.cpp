@@ -2234,3 +2234,106 @@ TEST_CASE("rendergraph exec: an out-of-range frame slot is refused", "[nri]")
     CHECK(Arcane::RenderErrorCount() == before + 1);
     Arcane::ResetRenderErrorCount();
 }
+
+TEST_CASE("rendergraph exec: an imported attachment's view is rebuilt every Execute, never carried", "[nri]")
+{
+    // Fix round 2. Views are found by texture POINTER, and the graph is never
+    // told when an imported texture's OWNER destroys it -- NriSwapChain::
+    // Resize() destroys and recreates every backbuffer entirely outside the
+    // graph. NRI may then hand a recreated texture the address a destroyed one
+    // just vacated, so no pointer-keyed cache can tell "same texture" from
+    // "different texture, recycled address", and a stale nri::Descriptor still
+    // names the OLD native image. The graph therefore does not cache imported
+    // views across frames at all.
+    //
+    // Deliberately driven through plain ImportTexture(), not
+    // ImportSwapChainTexture(): the hazard belongs to EVERY imported texture,
+    // which is why a resize-epoch signal on NriSwapChain was rejected as the
+    // fix -- it would have left this path exposed.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+
+    // Two distinct stand-in addresses for "the backbuffer before the resize"
+    // and "the backbuffer after it". Nothing ever dereferences them: on NONE
+    // every Cmd* is a no-op and GetTextureDesc ignores its argument
+    // (ImplNONE.cpp), and the graph itself only stores and compares the
+    // pointer. Real textures are useless here -- NONE hands every
+    // CreateCommittedTexture the SAME dummy pointer, so two of them would be
+    // indistinguishable, which is exactly the property under test.
+    auto* const beforeResize = reinterpret_cast<nri::Texture*>(0x1000);
+    auto* const afterResize  = reinterpret_cast<nri::Texture*>(0x2000);
+
+    constexpr nri::AccessLayoutStage kEntry{
+        nri::AccessBits::NONE, nri::Layout::UNDEFINED, nri::StageBits::ALL };
+
+    int               execCount = 0;
+    nri::Descriptor*  boundView = nullptr;
+    // Lives in the CASE's scope, not the lambda's: the exec fn runs during
+    // Execute(), long after declare() returned, so a handle owned by declare()
+    // would be a dangling reference by the time the node reads it.
+    Arcane::RgTexture backbuffer;
+
+    const auto declare = [&](nri::Texture* texture)
+    {
+        graph.AddNode("clear", Arcane::RenderGraph::NodeKind::Raster,
+            [&](Arcane::RenderGraphBuilder& builder)
+            {
+                backbuffer = builder.ImportTexture("backbuffer", texture, kEntry, kPresentState,
+                                                    /*persistent=*/false);
+                builder.Write(backbuffer, Arcane::RgUsage::ColorWrite);
+                const Arcane::RgTexture attachments[] = { backbuffer };
+                graph.SetColorAttachments(attachments);
+            },
+            [&](Arcane::RenderGraphNodeContext& context)
+            {
+                ++execCount;
+                boundView = context.ColorView(backbuffer);
+            });
+    };
+
+    // Frame 1 -- the pre-resize backbuffer.
+    declare(beforeResize);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    CHECK(execCount == 1);
+    CHECK(boundView != nullptr);
+    // Imported views are turned over at the START of the next Execute, so
+    // frame 1 has buried nothing yet. No transients at all in this graph, so
+    // the pool cannot be confused with the views.
+    CHECK(graph.DebugTransientCount() == 0);
+    CHECK(device->Graves().Pending() == 0);
+
+    // Frame 2 -- the swapchain resized, so the import is a different texture.
+    graph.Reset();
+    declare(afterResize);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    CHECK(execCount == 2);
+    CHECK(boundView != nullptr);
+
+    // THE ASSERTION: frame 1's view is in the graveyard, so nothing can serve
+    // it for the recreated texture. (On NONE every descriptor is the same
+    // dummy pointer, so the burial -- not a pointer compare -- is what proves
+    // the old one is gone; a graph that carried it would bury nothing.)
+    CHECK(device->Graves().Pending() == 1);
+
+    // Frame 3 -- the SAME pointer as frame 2, to pin that the turnover is
+    // unconditional rather than a pointer-change optimisation. It has to be:
+    // "the pointer did not change" is precisely the case a recycled address
+    // fakes.
+    graph.Reset();
+    declare(afterResize);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    CHECK(execCount == 3);
+    CHECK(device->Graves().Pending() == 2);
+
+    device->Graves().Reap(graph.DebugSubmitCount());
+    CHECK(device->Graves().Pending() == 0);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
