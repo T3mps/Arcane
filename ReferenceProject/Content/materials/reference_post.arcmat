@@ -1,0 +1,56 @@
+{
+  "baseInputs": [
+    4294967295
+  ],
+  "chainPos": {
+    "base": [
+      0.0,
+      0.0
+    ],
+    "out": [
+      0.0,
+      0.0
+    ],
+    "scene": [
+      0.0,
+      0.0
+    ]
+  },
+  "id": "7e5a0002-0002-4002-8002-000000000002",
+  "kind": "fullscreen",
+  "name": "ReferencePost",
+  "params": {
+    "Grade": {
+      "type": "color",
+      "value": [
+        1.6,
+        0.55,
+        1.25,
+        1.0
+      ]
+    },
+    "VignetteRadius": {
+      "type": "float",
+      "value": 0.3
+    },
+    "VignetteStrength": {
+      "type": "float",
+      "value": 1.0
+    }
+  },
+  "passes": [
+    {
+      "inputs": [
+        0
+      ],
+      "name": "vignette",
+      "pos": [
+        0.0,
+        0.0
+      ],
+      "snippet": "//@param float VignetteStrength = 0 [0..2]\n//@param float VignetteRadius = 0.5 [0..1]\n\n// PASS 1 of the chain. `inputs: [0]` wires pass 0's output into the reserved\n// InputTexture slot, so this is the seam that proves an INTERMEDIATE target\n// round-trips (pass 0 renders its own RGBA16F, pass 1 samples it, only pass 1\n// reaches the target). One merged param layout serves both passes -- Grade is\n// declared in pass 0 and visible here, these two are declared here and visible\n// there -- so the whole chain shares ONE packed CB and ONE binding-set shape.\nfloat4 shade(Varyings v)\n{\n    float4 c = InputTexture.Sample(MaterialSampler, v.uv);\n    float2 d = v.uv - 0.5;\n    float r = saturate((length(d) * 1.41421356 - VignetteRadius) /\n                       max(1.0 - VignetteRadius, 1e-4));\n    float vig = saturate(1.0 - VignetteStrength * r * r);\n    return float4(c.rgb * vig, c.a);\n}\n"
+    }
+  ],
+  "snippet": "//@param color Grade = (1, 1, 1, 1)\n\n// The scene post chain for ReferenceProject (assigned by the scene's\n// Arcane::PostProcess component). PASS 0: `baseInputs: [4294967295]` is the\n// kSceneInput sentinel, so InputTexture here is the EXTERNAL linear scene\n// colour the host hands the chain -- the seam a frame-graph port has to keep\n// alive, and the reason a post material can only be assigned to the scene's\n// post slot rather than stitched anywhere else.\n//\n// Both passes' decl defaults are IDENTITY (Grade = white, VignetteStrength = 0)\n// and the .arcmat's saved values are the loud ones. That is deliberate: if the\n// saved-value apply path breaks, the post chain still runs and still costs two\n// passes, but the picture silently equals the un-graded scene. Making the\n// visible effect depend on the saved values turns that failure into a diff.\nfloat4 shade(Varyings v)\n{\n    float4 scene = InputTexture.Sample(MaterialSampler, v.uv);\n    return float4(scene.rgb * Grade.rgb, scene.a);\n}\n",
+  "type": "material"
+}

@@ -9,6 +9,23 @@
 #include <Arcane/Render/Device.hpp>   // Arcane::GraphicsBackend
 namespace Arcane
 {
+    // WHICH SLICE OF THE FRAME a golden capture/compare covers (NRI Phase 2).
+    // The 2D cutover is verified node by node, and a whole-frame golden cannot
+    // say WHICH stage regressed: a batch-node bug and a post-node bug both show
+    // up as "main-dx12.png differs". Capturing the frame truncated after each
+    // stage gives one golden per seam, so the first stage whose golden breaks
+    // names the node.
+    //
+    // Semantics in the runtime frame (RuntimeApp::MainLoop):
+    //   Full  -- everything (the pre-Phase-2 frame, byte for byte)
+    //   Batch -- batcher + tonemap only: the post chain and the ImGui pass are
+    //            both bypassed
+    //   Post  -- batcher + post chain + tonemap: only the ImGui pass is bypassed
+    //
+    // Honoured ONLY in golden mode (see HostConfig::GoldenMode) -- an ordinary
+    // run always draws the whole frame, whatever this says.
+    enum class GoldenStage : std::uint8_t { Full, Batch, Post };
+
     struct ARCANE_API HostConfig
     {
         GraphicsBackend backend   = GraphicsBackend::D3D12;
@@ -40,6 +57,22 @@ namespace Arcane
         std::string     goldenCapturePath = "";   // --golden-capture <dir>: write <dir>/<name>.png on the last frame
         std::string     goldenComparePath = "";   // --golden-compare <dir>: compare last frame vs <dir>/<name>.png; exit 3 on mismatch
         std::string     goldenName        = "";   // --golden-name <name>: artifact stem (default "main-<backend>" at use site)
+
+        // --golden-stage full|batch|post (NRI Phase 2). Default Full = the
+        // pre-Phase-2 behaviour exactly. Only read when GoldenMode() is true;
+        // HostConfig::Parse refuses a non-Full stage without golden mode rather
+        // than let it be a silent no-op.
+        //
+        // ARTIFACT NAMING (the stem the runtime derives from this + goldenName):
+        //   Full  -> "main-<backend>"          (unchanged -- Phase 0's goldens
+        //                                       keep their filenames)
+        //   Batch -> "main-batch-<backend>"
+        //   Post  -> "main-post-<backend>"
+        // An explicit --golden-name is the WHOLE stem (the cross-backend
+        // compare passes the other backend's stem there), so a non-Full stage
+        // appends "-<stage>" to it instead -- enough that the three stages of
+        // one scripted run cannot overwrite each other's file.
+        GoldenStage     goldenStage = GoldenStage::Full;
 
         // True if either capture or compare mode is active.
         [[nodiscard]] bool GoldenMode() const noexcept

@@ -616,8 +616,18 @@ void RuntimeApp::MainLoop()
                 m_resolver ? m_resolver->PostChain() : nullptr;
             const Arcane::MaterialInstance* postInstance =
                 m_resolver ? m_resolver->PostInstance() : nullptr;
+            // --golden-stage batch: the BATCH golden is "batcher + tonemap and
+            // nothing else", so the post chain is bypassed even when the scene
+            // binds one -- that is the whole point of a stage golden (a batch
+            // node regression and a post node regression must not look the
+            // same). Gated on GoldenMode() so an ordinary run is untouched:
+            // outside a golden run goldenStage is not even read (and Parse
+            // refuses a non-Full stage without golden mode anyway).
+            const bool stageSkipsPost =
+                m_config.GoldenMode() &&
+                m_config.goldenStage == Arcane::GoldenStage::Batch;
             Arcane::Canvas* post =
-                (postChain && postChain->Ready() && postInstance)
+                (!stageSkipsPost && postChain && postChain->Ready() && postInstance)
                     ? m_gpu->EnsurePost() : nullptr;
             if (post)
             {
@@ -634,6 +644,23 @@ void RuntimeApp::MainLoop()
             }
             m_perf.Add(m_perf.accTone, t0, m_perf.Now());
         }
+        // --golden-stage batch|post: the HUD is host chrome, not scene content
+        // -- it would sit on top of every stage golden and mask exactly the
+        // pixels a node-by-node cutover needs to compare. Both non-Full stages
+        // drop it; Full keeps it (the Phase 0 goldens include it, and their
+        // filenames are unchanged).
+        //
+        // ImGui::EndFrame() rather than simply skipping: ImGuiLayer's contract
+        // is that every BeginFrame is paired with exactly one Render, and the
+        // frame HAS begun above (the HUD window and the plugin's DrawUIAll
+        // already recorded into it). Ending it without drawing is the same
+        // balancing move the no-backbuffer path above makes.
+        if (m_config.GoldenMode() &&
+            m_config.goldenStage != Arcane::GoldenStage::Full)
+        {
+            ImGui::EndFrame();
+        }
+        else
         {
             Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:imgui");
             const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
@@ -696,10 +723,23 @@ void RuntimeApp::MainLoop()
         // pass exactly one, matching the harness scripts (Task 6).
         if (lastFrame && m_config.GoldenMode())
         {
-            const std::string name = !m_config.goldenName.empty()
-                ? m_config.goldenName
-                : std::string("main-") +
-                  (m_config.backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12");
+            // Stage-golden stem (HostConfig::goldenStage's own comment carries
+            // the contract). Full resolves to EXACTLY the pre-Phase-2 string,
+            // so Phase 0's captured goldens keep working under their existing
+            // filenames; batch/post get their own stem so a scripted
+            // three-stage run writes three files instead of overwriting one.
+            const char* stage =
+                m_config.goldenStage == Arcane::GoldenStage::Batch ? "batch"
+              : m_config.goldenStage == Arcane::GoldenStage::Post  ? "post"
+                                                                   : nullptr;
+            const std::string name =
+                !m_config.goldenName.empty()
+                    // Explicit stem = the whole filename stem (the
+                    // cross-backend compare names the OTHER backend's golden
+                    // here), so the stage can only be appended to it.
+                    ? (stage ? m_config.goldenName + "-" + stage : m_config.goldenName)
+                    : std::string("main-") + (stage ? std::string(stage) + "-" : "") +
+                      (m_config.backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12");
 
             std::uint32_t w = 0, h = 0;
             std::vector<unsigned char> actual;

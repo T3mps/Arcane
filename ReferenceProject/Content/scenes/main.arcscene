@@ -13,6 +13,12 @@
           },
           "name": "Scene"
         },
+        "Arcane::PostProcess": {
+          "material": {
+            "hi": 9104589605272961026,
+            "lo": 9223934986808197122
+          }
+        },
         "Arcane::Transform": {
           "position": [
             0.0,
@@ -148,6 +154,48 @@
           "scale": [
             1.0,
             1.0
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104589609567993859,
+            "lo": 9224216461784907779
+          },
+          "name": "PulseBox"
+        },
+        "Arcane::SpriteRenderer": {
+          "material": {
+            "hi": 9104589600977928193,
+            "lo": 9223653511831486465
+          },
+          "orderInLayer": 2,
+          "shape": "Rect",
+          "sortingLayer": 0,
+          "sprite": {
+            "hi": 0,
+            "lo": 0
+          },
+          "tint": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Arcane::Transform": {
+          "position": [
+            0.0,
+            1.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.6,
+            0.7
           ]
         }
       },

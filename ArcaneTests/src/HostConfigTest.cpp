@@ -76,6 +76,52 @@ TEST_CASE("host config: golden mode without --frames is refused at parse time", 
     REQUIRE_FALSE(o.config.has_value());
     CHECK(o.exitCode == 2);
 }
+// NRI Phase 2, Task 2 -- the stage-golden flag. Registered beside the other
+// golden flags (NOT Dist-guarded, unlike --nri-smoke below), so this case is
+// unconditional too.
+TEST_CASE("host config: --golden-stage round-trips all three values", "[host][golden]") {
+    // Default: Full == the pre-Phase-2 frame, and it needs no golden run to be
+    // legal (it asks for nothing that does not already happen).
+    const auto def = Run({});
+    REQUIRE(def.config.has_value());
+    CHECK(def.config->goldenStage == Arcane::GoldenStage::Full);
+
+    const std::vector<std::string> golden{"--golden-capture", "goldens/out", "--frames", "60"};
+    auto withStage = [&](const char* stage) {
+        std::vector<std::string> args = golden;
+        args.push_back("--golden-stage");
+        args.push_back(stage);
+        return Run(args);
+    };
+
+    const auto full = withStage("full");
+    REQUIRE(full.config.has_value());
+    CHECK(full.config->goldenStage == Arcane::GoldenStage::Full);
+
+    const auto batch = withStage("batch");
+    REQUIRE(batch.config.has_value());
+    CHECK(batch.config->goldenStage == Arcane::GoldenStage::Batch);
+
+    const auto post = withStage("post");
+    REQUIRE(post.config.has_value());
+    CHECK(post.config->goldenStage == Arcane::GoldenStage::Post);
+
+    // Unknown stage: Cli::Choices refuses it at parse time, like --backend metal.
+    const auto bad = withStage("imgui");
+    REQUIRE_FALSE(bad.config.has_value());
+    CHECK(bad.exitCode == 2);
+
+    // A non-Full stage outside golden mode would draw the full frame anyway and
+    // exit 0 -- a silent no-op, refused for the same reason golden mode without
+    // --frames is.
+    const auto orphan = Run({"--golden-stage", "batch"});
+    REQUIRE_FALSE(orphan.config.has_value());
+    CHECK(orphan.exitCode == 2);
+    // ...but the default spelling of the same flag stays legal off a golden run.
+    const auto orphanFull = Run({"--golden-stage", "full"});
+    REQUIRE(orphanFull.config.has_value());
+    CHECK(orphanFull.config->goldenStage == Arcane::GoldenStage::Full);
+}
 #if !defined(ARCANE_DIST)
 // NRI Phase 1, Task 9 -- SCAFFOLDING, deleted with the smoke itself in Phase 2.
 // Guarded exactly like the flag it covers: --nri-smoke is registered inside

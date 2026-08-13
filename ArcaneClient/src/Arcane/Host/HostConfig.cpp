@@ -17,6 +17,16 @@ namespace Arcane
         cli.Option("golden-capture", "", "write the last rendered frame to <dir>/<name>.png (pairs with --frames)");
         cli.Option("golden-compare", "", "compare the last rendered frame against <dir>/<name>.png; exit 3 on mismatch");
         cli.Option("golden-name",    "", "golden artifact stem (default: main-<backend>)");
+        // Registered NEXT TO the other golden flags and, like them, NOT
+        // Dist-guarded: --golden-capture/--golden-compare/--golden-name all
+        // exist in every configuration, and a vocabulary where a Dist build
+        // accepts --golden-capture but rejects --golden-stage would be a worse
+        // trap than the shipped flag itself. (--crash-gpu / --nri-smoke are
+        // Dist-guarded because they are DEV scaffolding with no golden peer.)
+        cli.Option("golden-stage", "full",
+                   "which slice of the frame the golden covers: full|batch|post "
+                   "(batch = no post chain and no ImGui, post = no ImGui)")
+            .Choices({ "full", "batch", "post" });
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
 #if !defined(ARCANE_DIST)
         cli.Option("crash-gpu", "0", "DEV: deliberately fault the GPU on frame N (0 = off) -- "
@@ -40,6 +50,15 @@ namespace Arcane
         cfg.goldenCapturePath = r.Get("golden-capture");
         cfg.goldenComparePath = r.Get("golden-compare");
         cfg.goldenName        = r.Get("golden-name");
+        // Cli::Choices already refused anything outside the set at parse time
+        // (stderr + exit 2), so this mapping only ever sees the three legal
+        // spellings -- "full" is both the default and the else branch.
+        {
+            const std::string stage = r.Get("golden-stage");
+            cfg.goldenStage = stage == "batch" ? GoldenStage::Batch
+                            : stage == "post"  ? GoldenStage::Post
+                                               : GoldenStage::Full;
+        }
         cfg.printEngineInfo = r.Flag("print-engine-info");
 #if !defined(ARCANE_DIST)
         cfg.crashGpuFrame = r.GetAs<std::uint64_t>("crash-gpu");
@@ -54,6 +73,20 @@ namespace Arcane
         if (cfg.GoldenMode() && cfg.maxFrames == 0)
         {
             std::fprintf(stderr, "error: golden capture/compare requires --frames N\n");
+            return { std::nullopt, 2 };
+        }
+
+        // Same silent-no-op reasoning as the --frames rule above: the stage
+        // semantics are read ONLY inside RuntimeApp's `GoldenMode()` guard, so
+        // `--golden-stage batch` on an ordinary run would draw the full frame
+        // anyway and exit 0, looking exactly like a batch-only run that
+        // happened to include the post chain and the HUD. Refuse it here
+        // instead. (`--golden-stage full` is the default and stays legal
+        // everywhere -- it asks for nothing that does not already happen.)
+        if (cfg.goldenStage != GoldenStage::Full && !cfg.GoldenMode())
+        {
+            std::fprintf(stderr, "error: --golden-stage batch|post only applies to a golden run; "
+                                 "pass --golden-capture or --golden-compare\n");
             return { std::nullopt, 2 };
         }
 

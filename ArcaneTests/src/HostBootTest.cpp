@@ -6,10 +6,22 @@
 #include <Arcane/Config/Config.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // kGamePluginABIVersion (the probe tripwire)
+#include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (ReferenceProject material resolution)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Serialization/SceneAsset.hpp>   // kSceneJsonVersion, kSceneExt
+
+// The golden-scene content case below (NRI Phase 2, Task 2) stitches and
+// compiles ReferenceProject's shipped .arcmat files -- no device involved, the
+// same headless [shadercompile] idiom MaterialSourceTest uses.
+#include <Arcane/Material/MaterialAsset.hpp>
+#include <Arcane/Material/MaterialInstance.hpp>
+#include <Arcane/Material/MaterialSource.hpp>
+#include <Arcane/Material/MaterialTemplate.hpp>
+#include <Arcane/Render/ShaderCompiler.hpp>
+#include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry/kPsEntry + profiles
+#include <Arcane/Render/ShaderSourceProvider.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -25,6 +37,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -621,15 +634,167 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
     REQUIRE(sceneRoot != nullptr);
 
     const auto children = runtime.Registry().GetChildren(sceneRoot->entity);
-    REQUIRE(children.size() == 3);
+    REQUIRE(children.size() == 4);
 
     std::vector<std::string> names;
+    Astra::Entity pulseBox{};
+    bool foundPulseBox = false;
     for (Astra::Entity child : children)
     {
         const Arcane::Identity* info = runtime.Registry().GetComponent<Arcane::Identity>(child);
         REQUIRE(info != nullptr);
+        if (info->name == "PulseBox")
+        {
+            pulseBox = child;
+            foundPulseBox = true;
+        }
         names.push_back(info->name);
     }
     std::sort(names.begin(), names.end());
-    CHECK(names == std::vector<std::string>{"BoxA", "BoxB", "Ground"});
+    CHECK(names == std::vector<std::string>{"BoxA", "BoxB", "Ground", "PulseBox"});
+
+    // NRI Phase 2, Task 2: the scene is the fixture the stage goldens are
+    // captured from, so the two seams it was enriched to cover are pinned here
+    // -- a sprite that carries a REGISTERED sprite material (Batcher2D's
+    // per-material CB + binding-set path) and a scene PostProcess assignment
+    // (the PostChainCache path). Both are Guid references into this project's
+    // asset registry: a renamed/moved .arcmat resolves to nothing, the seam
+    // silently stops being exercised, and the goldens go on passing while
+    // covering less than they claim. Resolving them here is what makes that
+    // loud. (`.arcmat` is a NATIVE asset -- the Guid lives in the file's own
+    // "id" -- so this is the same resolution SceneRenderResolver performs.)
+    REQUIRE(foundPulseBox);
+    const Arcane::SpriteRenderer* pulse =
+        runtime.Registry().GetComponent<Arcane::SpriteRenderer>(pulseBox);
+    REQUIRE(pulse != nullptr);
+    REQUIRE(pulse->material.IsValid());
+    const auto spriteMatPath = proj->ResolveAsset(Arcane::AssetId::FromGuid(pulse->material));
+    REQUIRE(spriteMatPath.has_value());
+    CHECK(spriteMatPath->filename() == "pulse_sprite.arcmat");
+
+    const Arcane::PostProcess* post =
+        runtime.Registry().GetComponent<Arcane::PostProcess>(sceneRoot->entity);
+    REQUIRE(post != nullptr);
+    REQUIRE(post->material.IsValid());
+    const auto postMatPath = proj->ResolveAsset(Arcane::AssetId::FromGuid(post->material));
+    REQUIRE(postMatPath.has_value());
+    CHECK(postMatPath->filename() == "reference_post.arcmat");
+}
+
+// --- NRI Phase 2, Task 2: the golden scene's material content ------------------
+// The two .arcmat assets the enriched scene references are AUTHORED CONTENT, and
+// nothing else in the headless suite would notice a hand-edit that broke them:
+// a mistyped //@param or a snippet that no longer compiles surfaces as an
+// unshaded quad / a missing post chain at the desk, one GPU round trip later,
+// and a stage golden captured from that content would freeze the broken picture
+// as the baseline. This case stitches both through the real engine templates and
+// runs DXC over every stitched source -- CPU only, no device, so it belongs to
+// the ~[gpu] gate.
+
+TEST_CASE("ReferenceProject's golden materials stitch and compile on both targets",
+          "[host][project][shadercompile]")
+{
+    const fs::path dir = FindReferenceProjectDir();
+    REQUIRE_FALSE(dir.empty());
+    const fs::path materials = dir / "Content" / "materials";
+
+    Arcane::ShaderSourceProvider provider;
+    provider.AddRoot("data/shaders");
+
+    Arcane::ShaderCompiler sc;
+    REQUIRE(sc.Initialize(0.0));
+
+    // Both stages, both targets -- the sprite/post caches submit exactly this
+    // pair per pass, and a source that compiles as DXIL but not SPIR-V binds on
+    // one backend only (which reads as "the vulkan golden is wrong").
+    auto compileBoth = [&sc](const std::string& name, const std::string& hlsl)
+    {
+        for (const char* entry : { Arcane::kPsEntry, Arcane::kVsEntry })
+        {
+            Arcane::ShaderCompileRequest req;
+            req.debugName = name;
+            req.sourceUtf8 = hlsl;
+            req.entry = entry;
+            req.profile = entry == Arcane::kPsEntry ? Arcane::kPsProfile : Arcane::kVsProfile;
+            const Arcane::ShaderCompileResult r = sc.CompileNow(req);
+            for (const Arcane::ShaderDiag& d : r.dxil.diags)
+                INFO("dxil " << name << " " << entry << " line " << d.line << ": " << d.message);
+            for (const Arcane::ShaderDiag& d : r.spirv.diags)
+                INFO("spirv " << name << " " << entry << " line " << d.line << ": " << d.message);
+            CHECK(r.AllSucceeded());
+        }
+    };
+
+    SECTION("the sprite material stitches the SPRITE surface with a CB and a texture")
+    {
+        const auto data = Arcane::LoadMaterialAsset(materials / "pulse_sprite.arcmat");
+        REQUIRE(data.has_value());
+        CHECK(Arcane::MaterialSurfaceForKind(data->kind) == Arcane::MaterialSurface::Sprite);
+
+        const auto templateText =
+            provider.Get(Arcane::MaterialTemplateFile(Arcane::MaterialSurface::Sprite));
+        REQUIRE(templateText.has_value());
+
+        const Arcane::MaterialBuildResult build = Arcane::BuildMaterialShaderSource(
+            *templateText, data->snippet, data->name, Arcane::MaterialSurface::Sprite);
+        REQUIRE(build.errors.empty());
+
+        // WHY the scene needs this material at all: numeric params are what make
+        // Batcher2D build the per-material volatile CB at b1, and a declared
+        // texture is what puts the extra Texture_SRV(t1) into both the binding
+        // layout and the per-(texture, material) binding-set cache. A snippet
+        // that lost either decl would still compile and still draw -- and would
+        // stop covering the seam the Phase 2 goldens exist to watch.
+        CHECK(build.templ.CbSize() > 0);
+        CHECK(build.templ.TextureCount() == 1);
+
+        // Every saved value must land. A name that no longer matches a decl (or
+        // a type that changed under it) drops SILENTLY at bind, and on this
+        // material that means the sprite quietly renders its identity defaults.
+        Arcane::MaterialInstance instance(
+            std::make_shared<const Arcane::MaterialTemplate>(build.templ));
+        CHECK(Arcane::ApplyMaterialParams(*data, instance) == data->params.size());
+
+        compileBoth("pulse_sprite.hlsl", build.hlsl);
+    }
+
+    SECTION("the post material stitches a two-pass chain that reads the scene")
+    {
+        const auto data = Arcane::LoadMaterialAsset(materials / "reference_post.arcmat");
+        REQUIRE(data.has_value());
+        CHECK(Arcane::MaterialSurfaceForKind(data->kind) == Arcane::MaterialSurface::Fullscreen);
+        // Pass 0 reads the EXTERNAL scene colour; pass 1 reads pass 0. That
+        // exact shape -- two passes, an intermediate, a scene input -- is the
+        // post seam the cutover has to reproduce; a chain collapsed to one pass
+        // would still render and would prove strictly less.
+        REQUIRE((data->baseInputs == std::vector<std::uint32_t>{ Arcane::kSceneInput }));
+        REQUIRE(data->passes.size() == 1);   // + the base snippet = 2 chain passes
+        CHECK((data->passes[0].inputs == std::vector<std::uint32_t>{ 0u }));
+
+        const auto templateText =
+            provider.Get(Arcane::MaterialTemplateFile(Arcane::MaterialSurface::Fullscreen));
+        REQUIRE(templateText.has_value());
+
+        // Built exactly as PostChainCache builds it: base snippet first, POST
+        // mode on (which is what makes the kSceneInput wire legal).
+        std::vector<Arcane::MaterialChainPassDesc> descs;
+        descs.push_back({ data->snippet, data->baseInputs });
+        for (const Arcane::MaterialPass& p : data->passes)
+            descs.push_back({ p.snippet, p.inputs });
+
+        const Arcane::MaterialChainBuildResult build = Arcane::BuildMaterialChainSource(
+            *templateText, descs, data->name, data->vertexSnippet, /*externalInput=*/true);
+        REQUIRE(build.Ok());
+        REQUIRE(build.hlsl.size() == 2);
+        CHECK(build.templ.CbSize() > 0);   // the ONE merged CB both passes share
+
+        Arcane::MaterialInstance instance(
+            std::make_shared<const Arcane::MaterialTemplate>(build.templ));
+        CHECK(Arcane::ApplyMaterialParams(*data, instance) == data->params.size());
+
+        for (std::size_t i = 0; i < build.hlsl.size(); ++i)
+            compileBoth("reference_post.p" + std::to_string(i) + ".hlsl", build.hlsl[i]);
+    }
+
+    sc.Shutdown();
 }
