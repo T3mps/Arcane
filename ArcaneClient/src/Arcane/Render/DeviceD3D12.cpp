@@ -4,6 +4,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Platform/Window.hpp>
+#include <Arcane/Render/DeviceCreationD3D12.hpp>
 #include <Arcane/Render/DeviceFactories.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/IGpuCrashBackend.hpp>
@@ -117,11 +118,11 @@ namespace Arcane
 
             GraphicsBackend Backend() const override { return GraphicsBackend::D3D12; }
             nvrhi::IDevice* Nvrhi() const override { return m_nvrhi.Get(); }
-            std::string AdapterName() const override { return m_adapterName; }
+            std::string AdapterName() const override { return m_creation.adapterName; }
 
-            IDXGIFactory6* Factory() const { return m_factory.Get(); }
-            ID3D12CommandQueue* GraphicsQueue() const { return m_graphicsQueue.Get(); }
-            ID3D12Device* D3D12Device() const { return m_device.Get(); }
+            IDXGIFactory6* Factory() const { return m_creation.factory.Get(); }
+            ID3D12CommandQueue* GraphicsQueue() const { return m_creation.graphicsQueue.Get(); }
+            ID3D12Device* D3D12Device() const { return m_creation.device.Get(); }
 
             std::unique_ptr<Swapchain> CreateSwapchain(Window& window,
                                                        bool vsync) override;
@@ -130,20 +131,18 @@ namespace Arcane
             // Declaration order is destruction order in reverse: the nvrhi
             // device must release its D3D12 references before the queue,
             // device, adapter, and factory go away.
-            ComPtr<IDXGIFactory6>      m_factory;
-            ComPtr<IDXGIAdapter1>      m_adapter;
-            ComPtr<ID3D12Device>       m_device;
-            // Contract item 12's registration, held so the destructor can
-            // unregister: the callback is a function in THIS module and must
-            // not outlive it. Declared after m_device so it releases first.
-            ComPtr<ID3D12InfoQueue1>   m_infoQueue;
-            DWORD                      m_infoQueueCookie = 0;
-            ComPtr<ID3D12CommandQueue> m_graphicsQueue;
-            nvrhi::DeviceHandle        m_nvrhi;
-            std::string                m_adapterName;
+            //
+            // Task 7: those five COM handles (plus the adapter name and the
+            // info-queue registration) are the creation half now. It is FIRST
+            // here, and its own member order reproduces the order they were
+            // declared in -- factory, adapter, device, info queue, cookie,
+            // queue -- so the release sequence this class always produced is
+            // unchanged: nvrhi first, then the natives in that order.
+            D3D12DeviceCreation m_creation;
+            nvrhi::DeviceHandle m_nvrhi;
             // LAST on purpose, so it is destroyed FIRST: the crash backend
-            // holds an ID3D12Heap + placed resource created off m_device, and
-            // those must release before the device does.
+            // holds an ID3D12Heap + placed resource created off
+            // m_creation.device, and those must release before the device does.
             std::unique_ptr<IGpuCrashBackend> m_crashBackend;
         };
 
@@ -167,138 +166,24 @@ namespace Arcane
             }
             // Contract item 12, symmetric with Init's registration: the
             // debug layer holds a raw pointer to a function in this module.
-            if (m_infoQueue && m_infoQueueCookie != 0)
-            {
-                m_infoQueue->UnregisterMessageCallback(m_infoQueueCookie);
-                m_infoQueueCookie = 0;
-            }
+            // Same call, same position -- unregistering here rather than with
+            // the COM handles keeps the NVRHI device's own teardown messages
+            // behaving exactly as they did before the creation-half split.
+            UnregisterD3D12DebugCallback(m_creation);
         }
 
         bool DeviceD3D12::Init(const RenderDeviceDesc& desc)
         {
-            UINT factoryFlags = 0;
-            if (desc.enableD3D12DebugLayer)
-            {
-                ComPtr<ID3D12Debug> debug;
-                if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))))
-                {
-                    debug->EnableDebugLayer();
-                    factoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
-                }
-                else
-                {
-                    ARC_WARN("D3D12 debug layer unavailable; continuing without it");
-                }
-            }
-
-            if (FAILED(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&m_factory))))
-            {
-                ARC_ERROR("CreateDXGIFactory2 failed");
+            // Everything above the NVRHI desc used to live inline here; it
+            // is the creation half now, and this call is the ONLY thing
+            // between the two versions of this function.
+            if (!CreateD3D12NativeDevice(desc, m_creation))
                 return false;
-            }
-
-            if (FAILED(m_factory->EnumAdapterByGpuPreference(
-                    0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&m_adapter))))
-            {
-                ARC_ERROR("No DXGI adapter found");
-                return false;
-            }
-
-            DXGI_ADAPTER_DESC1 adapterDesc{};
-            m_adapter->GetDesc1(&adapterDesc);
-            char name[128]{};
-            size_t converted = 0;
-            wcstombs_s(&converted, name, adapterDesc.Description, _TRUNCATE);
-            m_adapterName = name;
-
-            // F-2b: DRED settings are process-global and "you must configure
-            // them prior to creating a Direct3D 12 Device" -- modifications
-            // have no effect on devices already created. This must therefore
-            // sit BEFORE D3D12CreateDevice, and it is deliberately independent
-            // of enableD3D12DebugLayer (D3D12GetDebugInterface fetches the DRED
-            // settings object without enabling the debug layer). Never fatal:
-            // every failure inside degrades the tier and logs one WARN.
-            //
-            // NRI capability contract item 13: stays exactly here. NRI v180
-            // contains no DRED code at all (zero matches for DRED /
-            // AutoBreadcrumb / PageFault across its Source and Include), and it
-            // never creates the device in wrapper mode, so it cannot clobber
-            // this -- but only if the call keeps its position ahead of create.
-            EnableD3D12Dred();
-
-            if (FAILED(D3D12CreateDevice(m_adapter.Get(), D3D_FEATURE_LEVEL_12_0,
-                                         IID_PPV_ARGS(&m_device))))
-            {
-                ARC_ERROR("D3D12CreateDevice failed (feature level 12_0)");
-                return false;
-            }
-
-            // The D3D12 debug layer defaults to break-on-error, which calls
-            // __fastfail when the info queue receives a D3D12_MESSAGE_SEVERITY_ERROR
-            // or CORRUPTION message. Route all validation through NVRHI's message
-            // callback (which logs them at the appropriate level) rather than
-            // aborting the process on first error.
-            if (desc.enableD3D12DebugLayer)
-            {
-                ComPtr<ID3D12InfoQueue> infoQueue;
-                if (SUCCEEDED(m_device.As(&infoQueue)))
-                {
-                    infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, FALSE);
-                    infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, FALSE);
-                    infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
-                }
-
-                // NRI capability contract item 12: turning break-off is all the
-                // block above ever did -- the messages themselves went nowhere.
-                // Register the callback that actually delivers them (see
-                // D3D12DebugLayerCallback). ID3D12InfoQueue1 is an Agility-era
-                // interface, so the QueryInterface can fail on an old runtime:
-                // that is a diagnostics degradation, never a create failure.
-                // (In practice the Agility redistributable makes it available;
-                // the proof line lands at the desk milestone.)
-                ComPtr<ID3D12InfoQueue1> infoQueue1;
-                if (SUCCEEDED(m_device.As(&infoQueue1)))
-                {
-                    DWORD cookie = 0;
-                    if (SUCCEEDED(infoQueue1->RegisterMessageCallback(
-                            &D3D12DebugLayerCallback,
-                            D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie)))
-                    {
-                        m_infoQueue = infoQueue1;
-                        m_infoQueueCookie = cookie;
-                    }
-                    else
-                    {
-                        ARC_WARN("ID3D12InfoQueue1::RegisterMessageCallback failed; "
-                                 "D3D12 debug-layer messages will not reach the log");
-                    }
-                }
-                else
-                {
-                    ARC_WARN("ID3D12InfoQueue1 unavailable (pre-Agility D3D12 runtime); "
-                             "D3D12 debug-layer messages will not reach the log");
-                }
-            }
-
-            // NRI capability contract item 10 (creation half): this ONE direct
-            // queue is what the wrapper desc must carry in
-            // QueueFamilyD3D12Desc::d3d12Queues -- leaving that null makes NRI
-            // create its own, and the DXGI swapchain below is bound to THIS
-            // one, so it would be presenting on a queue NRI never submits to.
-            // Reachable for the wrap through GraphicsQueue() above.
-            D3D12_COMMAND_QUEUE_DESC queueDesc{};
-            queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-            if (FAILED(m_device->CreateCommandQueue(&queueDesc,
-                                                    IID_PPV_ARGS(&m_graphicsQueue))))
-            {
-                ARC_ERROR("CreateCommandQueue failed");
-                return false;
-            }
 
             nvrhi::d3d12::DeviceDesc nvrhiDesc;
             nvrhiDesc.errorCB = &NvrhiMessageCallback::Instance();
-            nvrhiDesc.pDevice = m_device.Get();
-            nvrhiDesc.pGraphicsCommandQueue = m_graphicsQueue.Get();
+            nvrhiDesc.pDevice = m_creation.device.Get();
+            nvrhiDesc.pGraphicsCommandQueue = m_creation.graphicsQueue.Get();
             m_nvrhi = nvrhi::d3d12::createDevice(nvrhiDesc);
             if (!m_nvrhi)
             {
@@ -338,7 +223,7 @@ namespace Arcane
                 ARC_INFO("GPU crash backend armed: {}", m_crashBackend->Name());
             }
 
-            ARC_INFO("D3D12 device created on '{}'", m_adapterName);
+            ARC_INFO("D3D12 device created on '{}'", m_creation.adapterName);
             return true;
         }
 
@@ -549,6 +434,182 @@ namespace Arcane
                 return nullptr;
             return swapchain;
         }
+    }
+
+    // ----------------------------------------------------------------
+    // The CREATION HALF (NRI Phase 1, Task 7).
+    // ----------------------------------------------------------------
+    // This function IS the former prologue of DeviceD3D12::Init, moved out
+    // whole so the NRI wrapper can reuse it: the same calls in the same order
+    // with the same parameters, the same log lines, and the same early
+    // returns. The only textual change is that what used to be written into
+    // DeviceD3D12's members is written into `out` -- which is now where
+    // DeviceD3D12 keeps them anyway (m_creation), so the NVRHI path reads
+    // exactly the values it read before, and the member ORDER inside
+    // D3D12DeviceCreation reproduces the COM release order this class had.
+    //
+    // It sits at namespace scope (outside the anonymous namespace above)
+    // because DeviceCreationD3D12.hpp declares it for the other consumers.
+    //
+    // Failure leaves `out` holding whatever was created; the caller's
+    // teardown releases it, exactly as ~DeviceD3D12 always did when Init
+    // bailed.
+    bool CreateD3D12NativeDevice(const RenderDeviceDesc& desc, D3D12DeviceCreation& out)
+    {
+        // Recorded, not acted on: NRI's own validation layer is available in
+        // wrapper mode (contract 2.1) and keys off the same switch the NVRHI
+        // validation layer does. Pure member write -- no call, no branch,
+        // nothing the NVRHI path can observe.
+        out.enableValidation = desc.enableValidation;
+
+        UINT factoryFlags = 0;
+        if (desc.enableD3D12DebugLayer)
+        {
+            ComPtr<ID3D12Debug> debug;
+            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))))
+            {
+                debug->EnableDebugLayer();
+                factoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
+            }
+            else
+            {
+                ARC_WARN("D3D12 debug layer unavailable; continuing without it");
+            }
+        }
+
+        if (FAILED(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&out.factory))))
+        {
+            ARC_ERROR("CreateDXGIFactory2 failed");
+            return false;
+        }
+
+        if (FAILED(out.factory->EnumAdapterByGpuPreference(
+                0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&out.adapter))))
+        {
+            ARC_ERROR("No DXGI adapter found");
+            return false;
+        }
+
+        DXGI_ADAPTER_DESC1 adapterDesc{};
+        out.adapter->GetDesc1(&adapterDesc);
+        char name[128]{};
+        size_t converted = 0;
+        wcstombs_s(&converted, name, adapterDesc.Description, _TRUNCATE);
+        out.adapterName = name;
+
+        // F-2b: DRED settings are process-global and "you must configure
+        // them prior to creating a Direct3D 12 Device" -- modifications
+        // have no effect on devices already created. This must therefore
+        // sit BEFORE D3D12CreateDevice, and it is deliberately independent
+        // of enableD3D12DebugLayer (D3D12GetDebugInterface fetches the DRED
+        // settings object without enabling the debug layer). Never fatal:
+        // every failure inside degrades the tier and logs one WARN.
+        //
+        // NRI capability contract item 13: stays exactly here. NRI v180
+        // contains no DRED code at all (zero matches for DRED /
+        // AutoBreadcrumb / PageFault across its Source and Include), and it
+        // never creates the device in wrapper mode, so it cannot clobber
+        // this -- but only if the call keeps its position ahead of create.
+        EnableD3D12Dred();
+
+        if (FAILED(D3D12CreateDevice(out.adapter.Get(), D3D_FEATURE_LEVEL_12_0,
+                                     IID_PPV_ARGS(&out.device))))
+        {
+            ARC_ERROR("D3D12CreateDevice failed (feature level 12_0)");
+            return false;
+        }
+
+        // The D3D12 debug layer defaults to break-on-error, which calls
+        // __fastfail when the info queue receives a D3D12_MESSAGE_SEVERITY_ERROR
+        // or CORRUPTION message. Route all validation through NVRHI's message
+        // callback (which logs them at the appropriate level) rather than
+        // aborting the process on first error.
+        if (desc.enableD3D12DebugLayer)
+        {
+            ComPtr<ID3D12InfoQueue> infoQueue;
+            if (SUCCEEDED(out.device.As(&infoQueue)))
+            {
+                infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, FALSE);
+                infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, FALSE);
+                infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
+            }
+
+            // NRI capability contract item 12: turning break-off is all the
+            // block above ever did -- the messages themselves went nowhere.
+            // Register the callback that actually delivers them (see
+            // D3D12DebugLayerCallback). ID3D12InfoQueue1 is an Agility-era
+            // interface, so the QueryInterface can fail on an old runtime:
+            // that is a diagnostics degradation, never a create failure.
+            // (In practice the Agility redistributable makes it available;
+            // the proof line lands at the desk milestone.)
+            ComPtr<ID3D12InfoQueue1> infoQueue1;
+            if (SUCCEEDED(out.device.As(&infoQueue1)))
+            {
+                DWORD cookie = 0;
+                if (SUCCEEDED(infoQueue1->RegisterMessageCallback(
+                        &D3D12DebugLayerCallback,
+                        D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie)))
+                {
+                    out.infoQueue = infoQueue1;
+                    out.infoQueueCookie = cookie;
+                }
+                else
+                {
+                    ARC_WARN("ID3D12InfoQueue1::RegisterMessageCallback failed; "
+                             "D3D12 debug-layer messages will not reach the log");
+                }
+            }
+            else
+            {
+                ARC_WARN("ID3D12InfoQueue1 unavailable (pre-Agility D3D12 runtime); "
+                         "D3D12 debug-layer messages will not reach the log");
+            }
+        }
+
+        // NRI capability contract item 10 (creation half): this ONE direct
+        // queue is what the wrapper desc must carry in
+        // QueueFamilyD3D12Desc::d3d12Queues -- leaving that null makes NRI
+        // create its own, and the DXGI swapchain below is bound to THIS
+        // one, so it would be presenting on a queue NRI never submits to.
+        // Reachable for the wrap through GraphicsQueue() above.
+        D3D12_COMMAND_QUEUE_DESC queueDesc{};
+        queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        if (FAILED(out.device->CreateCommandQueue(&queueDesc,
+                                                 IID_PPV_ARGS(&out.graphicsQueue))))
+        {
+            ARC_ERROR("CreateCommandQueue failed");
+            return false;
+        }
+
+        return true;
+    }
+
+    // Contract item 12's teardown half, idempotent: the debug layer holds a
+    // raw pointer to a function in THIS module and must not outlive it. Split
+    // out of the release below because the NVRHI path has to unregister at
+    // one specific point -- before its nvrhi device is released, which is
+    // exactly where ~DeviceD3D12 called it before this refactor.
+    void UnregisterD3D12DebugCallback(D3D12DeviceCreation& creation)
+    {
+        if (creation.infoQueue && creation.infoQueueCookie != 0)
+        {
+            creation.infoQueue->UnregisterMessageCallback(creation.infoQueueCookie);
+            creation.infoQueueCookie = 0;
+        }
+    }
+
+    // Owner teardown (contract item 15: the NRI device is destroyed BEFORE
+    // this runs). Releases in the order D3D12DeviceCreation's member layout
+    // encodes -- queue, info queue, device, adapter, factory -- which is the
+    // order ~DeviceD3D12's member destruction has always produced.
+    void DestroyD3D12NativeDevice(D3D12DeviceCreation& creation)
+    {
+        UnregisterD3D12DebugCallback(creation);
+        creation.graphicsQueue.Reset();
+        creation.infoQueue.Reset();
+        creation.device.Reset();
+        creation.adapter.Reset();
+        creation.factory.Reset();
     }
 
     std::unique_ptr<RenderDevice> CreateDeviceD3D12(const RenderDeviceDesc& desc)

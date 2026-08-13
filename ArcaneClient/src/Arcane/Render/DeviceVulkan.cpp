@@ -11,6 +11,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Platform/Window.hpp>
+#include <Arcane/Render/DeviceCreationVulkan.hpp>
 #include <Arcane/Render/DeviceFactories.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/IGpuCrashBackend.hpp>
@@ -160,26 +161,26 @@ namespace Arcane
 
             GraphicsBackend Backend() const override { return GraphicsBackend::Vulkan; }
             nvrhi::IDevice* Nvrhi() const override { return m_nvrhi.Get(); }
-            std::string AdapterName() const override { return m_adapterName; }
+            std::string AdapterName() const override { return m_creation.adapterName; }
 
-            vk::Instance Instance() const { return m_instance; }
-            vk::PhysicalDevice PhysicalDevice() const { return m_physicalDevice; }
-            vk::Device Device() const { return m_device; }
-            vk::Queue GraphicsQueue() const { return m_graphicsQueue; }
-            uint32_t GraphicsQueueFamily() const { return (uint32_t)m_graphicsQueueFamily; }
+            vk::Instance Instance() const { return m_creation.instance; }
+            vk::PhysicalDevice PhysicalDevice() const { return m_creation.physicalDevice; }
+            vk::Device Device() const { return m_creation.device; }
+            vk::Queue GraphicsQueue() const { return m_creation.graphicsQueue; }
+            uint32_t GraphicsQueueFamily() const { return (uint32_t)m_creation.graphicsQueueFamily; }
 
             // NRI capability contract items 5 + 6: the three values a wrapper
             // desc may not guess. minorVersion is the created API minor, and
             // the two lists are the FILTERED ones the device was actually
             // created with (NRI takes both verbatim in wrapper mode).
-            uint32_t ApiMinorVersion() const { return m_apiMinorVersion; }
+            uint32_t ApiMinorVersion() const { return m_creation.apiMinorVersion; }
             const std::vector<const char*>& EnabledInstanceExtensions() const
             {
-                return m_enabledInstanceExtensions;
+                return m_creation.enabledInstanceExtensions;
             }
             const std::vector<const char*>& EnabledDeviceExtensions() const
             {
-                return m_enabledDeviceExtensions;
+                return m_creation.enabledDeviceExtensions;
             }
 
             // The unwrapped backend device, for native queue-semaphore calls.
@@ -194,26 +195,21 @@ namespace Arcane
                                                        bool vsync) override;
 
         private:
-            vk::detail::DynamicLoader        m_loader;  // must outlive everything below
-            vk::Instance                     m_instance;
-            vk::DebugUtilsMessengerEXT       m_debugMessenger;
-            vk::PhysicalDevice               m_physicalDevice;
-            vk::Device         m_device;
-            vk::Queue          m_graphicsQueue;
-            int                m_graphicsQueueFamily = -1;
-            uint32_t           m_apiMinorVersion = 0;
-            // The names vkCreateDevice/vkCreateInstance were actually given.
-            // Every element points at a string literal, so the vectors are safe
-            // to hand out by reference for the process lifetime.
-            std::vector<const char*> m_enabledInstanceExtensions;
-            std::vector<const char*> m_enabledDeviceExtensions;
+            // Task 7: the creation half -- loader, instance, messenger,
+            // physical device, device, queue, family index, API minor, the
+            // filtered extension lists, adapter name, and the GPU-crash
+            // record. It is FIRST for the same reason m_loader was: it owns
+            // the Vulkan loader module, which must outlive every handle
+            // (including everything NVRHI holds) and therefore has to be
+            // destroyed last. Same values, same lifetimes, one owner --
+            // DeviceCreationVulkan.hpp says what each field is for.
+            VulkanDeviceCreation m_creation;
             nvrhi::DeviceHandle m_nvrhiBackend;  // the real vulkan device
             nvrhi::DeviceHandle m_nvrhi;         // possibly validation-wrapped
-            std::string         m_adapterName;
-            // Holds a VkBuffer + VkDeviceMemory created off m_device, so it
-            // must be released BEFORE m_device.destroy() -- ~DeviceVulkan
-            // resets it explicitly rather than relying on member order,
-            // because that destructor tears the device down in its BODY.
+            // Holds a VkBuffer + VkDeviceMemory created off m_creation.device,
+            // so it must be released BEFORE that device is destroyed --
+            // ~DeviceVulkan resets it explicitly rather than relying on member
+            // order, because that destructor tears the device down in its BODY.
             std::unique_ptr<IGpuCrashBackend> m_crashBackend;
         };
 
@@ -604,594 +600,660 @@ namespace Arcane
                 return nullptr;
             return swapchain;
         }
+    }
 
-        bool DeviceVulkan::Init(const RenderDeviceDesc& desc)
+    // ----------------------------------------------------------------
+    // The CREATION HALF (NRI Phase 1, Task 7).
+    // ----------------------------------------------------------------
+    // This function IS the former prologue of DeviceVulkan::Init, moved out
+    // whole so the NRI wrapper can reuse it: the same calls in the same order
+    // with the same parameters, the same log lines, and the same early
+    // returns. The only textual change is that what used to be written into
+    // DeviceVulkan's members is written into `out` -- which is now where
+    // DeviceVulkan keeps them anyway (m_creation), so the NVRHI path reads
+    // exactly the values it read before.
+    //
+    // It sits at namespace scope (outside the anonymous namespace above)
+    // because DeviceCreationVulkan.hpp declares it for the other consumers;
+    // DeviceVulkan's own out-of-class member definitions follow it, still
+    // internal-linkage by virtue of their class.
+    //
+    // Failure leaves `out` holding whatever was created; the caller's
+    // teardown (DestroyVulkanNativeDevice, reached through ~DeviceVulkan or
+    // NativeDeviceOwner) releases it, exactly as ~DeviceVulkan always did
+    // when Init bailed. Exceptions still propagate -- CreateDeviceVulkan's
+    // catch below is unchanged and is still the one that reports them.
+    bool CreateVulkanNativeDevice(const RenderDeviceDesc& desc, VulkanDeviceCreation& out)
+    {
+        // Recorded, not acted on: NRI's own validation layer is available in
+        // wrapper mode (contract 1.1) and keys off the same switch the
+        // instance's VK_LAYER_KHRONOS_validation below does. Pure member
+        // write -- no call, no branch, nothing the NVRHI path can observe.
+        out.enableValidation = desc.enableValidation;
+
+        auto vkGetInstanceProcAddr =
+            out.loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+        if (!vkGetInstanceProcAddr)
         {
-            auto vkGetInstanceProcAddr =
-                m_loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-            if (!vkGetInstanceProcAddr)
-            {
-                ARC_ERROR("Vulkan loader not available (vulkan-1.dll missing?)");
-                return false;
-            }
-            VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+            ARC_ERROR("Vulkan loader not available (vulkan-1.dll missing?)");
+            return false;
+        }
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
 
-            std::vector<const char*> layers;
-            if (desc.enableValidation)
+        std::vector<const char*> layers;
+        if (desc.enableValidation)
+        {
+            try
             {
-                try
+                for (const auto& layer : vk::enumerateInstanceLayerProperties())
                 {
-                    for (const auto& layer : vk::enumerateInstanceLayerProperties())
+                    if (std::string_view(layer.layerName) == kValidationLayer)
                     {
-                        if (std::string_view(layer.layerName) == kValidationLayer)
-                        {
-                            layers.push_back(kValidationLayer);
-                            break;
-                        }
-                    }
-                }
-                catch (const vk::SystemError& e)
-                {
-                    ARC_WARN("vk::enumerateInstanceLayerProperties threw: {}; "
-                             "continuing without validation layer", e.what());
-                }
-                if (layers.empty())
-                    ARC_WARN("{} not installed; continuing without it", kValidationLayer);
-            }
-
-            std::vector<const char*> instanceExtensions(
-                std::begin(kInstanceExtensions), std::end(kInstanceExtensions));
-
-            // Enumerated once and shared by the two checks below; previously
-            // this call sat inside the validation-only debug_utils loop.
-            const auto availableInstanceExtensions =
-                vk::enumerateInstanceExtensionProperties();
-            const auto instanceExtensionAvailable = [&](std::string_view wanted) {
-                for (const auto& ext : availableInstanceExtensions)
-                {
-                    if (std::string_view(ext.extensionName) == wanted)
-                        return true;
-                }
-                return false;
-            };
-
-            // NRI capability contract item 1: a hard-required instance
-            // extension, named here rather than left to vk::createInstance to
-            // report as a bare ErrorExtensionNotPresent (contract item 14's
-            // rule -- the message must say WHICH capability is missing).
-            if (!instanceExtensionAvailable(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME))
-            {
-                ARC_ERROR("Vulkan instance extension '{}' is unavailable; it is "
-                          "hard-required (NRI wrapper capability contract item 1)",
-                          VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
-                return false;
-            }
-
-            bool debugUtils = false;
-            if (desc.enableValidation &&
-                instanceExtensionAvailable(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
-            {
-                instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-                debugUtils = true;
-            }
-
-            try
-            {
-                auto appInfo = vk::ApplicationInfo()
-                    .setPApplicationName("Arcane")
-                    .setApiVersion(kApiVersion);
-
-                auto instanceInfo = vk::InstanceCreateInfo()
-                    .setPApplicationInfo(&appInfo)
-                    .setEnabledLayerCount((uint32_t)layers.size())
-                    .setPpEnabledLayerNames(layers.data())
-                    .setEnabledExtensionCount((uint32_t)instanceExtensions.size())
-                    .setPpEnabledExtensionNames(instanceExtensions.data());
-
-                m_instance = vk::createInstance(instanceInfo);
-            }
-            catch (const vk::SystemError& e)
-            {
-                ARC_ERROR("vk::createInstance failed: {}", e.what());
-                return false;
-            }
-
-            VULKAN_HPP_DEFAULT_DISPATCHER.init(m_instance);
-
-            if (debugUtils)
-            {
-                using Severity = vk::DebugUtilsMessageSeverityFlagBitsEXT;
-                using Type = vk::DebugUtilsMessageTypeFlagBitsEXT;
-                auto messengerInfo = vk::DebugUtilsMessengerCreateInfoEXT()
-                    .setMessageSeverity(Severity::eError | Severity::eWarning)
-                    .setMessageType(Type::eValidation | Type::eGeneral |
-                                    Type::ePerformance)
-                    .setPfnUserCallback(&VkDebugCallback);
-                m_debugMessenger =
-                    m_instance.createDebugUtilsMessengerEXT(messengerInfo);
-            }
-
-            std::vector<vk::PhysicalDevice> physicalDevices;
-            try
-            {
-                physicalDevices = m_instance.enumeratePhysicalDevices();
-            }
-            catch (const vk::SystemError& e)
-            {
-                ARC_ERROR("vk::enumeratePhysicalDevices failed: {}", e.what());
-                return false;
-            }
-
-            if (physicalDevices.empty())
-            {
-                ARC_ERROR("No Vulkan physical devices");
-                return false;
-            }
-            m_physicalDevice = physicalDevices[0];
-            for (auto& candidate : physicalDevices)
-            {
-                if (candidate.getProperties().deviceType ==
-                    vk::PhysicalDeviceType::eDiscreteGpu)
-                {
-                    m_physicalDevice = candidate;
-                    break;
-                }
-            }
-            m_adapterName = std::string(
-                m_physicalDevice.getProperties().deviceName.data());
-
-            // NRI capability contract item 5. Two halves:
-            //   (a) VK 1.3 was already an implicit requirement -- chaining
-            //       VkPhysicalDeviceVulkan13Features below is illegal on an
-            //       older device -- but nothing asserted it, so a 1.2 GPU
-            //       failed as an opaque createDevice error. Say it plainly.
-            //   (b) the minor recorded here is what the wrapper desc must
-            //       carry: NRI reads minorVersion verbatim (it drives promoted-
-            //       feature chaining AND VMA's vulkanApiVersion) and the
-            //       correct value is min(instance minor, physical minor)
-            //       -- contract §6 concern 8.
-            const uint32_t physicalApiMinor =
-                VK_API_VERSION_MINOR(m_physicalDevice.getProperties().apiVersion);
-            if (physicalApiMinor < kApiMinorVersion)
-            {
-                ARC_ERROR("Vulkan physical device '{}' reports API 1.{}; 1.{} is "
-                          "required (Vulkan 1.3 core feature structs are chained "
-                          "at device creation)",
-                          m_adapterName, physicalApiMinor, kApiMinorVersion);
-                return false;
-            }
-            m_apiMinorVersion = std::min(physicalApiMinor, kApiMinorVersion);
-
-            auto families = m_physicalDevice.getQueueFamilyProperties();
-            for (uint32_t i = 0; i < (uint32_t)families.size(); ++i)
-            {
-                if (families[i].queueFlags & vk::QueueFlagBits::eGraphics)
-                {
-                    m_graphicsQueueFamily = (int)i;
-                    break;
-                }
-            }
-            if (m_graphicsQueueFamily < 0)
-            {
-                ARC_ERROR("No graphics queue family");
-                return false;
-            }
-
-            // ------------------------------------------------------------
-            // F-5c step 1+2: device-extension availability sweep.
-            // ------------------------------------------------------------
-            // Device extensions were previously passed through UNFILTERED --
-            // fine for VK_KHR_swapchain (required anyway; its absence should
-            // fail loudly) but fatal as a policy for optional diagnostics.
-            // This mirrors the instance-extension shape already used above.
-            std::vector<const char*> deviceExtensions(
-                std::begin(kDeviceExtensions), std::end(kDeviceExtensions));
-
-            bool haveBufferMarker  = false;
-            bool haveDeviceFaultExt = false;
-            bool haveDeviceFaultKhr = false;
-            // Contract items 2 + 3 ride the SAME enumeration -- one pass, and
-            // the diagnostics branches below are untouched.
-            bool havePushDescriptor = false;
-            bool haveOptional[kOptionalDeviceExtensionCount] = {};
-            bool deviceExtensionsEnumerated = true;
-            try
-            {
-                for (const auto& ext : m_physicalDevice.enumerateDeviceExtensionProperties())
-                {
-                    const std::string_view name(ext.extensionName);
-                    if (name == VK_AMD_BUFFER_MARKER_EXTENSION_NAME)  haveBufferMarker   = true;
-                    // F-5d lists only the EXT spelling, but the KHR promotion
-                    // is in the vendored headers too (vulkan_core.h:14372) and
-                    // a newer driver may expose only that one. Accept EITHER;
-                    // the feature struct and the query differ per spelling, so
-                    // which one won is recorded and carried to the backend.
-                    else if (name == VK_EXT_DEVICE_FAULT_EXTENSION_NAME) haveDeviceFaultExt = true;
-                    else if (name == VK_KHR_DEVICE_FAULT_EXTENSION_NAME) haveDeviceFaultKhr = true;
-
-                    // NRI capability contract item 2: hard-required, and
-                    // already in kDeviceExtensions -- this only decides whether
-                    // the failure is named or an opaque createDevice error.
-                    if (name == VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)
-                        havePushDescriptor = true;
-                    // NRI capability contract item 3: quality extensions, taken
-                    // only where advertised (see kOptionalDeviceExtensions).
-                    for (int i = 0; i < kOptionalDeviceExtensionCount; ++i)
-                    {
-                        if (name == kOptionalDeviceExtensions[i])
-                            haveOptional[i] = true;
+                        layers.push_back(kValidationLayer);
+                        break;
                     }
                 }
             }
             catch (const vk::SystemError& e)
             {
-                ARC_WARN("vk::PhysicalDevice::enumerateDeviceExtensionProperties threw: {}; "
-                         "continuing without GPU-crash diagnostics extensions", e.what());
-                // The item-2 check below is a better error message, not the
-                // enforcement: VK_KHR_push_descriptor stays in the required
-                // list, so createDevice still fails loudly on a device without
-                // it. Suppress the named check rather than reject a device we
-                // simply could not enumerate -- that is a regression this TU
-                // has never had.
-                deviceExtensionsEnumerated = false;
+                ARC_WARN("vk::enumerateInstanceLayerProperties threw: {}; "
+                         "continuing without validation layer", e.what());
             }
-
-            // NRI capability contract item 2 (contract item 14's rule: name the
-            // capability). NRI calls vkCmdPushDescriptorSet through a pointer
-            // it never null-checks, and the frame-graph design puts per-frame
-            // data behind CmdSetRootDescriptor -- this is load-bearing.
-            if (deviceExtensionsEnumerated && !havePushDescriptor)
-            {
-                ARC_ERROR("Vulkan device extension '{}' is unavailable on '{}'; it is "
-                          "hard-required (NRI wrapper capability contract item 2)",
-                          VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, m_adapterName);
-                return false;
-            }
-
-            // NRI capability contract item 3: absence is a documented slower
-            // path inside NRI, never a failure -- so append, don't require.
-            // haveOptional[] stays the single predicate: what lands in
-            // deviceExtensions here is exactly what gets its feature struct
-            // chained below, so the list can never claim a capability the
-            // device was not actually created with.
-            for (int i = 0; i < kOptionalDeviceExtensionCount; ++i)
-            {
-                if (haveOptional[i])
-                    deviceExtensions.push_back(kOptionalDeviceExtensions[i]);
-                else
-                    ARC_INFO("Vulkan quality extension '{}' unavailable; NRI will take "
-                             "its documented fallback path",
-                             kOptionalDeviceExtensions[i]);
-            }
-
-            // An extension being present is not the same as its feature being
-            // supported, and vkCreateDevice fails if a chained feature struct
-            // asks for a VK_FALSE feature. Ask before enabling.
-            vk::PhysicalDeviceFaultFeaturesEXT faultFeaturesExt;
-            vk::PhysicalDeviceFaultFeaturesKHR faultFeaturesKhr;
-            if (haveDeviceFaultExt)
-            {
-                vk::PhysicalDeviceFeatures2 supported;
-                supported.pNext = &faultFeaturesExt;
-                m_physicalDevice.getFeatures2(&supported);
-                faultFeaturesExt.pNext = nullptr;  // queried as a leaf; re-chained below
-                if (!faultFeaturesExt.deviceFault) haveDeviceFaultExt = false;
-            }
-            if (haveDeviceFaultKhr)
-            {
-                vk::PhysicalDeviceFeatures2 supported;
-                supported.pNext = &faultFeaturesKhr;
-                m_physicalDevice.getFeatures2(&supported);
-                faultFeaturesKhr.pNext = nullptr;
-                if (!faultFeaturesKhr.deviceFault) haveDeviceFaultKhr = false;
-            }
-            // Prefer EXT when both are advertised: it is the mature spelling
-            // (spec version 2 vs 1) and the one F-5d binds against.
-            if (haveDeviceFaultExt) haveDeviceFaultKhr = false;
-
-            auto deviceFaultSpelling = VulkanCrashDesc::DeviceFault::None;
-            if (haveDeviceFaultExt)
-            {
-                deviceExtensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
-                deviceFaultSpelling = VulkanCrashDesc::DeviceFault::Ext;
-            }
-            else if (haveDeviceFaultKhr)
-            {
-                deviceExtensions.push_back(VK_KHR_DEVICE_FAULT_EXTENSION_NAME);
-                deviceFaultSpelling = VulkanCrashDesc::DeviceFault::Khr;
-            }
-            if (haveBufferMarker)
-                deviceExtensions.push_back(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
-
-            ARC_INFO("Vulkan GPU-crash extensions: VK_AMD_buffer_marker={}, device_fault={}",
-                     haveBufferMarker ? "yes" : "no",
-                     haveDeviceFaultExt ? "EXT" : (haveDeviceFaultKhr ? "KHR" : "no"));
-
-            // NRI capability contract item 7: exactly one GRAPHICS family with
-            // queueCount = 1. NRI clamps the queueNum a wrapper desc declares
-            // against PHYSICAL family capacity, not against what we created, so
-            // this count and the desc's must stay equal -- declaring more would
-            // hand back queues that do not exist.
-            const float priority = 1.0f;
-            auto queueInfo = vk::DeviceQueueCreateInfo()
-                .setQueueFamilyIndex((uint32_t)m_graphicsQueueFamily)
-                .setQueueCount(1)
-                .setPQueuePriorities(&priority);
-
-            // NRI capability contract item 4: query-then-pass-back-verbatim,
-            // the pattern NVIDIA's own wrapper sample uses
-            // (NRISamples/Source/Wrapper.cpp:340-360). In wrapper mode NRI
-            // derives its ENTIRE capability model from
-            // vkGetPhysicalDeviceFeatures2 on the PHYSICAL device -- it never
-            // asks the logical device what was actually enabled, and has no way
-            // to. So anything the GPU reports and we fail to enable becomes an
-            // over-reported nri::DeviceDesc and, for the subset NRI uses
-            // unconditionally, invalid Vulkan usage on the first call. Enabling
-            // exactly the supported set is the only shape that cannot lie.
-            //
-            // This replaces the previous hand-picked pair of structs, which
-            // enabled three bits and left the whole core-1.0 block VK_FALSE
-            // while NRI would have reported the physically-supported ones as
-            // available. It subsumes their reasoning, which still holds for
-            // NVRHI and is worth keeping: NVRHI's queue submits with
-            // vk::TimelineSemaphoreSubmitInfo (timelineSemaphore), calls
-            // vkCmdPipelineBarrier2 (synchronization2) and builds pipelines
-            // with VkPipelineRenderingCreateInfo instead of a VkRenderPass
-            // (dynamicRendering, or vkCreateGraphicsPipelines fails
-            // VUID-06576) -- all three are in the hard set asserted below.
-            vk::PhysicalDeviceFeatures2        enabledFeatures2;
-            vk::PhysicalDeviceVulkan11Features vulkan11Features;
-            vk::PhysicalDeviceVulkan12Features vulkan12Features;
-            vk::PhysicalDeviceVulkan13Features vulkan13Features;
-            enabledFeatures2.setPNext(&vulkan11Features);
-            vulkan11Features.setPNext(&vulkan12Features);
-            vulkan12Features.setPNext(&vulkan13Features);
-            vulkan13Features.setPNext(nullptr);
-
-            // The chain grows past vulkan13Features below (item 3's feature
-            // structs, then the device-fault struct), so the tail is tracked
-            // rather than assumed -- appending to a stale tail would silently
-            // drop everything already attached there.
-            void** chainTail = &vulkan13Features.pNext;
-            const auto chainAppend = [&chainTail](auto& feature) {
-                feature.pNext = nullptr;
-                *chainTail = &feature;
-                chainTail = &feature.pNext;
-            };
-
-            // NRI capability contract item 3, second half. At VK 1.3 the
-            // maintenance5/6 FEATURE bits live in their own KHR structs, which
-            // none of the promoted-to-core structs above carries -- so taking
-            // the extension in the sweep without chaining these would create a
-            // device with the extension enabled and its feature VK_FALSE. That
-            // is precisely the meta-rule's failure mode, and NRI walks straight
-            // into it: it gates feature-struct chaining on OUR extension-name
-            // list (SharedVK.h:28-31) but sets m_IsSupported.maintenance5/6
-            // from PHYSICAL support (DeviceVK.hpp:657-658, :673-674), then
-            // calls vkCmdBindIndexBuffer2 / vkCmdBindDescriptorSets2 /
-            // vkCmdPushConstants2 (CommandBufferVK.hpp:872-876, :928, :966) and
-            // sets VMA's KHR_MAINTENANCE5 bit (DeviceVK.hpp:225) -- all of
-            // which need the feature enabled at creation. Chained BEFORE the
-            // query so they are filled and passed back verbatim, exactly as
-            // item 4 does for the core structs. (VK_EXT_memory_budget needs
-            // nothing here: it has no feature struct at all.)
-            vk::PhysicalDeviceMaintenance5FeaturesKHR maintenance5Features;
-            vk::PhysicalDeviceMaintenance6FeaturesKHR maintenance6Features;
-            if (haveOptional[kOptMaintenance5])
-                chainAppend(maintenance5Features);
-            if (haveOptional[kOptMaintenance6])
-                chainAppend(maintenance6Features);
-
-            m_physicalDevice.getFeatures2(&enabledFeatures2);
-
-            // NRI capability contract item 14's rule applied to item 4's hard
-            // set: keyed off the PHYSICAL query, so the message names the
-            // capability the GPU does not offer rather than surfacing as a
-            // VUID on the first submit/buffer/query-reset. Every one of these
-            // is either used unconditionally by NRI or, worse, invisible to it
-            // (timelineSemaphore and hostQueryReset appear nowhere in NRI's
-            // source -- there is no capability bit that could degrade).
-            const struct { bool supported; const char* name; } kHardFeatures[] = {
-                { (bool)vulkan12Features.timelineSemaphore,   "timelineSemaphore"   },
-                { (bool)vulkan12Features.bufferDeviceAddress, "bufferDeviceAddress" },
-                { (bool)vulkan12Features.hostQueryReset,      "hostQueryReset"      },
-                { (bool)vulkan13Features.synchronization2,    "synchronization2"    },
-                { (bool)vulkan13Features.dynamicRendering,    "dynamicRendering"    },
-                { (bool)vulkan13Features.maintenance4,        "maintenance4"        },
-            };
-            bool hardFeaturesPresent = true;
-            for (const auto& feature : kHardFeatures)
-            {
-                if (feature.supported)
-                    continue;
-                ARC_ERROR("Vulkan feature '{}' is not supported by '{}'; it is "
-                          "hard-required (NRI wrapper capability contract item 4)",
-                          feature.name, m_adapterName);
-                hardFeaturesPresent = false;
-            }
-            if (!hardFeaturesPresent)
-                return false;
-
-            // F-5c step 4: VK_EXT/KHR_device_fault requires its feature to be
-            // enabled at device creation, so the matching struct is appended
-            // to the TAIL of the existing chain (deviceInfo -> features2 ->
-            // vulkan11 -> vulkan12 -> vulkan13 -> [maintenance5] ->
-            // [maintenance6] -> fault; contract item 4 keeps it at the tail,
-            // and it is queried as a leaf above so it never rides the
-            // enable-what-is-supported chain -- which is why it appends AFTER
-            // the query rather than before it like the maintenance structs).
-            // The two structs are distinct types, not aliases -- chain the one
-            // whose spelling was enabled above.
-            // deviceFaultVendorBinary is opt-in on top and is what makes the
-            // opaque vendor blob retrievable; take it only where advertised.
-            if (deviceFaultSpelling == VulkanCrashDesc::DeviceFault::Ext)
-            {
-                faultFeaturesExt.deviceFault = VK_TRUE;
-                chainAppend(faultFeaturesExt);
-            }
-            else if (deviceFaultSpelling == VulkanCrashDesc::DeviceFault::Khr)
-            {
-                faultFeaturesKhr.deviceFault = VK_TRUE;
-                chainAppend(faultFeaturesKhr);
-            }
-
-            // pEnabledFeatures stays null (Vulkan-Hpp's default): the core-1.0
-            // block travels in enabledFeatures2.features, and the two are
-            // mutually exclusive.
-            auto deviceInfo = vk::DeviceCreateInfo()
-                .setQueueCreateInfoCount(1)
-                .setPQueueCreateInfos(&queueInfo)
-                .setEnabledExtensionCount((uint32_t)deviceExtensions.size())
-                .setPpEnabledExtensionNames(deviceExtensions.data())
-                .setPNext(&enabledFeatures2);
-
-            try
-            {
-                m_device = m_physicalDevice.createDevice(deviceInfo);
-            }
-            catch (const vk::SystemError& e)
-            {
-                ARC_ERROR("vk::PhysicalDevice::createDevice failed: {}", e.what());
-                return false;
-            }
-
-            // The per-module default dispatcher binds ONE VkDevice: a second
-            // simultaneous Vulkan device would re-point the device-level
-            // entry points and corrupt the first. Fine by design -- one
-            // engine instance per process (see VulkanDispatchStorage.cpp).
-            VULKAN_HPP_DEFAULT_DISPATCHER.init(m_device);
-            m_graphicsQueue = m_device.getQueue((uint32_t)m_graphicsQueueFamily, 0);
-
-            // NRI capability contract item 6: the extension lists become
-            // members the moment the device they describe exists, so every
-            // consumer reads ONE list rather than a copy that can drift. NRI
-            // takes the device list verbatim in wrapper mode -- it is the sole
-            // gate on which device-level entry points it resolves and which
-            // extension feature structs it chains -- so "what we actually
-            // enabled" has to survive past this function.
-            //
-            // NRI capability contract item 8 (the value, not the wiring -- the
-            // field lives in the wrapper desc): nri::VKBindingOffsets is
-            // {sRegister, tRegister, bRegister, uRegister} and ours must equal
-            // the dxc -fvk-*-shift values in ShaderConventions.hpp's
-            // kSpirvArgs, i.e. {s=128, t=0, b=256, u=384} -- NOT NRI's
-            // reference {0, 128, 32, 64}. Those shifts are also
-            // nvrhi::VulkanBindingOffsets' defaults, which is why the SPIR-V
-            // half of every shader works today; change them in
-            // ShaderConventions.hpp first and fan out, as that header says.
-            m_enabledInstanceExtensions = instanceExtensions;
-            m_enabledDeviceExtensions   = deviceExtensions;
-
-            nvrhi::vulkan::DeviceDesc nvrhiDesc;
-            nvrhiDesc.errorCB = &NvrhiMessageCallback::Instance();
-            nvrhiDesc.instance = m_instance;
-            nvrhiDesc.physicalDevice = m_physicalDevice;
-            nvrhiDesc.device = m_device;
-            nvrhiDesc.graphicsQueue = m_graphicsQueue;
-            nvrhiDesc.graphicsQueueIndex = m_graphicsQueueFamily;
-            nvrhiDesc.instanceExtensions = m_enabledInstanceExtensions.data();
-            nvrhiDesc.numInstanceExtensions = m_enabledInstanceExtensions.size();
-            // F-5c step 3: BOTH consumers of the extension list get the
-            // filtered vector. Leaving this at the constant array would tell
-            // NVRHI the diagnostics extensions are absent even though the
-            // device was created with them.
-            nvrhiDesc.deviceExtensions = m_enabledDeviceExtensions.data();
-            nvrhiDesc.numDeviceExtensions = m_enabledDeviceExtensions.size();
-            // Deliberately left at its default false even though contract item
-            // 4 now enables features12.bufferDeviceAddress: this flag is
-            // "does the APP want NVRHI to use device addresses", and flipping
-            // it would change NVRHI's own buffer-usage flags. The NVRHI path
-            // must stay byte-identical through this task; NRI reads the
-            // feature off the physical device and needs nothing from here.
-            nvrhiDesc.bufferDeviceAddressSupported = false;
-
-            m_nvrhiBackend = nvrhi::vulkan::createDevice(nvrhiDesc);
-            if (!m_nvrhiBackend)
-            {
-                ARC_ERROR("nvrhi::vulkan::createDevice failed");
-                return false;
-            }
-
-            m_nvrhi = m_nvrhiBackend;
-            if (desc.enableValidation)
-                m_nvrhi = nvrhi::validation::createValidationLayer(m_nvrhi);
-
-            // GPU crash backend (F-5/F-4). Built against the OUTER nvrhi
-            // device for getNativeObject (the validation layer forwards it
-            // verbatim), plus the UNWRAPPED one for queueGetCompletedInstance,
-            // which is declared on nvrhi::vulkan::IDevice only.
-            VulkanCrashDesc crashDesc;
-            crashDesc.device        = m_nvrhi.Get();
-            crashDesc.backendDevice = VulkanNvrhi();
-            crashDesc.deviceFault   = deviceFaultSpelling;
-            crashDesc.bufferMarker  = haveBufferMarker;
-            m_crashBackend = MakeVulkanCrashBackend(crashDesc);
-            if (m_crashBackend)
-            {
-                g_deviceRemovedReported.store(false, std::memory_order_release);
-                // A new device means the loss the latch described is over; a
-                // stale latch would quit the host the moment this healthy
-                // device started presenting.
-                ResetGpuDeviceLost();
-                // F-3b: the cross-backend observable, armed now that there is
-                // something to collect with.
-                NvrhiMessageCallback::Instance().SetDeviceRemovedHook(&ObserveDeviceRemoved);
-                // The ONE SetGpuSectionProvider call per host lifetime. Only
-                // one RenderDevice backend is live per process, so this and
-                // DeviceD3D12's call are two TEXTUAL sites of a single runtime
-                // install. The device layer owns the slot because it owns the
-                // backend the slot's `user` pointer names; ~DeviceVulkan
-                // clears it.
-                Diagnostics::SetGpuSectionProvider(&VulkanGpuSectionProvider, m_crashBackend.get());
-                // Task 7's pass scopes read the backend from here. Same owner,
-                // same lifetime, same clear site as the provider slot above --
-                // F-8e's three command-list owners sit in layers that cannot be
-                // handed a backend pointer.
-                SetActiveGpuCrashBackend(m_crashBackend.get());
-                ARC_INFO("GPU crash backend armed: {}", m_crashBackend->Name());
-            }
-
-            ARC_INFO("Vulkan device created on '{}'", m_adapterName);
-            return true;
+            if (layers.empty())
+                ARC_WARN("{} not installed; continuing without it", kValidationLayer);
         }
 
-        DeviceVulkan::~DeviceVulkan()
+        std::vector<const char*> instanceExtensions(
+            std::begin(kInstanceExtensions), std::end(kInstanceExtensions));
+
+        // Enumerated once and shared by the two checks below; previously
+        // this call sat inside the validation-only debug_utils loop.
+        const auto availableInstanceExtensions =
+            vk::enumerateInstanceExtensionProperties();
+        const auto instanceExtensionAvailable = [&](std::string_view wanted) {
+            for (const auto& ext : availableInstanceExtensions)
+            {
+                if (std::string_view(ext.extensionName) == wanted)
+                    return true;
+            }
+            return false;
+        };
+
+        // NRI capability contract item 1: a hard-required instance
+        // extension, named here rather than left to vk::createInstance to
+        // report as a bare ErrorExtensionNotPresent (contract item 14's
+        // rule -- the message must say WHICH capability is missing).
+        if (!instanceExtensionAvailable(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME))
         {
-            if (m_crashBackend)
-            {
-                // Symmetric with Init's install. All three slots are
-                // process-wide and point INTO m_crashBackend, so they must be
-                // emptied before it goes away. The pass-scope slot clears
-                // conditionally: a second device that installed after this one
-                // must keep its registration.
-                Diagnostics::ClearGpuSectionProvider();
-                // Wait out a report already mid-flight against this backend
-                // (watchdog thread) before m_crashBackend.reset() below --
-                // clearing the provider slot above only stops the NEXT
-                // report from seeing it. See Diagnostics::FenceReports.
-                Diagnostics::FenceReports();
-                (void)ClearActiveGpuCrashBackendIfCurrent(m_crashBackend.get());
-                NvrhiMessageCallback::Instance().SetDeviceRemovedHook(nullptr);
-            }
-            if (m_nvrhi)
-            {
-                m_nvrhi->waitForIdle();
-                m_nvrhi->runGarbageCollection();
-            }
-            // BEFORE m_device.destroy(): the backend owns a VkBuffer and a
-            // VkDeviceMemory allocated from that device. Member-declaration
-            // order cannot save us here -- this destructor destroys the device
-            // in its own body, which runs first.
-            m_crashBackend.reset();
-            m_nvrhi = nullptr;
-            m_nvrhiBackend = nullptr;
-            if (m_device)
-                m_device.destroy();
-            if (m_debugMessenger)
-                m_instance.destroyDebugUtilsMessengerEXT(m_debugMessenger);
-            if (m_instance)
-                m_instance.destroy();
+            ARC_ERROR("Vulkan instance extension '{}' is unavailable; it is "
+                      "hard-required (NRI wrapper capability contract item 1)",
+                      VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+            return false;
         }
+
+        bool debugUtils = false;
+        if (desc.enableValidation &&
+            instanceExtensionAvailable(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
+        {
+            instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            debugUtils = true;
+        }
+
+        try
+        {
+            auto appInfo = vk::ApplicationInfo()
+                .setPApplicationName("Arcane")
+                .setApiVersion(kApiVersion);
+
+            auto instanceInfo = vk::InstanceCreateInfo()
+                .setPApplicationInfo(&appInfo)
+                .setEnabledLayerCount((uint32_t)layers.size())
+                .setPpEnabledLayerNames(layers.data())
+                .setEnabledExtensionCount((uint32_t)instanceExtensions.size())
+                .setPpEnabledExtensionNames(instanceExtensions.data());
+
+            out.instance = vk::createInstance(instanceInfo);
+        }
+        catch (const vk::SystemError& e)
+        {
+            ARC_ERROR("vk::createInstance failed: {}", e.what());
+            return false;
+        }
+
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(out.instance);
+
+        if (debugUtils)
+        {
+            using Severity = vk::DebugUtilsMessageSeverityFlagBitsEXT;
+            using Type = vk::DebugUtilsMessageTypeFlagBitsEXT;
+            auto messengerInfo = vk::DebugUtilsMessengerCreateInfoEXT()
+                .setMessageSeverity(Severity::eError | Severity::eWarning)
+                .setMessageType(Type::eValidation | Type::eGeneral |
+                                Type::ePerformance)
+                .setPfnUserCallback(&VkDebugCallback);
+            out.debugMessenger =
+                out.instance.createDebugUtilsMessengerEXT(messengerInfo);
+        }
+
+        std::vector<vk::PhysicalDevice> physicalDevices;
+        try
+        {
+            physicalDevices = out.instance.enumeratePhysicalDevices();
+        }
+        catch (const vk::SystemError& e)
+        {
+            ARC_ERROR("vk::enumeratePhysicalDevices failed: {}", e.what());
+            return false;
+        }
+
+        if (physicalDevices.empty())
+        {
+            ARC_ERROR("No Vulkan physical devices");
+            return false;
+        }
+        out.physicalDevice = physicalDevices[0];
+        for (auto& candidate : physicalDevices)
+        {
+            if (candidate.getProperties().deviceType ==
+                vk::PhysicalDeviceType::eDiscreteGpu)
+            {
+                out.physicalDevice = candidate;
+                break;
+            }
+        }
+        out.adapterName = std::string(
+            out.physicalDevice.getProperties().deviceName.data());
+
+        // NRI capability contract item 5. Two halves:
+        //   (a) VK 1.3 was already an implicit requirement -- chaining
+        //       VkPhysicalDeviceVulkan13Features below is illegal on an
+        //       older device -- but nothing asserted it, so a 1.2 GPU
+        //       failed as an opaque createDevice error. Say it plainly.
+        //   (b) the minor recorded here is what the wrapper desc must
+        //       carry: NRI reads minorVersion verbatim (it drives promoted-
+        //       feature chaining AND VMA's vulkanApiVersion) and the
+        //       correct value is min(instance minor, physical minor)
+        //       -- contract §6 concern 8.
+        const uint32_t physicalApiMinor =
+            VK_API_VERSION_MINOR(out.physicalDevice.getProperties().apiVersion);
+        if (physicalApiMinor < kApiMinorVersion)
+        {
+            ARC_ERROR("Vulkan physical device '{}' reports API 1.{}; 1.{} is "
+                      "required (Vulkan 1.3 core feature structs are chained "
+                      "at device creation)",
+                      out.adapterName, physicalApiMinor, kApiMinorVersion);
+            return false;
+        }
+        out.apiMinorVersion = std::min(physicalApiMinor, kApiMinorVersion);
+
+        auto families = out.physicalDevice.getQueueFamilyProperties();
+        for (uint32_t i = 0; i < (uint32_t)families.size(); ++i)
+        {
+            if (families[i].queueFlags & vk::QueueFlagBits::eGraphics)
+            {
+                out.graphicsQueueFamily = (int)i;
+                break;
+            }
+        }
+        if (out.graphicsQueueFamily < 0)
+        {
+            ARC_ERROR("No graphics queue family");
+            return false;
+        }
+
+        // ------------------------------------------------------------
+        // F-5c step 1+2: device-extension availability sweep.
+        // ------------------------------------------------------------
+        // Device extensions were previously passed through UNFILTERED --
+        // fine for VK_KHR_swapchain (required anyway; its absence should
+        // fail loudly) but fatal as a policy for optional diagnostics.
+        // This mirrors the instance-extension shape already used above.
+        std::vector<const char*> deviceExtensions(
+            std::begin(kDeviceExtensions), std::end(kDeviceExtensions));
+
+        bool haveBufferMarker  = false;
+        bool haveDeviceFaultExt = false;
+        bool haveDeviceFaultKhr = false;
+        // Contract items 2 + 3 ride the SAME enumeration -- one pass, and
+        // the diagnostics branches below are untouched.
+        bool havePushDescriptor = false;
+        bool haveOptional[kOptionalDeviceExtensionCount] = {};
+        bool deviceExtensionsEnumerated = true;
+        try
+        {
+            for (const auto& ext : out.physicalDevice.enumerateDeviceExtensionProperties())
+            {
+                const std::string_view name(ext.extensionName);
+                if (name == VK_AMD_BUFFER_MARKER_EXTENSION_NAME)  haveBufferMarker   = true;
+                // F-5d lists only the EXT spelling, but the KHR promotion
+                // is in the vendored headers too (vulkan_core.h:14372) and
+                // a newer driver may expose only that one. Accept EITHER;
+                // the feature struct and the query differ per spelling, so
+                // which one won is recorded and carried to the backend.
+                else if (name == VK_EXT_DEVICE_FAULT_EXTENSION_NAME) haveDeviceFaultExt = true;
+                else if (name == VK_KHR_DEVICE_FAULT_EXTENSION_NAME) haveDeviceFaultKhr = true;
+
+                // NRI capability contract item 2: hard-required, and
+                // already in kDeviceExtensions -- this only decides whether
+                // the failure is named or an opaque createDevice error.
+                if (name == VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)
+                    havePushDescriptor = true;
+                // NRI capability contract item 3: quality extensions, taken
+                // only where advertised (see kOptionalDeviceExtensions).
+                for (int i = 0; i < kOptionalDeviceExtensionCount; ++i)
+                {
+                    if (name == kOptionalDeviceExtensions[i])
+                        haveOptional[i] = true;
+                }
+            }
+        }
+        catch (const vk::SystemError& e)
+        {
+            ARC_WARN("vk::PhysicalDevice::enumerateDeviceExtensionProperties threw: {}; "
+                     "continuing without GPU-crash diagnostics extensions", e.what());
+            // The item-2 check below is a better error message, not the
+            // enforcement: VK_KHR_push_descriptor stays in the required
+            // list, so createDevice still fails loudly on a device without
+            // it. Suppress the named check rather than reject a device we
+            // simply could not enumerate -- that is a regression this TU
+            // has never had.
+            deviceExtensionsEnumerated = false;
+        }
+
+        // NRI capability contract item 2 (contract item 14's rule: name the
+        // capability). NRI calls vkCmdPushDescriptorSet through a pointer
+        // it never null-checks, and the frame-graph design puts per-frame
+        // data behind CmdSetRootDescriptor -- this is load-bearing.
+        if (deviceExtensionsEnumerated && !havePushDescriptor)
+        {
+            ARC_ERROR("Vulkan device extension '{}' is unavailable on '{}'; it is "
+                      "hard-required (NRI wrapper capability contract item 2)",
+                      VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, out.adapterName);
+            return false;
+        }
+
+        // NRI capability contract item 3: absence is a documented slower
+        // path inside NRI, never a failure -- so append, don't require.
+        // haveOptional[] stays the single predicate: what lands in
+        // deviceExtensions here is exactly what gets its feature struct
+        // chained below, so the list can never claim a capability the
+        // device was not actually created with.
+        for (int i = 0; i < kOptionalDeviceExtensionCount; ++i)
+        {
+            if (haveOptional[i])
+                deviceExtensions.push_back(kOptionalDeviceExtensions[i]);
+            else
+                ARC_INFO("Vulkan quality extension '{}' unavailable; NRI will take "
+                         "its documented fallback path",
+                         kOptionalDeviceExtensions[i]);
+        }
+
+        // An extension being present is not the same as its feature being
+        // supported, and vkCreateDevice fails if a chained feature struct
+        // asks for a VK_FALSE feature. Ask before enabling.
+        vk::PhysicalDeviceFaultFeaturesEXT faultFeaturesExt;
+        vk::PhysicalDeviceFaultFeaturesKHR faultFeaturesKhr;
+        if (haveDeviceFaultExt)
+        {
+            vk::PhysicalDeviceFeatures2 supported;
+            supported.pNext = &faultFeaturesExt;
+            out.physicalDevice.getFeatures2(&supported);
+            faultFeaturesExt.pNext = nullptr;  // queried as a leaf; re-chained below
+            if (!faultFeaturesExt.deviceFault) haveDeviceFaultExt = false;
+        }
+        if (haveDeviceFaultKhr)
+        {
+            vk::PhysicalDeviceFeatures2 supported;
+            supported.pNext = &faultFeaturesKhr;
+            out.physicalDevice.getFeatures2(&supported);
+            faultFeaturesKhr.pNext = nullptr;
+            if (!faultFeaturesKhr.deviceFault) haveDeviceFaultKhr = false;
+        }
+        // Prefer EXT when both are advertised: it is the mature spelling
+        // (spec version 2 vs 1) and the one F-5d binds against.
+        if (haveDeviceFaultExt) haveDeviceFaultKhr = false;
+
+        auto deviceFaultSpelling = VulkanCrashDesc::DeviceFault::None;
+        if (haveDeviceFaultExt)
+        {
+            deviceExtensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+            deviceFaultSpelling = VulkanCrashDesc::DeviceFault::Ext;
+        }
+        else if (haveDeviceFaultKhr)
+        {
+            deviceExtensions.push_back(VK_KHR_DEVICE_FAULT_EXTENSION_NAME);
+            deviceFaultSpelling = VulkanCrashDesc::DeviceFault::Khr;
+        }
+        if (haveBufferMarker)
+            deviceExtensions.push_back(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
+
+        ARC_INFO("Vulkan GPU-crash extensions: VK_AMD_buffer_marker={}, device_fault={}",
+                 haveBufferMarker ? "yes" : "no",
+                 haveDeviceFaultExt ? "EXT" : (haveDeviceFaultKhr ? "KHR" : "no"));
+
+        // NRI capability contract item 7: exactly one GRAPHICS family with
+        // queueCount = 1. NRI clamps the queueNum a wrapper desc declares
+        // against PHYSICAL family capacity, not against what we created, so
+        // this count and the desc's must stay equal -- declaring more would
+        // hand back queues that do not exist.
+        const float priority = 1.0f;
+        auto queueInfo = vk::DeviceQueueCreateInfo()
+            .setQueueFamilyIndex((uint32_t)out.graphicsQueueFamily)
+            .setQueueCount(1)
+            .setPQueuePriorities(&priority);
+
+        // NRI capability contract item 4: query-then-pass-back-verbatim,
+        // the pattern NVIDIA's own wrapper sample uses
+        // (NRISamples/Source/Wrapper.cpp:340-360). In wrapper mode NRI
+        // derives its ENTIRE capability model from
+        // vkGetPhysicalDeviceFeatures2 on the PHYSICAL device -- it never
+        // asks the logical device what was actually enabled, and has no way
+        // to. So anything the GPU reports and we fail to enable becomes an
+        // over-reported nri::DeviceDesc and, for the subset NRI uses
+        // unconditionally, invalid Vulkan usage on the first call. Enabling
+        // exactly the supported set is the only shape that cannot lie.
+        //
+        // This replaces the previous hand-picked pair of structs, which
+        // enabled three bits and left the whole core-1.0 block VK_FALSE
+        // while NRI would have reported the physically-supported ones as
+        // available. It subsumes their reasoning, which still holds for
+        // NVRHI and is worth keeping: NVRHI's queue submits with
+        // vk::TimelineSemaphoreSubmitInfo (timelineSemaphore), calls
+        // vkCmdPipelineBarrier2 (synchronization2) and builds pipelines
+        // with VkPipelineRenderingCreateInfo instead of a VkRenderPass
+        // (dynamicRendering, or vkCreateGraphicsPipelines fails
+        // VUID-06576) -- all three are in the hard set asserted below.
+        vk::PhysicalDeviceFeatures2        enabledFeatures2;
+        vk::PhysicalDeviceVulkan11Features vulkan11Features;
+        vk::PhysicalDeviceVulkan12Features vulkan12Features;
+        vk::PhysicalDeviceVulkan13Features vulkan13Features;
+        enabledFeatures2.setPNext(&vulkan11Features);
+        vulkan11Features.setPNext(&vulkan12Features);
+        vulkan12Features.setPNext(&vulkan13Features);
+        vulkan13Features.setPNext(nullptr);
+
+        // The chain grows past vulkan13Features below (item 3's feature
+        // structs, then the device-fault struct), so the tail is tracked
+        // rather than assumed -- appending to a stale tail would silently
+        // drop everything already attached there.
+        void** chainTail = &vulkan13Features.pNext;
+        const auto chainAppend = [&chainTail](auto& feature) {
+            feature.pNext = nullptr;
+            *chainTail = &feature;
+            chainTail = &feature.pNext;
+        };
+
+        // NRI capability contract item 3, second half. At VK 1.3 the
+        // maintenance5/6 FEATURE bits live in their own KHR structs, which
+        // none of the promoted-to-core structs above carries -- so taking
+        // the extension in the sweep without chaining these would create a
+        // device with the extension enabled and its feature VK_FALSE. That
+        // is precisely the meta-rule's failure mode, and NRI walks straight
+        // into it: it gates feature-struct chaining on OUR extension-name
+        // list (SharedVK.h:28-31) but sets m_IsSupported.maintenance5/6
+        // from PHYSICAL support (DeviceVK.hpp:657-658, :673-674), then
+        // calls vkCmdBindIndexBuffer2 / vkCmdBindDescriptorSets2 /
+        // vkCmdPushConstants2 (CommandBufferVK.hpp:872-876, :928, :966) and
+        // sets VMA's KHR_MAINTENANCE5 bit (DeviceVK.hpp:225) -- all of
+        // which need the feature enabled at creation. Chained BEFORE the
+        // query so they are filled and passed back verbatim, exactly as
+        // item 4 does for the core structs. (VK_EXT_memory_budget needs
+        // nothing here: it has no feature struct at all.)
+        vk::PhysicalDeviceMaintenance5FeaturesKHR maintenance5Features;
+        vk::PhysicalDeviceMaintenance6FeaturesKHR maintenance6Features;
+        if (haveOptional[kOptMaintenance5])
+            chainAppend(maintenance5Features);
+        if (haveOptional[kOptMaintenance6])
+            chainAppend(maintenance6Features);
+
+        out.physicalDevice.getFeatures2(&enabledFeatures2);
+
+        // NRI capability contract item 14's rule applied to item 4's hard
+        // set: keyed off the PHYSICAL query, so the message names the
+        // capability the GPU does not offer rather than surfacing as a
+        // VUID on the first submit/buffer/query-reset. Every one of these
+        // is either used unconditionally by NRI or, worse, invisible to it
+        // (timelineSemaphore and hostQueryReset appear nowhere in NRI's
+        // source -- there is no capability bit that could degrade).
+        const struct { bool supported; const char* name; } kHardFeatures[] = {
+            { (bool)vulkan12Features.timelineSemaphore,   "timelineSemaphore"   },
+            { (bool)vulkan12Features.bufferDeviceAddress, "bufferDeviceAddress" },
+            { (bool)vulkan12Features.hostQueryReset,      "hostQueryReset"      },
+            { (bool)vulkan13Features.synchronization2,    "synchronization2"    },
+            { (bool)vulkan13Features.dynamicRendering,    "dynamicRendering"    },
+            { (bool)vulkan13Features.maintenance4,        "maintenance4"        },
+        };
+        bool hardFeaturesPresent = true;
+        for (const auto& feature : kHardFeatures)
+        {
+            if (feature.supported)
+                continue;
+            ARC_ERROR("Vulkan feature '{}' is not supported by '{}'; it is "
+                      "hard-required (NRI wrapper capability contract item 4)",
+                      feature.name, out.adapterName);
+            hardFeaturesPresent = false;
+        }
+        if (!hardFeaturesPresent)
+            return false;
+
+        // F-5c step 4: VK_EXT/KHR_device_fault requires its feature to be
+        // enabled at device creation, so the matching struct is appended
+        // to the TAIL of the existing chain (deviceInfo -> features2 ->
+        // vulkan11 -> vulkan12 -> vulkan13 -> [maintenance5] ->
+        // [maintenance6] -> fault; contract item 4 keeps it at the tail,
+        // and it is queried as a leaf above so it never rides the
+        // enable-what-is-supported chain -- which is why it appends AFTER
+        // the query rather than before it like the maintenance structs).
+        // The two structs are distinct types, not aliases -- chain the one
+        // whose spelling was enabled above.
+        // deviceFaultVendorBinary is opt-in on top and is what makes the
+        // opaque vendor blob retrievable; take it only where advertised.
+        if (deviceFaultSpelling == VulkanCrashDesc::DeviceFault::Ext)
+        {
+            faultFeaturesExt.deviceFault = VK_TRUE;
+            chainAppend(faultFeaturesExt);
+        }
+        else if (deviceFaultSpelling == VulkanCrashDesc::DeviceFault::Khr)
+        {
+            faultFeaturesKhr.deviceFault = VK_TRUE;
+            chainAppend(faultFeaturesKhr);
+        }
+
+        // pEnabledFeatures stays null (Vulkan-Hpp's default): the core-1.0
+        // block travels in enabledFeatures2.features, and the two are
+        // mutually exclusive.
+        auto deviceInfo = vk::DeviceCreateInfo()
+            .setQueueCreateInfoCount(1)
+            .setPQueueCreateInfos(&queueInfo)
+            .setEnabledExtensionCount((uint32_t)deviceExtensions.size())
+            .setPpEnabledExtensionNames(deviceExtensions.data())
+            .setPNext(&enabledFeatures2);
+
+        try
+        {
+            out.device = out.physicalDevice.createDevice(deviceInfo);
+        }
+        catch (const vk::SystemError& e)
+        {
+            ARC_ERROR("vk::PhysicalDevice::createDevice failed: {}", e.what());
+            return false;
+        }
+
+        // The per-module default dispatcher binds ONE VkDevice: a second
+        // simultaneous Vulkan device would re-point the device-level
+        // entry points and corrupt the first. Fine by design -- one
+        // engine instance per process (see VulkanDispatchStorage.cpp).
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(out.device);
+        out.graphicsQueue = out.device.getQueue((uint32_t)out.graphicsQueueFamily, 0);
+
+        // NRI capability contract item 6: the extension lists become
+        // members the moment the device they describe exists, so every
+        // consumer reads ONE list rather than a copy that can drift. NRI
+        // takes the device list verbatim in wrapper mode -- it is the sole
+        // gate on which device-level entry points it resolves and which
+        // extension feature structs it chains -- so "what we actually
+        // enabled" has to survive past this function.
+        //
+        // NRI capability contract item 8 (the value, not the wiring -- the
+        // field lives in the wrapper desc): nri::VKBindingOffsets is
+        // {sRegister, tRegister, bRegister, uRegister} and ours must equal
+        // the dxc -fvk-*-shift values in ShaderConventions.hpp's
+        // kSpirvArgs, i.e. {s=128, t=0, b=256, u=384} -- NOT NRI's
+        // reference {0, 128, 32, 64}. Those shifts are also
+        // nvrhi::VulkanBindingOffsets' defaults, which is why the SPIR-V
+        // half of every shader works today; change them in
+        // ShaderConventions.hpp first and fan out, as that header says.
+        out.enabledInstanceExtensions = instanceExtensions;
+        out.enabledDeviceExtensions   = deviceExtensions;
+        // The GPU-crash record travels with the rest of "what this device was
+        // created with", for the same reason: it is decided here and consumed
+        // after the split (VulkanCrashDesc, below). Neither value changes
+        // after the sweep above.
+        out.deviceFault  = deviceFaultSpelling;
+        out.bufferMarker = haveBufferMarker;
+
+        return true;
+    }
+
+    // The tail of ~DeviceVulkan, verbatim and in the same order: device,
+    // then debug messenger, then instance. Handles are nulled as they go so
+    // an owner can call this at the point its ordering requires (contract
+    // item 15: the NRI device is destroyed BEFORE this runs) and still hold
+    // the struct afterwards.
+    void DestroyVulkanNativeDevice(VulkanDeviceCreation& creation)
+    {
+        if (creation.device)
+        {
+            creation.device.destroy();
+            creation.device = nullptr;
+        }
+        if (creation.debugMessenger)
+        {
+            creation.instance.destroyDebugUtilsMessengerEXT(creation.debugMessenger);
+            creation.debugMessenger = nullptr;
+        }
+        if (creation.instance)
+        {
+            creation.instance.destroy();
+            creation.instance = nullptr;
+        }
+    }
+
+    bool DeviceVulkan::Init(const RenderDeviceDesc& desc)
+    {
+        // Everything above the NVRHI desc used to live inline here; it is the
+        // creation half now, and this call is the ONLY thing between the two
+        // versions of this function.
+        if (!CreateVulkanNativeDevice(desc, m_creation))
+            return false;
+
+        nvrhi::vulkan::DeviceDesc nvrhiDesc;
+        nvrhiDesc.errorCB = &NvrhiMessageCallback::Instance();
+        nvrhiDesc.instance = m_creation.instance;
+        nvrhiDesc.physicalDevice = m_creation.physicalDevice;
+        nvrhiDesc.device = m_creation.device;
+        nvrhiDesc.graphicsQueue = m_creation.graphicsQueue;
+        nvrhiDesc.graphicsQueueIndex = m_creation.graphicsQueueFamily;
+        nvrhiDesc.instanceExtensions = m_creation.enabledInstanceExtensions.data();
+        nvrhiDesc.numInstanceExtensions = m_creation.enabledInstanceExtensions.size();
+        // F-5c step 3: BOTH consumers of the extension list get the
+        // filtered vector. Leaving this at the constant array would tell
+        // NVRHI the diagnostics extensions are absent even though the
+        // device was created with them.
+        nvrhiDesc.deviceExtensions = m_creation.enabledDeviceExtensions.data();
+        nvrhiDesc.numDeviceExtensions = m_creation.enabledDeviceExtensions.size();
+        // Deliberately left at its default false even though contract item
+        // 4 now enables features12.bufferDeviceAddress: this flag is
+        // "does the APP want NVRHI to use device addresses", and flipping
+        // it would change NVRHI's own buffer-usage flags. The NVRHI path
+        // must stay byte-identical through this task; NRI reads the
+        // feature off the physical device and needs nothing from here.
+        nvrhiDesc.bufferDeviceAddressSupported = false;
+
+        m_nvrhiBackend = nvrhi::vulkan::createDevice(nvrhiDesc);
+        if (!m_nvrhiBackend)
+        {
+            ARC_ERROR("nvrhi::vulkan::createDevice failed");
+            return false;
+        }
+
+        m_nvrhi = m_nvrhiBackend;
+        if (desc.enableValidation)
+            m_nvrhi = nvrhi::validation::createValidationLayer(m_nvrhi);
+
+        // GPU crash backend (F-5/F-4). Built against the OUTER nvrhi
+        // device for getNativeObject (the validation layer forwards it
+        // verbatim), plus the UNWRAPPED one for queueGetCompletedInstance,
+        // which is declared on nvrhi::vulkan::IDevice only.
+        VulkanCrashDesc crashDesc;
+        crashDesc.device        = m_nvrhi.Get();
+        crashDesc.backendDevice = VulkanNvrhi();
+        crashDesc.deviceFault   = m_creation.deviceFault;
+        crashDesc.bufferMarker  = m_creation.bufferMarker;
+        m_crashBackend = MakeVulkanCrashBackend(crashDesc);
+        if (m_crashBackend)
+        {
+            g_deviceRemovedReported.store(false, std::memory_order_release);
+            // A new device means the loss the latch described is over; a
+            // stale latch would quit the host the moment this healthy
+            // device started presenting.
+            ResetGpuDeviceLost();
+            // F-3b: the cross-backend observable, armed now that there is
+            // something to collect with.
+            NvrhiMessageCallback::Instance().SetDeviceRemovedHook(&ObserveDeviceRemoved);
+            // The ONE SetGpuSectionProvider call per host lifetime. Only
+            // one RenderDevice backend is live per process, so this and
+            // DeviceD3D12's call are two TEXTUAL sites of a single runtime
+            // install. The device layer owns the slot because it owns the
+            // backend the slot's `user` pointer names; ~DeviceVulkan
+            // clears it.
+            Diagnostics::SetGpuSectionProvider(&VulkanGpuSectionProvider, m_crashBackend.get());
+            // Task 7's pass scopes read the backend from here. Same owner,
+            // same lifetime, same clear site as the provider slot above --
+            // F-8e's three command-list owners sit in layers that cannot be
+            // handed a backend pointer.
+            SetActiveGpuCrashBackend(m_crashBackend.get());
+            ARC_INFO("GPU crash backend armed: {}", m_crashBackend->Name());
+        }
+
+        ARC_INFO("Vulkan device created on '{}'", m_creation.adapterName);
+        return true;
+    }
+
+    DeviceVulkan::~DeviceVulkan()
+    {
+        if (m_crashBackend)
+        {
+            // Symmetric with Init's install. All three slots are
+            // process-wide and point INTO m_crashBackend, so they must be
+            // emptied before it goes away. The pass-scope slot clears
+            // conditionally: a second device that installed after this one
+            // must keep its registration.
+            Diagnostics::ClearGpuSectionProvider();
+            // Wait out a report already mid-flight against this backend
+            // (watchdog thread) before m_crashBackend.reset() below --
+            // clearing the provider slot above only stops the NEXT
+            // report from seeing it. See Diagnostics::FenceReports.
+            Diagnostics::FenceReports();
+            (void)ClearActiveGpuCrashBackendIfCurrent(m_crashBackend.get());
+            NvrhiMessageCallback::Instance().SetDeviceRemovedHook(nullptr);
+        }
+        if (m_nvrhi)
+        {
+            m_nvrhi->waitForIdle();
+            m_nvrhi->runGarbageCollection();
+        }
+        // BEFORE m_creation.device.destroy(): the backend owns a VkBuffer and a
+        // VkDeviceMemory allocated from that device. Member-declaration
+        // order cannot save us here -- this destructor destroys the device
+        // in its own body, which runs first.
+        m_crashBackend.reset();
+        m_nvrhi = nullptr;
+        m_nvrhiBackend = nullptr;
+        // The same three destroys this function always ended with, in the
+        // same order, now expressed once so the wrapper path's owner can run
+        // them at the same point (DeviceCreationVulkan.hpp).
+        DestroyVulkanNativeDevice(m_creation);
     }
 
     std::unique_ptr<RenderDevice> CreateDeviceVulkan(const RenderDeviceDesc& desc)

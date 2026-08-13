@@ -16,6 +16,7 @@
 #include <Arcane/Render/Device.hpp>
 #include <Arcane/Render/Nri/Graveyard.hpp>
 #include <Arcane/Render/Nri/NriCommon.hpp>
+#include <Arcane/Render/Nri/NriDevice.hpp>
 
 #include <cstdint>
 #include <stdexcept>
@@ -75,6 +76,72 @@ TEST_CASE("nri: NONE-backend device lifecycle via MakeNriCallbacks/LogNriIdentit
     nriDestroyDevice(device);
 
     CHECK(Arcane::RenderErrorCount() == before);
+}
+
+// ---------------------------------------------------------------------------
+// Task 7: the wrap smoke -- [gpu], NOT part of the ~[gpu] dev gate.
+//
+// SCAFFOLDING with a planned deletion point: this pair of cases goes away
+// with the rest of the Phase-1 smoke path (Phase 2 end / Phase 5), once the
+// frame graph renders real content through NRI and the wrapper path is
+// covered by something that draws.
+//
+// Headless coverage of the wrap is impossible by construction -- wrapping
+// needs a REAL native device, which is precisely what [gpu] means here. What
+// these prove at the desk: our creation half produces a device NRI accepts
+// through the WRAPPER entry point (never nriCreateDevice), the post-wrap
+// asserts hold (CoreInterface resolves, GetQueue(GRAPHICS, 0) succeeds --
+// the clamp-to-zero canary), and the teardown order of contract item 15
+// (NRI device first, native device second) runs clean with no growth in the
+// shared 0/0 error latch.
+//
+// Everything goes through NriDevice's own methods on purpose: this exe links
+// its own static copy of NRI, so calling nri* functions directly on a device
+// created inside ArcaneClient.dll would cross function tables.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    void CheckNriWrapSmoke(Arcane::GraphicsBackend backend)
+    {
+        // before/after rather than ResetRenderErrorCount: this case is not
+        // meant to trip the shared 0/0 latch, so it must not touch it either.
+        const uint64_t before = Arcane::RenderErrorCount();
+
+        Arcane::RenderDeviceDesc desc;
+        desc.backend = backend;
+
+        // The creation half -- the same function DeviceVulkan/DeviceD3D12
+        // call, so what gets wrapped is what the engine boots with.
+        auto native = Arcane::NativeDeviceOwner::Create(desc);
+        REQUIRE(native != nullptr);
+        REQUIRE(native->Backend() == backend);
+
+        auto nri = Arcane::NriDevice::Wrap(*native);
+        REQUIRE(nri != nullptr);
+        CHECK(nri->Backend() == backend);
+        // Post-wrap asserts already ran inside Wrap (a miss returns null);
+        // re-read the queue here so the case states what it depends on.
+        CHECK(nri->GraphicsQueue() != nullptr);
+        CHECK(nri->Graves().Pending() == 0);
+
+        // Contract item 15, made explicit rather than left to declaration
+        // order: the NRI device dies BEFORE the native device it wraps.
+        nri.reset();
+        native.reset();
+
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+}
+
+TEST_CASE("nri wrap smoke: d3d12 native device wraps through nriCreateDeviceFromD3D12Device", "[gpu][nri][d3d12]")
+{
+    CheckNriWrapSmoke(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("nri wrap smoke: vulkan native device wraps through nriCreateDeviceFromVKDevice", "[gpu][nri][vulkan]")
+{
+    CheckNriWrapSmoke(Arcane::GraphicsBackend::Vulkan);
 }
 
 // ---------------------------------------------------------------------------
