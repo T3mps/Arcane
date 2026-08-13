@@ -626,19 +626,28 @@ namespace Arcane
 
     void RenderGraph::Reset()
     {
-        // The realized transients and cached views exist only to serve the
-        // declarations being thrown away here, so they go first -- buried,
-        // not destroyed, because the GPU may still be reading them (see
-        // ReleaseGpuResources in RenderGraphExec.cpp). The command slots and
-        // the submission fence deliberately survive: they are execution
-        // machinery, not frame resources.
-        ReleaseGpuResources(/*all=*/false);
-
+        // DECLARATIONS ONLY -- see the header's Reset() comment. Nothing here
+        // touches a GPU resource: the transient pool and the cached
+        // attachment views survive, so the next frame's Execute() reuses
+        // every pool slot whose desc still matches. Burying here would make
+        // the pool-reuse property unreachable in the one loop shape that
+        // exists, because a per-frame driver has to Reset() to clear
+        // declarations at all.
         m_nodes.clear();
         m_textures.clear();
         m_buffers.clear();
         m_accesses.clear();
         m_currentNodeIndex = kNoCurrentNode;
+
+        // Derived from the declarations just cleared, so they go with them.
+        // Execute() rebuilds all four from the next compile before anything
+        // reads them; leaving last frame's contents behind would make this
+        // graph briefly describe resources it no longer declares.
+        m_resolvedTextures.clear();
+        m_resolvedBuffers.clear();
+        m_texturePoolSlot.clear();
+        m_bufferPoolSlot.clear();
+
         ++m_generation;
     }
 

@@ -234,10 +234,19 @@ namespace Arcane
         // already made the GPU idle" contract on the way out -- and the
         // reason RgExecuteDesc::device documents that the device must
         // outlive the graph.
-        ReleaseGpuResources(/*all=*/true);
+        ReleaseGpuResourcesInternal(/*all=*/true);
     }
 
-    void RenderGraph::ReleaseGpuResources(bool all)
+    void RenderGraph::ReleaseGpuResources()
+    {
+        // The public, frame-driver-facing half: pool + views only. The
+        // command slots and the fence are execution machinery and stay --
+        // a graph released this way is immediately usable again, it just
+        // realizes its pool from scratch on the next Execute().
+        ReleaseGpuResourcesInternal(/*all=*/false);
+    }
+
+    void RenderGraph::ReleaseGpuResourcesInternal(bool all)
     {
         if (!m_device)
         {
@@ -250,11 +259,12 @@ namespace Arcane
         const nri::CoreInterface* core   = &m_device->Core();
 
         // Every burial in this call uses the SAME fence value -- the last
-        // value this graph signalled -- which keeps Graveyard's nondecreasing
-        // invariant trivially satisfied across repeated Reset()s (the value
-        // only ever grows, one per successful submit). A graph that never
-        // submitted buries at 0, which is correct: nothing it created was
-        // ever seen by the GPU.
+        // value this graph signalled. m_submitValue only ever grows (one per
+        // successful submit) and every burial path in this file keys off its
+        // CURRENT value, so Graveyard's nondecreasing invariant holds across
+        // any interleaving of release, re-realization and destruction. A
+        // graph that never submitted buries at 0, which is correct: nothing
+        // it created was ever seen by the GPU.
         const std::uint64_t fence = m_submitValue;
 
         for (const CachedView& cached : m_views)
@@ -277,6 +287,12 @@ namespace Arcane
         m_resolvedBuffers.clear();
         m_texturePoolSlot.clear();
         m_bufferPoolSlot.clear();
+
+        // The pool is gone, so every carry state it held went with it -- the
+        // next Execute() realizes fresh resources that genuinely start
+        // undefined, and must not be handed a state from a buried one.
+        m_poolCarrySeeded.clear();
+        m_poolFirstBefore.clear();
 
         if (!all)
             return;
@@ -710,6 +726,27 @@ namespace Arcane
         return slot < m_resolvedBuffers.size() ? m_resolvedBuffers[slot] : nullptr;
     }
 
+    std::uint32_t RenderGraph::PoolSlotForBarrier(const RgBarrier& barrier) const noexcept
+    {
+        if (barrier.isTexture)
+        {
+            return barrier.resourceIndex < m_texturePoolSlot.size()
+                 ? m_texturePoolSlot[barrier.resourceIndex] : kRgNoPoolSlot;
+        }
+        return barrier.resourceIndex < m_bufferPoolSlot.size()
+             ? m_bufferPoolSlot[barrier.resourceIndex] : kRgNoPoolSlot;
+    }
+
+    std::optional<nri::AccessLayoutStage> RenderGraph::DebugFirstBarrierBefore(std::uint32_t slot) const
+    {
+        if (slot >= m_poolCarrySeeded.size() || m_poolCarrySeeded[slot] == 0
+            || slot >= m_poolFirstBefore.size())
+        {
+            return std::nullopt;
+        }
+        return m_poolFirstBefore[slot];
+    }
+
     // ==================================================================
     // Barriers -- the ONE CmdBarrier call site (see the file header).
     // ==================================================================
@@ -724,6 +761,36 @@ namespace Arcane
 
         for (const RgBarrier& barrier : barriers)
         {
+            // CROSS-FRAME POOL HANDOVER -- the executor's one amendment to a
+            // verbatim replay (RgCompiled's contract block says so, and why).
+            // The pool survives Reset(), so this physical resource may still
+            // be carrying the previous frame's writes; Compile(), being pure
+            // and per-frame, always hands the slot's first use a
+            // `before = {NONE, UNDEFINED, ALL}`, which performs no source
+            // availability operation at all. Patch access + stages from what
+            // the last frame actually left here, leave the layout UNDEFINED
+            // (discard, never inherit contents) -- byte-for-byte the amendment
+            // Compile() makes for a within-frame tenant handover.
+            const std::uint32_t poolSlot = PoolSlotForBarrier(barrier);
+            nri::AccessLayoutStage before = barrier.before;
+            if (poolSlot != kRgNoPoolSlot && poolSlot < m_pool.size()
+                && poolSlot < m_poolCarrySeeded.size() && m_poolCarrySeeded[poolSlot] == 0)
+            {
+                m_poolCarrySeeded[poolSlot] = 1;
+                // Guarded on the state Compile() actually emits for a first
+                // use rather than applied blind: anything else means this is
+                // NOT the slot's first-use barrier and must not be touched.
+                if (m_pool[poolSlot].hasCarry
+                    && before.access == nri::AccessBits::NONE
+                    && before.layout == nri::Layout::UNDEFINED)
+                {
+                    before.access = m_pool[poolSlot].carry.access;
+                    before.stages = m_pool[poolSlot].carry.stages;
+                }
+                if (poolSlot < m_poolFirstBefore.size())
+                    m_poolFirstBefore[poolSlot] = before;
+            }
+
             if (barrier.isTexture)
             {
                 nri::Texture* texture = TextureForSlot(barrier.resourceIndex);
@@ -736,7 +803,7 @@ namespace Arcane
 
                 nri::TextureBarrierDesc desc = {};
                 desc.texture = texture;
-                desc.before  = barrier.before;
+                desc.before  = before;
                 desc.after   = barrier.after;
                 // mipNum/layerNum left at REMAINING (0): the graph transitions
                 // whole resources, and REMAINING stays correct for an imported
@@ -756,9 +823,20 @@ namespace Arcane
                 // RgBarrier's contract says.
                 nri::BufferBarrierDesc desc = {};
                 desc.buffer = buffer;
-                desc.before = { barrier.before.access, barrier.before.stages };
-                desc.after  = { barrier.after.access,  barrier.after.stages };
+                desc.before = { before.access, before.stages };
+                desc.after  = { barrier.after.access, barrier.after.stages };
                 m_scratchBufferBarriers.push_back(desc);
+            }
+
+            // The slot now holds whatever this barrier moved it to. The LAST
+            // barrier of the frame therefore leaves the carry state the next
+            // frame patches from -- and that is exact, because Compile()
+            // emits a barrier for every state change and the physical
+            // resource cannot change state any other way.
+            if (poolSlot != kRgNoPoolSlot && poolSlot < m_pool.size())
+            {
+                m_pool[poolSlot].carry    = barrier.after;
+                m_pool[poolSlot].hasCarry = true;
             }
         }
 
@@ -842,6 +920,12 @@ namespace Arcane
 
         if (!RealizePool(compiled))
             return false;
+
+        // Cross-frame handover bookkeeping for THIS frame: no slot has had
+        // its first barrier emitted yet. PoolResource::carry itself is NOT
+        // cleared -- it is precisely what survives from the last Execute().
+        m_poolCarrySeeded.assign(m_pool.size(), 0);
+        m_poolFirstBefore.assign(m_pool.size(), nri::AccessLayoutStage{});
 
         // ------------------------------------------------------------
         // Acquire -- as LATE as possible. Everything fallible above this

@@ -294,6 +294,20 @@ namespace Arcane
     // its own: doing so silently diverges from the derivation this task's
     // tests pin.
     //
+    // ONE amendment, and only one, is the executor's to make (Task 6 fix
+    // round 1): the CROSS-FRAME half of the pool handover. The transient pool
+    // survives Reset(), so two consecutive frames share one physical
+    // resource -- and Compile() is pure and per-frame, so the `before` it
+    // derives for a slot's first use is always {NONE, UNDEFINED, ALL}
+    // regardless of what the previous frame left there. The executor patches
+    // exactly that first barrier per pool slot per frame, taking access +
+    // stages from the state IT observed the resource being left in and
+    // leaving the layout UNDEFINED -- the identical operation the POOL
+    // HANDOVER block in RenderGraph.cpp performs for a within-frame tenant
+    // change, applied where Compile() cannot see. It is not a derivation of
+    // its own: it is an observation Compile() has no access to. See
+    // RenderGraph::PoolResource::carry.
+    //
     // INDEX SPACE -- READ THIS BEFORE SUBSCRIPTING ANYTHING IN HERE. Two
     // different index spaces live in this block and they are NOT the same:
     //
@@ -405,10 +419,10 @@ namespace Arcane
         // Releases everything Execute() realized -- the transient pool, the
         // cached attachment views, the per-frame-slot command buffers and the
         // submission fence -- by BURYING it in the device's graveyard at the
-        // last submitted fence value, exactly as Reset() does. ~NriDevice
-        // drains that graveyard behind a DeviceWaitIdle, which is why the
-        // device must outlive the graph (RgExecuteDesc::device). A graph that
-        // never executed owns nothing and this is a no-op.
+        // last submitted fence value. ~NriDevice drains that graveyard behind
+        // a DeviceWaitIdle, which is why the device must outlive the graph
+        // (RgExecuteDesc::device). A graph that never executed owns nothing
+        // and this is a no-op.
         ~RenderGraph();
 
         // Non-copyable, non-movable since Task 6: this object owns live NRI
@@ -526,26 +540,54 @@ namespace Arcane
         // with last frame's slots.
         [[nodiscard]] bool Execute(const RgExecuteDesc& desc, const RgCompiled& compiled);
 
-        // Clears every declared node and resource -- this graph is ready to
+        // DECLARATIONS ONLY. Clears every declared node and resource (and the
+        // per-frame tables derived from them) -- this graph is ready to
         // declare the next frame's build -- and bumps Generation() (see the
         // RgTexture/RgBuffer comment above for what that buys a stale
         // handle).
         //
-        // Also BURIES every realized transient and cached view in the
-        // device's graveyard, keyed to this graph's last submitted fence
-        // value, since the declarations they were realized from are exactly
-        // what is being thrown away. The per-frame-slot command buffers and
-        // the submission fence are NOT touched -- they are execution
-        // machinery, not frame resources, and live until ~RenderGraph.
+        // IT RELEASES NO GPU RESOURCE. The transient pool, the cached
+        // attachment views, the per-frame-slot command buffers and the
+        // submission fence all SURVIVE, and the next Execute() reuses every
+        // pool slot whose desc still matches (RealizePool's per-slot compare).
+        // So the intended frame loop --
         //
-        // COST, stated plainly: a frame driver that Reset()s every frame
-        // re-creates every transient every frame. That is the frozen Task-6
-        // contract (the pool exists to be shared WITHIN a frame and reused
-        // across back-to-back Executes of one compiled graph), and it is
-        // where to look first if Task 8+ sees per-frame allocator churn --
-        // the upgrade is a desc-keyed pool that survives Reset(), not a
-        // change to who owns the resources.
+        //     Reset(); BuildGraph(...); Compile(); Execute(...);
+        //
+        // -- costs ZERO GPU allocations in steady state, and re-creates only
+        // the slots whose desc actually changed (a resize, a re-shaped frame),
+        // burying exactly those.
+        //
+        // This is the one place the plan's own text had to be reconciled: it
+        // said transients are "destroyed through the Graveyard on Reset()",
+        // which collides with the same plan's pool-reuse mandate, because
+        // Reset() is the ONLY way to clear declarations and a per-frame driver
+        // must therefore call it every frame. Burying there would have made
+        // the reuse property unreachable in the actual loop -- N committed
+        // render-target creations plus N burials per frame, reaped
+        // kSwapchainFramesInFlight frames later. Intent governs; the pool
+        // persists.
+        //
+        // Pool resources die through the graveyard on exactly four paths:
+        // a desc mismatch at re-realization, a resize (which IS a desc
+        // mismatch), an explicit ReleaseGpuResources(), and ~RenderGraph.
         void Reset();
+
+        // Buries the transient pool and every cached attachment view in the
+        // device's graveyard, keyed to this graph's last submitted fence
+        // value -- the explicit "give the memory back" entry point, for a
+        // frame driver parking a graph it will not run for a while (project
+        // switch, minimised-to-tray, shutdown ahead of the device). The
+        // per-frame-slot command buffers and the submission fence are NOT
+        // touched: they are execution machinery, not frame resources, and
+        // live until ~RenderGraph.
+        //
+        // Not needed in the ordinary frame loop -- Reset() does not call it,
+        // and a re-declared frame with the same shape reuses the pool. Safe
+        // to call at any time, including on a graph that never executed (a
+        // no-op) and repeatedly (idempotent); the next Execute() simply
+        // realizes the pool again.
+        void ReleaseGpuResources();
 
         // -------------------------------------------------------------
         // Declaration-side introspection. Not part of the cross-task
@@ -585,18 +627,30 @@ namespace Arcane
         // -------------------------------------------------------------
 
         // Pool slots currently realized -- equals RgCompiled::poolSlotCount
-        // after a successful Execute() of that compile, and 0 after Reset().
+        // after a successful Execute() of that compile. SURVIVES Reset();
+        // 0 only before the first Execute(), after ReleaseGpuResources(), or
+        // once a later compile asks for fewer slots.
         [[nodiscard]] std::size_t DebugTransientCount() const noexcept { return m_pool.size(); }
 
         // Physical transients ever created by this graph, monotonically.
-        // Unchanged across a second Execute() of the same compiled graph --
-        // that is what "the pool is reused" means.
+        // Unchanged across a second Execute() of the same compiled graph AND
+        // across a Reset()-then-redeclare-the-same-shape frame loop -- that is
+        // what "the pool is reused" means.
         [[nodiscard]] std::uint64_t DebugTransientCreateCount() const noexcept { return m_transientCreateCount; }
 
         // Successful QueueSubmits so far == the value this graph last
-        // signalled on its own fence, and the fence value every burial made
-        // by Reset()/~RenderGraph is keyed to.
+        // signalled on its own fence, and the fence value every burial is
+        // keyed to.
         [[nodiscard]] std::uint64_t DebugSubmitCount() const noexcept { return m_submitValue; }
+
+        // The `before` triple actually RECORDED for the first barrier that
+        // touched pool slot `slot` during the last Execute(). The only
+        // observable of the cross-frame handover (PoolResource::carry): on a
+        // freshly realized slot it is Compile()'s {NONE, UNDEFINED, ALL}, and
+        // on a slot carried across a Reset() it is the previous frame's
+        // outgoing access + stages with the layout still UNDEFINED. nullopt
+        // if that slot saw no barrier in the last Execute().
+        [[nodiscard]] std::optional<nri::AccessLayoutStage> DebugFirstBarrierBefore(std::uint32_t slot) const;
 
     private:
         friend class RenderGraphBuilder;
@@ -730,6 +784,27 @@ namespace Arcane
             nri::Buffer*     buffer    = nullptr;
             nri::TextureDesc textureDesc{};
             nri::BufferDesc  bufferDesc{};
+
+            // CROSS-FRAME HANDOVER. The state the LAST Execute() left this
+            // physical resource in -- the `after` of the last barrier that
+            // named it. Necessary because the pool now survives Reset(): two
+            // consecutive frames share one physical texture, and frame N+1's
+            // first barrier for the slot carries Compile()'s
+            // `before = {NONE, UNDEFINED, ALL}` (Compile is pure and
+            // per-frame; it cannot know what the previous frame did). Emitting
+            // that verbatim would perform no source availability operation for
+            // frame N's writes -- the SAME spec-level write-after-write hazard
+            // across a reused object that RenderGraph.cpp's POOL HANDOVER
+            // block closes WITHIN a frame, just at the frame boundary.
+            //
+            // EmitBarriers() therefore patches the first barrier it emits per
+            // pool slot per frame, taking access + stages from here and
+            // leaving `layout` UNDEFINED -- byte-for-byte the same amendment
+            // Compile() makes for an intra-frame tenant handover. Cleared
+            // whenever the slot is re-realized (a fresh resource genuinely
+            // starts undefined).
+            nri::AccessLayoutStage carry{};
+            bool                   hasCarry = false;
         };
 
         // An attachment view, cached by the texture it views. Keyed by
@@ -755,9 +830,10 @@ namespace Arcane
         bool RealizePool(const RgCompiled& compiled);
         bool RealizeAttachmentViews();
         bool EnsureExecutionResources();
-        // Buries the pool + views (Reset() and ~RenderGraph); buries the
-        // command slots + fence too when `all` (~RenderGraph only).
-        void ReleaseGpuResources(bool all);
+        // Buries the pool + views (the public ReleaseGpuResources() and
+        // ~RenderGraph); buries the command slots + fence too when `all`
+        // (~RenderGraph only). NOT reached from Reset() -- see Reset().
+        void ReleaseGpuResourcesInternal(bool all);
         // Translates one RgBarrier list into ONE nri CmdBarrier group. The
         // ONLY CmdBarrier call site on the graph path -- see RgCompiled's
         // contract block. Non-const because it fills the reused scratch
@@ -766,6 +842,9 @@ namespace Arcane
 
         [[nodiscard]] nri::Texture* TextureForSlot(std::size_t slot) const noexcept;
         [[nodiscard]] nri::Buffer*  BufferForSlot(std::size_t slot) const noexcept;
+        // The pool slot a barrier's resource maps to this frame, or
+        // kRgNoPoolSlot for an imported resource.
+        [[nodiscard]] std::uint32_t PoolSlotForBarrier(const RgBarrier& barrier) const noexcept;
         [[nodiscard]] nri::Descriptor* ViewForTexture(nri::Texture* texture, bool depth) const noexcept;
 
         std::vector<TextureResource> m_textures;
@@ -792,6 +871,13 @@ namespace Arcane
         // kRgNoPoolSlot for imported resources / untouched transients.
         std::vector<std::uint32_t> m_texturePoolSlot;
         std::vector<std::uint32_t> m_bufferPoolSlot;
+
+        // Cross-frame handover bookkeeping, reset at the top of every
+        // Execute(): which pool slots have already had their first barrier of
+        // this frame emitted (and therefore patched from PoolResource::carry),
+        // and what `before` that barrier actually carried.
+        std::vector<char>                   m_poolCarrySeeded;
+        std::vector<nri::AccessLayoutStage> m_poolFirstBefore;
 
         std::uint64_t m_submitValue           = 0;   // successful submits == last signalled fence value
         std::uint64_t m_transientCreateCount  = 0;   // lifetime physical-transient creations

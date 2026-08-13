@@ -1867,7 +1867,7 @@ TEST_CASE("rendergraph exec: a second Execute of the same compiled graph creates
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
-TEST_CASE("rendergraph exec: Reset buries every realized transient and view in the device graveyard", "[nri]")
+TEST_CASE("rendergraph exec: Reset alone releases nothing; ReleaseGpuResources buries the pool and its views", "[nri]")
 {
     const std::uint64_t before = Arcane::RenderErrorCount();
 
@@ -1886,7 +1886,16 @@ TEST_CASE("rendergraph exec: Reset buries every realized transient and view in t
     REQUIRE(graph.Execute(desc, compiled));
     REQUIRE(device->Graves().Pending() == 0);
 
+    // Reset clears DECLARATIONS ONLY (fix round 1). The pool has to survive
+    // it: Reset is the only way to clear declarations, so a per-frame driver
+    // calls it every frame, and burying here would make pool reuse
+    // unreachable in the one loop shape that exists.
     graph.Reset();
+    CHECK(graph.DebugTransientCount() == compiled.poolSlotCount);
+    CHECK(device->Graves().Pending() == 0);
+
+    // The explicit release is what hands the memory back.
+    graph.ReleaseGpuResources();
 
     // Two pool slots plus the one colour-attachment view node 0 declared.
     // Buried, NOT destroyed: the submission that used them may still be in
@@ -1904,11 +1913,23 @@ TEST_CASE("rendergraph exec: Reset buries every realized transient and view in t
     device->Graves().Reap(graph.DebugSubmitCount());
     CHECK(device->Graves().Pending() == 0);
 
+    // Released is not broken: the next frame simply realizes again.
+    ThreeNodeGraph rebuilt;
+    rebuilt.Declare(graph);
+    const Arcane::RgCompiled again = CompileOk(graph);
+    REQUIRE(graph.Execute(desc, again));
+    CHECK(graph.DebugTransientCount() == again.poolSlotCount);
+    CHECK(graph.DebugTransientCreateCount() == compiled.poolSlotCount + again.poolSlotCount);
+
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
-TEST_CASE("rendergraph exec: a re-declared graph re-realizes its pool from scratch after Reset", "[nri]")
+TEST_CASE("rendergraph exec: the per-frame Reset-redeclare-compile-execute loop creates zero new transients", "[nri]")
 {
+    // THE loop shape Task 7's frame driver runs. Before fix round 1, Reset()
+    // buried the pool, so this -- the only way a real driver can clear
+    // declarations -- re-created every render target every frame and buried
+    // the old ones, reaped kSwapchainFramesInFlight frames later.
     const std::uint64_t before = Arcane::RenderErrorCount();
 
     auto device = Arcane::NriDevice::CreateNoneForTests();
@@ -1918,31 +1939,170 @@ TEST_CASE("rendergraph exec: a re-declared graph re-realizes its pool from scrat
     Arcane::NriPipelineCache pipelines;
     Arcane::RenderGraph      graph;
 
+    std::uint32_t poolSlots = 0;
+    for (std::uint32_t frame = 0; frame < 4; ++frame)
+    {
+        graph.Reset();
+
+        ThreeNodeGraph shape;
+        shape.Declare(graph);
+
+        const Arcane::RgCompiled    compiled = CompileOk(graph);
+        const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines,
+                                          frame % Arcane::kSwapchainFramesInFlight };
+        REQUIRE(graph.Execute(desc, compiled));
+
+        if (frame == 0)
+            poolSlots = compiled.poolSlotCount;
+        REQUIRE(compiled.poolSlotCount == poolSlots);
+
+        CHECK(shape.execCount[0] == 1);
+        CHECK(graph.DebugTransientCount() == poolSlots);
+
+        // The whole point: creations happened on frame 0 and never again,
+        // and nothing was ever buried.
+        CHECK(graph.DebugTransientCreateCount() == poolSlots);
+        CHECK(device->Graves().Pending() == 0);
+    }
+
+    CHECK(graph.DebugSubmitCount() == 4);
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("rendergraph exec: the carried-over pool slot's first barrier picks up the previous frame's outgoing state", "[nri]")
+{
+    // The correctness consequence of letting the pool cross frames. Compile()
+    // is pure and per-frame: the `before` it derives for a slot's first use is
+    // always {NONE, UNDEFINED, ALL}, which performs no source availability
+    // operation for the PREVIOUS frame's writes to the same physical texture
+    // -- the identical write-after-write hazard RenderGraph.cpp's POOL
+    // HANDOVER block closes within a frame. The executor patches it at the
+    // frame boundary, where Compile() cannot see.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+
+    {
+        ThreeNodeGraph shape;
+        shape.Declare(graph);
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        REQUIRE(graph.Execute(desc, compiled));
+    }
+
+    // Frame 1 realized pool slot 0 fresh, so its first barrier is Compile()'s
+    // unpatched first-use state -- a genuinely undefined new texture.
+    const auto firstFrame = graph.DebugFirstBarrierBefore(0);
+    REQUIRE(firstFrame.has_value());
+    CheckState(*firstFrame, kUnknownState);
+
+    // Slot 0's tenants are `color` (ColorWrite -> ShaderRead) and then `dst`
+    // (CopyDst, which shares the slot), so frame 1 leaves the physical
+    // texture in the CopyDst state.
+    graph.Reset();
+    {
+        ThreeNodeGraph shape;
+        shape.Declare(graph);
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        // Compile() still derives the unpatched first-use state -- it has no
+        // way to know a previous frame existed. That is what makes the
+        // executor's amendment necessary rather than redundant.
+        REQUIRE(compiled.nodes[0].preBarriers.size() == 1);
+        CheckState(compiled.nodes[0].preBarriers[0].before, kUnknownState);
+
+        REQUIRE(graph.Execute(desc, compiled));
+        REQUIRE(graph.DebugTransientCreateCount() == compiled.poolSlotCount);   // reused, not re-created
+    }
+
+    // What was actually RECORDED: the previous frame's outgoing access and
+    // stages, with the layout still UNDEFINED (discard, never inherit
+    // contents) -- byte-for-byte the within-frame handover's shape.
+    const auto secondFrame = graph.DebugFirstBarrierBefore(0);
+    REQUIRE(secondFrame.has_value());
+    CheckState(*secondFrame, nri::AccessBits::COPY_DESTINATION, nri::Layout::UNDEFINED, nri::StageBits::COPY);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("rendergraph exec: a desc change after Reset re-creates and buries exactly the changed slots", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+
     std::uint32_t firstPoolSlots = 0;
     {
         ThreeNodeGraph shape;
         shape.Declare(graph);
-        const Arcane::RgCompiled    compiled = CompileOk(graph);
-        const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+        const Arcane::RgCompiled compiled = CompileOk(graph);
         REQUIRE(graph.Execute(desc, compiled));
-        REQUIRE(graph.DebugTransientCreateCount() == compiled.poolSlotCount);
         firstPoolSlots = compiled.poolSlotCount;
+        REQUIRE(graph.DebugTransientCreateCount() == firstPoolSlots);
     }
 
     graph.Reset();
+
+    // Same node shape, DIFFERENT extent -- what a window resize looks like to
+    // the graph. Every slot's realized desc now mismatches, so every slot is
+    // buried and re-created; the reuse path deliberately does not paper over
+    // a shape change.
+    Arcane::RgTexture color, scratch, dst;
+    graph.AddNode("write", Arcane::RenderGraph::NodeKind::Raster,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            color = builder.CreateTexture("color", MakeColorDesc(128, 128));
+            builder.Write(color, Arcane::RgUsage::ColorWrite);
+            const Arcane::RgTexture attachments[] = { color };
+            graph.SetColorAttachments(attachments);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+    graph.AddNode("read", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            scratch = builder.CreateTexture("scratch", MakeColorDesc(128, 128));
+            builder.Read(color, Arcane::RgUsage::ShaderRead);
+            builder.Write(scratch, Arcane::RgUsage::ShaderWriteCs);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+    graph.AddNode("copy", Arcane::RenderGraph::NodeKind::Copy,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            dst = builder.CreateTexture("dst", MakeColorDesc(128, 128));
+            builder.Read(scratch, Arcane::RgUsage::CopySrc);
+            builder.Write(dst, Arcane::RgUsage::CopyDst);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    const Arcane::RgCompiled resized = CompileOk(graph);
+    REQUIRE(resized.poolSlotCount == firstPoolSlots);
+    REQUIRE(graph.Execute(desc, resized));
+
+    CHECK(graph.DebugTransientCount() == resized.poolSlotCount);
+    CHECK(graph.DebugTransientCreateCount() == firstPoolSlots + resized.poolSlotCount);
+
+    // Buried: the old pool textures, plus the old colour-attachment view
+    // (swept with the texture it named -- a view outliving its resource is a
+    // dangling descriptor).
+    CHECK(device->Graves().Pending() == firstPoolSlots + 1);
     device->Graves().Reap(graph.DebugSubmitCount());
+    CHECK(device->Graves().Pending() == 0);
 
-    // The SAME shape declared again on the same graph object: the pool is
-    // gone (Reset buried it), so the second build realizes its own.
-    ThreeNodeGraph rebuilt;
-    rebuilt.Declare(graph);
-    const Arcane::RgCompiled    compiled = CompileOk(graph);
-    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
-    REQUIRE(graph.Execute(desc, compiled));
-
-    CHECK(graph.DebugTransientCount() == compiled.poolSlotCount);
-    CHECK(graph.DebugTransientCreateCount() == firstPoolSlots + compiled.poolSlotCount);
-    CHECK(rebuilt.execCount[0] == 1);
+    // A re-realized slot starts genuinely undefined, so no carry state from
+    // the buried texture may leak into it.
+    const auto firstBarrier = graph.DebugFirstBarrierBefore(0);
+    REQUIRE(firstBarrier.has_value());
+    CheckState(*firstBarrier, kUnknownState);
 
     CHECK(Arcane::RenderErrorCount() == before);
 }
