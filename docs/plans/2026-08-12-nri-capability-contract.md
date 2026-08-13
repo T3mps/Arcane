@@ -603,3 +603,252 @@ Called out deliberately rather than guessed:
    does not resolve this for us and does not validate the field at all.
 9. Line numbers are from the current gitignored `.example/NRI` clone
    (v180). Function names are the durable anchors.
+
+---
+
+## 7. ImGui render-backend brief (Task 8)
+
+**Question posed by the spec's Plan-inputs section**
+(`docs/specs/2026-08-12-nri-adoption-design.md:216-218`): "Dear ImGui
+version vs `NRIImgui`'s ≥1.92 requirement — bump ours or port our backend
+to raw NRI (decide in plan; porting ours is small and keeps the
+game-debug-ImGui-in-viewport path unchanged)." This section resolves it
+with facts from both trees.
+
+**Recommendation, stated up front: PORT OURS.** Not because of a version
+gap — there isn't one (§7.5) — but because `NRIImgui` hard-requires the
+NRI Streamer extension, which the spec's own Non-goals section has
+already deferred (`docs/specs/2026-08-12-nri-adoption-design.md:206`,
+Non-goals: "Streamer adoption (until measured), ray tracing, mesh
+shaders, Reflex, upscalers beyond NIS, HDR output..."). See §7.6 for the
+full rationale.
+
+### 7.1 Our vendored Dear ImGui version
+
+`ThirdParty/imgui/imgui.h:1` (top-of-file banner): `// dear imgui, v1.92.9 WIP`.
+
+`ThirdParty/imgui/imgui.h:32-33`:
+
+```c
+#define IMGUI_VERSION       "1.92.9 WIP"
+#define IMGUI_VERSION_NUM   19281
+```
+
+We are already on **1.92.9 WIP** (`IMGUI_VERSION_NUM 19281`) — past, not
+behind, `NRIImgui`'s documented ≥1.92 floor (§7.4). Also present at
+`imgui.h:35`: `#define IMGUI_HAS_TEXTURES // Added
+ImGuiBackendFlags_RendererHasTextures - from IMGUI_VERSION_NUM >= 19198`
+— the exact numeric floor for the texture-management protocol both our
+own backend and `NRIImgui` depend on (§7.2, §7.4).
+
+### 7.2 Our ImGui backend surface — `ArcaneClient/src/Arcane/ImGui/`
+
+Six files, all nvrhi-touching (three implementation pairs; every header
+carries `nvrhi::ICommandList*`/`nvrhi::IFramebuffer*` in its public
+signatures, every `.cpp` calls into `nvrhi::IDevice` or a type built from
+it):
+
+| File | Role |
+|---|---|
+| `ImGuiLayer.hpp` / `.cpp` | Exported facade (`ARCANE_API`) for the **editor's own OS-window ImGui context**: owns the `ImGuiContext`, wires upstream `imgui_impl_sdl3` for platform/input via `Window::SetNativeEventTap` (`ImGuiLayer.cpp:65`, `:110-115`), and owns an `ImGuiNvrhiRenderer` instance for drawing. Renders post-tonemap into the caller-supplied display-referred backbuffer framebuffer. Platform glue lives **here**, not in the renderer. |
+| `ImGuiNvrhi.hpp` / `.cpp` | The actual **nvrhi renderer** — internal, not exported. `Init` sets `io.BackendFlags \|= ImGuiBackendFlags_RendererHasTextures \| ImGuiBackendFlags_RendererHasVtxOffset` (`ImGuiNvrhi.cpp:41-42`) and builds the sampler/binding-layout/input-layout/pipeline from `imgui_vs`/`imgui_ps` shaders (via `ShaderLibrary`, hot-reload-aware through `m_pipelineGeneration`, `:292-296`). `UpdateTexture`/`DestroyTexture` implement the 1.92 `ImTextureData`/`ImTextureStatus` texture lifecycle (`WantCreate`/`WantUpdates`/`WantDestroy`, `:105-142`) via `createTexture`+`writeTexture` directly on an open `nvrhi::ICommandList` — no manual barriers (`setKeepInitialState(true)`). `RenderDrawData` walks `ImDrawData`/`ImDrawList`/`ImDrawCmd` and issues `setGraphicsState`/`drawIndexed` per draw command, casting `cmd->GetTexID()` straight to `nvrhi::ITexture*` (`:246-247`) — **this cast is our engine-wide `ImTextureID` convention** (§7.3). This is the one TU that would actually change under an NRI raw-API port; the other two pairs are backend-agnostic apart from their function signatures. |
+| `OffscreenImGuiLayer.hpp` / `.cpp` | **The game-debug-ImGui-in-viewport seam.** A second, self-contained `ImGuiContext` + its own `ImGuiNvrhiRenderer` + its own font atlas, with **manually injected IO** (no SDL backend — `Input{displaySize, mousePos, mouseDown[5], wheel, deltaTime, hasInput}`, `OffscreenImGuiLayer.hpp:36-44`) instead of OS events. Header comment (`:4-9`): "for hosting a SECOND ImGui layer inside an offscreen render target — e.g. a game/plugin's debug UI composited into an editor viewport, separate from the editor's own ImGui." `Context()` returns the raw `ImGuiContext*` for a plugin to adopt via `Runtime::SetImGui`/`EngineContext` (`:34`). |
+
+### 7.3 The game-debug-ImGui-in-viewport wiring + the `ImTextureID` convention
+
+`ArcaneEditor/src/App/EditorApp.cpp:439`:
+```cpp
+m_gameImgui = Arcane::OffscreenImGuiLayer::Create(m_gpu->Device(), m_gpu->Shaders());
+```
+— built from the **same** `RenderDevice`/`ShaderLibrary` the editor's own
+`ImGuiLayer` uses (comment at `:436-438`), then composited into the
+viewport panel each frame. This is the exact path the spec calls out by
+name.
+
+Separately, and engine-wide (not limited to the game-viewport seam): our
+`ImGuiNvrhiRenderer::RenderDrawData` reads `cmd->GetTexID()` and casts it
+straight to `nvrhi::ITexture*` (`ImGuiNvrhi.cpp:246-247`); the matching
+write side is `(ImTextureID)(intptr_t)handle.Get()` at texture-create
+time (`ImGuiNvrhi.cpp:125`). Editor call sites rely on this convention
+directly — a grep for `ImTextureID`/`ImGui::Image` across `ArcaneEditor/`
+returns 17 matches in 6 files; live call sites (not comments) include
+`ArcaneEditor/src/Panels/EditorPanels.cpp:491,933`,
+`ArcaneEditor/src/Documents/SpriteDocument.cpp:309`, and
+`ArcaneEditor/src/Documents/ShaderEditorDocument.cpp:2536,2579,2622,3139,3759,5357`
+— viewport textures, sprite thumbnails, shader-preview thumbnails, and
+the editor logo all pass a raw `nvrhi::ITexture*` cast to `ImTextureID`.
+This convention is load-bearing across the editor, not a single call
+site (§7.6 point 3).
+
+### 7.4 `NRIImgui` from source — `.example/NRI`
+
+Header: `Include/Extensions/NRIImgui.h`. Implementation:
+`Source/Shared/ImguiInterface.h` (class decl) +
+`Source/Shared/ImguiInterface.hpp` (impl, gated
+`#if NRI_ENABLE_IMGUI_EXTENSION`, `ImguiInterface.h:5`).
+
+**Documented requirements** (`NRIImgui.h:11-13`, verbatim):
+```
+- ImGui 1.92+ with "ImGuiBackendFlags_RendererHasTextures" flag ("IMGUI_DISABLE_OBSOLETE_FUNCTIONS" is recommended)
+- unmodified "ImDrawVert" (20 bytes) and "ImDrawIdx" (2 bytes)
+- "ImTextureID_Invalid" = 0
+```
+All three are already satisfied by our tree today: version §7.1;
+`ImGuiBackendFlags_RendererHasTextures` is set at `ImGuiNvrhi.cpp:41`;
+`ImDrawVert`/`ImDrawIdx` sizes are enforced by our own `static_assert`s
+at `ImGuiNvrhi.cpp:26-30`; `ImTextureID_Invalid` is ImGui's unmodified
+default of `0` (`imgui.h:352`, and we never redefine it).
+
+**No compile-time version check exists.** `NRIImgui` does not
+`#include` our `imgui.h` anywhere — confirmed by a repo-wide grep over
+`.example/NRI/Source` and `Include` for `IMGUI_VERSION`/`imgui.h`/
+`#include.*[Ii]mgui`, which returns only its own `#include
+"ImguiInterface.h"` cross-references, zero hits on the real header.
+`README.md:49` documents this deliberately: `` `NRIImgui.h` - a
+light-weight *ImGui* renderer (**no *ImGui* dependency**) ``. Instead,
+`Source/Shared/ImguiInterface.hpp:243-330` hand-copies minimal
+struct-layout mirrors of `ImDrawVert`, `ImDrawList`, `ImDrawCmd`,
+`ImTextureData`, `ImTextureRef`, etc., with the comment at `:243`:
+`// Copied from Imgui // TODO: always keep in sync with latest`. The
+"≥1.92" requirement is therefore a **documentation-only contract**, not
+something the compiler or NRI itself can verify against our actual
+vendored copy — a struct-layout drift on our side (e.g. a future
+`ImDrawCmd` field reorder) would silently desync rather than fail to
+build.
+
+**What it renders — draw-data only, nothing else:**
+
+| Capability | In `NRIImgui`? | Citation |
+|---|---|---|
+| Draw-data rendering (`CmdCopyImguiData` + `CmdDrawImgui`) | **yes — this is the entire scope** | `NRIImgui.h:54-65`; impl `ImguiInterface.hpp:447-643` (copy), `:645-871` (draw) |
+| Platform/input glue (window events, clipboard, IME) | **no** | Zero SDL/window-system references anywhere in `ImguiInterface.hpp`/`.h`; header comment `NRIImgui.h:15-17`: "the goal of this extension is to support latest ImGui only", "designed only for rendering" |
+| Font-atlas *building* / IO ownership | **no** — atlas building stays 100% ImGui's/ours | `NRIImgui` only consumes `ImTextureData` handed to it via `CopyImguiDataDesc::textures` (`NRIImgui.h:40`) — it never touches `ImGuiIO::Fonts` or calls any atlas-build API |
+| Font/user-texture GPU upload | **yes**, via the NRI **Streamer** | `ImguiInterface.hpp:536-542` (`StreamTextureDataDesc` + `m_iStreamer.StreamTextureData`) |
+| `ImGui::Image()`-style user textures | **yes**, but different ID protocol than ours | `NRIImgui.h:21-22`: `"ImGui::Image*" functions are supported. "ImTextureID" must be a "SHADER_RESOURCE" descriptor: ImGui::Image((ImTextureID)descriptor, ...)` — keys off an `nri::Descriptor*`, not the raw resource handle our `nvrhi::ITexture*` convention uses (§7.3) |
+| `drawList->AddCallback` (ImGui user callbacks) | **no**, explicitly unsupported except one HDR-scale special case | `NRIImgui.h:18-20`; our own renderer also asserts none are used today (`ImGuiNvrhi.cpp:235-236`) — parity, not a regression either way |
+| Shaders | **embedded**, not ours | Compiled bytecode baked in per-backend (`ImguiInterface.hpp:22-234`: dxbc/dxil/spirv byte arrays) or generated via `Shaders/Imgui.{fs,vs}.hlsl` + ShaderMake (`:4-16`) — **not** routed through our `ShaderLibrary`, so it does not participate in our shader hot-reload (`m_pipelineGeneration` tracking, §7.2) |
+| Pipeline/descriptor model | **own, bindless-flavored** | Its own `PipelineLayout` with 2 descriptor sets — a static sampler set and a dynamic `ALLOW_UPDATE_AFTER_SET` texture set sized by `ImguiDesc::descriptorPoolSize` (default 128) — built independently of any binding-layout our engine already owns (`ImguiInterface.hpp:379-424`) |
+
+**Threading.** `ImguiInterface.h:52,64`: the impl holds its own
+`StreamerInterface m_iStreamer` and a `Lock m_Lock`. Both `CmdCopyData`
+and `CmdDraw` open with `ExclusiveScope lock(m_Lock)`
+(`ImguiInterface.hpp:448`, `:646`) — internally synchronized, matching
+the interface doc's `// Threadsafe: yes` at `NRIImgui.h:53`. Not a
+concern either way: our own renderer is single-threaded-per-context by
+construction (one `ImGuiContext` = one call site per frame) and never
+needed a lock.
+
+**Dependency footprint — the load-bearing fact.**
+`ImguiImpl::Create` (`ImguiInterface.hpp:350-354`) resolves the NRI
+**Streamer** interface as its first act:
+```cpp
+Result result = nriGetInterface(m_Device, NRI_INTERFACE(StreamerInterface), &m_iStreamer);
+```
+and `CmdCopyData` is built entirely on it —
+`m_iStreamer.StreamTextureData` (`:542`, `:558`, `:574`),
+`m_iStreamer.StreamBufferData` (`:619`), `m_iStreamer.CmdCopyStreamedData`
+(`:634`). There is no code path that renders `ImDrawData` without the
+Streamer. `README.md:53,91-92` confirms Streamer is its own separately
+gated extension (`NRIStreamer.h`, `NRI_STREAMER_THREAD_SAFE` build
+flag) — adopting `NRIImgui` is not adopting one extension, it is
+adopting two.
+
+**This collides with an explicit spec ruling, not just a preference.**
+`docs/specs/2026-08-12-nri-adoption-design.md:206` lists under
+Non-goals: "Streamer adoption (until measured), ray tracing, mesh
+shaders, Reflex, upscalers beyond NIS, HDR output (formats noted as
+future direction)." `docs/research/2026-08-12-nri-survey.md:151-155`
+gives the reason: "the
+Streamer constant ring has no overflow protection — undersizing
+`constantBufferSize` silently corrupts in-flight frames (wraps on size
+only, no fence check). A live NVIDIA `\ TODO ... right? :)` questions
+whether `CmdCopyStreamedData` needs a barrier. Both need empirical
+validation before a frame graph leans on the Streamer." Adopting
+`NRIImgui` today would pull the Streamer in through a side door — the
+one subsystem the spec has already named as not-yet-safe to build on.
+
+### 7.5 Version-delta / API-break analysis
+
+There is **no version delta to resolve**. We are already on 1.92.9 WIP
+(§7.1), past `NRIImgui`'s documented ≥1.92 floor, and our own renderer
+already implements the 1.92 texture-management protocol
+(`ImGuiBackendFlags_RendererHasTextures`, the `ImTextureData`/
+`ImTextureStatus` lifecycle, `ImTextureID_Invalid`) — see §7.2. That
+migration (from the pre-1.92 single-font-atlas-texture model to the
+per-`ImTextureData` create/update/destroy protocol) already happened in
+our tree; it is not a cost either branch of this decision would incur.
+Concretely: **adopting `NRIImgui` would not save us an upgrade we still
+owe, because we don't owe one.** The only variable this decision
+actually turns on is the render-backend implementation (raw nvrhi calls
+vs `NRIImgui`'s own pipeline+Streamer), not the ImGui version.
+
+### 7.6 Recommendation: PORT OURS
+
+1. **No version motivation either way** (§7.5) — this removes the one
+   argument that could have favored adopting `NRIImgui` ("catch up to
+   ≥1.92"). We're already there.
+2. **The Streamer dependency is a hard blocker today, not a style
+   preference.** `NRIImgui::Create` cannot construct without
+   `StreamerInterface` (§7.4), and the spec has already deferred
+   Streamer adoption pending the two empirical fixes in
+   `docs/research/2026-08-12-nri-survey.md:151-155`. Choosing
+   `NRIImgui` for Phase 1 would force Streamer adoption now, out of
+   order, for the least performance-critical draw path in the engine.
+3. **The `ImTextureID` protocol change would ripple wider than the
+   game-viewport seam the spec named, independent of the wholesale-swap
+   ruling.** The spec's binding ruling
+   (`docs/specs/2026-08-12-nri-adoption-design.md:18-19`: "this is a
+   COMPLETE migration. One branch, wholesale swap, no dual-RHI period")
+   means ImGui's *renderer* moves off nvrhi in Phase 1 either way — that
+   part is not optional and this decision does not reopen it. What *is*
+   optional is whether the post-swap `ImTextureID` convention stays a
+   raw handle cast (port ours) or becomes an `nri::Descriptor*` (adopt
+   `NRIImgui`, per `NRIImgui.h:21-22`). Our engine-wide convention is
+   used in at least 9 live call sites across 3 editor files (§7.3) plus
+   the `OffscreenImGuiLayer` game-debug path; recutting that convention
+   is a second, separable migration bolted onto the RHI swap for no
+   reason forced by NRI itself (raw NRI has no opinion on how a host
+   chooses its `ImTextureID` values — only `NRIImgui`'s own texture-set
+   design does). The frame graph's node-by-node golden-verified cutover
+   order (`docs/specs/2026-08-12-nri-adoption-design.md:169-173`) is
+   easier to keep honest when the ImGui node's diff is "same renderer,
+   different API calls" rather than "different renderer, different
+   pipeline, different descriptor model, different texture-ID scheme,
+   new Streamer dependency" all at once.
+4. **Shader hot-reload parity.** Our renderer's pipeline cache is keyed
+   off `ShaderLibrary::Generation()` (`ImGuiNvrhi.cpp:292-296`) so
+   `imgui_vs`/`imgui_ps` hot-reload like every other shader in the
+   engine. `NRIImgui`'s shaders are embedded bytecode baked at NRI's
+   build time (§7.4) — adopting it would carve out the one UI surface
+   that stops hot-reloading, for no functional gain.
+5. **Keeps the game-debug-ImGui-in-viewport path unchanged**, per the
+   spec's own stated reason (`docs/specs/2026-08-12-nri-adoption-design.md:216-218`)
+   — `OffscreenImGuiLayer`'s manually-injected-IO / dual-context design
+   (§7.2, §7.3) is orthogonal to which draw backend `ImGuiNvrhiRenderer`
+   targets; porting only touches the renderer.
+
+**What porting ours costs.** Of the six files in §7.2, only
+`ImGuiNvrhi.hpp`/`.cpp` issues GPU calls (`nvrhi::IDevice::create*`,
+`nvrhi::ICommandList::write*`/`setGraphicsState`/`drawIndexed`) — that
+pair is the entire edit surface for a raw-NRI port: swap the
+`nvrhi::` device/command-list calls for the equivalent `nri::CoreInterface`
+calls (`CreateTexture`/`CreateSampler`/`CreatePipelineLayout`/
+`CmdSetGraphicsState`-equivalents/`CmdDrawIndexed`), keep our own
+`imgui_vs`/`imgui_ps` shaders and `ShaderLibrary` binding, keep our own
+`ImTextureID` = raw-handle-cast convention, and skip the Streamer
+entirely (upload via the same open-command-list `writeTexture`/
+`writeBuffer`-equivalent pattern already used, per the frame graph's
+general upload strategy — spec `docs/specs/2026-08-12-nri-adoption-design.md:108-111`).
+`ImGuiLayer.cpp`/`OffscreenImGuiLayer.cpp` need no changes beyond
+whatever type renames the device layer's own port introduces elsewhere
+(`RenderDevice`/`ShaderLibrary` call shapes) — their platform-glue and
+dual-context logic (§7.2) does not touch nvrhi/nri APIs directly, only
+through the renderer they own.
+
+**What Phase 1 should NOT do:** do not enable
+`NRI_ENABLE_IMGUI_EXTENSION`, do not vendor `Shaders/Imgui.*.hlsl` or
+its precompiled bytecode, and do not adopt the Streamer as a side
+effect of this decision. Revisit `NRIImgui` only if/when the Streamer
+is independently adopted (its own measured decision, not this one) —
+at that point the version floor will still be satisfied and this
+section's §7.4 facts remain the reference.
