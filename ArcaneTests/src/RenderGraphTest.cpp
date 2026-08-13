@@ -950,6 +950,76 @@ TEST_CASE("rendergraph compile: (e) two identical transients with disjoint lifet
     CHECK(compiled.poolSlotCount == 1);
 }
 
+TEST_CASE("rendergraph compile: (e) a pool-slot handover seeds the next tenant's before from the previous tenant's final access/stages", "[nri]")
+{
+    // Fix round 1. Two transients that share a pool slot are ONE physical
+    // texture at execution time, so the second tenant's first barrier must
+    // make the first tenant's writes available -- `before.access = NONE`
+    // would leave a write-after-write hazard across the reused object. The
+    // layout half stays UNDEFINED (a contents-discarding transition), which
+    // is what keeps the first-use rule true per LOGICAL transient.
+    //
+    // Node 2 also pins a batched group's CONTENTS: two entries, identical
+    // `after`, DIFFERENT `before` -- `late` seeded from the handover, `side`
+    // (a different desc, so its own pool slot with no previous tenant) still
+    // seeded from kUnknownState. The handover is the only thing that can
+    // explain the difference.
+    Arcane::RenderGraph graph;
+    Arcane::RgTexture early, late, side;
+
+    graph.AddNode("declare", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            early = builder.CreateTexture("early", MakeColorDesc());
+            late  = builder.CreateTexture("late", MakeColorDesc());
+            side  = builder.CreateTexture("side", MakeColorDesc(32, 32));
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    AddColorNode(graph, "uses-early", early);   // node 1: early -> kColorState, lifetime [1,1]
+
+    graph.AddNode("handover", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            builder.Write(late, Arcane::RgUsage::ShaderWriteCs);
+            builder.Write(side, Arcane::RgUsage::ShaderWriteCs);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+
+    // early and late share a slot; side (different desc) does not.
+    REQUIRE(compiled.transients.size() == 3);
+    REQUIRE(compiled.transientPoolSlot[0] == compiled.transientPoolSlot[1]);
+    REQUIRE(compiled.transientPoolSlot[2] != compiled.transientPoolSlot[0]);
+    CHECK(compiled.poolSlotCount == 2);
+
+    // The FIRST tenant of a slot is untouched by the handover rule.
+    REQUIRE(compiled.nodes[1].preBarriers.size() == 1);
+    CHECK(compiled.nodes[1].preBarriers[0].resourceIndex == 0u);
+    CheckState(compiled.nodes[1].preBarriers[0].before, kUnknownState);
+    CheckState(compiled.nodes[1].preBarriers[0].after, kColorState);
+
+    // The batched group: both entries, in declaration order.
+    REQUIRE(compiled.nodes[2].preBarriers.size() == 2);
+    const nri::AccessLayoutStage storageState{
+        nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::Layout::SHADER_RESOURCE_STORAGE,
+        nri::StageBits::COMPUTE_SHADER };
+
+    const Arcane::RgBarrier& handover = compiled.nodes[2].preBarriers[0];
+    CHECK(handover.resourceIndex == 1u);   // `late`
+    CHECK(handover.isTexture);
+    // The previous tenant's access + stages; contents discarded via UNDEFINED.
+    CheckState(handover.before, kColorState.access, nri::Layout::UNDEFINED, kColorState.stages);
+    CheckState(handover.after, storageState);
+
+    const Arcane::RgBarrier& fresh = compiled.nodes[2].preBarriers[1];
+    CHECK(fresh.resourceIndex == 2u);      // `side`
+    CHECK(fresh.isTexture);
+    CheckState(fresh.before, kUnknownState);   // no previous tenant -- unchanged behaviour
+    CheckState(fresh.after, storageState);
+}
+
 TEST_CASE("rendergraph compile: (e) two identical transients with overlapping lifetimes get different pool slots", "[nri]")
 {
     Arcane::RenderGraph graph;

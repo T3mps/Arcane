@@ -159,8 +159,26 @@ namespace Arcane
     // =====================================================================
     // Compile output (Task 4). Pure data: RenderGraph::Compile() derives all
     // of it from the declarations alone -- no nri device calls, no GPU
-    // allocation, no mutation of the graph -- and Task 6's executor replays
-    // it verbatim.
+    // allocation, no mutation of the graph.
+    //
+    // WHAT TASK 6'S EXECUTOR REPLAYS, AND WHAT IT MUST MERGE: nothing needs
+    // merging. Every before/after triple in here is FINAL and already
+    // accounts for transient pool reuse -- when two transients share a pool
+    // slot, the second tenant's first barrier carries the FIRST tenant's
+    // outgoing access + stages in its `before`, with `before.layout` left
+    // UNDEFINED (a contents-discarding transition), so the handover barrier
+    // performs the source availability operation the reused physical
+    // resource needs. See RenderGraph.cpp's POOL HANDOVER comment.
+    //
+    // The executor's whole job is translation: emit each node's preBarriers
+    // as ONE nri CmdBarrier group immediately before that node, run the
+    // node, then emit exitBarriers after the last one -- textures via
+    // nri::TextureBarrierDesc (full AccessLayoutStage triples) and buffers
+    // via nri::BufferBarrierDesc (access + stages only; drop the layout,
+    // which is always UNDEFINED for a buffer). It must not synthesize,
+    // reorder, drop, or coalesce barriers, and must not derive any state of
+    // its own: doing so silently diverges from the derivation this task's
+    // tests pin.
     //
     // INDEX SPACE -- READ THIS BEFORE SUBSCRIPTING ANYTHING IN HERE. Two
     // different index spaces live in this block and they are NOT the same:
