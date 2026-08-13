@@ -626,22 +626,25 @@ project "ArcaneTests"
         "%{IncludeDir.freetype}",
         "%{IncludeDir.msdfgen}",
         "%{IncludeDir.nvrhi}",
+        "%{IncludeDir.NRI}",   -- Task 4: NriSubstrateTest.cpp drives nri::Result/Device/nriCreateDevice directly
         "%{IncludeDir.imgui}",
         "%{IncludeDir.imguinodeeditor}",   -- ShaderEditorDocument.cpp (graph canvas, Slice 9)
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
     }
 
-    -- msdfgen and freetype are static libs compiled separately; the smoke test
-    -- calls them directly (not via ArcaneClient.dll), so both appear in links here.
-    -- Two static copies in different modules is the established pattern for this workspace.
+    -- msdfgen, freetype, and NRI are static libs compiled separately; the smoke
+    -- test calls them directly (not via ArcaneClient.dll), so all three appear
+    -- in links here. Two static copies in different modules is the established
+    -- pattern for this workspace. NRI: the [nri] NONE-backend lifecycle test
+    -- (Task 4) calls nriCreateDevice/nriDestroyDevice directly, same reasoning.
     -- imgui is NOT linked here: it is exported from ArcaneClient.dll (IMGUI_API =
     -- dllimport below), so the test exe shares the DLL's single GImGui rather
     -- than carrying a second null context. The import lib comes via "ArcaneClient".
     -- imgui-node-editor IS linked (a plain static lib compiled with
     -- IMGUI_API=dllimport, same as this exe): ShaderEditorDocument.cpp's graph
     -- canvas calls it, and that TU source-compiles into the tests.
-    links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "Manifold2D", "imgui-node-editor" }
+    links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "NRI", "Manifold2D", "imgui-node-editor" }
 
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad" }
 
@@ -689,7 +692,14 @@ project "ArcaneTests"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
-        links { "ws2_32" }  -- ArcaneCore TcpSocket
+        -- ws2_32: ArcaneCore TcpSocket. d3d12/dxgi/dxguid: this exe's own
+        -- statically-linked NRI.lib copy (Task 4's [nri] NONE-backend test
+        -- links NRI directly, same "two static copies" reasoning as the
+        -- includedirs/links comment above) pulls in NRI's D3D12 backend
+        -- object code, which references D3D12CreateDevice/CreateDXGIFactory2/
+        -- WKPDID_D3DDebugObjectName etc. even though the test never exercises
+        -- the D3D12 backend -- mirrors ArcaneClient's own system-lib set.
+        links { "ws2_32", "d3d12", "dxgi", "dxguid" }
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }

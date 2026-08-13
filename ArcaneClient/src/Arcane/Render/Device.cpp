@@ -11,6 +11,11 @@ namespace Arcane
         return NvrhiMessageCallback::Instance().ErrorCount();
     }
 
+    void ResetRenderErrorCount()
+    {
+        NvrhiMessageCallback::Instance().ResetForTest();
+    }
+
     const char* ToString(GraphicsBackend backend)
     {
         switch (backend)

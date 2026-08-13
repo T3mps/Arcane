@@ -37,6 +37,19 @@ namespace Arcane
 
         uint64_t ErrorCount() const { return m_errorCount.load(); }
 
+        // Test support ONLY: the counter is documented (Device.hpp) as
+        // "since process start" and production code must never call this --
+        // it exists so a test that deliberately drives an Error/Fatal
+        // through this sink (proving a discipline macro or callback wiring
+        // actually reaches the shared 0/0 gate latch, e.g. NriCommon's
+        // ARC_NRI_CHECK) can restore the latch afterward instead of
+        // permanently failing every OTHER test case's RenderErrorCount()==0
+        // assertion for the rest of the process. Same idiom as
+        // GpuInstrumentation's ResetGpuDeviceLost(), reused by
+        // GpuCrashReportTest.cpp for the same "other cases must not leak
+        // into this one" reason.
+        void ResetForTest() noexcept { m_errorCount.store(0); }
+
         void SetDeviceRemovedHook(DeviceRemovedHook hook) noexcept
         {
             m_deviceRemovedHook.store(hook, std::memory_order_release);

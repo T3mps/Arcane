@@ -30,6 +30,16 @@ namespace Arcane
     // "validation must stay silent" foundation rule.
     ARCANE_API uint64_t RenderErrorCount();
 
+    // Test support ONLY -- production code must never call this (the count
+    // above is documented as "since process start"). Restores the 0/0 gate
+    // latch to zero; exists so a test that deliberately trips it (proving a
+    // discipline macro reaches the real, shared latch rather than a fake
+    // local counter) can clean up after itself instead of leaking a
+    // permanent +1 into every unrelated test case's RenderErrorCount()==0
+    // assertion for the rest of the process. Same idiom as
+    // ResetGpuDeviceLost() (GpuInstrumentation.hpp).
+    ARCANE_API void ResetRenderErrorCount();
+
     struct RenderDeviceDesc
     {
         GraphicsBackend backend = GraphicsBackend::D3D12;
