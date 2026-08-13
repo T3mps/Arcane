@@ -2,6 +2,10 @@
   "entities": [
     {
       "components": {
+        "Arcane::Camera": {
+          "active": true,
+          "orthographicSize": 2.0
+        },
         "Arcane::Identity": {
           "id": {
             "hi": 3508969169540367876,
@@ -79,7 +83,7 @@
             "hi": 0,
             "lo": 0
           },
-          "orderInLayer": 0,
+          "orderInLayer": 1,
           "shape": "Rect",
           "sortingLayer": 0,
           "sprite": {
@@ -87,16 +91,16 @@
             "lo": 0
           },
           "tint": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
+            0.9,
+            0.25,
+            0.2,
+            0.65
           ]
         },
         "Arcane::Transform": {
           "position": [
             -1.0,
-            -0.75
+            -0.5
           ],
           "rotation": 0.0,
           "scale": [
@@ -121,7 +125,7 @@
             "hi": 0,
             "lo": 0
           },
-          "orderInLayer": 0,
+          "orderInLayer": 1,
           "shape": "Rect",
           "sortingLayer": 0,
           "sprite": {
@@ -129,9 +133,9 @@
             "lo": 0
           },
           "tint": [
-            1.0,
-            1.0,
-            1.0,
+            0.2,
+            0.45,
+            0.9,
             1.0
           ]
         },
@@ -140,7 +144,7 @@
             1.0,
             -0.75
           ],
-          "rotation": 0.0,
+          "rotation": 0.35,
           "scale": [
             1.0,
             1.0
