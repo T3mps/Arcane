@@ -18,6 +18,7 @@
 #include <Arcane/Render/Nri/NriCommon.hpp>
 
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 TEST_CASE("nri: ARC_NRI_CHECK on SUCCESS returns true and does not bump RenderErrorCount", "[nri]")
@@ -213,6 +214,73 @@ TEST_CASE("graveyard: an explicit Drain leaves it empty, so destruction takes th
         // destructor's debug-mode ARC_ASSERT(m_graves.empty()) passes
         // silently, and its release-mode Drain() is a no-op.
     }
+}
+
+// ---------------------------------------------------------------------------
+// Post-review fixes (code review on the initial Task-5 commit): reentrancy
+// and exception safety. Reentrant Bury()/Reap()/Drain() from within a
+// running destroy thunk is a documented-forbidden, debug-asserted contract
+// violation -- like the destructor's debug-mode assert (see the case above),
+// this is NOT exercised by a test: the assert is fatal (std::abort(), via
+// Mosaic's FailFatal), so a Catch2 case cannot trigger it and survive to
+// report a result. See the class comment in Graveyard.hpp for the contract
+// and the reasoning for choosing "forbid and assert" over "make it safe."
+//
+// What IS testable in release semantics is the exception-safety half: a
+// throwing thunk's entry (and everything buried before it) must never
+// re-run on a subsequent Reap()/Drain() call. Both cases below use
+// CHECK_THROWS_AS, which catches the exception internally -- the test itself
+// stays exception-clean.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("graveyard: Reap erases a throwing thunk's entry (and everything before it) before the exception propagates, so neither re-runs", "[nri]")
+{
+    Arcane::Graveyard graveyard;
+    std::vector<int> ran;
+
+    graveyard.Bury(1, [&ran] { ran.push_back(1); });
+    graveyard.Bury(1, [&ran] { ran.push_back(2); throw std::runtime_error("thunk 2 throws"); });
+    graveyard.Bury(1, [&ran] { ran.push_back(3); });
+
+    REQUIRE(graveyard.Pending() == 3);
+
+    // All three are due at Reap(1); the second throws mid-sweep.
+    CHECK_THROWS_AS(graveyard.Reap(1), std::runtime_error);
+
+    // Thunks 1 and 2 both ran (2's push_back happened before its throw).
+    // Thunk 3 never got a chance -- the sweep stopped at the exception.
+    CHECK(ran == std::vector<int>{1, 2});
+    // 1 and 2 are erased (the throwing entry counts as "executed" and is
+    // never retried); 3 is still pending.
+    CHECK(graveyard.Pending() == 1);
+
+    // A second Reap must NOT re-run thunks 1 or 2 -- only thunk 3, which was
+    // never attempted, runs.
+    graveyard.Reap(1);
+    CHECK(ran == std::vector<int>{1, 2, 3});
+    CHECK(graveyard.Pending() == 0);
+}
+
+TEST_CASE("graveyard: Drain erases a throwing thunk's entry (and everything before it) before the exception propagates, so neither re-runs", "[nri]")
+{
+    Arcane::Graveyard graveyard;
+    std::vector<int> ran;
+
+    graveyard.Bury(10, [&ran] { ran.push_back(1); });
+    graveyard.Bury(20, [&ran] { ran.push_back(2); throw std::runtime_error("thunk 2 throws"); });
+    graveyard.Bury(30, [&ran] { ran.push_back(3); });
+
+    REQUIRE(graveyard.Pending() == 3);
+
+    CHECK_THROWS_AS(graveyard.Drain(), std::runtime_error);
+
+    CHECK(ran == std::vector<int>{1, 2});
+    CHECK(graveyard.Pending() == 1);
+
+    // A second Drain must not re-run 1 or 2 -- only the untouched 3 runs.
+    graveyard.Drain();
+    CHECK(ran == std::vector<int>{1, 2, 3});
+    CHECK(graveyard.Pending() == 0);
 }
 
 TEST_CASE("nri: Graveyard defers a CoreInterface DestroyBuffer through a NONE device to Reap, no latch growth", "[nri]")
