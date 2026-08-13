@@ -270,3 +270,68 @@ TEST_CASE("rendergraph: Reset clears every declared node and resource and bumps 
     CHECK(graph.BufferCount() == 0);
     CHECK(graph.Generation() == generationBefore + 1);
 }
+
+TEST_CASE("rendergraph: a default-constructed (kInvalid) handle is never valid", "[nri]")
+{
+    Arcane::RenderGraph graph;
+
+    // Fresh graph, no resources declared at all -- kInvalid must read as
+    // invalid regardless, since it is checked verbatim before any decode.
+    CHECK_FALSE(graph.IsHandleValid(Arcane::RgTexture{}));
+    CHECK_FALSE(graph.IsHandleValid(Arcane::RgBuffer{}));
+}
+
+TEST_CASE("rendergraph: a handle minted before Reset() is caught as stale after it, even when the new graph re-declares the same slot -- the common, steady-state case", "[nri]")
+{
+    // This is the fix-round-1 case: a plain bounds check alone only catches
+    // a stale handle when the post-Reset() graph is SMALLER than before.
+    // The generation packed into the handle's encoded index must catch the
+    // common per-frame-rebuild case too, where the new graph re-declares
+    // the SAME (or a larger) number of resources and the stale handle's
+    // slot bits are still perfectly in bounds.
+    Arcane::RenderGraph graph;
+    Arcane::RgTexture staleTex;
+
+    graph.AddNode("frame-1", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder) { staleTex = builder.CreateTexture("tex", MakeColorDesc()); },
+        [](Arcane::RenderGraphNodeContext&) {});
+    REQUIRE(graph.IsHandleValid(staleTex));
+
+    graph.Reset();
+
+    Arcane::RgTexture freshTex;
+    graph.AddNode("frame-2", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder) { freshTex = builder.CreateTexture("tex", MakeColorDesc()); },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    // Same declaration shape as frame 1 -- freshTex occupies the identical
+    // slot staleTex used to. A bounds-only check would have let staleTex
+    // silently alias it; the generation encoding must not.
+    CHECK_FALSE(graph.IsHandleValid(staleTex));
+    CHECK(graph.IsHandleValid(freshTex));
+    CHECK(std::string(graph.NameOf(freshTex)) == "tex");
+}
+
+TEST_CASE("rendergraph: a handle minted before Reset() also stays stale when the new graph re-declares a LARGER shape", "[nri]")
+{
+    Arcane::RenderGraph graph;
+    Arcane::RgTexture staleTex;
+
+    graph.AddNode("frame-1", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder) { staleTex = builder.CreateTexture("tex", MakeColorDesc()); },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    graph.Reset();
+
+    graph.AddNode("frame-2", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            builder.CreateTexture("a", MakeColorDesc());
+            builder.CreateTexture("b", MakeColorDesc());
+            builder.CreateTexture("c", MakeColorDesc());
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    REQUIRE(graph.TextureCount() == 3);
+    CHECK_FALSE(graph.IsHandleValid(staleTex));
+}

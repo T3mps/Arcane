@@ -51,17 +51,36 @@ namespace Arcane
     class RenderGraph;
 
     // Sentinel for both handle structs below: an RgTexture/RgBuffer with
-    // index == kInvalid never refers to a declared resource.
+    // index == kInvalid never refers to a declared resource. Checked
+    // verbatim (before any decode), so it stays unambiguous regardless of
+    // the encoding below.
     inline constexpr std::uint32_t kInvalid = 0xFFFFFFFFu;
 
     // ---------------------------------------------------------------------
-    // Value handles -- deliberately just an index, no generation field.
-    // RenderGraph::Reset() clears the backing vectors and bumps an internal
-    // generation counter (Generation()), so a handle from a previous frame
-    // that outlives Reset() is caught by an out-of-bounds ARC_ASSERT the
-    // next time it is used (Read/Write/the introspection accessors below)
-    // -- not by comparing generations, since the handle itself carries
-    // none to compare.
+    // Value handles -- a single uint32_t per the frozen contract, but NOT a
+    // raw resource-vector index: `index` packs a generation into the same
+    // field (top 8 bits generation, low 24 bits slot -- entt/Bevy-style
+    // versioned handles). RenderGraph::EncodeHandle()/DecodeAndValidateSlot()
+    // (private) are the ONLY seam that may interpret this value -- nothing
+    // else, including Task 4/6 code extending this class, should treat
+    // `.index` as a subscript into m_textures/m_buffers.
+    //
+    // RenderGraph::Reset() bumps its generation counter (Generation()), so a
+    // handle minted before Reset() carries the OLD generation and fails to
+    // decode against the NEW one -- caught by IsHandleValid() (queryable,
+    // non-fatal) and by an ARC_ASSERT in every accessor that takes a handle
+    // (Read/Write/NameOf/IsTransient/WasWritten). This catches the common,
+    // steady-state case a plain bounds check cannot: a graph rebuilt every
+    // frame with the SAME OR A LARGER shape, where a stale handle's raw
+    // index would otherwise still be in bounds and silently alias a
+    // different (fresh) resource in the same slot.
+    //
+    // Generation wraps mod 256 (8 bits): a handle held across exactly 256
+    // (or a multiple of 256) Reset() calls is indistinguishable from a
+    // current one. Accepted, documented limit on the debug safety net --
+    // the same tradeoff fixed-width versioned handles always make; nothing
+    // in this phase holds a graph handle across more than a handful of
+    // frames.
     // ---------------------------------------------------------------------
     struct RgTexture { std::uint32_t index = kInvalid; };
     struct RgBuffer  { std::uint32_t index = kInvalid; };
@@ -195,6 +214,15 @@ namespace Arcane
         [[nodiscard]] bool        WasWritten(RgTexture texture) const;
         [[nodiscard]] bool        WasWritten(RgBuffer buffer) const;
 
+        // True iff `texture`/`buffer` decodes to a slot that both exists in
+        // the CURRENT generation and is in range -- the non-fatal, queryable
+        // proxy for "would this handle ARC_ASSERT if used right now". Exists
+        // specifically so the stale-handle-across-Reset() invariant (see the
+        // RgTexture/RgBuffer comment above) has a real, executed negative
+        // test rather than only an untestable fatal assert.
+        [[nodiscard]] bool IsHandleValid(RgTexture texture) const noexcept;
+        [[nodiscard]] bool IsHandleValid(RgBuffer buffer) const noexcept;
+
     private:
         friend class RenderGraphBuilder;
 
@@ -240,7 +268,11 @@ namespace Arcane
 
         // One declared Read()/Write() -- the raw material Task 4's Compile()
         // walks to derive barriers and transient lifetimes. Recorded, never
-        // rejected, at declaration time (assert-later model).
+        // rejected, at declaration time (assert-later model). resourceIndex
+        // here is the DECODED, plain 0-based slot into m_textures/m_buffers
+        // (RecordAccess() decodes the caller's encoded handle once, via
+        // DecodeAndValidateSlot(), before storing this) -- Task 4 reading
+        // m_accesses never has to deal with the handle encoding.
         struct Access
         {
             std::size_t   nodeIndex;
@@ -256,8 +288,28 @@ namespace Arcane
                                          bool persistent);
         RgBuffer  CreateBufferInternal(const char* name, std::uint64_t size, nri::BufferUsageBits usage);
         RgBuffer  ImportBufferInternal(const char* name, nri::Buffer* buffer, std::uint64_t size);
-        void      RecordAccess(std::size_t nodeIndex, std::uint32_t resourceIndex,
+        void      RecordAccess(std::size_t nodeIndex, std::uint32_t encodedHandle,
                                 bool isTexture, bool isWrite, RgUsage usage);
+
+        // ---------------------------------------------------------------
+        // The handle-encoding seam (see the RgTexture/RgBuffer comment
+        // above). EncodeHandle() is the only place that PACKS a (slot,
+        // generation) pair; DecodeAndValidateSlot() is the only place that
+        // UNPACKS and validates one. Every method that mints a handle
+        // (Create*/Import*Internal) or consumes one (RecordAccess, NameOf,
+        // IsTransient, WasWritten, IsHandleValid) goes through exactly one
+        // of these two -- never through `.index` directly. Keep it that
+        // way: a future task adding a handle-consuming method (e.g. Task
+        // 4/6's Resolve()) MUST route through DecodeAndValidateSlot() too.
+        // ---------------------------------------------------------------
+        static constexpr std::uint32_t kIndexBits      = 24;
+        static constexpr std::uint32_t kGenerationBits = 8;
+        static constexpr std::uint32_t kIndexMask      = (1u << kIndexBits) - 1u;      // 0x00FFFFFF -- max live slots per generation
+        static constexpr std::uint32_t kGenerationMask = (1u << kGenerationBits) - 1u; // 0xFF -- generation wraps mod 256
+        static constexpr std::size_t   kNoSlot         = static_cast<std::size_t>(-1); // decode failure: invalid, stale, or out of range
+
+        [[nodiscard]] static std::uint32_t EncodeHandle(std::uint32_t slot, std::uint32_t generation) noexcept;
+        [[nodiscard]] std::size_t DecodeAndValidateSlot(std::uint32_t encoded, std::size_t resourceCount) const noexcept;
 
         static constexpr std::size_t kNoCurrentNode = static_cast<std::size_t>(-1);
 

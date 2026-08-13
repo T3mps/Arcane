@@ -81,6 +81,40 @@ namespace Arcane
         ++m_generation;
     }
 
+    // ------------------------------------------------------------------
+    // The handle-encoding seam -- see the RgTexture/RgBuffer comment in
+    // RenderGraph.hpp and the private-section comment above these
+    // declarations. Nothing outside this pair may pack or unpack `.index`.
+    // ------------------------------------------------------------------
+
+    std::uint32_t RenderGraph::EncodeHandle(std::uint32_t slot, std::uint32_t generation) noexcept
+    {
+        return ((generation & kGenerationMask) << kIndexBits) | (slot & kIndexMask);
+    }
+
+    std::size_t RenderGraph::DecodeAndValidateSlot(std::uint32_t encoded, std::size_t resourceCount) const noexcept
+    {
+        // kInvalid is checked verbatim, before any decode -- it stays
+        // unambiguous no matter the (slot, generation) split.
+        if (encoded == kInvalid)
+            return kNoSlot;
+
+        const std::uint32_t slot       = encoded & kIndexMask;
+        const std::uint32_t generation = encoded >> kIndexBits;
+
+        // Compare mod 256 against the graph's CURRENT generation, not a
+        // per-slot stamp: this is what catches the common case (a stale
+        // handle used after Reset() on a graph re-declared with the same
+        // or a larger shape) -- a stale handle's generation never matches
+        // the post-Reset generation regardless of whether its slot is
+        // still in bounds.
+        if (generation != (m_generation & kGenerationMask))
+            return kNoSlot;
+        if (slot >= resourceCount)
+            return kNoSlot;
+        return slot;
+    }
+
     const char* RenderGraph::NodeName(std::size_t nodeIndex) const
     {
         ARC_ASSERT(nodeIndex < m_nodes.size(), "RenderGraph::NodeName: index out of range");
@@ -95,38 +129,54 @@ namespace Arcane
 
     const char* RenderGraph::NameOf(RgTexture texture) const
     {
-        ARC_ASSERT(texture.index < m_textures.size(), "RenderGraph::NameOf(RgTexture): handle is invalid or stale");
-        return m_textures[texture.index].name.c_str();
+        const std::size_t slot = DecodeAndValidateSlot(texture.index, m_textures.size());
+        ARC_ASSERT(slot != kNoSlot, "RenderGraph::NameOf(RgTexture): handle is invalid, stale, or out of range");
+        return m_textures[slot].name.c_str();
     }
 
     const char* RenderGraph::NameOf(RgBuffer buffer) const
     {
-        ARC_ASSERT(buffer.index < m_buffers.size(), "RenderGraph::NameOf(RgBuffer): handle is invalid or stale");
-        return m_buffers[buffer.index].name.c_str();
+        const std::size_t slot = DecodeAndValidateSlot(buffer.index, m_buffers.size());
+        ARC_ASSERT(slot != kNoSlot, "RenderGraph::NameOf(RgBuffer): handle is invalid, stale, or out of range");
+        return m_buffers[slot].name.c_str();
     }
 
     bool RenderGraph::IsTransient(RgTexture texture) const
     {
-        ARC_ASSERT(texture.index < m_textures.size(), "RenderGraph::IsTransient(RgTexture): handle is invalid or stale");
-        return m_textures[texture.index].kind == ResourceKind::Transient;
+        const std::size_t slot = DecodeAndValidateSlot(texture.index, m_textures.size());
+        ARC_ASSERT(slot != kNoSlot, "RenderGraph::IsTransient(RgTexture): handle is invalid, stale, or out of range");
+        return m_textures[slot].kind == ResourceKind::Transient;
     }
 
     bool RenderGraph::IsTransient(RgBuffer buffer) const
     {
-        ARC_ASSERT(buffer.index < m_buffers.size(), "RenderGraph::IsTransient(RgBuffer): handle is invalid or stale");
-        return m_buffers[buffer.index].kind == ResourceKind::Transient;
+        const std::size_t slot = DecodeAndValidateSlot(buffer.index, m_buffers.size());
+        ARC_ASSERT(slot != kNoSlot, "RenderGraph::IsTransient(RgBuffer): handle is invalid, stale, or out of range");
+        return m_buffers[slot].kind == ResourceKind::Transient;
     }
 
     bool RenderGraph::WasWritten(RgTexture texture) const
     {
-        ARC_ASSERT(texture.index < m_textures.size(), "RenderGraph::WasWritten(RgTexture): handle is invalid or stale");
-        return m_textures[texture.index].everWritten;
+        const std::size_t slot = DecodeAndValidateSlot(texture.index, m_textures.size());
+        ARC_ASSERT(slot != kNoSlot, "RenderGraph::WasWritten(RgTexture): handle is invalid, stale, or out of range");
+        return m_textures[slot].everWritten;
     }
 
     bool RenderGraph::WasWritten(RgBuffer buffer) const
     {
-        ARC_ASSERT(buffer.index < m_buffers.size(), "RenderGraph::WasWritten(RgBuffer): handle is invalid or stale");
-        return m_buffers[buffer.index].everWritten;
+        const std::size_t slot = DecodeAndValidateSlot(buffer.index, m_buffers.size());
+        ARC_ASSERT(slot != kNoSlot, "RenderGraph::WasWritten(RgBuffer): handle is invalid, stale, or out of range");
+        return m_buffers[slot].everWritten;
+    }
+
+    bool RenderGraph::IsHandleValid(RgTexture texture) const noexcept
+    {
+        return DecodeAndValidateSlot(texture.index, m_textures.size()) != kNoSlot;
+    }
+
+    bool RenderGraph::IsHandleValid(RgBuffer buffer) const noexcept
+    {
+        return DecodeAndValidateSlot(buffer.index, m_buffers.size()) != kNoSlot;
     }
 
     RgTexture RenderGraph::CreateTextureInternal(const char* name, const RgTextureDesc& desc)
@@ -137,9 +187,11 @@ namespace Arcane
         resource.kind = ResourceKind::Transient;
         resource.everWritten = false; // undefined content until the first declared Write()
 
-        const std::uint32_t index = static_cast<std::uint32_t>(m_textures.size());
+        ARC_ASSERT(m_textures.size() < kIndexMask,
+                   "RenderGraph: texture slot count exceeds the encoded handle's 24-bit capacity");
+        const std::uint32_t slot = static_cast<std::uint32_t>(m_textures.size());
         m_textures.push_back(std::move(resource));
-        return RgTexture{ index };
+        return RgTexture{ EncodeHandle(slot, m_generation) };
     }
 
     RgTexture RenderGraph::ImportTextureInternal(const char* name, nri::Texture* texture,
@@ -155,9 +207,11 @@ namespace Arcane
         resource.persistent = persistent;
         resource.everWritten = true; // see TextureResource::everWritten in the header
 
-        const std::uint32_t index = static_cast<std::uint32_t>(m_textures.size());
+        ARC_ASSERT(m_textures.size() < kIndexMask,
+                   "RenderGraph: texture slot count exceeds the encoded handle's 24-bit capacity");
+        const std::uint32_t slot = static_cast<std::uint32_t>(m_textures.size());
         m_textures.push_back(std::move(resource));
-        return RgTexture{ index };
+        return RgTexture{ EncodeHandle(slot, m_generation) };
     }
 
     RgBuffer RenderGraph::CreateBufferInternal(const char* name, std::uint64_t size, nri::BufferUsageBits usage)
@@ -169,9 +223,11 @@ namespace Arcane
         resource.kind = ResourceKind::Transient;
         resource.everWritten = false;
 
-        const std::uint32_t index = static_cast<std::uint32_t>(m_buffers.size());
+        ARC_ASSERT(m_buffers.size() < kIndexMask,
+                   "RenderGraph: buffer slot count exceeds the encoded handle's 24-bit capacity");
+        const std::uint32_t slot = static_cast<std::uint32_t>(m_buffers.size());
         m_buffers.push_back(std::move(resource));
-        return RgBuffer{ index };
+        return RgBuffer{ EncodeHandle(slot, m_generation) };
     }
 
     RgBuffer RenderGraph::ImportBufferInternal(const char* name, nri::Buffer* buffer, std::uint64_t size)
@@ -183,29 +239,37 @@ namespace Arcane
         resource.imported = buffer;
         resource.everWritten = true; // see TextureResource::everWritten in the header
 
-        const std::uint32_t index = static_cast<std::uint32_t>(m_buffers.size());
+        ARC_ASSERT(m_buffers.size() < kIndexMask,
+                   "RenderGraph: buffer slot count exceeds the encoded handle's 24-bit capacity");
+        const std::uint32_t slot = static_cast<std::uint32_t>(m_buffers.size());
         m_buffers.push_back(std::move(resource));
-        return RgBuffer{ index };
+        return RgBuffer{ EncodeHandle(slot, m_generation) };
     }
 
-    void RenderGraph::RecordAccess(std::size_t nodeIndex, std::uint32_t resourceIndex,
+    void RenderGraph::RecordAccess(std::size_t nodeIndex, std::uint32_t encodedHandle,
                                     bool isTexture, bool isWrite, RgUsage usage)
     {
+        // Decode once, here -- the single seam (see the class comment):
+        // everything downstream (everWritten flip, the stored Access) works
+        // in plain decoded slots, never the encoded handle value.
+        const std::size_t resourceCount = isTexture ? m_textures.size() : m_buffers.size();
+        const std::size_t slot = DecodeAndValidateSlot(encodedHandle, resourceCount);
+
         if (isTexture)
         {
-            ARC_ASSERT(resourceIndex < m_textures.size(),
-                       "RenderGraph: RgTexture handle is invalid or stale (out of bounds -- "
-                       "was it held across a Reset()?)");
+            ARC_ASSERT(slot != kNoSlot,
+                       "RenderGraph: RgTexture handle is invalid, stale, or out of range "
+                       "(held across a Reset()?)");
             if (isWrite)
-                m_textures[resourceIndex].everWritten = true;
+                m_textures[slot].everWritten = true;
         }
         else
         {
-            ARC_ASSERT(resourceIndex < m_buffers.size(),
-                       "RenderGraph: RgBuffer handle is invalid or stale (out of bounds -- "
-                       "was it held across a Reset()?)");
+            ARC_ASSERT(slot != kNoSlot,
+                       "RenderGraph: RgBuffer handle is invalid, stale, or out of range "
+                       "(held across a Reset()?)");
             if (isWrite)
-                m_buffers[resourceIndex].everWritten = true;
+                m_buffers[slot].everWritten = true;
         }
 
         // A Read() of a never-written transient is accepted here -- the
@@ -213,7 +277,7 @@ namespace Arcane
         // for this, it only records the access (this Access entry) and
         // leaves everWritten as-is (still false for that case). Task 4's
         // Compile() walks these and refuses, naming the resource.
-        m_accesses.push_back(Access{ nodeIndex, resourceIndex, isTexture, isWrite, usage });
+        m_accesses.push_back(Access{ nodeIndex, static_cast<std::uint32_t>(slot), isTexture, isWrite, usage });
     }
 
     RgTexture RenderGraphBuilder::CreateTexture(const char* name, const RgTextureDesc& desc)
