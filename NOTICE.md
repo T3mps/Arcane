@@ -8,6 +8,7 @@ file is authoritative. Summary:
 |---|---|---|
 | Astra (ECS) | `ThirdParty/Astra` | see `ThirdParty/Astra/LICENSE` |
 | Catch2 | `ThirdParty/Catch2` | Boost Software License 1.0 (`LICENSE.txt`) |
+| D3D12MemoryAllocator (D3D12MA) | `ThirdParty/D3D12MA` | MIT (`LICENSE`) |
 | DirectX-Headers | `ThirdParty/DirectX-Headers` | MIT (`LICENSE`) |
 | enkiTS | `ThirdParty/enkiTS` | zlib (`LICENSE`) |
 | FreeType | `ThirdParty/freetype` | FreeType License (`LICENSE`) |
@@ -26,6 +27,7 @@ file is authoritative. Summary:
 | spdlog | `ThirdParty/spdlog` | MIT (`LICENSE`) |
 | stb | `ThirdParty/stb` | MIT / Unlicense (`LICENSE`) |
 | Tracy | `ThirdParty/tracy` | BSD 3-Clause (`LICENSE`; bundled libbacktrace: BSD) |
+| VulkanMemoryAllocator (VMA) | `ThirdParty/VMA` | MIT (`LICENSE`) |
 | Vulkan-Headers | `ThirdParty/Vulkan-Headers` | Apache-2.0 / MIT (`LICENSE`) |
 | DXC (binaries) | `ThirdParty/tools/dxc` | LLVM / MIT / Microsoft (`LICENSE-*.txt`) |
 | ShaderMake (binary) | `ThirdParty/tools/ShaderMake` | see `LICENSE` |

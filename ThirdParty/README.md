@@ -20,6 +20,7 @@ Prebuilt **tool binaries** live under `tools/` (shader pipeline, used from M2 on
 |---|---|---|---|---|---|
 | **Astra** | v3.1.0 | MIT | Arcane | Archetype ECS, in-house (tests run in its own repo and gate vendor pulls) | (own repo) |
 | **Catch2** | v3 | Boost 1.0 | Server, Arcane | Unit test framework (reducer tests, integration tests) | https://github.com/catchorg/Catch2 |
+| **D3D12MemoryAllocator** | 1d86c11 | MIT | Arcane | D3D12 allocator (include-only from a consumer's POV -- the `.cpp` is pulled in via `#include` by NRI's own D3D12 backend TU, not compiled standalone; NRI v180 pin) | https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator |
 | **DirectX-Headers** | v1.619.1 | MIT | Arcane | D3D12 Agility headers (include-only, NVRHI dep) | https://github.com/microsoft/DirectX-Headers |
 | **enkiTS** | v1.11 | zlib | Arcane | Job system (Astra IWorkScheduler adapter host) | https://github.com/dougbinks/enkiTS |
 | **freetype** | VER-2-13-3 | FTL | Arcane | Font rasterizer | https://github.com/freetype/freetype |
@@ -43,6 +44,7 @@ Prebuilt **tool binaries** live under `tools/` (shader pipeline, used from M2 on
 | **tiny** | — | MIT | Client | tiny-ecs entity-component system (`thirdparty.tiny`) | https://github.com/bakpakin/tiny-ecs |
 | **tracy** | v0.13.1 | BSD 3-Clause | Arcane | Frame profiler client (TRACY_ENABLE in Debug/Release only) | https://github.com/wolfpld/tracy |
 | **Vulkan-Headers** | v1.4.353 | Apache-2.0/MIT | Arcane | Vulkan API headers (include-only, NVRHI dep) | https://github.com/KhronosGroup/Vulkan-Headers |
+| **VulkanMemoryAllocator** | 3aa9212 | MIT | Arcane | Vulkan allocator, header-only (`VMA_IMPLEMENTATION` is defined by NRI's own VK backend TU; NRI v180 pin) | https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator |
 | **Xoshiro** | — | MIT | Server | xoshiro256++ PRNG for deterministic gacha-pull event replay | https://github.com/Reputeless/Xoshiro-cpp |
 
 ## Adding a dep
