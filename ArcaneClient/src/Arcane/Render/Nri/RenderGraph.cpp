@@ -2,7 +2,127 @@
 
 #include <Arcane/Base/Assert.hpp>
 
+#include <string>
 #include <utility>
+
+namespace
+{
+    // =================================================================
+    // The usage -> (access, layout, stage) mapping table (Task 4).
+    //
+    // Every value below is an NRI v180 enumerator from
+    // ThirdParty/NRI/Include/NRIDescs.h; the bit numbers in the table are
+    // that header's own NriBit() indices, quoted so a reviewer can check
+    // each row against the enum definitions without leaving this file.
+    // The idiom (an nri::AccessLayoutStage triple per state, transitioned
+    // by mutating before/after) is Phase 1's -- see NriSmoke.cpp's three
+    // hand-written transitions, which this table exists to replace.
+    //
+    //  RgUsage        access (AccessBits)              layout (Layout)             stages (StageBits)
+    //  -------------  -------------------------------  --------------------------  ---------------------------------
+    //  ColorWrite     COLOR_ATTACHMENT  (bits 5|6:      COLOR_ATTACHMENT            COLOR_ATTACHMENT   (bit 9)
+    //                   _READ | _WRITE, the umbrella
+    //                   -- ROP blending reads as well
+    //                   as writes)
+    //  DepthWrite     DEPTH_STENCIL_ATTACHMENT          DEPTH_STENCIL_ATTACHMENT    DEPTH_STENCIL_ATTACHMENT (bit 8)
+    //                   (bits 7|8, same umbrella
+    //                   reasoning: depth test reads,
+    //                   depth write writes)
+    //  ShaderRead     SHADER_RESOURCE   (bit 15)        SHADER_RESOURCE             VERTEX|FRAGMENT|COMPUTE_SHADER
+    //                                                                                 (bits 1|7|11) -- see below
+    //  ShaderWriteCs  SHADER_RESOURCE_STORAGE (bit 16)  SHADER_RESOURCE_STORAGE     COMPUTE_SHADER     (bit 11)
+    //  CopySrc        COPY_SOURCE       (bit 18)        COPY_SOURCE                 COPY               (bit 20)
+    //  CopyDst        COPY_DESTINATION  (bit 19)        COPY_DESTINATION            COPY               (bit 20)
+    //  Present        NONE              (0)             PRESENT                     NONE               (0x7FFFFFFF)
+    //  ReadbackHost   COPY_DESTINATION  (bit 19)        COPY_DESTINATION            COPY               (bit 20)
+    //
+    // Notes a reviewer should check the table against:
+    //
+    // * NRIDescs.h annotates every AccessBits row with the StageBits it is
+    //   compatible with; each row above uses that compatible stage rather
+    //   than StageBits::ALL (which is 0, NRI's "lazy default"). NriSmoke.cpp
+    //   left stages at that lazy default because it hand-wrote three
+    //   barriers on one texture; a derivation engine can afford to be
+    //   precise, and precise stages are strictly tighter synchronisation.
+    //
+    // * Present is the one row NRI dictates outright: Layout::PRESENT's own
+    //   comment reads 'NONE (use "after.stages = StageBits::NONE")'. That is
+    //   also byte-for-byte what NriSmoke.cpp's third transition writes.
+    //
+    // * ShaderRead's stage set is deliberately NOT StageBits::ALL_SHADERS or
+    //   GRAPHICS_SHADERS. Those umbrellas pull in tessellation, task/mesh and
+    //   ray-tracing stages, which on Vulkan require device features this
+    //   engine does not enable -- naming an unsupported stage in a barrier is
+    //   a validation error, not a no-op. VERTEX|FRAGMENT|COMPUTE is exactly
+    //   the set Phase 2's 2D pipelines use (compare NriSmoke.cpp's
+    //   pipeline-layout shaderStages: VERTEX_SHADER | FRAGMENT_SHADER).
+    //   Widening it is a one-constant edit HERE when a later phase adds a
+    //   geometry/mesh/RT stage -- and it must be widened then, or a shader
+    //   read from that stage will race.
+    //
+    // * ReadbackHost derives the SAME state as CopyDst by design: the
+    //   difference between them is a PLACEMENT hint (a readback buffer lives
+    //   in host-readable memory) consumed by Task 5/6's allocator, not a
+    //   state difference. A CopyDst -> ReadbackHost edge therefore correctly
+    //   produces no barrier.
+    // =================================================================
+    constexpr nri::StageBits kShaderReadStages =
+        nri::StageBits::VERTEX_SHADER | nri::StageBits::FRAGMENT_SHADER | nri::StageBits::COMPUTE_SHADER;
+
+    // The state a resource is in before anything has touched it: a transient
+    // has undefined contents, and an imported buffer carries no declared
+    // entry state (ImportBuffer takes none). This is the brief's
+    // `before = {UNKNOWN, UNDEFINED}` -- there is no special case beyond it,
+    // first use is an ordinary barrier that happens to start here.
+    constexpr nri::AccessLayoutStage kUnknownState{
+        nri::AccessBits::NONE, nri::Layout::UNDEFINED, nri::StageBits::ALL };
+
+    nri::AccessLayoutStage StateFor(Arcane::RgUsage usage, bool isTexture) noexcept
+    {
+        nri::AccessLayoutStage state = kUnknownState;
+        switch (usage)
+        {
+        case Arcane::RgUsage::ColorWrite:
+            state = { nri::AccessBits::COLOR_ATTACHMENT, nri::Layout::COLOR_ATTACHMENT,
+                      nri::StageBits::COLOR_ATTACHMENT };
+            break;
+        case Arcane::RgUsage::DepthWrite:
+            state = { nri::AccessBits::DEPTH_STENCIL_ATTACHMENT, nri::Layout::DEPTH_STENCIL_ATTACHMENT,
+                      nri::StageBits::DEPTH_STENCIL_ATTACHMENT };
+            break;
+        case Arcane::RgUsage::ShaderRead:
+            state = { nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE, kShaderReadStages };
+            break;
+        case Arcane::RgUsage::ShaderWriteCs:
+            state = { nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::Layout::SHADER_RESOURCE_STORAGE,
+                      nri::StageBits::COMPUTE_SHADER };
+            break;
+        case Arcane::RgUsage::CopySrc:
+            state = { nri::AccessBits::COPY_SOURCE, nri::Layout::COPY_SOURCE, nri::StageBits::COPY };
+            break;
+        case Arcane::RgUsage::CopyDst:
+        case Arcane::RgUsage::ReadbackHost:   // same state by design -- see the table
+            state = { nri::AccessBits::COPY_DESTINATION, nri::Layout::COPY_DESTINATION, nri::StageBits::COPY };
+            break;
+        case Arcane::RgUsage::Present:
+            state = { nri::AccessBits::NONE, nri::Layout::PRESENT, nri::StageBits::NONE };
+            break;
+        }
+
+        // nri::BufferBarrierDesc's before/after are nri::AccessStage --
+        // access + stages, no layout at all. Forcing UNDEFINED keeps a field
+        // Task 6 will drop from ever reading as meaningful (RenderGraph.hpp,
+        // RgBarrier).
+        if (!isTexture)
+            state.layout = nri::Layout::UNDEFINED;
+        return state;
+    }
+
+    bool SameState(const nri::AccessLayoutStage& a, const nri::AccessLayoutStage& b) noexcept
+    {
+        return a.access == b.access && a.layout == b.layout && a.stages == b.stages;
+    }
+}
 
 namespace Arcane
 {
@@ -69,6 +189,360 @@ namespace Arcane
                    "RenderGraph::SetDepthAttachment: no node's Setup is currently running -- "
                    "call this only from within the Setup passed to AddNode()");
         m_nodes[m_currentNodeIndex].depthAttachment = attachment;
+    }
+
+    // ------------------------------------------------------------------
+    // Compile -- the whole barrier derivation. PURE: reads m_nodes/
+    // m_textures/m_buffers/m_accesses, writes nothing, calls no nri device
+    // entry point. See the header's Compile() comment for the refusal list
+    // and the INDEX SPACE note above RgBarrier for what the indices mean.
+    // ------------------------------------------------------------------
+    std::optional<RgCompiled> RenderGraph::Compile(std::string* outError) const
+    {
+        const auto fail = [outError](std::string message) -> std::optional<RgCompiled>
+        {
+            if (outError != nullptr)
+                *outError = std::move(message);
+            return std::nullopt;
+        };
+
+        // Every refusal message names its resource through this, so the
+        // caller reads a declaration-site name instead of a slot number.
+        const auto resourceName = [this](std::uint32_t slot, bool isTexture) -> const std::string&
+        {
+            return isTexture ? m_textures[slot].name : m_buffers[slot].name;
+        };
+
+        // Does node `nodeIndex` declare any access at all to this resource?
+        // Used only by the attachment check below -- an attachment with no
+        // declared access gets no derived transition, so binding it would
+        // bind whatever layout the resource was last left in.
+        const auto nodeAccessesResource = [this](std::size_t nodeIndex, std::uint32_t slot, bool isTexture)
+        {
+            for (const Access& access : m_accesses)
+            {
+                if (access.nodeIndex == nodeIndex && access.isTexture == isTexture && access.resourceIndex == slot)
+                    return true;
+            }
+            return false;
+        };
+
+        // --------------------------------------------------------------
+        // Pass 1: structural validation of the Raster nodes' attachments.
+        // This is where the attachment handles get decoded -- the setters
+        // (SetColorAttachments/SetDepthAttachment) deliberately store them
+        // unvalidated, so this is their one and only validation point, and
+        // it goes through DecodeAndValidateSlot() like every other handle
+        // consumer in the class.
+        // --------------------------------------------------------------
+        for (std::size_t nodeIndex = 0; nodeIndex < m_nodes.size(); ++nodeIndex)
+        {
+            const NodeDesc& node = m_nodes[nodeIndex];
+            if (node.kind != NodeKind::Raster)
+                continue;
+
+            if (!node.hasRequiredAttachments)
+            {
+                return fail("RenderGraph::Compile: Raster node '" + node.name + "' declares no colour or depth "
+                            "attachment -- call SetColorAttachments/SetDepthAttachment during its Setup");
+            }
+
+            const auto checkAttachment = [&](RgTexture attachment, const char* which) -> std::optional<std::string>
+            {
+                const std::size_t slot = DecodeAndValidateSlot(attachment.index, m_textures.size());
+                if (slot == kNoSlot)
+                {
+                    return "RenderGraph::Compile: Raster node '" + node.name + "' has a " + which
+                         + " attachment whose handle is invalid, stale, or out of range (held across a Reset()?)";
+                }
+                if (!nodeAccessesResource(nodeIndex, static_cast<std::uint32_t>(slot), /*isTexture=*/true))
+                {
+                    return "RenderGraph::Compile: Raster node '" + node.name + "' attaches texture '"
+                         + m_textures[slot].name + "' as a " + which + " attachment but declares no Read()/Write() "
+                           "for it -- without a declared access the graph derives no layout transition for it";
+                }
+                return std::nullopt;
+            };
+
+            for (const RgTexture& color : node.colorAttachments)
+            {
+                if (std::optional<std::string> problem = checkAttachment(color, "colour"))
+                    return fail(std::move(*problem));
+            }
+            // kInvalid is "no depth attachment", not a bad handle -- checked
+            // verbatim, exactly as DecodeAndValidateSlot does.
+            if (node.depthAttachment.index != kInvalid)
+            {
+                if (std::optional<std::string> problem = checkAttachment(node.depthAttachment, "depth"))
+                    return fail(std::move(*problem));
+            }
+        }
+
+        // --------------------------------------------------------------
+        // Pass 2: the first node that WRITES each resource. A Read() before
+        // that node reads undefined content (declaration order IS execution
+        // order in Phase 2). Node-granular deliberately: a node may read a
+        // transient it also writes itself -- both accesses resolve to the
+        // one state that node runs in -- regardless of the order the two
+        // were declared in. Imported resources arrive with a defined entry
+        // state, so they count as written before node 0.
+        // --------------------------------------------------------------
+        std::vector<std::uint32_t> textureFirstWrite(m_textures.size(), kRgNoNode);
+        std::vector<std::uint32_t> bufferFirstWrite(m_buffers.size(), kRgNoNode);
+        for (std::size_t i = 0; i < m_textures.size(); ++i)
+        {
+            if (m_textures[i].kind == ResourceKind::Imported)
+                textureFirstWrite[i] = 0;
+        }
+        for (std::size_t i = 0; i < m_buffers.size(); ++i)
+        {
+            if (m_buffers[i].kind == ResourceKind::Imported)
+                bufferFirstWrite[i] = 0;
+        }
+        for (const Access& access : m_accesses)
+        {
+            if (!access.isWrite)
+                continue;
+            const std::size_t count = access.isTexture ? m_textures.size() : m_buffers.size();
+            if (access.resourceIndex >= count)
+                continue;   // reported by the in-range guard in pass 3
+            std::uint32_t& first = access.isTexture ? textureFirstWrite[access.resourceIndex]
+                                                    : bufferFirstWrite[access.resourceIndex];
+            const std::uint32_t node = static_cast<std::uint32_t>(access.nodeIndex);
+            if (first == kRgNoNode || node < first)
+                first = node;
+        }
+
+        // --------------------------------------------------------------
+        // Pass 3: walk the nodes in declaration order, tracking each
+        // resource's current state and emitting one barrier per real state
+        // change. Imported textures seed from their declared entry state;
+        // everything else seeds from kUnknownState.
+        // --------------------------------------------------------------
+        std::vector<nri::AccessLayoutStage> textureState(m_textures.size(), kUnknownState);
+        std::vector<nri::AccessLayoutStage> bufferState(m_buffers.size(), kUnknownState);
+        for (std::size_t i = 0; i < m_textures.size(); ++i)
+        {
+            if (m_textures[i].kind == ResourceKind::Imported)
+                textureState[i] = m_textures[i].importEntry;
+        }
+        // Imported BUFFERS keep kUnknownState: ImportBuffer() takes no entry
+        // state, so the graph cannot assume one. A buffer barrier out of
+        // {NONE, ALL} is the conservative, always-correct start.
+
+        RgCompiled compiled;
+        compiled.nodes.resize(m_nodes.size());
+
+        // The resources this node has already transitioned, so a second
+        // access to the same resource within one node collapses (same state)
+        // or refuses (different state) rather than emitting a second entry
+        // into a batch that can only transition each resource once.
+        struct NodeTouch { std::uint32_t resourceIndex; bool isTexture; nri::AccessLayoutStage state; };
+        std::vector<NodeTouch> touched;
+
+        for (std::size_t nodeIndex = 0; nodeIndex < m_nodes.size(); ++nodeIndex)
+        {
+            RgCompiledNode& compiledNode = compiled.nodes[nodeIndex];
+            compiledNode.nodeIndex = static_cast<std::uint32_t>(nodeIndex);
+            touched.clear();
+
+            for (const Access& access : m_accesses)
+            {
+                if (access.nodeIndex != nodeIndex)
+                    continue;
+
+                const bool          isTexture = access.isTexture;
+                const std::uint32_t slot      = access.resourceIndex;
+                const std::size_t   count     = isTexture ? m_textures.size() : m_buffers.size();
+
+                // Only reachable in a build where RecordAccess()'s
+                // ARC_ASSERT is compiled out and a bad handle got recorded
+                // as kNoSlot -- refuse rather than subscript out of range.
+                if (slot >= count)
+                {
+                    return fail("RenderGraph::Compile: node '" + m_nodes[nodeIndex].name + "' declares an access to a "
+                                + std::string(isTexture ? "texture" : "buffer")
+                                + " whose handle was invalid, stale, or out of range at declaration time");
+                }
+
+                if (!access.isWrite)
+                {
+                    const std::uint32_t firstWrite = isTexture ? textureFirstWrite[slot] : bufferFirstWrite[slot];
+                    if (firstWrite == kRgNoNode || static_cast<std::uint32_t>(nodeIndex) < firstWrite)
+                    {
+                        return fail("RenderGraph::Compile: node '" + m_nodes[nodeIndex].name + "' reads "
+                                    + std::string(isTexture ? "texture" : "buffer") + " '" + resourceName(slot, isTexture)
+                                    + "' before any node writes it -- its contents are undefined");
+                    }
+                }
+
+                const nri::AccessLayoutStage want = StateFor(access.usage, isTexture);
+
+                bool alreadyTouched = false;
+                for (const NodeTouch& touch : touched)
+                {
+                    if (touch.resourceIndex != slot || touch.isTexture != isTexture)
+                        continue;
+                    if (!SameState(touch.state, want))
+                    {
+                        return fail("RenderGraph::Compile: node '" + m_nodes[nodeIndex].name
+                                    + "' declares two different states for " + std::string(isTexture ? "texture" : "buffer")
+                                    + " '" + resourceName(slot, isTexture)
+                                    + "' -- one node runs in exactly one state per resource, and the two usages "
+                                      "are a read/write hazard against each other");
+                    }
+                    alreadyTouched = true;
+                    break;
+                }
+                if (alreadyTouched)
+                    continue;
+
+                touched.push_back(NodeTouch{ slot, isTexture, want });
+
+                nri::AccessLayoutStage& current = isTexture ? textureState[slot] : bufferState[slot];
+                if (SameState(current, want))
+                    continue;   // consecutive same-state declarations produce NO barrier
+
+                compiledNode.preBarriers.push_back(RgBarrier{ slot, isTexture, current, want });
+                current = want;
+            }
+        }
+
+        // --------------------------------------------------------------
+        // Pass 4: exit barriers. Every imported TEXTURE's ImportTexture()
+        // call promised the caller an exit state; restore it if the graph
+        // left the texture somewhere else. An imported texture no node
+        // touched still gets one (entry -> exit) when the two differ -- the
+        // promise does not depend on the graph having used the resource.
+        // Imported BUFFERS have no declared exit state, and transients do
+        // not outlive the frame, so neither appears here.
+        // --------------------------------------------------------------
+        for (std::size_t i = 0; i < m_textures.size(); ++i)
+        {
+            if (m_textures[i].kind != ResourceKind::Imported)
+                continue;
+            const nri::AccessLayoutStage& exit = m_textures[i].importExit;
+            if (SameState(textureState[i], exit))
+                continue;
+            compiled.exitBarriers.push_back(
+                RgBarrier{ static_cast<std::uint32_t>(i), /*isTexture=*/true, textureState[i], exit });
+        }
+
+        // --------------------------------------------------------------
+        // Pass 5: transient enumeration + lifetimes. Textures in slot order
+        // first, then buffers -- the order RgCompiled::transients documents
+        // and everything index-parallel to it depends on.
+        // --------------------------------------------------------------
+        for (std::size_t i = 0; i < m_textures.size(); ++i)
+        {
+            if (m_textures[i].kind == ResourceKind::Transient)
+                compiled.transients.push_back(RgTransient{ static_cast<std::uint32_t>(i), /*isTexture=*/true });
+        }
+        for (std::size_t i = 0; i < m_buffers.size(); ++i)
+        {
+            if (m_buffers[i].kind == ResourceKind::Transient)
+                compiled.transients.push_back(RgTransient{ static_cast<std::uint32_t>(i), /*isTexture=*/false });
+        }
+
+        compiled.transientLifetimes.assign(compiled.transients.size(), RgCompiled::Lifetime{});
+        for (std::size_t t = 0; t < compiled.transients.size(); ++t)
+        {
+            const RgTransient& transient = compiled.transients[t];
+            RgCompiled::Lifetime& lifetime = compiled.transientLifetimes[t];
+            for (const Access& access : m_accesses)
+            {
+                if (access.isTexture != transient.isTexture || access.resourceIndex != transient.resourceIndex)
+                    continue;
+                const std::uint32_t node = static_cast<std::uint32_t>(access.nodeIndex);
+                if (lifetime.first == kRgNoNode || node < lifetime.first)
+                    lifetime.first = node;
+                if (lifetime.last == kRgNoNode || node > lifetime.last)
+                    lifetime.last = node;
+            }
+        }
+
+        // --------------------------------------------------------------
+        // Pass 6: pool-slot assignment. Greedy first fit over the
+        // transients in enumeration order: a transient joins the first pool
+        // slot whose desc matches EXACTLY and whose already-assigned
+        // lifetimes it does not overlap. Lifetimes are INCLUSIVE node-index
+        // spans, so two transients that are both live at the same node
+        // overlap and cannot share.
+        //
+        // Slot ids are one numbering across textures and buffers: a texture
+        // and a buffer never share an id, so Task 6 can key its pool on the
+        // slot id alone and read each slot's kind/desc off the transient
+        // that maps to it.
+        //
+        // Greedy in ENUMERATION order, not sorted by first use. Interval
+        // colouring is only provably minimal when intervals are visited in
+        // start order, so a graph that declares its transients out of
+        // first-use order can end up with more pool slots than strictly
+        // necessary. That is a packing inefficiency, never a correctness
+        // bug -- the overlap test below is against real lifetimes, so a
+        // shared slot is always safe. Sorting by lifetime.first (carrying a
+        // permutation so the index-parallel output stays in enumeration
+        // order) is the upgrade if a profile ever shows the transient pool
+        // is the thing costing memory.
+        // --------------------------------------------------------------
+        const auto descsMatch = [this](const RgTransient& a, const RgTransient& b)
+        {
+            if (a.isTexture != b.isTexture)
+                return false;
+            if (a.isTexture)
+            {
+                const RgTextureDesc& lhs = m_textures[a.resourceIndex].desc;
+                const RgTextureDesc& rhs = m_textures[b.resourceIndex].desc;
+                return lhs.format == rhs.format && lhs.width == rhs.width && lhs.height == rhs.height
+                    && lhs.depthStencil == rhs.depthStencil;
+            }
+            const BufferResource& lhs = m_buffers[a.resourceIndex];
+            const BufferResource& rhs = m_buffers[b.resourceIndex];
+            return lhs.size == rhs.size && lhs.usage == rhs.usage;
+        };
+
+        struct PoolSlot { std::size_t representative; std::vector<RgCompiled::Lifetime> occupied; };
+        std::vector<PoolSlot> pool;
+        compiled.transientPoolSlot.assign(compiled.transients.size(), kRgNoPoolSlot);
+
+        for (std::size_t t = 0; t < compiled.transients.size(); ++t)
+        {
+            const RgCompiled::Lifetime& lifetime = compiled.transientLifetimes[t];
+            if (lifetime.first == kRgNoNode)
+                continue;   // no node touches it -- nothing to realize, no slot
+
+            bool assigned = false;
+            for (std::size_t p = 0; p < pool.size() && !assigned; ++p)
+            {
+                if (!descsMatch(compiled.transients[pool[p].representative], compiled.transients[t]))
+                    continue;
+
+                bool overlaps = false;
+                for (const RgCompiled::Lifetime& occupied : pool[p].occupied)
+                {
+                    if (lifetime.first <= occupied.last && occupied.first <= lifetime.last)
+                    {
+                        overlaps = true;
+                        break;
+                    }
+                }
+                if (overlaps)
+                    continue;
+
+                pool[p].occupied.push_back(lifetime);
+                compiled.transientPoolSlot[t] = static_cast<std::uint32_t>(p);
+                assigned = true;
+            }
+
+            if (!assigned)
+            {
+                compiled.transientPoolSlot[t] = static_cast<std::uint32_t>(pool.size());
+                pool.push_back(PoolSlot{ t, { lifetime } });
+            }
+        }
+        compiled.poolSlotCount = static_cast<std::uint32_t>(pool.size());
+
+        return compiled;
     }
 
     void RenderGraph::Reset()

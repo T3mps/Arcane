@@ -8,14 +8,17 @@
 // aliasing yet -- see the plan's Deadlock chassis criteria).
 //
 // Scope (plan: docs/plans/2026-08-13-nri-phase2-framegraph-2d-cutover.md,
-// Task 3): declaration ONLY -- handles, resource descs, node declaration,
-// the builder. No nri device calls in this TU beyond desc/enum types
-// (nri::Format, nri::AccessLayoutStage, nri::BufferUsageBits are pure data,
-// never dereferenced as devices/queues/etc. here). Compile() (barrier
-// derivation, transient lifetimes) is Task 4; Execute() (the executor that
-// records real commands) is Task 6 -- RenderGraphNodeContext::Resolve/
-// ColorView are declared below for their std::function signature but
-// defined in Task 6's TU, not this one.
+// Tasks 3+4): declaration AND compile -- handles, resource descs, node
+// declaration, the builder (Task 3); derived barriers, transient lifetimes
+// and transient pool-slot assignment (Task 4). No nri device calls in this
+// TU beyond desc/enum types (nri::Format, nri::AccessLayoutStage,
+// nri::AccessBits, nri::Layout, nri::StageBits, nri::BufferUsageBits are
+// pure data, never dereferenced as devices/queues/etc. here). Compile() is
+// PURE -- it derives everything from the declarations and nothing else, so
+// Task 6's executor can consume its RgCompiled verbatim. Execute() (the
+// executor that records real commands) is Task 6 --
+// RenderGraphNodeContext::Resolve/ColorView are declared below for their
+// std::function signature but defined in Task 6's TU, not this one.
 //
 // Execution order = declaration order. Phase 2 does not reorder, cull, or
 // parallelize nodes: AddNode() appends to a flat vector and Task 6's
@@ -36,6 +39,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -152,6 +156,111 @@ namespace Arcane
         NriPipelineCache& pipelines;  // Task 7
     };
 
+    // =====================================================================
+    // Compile output (Task 4). Pure data: RenderGraph::Compile() derives all
+    // of it from the declarations alone -- no nri device calls, no GPU
+    // allocation, no mutation of the graph -- and Task 6's executor replays
+    // it verbatim.
+    //
+    // INDEX SPACE -- READ THIS BEFORE SUBSCRIPTING ANYTHING IN HERE. Two
+    // different index spaces live in this block and they are NOT the same:
+    //
+    //   * `resourceIndex` (RgBarrier::resourceIndex, RgTransient::
+    //     resourceIndex) is a RESOURCE SLOT -- see below.
+    //   * RgCompiled::transientLifetimes and ::transientPoolSlot are indexed
+    //     by TRANSIENT INDEX, i.e. a position in RgCompiled::transients --
+    //     NOT by a resource slot. Go slot-ward via
+    //     transients[i].resourceIndex; there is no reverse mapping and
+    //     subscripting the lifetime/pool vectors with a resource slot is
+    //     silently wrong whenever the graph holds an imported resource.
+    //
+    // Every `resourceIndex` is a DECODED, plain 0-based SLOT into the
+    // graph's texture vector or its buffer vector, selected by the
+    // neighbouring `isTexture` flag. It is NOT an RgTexture/RgBuffer
+    // `.index` value:
+    // those pack a generation into their top 8 bits (see the RgTexture/
+    // RgBuffer comment above) and are never valid subscripts. Compile()
+    // decodes every handle it consumes -- the accesses recorded by
+    // RecordAccess(), AND NodeDesc::colorAttachments/depthAttachment, which
+    // the SetColorAttachments/SetDepthAttachment setters deliberately store
+    // unvalidated -- through RenderGraph::DecodeAndValidateSlot(), the one
+    // handle seam, and stores only decoded slots in here. So: index
+    // RgCompiled with these values directly; never re-decode them, and
+    // never feed an RgTexture/RgBuffer handle to one of these vectors.
+    // =====================================================================
+
+    // One derived state transition, emitted for exactly one resource.
+    //
+    // For TEXTURES `before`/`after` are complete nri::AccessLayoutStage
+    // triples and all three fields matter. For BUFFERS the `layout` field of
+    // both is ALWAYS nri::Layout::UNDEFINED and carries no meaning:
+    // nri::BufferBarrierDesc has no layout member (its before/after are
+    // nri::AccessStage, access+stages only), so Task 6 drops it when it
+    // translates. Sharing one struct across both kinds is the frozen
+    // contract's shape; forcing UNDEFINED on the buffer side keeps a
+    // meaningless field from ever reading as meaningful.
+    struct RgBarrier
+    {
+        std::uint32_t          resourceIndex = 0;   // DECODED slot -- see INDEX SPACE above
+        bool                   isTexture = true;
+        nri::AccessLayoutStage before{};
+        nri::AccessLayoutStage after{};
+    };
+
+    struct RgCompiledNode
+    {
+        std::uint32_t          nodeIndex = 0;
+        std::vector<RgBarrier> preBarriers;   // batched: ONE nri CmdBarrier group per node
+    };
+
+    // One transient resource, in the order Compile() enumerates them: every
+    // transient TEXTURE in slot order first, then every transient BUFFER in
+    // slot order. RgCompiled::transientLifetimes and ::transientPoolSlot are
+    // index-parallel to RgCompiled::transients -- this struct is what makes
+    // "index-parallel to transients" a defined, self-describing statement
+    // instead of an ordering Task 6 would have to re-derive (and could
+    // re-derive differently).
+    struct RgTransient
+    {
+        std::uint32_t resourceIndex = 0;   // DECODED slot -- see INDEX SPACE above
+        bool          isTexture = true;
+    };
+
+    // A transient no node ever reads or writes has no lifetime and gets no
+    // pool slot: its Lifetime is {kRgNoNode, kRgNoNode} and its
+    // transientPoolSlot entry is kRgNoPoolSlot. Task 6 must not realize it
+    // (there is no pool slot to realize it into).
+    inline constexpr std::uint32_t kRgNoNode     = 0xFFFFFFFFu;
+    inline constexpr std::uint32_t kRgNoPoolSlot = 0xFFFFFFFFu;
+
+    struct RgCompiled
+    {
+        // One entry per declared node, in declaration order:
+        // nodes.size() == RenderGraph::NodeCount() and nodes[i].nodeIndex == i
+        // ALWAYS -- a node with nothing to transition carries an EMPTY
+        // preBarriers rather than being omitted, so Task 6's executor can
+        // walk this vector as its node list and never has to cross-reference
+        // it against the graph's own node vector.
+        std::vector<RgCompiledNode> nodes;
+
+        // Transitions that run after the LAST node, restoring every imported
+        // TEXTURE to the exit state its ImportTexture() call promised (e.g.
+        // nri::Layout::PRESENT for a swapchain backbuffer). Imported BUFFERS
+        // never appear here: ImportBuffer() takes no entry/exit state, so the
+        // graph has nothing to restore them to.
+        std::vector<RgBarrier> exitBarriers;
+
+        // Inclusive node-index range [first, last] over which a transient is
+        // live -- first/last are the lowest/highest node index that reads or
+        // writes it.
+        struct Lifetime { std::uint32_t first = kRgNoNode, last = kRgNoNode; };
+
+        std::vector<RgTransient>   transients;
+        std::vector<Lifetime>      transientLifetimes;   // index-parallel to transients
+        std::vector<std::uint32_t> transientPoolSlot;    // index-parallel to transients
+        std::uint32_t              poolSlotCount = 0;    // distinct pool slots Task 6 must realize
+    };
+
     class ARCANE_API RenderGraph
     {
     public:
@@ -187,10 +296,48 @@ namespace Arcane
         void SetColorAttachments(std::span<const RgTexture> attachments);
         void SetDepthAttachment(RgTexture attachment);
 
-        // Compile()/Execute() land in Tasks 4/6. Reset() clears every
-        // declared node and resource -- this graph is ready to declare the
-        // next frame's build -- and bumps Generation() (see the RgTexture/
-        // RgBuffer comment above for what that buys a stale handle).
+        // Derives, from the declarations above and NOTHING else, everything
+        // Task 6's executor needs: the batched per-node barriers, the
+        // imported-texture exit barriers, transient lifetimes, and the
+        // transient pool-slot assignment. PURE -- no nri device calls, no
+        // GPU allocation, no mutation of this graph; compiling the same
+        // declarations twice yields the same result. See the INDEX SPACE
+        // comment above RgBarrier for how to read the indices it produces.
+        //
+        // Returns std::nullopt -- and, when `outError` is non-null, fills it
+        // with a message that NAMES the offending node and/or resource --
+        // when the declarations cannot yield a correct barrier chain:
+        //   1. a Raster node that declared no color or depth attachment
+        //      (NodeHasRequiredAttachments() false: recorded non-fatally at
+        //      declaration, refused HERE -- this is the "later" of Task 3's
+        //      assert-later model);
+        //   2. an attachment handle that fails to decode (invalid, stale
+        //      across a Reset(), or out of range) -- the setters store
+        //      attachment handles unvalidated, so Compile is their only
+        //      validation point;
+        //   3. a Raster node attachment the node never declared a Read()/
+        //      Write() for -- without a declared access the graph derives no
+        //      transition, and the attachment would be bound in whatever
+        //      layout it happened to be left in;
+        //   4. a Read() of a TRANSIENT at a node earlier than the first node
+        //      that Write()s it (which subsumes "never written at all") --
+        //      its contents are undefined. Node-granular: a node may read a
+        //      transient it also writes itself, regardless of the order the
+        //      two accesses were declared in, because one node resolves to
+        //      exactly one state;
+        //   5. a single node declaring two DIFFERENT states for the same
+        //      resource (e.g. ShaderRead and ShaderWriteCs) -- the node's
+        //      one batched pre-barrier group cannot transition a resource
+        //      twice, and the two usages are a genuine read/write hazard;
+        //   6. an access whose recorded slot is out of range -- only
+        //      reachable in a build where the ARC_ASSERT in RecordAccess()
+        //      is compiled out (see that function).
+        [[nodiscard]] std::optional<RgCompiled> Compile(std::string* outError = nullptr) const;
+
+        // Execute() lands in Task 6. Reset() clears every declared node and
+        // resource -- this graph is ready to declare the next frame's build
+        // -- and bumps Generation() (see the RgTexture/RgBuffer comment
+        // above for what that buys a stale handle).
         void Reset();
 
         // -------------------------------------------------------------
