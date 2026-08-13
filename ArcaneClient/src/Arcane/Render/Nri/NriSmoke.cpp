@@ -845,8 +845,19 @@ float4 ps_main(VsOut input) : SV_Target
             // host's own --screenshot uses (RuntimeApp::MainLoop), and the same
             // "this stalls the device" caveat -- which costs nothing on a
             // frame the process is about to exit after.
+            //
+            // Gated on !sessionFailed too: readbackRecorded is set at RECORD
+            // time (above, right after CmdReadbackTextureToBuffer), before
+            // EndCommandBuffer/QueueSubmit run. If either of those then
+            // fails, the loop breaks with sessionFailed set, but the copy
+            // command that was recorded never actually executed on the GPU
+            // -- res.readback holds whatever was already in that host-
+            // readback allocation, not this frame's pixels. Skipping the
+            // whole tail avoids mapping and writing that garbage; the exit
+            // code is unaffected either way (the sessionFailed check right
+            // below this block takes precedence over screenshotOk).
             // -------------------------------------------------------------
-            if (wantScreenshot)
+            if (wantScreenshot && !sessionFailed)
             {
                 if (!readbackRecorded)
                 {

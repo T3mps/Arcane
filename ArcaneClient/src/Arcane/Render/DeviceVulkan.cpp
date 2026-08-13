@@ -42,6 +42,12 @@ namespace Arcane
         // minorVersion the NRI wrapper is handed must never drift apart
         // (NRI capability contract item 5 -- NRI reads that field verbatim in
         // wrapper mode and never re-queries the device).
+        // TRIPWIRE: if this ever bumps to 1.4 (or beyond), fold an actual
+        // vkEnumerateInstanceVersion query into the apiMinorVersion min()
+        // below per §6.8 -- today's min(physical minor, kApiMinorVersion)
+        // stands in for min(instance minor, physical minor) only because the
+        // hard-fail guard right below that min() pins physicalApiMinor to
+        // always be >= kApiMinorVersion for a 1.3 request.
         constexpr uint32_t kApiVersion      = VK_API_VERSION_1_3;
         constexpr uint32_t kApiMinorVersion = VK_API_VERSION_MINOR(kApiVersion);
 

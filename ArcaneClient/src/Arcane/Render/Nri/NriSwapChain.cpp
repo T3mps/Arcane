@@ -272,7 +272,26 @@ namespace Arcane
         // ResizeSwapChain() (Source/Resize.cpp), which leaves m_FrameFence
         // untouched across the rebuild.
         ReleaseSwapChainObjects();
-        CreateSwapChainObjects();
+        if (!CreateSwapChainObjects())
+        {
+            // Return to the same safe "no swapchain" state a failed Create()
+            // leaves it in, rather than a half-built one: CreateSwapChainObjects
+            // can fail AFTER a successful CreateSwapChain (a per-image
+            // CreateFence failing partway through its loop, above), which
+            // would otherwise leave m_swapChain non-null with some
+            // m_textures[i] fences still null -- and AcquireNextTexture()
+            // dereferences the recycled slot's acquire fence unconditionally.
+            // ReleaseSwapChainObjects() is safe to call again here: it tears
+            // down whatever WAS partially built (null fences are skipped,
+            // see above) and clears m_swapChain, so AcquireNextTexture()'s
+            // `if (!m_swapChain || m_textures.empty())` guard skips frames
+            // instead of crashing. The pacing fence and frame counter are
+            // untouched by either call.
+            ARC_ERROR("[nri] NriSwapChain::Resize: CreateSwapChainObjects failed at {}x{} "
+                      "(backend={}); swapchain left null, frames will be skipped until "
+                      "the next successful Resize()", m_width, m_height, ToString(m_device->Backend()));
+            ReleaseSwapChainObjects();
+        }
     }
 
     // -----------------------------------------------------------------

@@ -59,8 +59,18 @@ namespace Arcane
         // its declared queueNum to equal the queueCount we created (1).
         int graphicsQueueFamily = -1;
 
-        // Contract item 5 / §6 concern 8: min(instance minor, physical minor)
-        // of the API version the device was ACTUALLY created with. NRI reads
+        // Contract item 5 / §6 concern 8: the API minor version the device
+        // was ACTUALLY created with. What DeviceVulkan.cpp's Init() actually
+        // computes is min(physical minor, REQUESTED minor / kApiMinorVersion)
+        // -- not min(instance minor, physical minor) as §6.8 phrases it,
+        // because the instance version is never separately queried anywhere
+        // in this file. The two are equivalent TODAY only because the
+        // hard-fail guard immediately above that min() in Init() already
+        // requires physicalApiMinor >= kApiMinorVersion, so the min() always
+        // resolves to kApiMinorVersion (currently 1.3) -- the same answer
+        // §6.8 wants, since requesting 1.3 at vkCreateInstance implies the
+        // instance supports >= 1.3 too. See DeviceVulkan.cpp's kApiVersion
+        // comment for the tripwire if that request ever changes. NRI reads
         // `minorVersion` verbatim in wrapper mode and never re-queries it, so
         // this may never be replaced by a constant.
         std::uint32_t apiMinorVersion = 0;

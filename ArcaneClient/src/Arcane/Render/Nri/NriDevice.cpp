@@ -225,10 +225,12 @@ namespace Arcane
         // §1.1 / item 5: the ACTUAL created API minor -- never a constant.
         // NRI reads it verbatim (it drives promoted-feature chaining, the
         // copyCommands2/extendedDynamicState verdicts, and VMA's
-        // vulkanApiVersion) and never re-queries it on the wrapper path. The
-        // recorded value is min(instance minor, physical minor), which is what
-        // §6 concern 8 says the correct answer is where the two differ -- NRI
-        // uses this one scalar for both and validates nothing.
+        // vulkanApiVersion) and never re-queries it on the wrapper path.
+        // `creation.apiMinorVersion` is min(physical minor, REQUESTED minor)
+        // (DeviceVulkan.cpp's Init()), not min(instance minor, physical
+        // minor) as §6 concern 8 phrases it -- see VulkanDeviceCreation::
+        // apiMinorVersion's comment in DeviceCreationVulkan.hpp for why the
+        // two agree today and the tripwire for when they might stop.
         desc.minorVersion = (uint8_t)creation.apiMinorVersion;
 
         // Not a field: `disableVKRayTracing` exists on nri::DeviceCreationDesc
