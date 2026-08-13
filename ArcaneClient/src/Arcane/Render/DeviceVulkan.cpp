@@ -75,7 +75,18 @@ namespace Arcane
         // ride F-5c's availability sweep rather than the hard-required list
         // above -- by the same rule stated there, a driver that lacks
         // maintenance6 must not fail device creation over a quality nicety.
-        const char* kOptionalDeviceExtensions[] = {
+        //
+        // Named indices, not bare subscripts: the maintenance pair also needs
+        // its FEATURE struct chained at creation (see item 3's second half in
+        // Init), and that code has to name the one it means.
+        enum OptionalDeviceExtension
+        {
+            kOptMaintenance5,
+            kOptMaintenance6,
+            kOptMemoryBudget,   // pure list check -- no feature struct exists
+            kOptionalDeviceExtensionCount
+        };
+        const char* kOptionalDeviceExtensions[kOptionalDeviceExtensionCount] = {
             VK_KHR_MAINTENANCE_5_EXTENSION_NAME,
             VK_KHR_MAINTENANCE_6_EXTENSION_NAME,
             VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
@@ -782,7 +793,7 @@ namespace Arcane
             // Contract items 2 + 3 ride the SAME enumeration -- one pass, and
             // the diagnostics branches below are untouched.
             bool havePushDescriptor = false;
-            bool haveOptional[std::size(kOptionalDeviceExtensions)] = {};
+            bool haveOptional[kOptionalDeviceExtensionCount] = {};
             bool deviceExtensionsEnumerated = true;
             try
             {
@@ -805,7 +816,7 @@ namespace Arcane
                         havePushDescriptor = true;
                     // NRI capability contract item 3: quality extensions, taken
                     // only where advertised (see kOptionalDeviceExtensions).
-                    for (size_t i = 0; i < std::size(kOptionalDeviceExtensions); ++i)
+                    for (int i = 0; i < kOptionalDeviceExtensionCount; ++i)
                     {
                         if (name == kOptionalDeviceExtensions[i])
                             haveOptional[i] = true;
@@ -839,7 +850,11 @@ namespace Arcane
 
             // NRI capability contract item 3: absence is a documented slower
             // path inside NRI, never a failure -- so append, don't require.
-            for (size_t i = 0; i < std::size(kOptionalDeviceExtensions); ++i)
+            // haveOptional[] stays the single predicate: what lands in
+            // deviceExtensions here is exactly what gets its feature struct
+            // chained below, so the list can never claim a capability the
+            // device was not actually created with.
+            for (int i = 0; i < kOptionalDeviceExtensionCount; ++i)
             {
                 if (haveOptional[i])
                     deviceExtensions.push_back(kOptionalDeviceExtensions[i]);
@@ -931,7 +946,42 @@ namespace Arcane
             enabledFeatures2.setPNext(&vulkan11Features);
             vulkan11Features.setPNext(&vulkan12Features);
             vulkan12Features.setPNext(&vulkan13Features);
-            vulkan13Features.setPNext(nullptr);  // tail; the fault struct lands here
+            vulkan13Features.setPNext(nullptr);
+
+            // The chain grows past vulkan13Features below (item 3's feature
+            // structs, then the device-fault struct), so the tail is tracked
+            // rather than assumed -- appending to a stale tail would silently
+            // drop everything already attached there.
+            void** chainTail = &vulkan13Features.pNext;
+            const auto chainAppend = [&chainTail](auto& feature) {
+                feature.pNext = nullptr;
+                *chainTail = &feature;
+                chainTail = &feature.pNext;
+            };
+
+            // NRI capability contract item 3, second half. At VK 1.3 the
+            // maintenance5/6 FEATURE bits live in their own KHR structs, which
+            // none of the promoted-to-core structs above carries -- so taking
+            // the extension in the sweep without chaining these would create a
+            // device with the extension enabled and its feature VK_FALSE. That
+            // is precisely the meta-rule's failure mode, and NRI walks straight
+            // into it: it gates feature-struct chaining on OUR extension-name
+            // list (SharedVK.h:28-31) but sets m_IsSupported.maintenance5/6
+            // from PHYSICAL support (DeviceVK.hpp:657-658, :673-674), then
+            // calls vkCmdBindIndexBuffer2 / vkCmdBindDescriptorSets2 /
+            // vkCmdPushConstants2 (CommandBufferVK.hpp:872-876, :928, :966) and
+            // sets VMA's KHR_MAINTENANCE5 bit (DeviceVK.hpp:225) -- all of
+            // which need the feature enabled at creation. Chained BEFORE the
+            // query so they are filled and passed back verbatim, exactly as
+            // item 4 does for the core structs. (VK_EXT_memory_budget needs
+            // nothing here: it has no feature struct at all.)
+            vk::PhysicalDeviceMaintenance5FeaturesKHR maintenance5Features;
+            vk::PhysicalDeviceMaintenance6FeaturesKHR maintenance6Features;
+            if (haveOptional[kOptMaintenance5])
+                chainAppend(maintenance5Features);
+            if (haveOptional[kOptMaintenance6])
+                chainAppend(maintenance6Features);
+
             m_physicalDevice.getFeatures2(&enabledFeatures2);
 
             // NRI capability contract item 14's rule applied to item 4's hard
@@ -965,22 +1015,24 @@ namespace Arcane
             // F-5c step 4: VK_EXT/KHR_device_fault requires its feature to be
             // enabled at device creation, so the matching struct is appended
             // to the TAIL of the existing chain (deviceInfo -> features2 ->
-            // vulkan11 -> vulkan12 -> vulkan13 -> fault; contract item 4 keeps
-            // it exactly there, and it is queried as a leaf above so it never
-            // rides the enable-what-is-supported chain). The two structs are
-            // distinct types, not aliases -- chain the one whose spelling was
-            // enabled above.
+            // vulkan11 -> vulkan12 -> vulkan13 -> [maintenance5] ->
+            // [maintenance6] -> fault; contract item 4 keeps it at the tail,
+            // and it is queried as a leaf above so it never rides the
+            // enable-what-is-supported chain -- which is why it appends AFTER
+            // the query rather than before it like the maintenance structs).
+            // The two structs are distinct types, not aliases -- chain the one
+            // whose spelling was enabled above.
             // deviceFaultVendorBinary is opt-in on top and is what makes the
             // opaque vendor blob retrievable; take it only where advertised.
             if (deviceFaultSpelling == VulkanCrashDesc::DeviceFault::Ext)
             {
                 faultFeaturesExt.deviceFault = VK_TRUE;
-                vulkan13Features.setPNext(&faultFeaturesExt);
+                chainAppend(faultFeaturesExt);
             }
             else if (deviceFaultSpelling == VulkanCrashDesc::DeviceFault::Khr)
             {
                 faultFeaturesKhr.deviceFault = VK_TRUE;
-                vulkan13Features.setPNext(&faultFeaturesKhr);
+                chainAppend(faultFeaturesKhr);
             }
 
             // pEnabledFeatures stays null (Vulkan-Hpp's default): the core-1.0
