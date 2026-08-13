@@ -670,4 +670,47 @@ namespace Arcane
         }
         return true;
     }
+
+    bool LoadPngRgba(const std::filesystem::path& path,
+                     std::uint32_t& width, std::uint32_t& height,
+                     std::vector<unsigned char>& rgba)
+    {
+        width = height = 0;
+        rgba.clear();
+        int w = 0, h = 0, comp = 0;
+        unsigned char* data = stbi_load(path.string().c_str(), &w, &h, &comp, 4);
+        if (!data || w <= 0 || h <= 0)
+        {
+            if (data) stbi_image_free(data);
+            ARC_WARN("LoadPngRgba: failed to load {}", path.string());
+            return false;
+        }
+        width  = static_cast<std::uint32_t>(w);
+        height = static_cast<std::uint32_t>(h);
+        rgba.assign(data, data + (static_cast<std::size_t>(w) * h * 4));
+        stbi_image_free(data);
+        return true;
+    }
+
+    bool WritePngRgba(const std::filesystem::path& path,
+                      std::uint32_t width, std::uint32_t height,
+                      const unsigned char* rgba)
+    {
+        if (!rgba || width == 0 || height == 0)
+        {
+            ARC_WARN("WritePngRgba: nothing to write for {}", path.string());
+            return false;
+        }
+        std::error_code ec;
+        if (const auto parent = path.parent_path(); !parent.empty())
+            std::filesystem::create_directories(parent, ec);   // best-effort
+        if (!stbi_write_png(path.string().c_str(),
+                            static_cast<int>(width), static_cast<int>(height), 4,
+                            rgba, static_cast<int>(width) * 4))
+        {
+            ARC_WARN("WritePngRgba: write failed: {}", path.string());
+            return false;
+        }
+        return true;
+    }
 }

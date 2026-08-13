@@ -476,3 +476,43 @@ TEST_CASE("assets: RepackStagingToRgba passes RGBA rows through, still forcing o
     CHECK(out[0] == 10);  CHECK(out[1] == 20); CHECK(out[2] == 30); CHECK(out[3] == 255);
     CHECK(out[4] == 40);  CHECK(out[5] == 50); CHECK(out[6] == 60); CHECK(out[7] == 255);
 }
+
+TEST_CASE("assets: png rgba round-trip preserves every byte", "[assets][golden]")
+{
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "arcane_png_roundtrip";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path file = dir / "roundtrip.png";
+
+    // 3x2 with distinct channel values incl. alpha (alpha must survive).
+    const std::uint32_t w = 3, h = 2;
+    std::vector<unsigned char> src(w * h * 4);
+    for (std::size_t i = 0; i < src.size(); ++i)
+        src[i] = static_cast<unsigned char>((i * 37) & 0xFF);
+
+    REQUIRE(Arcane::WritePngRgba(file, w, h, src.data()));
+
+    std::uint32_t rw = 0, rh = 0;
+    std::vector<unsigned char> back;
+    REQUIRE(Arcane::LoadPngRgba(file, rw, rh, back));
+    CHECK(rw == w);
+    CHECK(rh == h);
+    CHECK(back == src);
+
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("assets: png load of a missing or corrupt file fails without throwing", "[assets][golden]")
+{
+    std::uint32_t w = 0, h = 0;
+    std::vector<unsigned char> px;
+    CHECK_FALSE(Arcane::LoadPngRgba("this-file-does-not-exist-arcane.png", w, h, px));
+
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "arcane_png_corrupt";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path junk = dir / "junk.png";
+    { std::ofstream f(junk, std::ios::binary); f << "not a png at all"; }
+    CHECK_FALSE(Arcane::LoadPngRgba(junk, w, h, px));
+    std::filesystem::remove_all(dir);
+}
