@@ -732,18 +732,60 @@ namespace Arcane
                 ARC_WARN("sync validation requested but {} is not loaded; "
                          "continuing without it", kValidationLayer);
             }
-            else if (!instanceExtensionAvailable(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME))
-            {
-                ARC_WARN("sync validation requested but instance extension '{}' is "
-                         "unavailable; continuing without it",
-                         VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
-            }
             else
             {
-                instanceExtensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
-                syncFeatures.setEnabledValidationFeatureCount(1)
-                            .setPEnabledValidationFeatures(syncFeatureList);
-                syncValidation = true;
+                // ENUMERATE WITH THE LAYER NAME. VK_EXT_validation_features is
+                // provided by VK_LAYER_KHRONOS_validation, an EXPLICIT layer --
+                // no ICD implements it. Per the Vulkan spec,
+                // vkEnumerateInstanceExtensionProperties(pLayerName = NULL) --
+                // which is what the `instanceExtensionAvailable` helper above
+                // wraps -- returns ONLY extensions provided by the Vulkan
+                // implementation and by IMPLICIT layers. Asking it about this
+                // extension therefore answers "unavailable" on every stock SDK
+                // machine, silently dropping sync validation while the smoke
+                // still exits clean and proves nothing. DO NOT re-route this
+                // check through `instanceExtensionAvailable`.
+                //
+                // Requesting a layer-provided extension in the SAME
+                // vkCreateInstance call that enables the layer is legal
+                // precisely because `layers` is non-empty on this branch.
+                bool featuresExtAvailable = false;
+                try
+                {
+                    const std::string layerName(kValidationLayer);
+                    for (const auto& ext : vk::enumerateInstanceExtensionProperties(layerName))
+                    {
+                        if (std::string_view(ext.extensionName) == VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME)
+                        {
+                            featuresExtAvailable = true;
+                            break;
+                        }
+                    }
+                }
+                catch (const vk::SystemError& e)
+                {
+                    // Catch-and-degrade, matching the layer enumeration above.
+                    // This call sits OUTSIDE the vk::createInstance try below,
+                    // whose catch returns false -- letting a throw reach that
+                    // one would fail device creation over a diagnostic, which
+                    // is exactly what this block must never do.
+                    ARC_WARN("vk::enumerateInstanceExtensionProperties('{}') threw: {}; "
+                             "continuing without sync validation", kValidationLayer, e.what());
+                }
+
+                if (!featuresExtAvailable)
+                {
+                    ARC_WARN("sync validation requested but layer '{}' does not provide '{}'; "
+                             "continuing without it", kValidationLayer,
+                             VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+                }
+                else
+                {
+                    instanceExtensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+                    syncFeatures.setEnabledValidationFeatureCount(1)
+                                .setPEnabledValidationFeatures(syncFeatureList);
+                    syncValidation = true;
+                }
             }
         }
 

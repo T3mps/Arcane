@@ -101,5 +101,15 @@ TEST_CASE("host config: --nri-smoke round-trips and defaults off", "[host][nri]"
     const auto def = Run({});
     REQUIRE(def.config.has_value());
     CHECK_FALSE(def.config->nriSmoke);
+    // The golden harness lives in RuntimeApp::MainLoop, which --nri-smoke never
+    // reaches -- so the combination is refused at parse time rather than
+    // silently capturing/comparing nothing and exiting 0.
+    const auto golden = Run({"--nri-smoke", "--golden-capture", "goldens/out", "--frames", "60"});
+    REQUIRE_FALSE(golden.config.has_value());
+    CHECK(golden.exitCode == 2);
+    // ...but --screenshot IS the smoke's own capture path, so it must survive.
+    const auto shot = Run({"--nri-smoke", "--frames", "60", "--screenshot", "a.png"});
+    REQUIRE(shot.config.has_value());
+    CHECK(shot.config->screenshotPath == "a.png");
 }
 #endif

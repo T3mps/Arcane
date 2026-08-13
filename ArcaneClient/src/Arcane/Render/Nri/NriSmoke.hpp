@@ -53,10 +53,13 @@ namespace Arcane
         //
         // Exit codes (documented because a scripted desk run reads them):
         //   0 -- ran to completion with RenderErrorCount unchanged
-        //   1 -- setup failed (window/device/wrap/swapchain/shader/pipeline)
+        //   1 -- the run FAILED: setup (window/device/wrap/swapchain/shader/
+        //        pipeline), or an error inside the frame loop that stopped it.
+        //        Closing the window is NOT a failure -- that is a legitimate
+        //        way to end an interactive (--frames 0) run.
         //   2 -- ran, but RenderErrorCount GREW: a validation error fired
         //   3 -- --screenshot was requested and the readback or write failed
-        // Precedence 1 > 2 > 3: a setup failure says WHERE the run died, which
+        // Precedence 1 > 2 > 3: a run failure says WHERE the run died, which
         // outranks the errors it produced on the way out, and a validation
         // error explains a bad capture rather than the reverse.
         //

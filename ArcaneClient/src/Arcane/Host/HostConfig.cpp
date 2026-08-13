@@ -57,6 +57,20 @@ namespace Arcane
             return { std::nullopt, 2 };
         }
 
+#if !defined(ARCANE_DIST)
+        // Same silent-no-op reasoning, same treatment: the golden harness lives
+        // in RuntimeApp::MainLoop, which --nri-smoke never reaches (Run()
+        // returns before the boot starts), so the combination would
+        // capture/compare nothing and still exit 0. (--screenshot IS honoured
+        // by the smoke -- only the golden flags are unreachable from it.)
+        if (cfg.nriSmoke && cfg.GoldenMode())
+        {
+            std::fprintf(stderr, "error: --nri-smoke does not run the golden harness; "
+                                 "use --screenshot instead of --golden-capture/--golden-compare\n");
+            return { std::nullopt, 2 };
+        }
+#endif
+
         return { cfg, 0 };
     }
 }

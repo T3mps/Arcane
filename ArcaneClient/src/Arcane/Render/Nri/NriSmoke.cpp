@@ -38,10 +38,10 @@ namespace Arcane
     namespace
     {
         // Documented on NriSmoke::Run -- a scripted desk run reads these.
-        constexpr int kExitOk                = 0;
-        constexpr int kExitSetupFailed       = 1;
-        constexpr int kExitValidationErrors  = 2;
-        constexpr int kExitScreenshotFailed  = 3;
+        constexpr int kExitOk               = 0;
+        constexpr int kExitRunFailed        = 1;   // setup, OR a frame-loop error that stopped the run
+        constexpr int kExitValidationErrors = 2;
+        constexpr int kExitScreenshotFailed = 3;
 
         // Same 1ms SDL_DelayNS primitive NriSwapChain's pacing wait and both
         // hosts' minimized-window paths use -- NOT std::this_thread::sleep_for,
@@ -364,7 +364,7 @@ float4 ps_main(VsOut input) : SV_Target
                 if (!window.Create(wd))
                 {
                     ARC_ERROR("[nri-smoke] window create failed");
-                    return kExitSetupFailed;
+                    return kExitRunFailed;
                 }
             }
 
@@ -411,7 +411,7 @@ float4 ps_main(VsOut input) : SV_Target
             if (!native)
             {
                 ARC_ERROR("[nri-smoke] native {} device creation failed", ToString(config.backend));
-                return kExitSetupFailed;
+                return kExitRunFailed;
             }
 
             // Destruction order (contract item 15) is encoded in declaration
@@ -421,14 +421,14 @@ float4 ps_main(VsOut input) : SV_Target
             if (!device)
             {
                 ARC_ERROR("[nri-smoke] wrapping the native device failed");
-                return kExitSetupFailed;
+                return kExitRunFailed;
             }
 
             std::unique_ptr<NriSwapChain> swap = NriSwapChain::Create(*device, window, config.vsync);
             if (!swap)
             {
                 ARC_ERROR("[nri-smoke] swapchain create failed");
-                return kExitSetupFailed;
+                return kExitRunFailed;
             }
 
             Resources res(*device);
@@ -441,7 +441,7 @@ float4 ps_main(VsOut input) : SV_Target
             if (swapFormat == nri::Format::UNKNOWN)
             {
                 ARC_ERROR("[nri-smoke] the swapchain resolved no format (zero-sized window at create?)");
-                return kExitSetupFailed;
+                return kExitRunFailed;
             }
 
             std::vector<std::uint8_t> vsCode;
@@ -455,13 +455,13 @@ float4 ps_main(VsOut input) : SV_Target
                     ARC_ERROR("[nri-smoke] dxcompiler.dll unavailable -- cannot compile the "
                               "triangle shaders (it is postbuild-copied beside the exe; run "
                               "from the exe's own directory)");
-                    return kExitSetupFailed;
+                    return kExitRunFailed;
                 }
                 vsCode = CompileStage(compiler, config.backend, kVsEntry, kVsProfile, "vs");
                 psCode = CompileStage(compiler, config.backend, kPsEntry, kPsProfile, "ps");
             }
             if (vsCode.empty() || psCode.empty())
-                return kExitSetupFailed;
+                return kExitRunFailed;
 
             {
                 // No descriptor sets, no root constants, no root samplers: the
@@ -473,7 +473,7 @@ float4 ps_main(VsOut input) : SV_Target
                     || !res.pipelineLayout)
                 {
                     ARC_ERROR("[nri-smoke] CreatePipelineLayout failed");
-                    return kExitSetupFailed;
+                    return kExitRunFailed;
                 }
             }
 
@@ -521,7 +521,7 @@ float4 ps_main(VsOut input) : SV_Target
                     || !res.pipeline)
                 {
                     ARC_ERROR("[nri-smoke] CreateGraphicsPipeline failed");
-                    return kExitSetupFailed;
+                    return kExitRunFailed;
                 }
             }
 
@@ -542,7 +542,7 @@ float4 ps_main(VsOut input) : SV_Target
                     || !slot.cmd)
                 {
                     ARC_ERROR("[nri-smoke] command allocator/buffer creation failed");
-                    return kExitSetupFailed;
+                    return kExitRunFailed;
                 }
             }
 
@@ -558,6 +558,13 @@ float4 ps_main(VsOut input) : SV_Target
             bool screenshotOk = true;
             std::uint64_t frameIndex = 0;
             bool running = true;
+            // Set by every ABNORMAL exit from the loop below (not by a user
+            // quit, which is a legitimate way to end an interactive run). It
+            // exists so that "exit 0" actually means "ran to completion" --
+            // without it, a mid-loop failure broke out and still returned 0,
+            // which is precisely the kind of quiet lie this smoke's exit code
+            // is supposed to be immune to.
+            bool sessionFailed = false;
 
             // Readback staging, sized on the frame that actually needs it (the
             // swapchain extent is only final once no more resizes can land).
@@ -605,6 +612,7 @@ float4 ps_main(VsOut input) : SV_Target
                         ARC_ERROR("[nri-smoke] swapchain format changed across a resize "
                                   "(was {}, now {}) -- the pipeline is no longer valid",
                                   (int)swapFormat, (int)swap->Format());
+                        sessionFailed = true;
                         break;
                     }
                 }
@@ -638,7 +646,10 @@ float4 ps_main(VsOut input) : SV_Target
                 // an untidy teardown on an already-failing path beats a hang.
                 nri::Descriptor* colorView = ViewFor(res, backbuffer, swapFormat);
                 if (!colorView)
+                {
+                    sessionFailed = true;
                     break;
+                }
 
                 const std::uint32_t width  = swap->Width();
                 const std::uint32_t height = swap->Height();
@@ -686,7 +697,10 @@ float4 ps_main(VsOut input) : SV_Target
 
                 nri::CommandBuffer& cmd = *slot.cmd;
                 if (!ARC_NRI_CHECK(core.BeginCommandBuffer(cmd, nullptr)))
+                {
+                    sessionFailed = true;
                     break;   // outstanding acquire, deliberately -- see the note above
+                }
 
                 // One reused barrier pair for the whole frame, exactly as both
                 // adapted samples do it: mutate `before`/`after` and re-issue.
@@ -776,12 +790,21 @@ float4 ps_main(VsOut input) : SV_Target
                 textureBarrier.after  = { nri::AccessBits::NONE, nri::Layout::PRESENT, nri::StageBits::NONE };
                 core.CmdBarrier(cmd, barrier);
 
-                (void)ARC_NRI_CHECK(core.EndCommandBuffer(cmd));
+                // A command buffer that did not close cannot be submitted, so
+                // nothing would signal the release fence -- and Present() waits
+                // on it. Exactly the never-signalled-fence hazard the acquire-
+                // side bail-outs above avoid; same treatment here.
+                if (!ARC_NRI_CHECK(core.EndCommandBuffer(cmd)))
+                {
+                    sessionFailed = true;
+                    break;
+                }
 
                 // Submit: wait on the acquire fence, signal the release fence.
                 // NriSwapChain owns both but submits no real work itself
                 // (NriSwapChain.hpp), so wiring them into a submission is the
                 // caller's job -- this is that caller.
+                bool submitted = false;
                 {
                     nri::FenceSubmitDesc waitFence = {};
                     waitFence.fence  = swap->CurrentAcquireFence();
@@ -799,7 +822,14 @@ float4 ps_main(VsOut input) : SV_Target
                     submit.commandBufferNum = 1;
                     submit.signalFences     = &signalFence;
                     submit.signalFenceNum   = 1;
-                    (void)ARC_NRI_CHECK(core.QueueSubmit(*device->GraphicsQueue(), submit));
+                    submitted = ARC_NRI_CHECK(core.QueueSubmit(*device->GraphicsQueue(), submit));
+                }
+                if (!submitted)
+                {
+                    // Ditto: a failed submit signalled no release fence, so
+                    // presenting would park the present engine forever.
+                    sessionFailed = true;
+                    break;
                 }
 
                 swap->Present();
@@ -844,6 +874,8 @@ float4 ps_main(VsOut input) : SV_Target
             }
 
             ARC_INFO("[nri-smoke] session finished: {} frame(s) rendered", frameIndex);
+            if (sessionFailed)
+                return kExitRunFailed;   // the loop stopped on an error; already logged
             return screenshotOk ? kExitOk : kExitScreenshotFailed;
         }
     }
@@ -877,7 +909,7 @@ float4 ps_main(VsOut input) : SV_Target
                 // says WHERE the run died, which outranks the errors it produced
                 // on the way out; and a validation error explains a bad capture,
                 // not the other way round.
-                return (sessionCode == kExitSetupFailed) ? kExitSetupFailed : kExitValidationErrors;
+                return (sessionCode == kExitRunFailed) ? kExitRunFailed : kExitValidationErrors;
             }
             return sessionCode;
         }
