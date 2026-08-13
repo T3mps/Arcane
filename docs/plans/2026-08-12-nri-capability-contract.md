@@ -121,7 +121,7 @@ unconditional block (`:1760-1773`) is all core 1.1/1.2 — satisfied by any
 |---|---|---|---|
 | `VK_KHR_surface` | **REQUIRED** (for any swapchain) | gate at `DeviceVK.hpp:1790-1807`; used at `SwapChainVK.hpp:80`, `:221`, and `vk.DestroySurfaceKHR` in `~SwapChainVK` | `GetPhysicalDeviceSurfaceSupportKHR`, `GetPhysicalDeviceSurfacePresentModesKHR`, `DestroySurfaceKHR`, `CreateWin32SurfaceKHR` all stay null ⇒ null-pointer call in `SwapChainVK::Create`. |
 | `VK_KHR_win32_surface` | **REQUIRED** (Windows) | `DeviceVK.hpp:1795-1797`; used at `SwapChainVK.hpp:41-47` | NRI creates the surface itself from `SwapChainDesc::window.windows.hwnd`. |
-| **`VK_KHR_get_surface_capabilities2`** | **REQUIRED** — easy to miss | gate at `DeviceVK.hpp:1785-1788`; called **unconditionally** at `SwapChainVK.hpp:103` (`GetPhysicalDeviceSurfaceCapabilities2KHR`), `:114`+`:121` (`GetPhysicalDeviceSurfaceFormats2KHR`), and again at `:283` | Both pointers stay null and `SwapChainVK::Create` calls them with no guard ⇒ **crash on first swapchain creation**. Corroborated: NVIDIA's sample lists it (`NRISamples/Source/Wrapper.cpp:259`). |
+| **`VK_KHR_get_surface_capabilities2`** | **REQUIRED** — easy to miss | gate at `DeviceVK.hpp:1785-1788`. **Unconditional** call sites in `SwapChainVK::Create`: `SwapChainVK.hpp:114` and `:121` (`GetPhysicalDeviceSurfaceFormats2KHR`, inside the bare `{` scope opened at `:109`) — the **first** site reached in execution order — and `:283` (`GetPhysicalDeviceSurfaceCapabilities2KHR`, bare scope opened at `:264`). *Additionally* a **conditional** site at `:103`, inside `if (allowLowLatency)` (`:94`), which is dead for us anyway (`allowLowLatency` needs `m_Desc.features.lowLatency`, i.e. `VK_NV_low_latency2` + `presentId`, `DeviceVK.hpp:1198`) | Both pointers stay null and the unconditional sites call them with no guard ⇒ **crash on first swapchain creation**. Corroborated: NVIDIA's sample lists it (`NRISamples/Source/Wrapper.cpp:259`). |
 | `VK_EXT_debug_utils` | optional, safe | gate at `DeviceVK.hpp:1775-1783`; **null-guarded** at `:1642` (`SetDebugNameToTrivialObject`) and `CommandBufferVK.hpp:1604` | Absence only loses object names and command-buffer annotations. No crash. |
 
 *(Not required: `VK_KHR_get_physical_device_properties2` — core since 1.1;
@@ -386,7 +386,7 @@ core 1.0 feature set is `VK_FALSE`. One graphics queue, `queueCount = 1`
 | `minorVersion = 3` passed to the desc | **MISSING (new field)** — and the physical-device version is never asserted | instance at `:598-600`; physical pick at `:648-657` with **no `apiVersion` check** | We already *implicitly* require VK 1.3 (chaining `VkPhysicalDeviceVulkan13Features` at `:768` fails on a 1.2 device), but nothing asserts it. Phase 1: read `physicalDevice.getProperties().apiVersion`, require ≥ 1.3, pass that minor to NRI. |
 | Instance ext `VK_KHR_surface` | **ALREADY-ENABLED** | `:44` | |
 | Instance ext `VK_KHR_win32_surface` | **ALREADY-ENABLED** | `:45` | |
-| Instance ext `VK_KHR_get_surface_capabilities2` | **MISSING — hard break** | `:43-46` (list) | NRI's `SwapChainVK::Create` calls the `...2KHR` surface queries unguarded. Add to `kInstanceExtensions`. |
+| Instance ext `VK_KHR_get_surface_capabilities2` | **MISSING — hard break** | `:43-46` (list) | `SwapChainVK::Create` calls `GetPhysicalDeviceSurfaceFormats2KHR` unguarded at `SwapChainVK.hpp:114` (first site reached) and `GetPhysicalDeviceSurfaceCapabilities2KHR` at `:283`. Add to `kInstanceExtensions`. |
 | Device ext `VK_KHR_swapchain` | **ALREADY-ENABLED** | `:54` | |
 | Device ext `VK_KHR_push_descriptor` | **MISSING — hard break for root descriptors** | `:53-55` | Required by the spec's per-frame-data design (`CmdSetRootDescriptor`). |
 | Device ext `VK_KHR_maintenance5` / `VK_KHR_maintenance6` | **MISSING (optional)** | `:53-55` | Safe degradation; NVIDIA's sample enables both below 1.4. Cheap to add. |
@@ -430,18 +430,45 @@ queue (`:187-194`), swapchain created against that queue (`:292-294`).
 | Adapter selection conflict | **NONE** | `:141-146` vs `DeviceD3D12.hpp:196-198` | NRI re-derives the adapter from our device's LUID. |
 | `agsContext` / NVAPI | **N/A (by design)** | n/a | Spec excludes NVAPI from vendoring; AGS needs an explicit context in wrapper mode. Both simply report "off". |
 
-### 3.3 Score
+### 3.3 Score — derived by counting the rows in §3.1 and §3.2
 
-- Vulkan: **4 instance-extension items** (3 held, 1 missing), **7
-  device-extension items** (1 held, 4 missing of which 1 hard, 2 optional),
-  **16 feature/feature-group items** (3 held, 13 missing) + 4 structural
-  items (queues, minorVersion, binding offsets, post-wrap assert).
-- D3D12: **11 items**, 7 already satisfied, 2 must-do wiring, **2 missing**
-  (Agility SDK, debug-message routing).
-- **Total gaps: 15** — of which **4 fail at runtime immediately**
-  (`VK_KHR_get_surface_capabilities2`, `VK_KHR_push_descriptor`,
-  `bufferDeviceAddress`, `hostQueryReset`).
+**§5 is the canonical actionable inventory. Use that numbered list as the
+checklist; the counts here are a summary of the two tables above, nothing
+more.**
+
+§3.1 has **24 rows**, §3.2 has **10**. Every breakdown below sums to its
+category total.
+
+| Category | Rows | Held / already-correct | Missing or new | Informational |
+|---|---|---|---|---|
+| VK instance extensions (§3.1) | 3 | 2 | 1 (hard) | — |
+| VK device extensions (§3.1) | 4 | 1 | 3 = 1 hard + 2 optional | — |
+| VK features (§3.1) | 10 | 3 | 7 = 2 hard + 5 report-honesty/conditional | — |
+| VK structural / wiring (§3.1) | 6 | 3 | 3 | — |
+| VK diagnostics interplay (§3.1) | 1 | — | — | 1 (no conflict) |
+| **§3.1 total (Vulkan)** | **24** | **9** | **14** | **1** |
+| **§3.2 total (D3D12)** | **10** | **3** | **2 missing + 1 must-do wiring** | **4** |
+
+- **Verdicted-MISSING items: 16** = 14 VK + 2 D3D12. Plus the 1 D3D12
+  must-do wiring row ⇒ **17 rows Phase 1 has to touch**.
+- **4 of the 16 fail at runtime immediately:**
+  `VK_KHR_get_surface_capabilities2`, `VK_KHR_push_descriptor`,
+  `bufferDeviceAddress`, `hostQueryReset`.
 - **Zero conflicts** with the crash-diagnostics arming on either backend.
+
+**Why §5 has 15 items and not 17.** §5 item 3 folds two device-extension
+gaps into one change and item 4 folds all seven VK feature gaps into one
+change (query-then-pass-back), while §5 additionally carries three
+preserve-this-behaviour actions and one write-the-asserts action that are
+not gaps. The three views are consistent: §3.1/§3.2 count *rows of
+contract*, §3.3 sums them, §5 counts *edits to make*.
+
+**Why §1's tables have more rows than §3.1.** §1 is the complete contract
+inventory, including items that are safe by omission and therefore need no
+decision from us (`VK_EXT_debug_utils`, `VK_KHR_present_id`/`present_wait`,
+`VK_EXT_swapchain_maintenance1`, ray tracing, mesh shading,
+`VK_EXT_robustness2`, …). §3.1 carries only the rows where our creation code
+has something to do or to preserve.
 
 ---
 
