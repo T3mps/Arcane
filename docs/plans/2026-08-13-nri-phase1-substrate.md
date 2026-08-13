@@ -379,3 +379,45 @@ From the Release AND Debug exe dirs (Debug = validation layers):
 - The `[gpu] nri wrap smoke` test + smoke path are scaffolding with a
   planned deletion point (Phase 2 end / Phase 5) — each carries a comment
   saying so.
+
+---
+
+## Task 10 milestone record (desk run 2026-08-13, RTX 3070, Win10 19045)
+
+All checklist items PASS. Implementation range `8b32a979..c896ae67` (Tasks 1-9 + final-review fix wave), gate 32506/811 both configs.
+
+1. **Triangle both backends (Debug, validation up):** 120 frames, exit 0,
+   `RenderErrorCount 0 -> 0`, screenshots eyeballed on both — apex red /
+   bottom-right green / bottom-left blue, matching the shader's vertex
+   assignment (channel order + Y orientation proven through the readback
+   path). dx12 and vulkan images visually identical, consistent with the
+   Phase 0 bit-identical-rasterization finding for this GPU.
+2. **Agility proof (contract §6 item 3):** `Using ID3D12Device15` — clears
+   the ID3D12Device10+ bar; the vendored 1.619.3 redistributable loads via
+   the exe exports. Enhanced-barriers floor live.
+3. **Vulkan sync validation:** `Vulkan synchronization validation ENABLED`
+   present (the fix-round layer-scoped enumeration works); 120-frame and
+   6187-frame runs validation-clean.
+4. **Release pacing sanity:** both backends 120 frames, exit 0; frame rate
+   consistent with vsync engaged on a high-refresh display (not uncapped).
+5. **Golden regression floor:** `golden PASS: main-dx12 (maxDelta 0, bad
+   0.0000%)` and `golden PASS: main-vulkan (maxDelta 0, bad 0.0000%)` —
+   the NVRHI path is bit-identical to the Phase 0 baseline after all nine
+   tasks (incl. the §5 feature enablement + Agility loader redirect).
+6. **Drag-storm resize (vulkan, Debug):** 6187 frames through aggressive
+   resize storms, no crash, no validation errors, exit 0.
+7. **`[gpu] nri wrap smoke` (Catch2):** both backends wrap + assert clean —
+   14 assertions / 2 cases, exit 0 (seed 3653502754).
+
+**Open follow-up (only one):** on this Win10 19045 machine the dx12 smoke
+logs `ID3D12InfoQueue1 unavailable (pre-Agility D3D12 runtime)` even though
+Device15 proves the Agility Core loaded — the WARN's baked-in diagnosis is
+wrong; suspicion is the debug-layer/SDKLayers interaction, not runtime age.
+Consequence: D3D12 debug-layer messages do not reach the RenderErrorCount
+latch here; NRI's own validation layer is the active dx12 latch producer.
+Tracked for the Phase 2 plan alongside the four named inheritances
+(Format()-aware goldens, latch tagging seam, barrier-rule ratification,
+graph-owned present sequencing).
+
+Phase 1 exit criteria (verification ladder items 1-3): **ALL MET.**
+Next: the Phase 2 plan (frame graph + 2D node-by-node cutover).
