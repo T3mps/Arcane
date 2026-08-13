@@ -61,6 +61,53 @@ namespace Arcane
             NoteGpuDeviceLost();
         }
 
+        // NRI capability contract item 12: the D3D12 debug layer's own channel
+        // into our log and the RenderErrorCount latch.
+        //
+        // Why it has to be OURS: NRI never copies enableGraphicsAPIValidation
+        // into its internal desc on the wrapper path, so its whole info-queue
+        // block -- including ID3D12InfoQueue1::RegisterMessageCallback -- is
+        // dead code for us, and its CallbackInterface carries NRI's own
+        // messages only. Without this, D3D12 validation text reaches nothing:
+        // the block below merely turns break-on-severity off. This is the one
+        // channel by which a D3D12 VUID can fail the 0/0 gate, and it is the
+        // exact counterpart of DeviceVulkan.cpp's VkDebugCallback -- same sink,
+        // same severity split, so "an error happened" means one thing on both
+        // backends.
+        //
+        // __stdcall by D3D12MessageFunc's typedef (d3d12sdklayers.h); the
+        // calling convention must match exactly.
+        void __stdcall D3D12DebugLayerCallback(D3D12_MESSAGE_CATEGORY /*category*/,
+                                               D3D12_MESSAGE_SEVERITY severity,
+                                               D3D12_MESSAGE_ID /*id*/,
+                                               LPCSTR description,
+                                               void* /*context*/)
+        {
+            const char* text = description ? description : "";
+            switch (severity)
+            {
+            case D3D12_MESSAGE_SEVERITY_CORRUPTION:
+            case D3D12_MESSAGE_SEVERITY_ERROR:
+                // Same latch NVRHI's own errors increment, so a raw D3D12
+                // message fails the GPU tests exactly like an [nvrhi] error.
+                // (Routing through message() also means a debug-layer text
+                // containing "Device Removed" reaches ObserveDeviceRemoved --
+                // additive, and the same treatment the NVRHI feed gets.)
+                NvrhiMessageCallback::Instance().message(
+                    nvrhi::MessageSeverity::Error, text);
+                break;
+            case D3D12_MESSAGE_SEVERITY_WARNING:
+                ARC_WARN("[d3d12] {}", text);
+                break;
+            default:
+                // INFO/MESSAGE: the debug layer emits one per resource create
+                // and destroy. The Vulkan messenger subscribes to Error and
+                // Warning only (DeviceVulkan.cpp) -- match it rather than
+                // drown the log.
+                break;
+            }
+        }
+
         class DeviceD3D12 final : public RenderDevice
         {
         public:
@@ -86,6 +133,11 @@ namespace Arcane
             ComPtr<IDXGIFactory6>      m_factory;
             ComPtr<IDXGIAdapter1>      m_adapter;
             ComPtr<ID3D12Device>       m_device;
+            // Contract item 12's registration, held so the destructor can
+            // unregister: the callback is a function in THIS module and must
+            // not outlive it. Declared after m_device so it releases first.
+            ComPtr<ID3D12InfoQueue1>   m_infoQueue;
+            DWORD                      m_infoQueueCookie = 0;
             ComPtr<ID3D12CommandQueue> m_graphicsQueue;
             nvrhi::DeviceHandle        m_nvrhi;
             std::string                m_adapterName;
@@ -112,6 +164,13 @@ namespace Arcane
                 Diagnostics::FenceReports();
                 (void)ClearActiveGpuCrashBackendIfCurrent(m_crashBackend.get());
                 NvrhiMessageCallback::Instance().SetDeviceRemovedHook(nullptr);
+            }
+            // Contract item 12, symmetric with Init's registration: the
+            // debug layer holds a raw pointer to a function in this module.
+            if (m_infoQueue && m_infoQueueCookie != 0)
+            {
+                m_infoQueue->UnregisterMessageCallback(m_infoQueueCookie);
+                m_infoQueueCookie = 0;
             }
         }
 
@@ -159,6 +218,12 @@ namespace Arcane
             // of enableD3D12DebugLayer (D3D12GetDebugInterface fetches the DRED
             // settings object without enabling the debug layer). Never fatal:
             // every failure inside degrades the tier and logs one WARN.
+            //
+            // NRI capability contract item 13: stays exactly here. NRI v180
+            // contains no DRED code at all (zero matches for DRED /
+            // AutoBreadcrumb / PageFault across its Source and Include), and it
+            // never creates the device in wrapper mode, so it cannot clobber
+            // this -- but only if the call keeps its position ahead of create.
             EnableD3D12Dred();
 
             if (FAILED(D3D12CreateDevice(m_adapter.Get(), D3D_FEATURE_LEVEL_12_0,
@@ -182,8 +247,45 @@ namespace Arcane
                     infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, FALSE);
                     infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
                 }
+
+                // NRI capability contract item 12: turning break-off is all the
+                // block above ever did -- the messages themselves went nowhere.
+                // Register the callback that actually delivers them (see
+                // D3D12DebugLayerCallback). ID3D12InfoQueue1 is an Agility-era
+                // interface, so the QueryInterface can fail on an old runtime:
+                // that is a diagnostics degradation, never a create failure.
+                // (In practice the Agility redistributable makes it available;
+                // the proof line lands at the desk milestone.)
+                ComPtr<ID3D12InfoQueue1> infoQueue1;
+                if (SUCCEEDED(m_device.As(&infoQueue1)))
+                {
+                    DWORD cookie = 0;
+                    if (SUCCEEDED(infoQueue1->RegisterMessageCallback(
+                            &D3D12DebugLayerCallback,
+                            D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie)))
+                    {
+                        m_infoQueue = infoQueue1;
+                        m_infoQueueCookie = cookie;
+                    }
+                    else
+                    {
+                        ARC_WARN("ID3D12InfoQueue1::RegisterMessageCallback failed; "
+                                 "D3D12 debug-layer messages will not reach the log");
+                    }
+                }
+                else
+                {
+                    ARC_WARN("ID3D12InfoQueue1 unavailable (pre-Agility D3D12 runtime); "
+                             "D3D12 debug-layer messages will not reach the log");
+                }
             }
 
+            // NRI capability contract item 10 (creation half): this ONE direct
+            // queue is what the wrapper desc must carry in
+            // QueueFamilyD3D12Desc::d3d12Queues -- leaving that null makes NRI
+            // create its own, and the DXGI swapchain below is bound to THIS
+            // one, so it would be presenting on a queue NRI never submits to.
+            // Reachable for the wrap through GraphicsQueue() above.
             D3D12_COMMAND_QUEUE_DESC queueDesc{};
             queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
             if (FAILED(m_device->CreateCommandQueue(&queueDesc,
