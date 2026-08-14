@@ -385,8 +385,10 @@ namespace Arcane
         // recorded. Unlike CurrentPickables()/CurrentSelectedIds(), which are
         // cleared the moment the declarations are done, this stays readable
         // for the whole RenderFrame call because the node's exec fn is what
-        // copies the geometry -- see FrameDesc::imgui. Null outside a
-        // RenderFrame call and on a frame the driver supplied no HUD for.
+        // copies the geometry -- see FrameDesc::imgui. NOT cleared after the
+        // call returns (unlike its two siblings above): it holds whatever the
+        // last RenderFrame published -- possibly null, if that frame supplied
+        // no HUD -- until the next RenderFrame re-publishes it.
         [[nodiscard]] ImDrawData* CurrentImGuiDrawData() const noexcept { return m_currentImGui; }
 
         // FrameDesc::pickables / ::selectedIds for the frame currently being
@@ -429,8 +431,10 @@ namespace Arcane
         // both paths together). Loaded once and cached; the returned bytes live
         // as long as this vehicle, which is what NriPipelineCache's fill
         // contract needs (CreateGraphicsPipeline dereferences the blob after the
-        // fill callback returns). Empty span, logged once, when the artifact is
-        // missing.
+        // fill callback returns). Empty span when the artifact is missing or
+        // unreadable -- a failed lookup is NOT cached (only a successful load
+        // is), so ARC_ERROR logs on EVERY call that misses, not just the
+        // first.
         [[nodiscard]] std::span<const std::uint8_t> ShaderBytecode(const char* name);
 
         // Called by the capture node's exec fn once the readback copy is

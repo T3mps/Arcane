@@ -281,12 +281,14 @@ namespace Arcane
     //
     // WHAT TASK 6'S EXECUTOR REPLAYS, AND WHAT IT MUST MERGE: nothing needs
     // merging. Every before/after triple in here is FINAL and already
-    // accounts for transient pool reuse -- when two transients share a pool
-    // slot, the second tenant's first barrier carries the FIRST tenant's
-    // outgoing access + stages in its `before`, with `before.layout` left
-    // UNDEFINED (a contents-discarding transition), so the handover barrier
-    // performs the source availability operation the reused physical
-    // resource needs. See RenderGraph.cpp's POOL HANDOVER comment.
+    // accounts for transient pool reuse -- when transients share a pool
+    // slot, each tenant after the first has its first barrier carry the
+    // IMMEDIATELY PRECEDING tenant's outgoing access + stages in its
+    // `before` (not necessarily the very first tenant's -- a 3+-tenant chain
+    // hands over link by link), with `before.layout` left UNDEFINED (a
+    // contents-discarding transition), so the handover barrier performs the
+    // source availability operation the reused physical resource needs. See
+    // RenderGraph.cpp's POOL HANDOVER comment.
     //
     // The executor's whole job is translation: emit each node's preBarriers
     // as ONE nri CmdBarrier group immediately before that node, run the
@@ -651,9 +653,14 @@ namespace Arcane
         // THE POOL EPOCH -- CONTRACT, NOT A TEST SEAM. Read this before
         // caching ANYTHING that names a pool texture or buffer.
         // =============================================================
-        // Bumped every time this graph buries a pool resource: a shrink or a
-        // desc change inside RealizePool (i.e. from INSIDE Execute()), an
-        // explicit ReleaseGpuResources(), and ~RenderGraph.
+        // Bumped once per buried resource inside RealizePool (a shrink or a
+        // desc change, from INSIDE Execute()) -- but bumped only ONCE, not
+        // once per resource, when the whole pool is torn down and MOVED out
+        // from under any cached view: an explicit ReleaseGpuResources() or
+        // ~RenderGraph. A node's epoch check only needs the value to have
+        // changed at all, so both granularities are correct for that
+        // purpose; this note exists so nobody adds up epoch deltas expecting
+        // them to count buried resources.
         //
         // It exists because a node that caches a descriptor over a pool
         // texture cannot detect that burial any other way. NRI is free to hand

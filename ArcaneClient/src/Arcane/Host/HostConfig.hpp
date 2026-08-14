@@ -101,9 +101,12 @@ namespace Arcane
         // that one host parses and silently ignores is a trap, and scripting the
         // editor's battery items beats clicking them.
         //
-        // KNOWN GAP, NOT REFUSED (NRI Phase 2 ledger, Task 7 minor, closed at
-        // Task 13): on ArcaneRuntime, the fault injector only fires inside
-        // RuntimeApp::MainLoop's NVRHI record path (`if (!m_graphContext)`);
+        // KNOWN GAP, NOT REFUSED (NRI Phase 2 ledger, Task 7 minor). The GAP
+        // ITSELF IS STILL OPEN, carried forward to Phase 3 -- what "closed at
+        // Task 13" refers to is the DOCUMENTATION decision below (leave it a
+        // documented no-op rather than wire the injector in), which Task 13
+        // reviewed and finalized. On ArcaneRuntime, the fault injector only
+        // fires inside RuntimeApp::MainLoop's NVRHI record path (`if (!m_graphContext)`);
         // the `--nri-graph` frame-graph vehicle has no fault-injector node
         // wired in, so `--crash-gpu N --nri-graph` parses, never fires, and
         // the run exits 0 having proven nothing. Left as a documented no-op

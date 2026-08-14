@@ -1273,8 +1273,12 @@ namespace Arcane
             nri::DescriptorSet*  set      = nullptr;
 
             // Everything a registered material needs was resolved at
-            // declaration time (PrepareMaterials) -- this is three reads, not a
-            // cache lookup: the recording window must not contain a PSO compile.
+            // declaration time (PrepareMaterials): `pipeline` and `set` are
+            // direct field reads off the resolved MaterialSlot, and `layout`
+            // is an O(1) bounds-checked index into NriPipelineCache's own
+            // vector (Layout()), not a hash lookup. None of the three can
+            // miss and fall back to compiling -- the recording window must
+            // not contain a PSO compile.
             const auto known = span.material >= kBuiltInCount
                              ? m_materialSlotOf.find(span.material)
                              : m_materialSlotOf.end();
@@ -1352,6 +1356,15 @@ namespace Arcane
             }
         }
 
+        // `canvas` is captured by reference ([&]) below, not shared_ptr like
+        // AddTonemapNode's `backbuffer` -- safe here only because the SETUP
+        // lambda is the one that mutates it, and AddNode runs setup
+        // synchronously (before AddBatch2DNode returns), so `canvas` is still
+        // this frame's live stack local. Nothing here shares it with the EXEC
+        // lambda below, which runs later, during Execute(). If an exec fn
+        // ever needed to read `canvas`, it would need AddTonemapNode's
+        // shared_ptr<RgTexture> pattern instead -- a bare reference into a
+        // function that has already returned by then would dangle.
         RgTexture canvas{};
         graph.AddNode("batch2d", RenderGraph::NodeKind::Raster,
             [&](RenderGraphBuilder& builder)

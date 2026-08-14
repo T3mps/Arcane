@@ -155,8 +155,11 @@ namespace Arcane
         // What the host last SetGlobals()'d -- the engine-global constants
         // every REGISTERED material samples (b2 on the sprite register map,
         // GlobalParams.hpp). Points at the batcher's own member, so it is
-        // valid for as long as the batcher is; null only on a drain that
-        // produced nothing. Built-in spans ignore it, exactly as End() does.
+        // valid for as long as the batcher is; Drain() sets it unconditionally
+        // (an empty drain still gets a non-null pointer). The only null case
+        // is the interface's default Drain() override, which returns a
+        // default-constructed Batch2DDrained -- e.g. a test double that never
+        // overrides it. Built-in spans ignore it, exactly as End() does.
         const GlobalParams* globals = nullptr;
 
         [[nodiscard]] bool Empty() const noexcept { return spans.empty(); }

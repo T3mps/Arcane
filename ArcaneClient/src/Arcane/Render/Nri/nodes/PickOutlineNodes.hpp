@@ -381,8 +381,9 @@ namespace Arcane
         // 16 steps floods a 65536-px field; the declarator clamps to this and
         // says so once.
         static constexpr std::uint32_t kMaxJfaSteps = 16;
-        // outline_seed.hlsl's `uint4 gSelectedIds[16]` -- 64 ids. Pinned by a
-        // static_assert against kMaxSelectedOutlineIds in the .cpp.
+        // outline_seed.hlsl's `uint4 gSelectedIds[16]` -- 64 ids. Pinned by
+        // the .cpp's static_assert(kMaxSelectedIds * sizeof(std::uint32_t)
+        // == 256, ...) against outline_seed.hlsl's uint4[16].
         static constexpr std::uint32_t kMaxSelectedIds = 64;
         // The largest of the three constant blocks: SeedCB is 288 bytes
         // (32 header + 256 ids). Pinned by a static_assert in the .cpp.

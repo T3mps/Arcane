@@ -183,14 +183,17 @@ namespace Arcane
     //
     // SOURCE VIEWS AND THE POOL. Every texture a pass samples is a graph
     // TRANSIENT (the canvas, or another pass's target) whose physical texture
-    // the graph owns and destroys on exactly one path --
-    // RenderGraph::ReleaseGpuResources, which NriGraphContext::Resize and
-    // ~NriGraphContext call. Both call InvalidateSources() in the same breath,
-    // BEFORE that release, which is what keeps this node's descriptors from
-    // ever naming a freed texture. The per-(pass, frame slot) rebind below is
-    // safe for the same reason Batch2DNode's arena is: a frame slot's previous
-    // submission has retired before this frame records into it (the pacing
-    // wait inside NriSwapChain::AcquireNextTexture).
+    // the graph can destroy on TWO paths, not one -- see SOURCE VIEWS AND THE
+    // POOL above for the full mechanism: mid-execute via RealizePool (a
+    // shrink or a desc change, caught by comparing PoolEpoch() at record
+    // time), and at teardown/resize via RenderGraph::ReleaseGpuResources,
+    // which NriGraphContext::Resize and ~NriGraphContext call. Both of those
+    // call InvalidateSources() in the same breath, BEFORE that release, which
+    // is what keeps this node's descriptors from ever naming a freed texture
+    // on THAT path. The per-(pass, frame slot) rebind below is safe for the
+    // same reason Batch2DNode's arena is: a frame slot's previous submission
+    // has retired before this frame records into it (the pacing wait inside
+    // NriSwapChain::AcquireNextTexture).
     // =====================================================================
     class ARCANE_API PostChainNode
     {

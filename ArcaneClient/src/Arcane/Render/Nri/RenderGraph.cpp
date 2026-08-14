@@ -605,8 +605,13 @@ namespace Arcane
         // left the texture somewhere else. An imported texture no node
         // touched still gets one (entry -> exit) when the two differ -- the
         // promise does not depend on the graph having used the resource.
-        // Imported BUFFERS have no declared exit state, and transients do
-        // not outlive the frame, so neither appears here.
+        // Imported BUFFERS have no declared exit state, and TRANSIENTS have no
+        // exit CONTRACT to honour either -- unlike an imported texture's
+        // importExit, nobody promised a caller what state a transient's pool
+        // slot is left in. (The physical resource itself is not scoped to
+        // this frame: the pool survives Reset() and can carry a slot across
+        // frames -- see PoolResource::carry -- it is just that nothing here
+        // needs restoring TO.) So neither appears here.
         // --------------------------------------------------------------
         for (std::size_t i = 0; i < m_textures.size(); ++i)
         {

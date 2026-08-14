@@ -644,8 +644,16 @@ namespace Arcane
         // The HRESULT is in the message because this call's failure mode is
         // otherwise indistinguishable at the desk: D1 hit it three times in a
         // row with no way to tell "no 12_0 adapter" from "the runtime is in a
-        // state that refuses to create one" (which is what an
-        // EnableDebugLayer-after-device does -- see g_d3d12DeviceCreated).
+        // state that refuses to create one" -- SUSPECTED to be an
+        // EnableDebugLayer-after-device call (see g_d3d12DeviceCreated), per
+        // the MS docs cited above, but never confirmed beyond that one desk
+        // repro; treat it as a working theory, not a diagnosed mechanism.
+        // That theory also leans on an UNSTATED assumption: the check-then-act
+        // read of g_d3d12DebugLayerEnabled/g_d3d12DeviceCreated above is two
+        // independent atomic loads, not one transaction, so it is only race-
+        // free if CreateD3D12NativeDevice is never entered from more than one
+        // thread at a time. Nothing in the tree calls this off the main
+        // thread today; a concurrent caller would need its own serialization.
         const HRESULT createHr = D3D12CreateDevice(out.adapter.Get(), D3D_FEATURE_LEVEL_12_0,
                                                    IID_PPV_ARGS(&out.device));
         if (FAILED(createHr))
