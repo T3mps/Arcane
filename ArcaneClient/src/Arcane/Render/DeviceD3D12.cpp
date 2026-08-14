@@ -46,6 +46,42 @@ namespace Arcane
         // when a new backend arms (project switch recreates the device).
         std::atomic<bool> g_deviceRemovedReported{ false };
 
+        // ------------------------------------------------------------------
+        // Process-global D3D12 debug-layer state (NRI Phase 2, D1 shakedown).
+        // ------------------------------------------------------------------
+        // ID3D12Debug::EnableDebugLayer is a BEFORE-ANY-DEVICE call, and the
+        // documentation is explicit about what happens otherwise: "To enable
+        // the debug layers using this API, it must be called before the D3D12
+        // device is created. Calling this API after creating the D3D12 device
+        // will cause the D3D12 runtime to remove the device."
+        // (learn.microsoft.com, ID3D12Debug::EnableDebugLayer, Remarks.)
+        //
+        // That is exactly what the `--nri-graph` vehicle did on its first desk
+        // run: the engine boots its NVRHI device with the layer OFF (the flag
+        // defaults false -- Device.hpp, the Nahimic-OSD fail-fast hazard), then
+        // the vehicle runs THIS SAME creation half a second time with
+        // enableD3D12DebugLayer forced true, so EnableDebugLayer landed on a
+        // process that already owned a live device. Every dx12 vehicle run then
+        // failed at D3D12CreateDevice and exited 1 after 0 frames. The pre-boot
+        // `--nri-smoke` creates the identical device with the identical desc and
+        // succeeds, because there is no live device when it enables the layer.
+        //
+        // These two flags make the sequencing structural rather than a rule
+        // somebody has to remember at each new call site.
+        //
+        // MONOTONE ON PURPOSE, and the conservative direction: `g_d3d12DeviceCreated`
+        // is never cleared, because the NVRHI owner (DeviceD3D12) releases its
+        // device through MEMBER DESTRUCTION rather than DestroyD3D12NativeDevice,
+        // so there is no single point that could decrement a live count without
+        // moving that teardown -- and the failure mode of being wrong here is
+        // asymmetric. Skipping an enable that would have been legal costs one
+        // diagnostic channel; making the call when it is NOT legal removes a live
+        // device. Nothing in the tree recreates a device WITH the layer requested
+        // anyway (only --nri-smoke and --nri-graph ever set the flag, and neither
+        // recreates one), so today this costs nothing at all.
+        std::atomic<bool> g_d3d12DeviceCreated{ false };
+        std::atomic<bool> g_d3d12DebugLayerEnabled{ false };
+
         void ObserveDeviceRemoved()
         {
             if (g_deviceRemovedReported.exchange(true, std::memory_order_acq_rel))
@@ -496,18 +532,79 @@ namespace Arcane
         // nothing the NVRHI path can observe.
         out.enableValidation = desc.enableValidation;
 
-        UINT factoryFlags = 0;
+        // The debug layer is PROCESS-GLOBAL state with a one-shot window (see
+        // g_d3d12DeviceCreated above): it can only be turned on while this
+        // process owns no D3D12 device, and turning it on later removes the
+        // device that already exists. So this asks three questions in order --
+        // is it already on, is it too late, otherwise turn it on -- rather than
+        // enabling unconditionally. `debugLayerActive` is what the rest of this
+        // function keys off, because "the caller asked for the layer" and "the
+        // layer is servicing this device" stopped being the same thing here.
+        UINT factoryFlags     = 0;
+        bool debugLayerActive = false;
         if (desc.enableD3D12DebugLayer)
         {
-            ComPtr<ID3D12Debug> debug;
-            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))))
+            if (g_d3d12DebugLayerEnabled.load(std::memory_order_acquire))
             {
-                debug->EnableDebugLayer();
+                // Already on process-wide, from an earlier device's creation.
+                // Re-calling EnableDebugLayer is the illegal post-device call
+                // AND would buy nothing: the layer that is already loaded is
+                // the one that will service this device too.
+                debugLayerActive = true;
                 factoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
+            }
+            else if (g_d3d12DeviceCreated.load(std::memory_order_acquire))
+            {
+                // THE `--nri-graph` CASE, and the tradeoff stated out loud.
+                // This device gets NO D3D12 debug layer: enabling it now would
+                // remove the engine's live NVRHI device (and, observed at the
+                // desk, makes the D3D12CreateDevice below fail outright), so
+                // the choice is "one device short of a validation channel" vs
+                // "no working device at all".
+                //
+                // WHAT IS LOST: D3D12 CPU validation messages for THIS device
+                // cannot reach D3D12DebugLayerCallback and therefore cannot fail
+                // the RenderErrorCount latch. NRI's own validation layer and (on
+                // Vulkan) the VK validation layers are unaffected -- they are
+                // per-device, not process-global. On the dev box the loss is
+                // currently nil: the in-box Win10 D3D12SDKLayers.dll implements
+                // no ID3D12InfoQueue1, so those messages reach nothing anyway
+                // (see the WARN further down).
+                //
+                // HOW TO GET IT BACK, when it is worth having: the FIRST device
+                // in the process has to be the one that turns the layer on --
+                // i.e. the host would set RenderDeviceDesc::enableD3D12DebugLayer
+                // on its own boot device when a --nri-graph run is requested,
+                // and this branch would then never be reached (the first branch
+                // above would take it instead). Deliberately NOT done as part of
+                // this fix: it would newly subject the engine's NVRHI half to a
+                // debug layer it has never run under, which can only ADD ways
+                // for the vehicle run to exit nonzero for reasons that have
+                // nothing to do with the graph. Phase 3's one-device flip
+                // dissolves the question entirely.
+                ARC_WARN("D3D12 debug layer NOT enabled for this device: a D3D12 device already "
+                         "exists in this process and EnableDebugLayer is documented to remove it "
+                         "when called after device creation. This device's D3D12 validation "
+                         "messages will not reach the log or the error latch.");
             }
             else
             {
-                ARC_WARN("D3D12 debug layer unavailable; continuing without it");
+                ComPtr<ID3D12Debug> debug;
+                if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))))
+                {
+                    debug->EnableDebugLayer();
+                    // Set BEFORE the create below, so the flag means "this
+                    // process has called EnableDebugLayer" and not "a device
+                    // came up afterwards" -- a failed create must not leave the
+                    // next caller thinking the layer is still enablable.
+                    g_d3d12DebugLayerEnabled.store(true, std::memory_order_release);
+                    debugLayerActive = true;
+                    factoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
+                }
+                else
+                {
+                    ARC_WARN("D3D12 debug layer unavailable; continuing without it");
+                }
             }
         }
 
@@ -546,12 +643,23 @@ namespace Arcane
         // this -- but only if the call keeps its position ahead of create.
         EnableD3D12Dred();
 
-        if (FAILED(D3D12CreateDevice(out.adapter.Get(), D3D_FEATURE_LEVEL_12_0,
-                                     IID_PPV_ARGS(&out.device))))
+        // The HRESULT is in the message because this call's failure mode is
+        // otherwise indistinguishable at the desk: D1 hit it three times in a
+        // row with no way to tell "no 12_0 adapter" from "the runtime is in a
+        // state that refuses to create one" (which is what an
+        // EnableDebugLayer-after-device does -- see g_d3d12DeviceCreated).
+        const HRESULT createHr = D3D12CreateDevice(out.adapter.Get(), D3D_FEATURE_LEVEL_12_0,
+                                                   IID_PPV_ARGS(&out.device));
+        if (FAILED(createHr))
         {
-            ARC_ERROR("D3D12CreateDevice failed (feature level 12_0)");
+            ARC_ERROR("D3D12CreateDevice failed (feature level 12_0, hr=0x{:08X}) on '{}'",
+                      static_cast<uint32_t>(createHr), out.adapterName);
             return false;
         }
+
+        // From here on this process owns a device, so the EnableDebugLayer
+        // window above is CLOSED for every later creation.
+        g_d3d12DeviceCreated.store(true, std::memory_order_release);
 
         // The device-side half of the debug layer. BOTH QueryInterface results
         // are kept, because which one fails IS the diagnosis: the base
@@ -563,7 +671,12 @@ namespace Arcane
         // ("pre-Agility D3D12 runtime") that the same run's "Using
         // ID3D12Device15" disproves. Each branch below now states only what it
         // actually knows.
-        if (desc.enableD3D12DebugLayer)
+        //
+        // Keyed on `debugLayerActive`, NOT on desc.enableD3D12DebugLayer: when
+        // the enable above was skipped because a device already existed, the
+        // layer is genuinely absent from this device and every WARN in here
+        // would be reporting our own decision back to us as a mystery.
+        if (debugLayerActive)
         {
             ComPtr<ID3D12InfoQueue> infoQueue;
             const HRESULT infoQueueHr = out.device.As(&infoQueue);
