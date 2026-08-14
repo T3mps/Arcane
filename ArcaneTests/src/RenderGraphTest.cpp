@@ -26,6 +26,7 @@
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // DeclareGraphFrame -- the vehicle's frame SHAPE
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
+#include <Arcane/Render/Nri/nodes/Batch2DNode.hpp>   // SpriteMaterialLayout / the arena region math
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/Swapchain.hpp>         // kSwapchainFramesInFlight
@@ -34,6 +35,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -2988,4 +2990,195 @@ TEST_CASE("nri pipeline cache: caller-contract breaches are refused and latched,
     // Restore the latch so the rest of this process still sees a clean
     // baseline -- the same courtesy GpuCrashReportTest.cpp extends.
     Arcane::ResetRenderErrorCount();
+}
+
+// =========================================================================
+// Task 9: REGISTERED SPRITE MATERIALS in Batch2DNode.
+//
+// What can be pinned headlessly and what cannot. The material path's GPU half
+// -- the constant-buffer arena's mapping, the descriptor-set writes, the PSOs
+// and the draws -- is unreachable here for the reason NriUploadRing's header
+// states: ImplNONE's MapBuffer returns null unconditionally, so
+// Batch2DNode::Create cannot even finish on a NONE device. What IS reachable,
+// and is exactly where a silent wrong-descriptor bug would live, is the pure
+// half: the pipeline-layout SHAPE (which is also where NRI's register-space
+// refusal would bite) and the arena's offset arithmetic.
+// =========================================================================
+
+TEST_CASE("nri batch2d material layout: root CONSTANTS only, so the root space and the "
+          "texture set legally share space 0", "[nri]")
+{
+    Arcane::SpriteMaterialLayout layout;
+    layout.Build(/*cbSize=*/32, /*textureCount=*/1);
+
+    // THE RULE, pinned. NRI refuses a layout whose rootRegisterSpace equals a
+    // descriptor set's registerSpace -- but ONLY when the layout also carries
+    // root DESCRIPTORS or root SAMPLERS (Source/Validation/DeviceVal.hpp).
+    // sprite_material.hlsl puts every register in the implicit space0 and the
+    // NVRHI path is the format-compatibility floor, so BOTH spaces must be 0
+    // and these two counts must therefore stay zero. Adding a root descriptor
+    // for b1/b2 -- the shape the plan originally sketched -- makes NRI reject
+    // the layout at creation, on a device this gate does not have.
+    REQUIRE(layout.desc.rootDescriptorNum == 0);
+    REQUIRE(layout.desc.rootSamplerNum == 0);
+    CHECK(layout.desc.rootRegisterSpace == 0);
+    REQUIRE(layout.desc.descriptorSetNum == 1);
+    CHECK(layout.set.registerSpace == 0);
+
+    // b0 push constants: the same 16-byte BatchConstants block every 2D
+    // pipeline reads, vertex-stage only (no ps_main reads it).
+    REQUIRE(layout.desc.rootConstantNum == 1);
+    CHECK(layout.rootConstant.registerIndex == 0);
+    CHECK(layout.rootConstant.size == 16);
+    CHECK(layout.rootConstant.shaderStages == nri::StageBits::VERTEX_SHADER);
+
+    // The register map, and the ORDER that lets NRI's D3D12 backend merge the
+    // two CBVs into one root table: CBV b1, CBV b2, SRV t0..tN, SAMPLER s0.
+    REQUIRE(layout.set.rangeNum == 4);
+    REQUIRE(layout.materialCb != Arcane::SpriteMaterialLayout::kNoRange);
+    CHECK(layout.materialCb == 0);
+    CHECK(layout.globalsCb  == 1);
+    CHECK(layout.textures   == 2);
+    CHECK(layout.sampler    == 3);
+
+    CHECK(layout.ranges[layout.materialCb].descriptorType == nri::DescriptorType::CONSTANT_BUFFER);
+    CHECK(layout.ranges[layout.materialCb].baseRegisterIndex == 1);   // b1
+    CHECK(layout.ranges[layout.materialCb].descriptorNum == 1);
+    CHECK(layout.ranges[layout.globalsCb].descriptorType == nri::DescriptorType::CONSTANT_BUFFER);
+    CHECK(layout.ranges[layout.globalsCb].baseRegisterIndex == 2);    // b2
+    CHECK(layout.ranges[layout.globalsCb].descriptorNum == 1);
+    // ONE contiguous SRV range: the sprite's own t0 plus the declared t1..N.
+    CHECK(layout.ranges[layout.textures].descriptorType == nri::DescriptorType::TEXTURE);
+    CHECK(layout.ranges[layout.textures].baseRegisterIndex == 0);
+    CHECK(layout.ranges[layout.textures].descriptorNum == 2);
+    CHECK(layout.ranges[layout.sampler].descriptorType == nri::DescriptorType::SAMPLER);
+    CHECK(layout.ranges[layout.sampler].baseRegisterIndex == 0);      // s0
+    CHECK(layout.ranges[layout.sampler].descriptorNum == 1);
+
+    // NRI validates that every range's stages are a SUBSET of the layout's
+    // (DeviceVal.hpp) -- and every range here is both stages, because a
+    // template's VERTEX_BODY may sample its textures and read its params.
+    for (std::uint32_t i = 0; i < layout.set.rangeNum; ++i)
+    {
+        const auto stages = (std::uint32_t)layout.ranges[i].shaderStages;
+        const auto all    = (std::uint32_t)layout.desc.shaderStages;
+        CHECK((stages & all) == stages);
+        CHECK((stages & (std::uint32_t)nri::StageBits::VERTEX_SHADER) != 0u);
+        CHECK((stages & (std::uint32_t)nri::StageBits::FRAGMENT_SHADER) != 0u);
+    }
+
+    // The desc points at THIS object's arrays -- the reason it is not copyable.
+    CHECK(layout.desc.descriptorSets == &layout.set);
+    CHECK(layout.desc.rootConstants == &layout.rootConstant);
+    CHECK(layout.set.ranges == layout.ranges);
+}
+
+TEST_CASE("nri batch2d material layout: a template with no numeric params declares no b1 range "
+          "at all", "[nri]")
+{
+    // The stitcher omits the whole material cbuffer block when the snippet
+    // declares no numeric params (MaterialSource.cpp), and Batcher2D's own
+    // binding layout omits the matching item -- so a b1 range here would name a
+    // register the shader never declared.
+    Arcane::SpriteMaterialLayout layout;
+    layout.Build(/*cbSize=*/0, /*textureCount=*/0);
+
+    CHECK(layout.materialCb == Arcane::SpriteMaterialLayout::kNoRange);
+    REQUIRE(layout.set.rangeNum == 3);
+    CHECK(layout.globalsCb == 0);
+    CHECK(layout.textures  == 1);
+    CHECK(layout.sampler   == 2);
+    CHECK(layout.ranges[layout.globalsCb].baseRegisterIndex == 2);   // b2, still
+    // t0 alone: the sprite's own texture is always bound, declared params or not.
+    CHECK(layout.ranges[layout.textures].descriptorNum == 1);
+    // ...and the space rule still holds for the degenerate shape.
+    CHECK(layout.desc.rootDescriptorNum == 0);
+    CHECK(layout.desc.rootSamplerNum == 0);
+}
+
+TEST_CASE("nri batch2d material layout: materials of the same SHAPE share one registered layout, "
+          "different shapes do not", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriPipelineCache cache;
+    cache.Bind(*device);
+
+    // NriPipelineCache::RegisterLayout dedups BYTE WISE, which is why
+    // SpriteMaterialLayout::Build value-initializes every desc before assigning
+    // it field by field. Two materials of the same (has-CB, textureCount) shape
+    // must therefore collapse onto ONE layout -- otherwise every material in a
+    // scene creates its own pipeline layout for an identical binding map.
+    Arcane::SpriteMaterialLayout a, b, wider, noCb;
+    a.Build(32, 1);
+    b.Build(16, 1);        // a different cbSize is the SAME layout: the CB VIEW carries the size
+    wider.Build(32, 2);
+    noCb.Build(0, 1);
+
+    const std::uint32_t idA = cache.RegisterLayout(a.desc);
+    REQUIRE(idA != Arcane::NriPipelineCache::kInvalidLayout);
+    CHECK(cache.LayoutCount() == 1);
+
+    CHECK(cache.RegisterLayout(b.desc) == idA);
+    CHECK(cache.LayoutCount() == 1);
+
+    const std::uint32_t idWider = cache.RegisterLayout(wider.desc);
+    CHECK(idWider != idA);
+    CHECK(cache.LayoutCount() == 2);
+
+    const std::uint32_t idNoCb = cache.RegisterLayout(noCb.desc);
+    CHECK(idNoCb != idA);
+    CHECK(idNoCb != idWider);
+    CHECK(cache.LayoutCount() == 3);
+
+    cache.Clear(device->Graves(), 0);
+    device->Graves().Drain();
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("nri batch2d constant arena: every (frame slot, region) pair owns a distinct, "
+          "stride-aligned byte range", "[nri]")
+{
+    // The property the whole arena rests on, and the one a desk run would only
+    // ever reveal as "the wrong material's colours". Batch2DNode creates its
+    // constant-buffer views ONCE, at fixed offsets, and double-buffers by frame
+    // slot -- so two regions overlapping would mean one frame's memcpy
+    // corrupting another frame's in-flight constants.
+    using Node = Arcane::Batch2DNode;
+    CHECK(Node::kCbRegionsPerFrame == Node::kMaxMaterialSlots + 1);
+
+    // Both a D3D12-shaped alignment (256) and a smaller Vulkan one (64), since
+    // the stride is whatever deviceDesc.memoryAlignment.constantBufferOffset
+    // rounds kMaterialCbMaxBytes up to.
+    const std::uint64_t strides[] = { 256, 64 };
+    for (const std::uint64_t stride : strides)
+    {
+        const std::uint64_t arenaBytes =
+            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight * stride;
+        std::vector<std::uint64_t> seen;
+        for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+        {
+            for (std::uint32_t region = 0; region < Node::kCbRegionsPerFrame; ++region)
+            {
+                const std::uint64_t offset = Node::CbRegionOffset(stride, slot, region);
+                CHECK(offset % stride == 0);
+                for (const std::uint64_t other : seen)
+                    REQUIRE(offset != other);            // no aliasing, ever
+                REQUIRE(offset + stride <= arenaBytes);  // and none escapes the buffer
+                seen.push_back(offset);
+            }
+        }
+        // Every region of the buffer Batch2DNode allocates is claimed exactly once.
+        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight);
+    }
+
+    // Region 0 of each frame slot is the GLOBALS CB and material slot n is
+    // region 1 + n -- the indexing Batch2DNode::ArenaOffset and
+    // MaterialSlot::cbRegion agree on.
+    CHECK(Node::CbRegionOffset(256, 0, 0) == 0);
+    CHECK(Node::CbRegionOffset(256, 0, 1) == 256);
+    CHECK(Node::CbRegionOffset(256, 1, 0) == (std::uint64_t)Node::kCbRegionsPerFrame * 256);
 }

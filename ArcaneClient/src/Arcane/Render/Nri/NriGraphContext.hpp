@@ -93,6 +93,7 @@
 #include <NRI.h>
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Guid.hpp>
 #include <Arcane/Host/HostConfig.hpp>   // HostConfig, GoldenStage
 #include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
@@ -112,7 +113,9 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -162,6 +165,13 @@ namespace Arcane
         // FAILED frame has already bumped RenderErrorCount and must stop the
         // run.
         enum class FrameOutcome : std::uint8_t { Presented, Skipped, Failed };
+
+        // Guid -> asset file, the SAME resolution the engine's caches use
+        // (Project::ResolveAsset behind Runtime::CurrentProject; see
+        // SceneRenderResolver's constructor, which builds the identical
+        // lambda). Injected rather than derived here because this class owns no
+        // Runtime and must not grow one -- it is a RENDER vehicle.
+        using AssetResolveFn = std::function<std::optional<std::filesystem::path>(const Guid&)>;
 
         // Builds window + native device + NRI wrap + swapchain + ring + cache
         // + graph, in that order, honouring `config.backend` and
@@ -268,6 +278,27 @@ namespace Arcane
         // a safe command-buffer slot.
         [[nodiscard]] std::uint64_t PresentedFrames() const noexcept { return m_frameIndex; }
 
+        // THE slot the frame currently being declared/recorded owns -- the
+        // exact value RenderFrame passes to ring.BeginFrame and
+        // RgExecuteDesc::frameSlot, exposed so a node that keeps its OWN
+        // per-frame-slot storage (Batch2DNode's constant-buffer arena) indexes
+        // it with the same number the ring does instead of re-deriving it.
+        // Stable for the whole of one RenderFrame call.
+        [[nodiscard]] std::uint32_t FrameSlot() const noexcept
+        {
+            return (std::uint32_t)(m_frameIndex % kSwapchainFramesInFlight);
+        }
+
+        // Installed once by the frame driver, right after Create(). Without it
+        // every asset Guid resolves to nothing -- a material's declared
+        // textures then fall back to the white texel, loudly and once
+        // (Batch2DNode). Copied, not borrowed.
+        void SetAssetResolver(AssetResolveFn resolver) { m_resolveAsset = std::move(resolver); }
+        [[nodiscard]] std::optional<std::filesystem::path> ResolveAsset(const Guid& id) const
+        {
+            return (m_resolveAsset && id.IsValid()) ? m_resolveAsset(id) : std::nullopt;
+        }
+
     private:
         NriGraphContext() = default;
 
@@ -329,6 +360,9 @@ namespace Arcane
         // CurrentBatch(). Cleared at the end of every RenderFrame so a stale
         // batcher can never be drained by a later frame.
         Batcher2D* m_currentBatch = nullptr;
+
+        // See SetAssetResolver. Empty until the frame driver installs one.
+        AssetResolveFn m_resolveAsset;
 
         nri::Format   m_format     = nri::Format::UNKNOWN;
         std::uint64_t m_frameIndex = 0;   // PRESENTED frames; the command-slot clock

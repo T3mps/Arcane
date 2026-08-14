@@ -415,7 +415,22 @@ namespace Arcane
                 out.indices  = std::span<const uint32_t>(m_indices);
                 out.spans    = std::span<const Batch2DDrawSpan>(m_runs);
                 out.viewport = m_viewport;
+                // The same sticky value End() writes into the globals CB for
+                // registered materials -- handed over rather than re-fetched by
+                // the consumer, so the second recorder cannot bind different
+                // globals than the first would have.
+                out.globals  = &m_globals;
                 return out;
+            }
+
+            const Material2DDesc* MaterialDesc(uint16_t id) const override
+            {
+                // Built-ins carry no Material2DDesc at all (their entries name
+                // ShaderLibrary artifacts by string), so a REGISTERED id is the
+                // only case with anything to hand back.
+                if (id < kBuiltInMaterialCount || id >= m_materials.size())
+                    return nullptr;
+                return &m_materials[id].desc;
             }
 
             void RemoveTexture(nvrhi::ITexture* texture) override

@@ -244,6 +244,14 @@ namespace Arcane
         desc.ps = ps;
         desc.templ = p.templ;
         desc.instance = inst;
+        // The SAME blobs the two handles above were created from, retained for
+        // the second recorder (NRI Phase 2, Task 9 -- Material2DDesc::vsBytes).
+        // Moved out of the pending entry, which is erased right after this
+        // returns, so nothing is copied and nothing is compiled twice. Exactly
+        // ONE target survives: the one `im.services.backend` selected above,
+        // which is the backend the whole process runs on.
+        desc.vsBytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(p.vsBytes));
+        desc.psBytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(p.psBytes));
         const std::vector<Guid> texGuids = inst->ResolveTextures();
         desc.paramTextures.resize(texGuids.size());
         if (im.services.assets)

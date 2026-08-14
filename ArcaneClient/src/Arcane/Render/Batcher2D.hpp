@@ -43,6 +43,23 @@ namespace Arcane
         std::shared_ptr<const MaterialTemplate> templ;
         std::shared_ptr<const MaterialInstance> instance;
         std::vector<nvrhi::TextureHandle> paramTextures;
+
+        // The STITCHED, COMPILED blobs `vs`/`ps` were created from -- retained
+        // (NRI Phase 2, Task 9) because a SECOND graphics device in the same
+        // process cannot use an nvrhi::ShaderHandle, only the bytecode behind
+        // it. The graph path's Batch2DNode builds its own NRI pipelines from
+        // exactly these bytes, so both recorders run the same shader rather
+        // than two independently compiled ones.
+        //
+        // ONE target, not both: the producer (SpriteMaterialCache) already
+        // picks dxil-or-spirv by the process's GraphicsBackend, and the graph
+        // vehicle runs on that same backend (RuntimeApp builds both from one
+        // HostConfig). shared_ptr so a Material2DDesc stays cheap to copy and
+        // so a RE-compile is observable as a new pointer.
+        // Null on a material registered without them: the graph path then
+        // falls back to the plain sprite pipeline and says so once.
+        std::shared_ptr<const std::vector<std::uint8_t>> vsBytes;
+        std::shared_ptr<const std::vector<std::uint8_t>> psBytes;
     };
 
     // The 4 corners of a quad, in the order Batcher2D emits them: TL, TR, BR, BL.
@@ -135,6 +152,12 @@ namespace Arcane
         // must derive its projection push-constants from (Batcher2D.cpp's
         // PushConstants{2/viewport}).
         glm::vec2 viewport{ 0.0f };
+        // What the host last SetGlobals()'d -- the engine-global constants
+        // every REGISTERED material samples (b2 on the sprite register map,
+        // GlobalParams.hpp). Points at the batcher's own member, so it is
+        // valid for as long as the batcher is; null only on a drain that
+        // produced nothing. Built-in spans ignore it, exactly as End() does.
+        const GlobalParams* globals = nullptr;
 
         [[nodiscard]] bool Empty() const noexcept { return spans.empty(); }
     };
@@ -277,5 +300,21 @@ namespace Arcane
         // is refused outright rather than merely surviving by luck; keep both,
         // and keep new virtuals at the end.
         virtual Batch2DDrained Drain() { return {}; }
+
+        // The registration data behind a REGISTERED material id -- shaders,
+        // template layout, values instance -- for a consumer that has to build
+        // its OWN pipeline and bindings from it. The NRI graph path's
+        // Batch2DNode is that consumer (Phase 2, Task 9): a drained span names
+        // a material id, and this is the only way back from the id to what the
+        // id means.
+        //
+        // Null for a built-in id (0..2), an id this batcher never issued, and
+        // on a test double that registers nothing. The returned pointer is
+        // owned by the batcher and is invalidated by UpdateMaterial on the SAME
+        // id -- read it inside the frame that drained the span, never store it.
+        //
+        // APPENDED, and it stays appended -- see Drain()'s comment above for
+        // why every new virtual goes at the end of this class. ABI v12.
+        virtual const Material2DDesc* MaterialDesc(uint16_t /*id*/) const { return nullptr; }
     };
 }

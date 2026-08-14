@@ -101,7 +101,19 @@ namespace Arcane
     //     implementation (a test double, a future editor batcher) hits a slot
     //     that module never emitted. Reject the pairing; the failure mode of
     //     NOT rejecting it is silent.
-    inline constexpr uint32_t kGamePluginABIVersion = 11;
+    // v12 (2026-08-14): Batcher2D grew a second appended virtual --
+    //     `const Material2DDesc* MaterialDesc(uint16_t)`, the id -> registration
+    //     lookup the NRI graph path needs to build a REGISTERED material's own
+    //     pipeline and bindings (Phase 2, Task 9). Two data layouts moved with
+    //     it and each is independently sufficient to require this bump:
+    //     Material2DDesc gained the retained shader BLOBS (vsBytes/psBytes) and
+    //     Batch2DDrained gained `globals`. Both are passed BY VALUE across the
+    //     Batcher2D vtable (RegisterMaterial takes a Material2DDesc; Drain
+    //     returns a Batch2DDrained), so a module compiled against the v11
+    //     layouts and a host compiled against these disagree about object size
+    //     -- which corrupts the stack rather than merely misdispatching. Same
+    //     verdict as v11, with a harder reason.
+    inline constexpr uint32_t kGamePluginABIVersion = 12;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

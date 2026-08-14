@@ -16,6 +16,7 @@
 #include <Arcane/Guid.hpp>          // Arcane::Guid::FromString (--scene override; not pulled in transitively by any of the below)
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
+#include <Arcane/Project/AssetId.hpp>    // Arcane::AssetId::FromGuid (--nri-graph asset resolver)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Batcher2D.hpp>   // Arcane::Batch2DStats (loop HUD + perf tick)
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
@@ -576,6 +577,20 @@ void RuntimeApp::MainLoop()
             ShutdownGraphPath();
             return;
         }
+        // Guid -> asset file, so the graph path can make a REGISTERED sprite
+        // material's declared TEXTURES resident on its own device (Task 9).
+        // Deliberately the same lambda SceneRenderResolver builds
+        // (SceneRenderResolver.cpp's constructor): re-reads CurrentProject()
+        // per call, so it survives a project switch, and resolves through the
+        // one registry both render paths already agree on.
+        m_graphContext->SetAssetResolver(
+            [rt = &*m_runtime](const Arcane::Guid& id)
+                -> std::optional<std::filesystem::path>
+            {
+                const Arcane::Project* project = rt ? rt->CurrentProject() : nullptr;
+                return project ? project->ResolveAsset(Arcane::AssetId::FromGuid(id))
+                               : std::nullopt;
+            });
     }
 #endif
 
