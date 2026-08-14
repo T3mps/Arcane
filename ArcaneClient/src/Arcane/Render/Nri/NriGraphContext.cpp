@@ -636,6 +636,31 @@ namespace Arcane
 
     NriGraphContext::FrameOutcome NriGraphContext::RenderFrame(const FrameDesc& frame)
     {
+        // ==============================================================
+        // A ZERO-SIZED SURFACE IS ROUTINE, AND IT HAS TO BE CAUGHT HERE.
+        // ==============================================================
+        // FrameOutcome's own contract names "a zero-sized surface, a minimized
+        // window" as SKIPPED -- routine, does not advance the frame counter,
+        // does not end a --frames N run. NriSwapChain::AcquireNextTexture
+        // implements exactly that skip, and until Task 8 it was reachable:
+        // Task 7's frame declared no transients, so the first thing Execute()
+        // did that could fail was the acquire.
+        //
+        // Task 8's frame declares the CANVAS, a transient sized to this
+        // swapchain -- and NriSwapChain::Resize stores a 0x0 extent verbatim,
+        // so a minimised window makes that a 0x0 transient. Execute() realizes
+        // the pool BEFORE it acquires, and RealizePool REFUSES a zero extent
+        // through the latched error seam (nri::Dim_t cannot express it and a
+        // zero-dimension texture would create successfully as something else).
+        // A latched refusal is FrameOutcome::Failed, which stops the run with a
+        // nonzero exit code -- the opposite of routine, and it would have made
+        // the acquire's own skip unreachable.
+        //
+        // So the guard belongs in front of the DECLARATION, not inside it: at
+        // 0x0 there is no frame worth declaring at all.
+        if (m_swap->Width() == 0 || m_swap->Height() == 0)
+            return FrameOutcome::Skipped;
+
         // A capture frame needs its staging buffer sized to the CURRENT extent
         // before the graph is declared (the node imports the buffer, so it has
         // to exist first). A failure here degrades to an uncaptured frame

@@ -2667,6 +2667,74 @@ TEST_CASE("nri graph frame: a capture frame copies the backbuffer BEFORE it pres
     CheckState(compiled.exitBarriers[0].after, kPresentState);
 }
 
+TEST_CASE("nri graph frame: a zero-extent canvas COMPILES but is a latched refusal at Execute",
+          "[nri]")
+{
+    // Fix round 1, finding 1 -- the two halves of why NriGraphContext::
+    // RenderFrame skips a zero-sized surface BEFORE it declares anything.
+    // RenderFrame itself cannot be exercised headlessly (it needs a real window
+    // and swapchain), so what is pinned here is the mechanism it guards
+    // against; if the guard were removed, a minimised window would exit the
+    // run nonzero instead of skipping a frame.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    // HALF ONE: the declaration side cannot catch it. A 0x0 canvas is a
+    // perfectly well-formed set of declarations -- Compile is pure and derives
+    // barriers, not extents -- so nothing refuses the frame here.
+    {
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 0;
+        shape.canvasHeight = 0;
+        Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        CHECK(compiled.transients.size() == 1);
+        CHECK(compiled.poolSlotCount == 1);
+    }
+    CHECK(Arcane::RenderErrorCount() == before);
+
+    // HALF TWO: Execute REFUSES it, and the refusal is LATCHED -- which on the
+    // vehicle means FrameOutcome::Failed and a nonzero exit, not a routine
+    // skip. It also happens during pool realization, i.e. BEFORE the acquire
+    // that owns the real zero-sized-surface skip, so that skip can never be
+    // reached with a zero-extent transient declared.
+    {
+        auto device = Arcane::NriDevice::CreateNoneForTests();
+        REQUIRE(device != nullptr);
+
+        Arcane::NriUploadRing    ring;
+        Arcane::NriPipelineCache pipelines;
+        Arcane::RenderGraph      graph;
+        const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+
+        Arcane::RgTexture canvas;
+        graph.AddNode("batch2d", Arcane::RenderGraph::NodeKind::Raster,
+            [&](Arcane::RenderGraphBuilder& builder)
+            {
+                Arcane::RgTextureDesc textureDesc;
+                textureDesc.format = nri::Format::RGBA16_SFLOAT;
+                textureDesc.width  = 0;
+                textureDesc.height = 0;
+                canvas = builder.CreateTexture("canvas", textureDesc);
+                builder.Write(canvas, Arcane::RgUsage::ColorWrite);
+                graph.SetColorAttachments(std::span<const Arcane::RgTexture>(&canvas, 1));
+            },
+            [](Arcane::RenderGraphNodeContext&) {});
+
+        const std::uint64_t beforeExecute = Arcane::RenderErrorCount();
+        CHECK_FALSE(graph.Execute(desc, CompileOk(graph)));
+        CHECK(Arcane::RenderErrorCount() > beforeExecute);
+
+        graph.ReleaseGpuResources();
+        device->Graves().Drain();
+    }
+
+    // This case deliberately GREW the latch; clear it so no other case
+    // inherits the refusal -- the same restore the neighbouring exec cases do.
+    Arcane::ResetRenderErrorCount();
+}
+
 TEST_CASE("nri graph frame: the canvas transient is swapchain-sized RGBA16F and reused across frames",
           "[nri]")
 {

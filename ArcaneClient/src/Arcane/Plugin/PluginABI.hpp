@@ -87,7 +87,21 @@ namespace Arcane
     //     ComponentRegistry grew owner/shadow/meta-thunk state, so a v9 plugin's
     //     inlined template code manipulates a registry whose layout changed.
     //     Layout mismatch plus a removed API: reject the pairing.
-    inline constexpr uint32_t kGamePluginABIVersion = 10;
+    // v11 (2026-08-14): Batcher2D grew a virtual -- Batch2DDrained Drain(), the
+    //     read interface the NRI graph path's Batch2DNode consumes instead of
+    //     End(). Plugins compile their own copy of Batcher2D.hpp (through
+    //     SceneResources.hpp's RenderContext2D, which the header-only
+    //     RenderSubmissionSystem calls) and dispatch through this vtable, so a
+    //     module built against a Batcher2D with a different virtual set is the
+    //     same failure class as the v6 entry above (:34-35). Drain() is declared
+    //     LAST specifically so no EXISTING slot moves -- a v10 module would in
+    //     fact still dispatch correctly -- but "correct by luck" is not what the
+    //     gate is for: the header a v10 module baked in has no Drain() at all,
+    //     so anything that calls it through a plugin-provided Batcher2D
+    //     implementation (a test double, a future editor batcher) hits a slot
+    //     that module never emitted. Reject the pairing; the failure mode of
+    //     NOT rejecting it is silent.
+    inline constexpr uint32_t kGamePluginABIVersion = 11;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

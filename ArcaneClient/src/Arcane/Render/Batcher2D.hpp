@@ -237,20 +237,6 @@ namespace Arcane
 
         virtual void End() = 0;
 
-        // Sorts this batch's recorded quads and builds the index + draw-span
-        // streams WITHOUT recording anything, then hands back a view of all
-        // three (see Batch2DDrained). The NRI graph path's Batch2DNode calls
-        // this instead of End(): it consumes the same CPU batching and issues
-        // its own draws through NRI.
-        //
-        // Idempotent inside one Begin() bracket -- End() runs the same work
-        // through the same code, so calling BOTH (never done today, but
-        // harmless) sorts and builds exactly once. Interface DEFAULT (not
-        // pure), for the same reason RegisterMaterial is: the geometry-
-        // recording test doubles stay valid, and a double that records nothing
-        // drainable honestly reports an empty batch.
-        virtual Batch2DDrained Drain() { return {}; }
-
         // Drops the cached texture->binding-set entry for `texture` (no-op
         // when absent or null). Call this BEFORE releasing a texture the
         // batcher has drawn with: the cached set holds a reference that pins
@@ -267,5 +253,29 @@ namespace Arcane
         // Stats for the most recently End()ed batch.
         // Valid after End() until the next Begin(); an empty batch reports all-zero.
         virtual Batch2DStats Stats() const = 0;
+
+        // Sorts this batch's recorded quads and builds the index + draw-span
+        // streams WITHOUT recording anything, then hands back a view of all
+        // three (see Batch2DDrained). The NRI graph path's Batch2DNode calls
+        // this instead of End(): it consumes the same CPU batching and issues
+        // its own draws through NRI.
+        //
+        // Idempotent inside one Begin() bracket -- End() runs the same work
+        // through the same code, so calling BOTH (never done today, but
+        // harmless) sorts and builds exactly once. Interface DEFAULT (not
+        // pure), for the same reason RegisterMaterial is: the geometry-
+        // recording test doubles stay valid, and a double that records nothing
+        // drainable honestly reports an empty batch.
+        //
+        // DECLARED LAST, AND THAT IS NOT TIDINESS. A game module compiles its
+        // OWN copy of this header (RenderContext2D in SceneResources.hpp ->
+        // RenderSubmissionSystem) and dispatches through this vtable, so
+        // inserting a virtual anywhere ABOVE an existing one slides every slot
+        // after it -- a stale module would call Stats() into
+        // RemoveTexture(ITexture*). Appending cannot slide anything. The
+        // plugin ABI gate was ALSO bumped (PluginABI.hpp v11) so a stale module
+        // is refused outright rather than merely surviving by luck; keep both,
+        // and keep new virtuals at the end.
+        virtual Batch2DDrained Drain() { return {}; }
     };
 }
