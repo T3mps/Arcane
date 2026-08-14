@@ -233,12 +233,38 @@ namespace Arcane
         // destroy safety net.
         m_pipelines.Clear(graves, fence);
 
-        // Buries the transient pool + the cached attachment views at the same
-        // value. ~RenderGraph then buries the per-frame command slots and the
-        // submission fence, also at m_submitValue, and ~NriDevice drains the
-        // whole graveyard behind its own DeviceWaitIdle.
+        // Buries the transient pool + EVERY cached attachment view at the same
+        // value -- including the IMPORTED views, which name this frame's
+        // swapchain backbuffers (ReleaseGpuResources -> ReleaseImportedViews).
         if (m_graph)
             m_graph->ReleaseGpuResources();
+
+        // ...and RUNS those burials HERE rather than leaving them pending.
+        // Load-bearing, and Vulkan-only in its consequences (fix round 1,
+        // finding 1):
+        //
+        // The graveyard's ordinary drain site is ~NriDevice -- which runs AFTER
+        // ~NriSwapChain in this class's member order, and NriSwapChain's
+        // teardown destroys the backbuffer IMAGES along with the swapchain. A
+        // view left buried above would therefore reach DestroyDescriptor with
+        // its VkImage already gone: exactly the "a VkImageView outliving its
+        // VkSwapchainKHR is a validation error" pattern NriSmoke.cpp's
+        // ~Resources documents and sidesteps by destroying its own views
+        // directly. On a vehicle whose entire exit-code contract is "the latch
+        // did not grow", that is not an ordering nit -- it is a guaranteed
+        // nonzero exit on vulkan.
+        //
+        // Draining here fixes it structurally: a destructor BODY runs before
+        // any member is destroyed, so the swapchain and its images are still
+        // alive at this line. Graveyard::Drain's precondition -- the caller has
+        // already made the GPU idle -- is satisfied by the DeviceWaitIdle at
+        // the top of this function. Everything buried above (capture buffer,
+        // pipeline cache, pool, views) goes out in this one sweep; ~RenderGraph
+        // then buries the command slots and the submission fence into a now-
+        // EMPTY graveyard (so nondecreasing holds trivially), and ~NriDevice
+        // drains that as usual. Neither of those names a swapchain image, so
+        // their ordering is unchanged and safe.
+        graves.Drain();
 
         // The number to size kUploadRingBytesPerFrame from once a real frame
         // has run -- the peak across every slot, not slot 0's.
@@ -253,6 +279,49 @@ namespace Arcane
     {
         if (!m_swap)
             return;
+
+        // ==============================================================
+        // EVERYTHING THAT NAMES A BACKBUFFER DIES BEFORE THE BACKBUFFERS DO.
+        // ==============================================================
+        // NriSwapChain::Resize destroys and recreates every swapchain texture
+        // (its header: destroy+recreate is the only path NRI offers). The
+        // graph holds a COLOR_ATTACHMENT view over the currently-acquired
+        // backbuffer from the last Execute -- it turns those over per frame
+        // (RenderGraph::ReleaseImportedViews) but by BURYING them, so at this
+        // instant they are still live descriptors naming images that are about
+        // to be freed. Letting the resize proceed would leave them to be
+        // destroyed later against a dead VkImage -- the same validation error
+        // as the teardown case in ~NriGraphContext, and the one D2's vulkan
+        // drag-storm would hit on the FIRST drag (fix round 1, finding 1).
+        //
+        // Order below is the whole point, and each step needs the one above it:
+        //   1. idle -- Graveyard::Drain's stated precondition, and NriSwapChain
+        //      does its own QueueWaitIdle only LATER, inside Resize();
+        //   2. drop the capture staging buffer, whose size is the old extent;
+        //   3. release the pool + every view (imported ones included);
+        //   4. DRAIN, so 2 and 3 actually execute while the images still exist;
+        //   5. only now, resize.
+        // Releasing the transient pool here is not collateral damage: a pool
+        // slot's desc is extent-derived, so RealizePool would re-create it on
+        // the next frame anyway (and Phase 2's frame has no transients at all).
+        // A resize is a rare event; a dangling descriptor is not a rare bug.
+        const nri::CoreInterface& core = m_device->Core();
+        if (core.DeviceWaitIdle)
+            (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
+
+        Graveyard& graves = m_device->Graves();
+        if (m_capture)
+        {
+            const nri::CoreInterface* graveCore = &core;
+            graves.Bury(m_graph ? m_graph->DebugSubmitCount() : 0,
+                        [graveCore, b = m_capture] { graveCore->DestroyBuffer(b); });
+            m_capture = nullptr;
+        }
+        m_captureRecorded = false;
+
+        if (m_graph)
+            m_graph->ReleaseGpuResources();
+        graves.Drain();
 
         // NriSwapChain's "no Resize between Acquire and Present" caller
         // contract is satisfied structurally here: the graph's acquire/present
@@ -272,18 +341,6 @@ namespace Arcane
                      "every format-keyed pipeline is now stale", (int)m_format, (int)resolved);
             m_format = resolved;
         }
-
-        // The staging buffer is sized to an extent that no longer exists.
-        // Dropped rather than resized in place: EnsureCaptureBuffer rebuilds
-        // it on the next capture frame, and a capture is a once-per-run event.
-        if (m_capture)
-        {
-            const nri::CoreInterface* core = &m_device->Core();
-            m_device->Graves().Bury(m_graph ? m_graph->DebugSubmitCount() : 0,
-                                     [core, b = m_capture] { core->DestroyBuffer(b); });
-            m_capture = nullptr;
-        }
-        m_captureRecorded = false;
     }
 
     bool NriGraphContext::EnsureCaptureBuffer()

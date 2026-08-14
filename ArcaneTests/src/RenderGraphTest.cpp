@@ -2339,6 +2339,96 @@ TEST_CASE("rendergraph exec: an imported attachment's view is rebuilt every Exec
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
+TEST_CASE("rendergraph exec: ReleaseGpuResources + Drain destroys imported views SYNCHRONOUSLY", "[nri]")
+{
+    // Fix round 1, finding 1 -- the mechanism NriGraphContext::Resize() and
+    // ~NriGraphContext both depend on, pinned here because neither of THEM can
+    // be exercised headlessly (both need a real window and swapchain).
+    //
+    // THE HAZARD. RenderGraph turns imported views over per Execute, but it
+    // does so by BURYING them -- so between frames they sit PENDING in the
+    // device graveyard, still naming the backbuffers they were created over.
+    // The graveyard's ordinary drain site is ~NriDevice, which on the vehicle
+    // runs AFTER the swapchain is destroyed. A pending view reaped then is a
+    // DestroyDescriptor over a freed VkImage: a validation error, and therefore
+    // a nonzero exit for a vehicle whose contract is "the latch did not grow".
+    //
+    // THE FIX both call sites make is to idle, ReleaseGpuResources() and DRAIN
+    // before letting the backbuffers go. What that needs from the graph is that
+    // the pair is a COMPLETE and IMMEDIATE release -- nothing left pending
+    // afterwards. That is what this case pins. If a future edit stopped
+    // ReleaseGpuResourcesInternal from calling ReleaseImportedViews, the
+    // dangle would come back silently and this is what would catch it.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+
+    // Stands in for an acquired backbuffer -- never dereferenced (every NONE
+    // Cmd* is a no-op and the graph only stores/compares the pointer).
+    auto* const backbufferTexture = reinterpret_cast<nri::Texture*>(0x1000);
+    constexpr nri::AccessLayoutStage kEntry{
+        nri::AccessBits::NONE, nri::Layout::UNDEFINED, nri::StageBits::ALL };
+
+    Arcane::RgTexture backbuffer;
+    graph.AddNode("clear", Arcane::RenderGraph::NodeKind::Raster,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            backbuffer = builder.ImportTexture("backbuffer", backbufferTexture,
+                                               kEntry, kPresentState, /*persistent=*/false);
+            builder.Write(backbuffer, Arcane::RgUsage::ColorWrite);
+            graph.SetColorAttachments(std::span<const Arcane::RgTexture>(&backbuffer, 1));
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+
+    // Steady state between frames: the view is LIVE (created this Execute) and
+    // nothing is pending yet. This is the exact instant a resize arrives in.
+    CHECK(device->Graves().Pending() == 0);
+
+    // The release buries it -- and, on its own, that is all it does. Left here,
+    // the reap would happen inside ~NriDevice, after the swapchain is gone.
+    graph.ReleaseGpuResources();
+    CHECK(device->Graves().Pending() == 1);
+
+    // The drain is what makes it actually run, while the texture still exists.
+    // Pending() == 0 is the whole property: NOTHING survives to be reaped after
+    // the backbuffers are freed.
+    device->Graves().Drain();
+    CHECK(device->Graves().Pending() == 0);
+
+    // ...and the graph is immediately usable again -- ReleaseGpuResources is
+    // pool + views only, so the command slots and the fence survived and the
+    // next frame simply re-realizes. That is what lets Resize() call it on
+    // every window drag.
+    graph.Reset();
+    Arcane::RgTexture rebuilt;
+    graph.AddNode("clear", Arcane::RenderGraph::NodeKind::Raster,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            // A DIFFERENT address: the post-resize backbuffer.
+            rebuilt = builder.ImportTexture("backbuffer",
+                                            reinterpret_cast<nri::Texture*>(0x2000),
+                                            kEntry, kPresentState, /*persistent=*/false);
+            builder.Write(rebuilt, Arcane::RgUsage::ColorWrite);
+            graph.SetColorAttachments(std::span<const Arcane::RgTexture>(&rebuilt, 1));
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+
+    graph.ReleaseGpuResources();
+    device->Graves().Drain();
+    CHECK(device->Graves().Pending() == 0);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
 // ======================================================================
 // The --nri-graph vehicle's frame SHAPE (Phase 2, Task 7)
 // ======================================================================

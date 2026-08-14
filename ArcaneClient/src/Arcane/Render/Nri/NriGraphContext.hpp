@@ -43,11 +43,26 @@
 //  1. Vulkan: NriDevice.hpp's "one live Vulkan device per process" rule is
 //     BROKEN on this path by construction -- the Vulkan-Hpp default dispatcher
 //     (Render/VulkanDispatchStorage.cpp) binds ONE VkDevice, and the creation
-//     half re-inits it, so the NVRHI device's device-level entry points can be
-//     left pointing into this device's dispatch chain (they differ whenever a
-//     layer is active, i.e. in Debug). Create() says so at WARN. dx12 is
-//     unaffected (two ID3D12Devices coexist fine). Closing this properly means
-//     one device for the whole process, which is the Phase 3 flip.
+//     half re-inits it onto ours (DeviceVulkan.cpp's
+//     VULKAN_HPP_DEFAULT_DISPATCHER.init(out.device)), so the NVRHI device's
+//     device-level entry points are left resolved through THIS device's
+//     dispatch chain. Those pointers coincide only while no layer is active --
+//     and Debug, the configuration this vehicle exists to run in, turns
+//     validation ON. Create() says so at WARN. dx12 is unaffected (two
+//     ID3D12Devices coexist fine). Closing it properly means one device for the
+//     whole process, which is the Phase 3 flip.
+//
+//     IT IS LIVE, NOT LATENT, AND `vulkan + RESIZE` IS THE SHARP EDGE. The
+//     NVRHI device keeps doing device-level work every frame on this path (the
+//     shader poll and the resolver's Refresh sit OUTSIDE RuntimeApp's render
+//     branch), and RuntimeApp still calls GpuContext::OnResize here, which
+//     DESTROYS AND RECREATES the hidden NVRHI swapchain's backbuffers on EVERY
+//     resize -- the heaviest device-level burst in the frame, aimed at the
+//     device whose dispatch chain was rebound. Resize() below closes the
+//     graph's OWN half of the resize hazard (descriptors left naming freed
+//     backbuffers), which does not fix this but does mean a surviving
+//     drag-storm failure has one cause instead of two overlapping ones.
+//     Desk order accordingly: dx12 first, on every item.
 //  2. DXGI allows only ONE flip-model swap chain per HWND at a time
 //     (IDXGIFactory2::CreateSwapChainForHwnd's own remark), and both this
 //     swapchain (NRI SwapChainD3D12 -> DXGI_SWAP_EFFECT_FLIP_DISCARD) and the
@@ -147,9 +162,17 @@ namespace Arcane
         // strictly BETWEEN RenderFrame() calls -- never from inside one --
         // which is exactly what a frame driver that pumps events at the top of
         // its loop does. (The graph's acquire/present pair lives entirely
-        // inside one Execute(), so this is the whole of the caller's
-        // obligation: imported-texture views are rebuilt per Execute, so there
-        // is nothing to invalidate here. See RgExecuteDesc::swapChain.)
+        // inside one Execute(), so that is the whole of the CALLER's
+        // obligation; RgExecuteDesc::swapChain.)
+        //
+        // Not a bare forward to NriSwapChain::Resize: it first idles, releases
+        // the graph's GPU resources and DRAINS the graveyard, so that every
+        // descriptor naming a current backbuffer is destroyed BEFORE those
+        // backbuffers are. RenderGraph turns imported views over per Execute,
+        // but it does so by BURYING them -- and a burial reaped after the
+        // swapchain is gone destroys a view over a freed image, which is a
+        // Vulkan validation error and therefore a nonzero exit on a vehicle
+        // whose contract is "the latch did not grow". See the .cpp.
         void Resize(std::uint32_t width, std::uint32_t height);
 
         // One frame: Reset the graph, declare this frame's nodes, Compile,

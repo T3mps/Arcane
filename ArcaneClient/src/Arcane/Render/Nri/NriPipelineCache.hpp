@@ -26,16 +26,39 @@
 // trusted to remember. Keying on it makes a format change a cache MISS (a new
 // PSO) instead of a silent mismatch.
 //
-// THE FILL CALLBACK'S CONTRACT, which is structural rather than documented:
-// everything IN the key belongs to the cache. After `fill` returns, GetGraphics
-// RE-STAMPS pipelineLayout, inputAssembly.topology, and the whole
-// outputMerger colour/format block from the key, so a callback that tried to
-// set them cannot desynchronise the cache from what it actually created -- and
-// cannot leave outputMerger.colors pointing at an array that died with the
-// callback's own stack frame (the classic form of that bug). Everything else
-// -- shaders, vertexInput, rasterization, multisample, depth/stencil TEST
-// state, robustness -- is the callback's, and must therefore be a pure
-// function of the key, or two different pipelines will collide on one entry.
+// THE FILL CALLBACK'S CONTRACT. Three rules; the first is enforced for you,
+// and the two after it are the ones that bite.
+//
+// 1. EVERYTHING IN THE KEY BELONGS TO THE CACHE, structurally. After `fill`
+//    returns, GetGraphics RE-STAMPS pipelineLayout, inputAssembly.topology and
+//    the whole outputMerger colour/format block from the key -- so a callback
+//    that tried to set them can neither desynchronise the cache from what it
+//    actually created, nor leave outputMerger.colors pointing at an array that
+//    died with its own stack frame.
+//
+// 2. ANYTHING YOU POINT THE DESC AT MUST OUTLIVE THE CALL.
+//    GraphicsPipelineDesc's `shaders`, `vertexInput` and `multisample` are
+//    POINTERS INTO CALLER MEMORY, and CreateGraphicsPipeline runs AFTER `fill`
+//    has returned -- so the obvious spelling
+//
+//        [&](nri::GraphicsPipelineDesc& desc) {
+//            nri::ShaderDesc stages[2] = { ... };   // DANGLES
+//            desc.shaders = stages; desc.shaderNum = 2;
+//        }
+//
+//    hands the cache a pointer into a dead frame. It is the identical hazard
+//    rule 1 closes for outputMerger.colors, on the three fields the cache
+//    cannot own on your behalf. Keep those arrays -- and the shader bytecode
+//    they point at -- in a scope that encloses the GetGraphics call: the
+//    caller's own frame, or a member.
+//
+// 3. EVERYTHING THE CALLBACK SETS MUST BE A PURE FUNCTION OF THE KEY. The
+//    cache compares keys and nothing else, so any state that is NOT keyed --
+//    `vertexInput`, `rasterization`, the depth/stencil TEST state,
+//    `multisample`, `robustness` -- must be folded into `shaderPairId`, which
+//    is opaque to the cache and exists precisely to be the caller's
+//    discriminator. Otherwise two genuinely different pipelines collide on one
+//    entry and the second silently gets the first's PSO.
 //
 // LIFETIME. The cache owns every nri::Pipeline and nri::PipelineLayout it
 // creates and hands them back as borrowed pointers. Clear(graveyard, fence) is
@@ -158,8 +181,11 @@ namespace Arcane
         [[nodiscard]] nri::PipelineLayout* Layout(std::uint32_t id) const;
 
         // The pipeline for `key`, creating it on a miss. `fill` runs ONLY on a
-        // miss and receives a desc whose key-derived fields are already set;
-        // see the header's fill contract for what it may and may not touch.
+        // miss and receives a desc whose key-derived fields are already set.
+        // READ THE HEADER'S FILL CONTRACT before writing one -- it is three
+        // rules, and two of them (pointer lifetime for shaders/vertexInput/
+        // multisample, and folding non-keyed state into shaderPairId) are
+        // caller obligations this class cannot check for you.
         // Null on failure (unbound cache, unregistered layoutId, colorCount
         // over kMaxColorAttachments, or NRI refused the pipeline) -- already
         // logged and latched; the failed key is NOT cached, so a later call
