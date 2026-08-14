@@ -101,6 +101,7 @@
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -261,5 +262,21 @@ namespace Arcane
         nri::Format   m_format     = nri::Format::UNKNOWN;
         std::uint64_t m_frameIndex = 0;   // PRESENTED frames; the command-slot clock
         bool          m_vsync      = true;
+
+        // --- the drag-storm heartbeat (D1 shakedown ride-along) -------------
+        // An open-ended run (`--nri-graph` with no --frames) prints NOTHING
+        // between "ready" and whatever the user's window close produces, so a
+        // desk user dragging the window for 30s has no way to tell a healthy
+        // vehicle from a wedged one. Armed only on that path -- a --frames N
+        // run already ends by itself and says how it went.
+        //
+        // It ticks from RenderFrame, i.e. from PRESENTED frames only, which is
+        // the point: a heartbeat that kept printing while the frame loop was
+        // stuck inside a submit would be worse than silence. Its ABSENCE is
+        // the wedge signal (and the hang watchdog is what turns a real wedge
+        // into a report).
+        bool                                  m_heartbeat = false;
+        std::uint64_t                         m_errorBaseline = 0;
+        std::chrono::steady_clock::time_point m_lastHeartbeat{};
     };
 }

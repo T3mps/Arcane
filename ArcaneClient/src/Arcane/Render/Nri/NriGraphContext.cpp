@@ -20,6 +20,7 @@
 
 #undef ERROR
 
+#include <chrono>
 #include <cstring>
 #include <optional>
 #include <span>
@@ -120,6 +121,18 @@ namespace Arcane
         // hazard; NRI's own validation layer -> MakeNriCallbacks). Identical
         // wiring to NriSmoke::RunSession -- read that function's comment for
         // the desk hazard each one carries.
+        //
+        // ONE OF THOSE THREE IS A REQUEST, NOT A GUARANTEE, on THIS path
+        // (D1 shakedown): the D3D12 debug layer is process-global and can only
+        // be turned on before the process's FIRST device, and by the time the
+        // vehicle runs, the engine's NVRHI device is already live. So
+        // enableD3D12DebugLayer below is honoured on the pre-boot smoke and
+        // declined here, with a WARN naming the reason -- see
+        // DeviceD3D12.cpp's g_d3d12DeviceCreated for the full tradeoff (the
+        // alternative was removing the engine's device, which is what the
+        // first desk run actually did). NRI validation and, on Vulkan, the VK
+        // validation layers are per-device and unaffected: they are what makes
+        // a dx12 vehicle run's exit code mean something today.
         // -------------------------------------------------------------
         RenderDeviceDesc dd;
         dd.backend = config.backend;
@@ -191,6 +204,15 @@ namespace Arcane
 
         m_pipelines.Bind(*m_device);
         m_graph = std::make_unique<RenderGraph>();
+
+        // See the header: the heartbeat exists for the open-ended drag-storm
+        // run and nothing else. The baseline is taken here rather than at the
+        // host's own baseline point so the number it prints means "errors this
+        // vehicle has produced", which is the question a desk user is asking
+        // mid-drag.
+        m_heartbeat     = (config.maxFrames == 0);
+        m_errorBaseline = RenderErrorCount();
+        m_lastHeartbeat = std::chrono::steady_clock::now();
 
         ARC_INFO("[nri-graph] ready: {}x{} format={} textures={} ring={}KiB/slot",
                  m_swap->Width(), m_swap->Height(), (int)m_format, m_swap->TextureCount(),
@@ -556,6 +578,25 @@ namespace Arcane
             return RenderErrorCount() > errorsBefore ? FrameOutcome::Failed : FrameOutcome::Skipped;
 
         ++m_frameIndex;
+
+        // ~5s heartbeat, open-ended runs only (header: m_heartbeat). Deliberately
+        // AFTER the present, so "alive" means a frame actually reached the
+        // screen, and it reports the latch too -- "alive and clean" and "alive
+        // but latching errors" are different desk answers and the drag-storm
+        // gave the user neither.
+        if (m_heartbeat)
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - m_lastHeartbeat >= std::chrono::seconds(5))
+            {
+                m_lastHeartbeat = now;
+                const std::uint64_t errors = RenderErrorCount();
+                ARC_INFO("[nri-graph] alive: {} frame(s) presented, {} error(s) latched since the "
+                         "vehicle started", m_frameIndex,
+                         errors > m_errorBaseline ? errors - m_errorBaseline : 0);
+            }
+        }
+
         return FrameOutcome::Presented;
     }
 
