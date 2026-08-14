@@ -108,6 +108,54 @@ namespace
         return total;
     }
 
+    // ------------------------------------------------------------------
+    // THE D3D12 ENHANCED-BARRIER INVARIANT (D2 fix). NRI's D3D12 backend
+    // derives LayoutBefore and AccessBefore INDEPENDENTLY and then sets
+    // D3D12_TEXTURE_BARRIER_FLAG_DISCARD from the layout alone
+    // (ThirdParty/NRI/Source/D3D12/CommandBufferD3D12.hpp:1054-1056 and
+    // :1078-1079). A TEXTURE `before` that pairs Layout::UNDEFINED with a
+    // non-NONE access therefore becomes a D3D12_TEXTURE_BARRIER with
+    // LayoutBefore = UNDEFINED, AccessBefore != NO_ACCESS and FLAG_DISCARD --
+    // rejected by enhanced-barrier validation, which invalidates the command
+    // list, so EndCommandBuffer -> ID3D12GraphicsCommandList::Close() fails.
+    // Vulkan accepts that pairing happily, which is exactly why the shape
+    // shipped green on the VK half and killed every dx12 `--nri-graph` run.
+    // NRI states the same contract in its own public enum: Layout::UNDEFINED's
+    // "Compatible AccessBits" column is EMPTY (Include/NRIDescs.h:544-547).
+    //
+    // BUFFERS are exempt: RgBarrier's layout is meaningless for them by
+    // contract (always UNDEFINED) and Task 6's translation drops it.
+    // ------------------------------------------------------------------
+    void CheckBeforeIsD3D12Legal(const nri::AccessLayoutStage& before, bool isTexture = true)
+    {
+        if (!isTexture)
+            return;
+        CHECK((static_cast<std::uint32_t>(before.layout)
+                   != static_cast<std::uint32_t>(nri::Layout::UNDEFINED)
+               || static_cast<std::uint32_t>(before.access)
+                   == static_cast<std::uint32_t>(nri::AccessBits::NONE)));
+    }
+
+    // The same invariant over EVERY barrier one compile produced -- the
+    // regression net a Task-4-era version of this would have caught the D2
+    // blocker with.
+    void CheckAllBarriersD3D12Legal(const Arcane::RgCompiled& compiled)
+    {
+        for (const Arcane::RgCompiledNode& node : compiled.nodes)
+        {
+            for (const Arcane::RgBarrier& barrier : node.preBarriers)
+            {
+                INFO("node " << node.nodeIndex << ", barrier on resource " << barrier.resourceIndex);
+                CheckBeforeIsD3D12Legal(barrier.before, barrier.isTexture);
+            }
+        }
+        for (const Arcane::RgBarrier& barrier : compiled.exitBarriers)
+        {
+            INFO("exit barrier on resource " << barrier.resourceIndex);
+            CheckBeforeIsD3D12Legal(barrier.before, barrier.isTexture);
+        }
+    }
+
     // Drives one RgUsage through Compile and hands back the state it derived.
     // Node 0 seeds a defined state with `seed` (a different usage, so node 1
     // always crosses a state edge and therefore always emits exactly one
@@ -980,8 +1028,10 @@ TEST_CASE("rendergraph compile: (e) a pool-slot handover seeds the next tenant's
     // texture at execution time, so the second tenant's first barrier must
     // make the first tenant's writes available -- `before.access = NONE`
     // would leave a write-after-write hazard across the reused object. The
-    // layout half stays UNDEFINED (a contents-discarding transition), which
-    // is what keeps the first-use rule true per LOGICAL transient.
+    // LAYOUT carries too (D2 dx12 fix): the handover is an ordinary
+    // state-to-state transition, because a D3D12 enhanced barrier pairing
+    // LayoutBefore = UNDEFINED with a non-NONE AccessBefore is illegal and
+    // fails Close() -- see RenderGraph.cpp's POOL HANDOVER block.
     //
     // Node 2 also pins a batched group's CONTENTS: two entries, identical
     // `after`, DIFFERENT `before` -- `late` seeded from the handover, `side`
@@ -1033,8 +1083,8 @@ TEST_CASE("rendergraph compile: (e) a pool-slot handover seeds the next tenant's
     const Arcane::RgBarrier& handover = compiled.nodes[2].preBarriers[0];
     CHECK(handover.resourceIndex == 1u);   // `late`
     CHECK(handover.isTexture);
-    // The previous tenant's access + stages; contents discarded via UNDEFINED.
-    CheckState(handover.before, kColorState.access, nri::Layout::UNDEFINED, kColorState.stages);
+    // The previous tenant's state IN FULL -- access, layout and stages.
+    CheckState(handover.before, kColorState);
     CheckState(handover.after, storageState);
 
     const Arcane::RgBarrier& fresh = compiled.nodes[2].preBarriers[1];
@@ -1042,6 +1092,62 @@ TEST_CASE("rendergraph compile: (e) a pool-slot handover seeds the next tenant's
     CHECK(fresh.isTexture);
     CheckState(fresh.before, kUnknownState);   // no previous tenant -- unchanged behaviour
     CheckState(fresh.after, storageState);
+
+    CheckAllBarriersD3D12Legal(compiled);
+}
+
+TEST_CASE("rendergraph compile: a pool handover ALWAYS emits a barrier, even when both tenants "
+          "want the SAME state", "[nri]")
+{
+    // THE REGRESSION NET FOR THE D2 FIX. Carrying the previous tenant's LAYOUT
+    // (rather than forcing UNDEFINED) means a handover's `before` can now
+    // equal its `after` -- and the consecutive-same-state elision would then
+    // swallow the barrier entirely. It must not: two tenants of one slot are
+    // two LOGICAL resources on ONE physical object, so the previous tenant's
+    // writes still need the source availability operation only a barrier
+    // performs. Eliding it is the write-after-write hazard the pool handover
+    // exists to close, arriving through a different door.
+    //
+    // `early` and `late` share a slot and BOTH use ColorWrite, so the
+    // handover's before and after are the identical kColorState triple. While
+    // the layout was forced to UNDEFINED this case could not exist (nothing
+    // ever WANTS UNDEFINED, so before != after held by accident).
+    Arcane::RenderGraph graph;
+    Arcane::RgTexture early, late;
+
+    graph.AddNode("declare", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            early = builder.CreateTexture("early", MakeColorDesc());
+            late  = builder.CreateTexture("late", MakeColorDesc());
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    AddColorNode(graph, "uses-early", early);   // node 1, lifetime [1,1]
+    AddColorNode(graph, "uses-late", late);     // node 2, lifetime [2,2] -- same slot
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.transients.size() == 2);
+    REQUIRE(compiled.transientPoolSlot[0] == compiled.transientPoolSlot[1]);
+    REQUIRE(compiled.poolSlotCount == 1);
+
+    // THE PROPERTY: the barrier EXISTS...
+    REQUIRE(compiled.nodes[2].preBarriers.size() == 1);
+    const Arcane::RgBarrier& handover = compiled.nodes[2].preBarriers[0];
+    CHECK(handover.resourceIndex == 1u);   // `late`
+    // ...and it is a same-state one, which is what makes the assertion above
+    // load-bearing rather than incidental.
+    CheckState(handover.before, kColorState);
+    CheckState(handover.after, kColorState);
+
+    // And a same-state edge on ONE logical resource still elides, so the
+    // exception is exactly as narrow as it claims to be: node 1's barrier is
+    // `early`'s only one, and `early` is never barriered again.
+    REQUIRE(compiled.nodes[1].preBarriers.size() == 1);
+    CheckState(compiled.nodes[1].preBarriers[0].before, kUnknownState);
+    CHECK(TotalBarriers(compiled) == 2);
+
+    CheckAllBarriersD3D12Legal(compiled);
 }
 
 TEST_CASE("rendergraph compile: (e) two identical transients with overlapping lifetimes get different pool slots", "[nri]")
@@ -2123,12 +2229,18 @@ TEST_CASE("rendergraph exec: the carried-over pool slot's first barrier picks up
         REQUIRE(graph.DebugTransientCreateCount() == compiled.poolSlotCount);   // reused, not re-created
     }
 
-    // What was actually RECORDED: the previous frame's outgoing access and
-    // stages, with the layout still UNDEFINED (discard, never inherit
-    // contents) -- byte-for-byte the within-frame handover's shape.
+    // What was actually RECORDED: the previous frame's outgoing state IN FULL
+    // -- access, LAYOUT and stages -- byte-for-byte the within-frame
+    // handover's shape. The layout carries rather than staying UNDEFINED
+    // because {UNDEFINED layout, non-NONE access} is an illegal D3D12
+    // enhanced barrier that fails Close() (the D2 blocker); see
+    // RenderGraph.cpp's POOL HANDOVER block. has_value() is half the
+    // assertion: a handover that emitted NO barrier would fail right here.
     const auto secondFrame = graph.DebugFirstBarrierBefore(0);
     REQUIRE(secondFrame.has_value());
-    CheckState(*secondFrame, nri::AccessBits::COPY_DESTINATION, nri::Layout::UNDEFINED, nri::StageBits::COPY);
+    CheckState(*secondFrame, nri::AccessBits::COPY_DESTINATION, nri::Layout::COPY_DESTINATION,
+               nri::StageBits::COPY);
+    CheckBeforeIsD3D12Legal(*secondFrame);
 
     CHECK(Arcane::RenderErrorCount() == before);
 }
@@ -3003,11 +3115,15 @@ TEST_CASE("nri graph frame: the post chain inserts one node per pass between the
     // Node 2 (post1): reads pass 0's target -- and writes a target whose pool
     // slot the CANVAS just vacated, which is the ping-pong showing up as a
     // handover rather than as an allocation. `before` therefore carries the
-    // canvas's OUTGOING access with the layout still UNDEFINED (the contents
-    // are not inherited, the availability operation is).
+    // canvas's OUTGOING state in full -- SHADER_RESOURCE access, layout AND
+    // stages -- so the reused physical texture gets its availability
+    // operation. (The layout carries rather than staying UNDEFINED because
+    // {UNDEFINED, non-NONE access} is an illegal D3D12 enhanced barrier that
+    // fails Close(); losing the discard hint costs nothing here, since the
+    // pass fully overwrites its target.)
     REQUIRE(compiled.nodes[2].preBarriers.size() == 2);
     CheckState(ColorWriteBarrier(compiled.nodes[2]).before,
-               nri::AccessBits::SHADER_RESOURCE, nri::Layout::UNDEFINED, kShaderReadStages);
+               nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE, kShaderReadStages);
     CheckState(ColorWriteBarrier(compiled.nodes[2]).after, kColorState);
 
     // Node 3 (tonemap): samples pass 1's target (NOT the canvas) and writes
@@ -3029,6 +3145,8 @@ TEST_CASE("nri graph frame: the post chain inserts one node per pass between the
     REQUIRE(compiled.transientPoolSlot.size() == 3);
     CHECK(compiled.transientPoolSlot[0] == compiled.transientPoolSlot[2]);
     CHECK(compiled.transientPoolSlot[0] != compiled.transientPoolSlot[1]);
+
+    CheckAllBarriersD3D12Legal(compiled);
 }
 
 TEST_CASE("nri graph frame: --golden-stage batch drops the post chain; post and full keep it",
@@ -3113,21 +3231,27 @@ TEST_CASE("nri graph frame: a four-pass post chain runs THREE tenants through on
     CHECK(compiled.transientPoolSlot[4] == even);   // post1  -> post3  (tenant 3)
 
     // THE PROPERTY. Pass 1 is `even`'s second tenant and pass 3 is its THIRD;
-    // both must see the previous tenant's outgoing SHADER_RESOURCE access
-    // (the layout stays UNDEFINED -- contents are not inherited). If Compile
-    // seeded a later tenant from kUnknownState instead, the third would come
-    // back with access NONE and perform no availability operation for the
-    // second tenant's writes -- the write-after-write hazard the handover
-    // exists to close, one tenant further along than anything tested before.
+    // both must see the previous tenant's outgoing SHADER_RESOURCE state --
+    // access, LAYOUT and stages (the D2 dx12 fix carries the layout instead of
+    // forcing UNDEFINED). If Compile seeded a later tenant from kUnknownState
+    // instead, the third would come back with access NONE and perform no
+    // availability operation for the second tenant's writes -- the
+    // write-after-write hazard the handover exists to close, one tenant
+    // further along than anything tested before. ColorWriteBarrier() FAILs
+    // when a node declares no transition into COLOR_ATTACHMENT, so this loop
+    // is also the "every handover emits a barrier" assertion for a 3-tenant
+    // chain.
     for (const std::size_t node : { std::size_t(2), std::size_t(3), std::size_t(4) })
     {
         INFO("post pass node index " << node);
         CheckState(ColorWriteBarrier(compiled.nodes[node]).before,
-                   nri::AccessBits::SHADER_RESOURCE, nri::Layout::UNDEFINED, kShaderReadStages);
+                   nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE, kShaderReadStages);
     }
     // ...while the FIRST tenant of each slot still starts from the discarding
     // entry, which is what makes the three assertions above meaningful.
     CheckState(ColorWriteBarrier(compiled.nodes[1]).before, kUnknownState);
+
+    CheckAllBarriersD3D12Legal(compiled);
 }
 
 TEST_CASE("nri graph frame: a post chain whose base reads the scene keeps the canvas alive past "

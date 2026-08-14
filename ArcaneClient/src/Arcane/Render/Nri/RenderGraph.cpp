@@ -464,24 +464,57 @@ namespace Arcane
         // state, so the graph cannot assume one. A buffer barrier out of
         // {NONE, ALL} is the conservative, always-correct start.
 
-        // POOL HANDOVER (fix round 1). Barrier state is tracked per LOGICAL
-        // resource, but two transients that share a pool slot are ONE
-        // physical nri::Texture/nri::Buffer at execution time. Seeding the
-        // second tenant's first use from kUnknownState would emit
-        // `before.access = NONE`, which performs no source availability
-        // operation for the FIRST tenant's writes -- a spec-level
-        // write-after-write hazard across the reused object (what Vulkan
-        // sync-validation reports as SYNC-HAZARD-WRITE-AFTER-WRITE, and
+        // POOL HANDOVER (fix round 1; `before` reshaped by the D2 dx12 fix).
+        // Barrier state is tracked per LOGICAL resource, but two transients
+        // that share a pool slot are ONE physical nri::Texture/nri::Buffer at
+        // execution time. Seeding the second tenant's first use from
+        // kUnknownState would emit `before.access = NONE`, which performs no
+        // source availability operation for the FIRST tenant's writes -- a
+        // spec-level write-after-write hazard across the reused object (what
+        // Vulkan sync-validation reports as SYNC-HAZARD-WRITE-AFTER-WRITE, and
         // intermittent corruption with sync-val off).
         //
         // So each pool slot carries the state its current occupant left the
         // physical resource in, and a new tenant's first-use `before` takes
-        // that slot's access + stages. `before.layout` STAYS
-        // nri::Layout::UNDEFINED: the new tenant does not inherit the old
-        // one's contents, and an UNDEFINED source layout is the legal
-        // discard transition on both backends -- which is also what keeps
-        // the plan's "transient first use needs no from-UNDEFINED special
-        // case" rule true per logical transient.
+        // that slot's WHOLE triple -- access, stages AND LAYOUT. The handover
+        // is therefore an ordinary state-to-state transition, not a
+        // contents-discarding one.
+        //
+        // WHY THE LAYOUT IS CARRIED AND NOT FORCED TO UNDEFINED. It used to be
+        // forced ("discard, never inherit contents"): legal on Vulkan, ILLEGAL
+        // on D3D12, and it was the D2 blocker -- every `--nri-graph --dx12`
+        // run died with EndCommandBuffer -> ID3D12GraphicsCommandList::Close()
+        // failing. NRI's D3D12 backend derives LayoutBefore and AccessBefore
+        // INDEPENDENTLY and then sets D3D12_TEXTURE_BARRIER_FLAG_DISCARD from
+        // the layout alone (ThirdParty/NRI/Source/D3D12/CommandBufferD3D12.hpp
+        // :1054-1056 and :1078-1079 -- the latter carries NRI's own
+        // `// TODO: verify that it works`). So {previous access, UNDEFINED}
+        // became a D3D12_TEXTURE_BARRIER pairing LayoutBefore = UNDEFINED with
+        // AccessBefore != NO_ACCESS *and* FLAG_DISCARD; D3D12 enhanced
+        // barriers reject that -- an UNDEFINED-layout side is the "no previous
+        // access" side, and FLAG_DISCARD is only valid on such a side. NRI
+        // states the same contract in its own public enum: Layout::UNDEFINED's
+        // "Compatible AccessBits" column is EMPTY (Include/NRIDescs.h:544-547).
+        // The rejection is a deferred, list-invalidating parameter error, so it
+        // surfaces at Close() rather than at the CmdBarrier call.
+        //
+        // The alternative -- keep UNDEFINED and zero the access instead -- is
+        // D3D12-legal but reopens the exact hazard this block exists to close:
+        // the sync/stage half alone is an EXECUTION dependency, and a WAW needs
+        // a MEMORY dependency (a source availability operation over the
+        // previous writes' access scope) on both backends. Zeroing the access
+        // is what produced the sync-val WAW report in the first place.
+        //
+        // Losing the discard is a lost driver HINT, nothing more: the pool's
+        // new tenant either clears its target or fully overwrites it, so
+        // inheriting the old contents is unobservable.
+        //
+        // AND THE HANDOVER BARRIER IS ALWAYS EMITTED. Carrying the real layout
+        // means a handover can now be state-IDENTICAL (X leaves the slot in
+        // COLOR_ATTACHMENT, Y wants COLOR_ATTACHMENT), which the
+        // consecutive-same-state elision below would swallow -- and eliding a
+        // handover is exactly the availability operation this block exists to
+        // emit. `handover` forces it; see the emission site.
         //
         // A slot with no previous tenant (first tenant, or a slot nothing
         // else shares) is untouched by this and still seeds from
@@ -547,13 +580,15 @@ namespace Arcane
 
                 nri::AccessLayoutStage& current = isTexture ? textureState[slot] : bufferState[slot];
                 char& seeded                    = isTexture ? textureSeeded[slot] : bufferSeeded[slot];
+                bool handover                   = false;
                 if (seeded == 0)
                 {
                     if (poolSlot != kRgNoPoolSlot && poolHasTenant[poolSlot] != 0)
                     {
-                        current.access = poolState[poolSlot].access;
-                        current.stages = poolState[poolSlot].stages;
-                        current.layout = nri::Layout::UNDEFINED;   // discard, never inherit contents
+                        // The WHOLE triple, layout included -- an ordinary
+                        // state-to-state transition. See POOL HANDOVER above.
+                        current  = poolState[poolSlot];
+                        handover = true;
                     }
                     seeded = 1;
                 }
@@ -581,8 +616,18 @@ namespace Arcane
 
                 touched.push_back(NodeTouch{ slot, isTexture, want });
 
-                // Consecutive same-state declarations produce NO barrier.
-                if (!SameState(current, want))
+                // Consecutive same-state declarations produce NO barrier --
+                // EXCEPT a pool handover, which is emitted unconditionally.
+                // Two tenants of one slot are two different LOGICAL resources
+                // on one physical object, so "same state" there does not mean
+                // "nothing happened between them": the previous tenant's
+                // writes still need the source availability operation only a
+                // barrier performs. Before the D2 dx12 fix the forced
+                // UNDEFINED layout guaranteed this by construction (nothing
+                // ever WANTS UNDEFINED, so `before != after` always held);
+                // carrying the real layout removes that accident, so the rule
+                // is stated outright. See POOL HANDOVER above.
+                if (handover || !SameState(current, want))
                 {
                     compiledNode.preBarriers.push_back(RgBarrier{ slot, isTexture, current, want });
                     current = want;

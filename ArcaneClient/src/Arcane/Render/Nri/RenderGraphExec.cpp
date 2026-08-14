@@ -892,10 +892,26 @@ namespace Arcane
             // be carrying the previous frame's writes; Compile(), being pure
             // and per-frame, always hands the slot's first use a
             // `before = {NONE, UNDEFINED, ALL}`, which performs no source
-            // availability operation at all. Patch access + stages from what
-            // the last frame actually left here, leave the layout UNDEFINED
-            // (discard, never inherit contents) -- byte-for-byte the amendment
-            // Compile() makes for a within-frame tenant handover.
+            // availability operation at all. Patch the WHOLE triple -- access,
+            // stages AND LAYOUT -- from what the last frame actually left
+            // here, byte-for-byte the amendment Compile() makes for a
+            // within-frame tenant handover.
+            //
+            // The layout used to be left at UNDEFINED here too, and that was
+            // the D2 dx12 blocker: NRI's D3D12 backend turns {non-NONE access,
+            // UNDEFINED layout} into a D3D12_TEXTURE_BARRIER with
+            // LayoutBefore = UNDEFINED, AccessBefore != NO_ACCESS and
+            // D3D12_TEXTURE_BARRIER_FLAG_DISCARD (CommandBufferD3D12.hpp
+            // :1054-1056, :1078-1079), which enhanced-barrier validation
+            // rejects -- invalidating the list, so EndCommandBuffer ->
+            // Close() fails. RenderGraph.cpp's POOL HANDOVER block carries the
+            // full argument, including why zeroing the access instead would
+            // reopen the write-after-write hazard this patch exists to close.
+            //
+            // No force-emit is needed on this side: Compile() derived this
+            // barrier against kUnknownState, so it is already IN the list --
+            // this only reshapes its `before`. The "a handover always
+            // barriers" rule is upheld structurally here.
             const std::uint32_t poolSlot = PoolSlotForBarrier(barrier);
             nri::AccessLayoutStage before = barrier.before;
             if (poolSlot != kRgNoPoolSlot && poolSlot < m_pool.size()
@@ -909,8 +925,7 @@ namespace Arcane
                     && before.access == nri::AccessBits::NONE
                     && before.layout == nri::Layout::UNDEFINED)
                 {
-                    before.access = m_pool[poolSlot].carry.access;
-                    before.stages = m_pool[poolSlot].carry.stages;
+                    before = m_pool[poolSlot].carry;
                 }
                 if (poolSlot < m_poolFirstBefore.size())
                     m_poolFirstBefore[poolSlot] = before;

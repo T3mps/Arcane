@@ -283,12 +283,24 @@ namespace Arcane
     // merging. Every before/after triple in here is FINAL and already
     // accounts for transient pool reuse -- when transients share a pool
     // slot, each tenant after the first has its first barrier carry the
-    // IMMEDIATELY PRECEDING tenant's outgoing access + stages in its
-    // `before` (not necessarily the very first tenant's -- a 3+-tenant chain
-    // hands over link by link), with `before.layout` left UNDEFINED (a
-    // contents-discarding transition), so the handover barrier performs the
-    // source availability operation the reused physical resource needs. See
-    // RenderGraph.cpp's POOL HANDOVER comment.
+    // IMMEDIATELY PRECEDING tenant's outgoing state in its `before` (not
+    // necessarily the very first tenant's -- a 3+-tenant chain hands over
+    // link by link). ALL THREE FIELDS carry, LAYOUT INCLUDED, so the handover
+    // is an ordinary state-to-state transition that performs the source
+    // availability operation the reused physical resource needs.
+    //
+    // `before.layout` used to be forced to UNDEFINED (a contents-discarding
+    // transition). That was the D2 dx12 blocker: NRI's D3D12 backend pairs it
+    // with the carried non-NONE access and D3D12_TEXTURE_BARRIER_FLAG_DISCARD
+    // (ThirdParty/NRI/Source/D3D12/CommandBufferD3D12.hpp:1054-1056,
+    // :1078-1079), an illegal enhanced-barrier combination that invalidates
+    // the command list and fails Close(). See RenderGraph.cpp's POOL HANDOVER
+    // comment for the full argument and the rejected alternatives.
+    //
+    // A HANDOVER ALWAYS PRODUCES A BARRIER, including when the two tenants
+    // want the same state -- the consecutive-same-state elision does not
+    // apply to a change of tenant. (While the layout was forced to UNDEFINED
+    // that held by accident, since nothing ever WANTS UNDEFINED.)
     //
     // The executor's whole job is translation: emit each node's preBarriers
     // as ONE nri CmdBarrier group immediately before that node, run the
@@ -306,12 +318,13 @@ namespace Arcane
     // resource -- and Compile() is pure and per-frame, so the `before` it
     // derives for a slot's first use is always {NONE, UNDEFINED, ALL}
     // regardless of what the previous frame left there. The executor patches
-    // exactly that first barrier per pool slot per frame, taking access +
-    // stages from the state IT observed the resource being left in and
-    // leaving the layout UNDEFINED -- the identical operation the POOL
-    // HANDOVER block in RenderGraph.cpp performs for a within-frame tenant
-    // change, applied where Compile() cannot see. It is not a derivation of
-    // its own: it is an observation Compile() has no access to. See
+    // exactly that first barrier per pool slot per frame, replacing `before`
+    // with the whole state IT observed the resource being left in (access,
+    // layout and stages) -- the identical operation the POOL HANDOVER block in
+    // RenderGraph.cpp performs for a within-frame tenant change, applied where
+    // Compile() cannot see. It is not a derivation of its own: it is an
+    // observation Compile() has no access to. It also never ADDS or REMOVES a
+    // barrier -- the one it patches is already in Compile()'s list. See
     // RenderGraph::PoolResource::carry.
     //
     // INDEX SPACE -- READ THIS BEFORE SUBSCRIPTING ANYTHING IN HERE. Two
@@ -691,8 +704,8 @@ namespace Arcane
         // observable of the cross-frame handover (PoolResource::carry): on a
         // freshly realized slot it is Compile()'s {NONE, UNDEFINED, ALL}, and
         // on a slot carried across a Reset() it is the previous frame's
-        // outgoing access + stages with the layout still UNDEFINED. nullopt
-        // if that slot saw no barrier in the last Execute().
+        // outgoing state IN FULL -- access, layout and stages. nullopt if that
+        // slot saw no barrier in the last Execute().
         [[nodiscard]] std::optional<nri::AccessLayoutStage> DebugFirstBarrierBefore(std::uint32_t slot) const;
 
     private:
@@ -841,11 +854,17 @@ namespace Arcane
             // block closes WITHIN a frame, just at the frame boundary.
             //
             // EmitBarriers() therefore patches the first barrier it emits per
-            // pool slot per frame, taking access + stages from here and
-            // leaving `layout` UNDEFINED -- byte-for-byte the same amendment
+            // pool slot per frame, replacing `before` with this WHOLE triple --
+            // access, layout and stages -- byte-for-byte the same amendment
             // Compile() makes for an intra-frame tenant handover. Cleared
             // whenever the slot is re-realized (a fresh resource genuinely
             // starts undefined).
+            //
+            // The layout used to be left at UNDEFINED instead of carried, and
+            // that pairing (UNDEFINED layout + a non-NONE access) is illegal on
+            // D3D12 enhanced barriers -- the D2 blocker that failed Close() on
+            // every dx12 `--nri-graph` run. RenderGraph.cpp's POOL HANDOVER
+            // block carries the citation and the rejected alternatives.
             nri::AccessLayoutStage carry{};
             bool                   hasCarry = false;
         };
