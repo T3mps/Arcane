@@ -3150,9 +3150,32 @@ TEST_CASE("nri batch2d constant arena: every (frame slot, region) pair owns a di
     using Node = Arcane::Batch2DNode;
     CHECK(Node::kCbRegionsPerFrame == Node::kMaxMaterialSlots + 1);
 
-    // Both a D3D12-shaped alignment (256) and a smaller Vulkan one (64), since
-    // the stride is whatever deviceDesc.memoryAlignment.constantBufferOffset
-    // rounds kMaterialCbMaxBytes up to.
+    // THE STRIDE ITSELF, over every alignment a real device might report for
+    // deviceDesc.memoryAlignment.constantBufferOffset -- including 512, which is
+    // LARGER than kMaterialCbMaxBytes and is the case a naive "just use 256"
+    // would get wrong. Two invariants, and violating either is silent: a stride
+    // that is not a multiple of the device's alignment misaligns every CB view
+    // past the first, and a stride below kMaterialCbMaxBytes lets a material's
+    // packed bytes spill into the next region.
+    const std::uint64_t alignments[] = { 0, 1, 16, 64, 256, 512 };
+    for (const std::uint64_t alignment : alignments)
+    {
+        const std::uint64_t stride = Arcane::Batch2DNode::CbRegionStride(alignment);
+        REQUIRE(stride >= Arcane::Batch2DNode::kMaterialCbMaxBytes);
+        if (alignment > 1)
+            CHECK(stride % alignment == 0);
+        // ...and it is the SMALLEST such value: no region is wasted.
+        CHECK(stride - (alignment > 1 ? alignment : 1)
+              < Arcane::Batch2DNode::kMaterialCbMaxBytes);
+    }
+    // A 256-byte alignment is exactly one region -- the D3D12 case the constant
+    // was chosen for.
+    CHECK(Node::CbRegionStride(256) == Node::kMaterialCbMaxBytes);
+
+    // The OFFSET arithmetic, over two stride values -- deliberately including
+    // one (64) no device would produce, because CbRegionOffset must be correct
+    // for whatever stride it is handed rather than only for the one this node
+    // currently computes.
     const std::uint64_t strides[] = { 256, 64 };
     for (const std::uint64_t stride : strides)
     {

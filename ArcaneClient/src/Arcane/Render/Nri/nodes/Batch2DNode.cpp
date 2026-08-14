@@ -70,11 +70,6 @@ namespace Arcane
         constexpr const char* kBuiltInVs[] = { "sprite_vs", "circle_vs", "msdf_vs" };
         constexpr const char* kBuiltInPs[] = { "sprite_ps", "circle_ps", "msdf_ps" };
 
-        std::uint64_t AlignUp(std::uint64_t value, std::uint64_t alignment) noexcept
-        {
-            return alignment <= 1 ? value : ((value + alignment - 1) / alignment) * alignment;
-        }
-
         // FNV-1a. Used for two different jobs below and the difference matters:
         //   * over the BYTECODE it produces NriPipelineCache::GraphicsKey::
         //     shaderPairId, which that cache's fill contract (rule 3) requires
@@ -458,7 +453,7 @@ namespace Arcane
         // D3D12_CONSTANT_BUFFER_VIEW_DESC::SizeInBytes, which D3D12 requires to
         // be a multiple of 256 -- so the views name a whole region, not the
         // template's byte count, and the shader simply reads less than it.
-        m_arenaStride = AlignUp(kMaterialCbMaxBytes, deviceDesc.memoryAlignment.constantBufferOffset);
+        m_arenaStride = CbRegionStride(deviceDesc.memoryAlignment.constantBufferOffset);
 
         // RESERVED, not merely sized: EnsureMaterial hands PrepareMaterials a
         // MaterialSlot* out of this vector and then keeps building, so a
@@ -934,11 +929,24 @@ namespace Arcane
                 return false;
             }
 
+            // EVERY `descriptors` SOURCE BELOW MUST OUTLIVE THE
+            // UpdateDescriptorRanges CALL AT THE BOTTOM OF THIS BLOCK.
+            // UpdateDescriptorRangeDesc::descriptors is a POINTER TO AN ARRAY of
+            // descriptors (NRIDescs.h:1101), dereferenced inside the call -- so
+            // a single descriptor is passed as the address of a variable, and
+            // that variable has to still be alive when the call runs. Hence
+            // `cb` is declared HERE, in the same scope as its siblings, rather
+            // than inside the `cbSize > 0` block that fills it: taking &cb from
+            // a narrower scope leaves updates[] holding a pointer into dead
+            // storage, and the compiler is free to give that slot to `globals`
+            // -- which would silently write the GLOBALS view into range b1 and
+            // produce a well-formed descriptor NRI's validation cannot fault.
             nri::UpdateDescriptorRangeDesc updates[4] = {};
             std::uint32_t updateCount = 0;
+            const nri::Descriptor* cb = nullptr;
             if (cbSize > 0)
             {
-                const nri::Descriptor* cb = slot.cbView[frameSlot];
+                cb = slot.cbView[frameSlot];
                 updates[updateCount].descriptorSet = slot.set[frameSlot];
                 updates[updateCount].rangeIndex    = layout2D.materialCb;
                 updates[updateCount].descriptors   = &cb;

@@ -240,6 +240,24 @@ namespace Arcane
         // slot n's.
         static constexpr std::uint32_t kCbRegionsPerFrame   = kMaxMaterialSlots + 1;
 
+        // The arena's region stride on a device whose
+        // deviceDesc.memoryAlignment.constantBufferOffset is
+        // `constantBufferAlignment`. PURE and public for the same reason
+        // CbRegionOffset is: it carries an invariant whose violation would be
+        // silent. The result must be BOTH a multiple of the device's alignment
+        // (or every CB view past the first is misaligned) AND at least
+        // kMaterialCbMaxBytes (or a material's packed bytes spill into the next
+        // region). Rounding UP satisfies both for any power-of-two alignment,
+        // including one larger than kMaterialCbMaxBytes.
+        [[nodiscard]] static constexpr std::uint64_t CbRegionStride(
+            std::uint64_t constantBufferAlignment) noexcept
+        {
+            return constantBufferAlignment <= 1
+                 ? kMaterialCbMaxBytes
+                 : ((kMaterialCbMaxBytes + constantBufferAlignment - 1) / constantBufferAlignment)
+                       * constantBufferAlignment;
+        }
+
         // Byte offset of one constant-buffer region in the arena. PURE, static
         // and public so the [nri] tests can prove the property that matters and
         // cannot be observed from outside on a device: distinct (frame slot,
