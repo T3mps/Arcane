@@ -710,3 +710,114 @@ show zero latch growth):
 - Carried to Phase 5: NVRHI deletion, boundary-doc rewrite + ratification,
   zero-legacy sweep, battery re-run, `NativeDeviceOwner` export narrowing,
   `kSwapchainFramesInFlight` relocation.
+
+---
+
+## Phase 2 milestone record (appended 2026-08-14 at desk D2 GREEN)
+
+**Phase 2 is COMPLETE.** Engine main `d3225124..6a1ea24f`: Tasks 1-13
+executed via SDD (every task reviewed; 3 in-loop fix rounds; one desk
+shakedown wave; one final-review fix wave; one D2 desk-blocker fix wave —
+all reviewed), final whole-branch review CLEAN, desk milestones D1 + D2
+green. The `--nri-graph` vehicle renders the full 2D stack through the
+frame graph: Batch2DNode (built-ins + registered materials), post-chain
+ping-pong, TonemapNode (per-frame-slot sets), Pick+JFA outline with graph
+readback, ImGuiNri (§7 PORT OURS). `--nri-smoke` and its TEMP hand
+barriers are deleted. Gate at close: 36457 assertions / 938 cases, both
+configs, `CheckAllBarriersD3D12Legal` running on every compile.
+
+### D2 results (2026-08-14, RTX 3070, Win10 19045, 1280x720)
+
+- Stage compares through the graph: **12/12 `golden PASS maxDelta 0`**
+  (Debug + Release × dx12 + vulkan × batch/post/full) vs the FROZEN D1
+  baselines @b64ca9d1. Debug runs under NRI validation (both backends) +
+  VK sync validation; latch 0→0 on every run.
+- NVRHI floor: **12/12 `maxDelta 0`** across two sessions — the phase
+  changed NVRHI pixels nowhere.
+- Pick probe: HIT (entity 1 of 4 pickables) at (640,360), both backends,
+  exit 0; 11-step JFA at 1280x720; outline screenshots eyeballed
+  (vulkan-matches-dx12 confirmed).
+- Drag-storms: dx12 4453-frame storm + an earlier 4.9-minute/70,718-frame
+  session, 0 errors; vulkan (the two-VkDevice resize hazard) 2893 frames
+  under sync validation, 0 errors, zero cross-device marker writes,
+  no stale/flickering content. **The Phase-2 "honest unknown" is cleared.**
+- Perf (Release, dx12, graph path): 4.16ms frame @ 240Hz vsync — present
+  3.9-4.1ms IS the pacing wait; sim/rec/end/tone/imgui ≤0.01ms each,
+  poll 0.02-0.03ms. Waiting-frame budget satisfied.
+- Refusal trio: desk demos waived — covered by the headless HostConfigTest
+  cases inside the green gate.
+- Goldens: FROZEN throughout. No calibration change occurred; the D1 set
+  remains the contract.
+
+### PLAN-INPUT CORRECTIONS (ratified, source-verified — this plan's text is
+WRONG where it contradicts these; carry them into every later phase plan)
+
+1. **CAN_ALIAS does not exist in NRI v180** (Task 6; NRIDescs.h has only
+   memory-object-overlap prose). Transient pooling = committed resources +
+   pool-slot sharing; real aliasing is a Phase-4+ allocator swap — and note
+   the handover fix (#4) removed the DISCARD hint, so aliasing will need an
+   initializing barrier story when it lands.
+2. **Root descriptors are unbuildable with our all-space0 shaders**
+   (Task 9; DeviceVal.hpp collision guard + PipelineLayoutVK same-index set
+   clobber + PipelineLayoutD3D12 rootRegisterSpace stamped on root
+   constants). The brief's "two root descriptors b1/b2 via
+   CmdSetRootDescriptor" never existed on this path.
+3. **Descriptor-set CB views take no dynamic offsets in v180** (Task 9;
+   offset baked into nri::Descriptor at creation; SetDescriptorSetDesc has
+   no offset field). Per-frame CB data = node-owned per-frame-slot
+   HOST_UPLOAD arenas aligned to memoryAlignment.constantBufferOffset —
+   the established idiom across Batch2DNode / FullscreenNodes /
+   PickOutlineNodes. The upload ring carries VB/IB only.
+4. **Pool-handover barriers must carry the previous tenant's real layout**
+   (D2 desk blocker; fixed @fd296f59+6a1ea24f). Task 4's forced-UNDEFINED
+   before-layout paired with carried access bits is D3D12-enhanced-barrier
+   CORE-illegal (LayoutBefore=UNDEFINED + AccessBefore≠NO_ACCESS + DISCARD
+   → list invalidated → Close() fails; legal on VK, hence the backend
+   split). Texture handovers still ALWAYS emit a barrier (explicit
+   override, headlessly pinned); NRI's validation layer cannot catch this
+   class — `CheckAllBarriersD3D12Legal` on every compile is the net.
+
+### Phase 3 carry list (consolidated; the SDD ledger is deleted — this is
+the surviving copy)
+
+- **Texture residency**: the Guid→NRI-texture cache exists but is
+  content-unexercised (reference project has no bound textures). First
+  content with real sprite/material/post textures needs fresh baselines +
+  exercises the load path. THE TEXTURE GAP warns loudly meanwhile; never
+  desk-test with a module drawing ImGui::Image until the one-device flip.
+- **Two-device residuals**: m_gpu->OnResize still recreates hidden NVRHI
+  backbuffers on the graph path; vehicle ImGui bypasses ImGuiLayer's
+  SetCurrentContext pin; PumpEvents drains the process-wide SDL queue
+  (per-window routing fix wanted). All collapse at/require the Phase 3
+  one-device one-window flip.
+- **GpuFrameProgress on the graph path** (hang-watchdog disarmed; CPU 5s
+  heartbeat only) + `--crash-gpu` no-op on the graph path (documented at
+  HostConfig) — wire both when the host drives the graph.
+- **Remaining `[nvrhi]`-labeled producers** (DeviceVulkan message routing +
+  one NoteError caller) — retag when NVRHI's callback dies (Phase 5).
+- **ShaderRead stage-mask narrowed to VERTEX|FRAGMENT|COMPUTE** — widen
+  tripwire pinned in code+tests; revisit at first non-graphics consumer.
+- **Buffer same-state WAW handovers emit no barrier** (frozen rule;
+  texture handovers are exempt via the always-barrier override) — revisit
+  at the first compute-heavy phase; do not rely on pooled-buffer
+  same-state handovers.
+- **Arena-helper extraction** (three identical CbRegionStride copies):
+  all-three-or-none, one Phase 3 cleanup if ever.
+- **Batcher2D material-id drain-order latent**: two materials sharing
+  (layer, orderInLayer) could reorder run-to-run; give future materials
+  distinct orderInLayer or sort ids at drain.
+- **GraphError helper duplicated in six TUs** (identical today) — one
+  NriCommon.hpp seam ends the drift risk.
+- **PoolResource::carry updated during recording** — stale after a failed
+  EndCommandBuffer/QueueSubmit; unreachable-consumed today (host stops on
+  Failed) but becomes real if a host ever continues past a failed frame.
+- ABI at close: **12** (bumped 10→11→12 for Batcher2D::Drain +
+  by-value structs). Out-of-tree projects (Aphelyon) need restamp+rebuild.
+
+### What Phase 3 is (per the ladder, unchanged)
+
+Host integration: GpuContext/OffscreenCanvas internals onto
+NriGraphContext, editor viewport + pick wiring, ImGuiLayer delegation
+flip, SwitchProject/module-rebuild lifecycle, `--golden-stage` on the
+editor host — with the 2D-parity gate (these same frozen baselines) as
+the floor.
