@@ -160,6 +160,55 @@ TEST_CASE("vulkan: batcher quad fills the canvas; sort keys order and coalesce",
     CheckSortKeys(Arcane::GraphicsBackend::Vulkan);
 }
 
+TEST_CASE("d3d12: Drain() reports the SAME stats End() does -- the HUD's parity line",
+          "[gpu][d3d12]")
+{
+    // NRI Phase 2, Task 12. Both hosts print "Quads: %u  Draws: %u" from
+    // Stats(), and the graph path DRAINS the batcher where the NVRHI path ENDS
+    // it. Until Drain() wrote m_stats, the graph path's HUD read a permanent
+    // 0/0 -- a text difference in the `full` stage golden, in the one HUD line
+    // that says what the frame drew. Backend-agnostic CPU math; it needs a
+    // device only because Batcher2D::Create does.
+    GpuFixture fx(Arcane::GraphicsBackend::D3D12);
+
+    // Two quads that COALESCE into one draw (same kind + white texture),
+    // submitted out of layer order -- so a stat that merely counted records
+    // would disagree with End()'s run count.
+    const auto submit = [&fx]
+    {
+        fx.batcher->SetLayer(1, 0);
+        fx.batcher->Rect(glm::vec2(0, 0), glm::vec2(8, 8), glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
+        fx.batcher->SetLayer(0, 0);
+        fx.batcher->Rect(glm::vec2(0, 0), glm::vec2(4, 4), glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+    };
+
+    // The NVRHI recorder's numbers.
+    fx.commandList->open();
+    fx.batcher->Begin(fx.commandList, fx.canvas->Framebuffer(), 8, 8);
+    submit();
+    fx.batcher->End();
+    const Arcane::Batch2DStats ended = fx.batcher->Stats();
+    fx.Flush();
+    CHECK(ended.quads == 2);
+    CHECK(ended.drawCalls == 1);
+
+    // The graph recorder's: Begin with NO command list and NO framebuffer --
+    // exactly what RuntimeApp's --nri-graph branch does -- then Drain.
+    fx.batcher->Begin(nullptr, nullptr, 8, 8);
+    submit();
+    const Arcane::Batch2DDrained drained = fx.batcher->Drain();
+    const Arcane::Batch2DStats after = fx.batcher->Stats();
+
+    CHECK(after.quads == ended.quads);
+    CHECK(after.drawCalls == ended.drawCalls);
+    // ...and the draw count IS the span count the graph's Batch2DNode records,
+    // so the number the HUD prints is the number of draws that happened.
+    CHECK(after.drawCalls == (uint32_t)drained.spans.size());
+
+    fx.device->Nvrhi()->runGarbageCollection();
+    CHECK(Arcane::RenderErrorCount() == 0);
+}
+
 namespace
 {
     void CheckCircleCoverage(Arcane::GraphicsBackend backend)

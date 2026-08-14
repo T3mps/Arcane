@@ -78,9 +78,28 @@
 // desk: this window is the one to close/drag/resize (the hidden engine window
 // still exists and still holds an idle NVRHI swapchain), and RuntimeApp pumps
 // THIS window's events instead of the host's -- so the ImGui event tap the
-// ImGuiLayer installed on the host window receives nothing on this path. That
-// is fine for Tasks 7-11 (nothing draws ImGui through the graph yet) and is
-// Task 12's to wire.
+// ImGuiLayer installed on the host window receives nothing on this path.
+//
+// THE HUD IS THEREFORE DRAWN BUT NOT INTERACTIVE on a --nri-graph run, and
+// Task 12 left it that way ON PURPOSE rather than re-pointing the tap. Two
+// reasons, and the second is the load-bearing one:
+//   1. ImGui's platform backend is bound to the HOST window
+//      (ImGui_ImplSDL3_InitForOther), so events carrying THIS window's id
+//      would be matched against the wrong window -- mouse coordinates would be
+//      wrong rather than absent.
+//   2. An interactive HUD can be DRAGGED, and window placement persists per
+//      exe dir in imgui.ini. The vehicle and the NVRHI runtime share that
+//      file, so a drag on the vehicle would silently move the HUD on the
+//      NVRHI path too -- i.e. it would change the very baseline D2 compares
+//      against. A HUD that renders identically and cannot be moved is exactly
+//      what a golden comparison wants.
+// Phase 3 retires the whole question: one window, one device, one tap.
+//
+// The HUD's DISPLAY SIZE has the same root cause and is worth knowing at the
+// desk: ImGui_ImplSDL3_NewFrame reads the HOST window's size, so RuntimeApp
+// keeps that window's size in lockstep with this one on resize (it already
+// does the same for the host canvas). Both default to 1280x720, which is the
+// size every golden was captured at.
 //
 // Adapted, where marked, from .example/NRISamples (MIT -- see that tree's
 // LICENSE.txt): the readback shape (Source/Readback.cpp's COPY_SOURCE ->
@@ -110,6 +129,7 @@
 // forward-declare NriGraphContext.
 #include <Arcane/Render/Nri/nodes/Batch2DNode.hpp>
 #include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>
+#include <Arcane/Render/Nri/nodes/ImGuiNriNode.hpp>
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 
 #include <chrono>
@@ -122,6 +142,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+struct ImDrawData;
 
 namespace Arcane
 {
@@ -152,10 +174,13 @@ namespace Arcane
             //
             // AS OF TASK 10 `batch` genuinely differs: it drops the post chain
             // (the same bypass RuntimeApp applies to the NVRHI path, so a batch
-            // golden compares the same content on both). `post` and `full`
-            // still render the same frame, because the HUD (Task 12) does not
-            // exist on this path yet -- which is the HONEST reading of the
-            // flag, not a stub.
+            // golden compares the same content on both). AS OF TASK 12 `full`
+            // differs too: it is the only stage that draws the HUD, which is
+            // again the same gate RuntimeApp applies to the NVRHI path (both
+            // non-Full stages end the ImGui frame without rendering it,
+            // because host chrome would sit on top of every stage golden and
+            // mask exactly the pixels a node-by-node cutover compares). All
+            // three stages now mean what they say.
             GoldenStage stage = GoldenStage::Full;
 
             // Add the readback node to THIS frame's graph, so the presented
@@ -210,6 +235,23 @@ namespace Arcane
             // keeps the frame's shape -- and therefore the batch/post/full
             // stage goldens -- byte-for-byte Task 10's.
             bool pickOutline = false;
+
+            // ---- the HUD (Task 12) --------------------------------------
+            // THIS FRAME'S ImGui DRAW DATA, already built by the frame driver
+            // (ImGui::Render() -> ImGui::GetDrawData()) before RenderFrame was
+            // called. Null means "no HUD this frame", which is what the two
+            // non-Full golden stages pass and what makes the frame's shape
+            // bit-identical to Task 11's on those runs.
+            //
+            // BORROWED, and unlike `pickables`/`selectedIds` it is NOT fully
+            // consumed at declaration time: the vertex/index copy happens at
+            // RECORD time, inside the node's exec fn (the ring's BeginFrame
+            // runs after the frame is declared, so an earlier allocation would
+            // land in the previous frame's slot). ImGui's own buffers stay
+            // valid until the next ImGui::NewFrame, which is a whole frame
+            // away -- so this pointer is live for the whole RenderFrame call
+            // and nothing retains it past one.
+            ImDrawData* imgui = nullptr;
         };
 
         // What one frame did. Distinguishes the two false-y outcomes the frame
@@ -305,6 +347,21 @@ namespace Arcane
         // never declares them cannot be affected by their absence.
         [[nodiscard]] PickNode*    Pick()    noexcept { return m_pick.get(); }
         [[nodiscard]] OutlineNode* Outline() noexcept { return m_outline.get(); }
+
+        // The HUD node (Task 12). Built on every run -- unlike the pick pair
+        // it costs one sampler, one layout and one small descriptor pool, and
+        // the ONE thing that decides whether the frame draws it is whether the
+        // driver handed this frame draw data. Named ImGuiHud() rather than
+        // ImGui() because `ImGui` is a namespace this header's consumers use.
+        [[nodiscard]] ImGuiNriNode* ImGuiHud() noexcept { return m_imguiHud.get(); }
+
+        // FrameDesc::imgui for the frame currently being declared AND
+        // recorded. Unlike CurrentPickables()/CurrentSelectedIds(), which are
+        // cleared the moment the declarations are done, this stays readable
+        // for the whole RenderFrame call because the node's exec fn is what
+        // copies the geometry -- see FrameDesc::imgui. Null outside a
+        // RenderFrame call and on a frame the driver supplied no HUD for.
+        [[nodiscard]] ImDrawData* CurrentImGuiDrawData() const noexcept { return m_currentImGui; }
 
         // FrameDesc::pickables / ::selectedIds for the frame currently being
         // declared -- read by the pick and outline declarators the same way
@@ -434,6 +491,11 @@ namespace Arcane
         // releases that pool.
         std::unique_ptr<PickNode>          m_pick;
         std::unique_ptr<OutlineNode>       m_outline;
+        // The HUD node. It caches no view over the graph's transient pool (see
+        // ImGuiNriNode.hpp), but it is released in ~NriGraphContext beside the
+        // others anyway -- one teardown order for every node is cheaper to
+        // keep correct than a per-node exception.
+        std::unique_ptr<ImGuiNriNode>      m_imguiHud;
 
         // Raw offline shader artifacts, keyed by artifact stem. unordered_map
         // and not vector: the node authors hold SPANS into these vectors for
@@ -475,6 +537,12 @@ namespace Arcane
         // Reading either of these from an exec fn would read an empty span.
         std::span<const PickDrawable>  m_currentPickables;
         std::span<const std::uint32_t> m_currentSelectedIds;
+
+        // FrameDesc::imgui, published for the whole of one RenderFrame call
+        // (declaration AND execution) and re-published -- possibly as null --
+        // at the top of the next one, so a later frame can never reach a
+        // previous frame's draw data. See CurrentImGuiDrawData().
+        ImDrawData* m_currentImGui = nullptr;
 
         // --pick-probe: armed at Create from the config, so an ordinary run
         // never builds the nodes at all.
@@ -566,6 +634,14 @@ namespace Arcane
         // them. A stage golden is taken without the probe, so the two never
         // meet in practice.
         bool pickOutline = false;
+
+        // Declare the HUD node after the tonemap (Task 12). Unlike
+        // `pickOutline` this IS stage-gated -- `full` alone draws host chrome
+        // -- and the declarations depend on this flag and on nothing else: the
+        // ImDrawData itself is RECORD-time data that travels through
+        // NriGraphContext, which is what lets the headless [nri] cases drive
+        // the real shape with a null context.
+        bool imgui = false;
     };
 
     struct RgFrameHandles

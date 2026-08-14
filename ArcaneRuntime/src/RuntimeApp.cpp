@@ -688,7 +688,21 @@ void RuntimeApp::MainLoop()
             // top of its loop satisfies that structurally, and owes nothing
             // else: the graph rebuilds imported-texture views every Execute.
             if (m_graphContext)
+            {
                 m_graphContext->Resize(events.width, events.height);
+                // ...and the HIDDEN host window's SIZE, which is not cosmetic
+                // on this path: ImGui_ImplSDL3_NewFrame reads its size into
+                // io.DisplaySize, and the HUD's vertices are in that space.
+                // Leaving it pinned at 1280x720 while the visible (vehicle)
+                // surface grew would stretch and mis-clip the HUD, because the
+                // ImGui node's projection maps DisplaySize onto the whole
+                // backbuffer. Same reasoning as the canvas line below -- ONE
+                // source of truth for the frame's extent -- and inert at the
+                // default size every golden was captured at. The host window
+                // is hidden, so resizing it shows nothing and its own resize
+                // event is filtered out by the vehicle window's PumpEvents.
+                m_gpu->Win().SetSize(events.width, events.height);
+            }
             // The canvas -- and therefore the viewport extent the resolver
             // reports into the material globals -- tracks the window on BOTH
             // paths. On the graph path this also resizes the hidden host
@@ -996,23 +1010,57 @@ void RuntimeApp::MainLoop()
         // compiled bytes the NVRHI chain was built from -- one node per pass,
         // between the canvas and the tonemap.
         //
-        // WHAT THIS PATH STILL DOES NOT DO, named so it stays a known gap: the
-        // HUD (Task 12); sprite TEXTURES inside the batch node, which live on
-        // the engine's NVRHI device and cannot be sampled by the graph's own
-        // device (Batch2DNode.hpp, THE TEXTURE GAP); and a post material's
-        // declared TEXTURE params, which take the same white-texel fallback
-        // (FullscreenNodes.cpp, THE POST TEXTURE GAP). The SIM half
-        // (FixedUpdate/Update) is untouched and runs identically.
+        // The HUD runs here too as of Task 12, from the same ImGui frame the
+        // NVRHI path renders -- see the block below.
+        //
+        // WHAT THIS PATH STILL DOES NOT DO, named so it stays a known gap:
+        // sprite TEXTURES inside the batch node, which live on the engine's
+        // NVRHI device and cannot be sampled by the graph's own device
+        // (Batch2DNode.hpp, THE TEXTURE GAP); a post material's declared
+        // TEXTURE params, which take the same white-texel fallback
+        // (FullscreenNodes.cpp, THE POST TEXTURE GAP); and ImGui INPUT, which
+        // reaches the host window's event tap rather than this one
+        // (NriGraphContext.hpp, THE TWO-DEVICE WINDOW -- the HUD draws but
+        // does not respond, deliberately). The SIM half (FixedUpdate/Update)
+        // is untouched and runs identically.
         // =============================================================
         else
         {
-            // ImGui was BEGUN above (the HUD window and the plugin's
-            // DrawUIAll already recorded into it) and nothing on this path
-            // renders it yet -- Task 12 owns that node. End the frame rather
-            // than skipping BeginFrame, so ImGuiLayer's "every BeginFrame is
-            // paired exactly once" contract holds: the same balancing move
-            // the no-backbuffer path and --golden-stage batch|post make.
-            ImGui::EndFrame();
+            Arcane::NriGraphContext::FrameDesc graphFrame;
+
+            // ============================================================
+            // THE HUD (Task 12) -- and this block is THE parity mechanism,
+            // not a convenience. The `full` golden's baseline was captured
+            // from the NVRHI path WITH the HUD on it, so the vehicle must
+            // draw the SAME content through the SAME code that feeds the
+            // NVRHI HUD. It does, structurally: the "ArcaneRuntime" window
+            // and the plugin's DrawUIAll are recorded ABOVE this branch, into
+            // one ImGui frame both render paths share. Nothing graph-specific
+            // is added here -- no "NRI" marker, no extra line -- because any
+            // text difference is a golden diff, and nothing on the NVRHI side
+            // changed either.
+            //
+            // The stage split mirrors the NVRHI block's exactly: both non-Full
+            // golden stages END the frame without rendering it (host chrome
+            // would mask the pixels a stage golden compares), and Full renders
+            // it and hands the draw data to the graph. ImGui::Render() ends
+            // the frame itself, so ImGuiLayer's "every BeginFrame is paired
+            // exactly once" contract holds on both arms.
+            //
+            // The draw data lives in the ImGui context until the next
+            // NewFrame, i.e. for the whole of the RenderFrame call below --
+            // which is what lets the node copy the vertices at RECORD time.
+            // ============================================================
+            if (m_config.GoldenMode() &&
+                m_config.goldenStage != Arcane::GoldenStage::Full)
+            {
+                ImGui::EndFrame();
+            }
+            else
+            {
+                ImGui::Render();
+                graphFrame.imgui = ImGui::GetDrawData();
+            }
 
             // The 2D submission, CPU-identical to the NVRHI block above. The
             // null command list / null framebuffer are what say "record
@@ -1032,7 +1080,6 @@ void RuntimeApp::MainLoop()
                 m_perf.Add(m_perf.accRec, t0, m_perf.Now());
             }
 
-            Arcane::NriGraphContext::FrameDesc graphFrame;
 #if !defined(ARCANE_DIST)
             // --pick-probe (NRI Phase 2, Task 11). THE ONE PLACE the entity ids
             // are produced: CollectPickables is a pure walk of the registry and

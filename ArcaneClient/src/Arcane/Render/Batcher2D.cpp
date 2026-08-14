@@ -410,6 +410,28 @@ namespace Arcane
             Batch2DDrained Drain() override
             {
                 DrainInternal();
+
+                // HUD PARITY (NRI Phase 2, Task 12). m_stats is what Stats()
+                // reports and what BOTH hosts print as "Quads: %u  Draws: %u";
+                // End() used to be the only thing that wrote it. The graph
+                // path never calls End() -- End() IS the NVRHI recorder -- so
+                // the HUD it draws would have read a permanent 0/0 while the
+                // NVRHI path read real numbers. That is a TEXT difference in
+                // the `full` stage golden, in the one HUD line that exists to
+                // say what the frame drew.
+                //
+                // Written HERE rather than in the graph's node for two
+                // reasons: this is the object that owns the numbers, and the
+                // TIMING then matches exactly -- both hosts build the HUD
+                // BEFORE the render half, so on both paths frame N's HUD
+                // reports frame N-1's counts. The counts are End()'s own: one
+                // draw call per run, one quad per record.
+                //
+                // Drain() has exactly one caller (the graph's Batch2DNode), so
+                // this cannot perturb the NVRHI path.
+                m_stats.drawCalls = (uint32_t)m_runs.size();
+                m_stats.quads     = (uint32_t)m_records.size();
+
                 Batch2DDrained out;
                 out.vertices = std::span<const Batch2DVertex>(m_vertices);
                 out.indices  = std::span<const uint32_t>(m_indices);

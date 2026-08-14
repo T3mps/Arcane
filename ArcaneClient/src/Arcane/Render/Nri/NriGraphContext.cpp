@@ -232,6 +232,16 @@ namespace Arcane
         m_tonemap = TonemapNode::Create(*this);
         if (!m_tonemap)
             return false;   // already logged
+        // The HUD node (Task 12). Built on EVERY run, unlike the pick pair
+        // below: it costs one sampler, one pipeline layout and a small
+        // descriptor pool, and it declares nothing unless the driver hands a
+        // frame draw data -- so an ordinary run and a stage-golden run still
+        // differ only in what the frame ASKS for, which is what keeps carry 8's
+        // "the flag off leaves the previous task's frame byte for byte" true
+        // for the HUD as well.
+        m_imguiHud = ImGuiNriNode::Create(*this);
+        if (!m_imguiHud)
+            return false;   // already logged
 
         // ---------------------------------------------------------------
         // The pick + outline pair (Task 11) is built ONLY when the probe is
@@ -353,6 +363,8 @@ namespace Arcane
         // teardown bug as fix round 1's imported-view ordering). The outline
         // node holds the same class of view (over the id target and the JFA
         // ping-pong) and goes out for the same reason.
+        if (m_imguiHud)
+            m_imguiHud->Release(graves, fence);
         if (m_outline)
             m_outline->Release(graves, fence);
         if (m_pick)
@@ -624,8 +636,9 @@ namespace Arcane
         // tonemap and nothing else", so it drops the chain even when the scene
         // binds one -- the SAME bypass RuntimeApp applies to the NVRHI path,
         // which is what lets a batch-stage golden compare the same content on
-        // both recorders. `post` and `full` still render the same frame,
-        // because the HUD (Task 12) does not exist on this path yet.
+        // both recorders. Since Task 12 `post` and `full` differ too -- the
+        // HUD node below is declared under `full` only, again matching what
+        // RuntimeApp does to the NVRHI path.
         // ---------------------------------------------------------------
         RgTexture sceneColor = handles.canvas;
         if (shape.stage != GoldenStage::Batch && shape.post && !shape.post->passes.empty())
@@ -687,6 +700,26 @@ namespace Arcane
             AddOutlineCompositeNode(graph, context, handles.outlineField, handles.backbuffer,
                                      shape.canvasWidth, shape.canvasHeight);
         }
+
+        // ---------------------------------------------------------------
+        // THE HUD (Task 12), the LAST visual writer of the frame -- after the
+        // tonemap (host chrome is display-referred and must not be graded),
+        // after the outline composite when a probe run armed one, and BEFORE
+        // the capture, because a `full` golden's baseline was captured from
+        // the NVRHI path WITH the HUD on it. Declaration order is execution
+        // order here, so this placement is the whole mechanism; it is the same
+        // order RuntimeApp records on the NVRHI path (pass:tone, then
+        // pass:imgui, then the readback).
+        //
+        // STAGE GATED, and it is the same gate RuntimeApp applies to the NVRHI
+        // path: `batch` and `post` end the ImGui frame without rendering it,
+        // because the HUD would sit on top of every stage golden and mask
+        // exactly the pixels a node-by-node cutover needs to compare. The
+        // driver expresses that by passing no draw data at all, and this
+        // re-checks the stage so the two cannot drift apart.
+        // ---------------------------------------------------------------
+        if (shape.imgui && shape.stage == GoldenStage::Full)
+            AddImGuiNode(graph, context, handles.backbuffer);
 
         if (!shape.capture)
             return handles;
@@ -766,6 +799,11 @@ namespace Arcane
         // Armed at Create AND asked for by this frame. Both, so a driver that
         // forgets the flag cannot declare a chain whose nodes were never built.
         shape.pickOutline   = frame.pickOutline && m_pick && m_outline;
+        // Same belt-and-braces for the HUD: draw data for THIS frame and a
+        // node that was actually built. The stage gate lives inside
+        // DeclareGraphFrame, beside the post chain's, so the headless
+        // frame-shape cases exercise the real rule.
+        shape.imgui         = frame.imgui != nullptr && m_imguiHud != nullptr;
 
         // NOTHING follows the declaration, and that is worth stating because
         // an earlier draft of this task needed something here.
@@ -846,6 +884,13 @@ namespace Arcane
         // frame's arena region at record time from the node's own storage.
         m_currentPickables   = effective.pickables;
         m_currentSelectedIds = effective.selectedIds;
+
+        // The HUD's draw data, published for the whole of THIS call rather
+        // than only its declaration half -- the node's exec fn is what copies
+        // the geometry into the ring (FrameDesc::imgui states why). Re-set
+        // every frame, including to null, so a later frame can never reach a
+        // previous frame's lists.
+        m_currentImGui = effective.imgui;
 
         // A probe pixel outside the surface would still be CLAMPED into the id
         // target by the readback node (PickSampleTexel), because the frame's

@@ -4163,6 +4163,192 @@ TEST_CASE("nri graph frame: the pick + outline chain composes with a post chain"
     CHECK(compiled.poolSlotCount == 5);
 }
 
+TEST_CASE("nri graph frame: the HUD node is absent unless the frame carries draw data", "[nri]")
+{
+    // Task 12's half of "the stage baselines stay the compare targets". The HUD
+    // node is built on EVERY run (unlike the pick pair, which is --pick-probe
+    // gated), so the only thing that can keep a batch/post golden's frame
+    // byte-for-byte Task 11's is this declaration gate. Pinned both ways.
+    {
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 320;
+        shape.canvasHeight = 200;
+        shape.imgui        = false;
+
+        Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+        REQUIRE(graph.NodeCount() == 2);
+        CHECK(std::string(graph.NodeName(0)) == "batch2d");
+        CHECK(std::string(graph.NodeName(1)) == "tonemap");
+
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        CHECK(compiled.nodes.size() == 2);
+        CHECK(compiled.transients.size() == 1);   // the canvas, and nothing else
+        CHECK(compiled.poolSlotCount == 1);
+    }
+
+    // ...and with draw data it is ONE node, appended after the tonemap, that
+    // creates NO resource of its own: the HUD renders straight onto the
+    // imported backbuffer, and its font atlas is node-owned rather than a
+    // graph transient. So the pool is untouched.
+    {
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 320;
+        shape.canvasHeight = 200;
+        shape.imgui        = true;
+
+        const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+        REQUIRE(graph.NodeCount() == 3);
+        CHECK(std::string(graph.NodeName(1)) == "tonemap");
+        CHECK(std::string(graph.NodeName(2)) == "imgui");
+
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        REQUIRE(compiled.nodes.size() == 3);
+        CHECK(compiled.transients.size() == 1);
+        CHECK(compiled.poolSlotCount == 1);
+
+        // The HUD writes the SAME backbuffer the tonemap did -- it does not
+        // import a second one.
+        REQUIRE(graph.IsHandleValid(handles.backbuffer));
+        CHECK(std::string(graph.NameOf(handles.backbuffer)) == "backbuffer");
+
+        // ...and it derives NO barrier: two consecutive ColorWrite
+        // declarations on one texture are the same state, and Compile skips
+        // same-state transitions. That is deliberately identical to what the
+        // outline composite does (Task 11's concern 2) and to what NVRHI's own
+        // state tracker does; the ROP's destination read for the alpha blend
+        // is inside AccessBits::COLOR_ATTACHMENT.
+        CHECK(compiled.nodes[2].preBarriers.empty());
+
+        // The graph -- not the node -- still leaves the backbuffer
+        // present-ready, and the HUD did not add a second exit barrier.
+        REQUIRE(compiled.exitBarriers.size() == 1);
+        CheckState(compiled.exitBarriers[0].after, kPresentState);
+    }
+}
+
+TEST_CASE("nri graph frame: a capture frame copies the backbuffer AFTER the HUD drew on it",
+          "[nri]")
+{
+    // The `full` golden baseline was captured from the NVRHI path WITH the HUD
+    // on it, so a capture that ran before the ImGui node would compare a bare
+    // frame against a chromed one -- every run, silently, and only in the
+    // stage that is supposed to include chrome.
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth   = 320;
+    shape.canvasHeight  = 200;
+    shape.imgui         = true;
+    shape.capture       = true;
+    shape.captureBuffer = nullptr;   // ImportBuffer stores the pointer without dereferencing
+    shape.captureBytes  = 4096;
+
+    Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+    REQUIRE(graph.NodeCount() == 4);
+    CHECK(std::string(graph.NodeName(2)) == "imgui");
+    CHECK(std::string(graph.NodeName(3)) == "capture");
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.nodes.size() == 4);
+
+    // The backbuffer is still a COLOUR ATTACHMENT when the HUD runs and only
+    // becomes a copy SOURCE at the capture node -- i.e. the HUD's pixels are in
+    // the artifact.
+    CHECK(compiled.nodes[2].preBarriers.empty());
+    REQUIRE(compiled.nodes[3].preBarriers.size() == 2);
+    const Arcane::RgBarrier& textureBarrier = compiled.nodes[3].preBarriers[0].isTexture
+                                                ? compiled.nodes[3].preBarriers[0]
+                                                : compiled.nodes[3].preBarriers[1];
+    CHECK(textureBarrier.isTexture);
+    CheckState(textureBarrier.before, kColorState);
+    CheckState(textureBarrier.after,
+               nri::AccessBits::COPY_SOURCE, nri::Layout::COPY_SOURCE, nri::StageBits::COPY);
+
+    REQUIRE(compiled.exitBarriers.size() == 1);
+    CheckState(compiled.exitBarriers[0].after, kPresentState);
+}
+
+TEST_CASE("nri graph frame: --golden-stage batch and post drop the HUD; full keeps it", "[nri]")
+{
+    // The SAME gate RuntimeApp applies to the NVRHI path, where both non-Full
+    // stages call ImGui::EndFrame() instead of rendering. Host chrome sits on
+    // top of every pixel a batch/post golden exists to compare, so if this gate
+    // broke, a stage golden would compare a chromed frame against a bare
+    // baseline -- and the diff would look like a batch-node regression.
+    const struct { Arcane::GoldenStage stage; std::size_t nodes; bool hud; } cases[] = {
+        { Arcane::GoldenStage::Batch, 2, false },
+        { Arcane::GoldenStage::Post,  2, false },
+        { Arcane::GoldenStage::Full,  3, true  },
+    };
+
+    for (const auto& expected : cases)
+    {
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 320;
+        shape.canvasHeight = 200;
+        shape.stage        = expected.stage;
+        // The driver would not even build draw data on a non-Full stage; this
+        // sets it anyway, so what is pinned is the GATE and not the driver's
+        // politeness.
+        shape.imgui        = true;
+
+        Arcane::DeclareGraphFrame(graph, shape, nullptr);
+        REQUIRE(graph.NodeCount() == expected.nodes);
+        CHECK((std::string(graph.NodeName(graph.NodeCount() - 1)) == "imgui") == expected.hud);
+    }
+}
+
+TEST_CASE("nri graph frame: the HUD composes with the post chain and the outline, and stays last",
+          "[nri]")
+{
+    // Everything at once, in the one order that is correct: scene -> grade ->
+    // display-referred -> selection chrome -> host chrome -> capture. The HUD
+    // must be the LAST VISUAL WRITER; the capture is the only node after it.
+    Arcane::PostChainDesc desc;
+    desc.chainInputSlots = 1;
+    desc.passes.resize(2);
+    desc.passes[0].inputs = { Arcane::kSceneInput };
+    desc.passes[1].inputs = { 0u };
+
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth   = 320;
+    shape.canvasHeight  = 200;
+    shape.post          = &desc;
+    shape.pickOutline   = true;
+    shape.imgui         = true;
+    shape.capture       = true;
+    shape.captureBuffer = nullptr;
+    shape.captureBytes  = 4096;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+    const std::uint32_t steps = handles.jfaStepCount;
+
+    // batch2d + 2 post + tonemap + pick + pickreadback + outlineseed + N jfa
+    // + outlinecomposite + imgui + capture.
+    REQUIRE(graph.NodeCount() == 10u + steps);
+    CHECK(std::string(graph.NodeName(3)) == "tonemap");
+    CHECK(std::string(graph.NodeName(graph.NodeCount() - 3)) == "outlinecomposite");
+    CHECK(std::string(graph.NodeName(graph.NodeCount() - 2)) == "imgui");
+    CHECK(std::string(graph.NodeName(graph.NodeCount() - 1)) == "capture");
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    // The HUD adds no pool slot however many chains are live: 2 for the post
+    // ping-pong, 1 for the id target, 2 for the outline field.
+    CHECK(compiled.poolSlotCount == 5);
+    // Three consecutive ColorWrite declarations on the backbuffer (tonemap,
+    // composite, HUD) still derive exactly one transition into it and one out
+    // of it.
+    CHECK(compiled.nodes[graph.NodeCount() - 2].preBarriers.empty());
+    REQUIRE(compiled.exitBarriers.size() == 1);
+    CheckState(compiled.exitBarriers[0].after, kPresentState);
+}
+
 TEST_CASE("nri pick readback: every frame slot owns a distinct, alignment-legal region", "[nri]")
 {
     // NRI's TextureDataLayoutDesc documents the buffer OFFSET as a multiple of
