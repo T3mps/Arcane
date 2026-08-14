@@ -63,8 +63,7 @@ namespace Arcane
         // WritePngRgba wants RGBA; NRI resolves the swapchain's channel order
         // rather than pinning it (NriSwapChain::Format()), so a BGRA
         // backbuffer has to be swizzled on the way out. Exactly the check
-        // NRISamples' Readback.cpp performs on its mapped pixel, reached here
-        // through NriSmoke.cpp.
+        // NRISamples' Readback.cpp performs on its mapped pixel.
         bool IsBgraFormat(nri::Format format) noexcept
         {
             return format == nri::Format::BGRA8_UNORM || format == nri::Format::BGRA8_SRGB;
@@ -122,21 +121,20 @@ namespace Arcane
         // VkDebugCallback; the D3D12 debug layer -> DeviceD3D12.cpp's
         // ID3D12InfoQueue1 callback, which is why enableD3D12DebugLayer is
         // forced here since it defaults FALSE for the Nahimic-OSD fail-fast
-        // hazard; NRI's own validation layer -> MakeNriCallbacks). Identical
-        // wiring to NriSmoke::RunSession -- read that function's comment for
-        // the desk hazard each one carries.
+        // hazard; NRI's own validation layer -> MakeNriCallbacks).
         //
         // ONE OF THOSE THREE IS A REQUEST, NOT A GUARANTEE, on THIS path
         // (D1 shakedown): the D3D12 debug layer is process-global and can only
         // be turned on before the process's FIRST device, and by the time the
-        // vehicle runs, the engine's NVRHI device is already live. So
-        // enableD3D12DebugLayer below is honoured on the pre-boot smoke and
-        // declined here, with a WARN naming the reason -- see
-        // DeviceD3D12.cpp's g_d3d12DeviceCreated for the full tradeoff (the
-        // alternative was removing the engine's device, which is what the
-        // first desk run actually did). NRI validation and, on Vulkan, the VK
-        // validation layers are per-device and unaffected: they are what makes
-        // a dx12 vehicle run's exit code mean something today.
+        // vehicle runs, the engine's own NVRHI device (created earlier in the
+        // same boot, by GpuContext) is already live. So enableD3D12DebugLayer
+        // below is DECLINED here, with a WARN naming the reason -- see
+        // DeviceD3D12.cpp's g_d3d12DeviceCreated ("THE `--nri-graph` CASE")
+        // for the full tradeoff (the alternative was removing the engine's
+        // device, which is what the first desk run actually did). NRI
+        // validation and, on Vulkan, the VK validation layers are per-device
+        // and unaffected: they are what makes a dx12 vehicle run's exit code
+        // mean something today.
         // -------------------------------------------------------------
         RenderDeviceDesc dd;
         dd.backend = config.backend;
@@ -342,10 +340,9 @@ namespace Arcane
         // ONE fence value for every burial below, and it is the graph's own
         // last submitted value -- the same one RenderGraph::
         // ReleaseGpuResources and ~RenderGraph bury at. That is what keeps
-        // Graveyard's NONDECREASING rule satisfied on a device the graph has
-        // already buried against: NriSmoke's teardown pattern (bury everything
-        // at fence 0 after an idle) would violate it here, because the graph
-        // has been burying at m_submitValue all run.
+        // Graveyard's NONDECREASING rule satisfied: burying everything at a
+        // fixed low sentinel (fence 0, after an idle) would violate it here,
+        // because the graph has been burying at m_submitValue all run.
         const std::uint64_t fence = m_graph ? m_graph->DebugSubmitCount() : 0;
         Graveyard& graves = m_device->Graves();
 
@@ -395,12 +392,10 @@ namespace Arcane
         // ~NriSwapChain in this class's member order, and NriSwapChain's
         // teardown destroys the backbuffer IMAGES along with the swapchain. A
         // view left buried above would therefore reach DestroyDescriptor with
-        // its VkImage already gone: exactly the "a VkImageView outliving its
-        // VkSwapchainKHR is a validation error" pattern NriSmoke.cpp's
-        // ~Resources documents and sidesteps by destroying its own views
-        // directly. On a vehicle whose entire exit-code contract is "the latch
-        // did not grow", that is not an ordering nit -- it is a guaranteed
-        // nonzero exit on vulkan.
+        // its VkImage already gone: "a VkImageView outliving its
+        // VkSwapchainKHR is a validation error". On a vehicle whose entire
+        // exit-code contract is "the latch did not grow", that is not an
+        // ordering nit -- it is a guaranteed nonzero exit on vulkan.
         //
         // Draining here fixes it structurally: a destructor BODY runs before
         // any member is destroyed, so the swapchain and its images are still

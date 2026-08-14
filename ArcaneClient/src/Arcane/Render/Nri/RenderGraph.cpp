@@ -15,8 +15,8 @@ namespace
     // that header's own NriBit() indices, quoted so a reviewer can check
     // each row against the enum definitions without leaving this file.
     // The idiom (an nri::AccessLayoutStage triple per state, transitioned
-    // by mutating before/after) is Phase 1's -- see NriSmoke.cpp's three
-    // hand-written transitions, which this table exists to replace.
+    // by mutating before/after) is Phase 1's -- the retired triangle smoke's
+    // three hand-written transitions, which this table exists to replace.
     //
     //  RgUsage        access (AccessBits)              layout (Layout)             stages (StageBits)
     //  -------------  -------------------------------  --------------------------  ---------------------------------
@@ -40,22 +40,20 @@ namespace
     //
     // * NRIDescs.h annotates every AccessBits row with the StageBits it is
     //   compatible with; each row above uses that compatible stage rather
-    //   than StageBits::ALL (which is 0, NRI's "lazy default"). NriSmoke.cpp
-    //   left stages at that lazy default because it hand-wrote three
-    //   barriers on one texture; a derivation engine can afford to be
+    //   than StageBits::ALL (which is 0, NRI's "lazy default"). The retired
+    //   Phase-1 smoke left stages at that lazy default because it hand-wrote
+    //   three barriers on one texture; a derivation engine can afford to be
     //   precise, and precise stages are strictly tighter synchronisation.
     //
     // * Present is the one row NRI dictates outright: Layout::PRESENT's own
-    //   comment reads 'NONE (use "after.stages = StageBits::NONE")'. That is
-    //   also byte-for-byte what NriSmoke.cpp's third transition writes.
+    //   comment reads 'NONE (use "after.stages = StageBits::NONE")'.
     //
     // * ShaderRead's stage set is deliberately NOT StageBits::ALL_SHADERS or
     //   GRAPHICS_SHADERS. Those umbrellas pull in tessellation, task/mesh and
     //   ray-tracing stages, which on Vulkan require device features this
     //   engine does not enable -- naming an unsupported stage in a barrier is
     //   a validation error, not a no-op. VERTEX|FRAGMENT|COMPUTE is exactly
-    //   the set Phase 2's 2D pipelines use (compare NriSmoke.cpp's
-    //   pipeline-layout shaderStages: VERTEX_SHADER | FRAGMENT_SHADER).
+    //   the set Phase 2's 2D pipelines use.
     //   Widening it is a one-constant edit HERE when a later phase adds a
     //   geometry/mesh/RT stage -- and it must be widened then, or a shader
     //   read from that stage will race.
@@ -868,8 +866,7 @@ namespace Arcane
         // Fixed entry/exit -- see the header for why they are not the
         // caller's to choose. The exit triple is the one nri::Layout::PRESENT
         // mandates ('NONE (use "after.stages = StageBits::NONE")'), which is
-        // also byte-for-byte what NriSmoke.cpp's third hand-written
-        // transition writes and what StateFor(RgUsage::Present) derives.
+        // what StateFor(RgUsage::Present) derives.
         constexpr nri::AccessLayoutStage kAcquiredState{
             nri::AccessBits::NONE, nri::Layout::UNDEFINED, nri::StageBits::ALL };
         constexpr nri::AccessLayoutStage kPresentState{

@@ -77,7 +77,7 @@ TEST_CASE("host config: golden mode without --frames is refused at parse time", 
     CHECK(o.exitCode == 2);
 }
 // NRI Phase 2, Task 2 -- the stage-golden flag. Registered beside the other
-// golden flags (NOT Dist-guarded, unlike --nri-smoke below), so this case is
+// golden flags (NOT Dist-guarded, unlike --nri-graph below), so this case is
 // unconditional too.
 TEST_CASE("host config: --golden-stage round-trips all three values", "[host][golden]") {
     // Default: Full == the pre-Phase-2 frame, and it needs no golden run to be
@@ -123,46 +123,13 @@ TEST_CASE("host config: --golden-stage round-trips all three values", "[host][go
     CHECK(orphanFull.config->goldenStage == Arcane::GoldenStage::Full);
 }
 #if !defined(ARCANE_DIST)
-// NRI Phase 1, Task 9 -- SCAFFOLDING, deleted with the smoke itself in Phase 2.
-// Guarded exactly like the flag it covers: --nri-smoke is registered inside
-// HostConfig.cpp's `#if !defined(ARCANE_DIST)` block, so in a Dist build it is
-// an unknown argument (exit 2) and HostConfig has no nriSmoke member at all.
-//
-// This is the ONLY headless coverage the smoke can have: everything past the
-// flag needs a window and a real device (desk-only on this machine), so the
-// parse round-trip is what the ~[gpu] gate can actually prove.
-TEST_CASE("host config: --nri-smoke round-trips and defaults off", "[host][nri]") {
-    const auto o = Run({"--nri-smoke"});
-    REQUIRE(o.config.has_value());
-    CHECK(o.config->nriSmoke);
-    // The two flags the smoke shares with the normal boot -- same vocabulary,
-    // deliberately (the smoke reads maxFrames/screenshotPath, it does not
-    // define its own).
-    const auto paired = Run({"--nri-smoke", "--frames", "120", "--screenshot", "nri-tri.png"});
-    REQUIRE(paired.config.has_value());
-    CHECK(paired.config->nriSmoke);
-    CHECK(paired.config->maxFrames == 120u);
-    CHECK(paired.config->screenshotPath == "nri-tri.png");
-    // Absent flag = the normal NVRHI boot (today's behavior, unchanged).
-    const auto def = Run({});
-    REQUIRE(def.config.has_value());
-    CHECK_FALSE(def.config->nriSmoke);
-    // The golden harness lives in RuntimeApp::MainLoop, which --nri-smoke never
-    // reaches -- so the combination is refused at parse time rather than
-    // silently capturing/comparing nothing and exiting 0.
-    const auto golden = Run({"--nri-smoke", "--golden-capture", "goldens/out", "--frames", "60"});
-    REQUIRE_FALSE(golden.config.has_value());
-    CHECK(golden.exitCode == 2);
-    // ...but --screenshot IS the smoke's own capture path, so it must survive.
-    const auto shot = Run({"--nri-smoke", "--frames", "60", "--screenshot", "a.png"});
-    REQUIRE(shot.config.has_value());
-    CHECK(shot.config->screenshotPath == "a.png");
-}
-// NRI Phase 2, Task 7 -- the graph vehicle's flag. Guarded exactly like
-// --nri-smoke (both are DEV scaffolding registered inside HostConfig.cpp's
-// `#if !defined(ARCANE_DIST)` block), and, like the smoke, this parse
-// round-trip is the ONLY headless coverage the vehicle can have: everything
-// past the flag needs a window and a real device.
+// NRI Phase 2, Task 7 -- the graph vehicle's flag. DEV scaffolding registered
+// inside HostConfig.cpp's `#if !defined(ARCANE_DIST)` block, so in a Dist
+// build it is an unknown argument (exit 2) and HostConfig has no nriGraph
+// member at all. This is the ONLY headless coverage the vehicle can have:
+// everything past the flag needs a window and a real device (desk-only on
+// this machine), so the parse round-trip is what the ~[gpu] gate can
+// actually prove.
 TEST_CASE("host config: --nri-graph round-trips and defaults off", "[host][nri]") {
     const auto o = Run({"--nri-graph"});
     REQUIRE(o.config.has_value());
@@ -171,7 +138,6 @@ TEST_CASE("host config: --nri-graph round-trips and defaults off", "[host][nri]"
     const auto def = Run({});
     REQUIRE(def.config.has_value());
     CHECK_FALSE(def.config->nriGraph);
-    CHECK_FALSE(def.config->nriSmoke);
     // Shares the whole run vocabulary with the normal boot -- deliberately.
     const auto paired = Run({"--nri-graph", "--frames", "120", "--screenshot", "nri-graph.png",
                              "--backend", "vulkan", "--no-vsync"});
@@ -182,24 +148,11 @@ TEST_CASE("host config: --nri-graph round-trips and defaults off", "[host][nri]"
     CHECK(paired.config->backend == Arcane::GraphicsBackend::Vulkan);
     CHECK_FALSE(paired.config->vsync);
 }
-TEST_CASE("host config: --nri-graph refuses to combine with --nri-smoke", "[host][nri]") {
-    // Two whole-render-path modes in one process: the smoke owns the process
-    // from Run() (its own window/device/loop) and never reaches MainLoop, so
-    // the pair can only mean one of the two was silently ignored.
-    const auto both = Run({"--nri-graph", "--nri-smoke"});
-    REQUIRE_FALSE(both.config.has_value());
-    CHECK(both.exitCode == 2);
-    // Order must not matter -- the refusal is on the parsed pair, not on
-    // which spelling came first.
-    const auto reversed = Run({"--nri-smoke", "--nri-graph"});
-    REQUIRE_FALSE(reversed.config.has_value());
-    CHECK(reversed.exitCode == 2);
-}
 TEST_CASE("host config: the golden flags ARE legal with --nri-graph", "[host][nri][golden]") {
     // THE POINT OF THE VEHICLE. The golden harness lives in
     // RuntimeApp::MainLoop, which --nri-graph reaches (it boots the real
-    // engine and swaps only the RENDER half) -- so, unlike --nri-smoke, the
-    // combination is meaningful and must survive parse.
+    // engine and swaps only the RENDER half), so the combination is
+    // meaningful and must survive parse.
     const auto capture = Run({"--nri-graph", "--golden-capture", "goldens/out", "--frames", "60"});
     REQUIRE(capture.config.has_value());
     CHECK(capture.config->nriGraph);
@@ -220,12 +173,6 @@ TEST_CASE("host config: the golden flags ARE legal with --nri-graph", "[host][nr
     const auto noFrames = Run({"--nri-graph", "--golden-capture", "goldens/out"});
     REQUIRE_FALSE(noFrames.config.has_value());
     CHECK(noFrames.exitCode == 2);
-
-    // ...and the smoke's refusal stayed scoped to the SMOKE. Pinned here so a
-    // future edit cannot widen it back over the graph path by accident.
-    const auto smokeGolden = Run({"--nri-smoke", "--golden-capture", "goldens/out", "--frames", "60"});
-    REQUIRE_FALSE(smokeGolden.config.has_value());
-    CHECK(smokeGolden.exitCode == 2);
 }
 // NRI Phase 2, Task 11 -- the pick/outline probe. Guarded like --nri-graph
 // (both are DEV scaffolding registered inside HostConfig.cpp's

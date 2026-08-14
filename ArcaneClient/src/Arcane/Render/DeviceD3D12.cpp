@@ -62,9 +62,7 @@ namespace Arcane
         // the vehicle runs THIS SAME creation half a second time with
         // enableD3D12DebugLayer forced true, so EnableDebugLayer landed on a
         // process that already owned a live device. Every dx12 vehicle run then
-        // failed at D3D12CreateDevice and exited 1 after 0 frames. The pre-boot
-        // `--nri-smoke` creates the identical device with the identical desc and
-        // succeeds, because there is no live device when it enables the layer.
+        // failed at D3D12CreateDevice and exited 1 after 0 frames.
         //
         // These two flags make the sequencing structural rather than a rule
         // somebody has to remember at each new call site.
@@ -77,8 +75,8 @@ namespace Arcane
         // asymmetric. Skipping an enable that would have been legal costs one
         // diagnostic channel; making the call when it is NOT legal removes a live
         // device. Nothing in the tree recreates a device WITH the layer requested
-        // anyway (only --nri-smoke and --nri-graph ever set the flag, and neither
-        // recreates one), so today this costs nothing at all.
+        // anyway (only --nri-graph ever sets the flag, and it never recreates
+        // one), so today this costs nothing at all.
         std::atomic<bool> g_d3d12DeviceCreated{ false };
         std::atomic<bool> g_d3d12DebugLayerEnabled{ false };
 

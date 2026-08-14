@@ -9,11 +9,12 @@
 // off BuildFrame() below; today the frame is a single Raster node that clears
 // the backbuffer and presents.
 //
-// NOT SCAFFOLDING in the sense NriSmoke is. The smoke is a straight-line proof
-// with no reusable abstraction and a scheduled deletion (Task 13); this class
-// is the shape Phase 3 grows into -- GpuContext's render internals move ONTO
-// it when the hosts flip. What IS temporary is that it stands beside a live
-// NVRHI GpuContext rather than replacing it; see THE TWO-DEVICE WINDOW below.
+// NOT SCAFFOLDING in the sense the Phase-1 triangle smoke was. That was a
+// straight-line proof with no reusable abstraction, deleted at Task 13; this
+// class is the shape Phase 3 grows into -- GpuContext's render internals move
+// ONTO it when the hosts flip. What IS temporary is that it stands beside a
+// live NVRHI GpuContext rather than replacing it; see THE TWO-DEVICE WINDOW
+// below.
 //
 // -------------------------------------------------------------------------
 // DESK COMMANDS (GPU/windowed runs are desk-only on the dev box, so nothing
@@ -21,16 +22,38 @@
 //
 //   ArcaneRuntime --nri-graph --project ..\..\..\ReferenceProject --backend dx12 \
 //                 --frames 120 --no-vsync --screenshot nri-graph-dx12.png
+//   ArcaneRuntime --nri-graph --project ..\..\..\ReferenceProject --backend vulkan \
+//                 --frames 120 --no-vsync --screenshot nri-graph-vulkan.png
 //   ArcaneRuntime --nri-graph --project ..\..\..\ReferenceProject --backend dx12 \
 //                 --frames 120 --no-vsync --golden-compare <repo>\ReferenceProject\Goldens \
 //                 --golden-stage batch
 //
+// The first two are the direct --nri-graph equivalents of the two commands
+// Phase 1's triangle smoke carried on its own header, one per backend --
+// migrated here at Task 13, which deleted that file. UNLIKE the smoke, which
+// owned the whole process and was therefore always the FIRST (and only)
+// D3D12/VK device the process created, --nri-graph boots the real engine
+// FIRST (GpuContext's NVRHI device), so its own device is always the SECOND.
+// That has one dx12 consequence worth stating here rather than leaving a
+// desk user to rediscover it: the D3D12 CPU debug layer / ID3D12InfoQueue1
+// channel the smoke used to exercise as Task 1's validation proof is NOT
+// available to the vehicle's device on an ordinary run -- DeviceD3D12.cpp
+// declines EnableDebugLayer once a device already exists in the process
+// (see "THE `--nri-graph` CASE" there) rather than risk removing the
+// engine's live one. NRI's own validation layer and, on Vulkan, the VK core
+// + SYNCHRONIZATION validation layers stay live and per-device regardless --
+// they are what makes a vehicle run's exit code mean something today -- but
+// closing the InfoQueue1 gap for real means the FIRST device in the process
+// would have to request the debug layer, which is a boot-sequencing change
+// nobody has made (DeviceD3D12.cpp names the tradeoff).
+//
 // Both boot the REAL engine (project, plugin, scene, material compiles) and
 // swap only the render half. Exit codes follow the host's existing contract:
 // 0 clean, 1 the graph run failed or the device was lost, 2 RenderErrorCount
-// GREW during the run (a validation error fired -- Debug turns the D3D12 debug
-// layer and VK sync validation ON for exactly this), 3 a golden/screenshot
-// capture or compare failure. Precedence 1 > 2 > 3, same as the smoke's.
+// GREW during the run (a validation error fired -- Debug requests the D3D12
+// debug layer and turns VK sync validation ON for exactly this, subject to
+// the dx12 caveat above), 3 a golden/screenshot capture or compare failure.
+// Precedence 1 > 2 > 3.
 // -------------------------------------------------------------------------
 //
 // THE TWO-DEVICE WINDOW (read before changing where the vehicle renders).
@@ -104,7 +127,8 @@
 // Adapted, where marked, from .example/NRISamples (MIT -- see that tree's
 // LICENSE.txt): the readback shape (Source/Readback.cpp's COPY_SOURCE ->
 // CmdReadbackTextureToBuffer -> map, and its BGRA-vs-RGBA channel check),
-// reached here through NriSmoke.cpp's adaptation of it.
+// originally adapted by the Phase-1 triangle smoke (deleted, Task 13) and
+// carried forward here.
 //
 // Include order: NRI headers first, ALWAYS (see NriCommon.hpp) --
 // Extensions/NRIDeviceCreation.h (via NriDevice.hpp) declares
@@ -273,11 +297,13 @@ namespace Arcane
         // + graph, in that order, honouring `config.backend` and
         // `config.vsync`. Null on any failure (already logged + latched).
         //
-        // Debug forces validation ON -- D3D12 debug layer through
+        // Debug REQUESTS validation ON -- D3D12 debug layer through
         // ID3D12InfoQueue1, VK core + SYNCHRONIZATION validation, and NRI's own
         // validation layer -- all three of which end at RenderErrorCount. That
-        // is identical to NriSmoke's wiring and is the dev-loop gate for the
-        // whole phase (NRI validation alone cannot catch barrier bugs).
+        // is the dev-loop gate for the whole phase (NRI validation alone
+        // cannot catch barrier bugs); see the DESK COMMANDS block above for
+        // the dx12 caveat (the D3D12 debug layer request is declined once the
+        // engine's own device already exists in-process, which is always).
         static std::unique_ptr<NriGraphContext> Create(const HostConfig& config);
 
         ~NriGraphContext();

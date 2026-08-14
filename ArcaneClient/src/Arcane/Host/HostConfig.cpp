@@ -21,8 +21,10 @@ namespace Arcane
         // Dist-guarded: --golden-capture/--golden-compare/--golden-name all
         // exist in every configuration, and a vocabulary where a Dist build
         // accepts --golden-capture but rejects --golden-stage would be a worse
-        // trap than the shipped flag itself. (--crash-gpu / --nri-smoke are
-        // Dist-guarded because they are DEV scaffolding with no golden peer.)
+        // trap than the shipped flag itself. (--crash-gpu is Dist-guarded
+        // because it is DEV scaffolding with no golden peer; --nri-graph is
+        // Dist-guarded too, but unlike --crash-gpu it DOES reach the golden
+        // harness -- see the refusal rules below.)
         cli.Option("golden-stage", "full",
                    "which slice of the frame the golden covers: full|batch|post "
                    "(batch = no post chain and no ImGui, post = no ImGui)")
@@ -31,8 +33,6 @@ namespace Arcane
 #if !defined(ARCANE_DIST)
         cli.Option("crash-gpu", "0", "DEV: deliberately fault the GPU on frame N (0 = off) -- "
                                      "the crash-diagnostics desk trigger").Type(CliType::Uint);
-        cli.Flag  ("nri-smoke",      "DEV: run the NRI Phase-1 triangle smoke instead of "
-                                     "booting the engine (honours --frames/--screenshot)");
         cli.Flag  ("nri-graph",      "DEV: render through the NRI frame graph instead of NVRHI "
                                      "(boots the real engine; honours --frames/--screenshot/"
                                      "--golden-*)");
@@ -72,7 +72,6 @@ namespace Arcane
         cfg.printEngineInfo = r.Flag("print-engine-info");
 #if !defined(ARCANE_DIST)
         cfg.crashGpuFrame = r.GetAs<std::uint64_t>("crash-gpu");
-        cfg.nriSmoke      = r.Flag("nri-smoke");
         cfg.nriGraph      = r.Flag("nri-graph");
 #endif
 
@@ -102,36 +101,6 @@ namespace Arcane
         }
 
 #if !defined(ARCANE_DIST)
-        // Same silent-no-op reasoning, same treatment: the golden harness lives
-        // in RuntimeApp::MainLoop, which --nri-smoke never reaches (Run()
-        // returns before the boot starts), so the combination would
-        // capture/compare nothing and still exit 0. (--screenshot IS honoured
-        // by the smoke -- only the golden flags are unreachable from it.)
-        //
-        // SCOPED TO THE SMOKE, deliberately (NRI Phase 2, Task 7). --nri-graph
-        // DOES reach MainLoop -- it boots the whole engine and swaps only the
-        // render half -- so the golden harness runs there and the flags are
-        // not merely legal but the point of the mode. Never widen this
-        // condition to "either NRI mode"; HostConfigTest pins both halves.
-        if (cfg.nriSmoke && cfg.GoldenMode())
-        {
-            std::fprintf(stderr, "error: --nri-smoke does not run the golden harness; "
-                                 "use --screenshot instead of --golden-capture/--golden-compare "
-                                 "(--nri-graph does run it)\n");
-            return { std::nullopt, 2 };
-        }
-
-        // Two whole-render-path modes at once. They are not composable and not
-        // orderable: --nri-smoke returns from RuntimeApp::Run before the boot
-        // starts, so a run carrying both would silently be a smoke run with
-        // --nri-graph ignored. Refuse rather than pick one.
-        if (cfg.nriSmoke && cfg.nriGraph)
-        {
-            std::fprintf(stderr, "error: --nri-smoke and --nri-graph are two different render "
-                                 "paths -- pass exactly one\n");
-            return { std::nullopt, 2 };
-        }
-
         // --pick-probe x,y (NRI Phase 2, Task 11). Parsed HERE rather than at
         // the use site, and refused rather than clamped, because the whole
         // value of the flag is being scriptable: a probe whose coordinate was

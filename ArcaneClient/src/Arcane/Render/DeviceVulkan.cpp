@@ -705,16 +705,16 @@ namespace Arcane
             debugUtils = true;
         }
 
-        // OPT-IN, DEFAULT OFF, AND INERT TO THE NVRHI BOOT (NRI Phase 1, Task
-        // 9): synchronization validation. `RenderDeviceDesc::enableSyncValidation`
-        // is false for every engine path -- RenderDevice::Create's callers all
-        // leave it defaulted -- so with the flag off this block is one
-        // false branch and the instance is created byte-identically to before
+        // OPT-IN, DEFAULT OFF, AND INERT TO THE NVRHI BOOT: synchronization
+        // validation. `RenderDeviceDesc::enableSyncValidation` is false for
+        // every engine path -- RenderDevice::Create's callers all leave it
+        // defaulted -- so with the flag off this block is one false branch
+        // and the instance is created byte-identically to before
         // (`syncFeatures` stays unreferenced and `instanceInfo.pNext` stays
-        // null). Its one caller is the --nri-smoke path, which needs the
-        // hazard checks core validation does not perform: the smoke's whole
-        // point is proving hand-written CmdBarrier placement on the wrapped
-        // device, and a missing barrier is silent to core validation.
+        // null). Its one caller is the `--nri-graph` frame-graph vehicle,
+        // which needs the hazard checks core validation does not perform:
+        // catching a missing or misplaced barrier on the graph's derived
+        // barrier chain, which is silent to core validation.
         //
         // Mechanism: VK_EXT_validation_features + a VkValidationFeaturesEXT
         // chained onto VkInstanceCreateInfo, the layer-configuration path the
@@ -748,7 +748,7 @@ namespace Arcane
                 // wraps -- returns ONLY extensions provided by the Vulkan
                 // implementation and by IMPLICIT layers. Asking it about this
                 // extension therefore answers "unavailable" on every stock SDK
-                // machine, silently dropping sync validation while the smoke
+                // machine, silently dropping sync validation while the vehicle
                 // still exits clean and proves nothing. DO NOT re-route this
                 // check through `instanceExtensionAvailable`.
                 //

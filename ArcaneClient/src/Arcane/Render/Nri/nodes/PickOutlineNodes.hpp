@@ -54,7 +54,7 @@
 //
 // The ReadbackHost pattern (a HOST_READBACK buffer as a copy destination,
 // mapped afterwards) is adapted from .example/NRISamples' Source/Readback.cpp
-// (MIT -- see that tree's LICENSE.txt), reached here through NriSmoke.cpp and
+// (MIT -- see that tree's LICENSE.txt), reached here through
 // NriGraphContext's own capture node.
 //
 // ===================================================================

@@ -118,10 +118,14 @@ TEST_CASE("nri: NONE-backend device lifecycle via MakeNriCallbacks/LogNriIdentit
 // ---------------------------------------------------------------------------
 // Task 7: the wrap smoke -- [gpu], NOT part of the ~[gpu] dev gate.
 //
-// SCAFFOLDING with a planned deletion point: this pair of cases goes away
-// with the rest of the Phase-1 smoke path (Phase 2 end / Phase 5), once the
-// frame graph renders real content through NRI and the wrapper path is
-// covered by something that draws.
+// SCAFFOLDING with a planned deletion point: Phase 1's own hand-rolled
+// triangle scaffold was retired at Task 13, once the frame-graph vehicle
+// (--nri-graph) rendered real content through NRI. This pair of cases is a
+// DELIBERATE carry-forward past that point -- it is the only headless-
+// adjacent [gpu] proof that the wrap itself (native device -> NRI, both
+// backends) still works, which nothing else in the tree currently covers --
+// and goes away at Phase 5, once the wrapper path is covered by something
+// that draws.
 //
 // Headless coverage of the wrap is impossible by construction -- wrapping
 // needs a REAL native device, which is precisely what [gpu] means here. What

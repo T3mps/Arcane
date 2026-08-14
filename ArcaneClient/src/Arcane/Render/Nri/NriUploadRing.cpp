@@ -25,8 +25,7 @@ namespace Arcane
         // alignment it expects -- every NRI memoryAlignment field is one --
         // but a release build that gets a non-power-of-two `align` past the
         // compiled-out assert still rounds correctly rather than doing
-        // something undefined. Same formula as NriSmoke.cpp's file-local
-        // AlignUp helper.
+        // something undefined.
         std::uint64_t AlignUp(std::uint64_t value, std::uint64_t align)
         {
             if (align <= 1)
@@ -189,14 +188,13 @@ namespace Arcane
 
         const nri::CoreInterface& core = m_device->Core();
 
-        // Unlike most Nri/ teardown (e.g. NriSmoke.cpp's ~Resources), this
-        // does NOT route through the device's Graveyard. DeviceWaitIdle()
-        // below already guarantees every previously-submitted GPU operation
-        // has completed -- nothing is left "in flight" that could still be
-        // reading one of these buffers, so an immediate Unmap+Destroy is
-        // correct without any fence-based deferral. Burying at a fixed
-        // sentinel value here (the way NriSmoke.cpp's single-owner teardown
-        // safely can) would NOT be safe for this class: Graveyard::Bury()
+        // Unlike most Nri/ teardown, this does NOT route through the
+        // device's Graveyard. DeviceWaitIdle() below already guarantees every
+        // previously-submitted GPU operation has completed -- nothing is
+        // left "in flight" that could still be reading one of these buffers,
+        // so an immediate Unmap+Destroy is correct without any fence-based
+        // deferral. Burying at a fixed sentinel value here would NOT be safe
+        // for this class: Graveyard::Bury()
         // asserts nondecreasing fenceValue order across EVERY caller sharing
         // one device's graveyard (Graveyard.hpp), and NriUploadRing has no
         // way to know it is burying after the highest fenceValue some other

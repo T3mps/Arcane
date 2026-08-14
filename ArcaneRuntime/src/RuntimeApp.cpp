@@ -24,11 +24,8 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuPassScope -- the F-8b pass seams
 #include <Arcane/Render/PickEmit.hpp>    // CollectPickables / PickEntityForId (--pick-probe)
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (the scene owns the view)
-#if !defined(ARCANE_DIST)
-#include <Arcane/Render/Nri/NriSmoke.hpp>   // --nri-smoke (Phase 1 scaffolding; deleted in Phase 2)
-#endif
-// NriGraphContext (--nri-graph) is NOT guarded here: RuntimeApp.hpp holds the
-// member unconditionally -- see its comment for why only the CREATION is
+// NriGraphContext (--nri-graph) is NOT Dist-guarded here: RuntimeApp.hpp holds
+// the member unconditionally -- see its comment for why only the CREATION is
 // Dist-guarded.
 
 #include <Astra/Core/TypeContext.hpp>
@@ -549,9 +546,9 @@ void RuntimeApp::MainLoop()
 
     // --nri-graph (NRI Phase 2, Task 7): THE RENDER HALF SWAPS, HERE.
     //
-    // Not a pre-boot early-return like --nri-smoke: everything above this line
-    // already ran -- project, plugin, boot scene, the scene resolver and its
-    // compile service -- and everything below it still runs, except that the
+    // Not a pre-boot early-return: everything above this line already ran --
+    // project, plugin, boot scene, the scene resolver and its compile service
+    // -- and everything below it still runs, except that the
     // NVRHI record/submit/present half is replaced by one graph frame. That is
     // what makes a stage-golden comparison against the NVRHI baselines mean
     // anything: both paths render THE SAME booted scene.
@@ -563,8 +560,8 @@ void RuntimeApp::MainLoop()
     // The latch baseline is taken HERE, not at process start: boot-time errors
     // belong to the boot, and everything from this point until the vehicle is
     // destroyed belongs to the graph. ShutdownGraphPath() reads it back after
-    // the last NRI object is gone (a teardown-only validation error must still
-    // fail the run -- the same reason NriSmoke::Run brackets its session).
+    // the last NRI object is gone -- a teardown-only validation error must
+    // still fail the run.
     m_graphErrorBaseline = Arcane::RenderErrorCount();
 #if !defined(ARCANE_DIST)
     if (m_config.nriGraph)
@@ -1354,8 +1351,7 @@ void RuntimeApp::ShutdownGraphPath()
     // Its own scope's end is what destroys every NRI object (device, swapchain,
     // graph, cache, ring, window), and teardown ordering is exactly the class of
     // mistake a validation layer exists to catch -- so the latch is sampled
-    // strictly after it, never from inside a still-live vehicle. Same bracketing
-    // NriSmoke::Run does around RunSession.
+    // strictly after it, never from inside a still-live vehicle.
     m_graphContext.reset();
 
     const std::uint64_t errorsNow = Arcane::RenderErrorCount();
@@ -1364,10 +1360,10 @@ void RuntimeApp::ShutdownGraphPath()
     {
         ARC_ERROR("[nri-graph] FAILED: {} validation/render error(s) fired during the run "
                   "(teardown included)", errorsNow - m_graphErrorBaseline);
-        // Precedence 1 > 2 > 3, the smoke's (NriSmoke.hpp): a run failure says
-        // WHERE the run died and outranks the errors it produced on the way
-        // out; a validation error explains a bad capture rather than the
-        // reverse, so it outranks the golden exit.
+        // Precedence 1 > 2 > 3: a run failure says WHERE the run died and
+        // outranks the errors it produced on the way out; a validation error
+        // explains a bad capture rather than the reverse, so it outranks the
+        // golden exit.
         if (m_graphExit == 0)
             m_graphExit = 2;
     }
@@ -1399,27 +1395,6 @@ void RuntimeApp::Shutdown()
 
 int RuntimeApp::Run()
 {
-#if !defined(ARCANE_DIST)
-    // --nri-smoke (NRI Phase 1, Task 9): SCAFFOLDING, deleted in Phase 2.
-    // FIRST statement in Run(), before the BootContext is even filled in, so
-    // the normal NVRHI boot never starts -- no GpuContext, no RenderDevice, no
-    // swapchain, no plugin, no project. The smoke owns the whole process from
-    // here: its own window, its own native device + NRI wrap, its own frame
-    // loop, its own exit code (documented on NriSmoke::Run).
-    //
-    // The splash is closed first because it is the NVRHI boot's progress
-    // story: main.cpp opens it before Run() is called, BootSequence's per-stage
-    // pump is what normally advances and closes it, and none of that machinery
-    // runs on this path -- leaving it up would put an orphan window in front of
-    // the smoke's own. Close() tolerates being called on a splash that never
-    // opened (BootSplashWindow's never-fail contract).
-    if (m_config.nriSmoke)
-    {
-        if (m_splash) m_splash->Close();
-        return Arcane::NriSmoke::Run(m_config);
-    }
-#endif
-
     Arcane::HostBoot::BootContext ctx{};
     ctx.runtime     = nullptr;              // stages populate as they go
     ctx.gpu         = nullptr;

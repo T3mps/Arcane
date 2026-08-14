@@ -534,7 +534,7 @@ namespace Arcane
         // A false return with an outstanding acquire is possible only on a
         // failed submit, in which case nothing is presented (presenting a
         // frame whose release fence nothing signalled parks the present
-        // engine forever -- the same hazard NriSmoke.cpp's bail-outs avoid).
+        // engine forever).
         //
         // `compiled` MUST be the output of a Compile() on THIS graph's
         // CURRENT declarations. That is checked structurally (node count,

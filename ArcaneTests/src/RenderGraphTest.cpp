@@ -566,8 +566,8 @@ TEST_CASE("rendergraph compile: CopyDst maps to COPY_DESTINATION + COPY stage", 
 TEST_CASE("rendergraph compile: Present maps to NONE access, PRESENT layout, NONE stage", "[nri]")
 {
     // NRI's own instruction for Layout::PRESENT ("NONE (use after.stages =
-    // StageBits::NONE)") -- and exactly what Phase 1's NriSmoke.cpp writes
-    // by hand for its present transition.
+    // StageBits::NONE)") -- and exactly what Phase 1's (since-retired)
+    // triangle smoke wrote by hand for its present transition.
     CheckState(DerivedTextureState(Arcane::RgUsage::ColorWrite, Arcane::RgUsage::Present),
                nri::AccessBits::NONE, nri::Layout::PRESENT, nri::StageBits::NONE);
 }
@@ -3309,7 +3309,7 @@ TEST_CASE("nri pipeline cache: Clear buries everything at one fence and reissues
 
     // ONE burial per object, all at the SAME fence value -- which trivially
     // satisfies Graveyard's nondecreasing rule, and is why the owner passes
-    // the graph's own last submitted value here rather than 0 (NriSmoke's
+    // the graph's own last submitted value here rather than 0 (a fixed
     // fence-0 teardown would violate it on a device the graph has used).
     CHECK(device->Graves().Pending() == 0);
     cache.Clear(device->Graves(), 7);

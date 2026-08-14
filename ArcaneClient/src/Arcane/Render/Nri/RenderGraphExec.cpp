@@ -12,7 +12,8 @@
 // EmitBarriers() below, from an RgBarrier list Compile() derived. Nothing in
 // this file synthesizes, reorders, drops or coalesces a barrier, and no other
 // file on the graph path may call CmdBarrier at all (spec ratification 1; the
-// remaining hand-written ones live in NriSmoke.cpp, which Task 13 deletes).
+// only other hand-written barriers in the tree belonged to the Phase-1
+// triangle smoke, retired in Task 13).
 // The `before` triples Compile() hands over already account for pool-slot
 // handover between transients, so replaying them verbatim is not laziness --
 // re-deriving anything here would silently diverge from the derivation Task
@@ -391,7 +392,7 @@ namespace Arcane
             return;
 
         // Command buffer before its allocator (the buffer is allocated OUT of
-        // it), same order NriSmoke.cpp's teardown uses.
+        // it).
         for (const GpuFrameSlot& slot : m_frames)
         {
             if (slot.cmd)
@@ -441,7 +442,7 @@ namespace Arcane
             {
                 // Short-circuit order matters: a failed CreateCommandAllocator
                 // leaves slot.allocator null, and CreateCommandBuffer takes it
-                // by reference (NriSmoke.cpp makes the same note).
+                // by reference.
                 if (!ARC_NRI_CHECK(core.CreateCommandAllocator(*m_device->GraphicsQueue(), slot.allocator))
                     || !slot.allocator
                     || !ARC_NRI_CHECK(core.CreateCommandBuffer(*slot.allocator, slot.cmd))
@@ -1056,8 +1057,7 @@ namespace Arcane
         // line fails without an outstanding acquire; a failure BELOW it
         // leaves one for ~NriSwapChain's QueueWaitIdle to clean up, which is
         // untidy but strictly better than presenting a frame whose release
-        // fence nothing signalled (that parks the present engine forever --
-        // NriSmoke.cpp's bail-outs make the same trade).
+        // fence nothing signalled (that parks the present engine forever).
         // ------------------------------------------------------------
         bool wantsSwapChain = false;
         for (const TextureResource& resource : m_textures)
@@ -1276,8 +1276,8 @@ namespace Arcane
         // ------------------------------------------------------------
         nri::FenceSubmitDesc waitFence = {};
         waitFence.fence  = backbuffer ? desc.swapChain->CurrentAcquireFence() : nullptr;
-        // StageBits::ALL (NRI's lazy default, 0) rather than NriSmoke's
-        // COLOR_ATTACHMENT: a graph does not know which stage first touches
+        // StageBits::ALL (NRI's lazy default, 0) rather than a narrower
+        // single stage: a graph does not know which stage first touches
         // the backbuffer -- the first node might copy into it rather than
         // render to it -- and a too-narrow wait stage is a race, not a
         // slowdown.
@@ -1289,8 +1289,7 @@ namespace Arcane
         std::uint32_t signalNum = 1;
         if (backbuffer)
         {
-            // A SWAPCHAIN_SEMAPHORE fence carries no value (NriSmoke.cpp
-            // leaves it 0 for the same reason).
+            // A SWAPCHAIN_SEMAPHORE fence carries no value, so it is left at 0.
             signalFences[1].fence = desc.swapChain->CurrentReleaseFence();
             signalNum = 2;
         }

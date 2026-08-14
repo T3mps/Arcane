@@ -86,15 +86,15 @@ namespace Arcane
         // and far costlier thing), so `enableD3D12DebugLayer` above is the
         // whole D3D12 story.
         //
-        // DEFAULT FALSE, AND THE ENGINE'S OWN BOOT NEVER SETS IT. Its one
-        // caller today is the Phase-1 NRI triangle smoke (Render/Nri/
-        // NriSmoke.cpp, --nri-smoke), whose entire job is proving the wrapped
-        // device's hand-written barriers are correct -- exactly the class of
-        // defect sync validation catches and core validation does not. Sync
-        // validation is expensive and false-positive-prone on a full engine
-        // frame, which is why it is opt-in per device rather than folded into
-        // `enableValidation`: turning it on for the normal boot is a separate
-        // decision nobody has made yet.
+        // DEFAULT FALSE, AND THE ENGINE'S OWN BOOT NEVER SETS IT. Its only
+        // caller today is the `--nri-graph` frame-graph vehicle
+        // (Render/Nri/NriGraphContext.cpp), which forces it on in Debug --
+        // the class of defect sync validation catches (hazards in hand- or
+        // graph-derived barrier placement) is exactly what core validation
+        // does not. Sync validation is expensive and false-positive-prone on
+        // a full engine frame, which is why it is opt-in per device rather
+        // than folded into `enableValidation`: turning it on for the normal
+        // boot is a separate decision nobody has made yet.
         //
         // Requires `enableValidation` (it configures the validation layer; with
         // no layer loaded there is nothing to configure) and the

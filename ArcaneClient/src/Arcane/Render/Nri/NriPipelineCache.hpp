@@ -146,9 +146,8 @@ namespace Arcane
         // that still holds objects here means the owner never called it. There
         // is no fence value to bury against at this point, and burying at 0
         // would VIOLATE Graveyard's nondecreasing rule on a device whose
-        // graveyard the graph has already used at higher values (exactly the
-        // trap NriSmoke's fence-0 teardown sets for a graph-using device), so
-        // this destroys DIRECTLY behind a DeviceWaitIdle and says so at WARN.
+        // graveyard the graph has already used at higher values, so this
+        // destroys DIRECTLY behind a DeviceWaitIdle and says so at WARN.
         // Safe only because a cache is destroyed as part of its owner's
         // teardown, with the device still alive -- which the member
         // declaration order of every owner must guarantee.
