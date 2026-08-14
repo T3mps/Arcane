@@ -1,14 +1,25 @@
 #pragma once
 
-// FullscreenNodes -- the graph's fullscreen-triangle passes.
+// FullscreenNodes -- the graph's fullscreen-triangle passes: the scene POST
+// CHAIN (PostChainNode, Task 10) and the TONEMAP (TonemapNode, Task 8).
 //
-// TONEMAP TODAY (NRI Phase 2, Task 8). Task 10 extends this file with the
-// POST CHAIN; the tonemap lives here from the start rather than being moved
-// later, because the plan's locked file structure assigns "post-chain passes
-// + tonemap" to this file and a stage golden is display-referred backbuffer
-// pixels -- so the batch stage cannot be compared to anything without a
-// tonemap. That is why Task 8 lands it: the real tonemap_vs/ps bins, no post
-// chain, nothing speculative.
+// The frame's tail is `canvas -> post0 -> .. -> postN-1 -> tonemap`, one graph
+// node per chain pass, each pass a fullscreen triangle rendering into its OWN
+// declared RGBA16F transient. Nothing here records a barrier: pass k declares
+// a Read of pass k-1's target and a Write of its own, and the executor derives
+// every transition from exactly that (RgCompiled's contract block).
+//
+// THE PING-PONG IS DERIVED, NOT HAND-ROLLED. Each pass declares its own
+// transient, and RenderGraph::Compile's lifetime-interval pool allocator is
+// what collapses them onto two physical textures: target k overlaps target
+// k-1 (both live at node k) so they never share, while target k and target
+// k-2 are disjoint and do. That is why the declarations are the honest DAG
+// (a pass reads whatever chain index it was authored to read, at any
+// distance) and the two-slot alternation still falls out for the linear case
+// -- including the CANVAS, whose lifetime ends at pass 0 and which therefore
+// hosts the even-numbered targets. Declaring two ping-pong textures by hand
+// would have produced the same picture with THREE pool slots and a chain
+// restriction the material system does not have.
 //
 // TonemapNode is the exact NRI counterpart of Render/TonemapPass.cpp: the
 // same two offline shader bins, the same POINT/clamp sampler (1:1 canvas ->
@@ -34,8 +45,10 @@
 #include <NRI.h>
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Material/GlobalParams.hpp>   // GlobalParams (16 bytes, held by value)
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
+#include <Arcane/Render/Swapchain.hpp>        // kSwapchainFramesInFlight
 
 #include <cstdint>
 #include <memory>
@@ -47,6 +60,284 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
     class NriGraphContext;
+    struct PostChainDesc;
+
+    // =====================================================================
+    // The pipeline-layout SHAPE one fullscreen material pass needs, as a
+    // standalone buildable object rather than a block of locals inside
+    // PostChainNode -- so the [nri] tests can pin it on a headless device.
+    // The sprite twin is SpriteMaterialLayout (Batch2DNode.hpp); the two
+    // differ because the two TEMPLATES differ, and the differences are the
+    // whole reason this is its own type:
+    //
+    //   * NO ROOT CONSTANTS AT ALL. fullscreen_material.hlsl has no push
+    //     constants -- b0 is the MATERIAL cbuffer here, where the sprite
+    //     template's b0 is the batcher's projection block. So the material CB
+    //     is b0 (kMaterialCbSlot) and globals is b1 (kGlobalCbSlot), one slot
+    //     below their sprite positions.
+    //   * THE TEXTURE RANGE CARRIES THE CHAIN INPUTS. GenerateMaterialBindings
+    //     emits the material's declared textures at t0.. and then the
+    //     reserved InputTexture(N) slots immediately after, so ONE contiguous
+    //     SRV range of (textureCount + chainInputs) covers both -- which is
+    //     also what lets D3D12 merge them into one root table.
+    //
+    // Unchanged from the sprite layout, and for the same reasons: root
+    // register space 0 alongside a space-0 descriptor set (legal because
+    // rootDescriptorNum and rootSamplerNum are both ZERO -- NRI's
+    // Source/Validation/DeviceVal.hpp guard), CBVs before SRVs before the
+    // sampler (the D3D12 table merge), and every range visible to BOTH stages
+    // (a template's %{VERTEX_BODY} may read params and sample textures).
+    // =====================================================================
+    struct ARCANE_API FullscreenMaterialLayout
+    {
+        // Fills everything for a material whose merged template has `cbSize`
+        // bytes of numeric params (0 == none, and then there is no b0 range at
+        // all), `textureCount` declared texture params and `chainInputs`
+        // reserved upstream-input slots. `desc` is left pointing at THIS
+        // object's arrays, so it is only valid while this object lives.
+        void Build(std::uint32_t cbSize, std::uint32_t textureCount, std::uint32_t chainInputs);
+
+        // Range indices into `ranges`, for UpdateDescriptorRanges. kNoRange
+        // when the material's shape declares no such range.
+        static constexpr std::uint32_t kNoRange = 0xFFFFFFFFu;
+        std::uint32_t materialCb = kNoRange;   // b0
+        std::uint32_t globalsCb  = kNoRange;   // b1
+        std::uint32_t textures   = kNoRange;   // t0 .. t(textureCount + chainInputs - 1)
+        std::uint32_t sampler    = kNoRange;   // s0
+
+        nri::DescriptorRangeDesc ranges[4]{};
+        nri::DescriptorSetDesc   set{};
+        nri::PipelineLayoutDesc  desc{};
+
+        FullscreenMaterialLayout() = default;
+        // `desc` holds interior pointers -- a copy would name the source's
+        // arrays. Build it where it is used.
+        FullscreenMaterialLayout(const FullscreenMaterialLayout&)            = delete;
+        FullscreenMaterialLayout& operator=(const FullscreenMaterialLayout&) = delete;
+    };
+
+    // =====================================================================
+    // PostChainNode -- ONE object serving EVERY pass of the scene's post
+    // chain, because a chain shares one merged template, one packed constant
+    // buffer and one binding shape (BuildMaterialChainSource's contract).
+    // Per pass it owns only what genuinely differs: the PSO (different
+    // bytecode) and the descriptor sets (different input textures).
+    //
+    // WHAT IT OWNS, all created once at Create():
+    //   * a 1x1 WHITE texel (an unbound/unresolvable declared texture param --
+    //     what FullscreenMaterialPass binds) and a 1x1 TRANSPARENT BLACK one
+    //     (a chain input slot with nothing wired into it -- likewise), plus
+    //     their views;
+    //   * one LINEAR/wrap sampler, matching FullscreenMaterialPass::Init's;
+    //   * one descriptor pool sized for kMaxPasses x kSwapchainFramesInFlight
+    //     sets;
+    //   * the per-frame-slot constant-buffer arena the b0/b1 views name.
+    // The pipeline LAYOUT and the PSOs come from the vehicle's shared
+    // NriPipelineCache.
+    //
+    // THE CONSTANT-BUFFER ARENA is the Batch2DNode pattern, and it is here for
+    // the identical NRI reason (that file's header states it in full): a
+    // descriptor-set constant buffer is bound through an nri::Descriptor whose
+    // (buffer, offset) is BAKED IN at creation, SetDescriptorSetDesc carries
+    // no dynamic offset in NRI v180, and the one binding that does take a
+    // dynamic offset -- CmdSetRootDescriptor -- is refused by the register-
+    // space rule. So the upload ring cannot back these, and this node owns one
+    // small HOST_UPLOAD buffer carved into TWO fixed regions per frame slot:
+    // region 0 the globals CB, region 1 the ONE material CB the whole chain
+    // shares. It is deliberately a second, smaller arena rather than a shared
+    // helper -- see the task report; the shapes differ (2 fixed regions here,
+    // 1 + kMaxMaterialSlots there) and the extraction is a later cleanup.
+    //
+    // SOURCE VIEWS AND THE POOL. Every texture a pass samples is a graph
+    // TRANSIENT (the canvas, or another pass's target) whose physical texture
+    // the graph owns and destroys on exactly one path --
+    // RenderGraph::ReleaseGpuResources, which NriGraphContext::Resize and
+    // ~NriGraphContext call. Both call InvalidateSources() in the same breath,
+    // BEFORE that release, which is what keeps this node's descriptors from
+    // ever naming a freed texture. The per-(pass, frame slot) rebind below is
+    // safe for the same reason Batch2DNode's arena is: a frame slot's previous
+    // submission has retired before this frame records into it (the pacing
+    // wait inside NriSwapChain::AcquireNextTexture).
+    // =====================================================================
+    class ARCANE_API PostChainNode
+    {
+    public:
+        // Builds the fallback texels, the sampler, the pool and the arena.
+        // Null (already logged + latched) on failure. The chain's own
+        // pipelines are built later, per bound chain, by PrepareChain.
+        static std::unique_ptr<PostChainNode> Create(NriGraphContext& context);
+
+        // SAFETY NET, NOT THE PATH -- see Batch2DNode's matching comment.
+        ~PostChainNode();
+
+        PostChainNode(const PostChainNode&)            = delete;
+        PostChainNode& operator=(const PostChainNode&) = delete;
+
+        // Buries every NRI object this node owns at `fence` and empties it.
+        // Idempotent.
+        void Release(Graveyard& graveyard, std::uint64_t fence);
+
+        // Buries every view over a graph transient and forgets what each
+        // descriptor set has bound, so the next frame rebuilds both. MUST be
+        // called before the graph releases its transient pool -- see SOURCE
+        // VIEWS AND THE POOL above. Idempotent.
+        void InvalidateSources(Graveyard& graveyard, std::uint64_t fence);
+
+        // Resolves `desc` into pipelines, descriptor sets and packed constants
+        // for THIS frame, and returns how many passes may be recorded --
+        // 0 meaning "bypass the chain entirely", which the declarator honours
+        // by adding no node at all. Called at DECLARATION time, deliberately,
+        // and for the same two reasons PrepareMaterials is: a PSO compile and
+        // MaterialInstance::PackCB must not happen inside the frame's open
+        // command buffer.
+        //
+        // `globals` is copied (16 bytes) rather than borrowed, because Record
+        // runs long after the frame driver's GlobalParams reference is gone.
+        [[nodiscard]] std::uint32_t PrepareChain(const PostChainDesc& desc,
+                                                 const GlobalParams& globals,
+                                                 nri::Format targetFormat);
+
+        // Records pass `pass` into an ALREADY-OPEN raster pass whose single
+        // colour attachment is `target`. `sources` is chainInputSlots long, in
+        // InputTexture slot order; an invalid handle (a slot this pass wired
+        // nothing into) binds the black texel, exactly as the NVRHI chain
+        // does. Emits no barrier: the executor derives them.
+        void Record(RenderGraphNodeContext& context, std::uint32_t pass,
+                    std::span<const RgTexture> sources, RgTexture target,
+                    std::uint32_t frameSlot);
+
+        // How many chain passes one frame may record, how many declared
+        // texture params one chain may carry, and the arena's region size
+        // before alignment. Pool/arena sizing constants, not opinions about
+        // content -- the same reasoning as Batch2DNode's caps: a pool's
+        // capacity is fixed at creation and NRI cannot free one descriptor
+        // set, so the alternative to a cap is discovering the limit mid-frame.
+        // Over either cap the chain is refused wholesale (the frame renders
+        // canvas -> tonemap) with one ERROR naming the constant to raise.
+        static constexpr std::uint32_t kMaxPasses   = 8;
+        static constexpr std::uint32_t kMaxTextures = 8;
+        // kMaxPassInputs (Material/MaterialSource.hpp) is 4; pinned by a
+        // static_assert in the .cpp so this cannot silently fall behind.
+        static constexpr std::uint32_t kMaxInputs   = 4;
+        static constexpr std::uint32_t kCbMaxBytes  = 256;
+        // Region 0 of every frame slot is the globals CB, region 1 the ONE
+        // material CB the whole chain shares.
+        static constexpr std::uint32_t kCbRegionsPerFrame = 2;
+        static constexpr std::uint32_t kGlobalsRegion     = 0;
+        static constexpr std::uint32_t kMaterialRegion    = 1;
+
+        // PURE and public for the same reason Batch2DNode's twins are: they
+        // carry invariants whose violation would be silent, and no device can
+        // show them. The stride must be BOTH a multiple of the device's
+        // constant-buffer alignment (or every view past the first is
+        // misaligned) AND at least kCbMaxBytes (or the packed bytes spill into
+        // the next region).
+        [[nodiscard]] static constexpr std::uint64_t CbRegionStride(
+            std::uint64_t constantBufferAlignment) noexcept
+        {
+            return constantBufferAlignment <= 1
+                 ? kCbMaxBytes
+                 : ((kCbMaxBytes + constantBufferAlignment - 1) / constantBufferAlignment)
+                       * constantBufferAlignment;
+        }
+
+        [[nodiscard]] static constexpr std::uint64_t CbRegionOffset(
+            std::uint64_t regionStride, std::uint32_t frameSlot, std::uint32_t region) noexcept
+        {
+            return ((std::uint64_t)frameSlot * kCbRegionsPerFrame + region) * regionStride;
+        }
+
+    private:
+        PostChainNode() = default;
+
+        bool Init(NriGraphContext& context);
+        bool CreateFallbackTexels();
+        bool CreateSampler();
+        bool CreatePool();
+        bool CreateConstantArena();
+
+        // Rebuilds the layout, the per-pass PSOs and the descriptor sets for a
+        // chain whose identity stamp changed. False (already logged) refuses
+        // the chain for this frame.
+        [[nodiscard]] bool BuildChain(const PostChainDesc& desc, nri::Format targetFormat);
+        // The cached SHADER_RESOURCE view over `texture`, creating it on first
+        // sight. Null (already reported) if NRI refused it.
+        [[nodiscard]] nri::Descriptor* EnsureView(const nri::CoreInterface& core,
+                                                  nri::Texture* texture);
+        [[nodiscard]] std::uint64_t ArenaOffset(std::uint32_t frameSlot, std::uint32_t region) const
+        {
+            return CbRegionOffset(m_arenaStride, frameSlot, region);
+        }
+
+        struct Pass
+        {
+            std::uint64_t  shaderPairId = 0;   // CONTENT hash of the blob pair
+            // Held so the bytecode the pipeline cache's fill callback points at
+            // outlives the GetGraphics call (its fill contract, rule 2).
+            std::shared_ptr<const std::vector<std::uint8_t>> vs, ps;
+            nri::Pipeline*      pipeline = nullptr;
+            nri::DescriptorSet* set[kSwapchainFramesInFlight]{};
+            // What this pass's set for that frame slot currently has bound in
+            // its texture range -- the declared params first, then the chain
+            // inputs. A rebind happens only when one of them changes.
+            nri::Texture* bound[kSwapchainFramesInFlight][kMaxTextures + kMaxInputs]{};
+            bool          written[kSwapchainFramesInFlight]{};
+        };
+
+        struct CachedView
+        {
+            nri::Texture*    texture = nullptr;
+            nri::Descriptor* view    = nullptr;
+        };
+
+        // See Batch2DNode::kShaderPairBase and TonemapNode::kShaderPairId: one
+        // shared cache, so the nodes' opaque shader-pair id spaces must not
+        // overlap. A post pass's id is the CONTENT hash of its blob pair with
+        // the high bit set (like a registered sprite material's) -- and the
+        // layout id is part of GraphicsKey anyway, so the two cannot collide
+        // even on identical bytecode.
+        static constexpr std::uint64_t kShaderPairMark = 0x8000000000000000ull;
+
+        NriDevice*        m_device    = nullptr;
+        NriPipelineCache* m_pipelines = nullptr;
+
+        nri::Texture*    m_white     = nullptr;
+        nri::Descriptor* m_whiteView = nullptr;
+        nri::Texture*    m_black     = nullptr;
+        nri::Descriptor* m_blackView = nullptr;
+        nri::Descriptor* m_sampler   = nullptr;
+
+        nri::DescriptorPool* m_pool = nullptr;
+
+        nri::Buffer*     m_arena       = nullptr;
+        void*            m_arenaCpu    = nullptr;
+        std::uint64_t    m_arenaStride = 0;
+        nri::Descriptor* m_globalsView[kSwapchainFramesInFlight]{};
+        nri::Descriptor* m_materialView[kSwapchainFramesInFlight]{};
+
+        // The bound chain's shape. Rebuilt only when `m_stamp` changes.
+        std::uint64_t m_stamp        = 0;
+        bool          m_ready        = false;
+        bool          m_refused      = false;   // this stamp was already reported unbuildable
+        std::uint32_t m_layoutId     = NriPipelineCache::kInvalidLayout;
+        std::uint32_t m_cbSize       = 0;
+        std::uint32_t m_textureCount = 0;
+        std::uint32_t m_chainInputs  = 0;
+        // FullscreenMaterialLayout's index for the SRV range, stored rather
+        // than re-derived at record time so the two cannot drift.
+        std::uint32_t m_textureRange = FullscreenMaterialLayout::kNoRange;
+        nri::Format   m_targetFormat = nri::Format::UNKNOWN;
+
+        std::vector<Pass>       m_passes;
+        std::vector<CachedView> m_views;
+        std::vector<nri::Descriptor*> m_orphanedViews;   // swept by InvalidateSources/Release
+
+        std::vector<std::uint8_t> m_packed;    // PackCB output, refreshed every frame
+        GlobalParams              m_globals{}; // this frame's engine-global constants
+
+        bool m_warnedViewChurn = false;
+        bool m_warnedTextures  = false;
+    };
 
     class ARCANE_API TonemapNode
     {
@@ -115,6 +406,25 @@ namespace Arcane
         // InvalidateSource/Release.
         std::vector<nri::Descriptor*> m_orphanedViews;
     };
+
+    // Declares `passCount` post-chain nodes into `graph` -- one per chain
+    // pass, named "post0".."postN-1" -- and hands back the LAST pass's target,
+    // which is what the tonemap then samples instead of the canvas.
+    //
+    // Each pass CREATES its own RGBA16F transient at the canvas extent and
+    // declares a Read of every upstream target its wiring names (`scene` for a
+    // kSceneInput entry). The two-slot ping-pong is the pool allocator's
+    // answer to those lifetimes, not something declared here -- see THE
+    // PING-PONG IS DERIVED at the top of this file.
+    //
+    // `desc` is read for its per-pass WIRING and slot count only; the bytecode
+    // and values were already consumed by PostChainNode::PrepareChain, which
+    // is also what decided `passCount`. `context` may be null -- see
+    // AddBatch2DNode's signature note.
+    ARCANE_API RgTexture AddPostChainNodes(RenderGraph& graph, NriGraphContext* context,
+                                           RgTexture scene, const PostChainDesc& desc,
+                                           std::uint32_t passCount,
+                                           std::uint32_t width, std::uint32_t height);
 
     // Declares the tonemap node into `graph`: imports the swapchain backbuffer
     // as its colour attachment, reads `source` as a shader resource, and hands

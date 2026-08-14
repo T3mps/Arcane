@@ -94,7 +94,8 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
-#include <Arcane/Host/HostConfig.hpp>   // HostConfig, GoldenStage
+#include <Arcane/Host/HostConfig.hpp>          // HostConfig, GoldenStage
+#include <Arcane/Material/GlobalParams.hpp>    // GlobalParams (held by value)
 #include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
@@ -124,6 +125,17 @@
 namespace Arcane
 {
     class Batcher2D;
+    struct PostChainDesc;
+
+    // THE LINEAR CANVAS FORMAT every node on this path renders into: the batch
+    // node's canvas, and every post-chain pass's target. RGBA16F, matching
+    // Canvas.cpp's kCanvasFormat (nvrhi::Format::RGBA16_FLOAT) -- colours are
+    // LINEAR and may exceed 1.0, and the tonemap node is what turns them
+    // display-referred. It lives HERE, next to the frame's shape, because two
+    // nodes now have to agree on it: a post target that did not match the
+    // canvas would be a pipeline built for one format bound to an attachment
+    // of another.
+    inline constexpr nri::Format kGraphCanvasFormat = nri::Format::RGBA16_SFLOAT;
 
     class ARCANE_API NriGraphContext
     {
@@ -137,11 +149,12 @@ namespace Arcane
             // the post chain, `full` = plus the HUD. Tasks 8-12 attach their
             // nodes under the stages that include them.
             //
-            // AS OF TASK 8 every stage still renders the same frame -- batch +
-            // tonemap -- because neither the post chain (Task 10) nor the HUD
-            // (Task 12) exists on this path yet. That is the HONEST reading of
-            // the flag, not a stub: `batch` means "batcher + tonemap and
-            // nothing else", which is exactly what this frame is.
+            // AS OF TASK 10 `batch` genuinely differs: it drops the post chain
+            // (the same bypass RuntimeApp applies to the NVRHI path, so a batch
+            // golden compares the same content on both). `post` and `full`
+            // still render the same frame, because the HUD (Task 12) does not
+            // exist on this path yet -- which is the HONEST reading of the
+            // flag, not a stub.
             GoldenStage stage = GoldenStage::Full;
 
             // Add the readback node to THIS frame's graph, so the presented
@@ -156,6 +169,19 @@ namespace Arcane
             // the duration of the RenderFrame call and never stored; null
             // renders a cleared canvas.
             Batcher2D* batch = nullptr;
+
+            // This frame's scene POST CHAIN as bytecode + layout + values --
+            // SceneRenderResolver::PostDesc(), the same bind its NVRHI twin
+            // renders through. Borrowed for the duration of the RenderFrame
+            // call (the resolver is not Refreshed inside one) and never
+            // stored; null means "no chain", i.e. canvas -> tonemap.
+            const PostChainDesc* post = nullptr;
+
+            // The engine-global material constants for THIS frame
+            // (SceneRenderResolver::Globals()). Copied, not borrowed -- the
+            // post chain's b1 is written at RECORD time, long after this
+            // pointer's referent is out of scope. Null leaves them zeroed.
+            const GlobalParams* globals = nullptr;
         };
 
         // What one frame did. Distinguishes the two false-y outcomes the frame
@@ -240,13 +266,21 @@ namespace Arcane
         // The node objects, reached from the free AddXxxNode() declarators (and
         // therefore from their exec fns). Null only if Create() failed, which
         // never returns a vehicle.
-        [[nodiscard]] Batch2DNode* Batch2D() noexcept { return m_batch2D.get(); }
-        [[nodiscard]] TonemapNode* Tonemap() noexcept { return m_tonemap.get(); }
+        [[nodiscard]] Batch2DNode*   Batch2D()   noexcept { return m_batch2D.get(); }
+        [[nodiscard]] TonemapNode*   Tonemap()   noexcept { return m_tonemap.get(); }
+        [[nodiscard]] PostChainNode* PostChain() noexcept { return m_post.get(); }
 
         // The batcher the frame CURRENTLY being declared should drain, i.e.
         // FrameDesc::batch. Valid only inside a RenderFrame() call; null
         // outside one and on a frame the driver submitted nothing for.
         [[nodiscard]] Batcher2D* CurrentBatch() noexcept { return m_currentBatch; }
+
+        // FrameDesc::globals for the frame currently being declared, COPIED so
+        // it stays readable for the whole RenderFrame call (the post chain's
+        // b1 is written at record time). All-zero on a frame the driver
+        // supplied none for -- which is what a material reads when nobody sets
+        // them on the NVRHI path either.
+        [[nodiscard]] const GlobalParams& CurrentGlobals() const noexcept { return m_currentGlobals; }
 
         // The raw bytecode of the offline shader artifact `name` -- the SAME
         // `<name>.bin` the NVRHI path loads through ShaderLibrary, from the same
@@ -334,6 +368,7 @@ namespace Arcane
         // objects are RELEASED explicitly in ~NriGraphContext, before the drain
         // -- these destructors are the safety net, not the path.
         std::unique_ptr<Batch2DNode>       m_batch2D;
+        std::unique_ptr<PostChainNode>     m_post;
         std::unique_ptr<TonemapNode>       m_tonemap;
 
         // Raw offline shader artifacts, keyed by artifact stem. unordered_map
@@ -360,6 +395,15 @@ namespace Arcane
         // CurrentBatch(). Cleared at the end of every RenderFrame so a stale
         // batcher can never be drained by a later frame.
         Batcher2D* m_currentBatch = nullptr;
+
+        // FrameDesc::globals, by VALUE -- see CurrentGlobals().
+        GlobalParams m_currentGlobals{};
+
+        // How many post-chain nodes the LAST declared frame carried. The
+        // tonemap's source is the canvas at 0 and the last pass's target
+        // otherwise, so a change here means the tonemap must rebuild its
+        // source view -- see BuildFrame.
+        std::uint32_t m_postPassCount = 0;
 
         // See SetAssetResolver. Empty until the frame driver installs one.
         AssetResolveFn m_resolveAsset;
@@ -416,6 +460,17 @@ namespace Arcane
         // it is true -- ImportBuffer stores the pointer without dereferencing).
         nri::Buffer*  captureBuffer = nullptr;
         std::uint64_t captureBytes  = 0;
+
+        // The scene post chain to insert between the canvas and the tonemap,
+        // or null for none. Read for its per-pass WIRING and slot count here;
+        // its bytecode and values are PostChainNode::PrepareChain's business.
+        // Honoured only when `stage` includes the chain (Batch drops it).
+        //
+        // A headless drive can point this at a PostChainDesc carrying nothing
+        // but `passes[i].inputs` -- the declarations depend on the wiring and
+        // on nothing else, which is what lets the [nri] frame-shape cases
+        // exercise the real chain shape with no device.
+        const PostChainDesc* post = nullptr;
     };
 
     struct RgFrameHandles
@@ -423,6 +478,11 @@ namespace Arcane
         RgTexture backbuffer{};
         RgTexture canvas{};
         RgBuffer  capture{};
+        // The LAST post-chain pass's target -- what the tonemap sampled. An
+        // invalid handle (and a zero count) when the frame carried no chain,
+        // in which case the tonemap sampled `canvas`.
+        RgTexture     post{};
+        std::uint32_t postPassCount = 0;
     };
 
     ARCANE_API RgFrameHandles DeclareGraphFrame(RenderGraph& graph, const RgFrameShape& shape,

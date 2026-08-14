@@ -27,11 +27,16 @@
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // DeclareGraphFrame -- the vehicle's frame SHAPE
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/nodes/Batch2DNode.hpp>   // SpriteMaterialLayout / the arena region math
+#include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>  // FullscreenMaterialLayout / PostChainNode
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
+#include <Arcane/Render/PostChainCache.hpp>    // PostChainDesc -- the frame's post-chain wiring
+#include <Arcane/Material/MaterialSource.hpp>  // kSceneInput
 #include <Arcane/Render/Swapchain.hpp>         // kSwapchainFramesInFlight
 
+#include <algorithm>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <span>
 #include <string>
@@ -2764,6 +2769,283 @@ TEST_CASE("nri graph frame: the canvas transient is swapchain-sized RGBA16F and 
 }
 
 // ======================================================================
+// THE POST CHAIN IN THE FRAME (Phase 2, Task 10).
+//
+// Same drive as the cases above -- Arcane::DeclareGraphFrame with a null
+// context -- so the nodes, the reads/writes and the derived barrier chain are
+// the REAL ones. What makes that possible headlessly is that the post nodes'
+// DECLARATIONS depend on the chain's per-pass WIRING and on nothing else: the
+// bytecode, the template and the values are PostChainNode::PrepareChain's
+// business, and PrepareChain only runs when there is a context (a device).
+// ======================================================================
+namespace
+{
+    // A chain expressed as wiring only, in the shape PostChainCache produces
+    // it: passes[p].inputs are chain indices, kSceneInput meaning the external
+    // scene colour, and chainInputSlots is the max input count anywhere (min
+    // 1) -- MaterialSource.cpp's own rule, restated so a change to it has to
+    // be made deliberately in both places.
+    Arcane::PostChainDesc MakeChain(std::initializer_list<std::vector<std::uint32_t>> wiring)
+    {
+        Arcane::PostChainDesc desc;
+        std::uint32_t slots = 1;
+        for (const std::vector<std::uint32_t>& inputs : wiring)
+        {
+            Arcane::PostChainPassDesc pass;
+            pass.inputs = inputs;
+            slots = (std::max)(slots, (std::uint32_t)inputs.size());
+            desc.passes.push_back(std::move(pass));
+        }
+        desc.chainInputSlots = slots;
+        return desc;
+    }
+
+    // The LINEAR chain every real post material produces: pass 0 reads the
+    // scene (BuildMaterialChainSource refuses anything else for the base) and
+    // pass k reads pass k-1. ReferenceProject's is this with N == 2.
+    Arcane::PostChainDesc MakeLinearChain(std::uint32_t passCount)
+    {
+        Arcane::PostChainDesc desc;
+        desc.chainInputSlots = 1;
+        for (std::uint32_t p = 0; p < passCount; ++p)
+        {
+            Arcane::PostChainPassDesc pass;
+            pass.inputs.push_back(p == 0 ? Arcane::kSceneInput : p - 1);
+            desc.passes.push_back(std::move(pass));
+        }
+        return desc;
+    }
+
+    // The one barrier at `node` that transitions something INTO a colour
+    // attachment -- i.e. the pass's own target. Every post node has exactly
+    // two: this, and the read of what it samples.
+    const Arcane::RgBarrier& ColorWriteBarrier(const Arcane::RgCompiledNode& node)
+    {
+        for (const Arcane::RgBarrier& barrier : node.preBarriers)
+            if (barrier.isTexture &&
+                static_cast<std::uint32_t>(barrier.after.layout)
+                    == static_cast<std::uint32_t>(nri::Layout::COLOR_ATTACHMENT))
+                return barrier;
+        FAIL("node declares no transition into COLOR_ATTACHMENT");
+        return node.preBarriers.front();
+    }
+}
+
+TEST_CASE("nri graph frame: the post chain inserts one node per pass between the batch and the "
+          "tonemap, and the tonemap samples the LAST pass", "[nri]")
+{
+    const Arcane::PostChainDesc chain = MakeLinearChain(2);   // ReferenceProject's shape
+
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 320;
+    shape.canvasHeight = 200;
+    shape.post         = &chain;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+    REQUIRE(graph.NodeCount() == 4);
+    CHECK(std::string(graph.NodeName(0)) == "batch2d");
+    CHECK(std::string(graph.NodeName(1)) == "post0");
+    CHECK(std::string(graph.NodeName(2)) == "post1");
+    CHECK(std::string(graph.NodeName(3)) == "tonemap");
+
+    CHECK(handles.postPassCount == 2);
+    REQUIRE(graph.IsHandleValid(handles.post));
+    CHECK(graph.IsTransient(handles.post));
+    CHECK(std::string(graph.NameOf(handles.post)) == "post1");
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.nodes.size() == 4);
+
+    // Node 1 (post0): reads the CANVAS the batch node just wrote, writes its
+    // own target. NEITHER transition is hand-written anywhere -- the node
+    // declares Read(scene)/Write(target) and the executor derives both.
+    REQUIRE(compiled.nodes[1].preBarriers.size() == 2);
+    bool sawCanvasRead = false;
+    for (const Arcane::RgBarrier& barrier : compiled.nodes[1].preBarriers)
+    {
+        REQUIRE(barrier.isTexture);
+        if (static_cast<std::uint32_t>(barrier.after.layout)
+            == static_cast<std::uint32_t>(nri::Layout::SHADER_RESOURCE))
+        {
+            sawCanvasRead = true;
+            CheckState(barrier.before, kColorState);
+            CheckState(barrier.after, nri::AccessBits::SHADER_RESOURCE,
+                       nri::Layout::SHADER_RESOURCE, kShaderReadStages);
+        }
+    }
+    CHECK(sawCanvasRead);
+    // Pass 0's own target is a fresh pool slot: the discarding entry.
+    CheckState(ColorWriteBarrier(compiled.nodes[1]).before, kUnknownState);
+    CheckState(ColorWriteBarrier(compiled.nodes[1]).after, kColorState);
+
+    // Node 2 (post1): reads pass 0's target -- and writes a target whose pool
+    // slot the CANVAS just vacated, which is the ping-pong showing up as a
+    // handover rather than as an allocation. `before` therefore carries the
+    // canvas's OUTGOING access with the layout still UNDEFINED (the contents
+    // are not inherited, the availability operation is).
+    REQUIRE(compiled.nodes[2].preBarriers.size() == 2);
+    CheckState(ColorWriteBarrier(compiled.nodes[2]).before,
+               nri::AccessBits::SHADER_RESOURCE, nri::Layout::UNDEFINED, kShaderReadStages);
+    CheckState(ColorWriteBarrier(compiled.nodes[2]).after, kColorState);
+
+    // Node 3 (tonemap): samples pass 1's target (NOT the canvas) and writes
+    // the freshly acquired backbuffer.
+    REQUIRE(compiled.nodes[3].preBarriers.size() == 2);
+    CheckState(ColorWriteBarrier(compiled.nodes[3]).before, kUnknownState);   // the backbuffer
+    CheckState(ColorWriteBarrier(compiled.nodes[3]).after, kColorState);
+
+    // ...and the graph still leaves the backbuffer present-ready, alone.
+    REQUIRE(compiled.exitBarriers.size() == 1);
+    CheckState(compiled.exitBarriers[0].after, kPresentState);
+
+    // THE TRANSIENT-POOL EXERCISE, stated as a number: THREE declared
+    // transients (canvas + two pass targets) sharing TWO physical textures.
+    // Enumeration order is texture-slot order (RgTransient's contract), i.e.
+    // canvas, post0, post1 -- so the alternation is 0, 1, 0.
+    REQUIRE(compiled.transients.size() == 3);
+    CHECK(compiled.poolSlotCount == 2);
+    REQUIRE(compiled.transientPoolSlot.size() == 3);
+    CHECK(compiled.transientPoolSlot[0] == compiled.transientPoolSlot[2]);
+    CHECK(compiled.transientPoolSlot[0] != compiled.transientPoolSlot[1]);
+}
+
+TEST_CASE("nri graph frame: --golden-stage batch drops the post chain; post and full keep it",
+          "[nri]")
+{
+    // The stage vocabulary is the ONE thing that makes a node-by-node cutover
+    // comparable: a batch-stage golden must contain the batcher and the
+    // tonemap and nothing else, on BOTH recorders. RuntimeApp applies exactly
+    // this bypass to the NVRHI path (`stageSkipsPost`), so if this gate broke,
+    // a batch golden would compare a graded frame against an ungraded one.
+    const Arcane::PostChainDesc chain = MakeLinearChain(2);
+
+    const struct { Arcane::GoldenStage stage; std::size_t nodes; std::uint32_t passes; } cases[] = {
+        { Arcane::GoldenStage::Batch, 2, 0 },
+        { Arcane::GoldenStage::Post,  4, 2 },
+        { Arcane::GoldenStage::Full,  4, 2 },
+    };
+
+    for (const auto& expected : cases)
+    {
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 320;
+        shape.canvasHeight = 200;
+        shape.post         = &chain;
+        shape.stage        = expected.stage;
+
+        const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+        CHECK(graph.NodeCount() == expected.nodes);
+        CHECK(handles.postPassCount == expected.passes);
+        CHECK(graph.IsHandleValid(handles.post) == (expected.passes > 0));
+        // The last node is the tonemap either way -- the chain is inserted
+        // BEFORE it, never appended after it.
+        CHECK(std::string(graph.NodeName(graph.NodeCount() - 1)) == "tonemap");
+    }
+
+    // ...and a frame with no chain at all is byte-for-byte Task 8's, whatever
+    // the stage: nothing above may make the no-post path grow a node.
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 320;
+    shape.canvasHeight = 200;
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+    CHECK(graph.NodeCount() == 2);
+    CHECK(handles.postPassCount == 0);
+    CHECK_FALSE(graph.IsHandleValid(handles.post));
+}
+
+TEST_CASE("nri graph frame: a four-pass post chain runs THREE tenants through one pool slot, and "
+          "each inherits the previous one's outgoing state", "[nri]")
+{
+    // The cross-tenant handover is generic in RenderGraph::Compile (its POOL
+    // HANDOVER block tracks state per pool SLOT, not per tenant), but until
+    // this task nothing in the tree declared a frame with more than two
+    // tenants on one slot -- so the X -> Y -> Z case was unpinned. A four-pass
+    // chain is the smallest frame that produces it.
+    const Arcane::PostChainDesc chain = MakeLinearChain(4);
+
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 320;
+    shape.canvasHeight = 200;
+    shape.post         = &chain;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+    REQUIRE(graph.NodeCount() == 6);   // batch2d, post0..post3, tonemap
+    CHECK(handles.postPassCount == 4);
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+
+    // FIVE transients (canvas + four targets) on TWO physical textures, still
+    // -- the alternation does not degrade as the chain grows.
+    REQUIRE(compiled.transients.size() == 5);
+    CHECK(compiled.poolSlotCount == 2);
+    REQUIRE(compiled.transientPoolSlot.size() == 5);
+    // Texture-slot enumeration order: canvas, post0, post1, post2, post3.
+    const std::uint32_t even = compiled.transientPoolSlot[0];
+    const std::uint32_t odd  = compiled.transientPoolSlot[1];
+    CHECK(even != odd);
+    CHECK(compiled.transientPoolSlot[2] == even);   // canvas -> post1  (tenant 2)
+    CHECK(compiled.transientPoolSlot[3] == odd);
+    CHECK(compiled.transientPoolSlot[4] == even);   // post1  -> post3  (tenant 3)
+
+    // THE PROPERTY. Pass 1 is `even`'s second tenant and pass 3 is its THIRD;
+    // both must see the previous tenant's outgoing SHADER_RESOURCE access
+    // (the layout stays UNDEFINED -- contents are not inherited). If Compile
+    // seeded a later tenant from kUnknownState instead, the third would come
+    // back with access NONE and perform no availability operation for the
+    // second tenant's writes -- the write-after-write hazard the handover
+    // exists to close, one tenant further along than anything tested before.
+    for (const std::size_t node : { std::size_t(2), std::size_t(3), std::size_t(4) })
+    {
+        INFO("post pass node index " << node);
+        CheckState(ColorWriteBarrier(compiled.nodes[node]).before,
+                   nri::AccessBits::SHADER_RESOURCE, nri::Layout::UNDEFINED, kShaderReadStages);
+    }
+    // ...while the FIRST tenant of each slot still starts from the discarding
+    // entry, which is what makes the three assertions above meaningful.
+    CheckState(ColorWriteBarrier(compiled.nodes[1]).before, kUnknownState);
+}
+
+TEST_CASE("nri graph frame: a post chain whose base reads the scene keeps the canvas alive past "
+          "pass 0", "[nri]")
+{
+    // A DAG, not a pipe: MaterialSource lets any pass read any EARLIER pass,
+    // and (in post mode) any pass read the scene. The declarator wires exactly
+    // what the chain says, so the pool allocator -- not a hand-rolled
+    // ping-pong -- is what decides the physical layout. Here pass 1 reads the
+    // SCENE as well as pass 0, which extends the canvas's lifetime and takes
+    // its slot out of the alternation entirely.
+    const Arcane::PostChainDesc chain =
+        MakeChain({ { Arcane::kSceneInput }, { 0u, Arcane::kSceneInput } });
+    CHECK(chain.chainInputSlots == 2);
+
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 320;
+    shape.canvasHeight = 200;
+    shape.post         = &chain;
+
+    Arcane::DeclareGraphFrame(graph, shape, nullptr);
+    REQUIRE(graph.NodeCount() == 4);
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    // THREE pool slots now, not two: the canvas is still live at node 2, so
+    // pass 1's target cannot take its slot. That is the pool allocator being
+    // driven by real lifetimes rather than by an assumption about chains.
+    REQUIRE(compiled.transients.size() == 3);
+    CHECK(compiled.poolSlotCount == 3);
+    // Pass 1 declares TWO reads (pass 0's target and the canvas) plus its own
+    // write -- but the canvas is ALREADY in SHADER_RESOURCE from node 1, so no
+    // barrier is emitted for it a second time.
+    REQUIRE(compiled.nodes[2].preBarriers.size() == 2);
+    CheckState(ColorWriteBarrier(compiled.nodes[2]).before, kUnknownState);
+}
+
+// ======================================================================
 // NriPipelineCache (Phase 2, Task 7)
 // ======================================================================
 // The NONE backend is enough to prove everything that is actually the
@@ -3204,4 +3486,213 @@ TEST_CASE("nri batch2d constant arena: every (frame slot, region) pair owns a di
     CHECK(Node::CbRegionOffset(256, 0, 0) == 0);
     CHECK(Node::CbRegionOffset(256, 0, 1) == 256);
     CHECK(Node::CbRegionOffset(256, 1, 0) == (std::uint64_t)Node::kCbRegionsPerFrame * 256);
+}
+
+// ======================================================================
+// PostChainNode's pure halves (Phase 2, Task 10)
+// ======================================================================
+
+TEST_CASE("nri post chain layout: NO root constants, b0/b1 CBVs, and the chain inputs share ONE "
+          "contiguous SRV range with the material's own textures", "[nri]")
+{
+    // The fullscreen register map is NOT the sprite one, and every difference
+    // below is a place a copy-paste from SpriteMaterialLayout would bind the
+    // wrong register: fullscreen_material.hlsl has no push constants at all
+    // (b0 is the MATERIAL cbuffer, not the batcher's projection block), and
+    // GenerateMaterialBindings emits the reserved InputTexture(N) slots
+    // immediately after the declared textures.
+    Arcane::FullscreenMaterialLayout layout;
+    layout.Build(/*cbSize=*/32, /*textureCount=*/1, /*chainInputs=*/2);
+
+    // THE REGISTER-SPACE RULE, same as the sprite twin's: NRI refuses
+    // rootRegisterSpace == a set's registerSpace only when the layout carries
+    // root DESCRIPTORS or root SAMPLERS, and every register in the fullscreen
+    // template is in the implicit space0 -- so both spaces must be 0 and these
+    // counts must stay zero.
+    REQUIRE(layout.desc.rootDescriptorNum == 0);
+    REQUIRE(layout.desc.rootSamplerNum == 0);
+    // ...and unlike the sprite layout, there are no root CONSTANTS either.
+    REQUIRE(layout.desc.rootConstantNum == 0);
+    CHECK(layout.desc.rootConstants == nullptr);
+    CHECK(layout.desc.rootRegisterSpace == 0);
+    REQUIRE(layout.desc.descriptorSetNum == 1);
+    CHECK(layout.set.registerSpace == 0);
+
+    // CBV b0, CBV b1, SRV t0..t2, SAMPLER s0 -- in the order that lets NRI's
+    // D3D12 backend merge each consecutive same-type run into one root table.
+    REQUIRE(layout.set.rangeNum == 4);
+    REQUIRE(layout.materialCb != Arcane::FullscreenMaterialLayout::kNoRange);
+    CHECK(layout.materialCb == 0);
+    CHECK(layout.globalsCb  == 1);
+    CHECK(layout.textures   == 2);
+    CHECK(layout.sampler    == 3);
+
+    CHECK(layout.ranges[layout.materialCb].descriptorType == nri::DescriptorType::CONSTANT_BUFFER);
+    CHECK(layout.ranges[layout.materialCb].baseRegisterIndex == Arcane::kMaterialCbSlot);   // b0
+    CHECK(layout.ranges[layout.globalsCb].descriptorType == nri::DescriptorType::CONSTANT_BUFFER);
+    CHECK(layout.ranges[layout.globalsCb].baseRegisterIndex == Arcane::kGlobalCbSlot);      // b1
+    // ONE range covering BOTH the declared texture params and the chain
+    // inputs -- 1 + 2 here. Splitting them would cost an extra root parameter
+    // and, worse, would need the input slots' base register recomputed.
+    CHECK(layout.ranges[layout.textures].descriptorType == nri::DescriptorType::TEXTURE);
+    CHECK(layout.ranges[layout.textures].baseRegisterIndex == 0);
+    CHECK(layout.ranges[layout.textures].descriptorNum == 3);
+    CHECK(layout.ranges[layout.sampler].descriptorType == nri::DescriptorType::SAMPLER);
+    CHECK(layout.ranges[layout.sampler].baseRegisterIndex == 0);                            // s0
+
+    // NRI validates that every range's stages are a SUBSET of the layout's,
+    // and every range here is both stages -- a merged template's VERTEX_BODY
+    // may read its params and sample its textures.
+    for (std::uint32_t i = 0; i < layout.set.rangeNum; ++i)
+    {
+        const auto stages = (std::uint32_t)layout.ranges[i].shaderStages;
+        const auto all    = (std::uint32_t)layout.desc.shaderStages;
+        CHECK((stages & all) == stages);
+        CHECK((stages & (std::uint32_t)nri::StageBits::VERTEX_SHADER) != 0u);
+        CHECK((stages & (std::uint32_t)nri::StageBits::FRAGMENT_SHADER) != 0u);
+    }
+
+    // The desc points at THIS object's arrays -- the reason it is not copyable.
+    CHECK(layout.desc.descriptorSets == &layout.set);
+    CHECK(layout.set.ranges == layout.ranges);
+}
+
+TEST_CASE("nri post chain layout: the degenerate shapes declare exactly what the stitcher emitted",
+          "[nri]")
+{
+    // A chain with no numeric params: MaterialSource omits the cbuffer block
+    // entirely, so a b0 range would name a register the shader never declared.
+    // The chain input slot keeps both the SRV range and the sampler alive.
+    {
+        Arcane::FullscreenMaterialLayout layout;
+        layout.Build(/*cbSize=*/0, /*textureCount=*/0, /*chainInputs=*/1);
+        CHECK(layout.materialCb == Arcane::FullscreenMaterialLayout::kNoRange);
+        REQUIRE(layout.set.rangeNum == 3);
+        CHECK(layout.globalsCb == 0);
+        CHECK(layout.textures  == 1);
+        CHECK(layout.sampler   == 2);
+        CHECK(layout.ranges[layout.globalsCb].baseRegisterIndex == Arcane::kGlobalCbSlot);
+        CHECK(layout.ranges[layout.textures].descriptorNum == 1);   // InputTexture alone, at t0
+        CHECK(layout.desc.rootDescriptorNum == 0);
+        CHECK(layout.desc.rootSamplerNum == 0);
+    }
+
+    // Nothing to sample at all: GenerateMaterialBindings emits no
+    // MaterialSampler in that case, so declaring s0 would name a register the
+    // shader does not have. Not reachable through the post slot today
+    // (chainInputSlots is at least 1) -- pinned because the layout must
+    // describe the STITCHER's output rather than the post path's habits.
+    {
+        Arcane::FullscreenMaterialLayout layout;
+        layout.Build(/*cbSize=*/16, /*textureCount=*/0, /*chainInputs=*/0);
+        REQUIRE(layout.set.rangeNum == 2);
+        CHECK(layout.textures == Arcane::FullscreenMaterialLayout::kNoRange);
+        CHECK(layout.sampler  == Arcane::FullscreenMaterialLayout::kNoRange);
+        CHECK(layout.materialCb == 0);
+        CHECK(layout.globalsCb  == 1);
+    }
+}
+
+TEST_CASE("nri post chain layout: chains of the same SHAPE share one registered layout", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriPipelineCache cache;
+    cache.Bind(*device);
+
+    // Same byte-wise dedup contract SpriteMaterialLayout relies on, and the
+    // same reason it matters: one layout per binding SHAPE, not per chain.
+    // PostChainNode keys its descriptor-set re-allocation on the layout id
+    // changing, so a dedup that failed here would re-allocate sets (and strand
+    // the old ones in a fixed pool) on every rebuild.
+    Arcane::FullscreenMaterialLayout a, b, wider, noCb;
+    a.Build(32, 0, 1);
+    b.Build(16, 0, 1);        // a different cbSize is the SAME layout: the CB VIEW carries the size
+    wider.Build(32, 0, 2);    // one more input slot IS a different shape
+    noCb.Build(0, 0, 1);
+
+    const std::uint32_t idA = cache.RegisterLayout(a.desc);
+    REQUIRE(idA != Arcane::NriPipelineCache::kInvalidLayout);
+    CHECK(cache.LayoutCount() == 1);
+
+    CHECK(cache.RegisterLayout(b.desc) == idA);
+    CHECK(cache.LayoutCount() == 1);
+
+    CHECK(cache.RegisterLayout(wider.desc) != idA);
+    CHECK(cache.RegisterLayout(noCb.desc) != idA);
+    CHECK(cache.LayoutCount() == 3);
+
+    // ...and a FULLSCREEN layout is never confused with a SPRITE one, even at
+    // the same (cbSize, textureCount): the register map differs, and both
+    // nodes register into this one shared cache.
+    Arcane::SpriteMaterialLayout sprite;
+    sprite.Build(32, 0);
+    CHECK(cache.RegisterLayout(sprite.desc) != idA);
+    CHECK(cache.LayoutCount() == 4);
+
+    cache.Clear(device->Graves(), 0);
+    device->Graves().Drain();
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("nri post chain arena: every (frame slot, region) pair owns a distinct, stride-aligned "
+          "byte range", "[nri]")
+{
+    // The post arena is the second one on this path and it is a SEPARATE,
+    // smaller one -- two fixed regions per frame slot (globals + the ONE
+    // material CB a chain shares) against Batch2DNode's 1 + kMaxMaterialSlots.
+    // Same invariants, same silence when they break: a stride below kCbMaxBytes
+    // lets the packed bytes spill into the next region, and one that is not a
+    // multiple of the device's alignment misaligns every view past the first.
+    using Node = Arcane::PostChainNode;
+    CHECK(Node::kCbRegionsPerFrame == 2);
+    CHECK(Node::kGlobalsRegion == 0);
+    CHECK(Node::kMaterialRegion == 1);
+
+    const std::uint64_t alignments[] = { 0, 1, 16, 64, 256, 512 };
+    for (const std::uint64_t alignment : alignments)
+    {
+        const std::uint64_t stride = Node::CbRegionStride(alignment);
+        REQUIRE(stride >= Node::kCbMaxBytes);
+        if (alignment > 1)
+            CHECK(stride % alignment == 0);
+        // ...and it is the SMALLEST such value: no region is wasted. 512 is
+        // the case that earns this -- it is LARGER than kCbMaxBytes, so a
+        // "just use 256" implementation passes every other alignment.
+        CHECK(stride - (alignment > 1 ? alignment : 1) < Node::kCbMaxBytes);
+    }
+    CHECK(Node::CbRegionStride(256) == Node::kCbMaxBytes);
+
+    const std::uint64_t strides[] = { 256, 64 };
+    for (const std::uint64_t stride : strides)
+    {
+        const std::uint64_t arenaBytes =
+            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight * stride;
+        std::vector<std::uint64_t> seen;
+        for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+        {
+            for (std::uint32_t region = 0; region < Node::kCbRegionsPerFrame; ++region)
+            {
+                const std::uint64_t offset = Node::CbRegionOffset(stride, slot, region);
+                CHECK(offset % stride == 0);
+                for (const std::uint64_t other : seen)
+                    REQUIRE(offset != other);            // no aliasing, ever
+                REQUIRE(offset + stride <= arenaBytes);  // and none escapes the buffer
+                seen.push_back(offset);
+            }
+        }
+        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight);
+    }
+
+    // The globals CB and the material CB are DIFFERENT regions of the same
+    // frame slot -- the mistake that would otherwise show up as a post chain
+    // whose params are the viewport size.
+    CHECK(Node::CbRegionOffset(256, 0, Node::kGlobalsRegion) !=
+          Node::CbRegionOffset(256, 0, Node::kMaterialRegion));
+    CHECK(Node::CbRegionOffset(256, 0, Node::kGlobalsRegion) == 0);
+    CHECK(Node::CbRegionOffset(256, 1, Node::kGlobalsRegion)
+          == (std::uint64_t)Node::kCbRegionsPerFrame * 256);
 }

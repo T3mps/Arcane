@@ -991,10 +991,16 @@ void RuntimeApp::MainLoop()
         // the NVRHI recorder, and calling it would need a target this path does
         // not have.
         //
+        // The scene POST CHAIN runs here too as of Task 10, from the same
+        // compiled bytes the NVRHI chain was built from -- one node per pass,
+        // between the canvas and the tonemap.
+        //
         // WHAT THIS PATH STILL DOES NOT DO, named so it stays a known gap: the
-        // post chain, the HUD, and -- inside the batch node -- sprite TEXTURES,
-        // which live on the engine's NVRHI device and cannot be sampled by the
-        // graph's own device (Batch2DNode.hpp, THE TEXTURE GAP). The SIM half
+        // HUD (Task 12); sprite TEXTURES inside the batch node, which live on
+        // the engine's NVRHI device and cannot be sampled by the graph's own
+        // device (Batch2DNode.hpp, THE TEXTURE GAP); and a post material's
+        // declared TEXTURE params, which take the same white-texel fallback
+        // (FullscreenNodes.cpp, THE POST TEXTURE GAP). The SIM half
         // (FixedUpdate/Update) is untouched and runs identically.
         // =============================================================
         else
@@ -1031,6 +1037,21 @@ void RuntimeApp::MainLoop()
             // the nodes the other two would add do not exist on this path yet.
             graphFrame.stage = m_config.goldenStage;
             graphFrame.batch = &m_gpu->Batch();
+            // The scene post chain, as the BYTES its NVRHI twin was built
+            // from (SceneRenderResolver::PostDesc -- NRI Phase 2, Task 10).
+            // Re-read every frame for the same reason PostChain() is above:
+            // a drain may swap the bound instance under an asset re-save.
+            // Null (no PostProcess assignment, or the compile has not landed
+            // yet) simply renders canvas -> tonemap.
+            //
+            // NOT stage-gated here: DeclareGraphFrame applies the same
+            // `--golden-stage batch` bypass the NVRHI block above does, so
+            // the two paths drop the chain on identical terms.
+            graphFrame.post    = m_resolver ? m_resolver->PostDesc() : nullptr;
+            // The same GlobalParams the batcher got via SetGlobals, and the
+            // same ones the NVRHI post hook passes to the chain -- so the two
+            // recorders cannot bind different b1 contents.
+            graphFrame.globals = &m_frameGlobals;
             // The capture is taken on the LAST frame, which has to be known
             // BEFORE the frame is declared (the readback is a graph NODE, not
             // an after-the-fact copy). Hence `+ 1`: m_frameCount is bumped

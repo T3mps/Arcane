@@ -58,6 +58,10 @@ namespace Arcane
         {
             std::unique_ptr<FullscreenMaterialChain> chain;
             std::shared_ptr<MaterialInstance> instance;
+            // The SAME bind, as bytes (NRI Phase 2, Task 10). Filled beside
+            // `instance` so the two can never disagree about which compile is
+            // live -- see PostChainCache::Desc.
+            PostChainDesc desc;
         };
 
         Services services;
@@ -87,6 +91,14 @@ namespace Arcane
     {
         const auto it = m_impl->bound.find(id);
         return it != m_impl->bound.end() ? it->second.instance.get() : nullptr;
+    }
+
+    const PostChainDesc* PostChainCache::Desc(const Guid& id) const
+    {
+        const auto it = m_impl->bound.find(id);
+        if (it == m_impl->bound.end() || it->second.desc.passes.empty())
+            return nullptr;
+        return &it->second.desc;
     }
 
     void PostChainCache::Invalidate(const Guid& id)
@@ -260,21 +272,34 @@ namespace Arcane
         Impl& im = *this;
 
         std::vector<FullscreenMaterialChain::PassShaders> passes;
+        // The same blobs, RETAINED for the second recorder (NRI Phase 2, Task
+        // 10 -- PostChainDesc). MOVED out of the pending jobs rather than
+        // copied, so nothing is duplicated and nothing is compiled twice; the
+        // createShader calls below then read them through the shared_ptr.
+        std::vector<PostChainPassDesc> passBytes;
         passes.reserve(p.jobs.size());
+        passBytes.reserve(p.jobs.size());
         for (std::size_t i = 0; i < p.jobs.size(); ++i)
         {
             const std::string stem = p.data.name + "_post_p" + std::to_string(i);
+            PostChainPassDesc bytes;
+            bytes.vsBytes = std::make_shared<const std::vector<std::uint8_t>>(
+                std::move(p.jobs[i].vsBytes));
+            bytes.psBytes = std::make_shared<const std::vector<std::uint8_t>>(
+                std::move(p.jobs[i].psBytes));
+            bytes.inputs = p.passInputs[i];
+
             FullscreenMaterialChain::PassShaders ps;
             ps.vs = im.services.device->createShader(
                 nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
                     .setEntryName(kVsEntry)
                     .setDebugName((stem + "_vs").c_str()),
-                p.jobs[i].vsBytes.data(), p.jobs[i].vsBytes.size());
+                bytes.vsBytes->data(), bytes.vsBytes->size());
             ps.ps = im.services.device->createShader(
                 nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
                     .setEntryName(kPsEntry)
                     .setDebugName((stem + "_ps").c_str()),
-                p.jobs[i].psBytes.data(), p.jobs[i].psBytes.size());
+                bytes.psBytes->data(), bytes.psBytes->size());
             if (!ps.vs || !ps.ps)
             {
                 ARC_WARN("PostChainCache: createShader failed for material {}",
@@ -285,6 +310,7 @@ namespace Arcane
             }
             ps.inputs = p.passInputs[i];
             passes.push_back(std::move(ps));
+            passBytes.push_back(std::move(bytes));
         }
 
         // Layer the SAVED values exactly like the sprite cache's bind:
@@ -317,6 +343,16 @@ namespace Arcane
             return;
         }
         e.instance = std::move(inst);
+
+        // The byte-level twin of what was just bound, published in the same
+        // breath so Chain()/Instance()/Desc() can never name different
+        // compiles (PostChainCache::Desc). Overwritten wholesale on a
+        // successful REBIND, and left untouched by a failed one -- last-good
+        // applies to all three together.
+        e.desc.templ           = p.templ;
+        e.desc.instance        = e.instance;
+        e.desc.chainInputSlots = p.chainInputSlots;
+        e.desc.passes          = std::move(passBytes);
 
         // Warm the declared texture params NOW -- the drain site has no open
         // command list, so first-time uploads execute here instead of being

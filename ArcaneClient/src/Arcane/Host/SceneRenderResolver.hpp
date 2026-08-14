@@ -44,6 +44,7 @@ namespace Arcane
     class Runtime;
     class ShaderCompiler;
     class ShaderSourceProvider;
+    struct PostChainDesc;
     struct ShaderCompileResult;
 
     class ARCANE_API SceneRenderResolver
@@ -123,6 +124,15 @@ namespace Arcane
         // swap the bound instance under an asset re-save.
         FullscreenMaterialChain* PostChain() const;
         const MaterialInstance*  PostInstance() const;
+
+        // The SAME bound chain as bytecode + layout + values, for a recorder
+        // that is not on this resolver's nvrhi device -- the `--nri-graph`
+        // vehicle's post nodes (NRI Phase 2, Task 10; see PostChainDesc in
+        // Render/PostChainCache.hpp). Null for "no chain", and latched beside
+        // PostChain()/PostInstance() in the same Refresh step, so all three
+        // describe one compile. Re-read every frame AFTER Refresh, for the
+        // same reason the other two are.
+        const PostChainDesc* PostDesc() const;
 
         // What the scene REFERENCES versus what is bound right now (NRI Phase 2).
         //

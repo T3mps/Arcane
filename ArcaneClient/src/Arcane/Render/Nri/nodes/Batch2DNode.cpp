@@ -46,10 +46,12 @@ namespace Arcane
         // match by construction rather than by coincidence.
         constexpr float kCanvasClear[4] = { 0.02f, 0.02f, 0.04f, 1.0f };
 
-        // The canvas is RGBA16F, matching Canvas.cpp:9 (kCanvasFormat =
-        // nvrhi::Format::RGBA16_FLOAT). Colours are LINEAR and may exceed 1.0
-        // -- the tonemap node is what turns them display-referred.
-        constexpr nri::Format kCanvasFormat = nri::Format::RGBA16_SFLOAT;
+        // The canvas is RGBA16F. Since Task 10 the constant lives beside the
+        // frame's shape (NriGraphContext.hpp's kGraphCanvasFormat), because
+        // the post-chain targets must be the SAME format as the canvas and two
+        // files independently mirroring Canvas.cpp is exactly how they would
+        // drift apart.
+        constexpr nri::Format kCanvasFormat = kGraphCanvasFormat;
 
         // data/shaders/sprite.hlsl's BatchConstants: float2 invHalfViewport +
         // float2 pad. Mirrors Batcher2D.cpp's PushConstants exactly (b0 on

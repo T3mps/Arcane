@@ -16,11 +16,13 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/Device.hpp>                 // RenderDeviceDesc, RenderErrorCount, ToString(GraphicsBackend)
 #include <Arcane/Render/NvrhiMessageCallback.hpp>   // the tagged "nri-graph" error seam
+#include <Arcane/Render/PostChainCache.hpp>         // PostChainDesc -- the frame's post-chain shape
 #include <Arcane/Render/ShaderLibrary.hpp>          // ShaderLibrary::ResolveFlavorDir
 #include <Arcane/Render/Swapchain.hpp>              // kSwapchainFramesInFlight
 
 #undef ERROR
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -224,6 +226,9 @@ namespace Arcane
         m_batch2D = Batch2DNode::Create(*this);
         if (!m_batch2D)
             return false;   // already logged
+        m_post = PostChainNode::Create(*this);
+        if (!m_post)
+            return false;   // already logged
         m_tonemap = TonemapNode::Create(*this);
         if (!m_tonemap)
             return false;   // already logged
@@ -313,6 +318,8 @@ namespace Arcane
         // teardown bug as fix round 1's imported-view ordering).
         if (m_tonemap)
             m_tonemap->Release(graves, fence);
+        if (m_post)
+            m_post->Release(graves, fence);
         if (m_batch2D)
             m_batch2D->Release(graves, fence);
 
@@ -418,6 +425,12 @@ namespace Arcane
         // VIEW).
         if (m_tonemap)
             m_tonemap->InvalidateSource(graves, m_graph ? m_graph->DebugSubmitCount() : 0);
+        // The post chain's passes sample the canvas and each other -- every
+        // one of those is a pool texture ReleaseGpuResources is about to bury,
+        // so this node owes the identical invalidation for the identical
+        // reason (FullscreenNodes.hpp, SOURCE VIEWS AND THE POOL).
+        if (m_post)
+            m_post->InvalidateSources(graves, m_graph ? m_graph->DebugSubmitCount() : 0);
 
         if (m_graph)
             m_graph->ReleaseGpuResources();
@@ -528,7 +541,9 @@ namespace Arcane
         //     the graph hands over with a contents-discarding barrier, so its
         //     LOADed contents are undefined -- and Batch2DNode::Record clears
         //     it in full before drawing. The BACKBUFFER needs no clear at all:
-        //     the tonemap covers it with a fullscreen triangle.
+        //     the tonemap covers it with a fullscreen triangle, and neither
+        //     does a POST-CHAIN target, for the same reason (an opaque
+        //     fullscreen pass writes every pixel of it).
         //   - It costs nothing measurable at Phase 2's scale: one full-target
         //     clear per frame on an immediate-mode desktop GPU is what
         //     LoadOp::CLEAR lowers to anyway.
@@ -546,15 +561,51 @@ namespace Arcane
         // ---------------------------------------------------------------
         RgFrameHandles handles;
 
-        // Stage gating, honestly: `batch` is "batcher + tonemap and nothing
-        // else", and that is the whole frame today -- the post chain (Task 10)
-        // and the HUD (Task 12) do not exist on this path, so `post` and `full`
-        // currently render the same thing. When they land they attach HERE,
-        // under a stage test, and this switch stops being a no-op.
-        (void)shape.stage;
+        handles.canvas = AddBatch2DNode(graph, context, shape.canvasWidth, shape.canvasHeight);
 
-        handles.canvas     = AddBatch2DNode(graph, context, shape.canvasWidth, shape.canvasHeight);
-        handles.backbuffer = AddTonemapNode(graph, context, handles.canvas);
+        // ---------------------------------------------------------------
+        // THE POST CHAIN (Task 10). One node per chain pass, between the
+        // canvas and the tonemap; the tonemap then samples the LAST pass's
+        // target instead of the canvas. Everything about the ping-pong -- two
+        // physical textures for N logical targets -- is the transient pool
+        // allocator's doing, not a declaration here (FullscreenNodes.hpp, THE
+        // PING-PONG IS DERIVED).
+        //
+        // STAGE GATING, and it is no longer a no-op: `batch` means "batcher +
+        // tonemap and nothing else", so it drops the chain even when the scene
+        // binds one -- the SAME bypass RuntimeApp applies to the NVRHI path,
+        // which is what lets a batch-stage golden compare the same content on
+        // both recorders. `post` and `full` still render the same frame,
+        // because the HUD (Task 12) does not exist on this path yet.
+        // ---------------------------------------------------------------
+        RgTexture sceneColor = handles.canvas;
+        if (shape.stage != GoldenStage::Batch && shape.post && !shape.post->passes.empty())
+        {
+            // With a context the NODE decides: PrepareChain builds the
+            // pipelines, the descriptor sets and the packed constants, and
+            // returns 0 for a chain it cannot honour -- which this then
+            // declares nothing for, rather than declaring passes whose exec fn
+            // would leave their targets holding undefined pool contents.
+            // Headlessly it is the wiring alone, clamped to the same cap.
+            std::uint32_t passCount = (std::uint32_t)std::min<std::size_t>(
+                shape.post->passes.size(), PostChainNode::kMaxPasses);
+            if (context)
+            {
+                PostChainNode* node = context->PostChain();
+                passCount = node ? node->PrepareChain(*shape.post, context->CurrentGlobals(),
+                                                       kGraphCanvasFormat)
+                                 : 0;
+            }
+            if (passCount > 0)
+            {
+                handles.post = AddPostChainNodes(graph, context, handles.canvas, *shape.post,
+                                                  passCount, shape.canvasWidth, shape.canvasHeight);
+                handles.postPassCount = passCount;
+                sceneColor            = handles.post;
+            }
+        }
+
+        handles.backbuffer = AddTonemapNode(graph, context, sceneColor);
 
         if (!shape.capture)
             return handles;
@@ -630,8 +681,48 @@ namespace Arcane
         shape.canvasHeight  = m_swap->Height();
         shape.captureBuffer = m_capture;
         shape.captureBytes  = m_captureSlicePitch;
+        shape.post          = frame.post;
 
-        (void)DeclareGraphFrame(*m_graph, shape, this);
+        const RgFrameHandles handles = DeclareGraphFrame(*m_graph, shape, this);
+
+        // ==============================================================
+        // THE TONEMAP'S SOURCE CHANGED, SO ITS ONE DESCRIPTOR SET MUST BE
+        // REWRITTEN -- BEHIND AN IDLE.
+        // ==============================================================
+        // This is reachable in an ORDINARY run, not just at a resize: a scene
+        // that assigns a post material has no chain on frame 0 (the compile is
+        // still in flight) and gains one a few frames later, at which point
+        // the tonemap stops sampling the canvas and starts sampling the last
+        // pass's target -- a different nri::Texture. TonemapNode holds ONE
+        // descriptor set shared by every frame in flight (Task 8: nothing in
+        // it was per-frame), so rewriting it while an earlier frame may still
+        // be reading it is a genuine hazard, and its EnsureSource backstop
+        // would additionally report the unannounced change through the error
+        // latch -- which on this vehicle is a nonzero exit code.
+        //
+        // Idling is honest here for the same reason it is in
+        // Batch2DNode::EnsureMaterial and PostChainNode::PrepareChain: this
+        // fires once or twice in a run (when the chain binds, and if it is
+        // ever dropped), never per frame. The alternative -- per-frame-slot
+        // sets in TonemapNode, the shape PostChainNode uses -- is the upgrade
+        // if a frame ever legitimately alternates its tonemap source.
+        //
+        // It runs AFTER the declaration and before Compile/Execute, which is
+        // in time: every exec fn runs inside Execute(), so the node rebuilds
+        // its view on this very frame.
+        if (handles.postPassCount != m_postPassCount)
+        {
+            ARC_INFO("[nri-graph] the post chain changed shape ({} -> {} pass(es)) -- the tonemap "
+                     "rebuilds its source view behind a device idle",
+                     m_postPassCount, handles.postPassCount);
+            m_postPassCount = handles.postPassCount;
+            if (m_tonemap)
+            {
+                const nri::CoreInterface& core = m_device->Core();
+                (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
+                m_tonemap->InvalidateSource(m_device->Graves(), m_graph->DebugSubmitCount());
+            }
+        }
     }
 
     NriGraphContext::FrameOutcome NriGraphContext::RenderFrame(const FrameDesc& frame)
@@ -680,6 +771,11 @@ namespace Arcane
         // Published for exactly the span of this frame's declaration: the batch
         // node drains it from its declarator (AddBatch2DNode -> CurrentBatch),
         // and nothing may reach a stale batcher afterwards.
+        //
+        // The GLOBALS are copied rather than published-and-cleared, because
+        // unlike the batcher they are read at RECORD time (the post chain
+        // writes b1 inside its exec fn) -- see CurrentGlobals().
+        m_currentGlobals = effective.globals ? *effective.globals : GlobalParams{};
         m_currentBatch = effective.batch;
         BuildFrame(effective);
         m_currentBatch = nullptr;

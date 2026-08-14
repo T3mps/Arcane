@@ -21,19 +21,63 @@
 #include <Arcane/Guid.hpp>
 #include <Arcane/Render/Device.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace Arcane
 {
     class Assets;
     class FullscreenMaterialChain;
     class MaterialInstance;
+    class MaterialTemplate;
     class ShaderCompiler;
     class ShaderSourceProvider;
     struct ShaderCompileResult;
+
+    // =====================================================================
+    // THE COMPILED CHAIN AS BYTES (NRI Phase 2, Task 10) -- the twin of
+    // Material2DDesc::vsBytes/psBytes (Batcher2D.hpp, Task 9), and it exists
+    // for the identical reason: a SECOND graphics device in the same process
+    // cannot use an nvrhi::ShaderHandle, only the bytecode behind it. The
+    // graph vehicle's PostChainNode builds its own NRI pipelines from exactly
+    // these bytes, so both recorders run the SAME stitched shaders rather
+    // than two independently compiled ones.
+    //
+    // ONE target, not both: the producer already picks dxil-or-spirv by the
+    // process's GraphicsBackend and the graph vehicle runs on that same
+    // backend (RuntimeApp builds both from one HostConfig).
+    //
+    // Purely additive -- the NVRHI path (FullscreenMaterialChain) neither
+    // reads nor is affected by any of it.
+    // =====================================================================
+    struct PostChainPassDesc
+    {
+        std::shared_ptr<const std::vector<std::uint8_t>> vsBytes;
+        std::shared_ptr<const std::vector<std::uint8_t>> psBytes;
+        // Chain indices feeding this pass's InputTexture(N) slots, in slot
+        // order: an EARLIER pass index, or kSceneInput (MaterialSource.hpp)
+        // for the external scene colour. Already validated by
+        // BuildMaterialChainSource, so a real index is always < this pass's.
+        std::vector<std::uint32_t> inputs;
+    };
+
+    struct PostChainDesc
+    {
+        // The ONE merged layout + values every pass shares
+        // (BuildMaterialChainSource's contract), so one packed CB and one
+        // texture table serve the whole chain.
+        std::shared_ptr<const MaterialTemplate> templ;
+        std::shared_ptr<const MaterialInstance> instance;
+        // The UNIFORM InputTexture decl count every pass's source carries
+        // (MaterialChainBuildResult::chainInputSlots) -- the binding layout's
+        // shape, not any one pass's wiring.
+        std::uint32_t chainInputSlots = 1;
+        std::vector<PostChainPassDesc> passes;   // chain order; passes[0] is the base
+    };
 
 #if defined(_MSC_VER)
 #pragma warning(push)
@@ -81,6 +125,14 @@ namespace Arcane
         // contract for hosts that Draw() right after the drain.
         FullscreenMaterialChain* Chain(const Guid& id) const;
         const MaterialInstance*  Instance(const Guid& id) const;
+
+        // The same bound chain expressed as BYTECODE + layout + values, for a
+        // recorder that is not on this cache's nvrhi device (the `--nri-graph`
+        // vehicle -- see PostChainDesc above). Null until the first successful
+        // bind, and it tracks Chain()/Instance() exactly: both are set in the
+        // same breath and a failed RE-compile leaves BOTH at last-good.
+        // Same validity window as Chain(): until the next mutating call.
+        const PostChainDesc* Desc(const Guid& id) const;
 
         // Forget everything (project switch).
         void Clear();

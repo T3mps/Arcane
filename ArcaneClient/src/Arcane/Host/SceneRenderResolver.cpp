@@ -36,6 +36,8 @@ namespace Arcane
         Guid                     postId{};
         FullscreenMaterialChain* postChain    = nullptr;
         const MaterialInstance*  postInstance = nullptr;
+        // The same bind as bytes, for the `--nri-graph` vehicle (Task 10).
+        const PostChainDesc*     postDesc     = nullptr;
 
         // Warn-once latches. Cleared when the condition clears, so the message
         // returns if the scene regains the problem -- the shape the editor's
@@ -124,6 +126,7 @@ namespace Arcane
 
     FullscreenMaterialChain* SceneRenderResolver::PostChain()    const { return m_impl->postChain; }
     const MaterialInstance*  SceneRenderResolver::PostInstance() const { return m_impl->postInstance; }
+    const PostChainDesc*     SceneRenderResolver::PostDesc()     const { return m_impl->postDesc; }
 
     SceneRenderResolver::MaterialCensus SceneRenderResolver::Materials() const
     {
@@ -198,6 +201,7 @@ namespace Arcane
         m_impl->postId       = Guid{};
         m_impl->postChain    = nullptr;
         m_impl->postInstance = nullptr;
+        m_impl->postDesc     = nullptr;
     }
 
     void SceneRenderResolver::Refresh(const FrameInfo& frame)
@@ -325,6 +329,7 @@ namespace Arcane
         im.postId       = postId;
         im.postChain    = postId.IsValid() ? im.post->Chain(postId)    : nullptr;
         im.postInstance = postId.IsValid() ? im.post->Instance(postId) : nullptr;
+        im.postDesc     = postId.IsValid() ? im.post->Desc(postId)     : nullptr;
 
         // (5) Publish. Every frame, not once at boot: the map addresses are
         // stable, but re-setting keeps the resources honest across project
