@@ -2580,6 +2580,34 @@ namespace
         void*                  m_nativeDevice = nullptr;
         Arcane::GpuBreadcrumbs m_breadcrumbs;
     };
+
+    // RAII safety net for the process-wide active-crash-backend slot. Installs
+    // in the ctor; the dtor clears the slot ONLY IF IT STILL HOLDS THIS
+    // GUARD'S BACKEND, mirroring ClearActiveGpuCrashBackendIfCurrent's own
+    // stale-owner guard (GpuInstrumentation.hpp). Without this, a case that
+    // sets the backend and then hits a REQUIRE failure between the set and its
+    // manual clear unwinds past the clear entirely -- the slot is left
+    // pointing at this case's dead stack, and the NEXT graph-executing case
+    // (order is time-seeded) dereferences it and use-after-frees instead of
+    // reporting its own, unrelated failure. A case may still clear explicitly
+    // on its happy path (as an assertion, not just cleanup); the guard's dtor
+    // is then a harmless no-op CAS miss.
+    class ScopedGpuCrashBackend
+    {
+    public:
+        explicit ScopedGpuCrashBackend(Arcane::IGpuCrashBackend* backend) noexcept
+            : m_backend(backend)
+        {
+            Arcane::SetActiveGpuCrashBackend(m_backend);
+        }
+        ~ScopedGpuCrashBackend() { (void)Arcane::ClearActiveGpuCrashBackendIfCurrent(m_backend); }
+
+        ScopedGpuCrashBackend(const ScopedGpuCrashBackend&)            = delete;
+        ScopedGpuCrashBackend& operator=(const ScopedGpuCrashBackend&) = delete;
+
+    private:
+        Arcane::IGpuCrashBackend* m_backend;
+    };
 }
 
 TEST_CASE("rendergraph exec: a crash backend on ANOTHER device gets CPU breadcrumbs but no native marker", "[nri]")
@@ -2592,9 +2620,9 @@ TEST_CASE("rendergraph exec: a crash backend on ANOTHER device gets CPU breadcru
     // Any address that is not this graph's native device. (A NONE device's is
     // null, so the gate is closed here for BOTH reasons -- which is the honest
     // headless approximation of the vehicle: never open by accident.)
-    int              foreignDevice = 0;
-    MarkerSpyBackend spy(&foreignDevice);
-    Arcane::SetActiveGpuCrashBackend(&spy);
+    int                     foreignDevice = 0;
+    MarkerSpyBackend        spy(&foreignDevice);
+    ScopedGpuCrashBackend   backendGuard(&spy);
 
     {
         Arcane::NriUploadRing    ring;

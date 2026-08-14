@@ -829,7 +829,12 @@ namespace Arcane
             ARC_ASSERT(slot != kNoSlot,
                        "RenderGraph: RgTexture handle is invalid, stale, or out of range "
                        "(held across a Reset()?)");
-            if (isWrite)
+            // slot != kNoSlot guards the subscript itself, not just the assert:
+            // ARC_ASSERT compiles out in Release, and kNoSlot is size_t(-1), so
+            // without this a bad handle would be an OOB write here, before
+            // Compile()'s own guarded check (this function's "Only reachable
+            // in a build where..." sibling below) ever gets a chance to refuse.
+            if (isWrite && slot != kNoSlot)
                 m_textures[slot].everWritten = true;
         }
         else
@@ -837,7 +842,7 @@ namespace Arcane
             ARC_ASSERT(slot != kNoSlot,
                        "RenderGraph: RgBuffer handle is invalid, stale, or out of range "
                        "(held across a Reset()?)");
-            if (isWrite)
+            if (isWrite && slot != kNoSlot)
                 m_buffers[slot].everWritten = true;
         }
 
