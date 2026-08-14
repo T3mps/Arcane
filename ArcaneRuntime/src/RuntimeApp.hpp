@@ -19,6 +19,7 @@
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only --crash-gpu N
+#include <Arcane/Render/Nri/NriGraphContext.hpp>   // dev-only --nri-graph vehicle
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 namespace Astra { class TypeContext; }
@@ -55,8 +56,32 @@ private:
     void MainLoop();
     void Shutdown();
 
+    // --nri-graph (NRI Phase 2, Task 7): destroy the vehicle and fold a grown
+    // RenderErrorCount into m_graphExit. Idempotent, and a no-op when the flag
+    // was not given -- MainLoop calls it on EVERY exit path (including the
+    // golden warm-up's early returns), because the latch must be read after
+    // the last NRI object is gone.
+    void ShutdownGraphPath();
+
     Arcane::HostConfig                  m_config;
     std::unique_ptr<Arcane::GpuContext> m_gpu;          // destructs LAST among engine state
+
+    // --nri-graph's whole render half: its own window, native device, NRI
+    // wrap, swapchain, upload ring, pipeline cache and RenderGraph. Null on
+    // every ordinary run -- the NVRHI path is the default and stays so until
+    // Phase 3 flips the hosts.
+    //
+    // NOT #if-guarded even though the FLAG is non-Dist: the type is compiled
+    // into the engine DLL in every configuration (it is ordinary Render/Nri
+    // source), and a preprocessor-guarded MEMBER would force every use site in
+    // MainLoop's frame body to grow a guard of its own -- which is exactly how
+    // a Dist-only compile break gets introduced. Only the CREATION is guarded,
+    // so a Dist build carries a null pointer and one predictable branch.
+    //
+    // Declared AFTER m_gpu so it destructs BEFORE it: this object owns an SDL
+    // window, and the host's window (inside m_gpu) is the one that owns the
+    // SDL video subsystem's lifetime.
+    std::unique_ptr<Arcane::NriGraphContext> m_graphContext;
 
     // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
     // Task 8c: this is now BootSequence::Run's presenter for the WHOLE boot,
@@ -87,6 +112,14 @@ private:
     // write failure or compare mismatch. Read by Run()'s tail as the process
     // exit code (device-loss stays exit code 1, checked first).
     int                                  m_goldenExit = 0;
+
+    // --nri-graph's exit code, which OUTRANKS m_goldenExit (Run()'s tail):
+    // 1 = the graph run failed, 2 = RenderErrorCount grew during it. 0 on
+    // every run that did not pass the flag. The latch baseline it is measured
+    // against is taken at the top of MainLoop -- boot-time errors belong to
+    // the boot, not to the vehicle.
+    int                                  m_graphExit  = 0;
+    std::uint64_t                        m_graphErrorBaseline = 0;
 
 #if !defined(ARCANE_DIST)
     // --crash-gpu N (GPU crash diagnostics arc, Task 11): the desk battery's

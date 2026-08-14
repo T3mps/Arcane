@@ -158,4 +158,73 @@ TEST_CASE("host config: --nri-smoke round-trips and defaults off", "[host][nri]"
     REQUIRE(shot.config.has_value());
     CHECK(shot.config->screenshotPath == "a.png");
 }
+// NRI Phase 2, Task 7 -- the graph vehicle's flag. Guarded exactly like
+// --nri-smoke (both are DEV scaffolding registered inside HostConfig.cpp's
+// `#if !defined(ARCANE_DIST)` block), and, like the smoke, this parse
+// round-trip is the ONLY headless coverage the vehicle can have: everything
+// past the flag needs a window and a real device.
+TEST_CASE("host config: --nri-graph round-trips and defaults off", "[host][nri]") {
+    const auto o = Run({"--nri-graph"});
+    REQUIRE(o.config.has_value());
+    CHECK(o.config->nriGraph);
+    // Absent flag = the normal NVRHI render half (today's behavior, unchanged).
+    const auto def = Run({});
+    REQUIRE(def.config.has_value());
+    CHECK_FALSE(def.config->nriGraph);
+    CHECK_FALSE(def.config->nriSmoke);
+    // Shares the whole run vocabulary with the normal boot -- deliberately.
+    const auto paired = Run({"--nri-graph", "--frames", "120", "--screenshot", "nri-graph.png",
+                             "--backend", "vulkan", "--no-vsync"});
+    REQUIRE(paired.config.has_value());
+    CHECK(paired.config->nriGraph);
+    CHECK(paired.config->maxFrames == 120u);
+    CHECK(paired.config->screenshotPath == "nri-graph.png");
+    CHECK(paired.config->backend == Arcane::GraphicsBackend::Vulkan);
+    CHECK_FALSE(paired.config->vsync);
+}
+TEST_CASE("host config: --nri-graph refuses to combine with --nri-smoke", "[host][nri]") {
+    // Two whole-render-path modes in one process: the smoke owns the process
+    // from Run() (its own window/device/loop) and never reaches MainLoop, so
+    // the pair can only mean one of the two was silently ignored.
+    const auto both = Run({"--nri-graph", "--nri-smoke"});
+    REQUIRE_FALSE(both.config.has_value());
+    CHECK(both.exitCode == 2);
+    // Order must not matter -- the refusal is on the parsed pair, not on
+    // which spelling came first.
+    const auto reversed = Run({"--nri-smoke", "--nri-graph"});
+    REQUIRE_FALSE(reversed.config.has_value());
+    CHECK(reversed.exitCode == 2);
+}
+TEST_CASE("host config: the golden flags ARE legal with --nri-graph", "[host][nri][golden]") {
+    // THE POINT OF THE VEHICLE. The golden harness lives in
+    // RuntimeApp::MainLoop, which --nri-graph reaches (it boots the real
+    // engine and swaps only the RENDER half) -- so, unlike --nri-smoke, the
+    // combination is meaningful and must survive parse.
+    const auto capture = Run({"--nri-graph", "--golden-capture", "goldens/out", "--frames", "60"});
+    REQUIRE(capture.config.has_value());
+    CHECK(capture.config->nriGraph);
+    CHECK(capture.config->GoldenMode());
+    CHECK(capture.config->goldenCapturePath == "goldens/out");
+
+    const auto compare = Run({"--nri-graph", "--golden-compare", "goldens/out",
+                              "--golden-name", "main-dx12", "--golden-stage", "batch",
+                              "--frames", "60"});
+    REQUIRE(compare.config.has_value());
+    CHECK(compare.config->nriGraph);
+    CHECK(compare.config->goldenComparePath == "goldens/out");
+    CHECK(compare.config->goldenName == "main-dx12");
+    CHECK(compare.config->goldenStage == Arcane::GoldenStage::Batch);
+
+    // The generic golden rules still apply to the graph path -- --nri-graph
+    // buys no exemption from "a golden run captures on the LAST frame".
+    const auto noFrames = Run({"--nri-graph", "--golden-capture", "goldens/out"});
+    REQUIRE_FALSE(noFrames.config.has_value());
+    CHECK(noFrames.exitCode == 2);
+
+    // ...and the smoke's refusal stayed scoped to the SMOKE. Pinned here so a
+    // future edit cannot widen it back over the graph path by accident.
+    const auto smokeGolden = Run({"--nri-smoke", "--golden-capture", "goldens/out", "--frames", "60"});
+    REQUIRE_FALSE(smokeGolden.config.has_value());
+    CHECK(smokeGolden.exitCode == 2);
+}
 #endif

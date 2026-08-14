@@ -25,6 +25,9 @@
 #if !defined(ARCANE_DIST)
 #include <Arcane/Render/Nri/NriSmoke.hpp>   // --nri-smoke (Phase 1 scaffolding; deleted in Phase 2)
 #endif
+// NriGraphContext (--nri-graph) is NOT guarded here: RuntimeApp.hpp holds the
+// member unconditionally -- see its comment for why only the CREATION is
+// Dist-guarded.
 
 #include <Astra/Core/TypeContext.hpp>
 
@@ -35,7 +38,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -102,6 +107,83 @@ namespace
                 return false;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+    }
+
+    // The golden artifact tail, shared by BOTH render paths (NRI Phase 2,
+    // Task 7). It takes display-referred RGBA8 pixels of the frame that was
+    // just presented and nothing else -- so --nri-graph inherits the artifact
+    // NAMING, the comparator, the tolerances and the exit code from the NVRHI
+    // path by construction rather than by a second implementation that could
+    // drift from it. Returns 0, or 3 on any capture-write or compare failure
+    // (the host's documented golden exit code).
+    //
+    // The two paths differ only in where the pixels came from: nvrhi
+    // ReadTexturePixels off the backbuffer, or NriGraphContext::ReadCapture
+    // off the graph's readback node (which normalizes BGRA -> RGBA, since NRI
+    // resolves the swapchain's channel order rather than letting us pin it).
+    int GoldenArtifact(const Arcane::HostConfig& config, std::uint32_t width, std::uint32_t height,
+                       const std::vector<unsigned char>& actual)
+    {
+        // Stage-golden stem (HostConfig::goldenStage's own comment carries the
+        // contract). Full resolves to EXACTLY the pre-Phase-2 string, so Phase
+        // 0's captured goldens keep working under their existing filenames;
+        // batch/post get their own stem so a scripted three-stage run writes
+        // three files instead of overwriting one.
+        const char* stage =
+            config.goldenStage == Arcane::GoldenStage::Batch ? "batch"
+          : config.goldenStage == Arcane::GoldenStage::Post  ? "post"
+                                                             : nullptr;
+        const std::string name =
+            !config.goldenName.empty()
+                // Explicit stem = the whole filename stem (the cross-backend
+                // compare names the OTHER backend's golden here), so the stage
+                // can only be appended to it.
+                ? (stage ? config.goldenName + "-" + stage : config.goldenName)
+                : std::string("main-") + (stage ? std::string(stage) + "-" : "") +
+                  (config.backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12");
+
+        // --golden-capture takes priority if both flags were somehow given;
+        // ordinary invocations pass exactly one, matching the harness scripts.
+        if (!config.goldenCapturePath.empty())
+        {
+            const std::filesystem::path out =
+                std::filesystem::path(config.goldenCapturePath) / (name + ".png");
+            if (Arcane::WritePngRgba(out, width, height, actual.data()))
+            {
+                ARC_INFO("golden captured: {} ({}x{})", out.generic_string(), width, height);
+                return 0;
+            }
+            ARC_ERROR("golden capture FAILED: {}", out.generic_string());
+            return 3;
+        }
+
+        const std::filesystem::path dir(config.goldenComparePath);
+        const std::filesystem::path goldenPath = dir / (name + ".png");
+        std::uint32_t gw = 0, gh = 0;
+        std::vector<unsigned char> golden;
+        if (!Arcane::LoadPngRgba(goldenPath, gw, gh, golden))
+        {
+            ARC_ERROR("golden: no golden at {}", goldenPath.generic_string());
+            return 3;
+        }
+
+        const Arcane::GoldenCompareResult r =
+            Arcane::CompareRgbaImages(golden.data(), gw, gh, actual.data(), width, height);
+        if (r.ok)
+        {
+            ARC_INFO("golden PASS: {} (maxDelta {}, bad {:.4f}%)",
+                     name, r.maxChannelDelta, r.badPixelFraction * 100.0f);
+            return 0;
+        }
+        ARC_ERROR("golden FAIL: {} (dims {}, maxDelta {}, bad {:.4f}%, first ({},{}))",
+                  name, r.dimensionsMatch ? "ok" : "MISMATCH",
+                  r.maxChannelDelta, r.badPixelFraction * 100.0f, r.firstBadX, r.firstBadY);
+        (void)Arcane::WritePngRgba(dir / (name + ".actual.png"), width, height, actual.data());
+        if (r.dimensionsMatch)
+            (void)Arcane::WriteDiffPng(dir / (name + ".diff.png"),
+                                        golden.data(), actual.data(), gw, gh,
+                                        Arcane::GoldenCompareParams{}.channelTolerance);
+        return 3;
     }
 }
 
@@ -414,6 +496,17 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
     // Show() also RAISES (Task 8d defect B) -- and must run while the splash
     // still holds the foreground, strictly before the Close() below. Same
     // constraint and same reason as EditorApp::StageSplashReady.
+    //
+    // NOT on the --nri-graph path: there the VEHICLE owns the visible window
+    // (NriGraphContext.hpp, THE TWO-DEVICE WINDOW -- DXGI allows only one
+    // flip-model swapchain per HWND, so the graph cannot present into this
+    // one), and this window would be a second, permanently frozen copy of the
+    // boot frame sitting beside it. The boot present ABOVE still happens: it
+    // is what proves the NVRHI half booted, and presenting into a hidden
+    // window is exactly what this stage already did before the Show().
+#if !defined(ARCANE_DIST)
+    if (!m_config.nriGraph)
+#endif
     m_gpu->Win().Show();
     // Disarm BEFORE Close() -- see EditorApp::StageSplashReady's matching
     // comment for why this specific ordering is required.
@@ -452,12 +545,55 @@ void RuntimeApp::MainLoop()
     auto lastShaderPoll = simPrev;
     bool running = true;
 
+    // --nri-graph (NRI Phase 2, Task 7): THE RENDER HALF SWAPS, HERE.
+    //
+    // Not a pre-boot early-return like --nri-smoke: everything above this line
+    // already ran -- project, plugin, boot scene, the scene resolver and its
+    // compile service -- and everything below it still runs, except that the
+    // NVRHI record/submit/present half is replaced by one graph frame. That is
+    // what makes a stage-golden comparison against the NVRHI baselines mean
+    // anything: both paths render THE SAME booted scene.
+    //
+    // Built before the golden warm-up on purpose -- the warm-up can take
+    // seconds on a cold toolchain, and a vehicle that cannot even create a
+    // device should say so first.
+    //
+    // The latch baseline is taken HERE, not at process start: boot-time errors
+    // belong to the boot, and everything from this point until the vehicle is
+    // destroyed belongs to the graph. ShutdownGraphPath() reads it back after
+    // the last NRI object is gone (a teardown-only validation error must still
+    // fail the run -- the same reason NriSmoke::Run brackets its session).
+    m_graphErrorBaseline = Arcane::RenderErrorCount();
+#if !defined(ARCANE_DIST)
+    if (m_config.nriGraph)
+    {
+        Arcane::Diagnostics::SetPhase("nri graph vehicle boot");
+        m_graphContext = Arcane::NriGraphContext::Create(m_config);
+        if (!m_graphContext)
+        {
+            ARC_ERROR("--nri-graph: the graph vehicle could not be created");
+            m_graphExit = 1;
+            ShutdownGraphPath();
+            return;
+        }
+    }
+#endif
+
     // Golden warm-up (NRI Phase 2): settle the scene's material compiles BEFORE
     // the frame counter starts, so what the captured/compared frame contains is
     // a function of the scene, not of how fast this machine is. See
     // DrainSceneCompiles for the failure this closes. Golden-mode-gated: an
     // ordinary run keeps binding materials opportunistically a few frames in,
     // exactly as before.
+    //
+    // UNCHANGED on the --nri-graph path, deliberately and by construction: the
+    // warm-up drives the RESOLVER (compile -> drain -> bind), which is engine
+    // state the graph path boots exactly like the NVRHI path, and the census
+    // it refuses on counts resolver-level binding rather than anything drawn.
+    // So a graph golden run is held to the same "the scene's materials all
+    // bound before frame 1" bar even though Task 7's clear-only frame draws
+    // none of them -- which is the point: the bar must already hold when Task
+    // 8's node starts drawing them.
     if (m_config.GoldenMode() && m_resolver)
     {
         Arcane::Diagnostics::SetPhase("golden compile warm-up");
@@ -469,6 +605,7 @@ void RuntimeApp::MainLoop()
                       "capture or compare a frame whose content is not bound yet",
                       kGoldenWarmupTimeoutSeconds);
             m_goldenExit = 3;
+            ShutdownGraphPath();
             return;
         }
 
@@ -487,6 +624,7 @@ void RuntimeApp::MainLoop()
                       census.spriteBound, census.spriteReferenced,
                       census.postReferenced ? (census.postBound ? "bound" : "UNBOUND") : "none");
             m_goldenExit = 3;
+            ShutdownGraphPath();
             return;
         }
         ARC_INFO("golden: scene materials settled before frame 1 -- {} sprite material(s), "
@@ -514,11 +652,35 @@ void RuntimeApp::MainLoop()
             break;
         }
 
-        auto events = m_gpu->Win().PumpEvents();
+        // EXACTLY ONE pump per frame, and on the --nri-graph path it is the
+        // VEHICLE's window rather than the host's. SDL's event queue is
+        // process-wide and Window::PumpEvents drains all of it (filtering by
+        // its own id for close/resize), so pumping both windows would make
+        // each silently eat the other's events. The vehicle owns the visible
+        // surface on that path -- the host's window stays hidden, because
+        // DXGI allows only one flip-model swapchain per HWND (see
+        // NriGraphContext.hpp, THE TWO-DEVICE WINDOW) -- so the window the
+        // user can actually close and drag is the one that must be pumped.
+        Arcane::Window& eventWindow = m_graphContext ? m_graphContext->Win() : m_gpu->Win();
+        const Arcane::WindowEvents events = eventWindow.PumpEvents();
         if (events.quitRequested) break;
         if (events.resized)
+        {
+            // Strictly BETWEEN frames -- never between the graph's acquire and
+            // its present, which both live inside one Execute() call
+            // (RgExecuteDesc::swapChain). A frame driver that resizes at the
+            // top of its loop satisfies that structurally, and owes nothing
+            // else: the graph rebuilds imported-texture views every Execute.
+            if (m_graphContext)
+                m_graphContext->Resize(events.width, events.height);
+            // The canvas -- and therefore the viewport extent the resolver
+            // reports into the material globals -- tracks the window on BOTH
+            // paths. On the graph path this also resizes the hidden host
+            // swapchain, which is wasted work, but keeping ONE source of truth
+            // for the frame's extent beats a second, divergent one.
             m_gpu->OnResize(events.width, events.height);
-        if (m_gpu->Win().IsMinimized())
+        }
+        if (eventWindow.IsMinimized())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
@@ -587,13 +749,20 @@ void RuntimeApp::MainLoop()
         // BeginFrame and Render. Each entry point is null-checked inside DrawUIAll.
         m_plugin->DrawUIAll();
 
-        nvrhi::ITexture* backbuffer = m_gpu->Swap().BeginFrame();
-        if (!backbuffer)
+        // The NVRHI backbuffer, acquired only on the NVRHI path -- the graph
+        // acquires its own inside Execute(), as late as possible, and never
+        // touches this swapchain.
+        nvrhi::ITexture* backbuffer = nullptr;
+        if (!m_graphContext)
         {
-            // No backbuffer this frame: still balance BeginFrame with EndFrame
-            // so ImGui's assert (double-Begin) doesn't fire next iteration.
-            ImGui::EndFrame();
-            continue;
+            backbuffer = m_gpu->Swap().BeginFrame();
+            if (!backbuffer)
+            {
+                // No backbuffer this frame: still balance BeginFrame with EndFrame
+                // so ImGui's assert (double-Begin) doesn't fire next iteration.
+                ImGui::EndFrame();
+                continue;
+            }
         }
 
         // Hot reload: poll shaders once a second; pipeline caches rebuild lazily.
@@ -626,199 +795,288 @@ void RuntimeApp::MainLoop()
             m_frameGlobals = m_resolver->Globals();
         }
 
-        m_gpu->Cmd()->open();
-        // F-8b: the runtime records its WHOLE frame into one command list, so
-        // the outer scope is that recording -- everything below nests inside it,
-        // and the canvas clear (which has no scope of its own) is covered by it.
-        // Held in an optional because the scope must END while the list is still
-        // open, and close() is ~100 lines down at the bottom of this loop body:
-        // a plain block would mean reindenting the entire frame for one marker.
-        std::optional<Arcane::GpuPassScope> framePass;
-        framePass.emplace(m_gpu->Cmd(), "pass:frame");
+        // =============================================================
+        // THE RENDER HALF. Exactly one of these two blocks runs per frame.
+        //
+        // NVRHI (default, and the regression floor this whole phase is
+        // measured against): record the whole frame into one command list --
+        // canvas clear, batcher, post chain, tonemap, ImGui -- then submit and
+        // present. NOT ONE LINE of it changed for Phase 2 beyond this brace
+        // and the indent it forced; the graph path is built BESIDE it, never
+        // through it.
+        // =============================================================
+        if (!m_graphContext)
+        {
+            m_gpu->Cmd()->open();
+            // F-8b: the runtime records its WHOLE frame into one command list, so
+            // the outer scope is that recording -- everything below nests inside it,
+            // and the canvas clear (which has no scope of its own) is covered by it.
+            // Held in an optional because the scope must END while the list is still
+            // open, and close() is ~100 lines down at the bottom of this loop body:
+            // a plain block would mean reindenting the entire frame for one marker.
+            std::optional<Arcane::GpuPassScope> framePass;
+            framePass.emplace(m_gpu->Cmd(), "pass:frame");
 
-        m_gpu->Cmd()->clearTextureFloat(m_gpu->Cnv().Texture(), nvrhi::AllSubresources,
-                                        nvrhi::Color(0.02f, 0.02f, 0.04f, 1.0f));
+            m_gpu->Cmd()->clearTextureFloat(m_gpu->Cnv().Texture(), nvrhi::AllSubresources,
+                                            nvrhi::Color(0.02f, 0.02f, 0.04f, 1.0f));
 
 #if !defined(ARCANE_DIST)
-        // --crash-gpu N: the deliberate fault, nested inside pass:frame so the
-        // breadcrumb ring shows the real timeline this host records rather than
-        // a lone synthetic scope. INSIDE the frame's own command list, not on a
-        // private one, for the same reason -- the capture should see the host's
-        // ordinary recording shape, with pass:gpu-fault as the last scope the
-        // GPU ever begins. Fires exactly once.
-        if (m_config.crashGpuFrame != 0 && !m_gpuFaultFired &&
-            m_frameCount >= m_config.crashGpuFrame)
-        {
-            m_gpuFaultFired = true;   // set FIRST: a failed build must not retry every frame
-            if (!m_gpuFault)
-                m_gpuFault = Arcane::GpuFaultInjector::Create(m_gpu->Device().Nvrhi(),
-                                                              m_gpu->Shaders());
-            if (m_gpuFault)
-                m_gpuFault->Fire(m_gpu->Cmd());
-            else
-                ARC_ERROR("--crash-gpu: fault injector unavailable -- nothing dispatched");
-        }
+            // --crash-gpu N: the deliberate fault, nested inside pass:frame so the
+            // breadcrumb ring shows the real timeline this host records rather than
+            // a lone synthetic scope. INSIDE the frame's own command list, not on a
+            // private one, for the same reason -- the capture should see the host's
+            // ordinary recording shape, with pass:gpu-fault as the last scope the
+            // GPU ever begins. Fires exactly once.
+            if (m_config.crashGpuFrame != 0 && !m_gpuFaultFired &&
+                m_frameCount >= m_config.crashGpuFrame)
+            {
+                m_gpuFaultFired = true;   // set FIRST: a failed build must not retry every frame
+                if (!m_gpuFault)
+                    m_gpuFault = Arcane::GpuFaultInjector::Create(m_gpu->Device().Nvrhi(),
+                                                                  m_gpu->Shaders());
+                if (m_gpuFault)
+                    m_gpuFault->Fire(m_gpu->Cmd());
+                else
+                    ARC_ERROR("--crash-gpu: fault injector unavailable -- nothing dispatched");
+            }
 #endif
 
-        m_gpu->Batch().Begin(m_gpu->Cmd(), m_gpu->Cnv().Framebuffer(),
-                             m_gpu->Cnv().Width(), m_gpu->Cnv().Height());
-        // Engine-global material constants (Time/Delta/Viewport) for registered
-        // sprite materials; sticky, so once per frame after Begin. Built-in
-        // pipelines ignore them -- but before this arc an animated material read
-        // zeros here, because the host never called SetGlobals at all.
-        m_gpu->Batch().SetGlobals(m_frameGlobals);
+            m_gpu->Batch().Begin(m_gpu->Cmd(), m_gpu->Cnv().Framebuffer(),
+                                 m_gpu->Cnv().Width(), m_gpu->Cnv().Height());
+            // Engine-global material constants (Time/Delta/Viewport) for registered
+            // sprite materials; sticky, so once per frame after Begin. Built-in
+            // pipelines ignore them -- but before this arc an animated material read
+            // zeros here, because the host never called SetGlobals at all.
+            m_gpu->Batch().SetGlobals(m_frameGlobals);
 
-        // Set the render context IN Arcane.dll so TypeID<RenderContext2D> resolves
-        // in the correct module; then drive the plugin's RenderSubmissionSystem.
-        // ArcaneRuntime stays camera-agnostic: SetRenderContext writes the STORED camera the
-        // plugin drives via Runtime::SetCamera (default identity if it never does).
-        // Scene camera: the ACTIVE Camera entity owns the view. Pushed HERE, after
-        // the plugin's update ran, so a scene that ships a camera beats a plugin
-        // that also pushes one -- the scene is the authored artifact. No camera
-        // leaves the stored camera untouched (a plugin that drives the camera
-        // itself via Runtime::SetCamera therefore still works) and says so
-        // once, rather than substituting an identity view that would render an
-        // older scene as an unexplained black window.
-        {
-            int camCount = 0;
-            const auto view = Arcane::ActiveSceneCamera(m_runtime->Registry(),
-                                                        (float)m_gpu->Cnv().Width(),
-                                                        (float)m_gpu->Cnv().Height(),
-                                                        &camCount);
-            if (view)
-                m_runtime->SetCamera(view->offset, view->zoom);
-            else if (!m_warnedNoSceneCamera)
+            // Set the render context IN Arcane.dll so TypeID<RenderContext2D> resolves
+            // in the correct module; then drive the plugin's RenderSubmissionSystem.
+            // ArcaneRuntime stays camera-agnostic: SetRenderContext writes the STORED camera the
+            // plugin drives via Runtime::SetCamera (default identity if it never does).
+            // Scene camera: the ACTIVE Camera entity owns the view. Pushed HERE, after
+            // the plugin's update ran, so a scene that ships a camera beats a plugin
+            // that also pushes one -- the scene is the authored artifact. No camera
+            // leaves the stored camera untouched (a plugin that drives the camera
+            // itself via Runtime::SetCamera therefore still works) and says so
+            // once, rather than substituting an identity view that would render an
+            // older scene as an unexplained black window.
             {
-                // The old message said "no active Camera entity" for THREE
-                // different situations and cost a debugging round: no Camera
-                // component in the scene at all, one present but active==false or
-                // orthographicSize<=0, or a component view that is empty in THIS
-                // module because it disagrees with the loader about the component
-                // id. Count the components here, host-side, and say which it is --
-                // the resolver logs its own census from inside Arcane.dll, so the
-                // two lines together localise the last case.
-                int total = 0;
-                m_runtime->Registry().CreateView<Arcane::Camera>().ForEach(
-                    [&](Astra::Entity, Arcane::Camera&) { ++total; });
-                if (total == 0)
-                    ARC_WARN("scene has no Camera component at all -- nothing sets the view. "
-                             "Add a Camera component to an entity (a New Scene ships one).");
+                int camCount = 0;
+                const auto view = Arcane::ActiveSceneCamera(m_runtime->Registry(),
+                                                            (float)m_gpu->Cnv().Width(),
+                                                            (float)m_gpu->Cnv().Height(),
+                                                            &camCount);
+                if (view)
+                    m_runtime->SetCamera(view->offset, view->zoom);
+                else if (!m_warnedNoSceneCamera)
+                {
+                    // The old message said "no active Camera entity" for THREE
+                    // different situations and cost a debugging round: no Camera
+                    // component in the scene at all, one present but active==false or
+                    // orthographicSize<=0, or a component view that is empty in THIS
+                    // module because it disagrees with the loader about the component
+                    // id. Count the components here, host-side, and say which it is --
+                    // the resolver logs its own census from inside Arcane.dll, so the
+                    // two lines together localise the last case.
+                    int total = 0;
+                    m_runtime->Registry().CreateView<Arcane::Camera>().ForEach(
+                        [&](Astra::Entity, Arcane::Camera&) { ++total; });
+                    if (total == 0)
+                        ARC_WARN("scene has no Camera component at all -- nothing sets the view. "
+                                 "Add a Camera component to an entity (a New Scene ships one).");
+                    else
+                        ARC_WARN("scene carries {} Camera component(s) but none is usable "
+                                 "(active == false, or orthographicSize <= 0) -- nothing sets "
+                                 "the view", total);
+                    m_warnedNoSceneCamera = true;
+                }
+                if (camCount > 1 && !m_warnedMultiSceneCamera)
+                {
+                    ARC_WARN("scene carries {} active Camera entities -- the first found wins", camCount);
+                    m_warnedMultiSceneCamera = true;
+                }
+            }
+
+            {
+                // Scope names deliberately mirror FramePerf's acc* accumulators
+                // (F-8b): a CPU timeline and a GPU timeline that use two vocabularies
+                // for the same phases cannot be read side by side.
+                Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:rec");
+                const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
+                m_runtime->SetRenderContext(&m_gpu->Batch());
+                m_runtime->Loop().SubmitRender();
+                m_perf.Add(m_perf.accRec, t0, m_perf.Now());
+            }
+
+            {
+                // Where the batcher's draws actually get recorded -- Begin() above
+                // only sets state, End() is the flush.
+                Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:end");
+                const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
+                m_gpu->Batch().End();
+                m_perf.Add(m_perf.accEnd, t0, m_perf.Now());
+            }
+
+            nvrhi::FramebufferHandle& fb = m_gpu->FramebufferFor(backbuffer);
+            {
+                Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:tone");
+                const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
+                // Scene post hook (post arc): with a bound chain the linear canvas
+                // feeds it as the external Scene input and the tonemap samples the
+                // chain's output -- without one this is exactly the old line
+                // (byte-identical). The chain comes from the resolver's PostProcess
+                // sweep, re-read every frame because a drain may swap the bound
+                // instance under an asset re-save.
+                Arcane::FullscreenMaterialChain* postChain =
+                    m_resolver ? m_resolver->PostChain() : nullptr;
+                const Arcane::MaterialInstance* postInstance =
+                    m_resolver ? m_resolver->PostInstance() : nullptr;
+                // --golden-stage batch: the BATCH golden is "batcher + tonemap and
+                // nothing else", so the post chain is bypassed even when the scene
+                // binds one -- that is the whole point of a stage golden (a batch
+                // node regression and a post node regression must not look the
+                // same). Gated on GoldenMode() so an ordinary run is untouched:
+                // outside a golden run goldenStage is not even read (and Parse
+                // refuses a non-Full stage without golden mode anyway).
+                const bool stageSkipsPost =
+                    m_config.GoldenMode() &&
+                    m_config.goldenStage == Arcane::GoldenStage::Batch;
+                Arcane::Canvas* post =
+                    (!stageSkipsPost && postChain && postChain->Ready() && postInstance)
+                        ? m_gpu->EnsurePost() : nullptr;
+                if (post)
+                {
+                    postChain->Render(m_gpu->Cmd(), post->Framebuffer(),
+                                      *postInstance, m_frameGlobals,
+                                      &m_runtime->AssetsFacade(),
+                                      static_cast<std::size_t>(-1),
+                                      m_gpu->Cnv().Texture());
+                    m_gpu->Tone().Run(m_gpu->Cmd(), post->Texture(), fb);
+                }
                 else
-                    ARC_WARN("scene carries {} Camera component(s) but none is usable "
-                             "(active == false, or orthographicSize <= 0) -- nothing sets "
-                             "the view", total);
-                m_warnedNoSceneCamera = true;
+                {
+                    m_gpu->Tone().Run(m_gpu->Cmd(), m_gpu->Cnv().Texture(), fb);
+                }
+                m_perf.Add(m_perf.accTone, t0, m_perf.Now());
             }
-            if (camCount > 1 && !m_warnedMultiSceneCamera)
+            // --golden-stage batch|post: the HUD is host chrome, not scene content
+            // -- it would sit on top of every stage golden and mask exactly the
+            // pixels a node-by-node cutover needs to compare. Both non-Full stages
+            // drop it; Full keeps it (the Phase 0 goldens include it, and their
+            // filenames are unchanged).
+            //
+            // ImGui::EndFrame() rather than simply skipping: ImGuiLayer's contract
+            // is that every BeginFrame is paired with exactly one Render, and the
+            // frame HAS begun above (the HUD window and the plugin's DrawUIAll
+            // already recorded into it). Ending it without drawing is the same
+            // balancing move the no-backbuffer path above makes.
+            if (m_config.GoldenMode() &&
+                m_config.goldenStage != Arcane::GoldenStage::Full)
             {
-                ARC_WARN("scene carries {} active Camera entities -- the first found wins", camCount);
-                m_warnedMultiSceneCamera = true;
-            }
-        }
-
-        {
-            // Scope names deliberately mirror FramePerf's acc* accumulators
-            // (F-8b): a CPU timeline and a GPU timeline that use two vocabularies
-            // for the same phases cannot be read side by side.
-            Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:rec");
-            const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
-            m_runtime->SetRenderContext(&m_gpu->Batch());
-            m_runtime->Loop().SubmitRender();
-            m_perf.Add(m_perf.accRec, t0, m_perf.Now());
-        }
-
-        {
-            // Where the batcher's draws actually get recorded -- Begin() above
-            // only sets state, End() is the flush.
-            Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:end");
-            const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
-            m_gpu->Batch().End();
-            m_perf.Add(m_perf.accEnd, t0, m_perf.Now());
-        }
-
-        nvrhi::FramebufferHandle& fb = m_gpu->FramebufferFor(backbuffer);
-        {
-            Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:tone");
-            const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
-            // Scene post hook (post arc): with a bound chain the linear canvas
-            // feeds it as the external Scene input and the tonemap samples the
-            // chain's output -- without one this is exactly the old line
-            // (byte-identical). The chain comes from the resolver's PostProcess
-            // sweep, re-read every frame because a drain may swap the bound
-            // instance under an asset re-save.
-            Arcane::FullscreenMaterialChain* postChain =
-                m_resolver ? m_resolver->PostChain() : nullptr;
-            const Arcane::MaterialInstance* postInstance =
-                m_resolver ? m_resolver->PostInstance() : nullptr;
-            // --golden-stage batch: the BATCH golden is "batcher + tonemap and
-            // nothing else", so the post chain is bypassed even when the scene
-            // binds one -- that is the whole point of a stage golden (a batch
-            // node regression and a post node regression must not look the
-            // same). Gated on GoldenMode() so an ordinary run is untouched:
-            // outside a golden run goldenStage is not even read (and Parse
-            // refuses a non-Full stage without golden mode anyway).
-            const bool stageSkipsPost =
-                m_config.GoldenMode() &&
-                m_config.goldenStage == Arcane::GoldenStage::Batch;
-            Arcane::Canvas* post =
-                (!stageSkipsPost && postChain && postChain->Ready() && postInstance)
-                    ? m_gpu->EnsurePost() : nullptr;
-            if (post)
-            {
-                postChain->Render(m_gpu->Cmd(), post->Framebuffer(),
-                                  *postInstance, m_frameGlobals,
-                                  &m_runtime->AssetsFacade(),
-                                  static_cast<std::size_t>(-1),
-                                  m_gpu->Cnv().Texture());
-                m_gpu->Tone().Run(m_gpu->Cmd(), post->Texture(), fb);
+                ImGui::EndFrame();
             }
             else
             {
-                m_gpu->Tone().Run(m_gpu->Cmd(), m_gpu->Cnv().Texture(), fb);
+                Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:imgui");
+                const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
+                m_gpu->Imgui().Render(m_gpu->Cmd(), fb);
+                m_perf.Add(m_perf.accImgui, t0, m_perf.Now());
             }
-            m_perf.Add(m_perf.accTone, t0, m_perf.Now());
+
+            // Ends the frame scope BEFORE close(): a marker recorded into a closed
+            // list latches the D3D12 marker layer off for the rest of the process
+            // and is an access violation on Vulkan.
+            framePass.reset();
+            m_gpu->Cmd()->close();
+            {
+                // No pass scope here: submit + present happen with the list already
+                // closed, so there is nothing left to record markers into. F-8b's
+                // "close + submit + present" row is a CPU seam only.
+                const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
+                m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
+                m_gpu->Swap().Present();
+                m_perf.Add(m_perf.accPresent, t0, m_perf.Now());
+            }
+
+            // GPU-progress heartbeat (Task 7): after the frame's last submit.
+            m_gpu->FrameProgress().EndFrame();
         }
-        // --golden-stage batch|post: the HUD is host chrome, not scene content
-        // -- it would sit on top of every stage golden and mask exactly the
-        // pixels a node-by-node cutover needs to compare. Both non-Full stages
-        // drop it; Full keeps it (the Phase 0 goldens include it, and their
-        // filenames are unchanged).
+        // =============================================================
+        // The GRAPH half (--nri-graph). One RenderGraph frame: Reset,
+        // declare, Compile, Execute -- and Execute is what acquires the
+        // backbuffer, records every node, submits and presents. Today that is
+        // a single Raster node clearing the backbuffer; Tasks 8-12 add the
+        // batcher, the post chain, tonemap, pick/outline and ImGui nodes
+        // inside NriGraphContext::BuildFrame, gated by the same --golden-stage
+        // vocabulary passed here.
         //
-        // ImGui::EndFrame() rather than simply skipping: ImGuiLayer's contract
-        // is that every BeginFrame is paired with exactly one Render, and the
-        // frame HAS begun above (the HUD window and the plugin's DrawUIAll
-        // already recorded into it). Ending it without drawing is the same
-        // balancing move the no-backbuffer path above makes.
-        if (m_config.GoldenMode() &&
-            m_config.goldenStage != Arcane::GoldenStage::Full)
-        {
-            ImGui::EndFrame();
-        }
+        // WHAT THIS PATH DOES NOT DO YET, named so it is a known gap and not a
+        // discovery: the plugin's RENDER submission (Runtime::SetRenderContext
+        // + Loop().SubmitRender(), which fills the batcher) lives in the NVRHI
+        // half above and does not run here, because Task 7's frame draws
+        // nothing. Task 8 -- which factors the batcher's read interface and
+        // adds the batch node -- is where it comes back, on both paths. The
+        // SIM half (FixedUpdate/Update) is untouched and runs identically:
+        // only the render half swaps.
+        // =============================================================
         else
         {
-            Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:imgui");
-            const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
-            m_gpu->Imgui().Render(m_gpu->Cmd(), fb);
-            m_perf.Add(m_perf.accImgui, t0, m_perf.Now());
-        }
+            // ImGui was BEGUN above (the HUD window and the plugin's
+            // DrawUIAll already recorded into it) and nothing on this path
+            // renders it yet -- Task 12 owns that node. End the frame rather
+            // than skipping BeginFrame, so ImGuiLayer's "every BeginFrame is
+            // paired exactly once" contract holds: the same balancing move
+            // the no-backbuffer path and --golden-stage batch|post make.
+            ImGui::EndFrame();
 
-        // Ends the frame scope BEFORE close(): a marker recorded into a closed
-        // list latches the D3D12 marker layer off for the rest of the process
-        // and is an access violation on Vulkan.
-        framePass.reset();
-        m_gpu->Cmd()->close();
-        {
-            // No pass scope here: submit + present happen with the list already
-            // closed, so there is nothing left to record markers into. F-8b's
-            // "close + submit + present" row is a CPU seam only.
-            const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
-            m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
-            m_gpu->Swap().Present();
-            m_perf.Add(m_perf.accPresent, t0, m_perf.Now());
-        }
+            Arcane::NriGraphContext::FrameDesc graphFrame;
+            // Only read in golden mode (Parse refuses a non-Full stage
+            // outside it), and today every stage renders the same frame --
+            // passing it now means Tasks 8-12 add nodes without touching this
+            // call site.
+            graphFrame.stage = m_config.goldenStage;
+            // The capture is taken on the LAST frame, which has to be known
+            // BEFORE the frame is declared (the readback is a graph NODE, not
+            // an after-the-fact copy). Hence `+ 1`: m_frameCount is bumped
+            // after a successful frame, below.
+            const bool willBeLastFrame =
+                m_config.maxFrames != 0 && (m_frameCount + 1) >= m_config.maxFrames;
+            graphFrame.capture = willBeLastFrame &&
+                                 (m_config.GoldenMode() || !m_config.screenshotPath.empty());
 
-        // GPU-progress heartbeat (Task 7): after the frame's last submit.
-        m_gpu->FrameProgress().EndFrame();
+            // Timed into accPresent rather than left unmeasured, so `--perf`
+            // reports something real on this path too (the spec's waiting-
+            // frame budget is mostly the pacing wait inside
+            // AcquireNextTexture, which is inside this call). It is the whole
+            // record + submit + present cost, not just the present: Execute()
+            // does all three, and splitting one call across three
+            // accumulators would be a fiction. The NVRHI path's own
+            // accRec/accEnd/accTone stay 0 here, which is the honest reading
+            // -- none of those phases ran.
+            const auto graphT0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
+            const Arcane::NriGraphContext::FrameOutcome outcome =
+                m_graphContext->RenderFrame(graphFrame);
+            m_perf.Add(m_perf.accPresent, graphT0, m_perf.Now());
+            if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)
+            {
+                // Already reported through the "nri-graph" seam (so the latch
+                // grew and the exit code would be nonzero anyway) -- stop
+                // rather than spin on a broken device.
+                ARC_ERROR("--nri-graph: the frame could not be recorded or submitted; stopping");
+                m_graphExit = 1;
+                break;
+            }
+            if (outcome == Arcane::NriGraphContext::FrameOutcome::Skipped)
+            {
+                // Routine: a zero-sized surface or an OUT_OF_DATE acquire,
+                // both self-healing on the next resize event. m_frameCount
+                // deliberately does NOT advance -- the vehicle's own frame
+                // counter did not either, and the two must stay in lockstep
+                // for the command-slot recycling to be safe.
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+        }
 
         // Debounced watcher: rebuild PlaygroundGame -> auto hot reload.
         {
@@ -836,101 +1094,97 @@ void RuntimeApp::MainLoop()
         ++m_frameCount;
         const bool lastFrame = m_config.maxFrames != 0 && m_frameCount >= m_config.maxFrames;
 
-        // --screenshot: capture the BACKBUFFER we just presented -- post-tonemap,
-        // post-ImGui, i.e. exactly the pixels a player sees. Taken on the final frame
-        // only, and SaveTexturePng stalls the device (staging copy + waitForIdle), so
-        // it never touches a steady-state frame. After Present, so the capture cannot
-        // race the recording that produced it.
-        if (lastFrame && !m_config.screenshotPath.empty())
+        // The capture tail. Both render paths reach it, on the final frame
+        // only, AFTER the present -- so the pixels are the ones that were
+        // actually shown and the capture cannot race the recording that
+        // produced it. The ONLY difference between the paths is where the
+        // pixels come from; everything downstream (artifact naming, the
+        // comparator, the tolerances, the exit code) is shared.
+        if (lastFrame && (!m_config.screenshotPath.empty() || m_config.GoldenMode()))
         {
-            if (Arcane::SaveTexturePng(m_gpu->Device().Nvrhi(), backbuffer,
-                                       m_config.screenshotPath))
-                ARC_INFO("screenshot written: {}", m_config.screenshotPath);
-            else
-                ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
-        }
-
-        // NRI Phase 0 golden harness: same last-frame/post-Present timing as
-        // --screenshot above (backbuffer is the exact presented pixels), but
-        // capture-to-<name>.png or compare-against-<name>.png. --golden-capture
-        // takes priority if both flags were somehow given; ordinary invocations
-        // pass exactly one, matching the harness scripts (Task 6).
-        if (lastFrame && m_config.GoldenMode())
-        {
-            // Stage-golden stem (HostConfig::goldenStage's own comment carries
-            // the contract). Full resolves to EXACTLY the pre-Phase-2 string,
-            // so Phase 0's captured goldens keep working under their existing
-            // filenames; batch/post get their own stem so a scripted
-            // three-stage run writes three files instead of overwriting one.
-            const char* stage =
-                m_config.goldenStage == Arcane::GoldenStage::Batch ? "batch"
-              : m_config.goldenStage == Arcane::GoldenStage::Post  ? "post"
-                                                                   : nullptr;
-            const std::string name =
-                !m_config.goldenName.empty()
-                    // Explicit stem = the whole filename stem (the
-                    // cross-backend compare names the OTHER backend's golden
-                    // here), so the stage can only be appended to it.
-                    ? (stage ? m_config.goldenName + "-" + stage : m_config.goldenName)
-                    : std::string("main-") + (stage ? std::string(stage) + "-" : "") +
-                      (m_config.backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12");
-
             std::uint32_t w = 0, h = 0;
             std::vector<unsigned char> actual;
-            if (!Arcane::ReadTexturePixels(m_gpu->Device().Nvrhi(), backbuffer, w, h, actual))
+            const bool read =
+                m_graphContext
+                    // The graph's readback NODE ran inside this frame's own
+                    // command buffer (declared up front, because a graph
+                    // capture is a node and not an afterthought) --
+                    // ReadCapture maps it and normalizes BGRA -> RGBA, since
+                    // NRI resolves the swapchain's channel order rather than
+                    // letting us pin it.
+                    ? m_graphContext->ReadCapture(w, h, actual)
+                    : Arcane::ReadTexturePixels(m_gpu->Device().Nvrhi(), backbuffer, w, h, actual);
+
+            if (!read)
             {
-                ARC_ERROR("golden: backbuffer readback failed");
-                m_goldenExit = 3;
-            }
-            else if (!m_config.goldenCapturePath.empty())
-            {
-                const std::filesystem::path out =
-                    std::filesystem::path(m_config.goldenCapturePath) / (name + ".png");
-                if (Arcane::WritePngRgba(out, w, h, actual.data()))
-                    ARC_INFO("golden captured: {} ({}x{})", out.generic_string(), w, h);
+                // Only a GOLDEN run fails on this. A --screenshot-only run has
+                // always degraded to a warning (a screenshot that cannot be
+                // written must not trip the GPU tests' RenderErrorCount()==0
+                // gate -- SaveTexturePng's own contract), and folding the two
+                // readbacks into one must not quietly change that.
+                if (m_config.GoldenMode())
+                {
+                    ARC_ERROR("golden: backbuffer readback failed");
+                    m_goldenExit = 3;
+                }
                 else
                 {
-                    ARC_ERROR("golden capture FAILED: {}", out.generic_string());
-                    m_goldenExit = 3;
+                    ARC_WARN("screenshot FAILED: {} (backbuffer readback)", m_config.screenshotPath);
                 }
             }
             else
             {
-                const std::filesystem::path dir(m_config.goldenComparePath);
-                const std::filesystem::path goldenPath = dir / (name + ".png");
-                std::uint32_t gw = 0, gh = 0;
-                std::vector<unsigned char> golden;
-                if (!Arcane::LoadPngRgba(goldenPath, gw, gh, golden))
+                // --screenshot: the exact pixels a player sees (post-tonemap,
+                // post-ImGui). Kept a WARN rather than an exit code, exactly
+                // as before -- only the golden harness fails a run.
+                if (!m_config.screenshotPath.empty())
                 {
-                    ARC_ERROR("golden: no golden at {}", goldenPath.generic_string());
-                    m_goldenExit = 3;
-                }
-                else
-                {
-                    const Arcane::GoldenCompareResult r = Arcane::CompareRgbaImages(
-                        golden.data(), gw, gh, actual.data(), w, h);
-                    if (r.ok)
-                        ARC_INFO("golden PASS: {} (maxDelta {}, bad {:.4f}%)",
-                                 name, r.maxChannelDelta, r.badPixelFraction * 100.0f);
+                    if (Arcane::WritePngRgba(m_config.screenshotPath, w, h, actual.data()))
+                        ARC_INFO("screenshot written: {}", m_config.screenshotPath);
                     else
-                    {
-                        ARC_ERROR("golden FAIL: {} (dims {}, maxDelta {}, bad {:.4f}%, first ({},{}))",
-                                  name, r.dimensionsMatch ? "ok" : "MISMATCH",
-                                  r.maxChannelDelta, r.badPixelFraction * 100.0f,
-                                  r.firstBadX, r.firstBadY);
-                        (void)Arcane::WritePngRgba(dir / (name + ".actual.png"), w, h, actual.data());
-                        if (r.dimensionsMatch)
-                            (void)Arcane::WriteDiffPng(dir / (name + ".diff.png"),
-                                                       golden.data(), actual.data(), gw, gh,
-                                                       Arcane::GoldenCompareParams{}.channelTolerance);
-                        m_goldenExit = 3;
-                    }
+                        ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
                 }
+                // NRI Phase 0 golden harness, unchanged in behaviour and now
+                // shared by both paths -- see GoldenArtifact.
+                if (m_config.GoldenMode() && GoldenArtifact(m_config, w, h, actual) != 0)
+                    m_goldenExit = 3;
             }
         }
 
         if (lastFrame)
             running = false;
+    }
+
+    // Destroys the vehicle and folds a grown RenderErrorCount into the exit
+    // code -- read AFTER the last NRI object is gone, so a teardown-only
+    // validation error still fails the run.
+    ShutdownGraphPath();
+}
+
+void RuntimeApp::ShutdownGraphPath()
+{
+    if (!m_graphContext)
+        return;
+
+    // Its own scope's end is what destroys every NRI object (device, swapchain,
+    // graph, cache, ring, window), and teardown ordering is exactly the class of
+    // mistake a validation layer exists to catch -- so the latch is sampled
+    // strictly after it, never from inside a still-live vehicle. Same bracketing
+    // NriSmoke::Run does around RunSession.
+    m_graphContext.reset();
+
+    const std::uint64_t errorsNow = Arcane::RenderErrorCount();
+    ARC_INFO("[nri-graph] RenderErrorCount {} -> {}", m_graphErrorBaseline, errorsNow);
+    if (errorsNow > m_graphErrorBaseline)
+    {
+        ARC_ERROR("[nri-graph] FAILED: {} validation/render error(s) fired during the run "
+                  "(teardown included)", errorsNow - m_graphErrorBaseline);
+        // Precedence 1 > 2 > 3, the smoke's (NriSmoke.hpp): a run failure says
+        // WHERE the run died and outranks the errors it produced on the way
+        // out; a validation error explains a bad capture rather than the
+        // reverse, so it outranks the golden exit.
+        if (m_graphExit == 0)
+            m_graphExit = 2;
     }
 }
 
@@ -1058,5 +1312,11 @@ int RuntimeApp::Run()
     // A device-loss exit is an abnormal end even though it was orderly: the
     // report exists, but the session did not do what it was asked to.
     if (Arcane::GpuDeviceLostObserved()) return 1;
+    // --nri-graph's own codes, ahead of the golden one: 1 = the graph run
+    // FAILED (it says WHERE the run died), 2 = RenderErrorCount GREW (a
+    // validation error fired, which explains a bad capture rather than the
+    // reverse). Precedence 1 > 2 > 3, the smoke's -- see ShutdownGraphPath.
+    // Always 0 when --nri-graph was not given.
+    if (m_graphExit != 0) return m_graphExit;
     return m_goldenExit;   // 0 ordinarily; 3 = golden capture/compare failure
 }

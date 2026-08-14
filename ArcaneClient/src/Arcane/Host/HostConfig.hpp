@@ -119,6 +119,33 @@ namespace Arcane
         // smoke owns its whole process (its own window, device and loop), so
         // there is nothing for an editor session to host it inside.
         bool            nriSmoke = false;
+
+        // DEV ONLY (NRI Phase 2, Task 7): the frame-graph VEHICLE. Renders
+        // the frame through Arcane::NriGraphContext (NRI device + swapchain +
+        // upload ring + pipeline cache + RenderGraph) instead of the NVRHI
+        // record/submit/present half.
+        //
+        // NOT the smoke's shape, and the difference is the whole point.
+        // --nri-smoke returns from RuntimeApp::Run BEFORE the boot starts and
+        // owns the process; --nri-graph boots the REAL engine -- project,
+        // plugin, scene resolve, sim, the material compile service -- and
+        // swaps only the RENDER half inside MainLoop. So everything the
+        // normal boot brings (a scene, bound materials, the golden warm-up
+        // and its material census) is live on this path, which is what makes
+        // stage-golden comparison against the NVRHI baselines meaningful.
+        //
+        // Consequences, stated because they are observable:
+        //   - the golden flags ARE honoured here (--nri-smoke refuses them;
+        //     see Parse). Same --frames/--screenshot/--golden-*/--golden-stage
+        //     vocabulary, same artifact names, same exit codes.
+        //   - it refuses to combine with --nri-smoke: two whole-render-path
+        //     modes in one process can only mean one was silently ignored.
+        //   - ArcaneRuntime-only, like --nri-smoke. The editor host keeps the
+        //     NVRHI path until Phase 3 flips both hosts.
+        //
+        // Non-Dist for the same reason --crash-gpu and --nri-smoke are: a
+        // shipped build has no business carrying a dev render path.
+        bool            nriGraph = false;
 #endif
 
         // Forward-declared here so it names HostConfig::ParseOutcome and can be the

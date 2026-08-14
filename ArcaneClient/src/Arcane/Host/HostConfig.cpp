@@ -33,6 +33,9 @@ namespace Arcane
                                      "the crash-diagnostics desk trigger").Type(CliType::Uint);
         cli.Flag  ("nri-smoke",      "DEV: run the NRI Phase-1 triangle smoke instead of "
                                      "booting the engine (honours --frames/--screenshot)");
+        cli.Flag  ("nri-graph",      "DEV: render through the NRI frame graph instead of NVRHI "
+                                     "(boots the real engine; honours --frames/--screenshot/"
+                                     "--golden-*)");
 #endif
 
         const Cli::Result r = cli.Parse(argc, argv);
@@ -63,6 +66,7 @@ namespace Arcane
 #if !defined(ARCANE_DIST)
         cfg.crashGpuFrame = r.GetAs<std::uint64_t>("crash-gpu");
         cfg.nriSmoke      = r.Flag("nri-smoke");
+        cfg.nriGraph      = r.Flag("nri-graph");
 #endif
 
         // Golden capture/compare only ever runs at the last frame (RuntimeApp
@@ -96,10 +100,28 @@ namespace Arcane
         // returns before the boot starts), so the combination would
         // capture/compare nothing and still exit 0. (--screenshot IS honoured
         // by the smoke -- only the golden flags are unreachable from it.)
+        //
+        // SCOPED TO THE SMOKE, deliberately (NRI Phase 2, Task 7). --nri-graph
+        // DOES reach MainLoop -- it boots the whole engine and swaps only the
+        // render half -- so the golden harness runs there and the flags are
+        // not merely legal but the point of the mode. Never widen this
+        // condition to "either NRI mode"; HostConfigTest pins both halves.
         if (cfg.nriSmoke && cfg.GoldenMode())
         {
             std::fprintf(stderr, "error: --nri-smoke does not run the golden harness; "
-                                 "use --screenshot instead of --golden-capture/--golden-compare\n");
+                                 "use --screenshot instead of --golden-capture/--golden-compare "
+                                 "(--nri-graph does run it)\n");
+            return { std::nullopt, 2 };
+        }
+
+        // Two whole-render-path modes at once. They are not composable and not
+        // orderable: --nri-smoke returns from RuntimeApp::Run before the boot
+        // starts, so a run carrying both would silently be a smoke run with
+        // --nri-graph ignored. Refuse rather than pick one.
+        if (cfg.nriSmoke && cfg.nriGraph)
+        {
+            std::fprintf(stderr, "error: --nri-smoke and --nri-graph are two different render "
+                                 "paths -- pass exactly one\n");
             return { std::nullopt, 2 };
         }
 #endif

@@ -28,6 +28,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace
@@ -2336,4 +2337,315 @@ TEST_CASE("rendergraph exec: an imported attachment's view is rebuilt every Exec
     CHECK(device->Graves().Pending() == 0);
 
     CHECK(Arcane::RenderErrorCount() == before);
+}
+
+// ======================================================================
+// The --nri-graph vehicle's frame SHAPE (Phase 2, Task 7)
+// ======================================================================
+// NriGraphContext itself needs a window, a device and a swapchain, so it is
+// desk-only. Its DECLARATIONS are not: Compile() is pure, so the exact node/
+// usage shape NriGraphContext::BuildFrame declares can be restated here and
+// its derived barrier chain pinned headlessly. That is what makes "the clear
+// frame presents, and a capture frame copies before it presents" a checked
+// property rather than a desk observation -- and it is the chain Task 8 will
+// insert its batch node into.
+TEST_CASE("nri graph vehicle: the clear + capture frame derives colour -> copy -> present", "[nri]")
+{
+    Arcane::RenderGraph graph;
+    Arcane::RgTexture backbuffer{};
+    Arcane::RgBuffer  capture{};
+
+    // Node 0 -- exactly BuildFrame's clear node: import the swapchain, declare
+    // it as the colour attachment, write it. No draws; the clear itself is a
+    // CmdClearAttachments inside the exec fn (the clear-seam decision -- see
+    // NriGraphContext::BuildFrame), which is invisible to Compile by design.
+    graph.AddNode("clear", Arcane::RenderGraph::NodeKind::Raster,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            backbuffer = builder.ImportSwapChainTexture("backbuffer");
+            builder.Write(backbuffer, Arcane::RgUsage::ColorWrite);
+            graph.SetColorAttachments(std::span<const Arcane::RgTexture>(&backbuffer, 1));
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    // Node 1 -- exactly BuildFrame's capture node. The staging buffer is
+    // IMPORTED (a transient would be DEVICE-local and unmappable) and declared
+    // ReadbackHost; the backbuffer is read as CopySrc.
+    graph.AddNode("capture", Arcane::RenderGraph::NodeKind::Copy,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            capture = builder.ImportBuffer("capture", nullptr, 4096);
+            builder.Read(backbuffer, Arcane::RgUsage::CopySrc);
+            builder.Write(capture, Arcane::RgUsage::ReadbackHost);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.nodes.size() == 2);
+
+    // Node 0: the freshly acquired backbuffer's contents are not ours, so it
+    // enters discarding and becomes a colour attachment.
+    REQUIRE(compiled.nodes[0].preBarriers.size() == 1);
+    CheckState(compiled.nodes[0].preBarriers[0].before, kUnknownState);
+    CheckState(compiled.nodes[0].preBarriers[0].after,
+               nri::AccessBits::COLOR_ATTACHMENT, nri::Layout::COLOR_ATTACHMENT,
+               nri::StageBits::COLOR_ATTACHMENT);
+
+    // Node 1: the backbuffer becomes a copy source. The imported staging
+    // buffer also transitions (COPY_DESTINATION), and a buffer barrier's
+    // layout is meaningless by contract -- hence UNDEFINED on both sides.
+    REQUIRE(compiled.nodes[1].preBarriers.size() == 2);
+    const Arcane::RgBarrier& textureBarrier = compiled.nodes[1].preBarriers[0].isTexture
+                                                ? compiled.nodes[1].preBarriers[0]
+                                                : compiled.nodes[1].preBarriers[1];
+    const Arcane::RgBarrier& bufferBarrier  = compiled.nodes[1].preBarriers[0].isTexture
+                                                ? compiled.nodes[1].preBarriers[1]
+                                                : compiled.nodes[1].preBarriers[0];
+    CHECK(textureBarrier.isTexture);
+    CheckState(textureBarrier.after,
+               nri::AccessBits::COPY_SOURCE, nri::Layout::COPY_SOURCE, nri::StageBits::COPY);
+    CHECK_FALSE(bufferBarrier.isTexture);
+    CheckState(bufferBarrier.after,
+               nri::AccessBits::COPY_DESTINATION, nri::Layout::UNDEFINED, nri::StageBits::COPY);
+
+    // ...and the graph -- not the caller -- is what leaves the backbuffer
+    // present-ready. Exactly one exit barrier: the imported staging BUFFER
+    // gets none (ImportBuffer takes no exit state to restore it to).
+    REQUIRE(compiled.exitBarriers.size() == 1);
+    CHECK(compiled.exitBarriers[0].isTexture);
+    CheckState(compiled.exitBarriers[0].after, kPresentState);
+
+    // Nothing transient: both resources are imported, so the frame allocates
+    // no pool slot at all.
+    CHECK(compiled.transients.empty());
+    CHECK(compiled.poolSlotCount == 0);
+}
+
+// ======================================================================
+// NriPipelineCache (Phase 2, Task 7)
+// ======================================================================
+// The NONE backend is enough to prove everything that is actually the
+// CACHE's behaviour. Its CreatePipelineLayout/CreateGraphicsPipeline hand
+// back one shared dummy object per type (ThirdParty/NRI/Source/NONE/
+// ImplNONE.cpp), so pointer identity proves nothing here -- the observable
+// that matters is HOW OFTEN the cache reached for the device, which these
+// cases count through the fill callback and through Graveyard::Pending().
+namespace
+{
+    // A minimal, deterministic layout desc. Value-initialized (`= {}`) and
+    // then assigned field by field -- which is not style but
+    // NriPipelineCache::RegisterLayout's stated DEDUP CONTRACT: the desc is
+    // compared byte-wise, so its padding has to be zeroed.
+    nri::PipelineLayoutDesc MakeLayoutDesc(nri::StageBits stages = nri::StageBits::VERTEX_SHADER
+                                                                | nri::StageBits::FRAGMENT_SHADER)
+    {
+        nri::PipelineLayoutDesc desc = {};
+        desc.shaderStages = stages;
+        return desc;
+    }
+
+    Arcane::NriPipelineCache::GraphicsKey MakeGraphicsKey(std::uint32_t layoutId)
+    {
+        Arcane::NriPipelineCache::GraphicsKey key;
+        key.shaderPairId    = 0x1234;
+        key.layoutId        = layoutId;
+        key.colorFormats[0] = nri::Format::RGBA8_UNORM;
+        key.colorCount      = 1;
+        key.blend           = Arcane::NriPipelineCache::GraphicsKey::Blend::AlphaOver;
+        return key;
+    }
+}
+
+TEST_CASE("nri pipeline cache: RegisterLayout dedups identical descs and separates different ones", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriPipelineCache cache;
+    cache.Bind(*device);
+    REQUIRE(cache.IsBound());
+
+    const std::uint32_t a = cache.RegisterLayout(MakeLayoutDesc());
+    REQUIRE(a != Arcane::NriPipelineCache::kInvalidLayout);
+    CHECK(cache.LayoutCount() == 1);
+
+    // An identical desc gets the SAME id, and creates nothing.
+    const std::uint32_t again = cache.RegisterLayout(MakeLayoutDesc());
+    CHECK(again == a);
+    CHECK(cache.LayoutCount() == 1);
+
+    // One field's worth of difference is a different layout -- exactly the
+    // case a dedup that compared only pointers or counts would miss.
+    const std::uint32_t b = cache.RegisterLayout(MakeLayoutDesc(nri::StageBits::COMPUTE_SHADER));
+    CHECK(b != a);
+    CHECK(cache.LayoutCount() == 2);
+
+    CHECK(cache.Layout(a) != nullptr);
+    CHECK(cache.Layout(b) != nullptr);
+    // Ids this cache never issued resolve to null rather than to a neighbour.
+    CHECK(cache.Layout(Arcane::NriPipelineCache::kInvalidLayout) == nullptr);
+    CHECK(cache.Layout(9999) == nullptr);
+
+    cache.Clear(device->Graves(), 0);
+    device->Graves().Drain();
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("nri pipeline cache: GetGraphics creates once per key and serves the rest", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriPipelineCache cache;
+    cache.Bind(*device);
+    const std::uint32_t layout = cache.RegisterLayout(MakeLayoutDesc());
+    REQUIRE(layout != Arcane::NriPipelineCache::kInvalidLayout);
+
+    int fills = 0;
+    // What a real caller supplies: shaders + fixed-function state. It must NOT
+    // touch the key-derived block -- and this one deliberately does, because
+    // the cache re-stamps that block after the callback returns precisely so a
+    // callback cannot desynchronise the cache from what it created (or leave
+    // outputMerger.colors pointing into a dead stack frame).
+    const auto fill = [&](nri::GraphicsPipelineDesc& desc)
+    {
+        ++fills;
+        desc.rasterization.fillMode = nri::FillMode::SOLID;
+        desc.rasterization.cullMode = nri::CullMode::NONE;
+        desc.outputMerger.colors    = nullptr;
+        desc.outputMerger.colorNum  = 0;
+        desc.inputAssembly.topology = nri::Topology::POINT_LIST;
+    };
+
+    const Arcane::NriPipelineCache::GraphicsKey key = MakeGraphicsKey(layout);
+
+    nri::Pipeline* first = cache.GetGraphics(key, fill);
+    REQUIRE(first != nullptr);
+    CHECK(fills == 1);
+    CHECK(cache.PipelineCount() == 1);
+
+    // A HIT: same key, no second creation, no second fill.
+    nri::Pipeline* second = cache.GetGraphics(key, fill);
+    CHECK(second == first);
+    CHECK(fills == 1);
+    CHECK(cache.PipelineCount() == 1);
+
+    // A MISS on the attachment format alone -- the whole reason formats are in
+    // the key (a pipeline bakes them, and binding it under a differently
+    // formatted attachment is undefined on both backends).
+    Arcane::NriPipelineCache::GraphicsKey other = key;
+    other.colorFormats[0] = nri::Format::BGRA8_UNORM;
+    REQUIRE(cache.GetGraphics(other, fill) != nullptr);
+    CHECK(fills == 2);
+    CHECK(cache.PipelineCount() == 2);
+
+    // ...and on the packed state that is not a format.
+    Arcane::NriPipelineCache::GraphicsKey additive = key;
+    additive.blend = Arcane::NriPipelineCache::GraphicsKey::Blend::Additive;
+    REQUIRE(cache.GetGraphics(additive, fill) != nullptr);
+    CHECK(fills == 3);
+    CHECK(cache.PipelineCount() == 3);
+
+    cache.Clear(device->Graves(), 0);
+    device->Graves().Drain();
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("nri pipeline cache: Clear buries everything at one fence and reissues no stale id", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriPipelineCache cache;
+    cache.Bind(*device);
+    const std::uint32_t layout = cache.RegisterLayout(MakeLayoutDesc());
+    int fills = 0;
+    REQUIRE(cache.GetGraphics(MakeGraphicsKey(layout), [&](nri::GraphicsPipelineDesc&) { ++fills; })
+            != nullptr);
+    CHECK(fills == 1);
+
+    // ONE burial per object, all at the SAME fence value -- which trivially
+    // satisfies Graveyard's nondecreasing rule, and is why the owner passes
+    // the graph's own last submitted value here rather than 0 (NriSmoke's
+    // fence-0 teardown would violate it on a device the graph has used).
+    CHECK(device->Graves().Pending() == 0);
+    cache.Clear(device->Graves(), 7);
+    CHECK(device->Graves().Pending() == 2);   // one pipeline + one layout
+    CHECK(cache.LayoutCount() == 0);
+    CHECK(cache.PipelineCount() == 0);
+
+    // An id a caller held across the Clear() must not resolve to whatever
+    // lands in the same slot next: the id counter keeps climbing.
+    const std::uint32_t reissued = cache.RegisterLayout(MakeLayoutDesc());
+    CHECK(reissued != layout);
+    CHECK(cache.Layout(layout) == nullptr);
+    CHECK(cache.Layout(reissued) != nullptr);
+
+    // The pipeline is genuinely gone, so the same shape is a MISS again.
+    REQUIRE(cache.GetGraphics(MakeGraphicsKey(reissued), [&](nri::GraphicsPipelineDesc&) { ++fills; })
+            != nullptr);
+    CHECK(fills == 2);
+
+    cache.Clear(device->Graves(), 8);
+    device->Graves().Drain();
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("nri pipeline cache: caller-contract breaches are refused and latched, not served", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    int fills = 0;
+    const auto fill = [&](nri::GraphicsPipelineDesc&) { ++fills; };
+
+    // 1. An unbound cache -- nothing can be created against no device.
+    {
+        Arcane::NriPipelineCache unbound;
+        CHECK(unbound.RegisterLayout(MakeLayoutDesc()) == Arcane::NriPipelineCache::kInvalidLayout);
+        CHECK(unbound.GetGraphics(MakeGraphicsKey(0), fill) == nullptr);
+    }
+
+    Arcane::NriPipelineCache cache;
+    cache.Bind(*device);
+    const std::uint32_t layout = cache.RegisterLayout(MakeLayoutDesc());
+    REQUIRE(layout != Arcane::NriPipelineCache::kInvalidLayout);
+
+    // 2. A layout id this cache never issued.
+    CHECK(cache.GetGraphics(MakeGraphicsKey(layout + 500), fill) == nullptr);
+
+    // 3. More colour attachments than the key can carry.
+    Arcane::NriPipelineCache::GraphicsKey tooMany = MakeGraphicsKey(layout);
+    tooMany.colorCount = Arcane::NriPipelineCache::kMaxColorAttachments + 1;
+    CHECK(cache.GetGraphics(tooMany, fill) == nullptr);
+
+    // 4. A graphics pipeline that would write nothing at all.
+    Arcane::NriPipelineCache::GraphicsKey writesNothing = MakeGraphicsKey(layout);
+    writesNothing.colorCount  = 0;
+    writesNothing.depthFormat = nri::Format::UNKNOWN;
+    CHECK(cache.GetGraphics(writesNothing, fill) == nullptr);
+
+    // None of them reached the fill callback, and none was cached as a
+    // poisoned entry a later call would keep serving.
+    CHECK(fills == 0);
+    CHECK(cache.PipelineCount() == 0);
+
+    // Every refusal went through the tagged "nri-graph" seam, so a --nri-graph
+    // desk run exits nonzero on any of them. This case therefore asserts the
+    // OPPOSITE of its neighbours: the latch must have grown.
+    CHECK(Arcane::RenderErrorCount() > before);
+
+    cache.Clear(device->Graves(), 0);
+    device->Graves().Drain();
+    // Restore the latch so the rest of this process still sees a clean
+    // baseline -- the same courtesy GpuCrashReportTest.cpp extends.
+    Arcane::ResetRenderErrorCount();
 }

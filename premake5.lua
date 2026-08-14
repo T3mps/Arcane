@@ -327,6 +327,14 @@ project "ArcaneRuntime"
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.Mosaic}",
+        -- NRI Phase 2, Task 7: RuntimeApp holds an Arcane::NriGraphContext (the
+        -- --nri-graph vehicle), and that header is NRI-typed because the node
+        -- authors of Tasks 8-12 are its other consumers. HEADERS ONLY -- this
+        -- exe does not link NRI, and every nri:: object it can reach is created
+        -- and destroyed inside ArcaneClient.dll. (Linking a second static copy
+        -- of NRI into the exe would be the bug -- see NriDevice::
+        -- CreateNoneForTests's comment about ArcaneTests' own copy.)
+        "%{IncludeDir.NRI}",
     }
     -- ArcaneCore is linked directly (alongside the Arcane DLL) even though the
     -- host-boot layer (HostConfig/GpuContext/FramePerf/ProjectBoot) moved INTO
