@@ -29,17 +29,40 @@
 // WHAT IT OWNS: one sampler, one pipeline layout registered in the vehicle's
 // NriPipelineCache (descriptor set space0 = { t0 texture, s0 sampler }; no
 // root constants -- the shader reads none), one descriptor pool holding ONE
-// descriptor set, and the SHADER_RESOURCE view over its source texture.
+// descriptor set PER FRAME SLOT, and its cached SHADER_RESOURCE views.
 //
-// THE SOURCE VIEW is the one piece with a lifetime worth stating. The source
-// is a graph TRANSIENT (the canvas), whose physical texture the graph owns and
-// destroys on exactly one path: RenderGraph::ReleaseGpuResources, which
-// NriGraphContext::Resize and ~NriGraphContext call. Both call
-// InvalidateSource() in the same breath, BEFORE that release, so this node's
-// descriptor can never name a freed texture. The pointer check inside
-// EnsureSource is the backstop, not the mechanism: if the resolved texture
-// ever changes without an invalidation, that is a bug in the owner and it says
-// so through the error latch rather than quietly binding a stale view.
+// ===================================================================
+// SOURCE VIEWS AND THE POOL -- the lifetime rule BOTH nodes here obey.
+// ===================================================================
+// Every texture either node samples is a graph TRANSIENT the graph owns: the
+// canvas, and each post pass's target. Two separate facts make caching a
+// descriptor over one dangerous, and they need two separate mechanisms:
+//
+//  1. THE GRAPH MAY DESTROY A POOL TEXTURE MID-EXECUTE. RealizePool buries a
+//     slot past the compiled slot count (a shrink) or one whose desc changed,
+//     and both run inside Execute() -- after every declaration, before every
+//     exec fn -- so the owner gets no ordering hook. Since Task 10 the frame's
+//     slot count genuinely varies at runtime (a post chain appears when its
+//     compile lands, goes away, or re-wires to a different slot count), which
+//     is what made this reachable. NRI may then hand the recreated texture the
+//     address the destroyed one vacated, so a pointer-keyed cache reports a
+//     HIT and binds freed memory.
+//     => Both nodes compare RenderGraph::PoolEpoch() at record time and bury
+//     their whole view cache when it moved. That is the MECHANISM; read that
+//     accessor's contract block.
+//
+//  2. THE SOURCE MAY LEGITIMATELY CHANGE FROM FRAME TO FRAME. The tonemap
+//     samples the canvas with no chain and the last pass's target with one,
+//     and a scene's chain binds a few frames into an ordinary run.
+//     => Both nodes hold ONE DESCRIPTOR SET PER FRAME SLOT and rewrite only
+//     the slot the current frame owns, whose previous submission has already
+//     retired (the pacing wait inside NriSwapChain::AcquireNextTexture). No
+//     idle, no error: a changed source is ordinary.
+//
+// InvalidateSource()/InvalidateSources() remain for TEARDOWN and RESIZE, where
+// the owner releases the pool and then drains the graveyard -- there is no
+// later Record() to notice the epoch on those paths, and the views must be
+// buried before the device goes away.
 //
 // Include order: NRI headers first, ALWAYS -- see NriCommon.hpp.
 #include <NRI.h>
@@ -61,6 +84,16 @@ namespace Arcane
     class NriDevice;
     class NriGraphContext;
     struct PostChainDesc;
+
+    // A SHADER_RESOURCE view over one graph transient, keyed by the texture it
+    // views. Shared by both nodes here because they cache them for the same
+    // reason and drop them on the same two triggers -- see SOURCE VIEWS AND
+    // THE POOL above.
+    struct FullscreenSourceView
+    {
+        nri::Texture*    texture = nullptr;
+        nri::Descriptor* view    = nullptr;
+    };
 
     // =====================================================================
     // The pipeline-layout SHAPE one fullscreen material pass needs, as a
@@ -264,6 +297,11 @@ namespace Arcane
         // sight. Null (already reported) if NRI refused it.
         [[nodiscard]] nri::Descriptor* EnsureView(const nri::CoreInterface& core,
                                                   nri::Texture* texture);
+        // Drops every cached view when the graph's POOL EPOCH moved, i.e. when
+        // RealizePool buried a pool texture this node may hold a descriptor
+        // over. Called at the top of every Record -- see SOURCE VIEWS AND THE
+        // POOL, mechanism 1.
+        void SyncPoolEpoch(const RenderGraphNodeContext& context);
         [[nodiscard]] std::uint64_t ArenaOffset(std::uint32_t frameSlot, std::uint32_t region) const
         {
             return CbRegionOffset(m_arenaStride, frameSlot, region);
@@ -282,12 +320,6 @@ namespace Arcane
             // inputs. A rebind happens only when one of them changes.
             nri::Texture* bound[kSwapchainFramesInFlight][kMaxTextures + kMaxInputs]{};
             bool          written[kSwapchainFramesInFlight]{};
-        };
-
-        struct CachedView
-        {
-            nri::Texture*    texture = nullptr;
-            nri::Descriptor* view    = nullptr;
         };
 
         // See Batch2DNode::kShaderPairBase and TonemapNode::kShaderPairId: one
@@ -328,9 +360,12 @@ namespace Arcane
         std::uint32_t m_textureRange = FullscreenMaterialLayout::kNoRange;
         nri::Format   m_targetFormat = nri::Format::UNKNOWN;
 
-        std::vector<Pass>       m_passes;
-        std::vector<CachedView> m_views;
-        std::vector<nri::Descriptor*> m_orphanedViews;   // swept by InvalidateSources/Release
+        std::vector<Pass>                 m_passes;
+        std::vector<FullscreenSourceView> m_views;
+        // The graph pool epoch m_views was built against -- see
+        // SyncPoolEpoch. 0 is also RenderGraph's starting value, which is
+        // correct: an empty cache has nothing to invalidate.
+        std::uint64_t                     m_poolEpoch = 0;
 
         std::vector<std::uint8_t> m_packed;    // PackCB output, refreshed every frame
         GlobalParams              m_globals{}; // this frame's engine-global constants
@@ -356,29 +391,40 @@ namespace Arcane
         // Idempotent.
         void Release(Graveyard& graveyard, std::uint64_t fence);
 
-        // Buries JUST the source view (and any view a missed invalidation left
-        // behind), so the next frame builds a fresh one. MUST be called before
-        // the graph releases the transient pool -- see THE SOURCE VIEW above.
-        // Idempotent; a no-op when no view exists.
+        // Buries every cached source view and forgets what each set has bound,
+        // so the next frame rebuilds both. For TEARDOWN and RESIZE, where the
+        // owner releases the pool and drains -- the in-run case is the epoch
+        // check inside Record (see SOURCE VIEWS AND THE POOL). Idempotent.
         void InvalidateSource(Graveyard& graveyard, std::uint64_t fence);
 
         // Records the tonemap into an ALREADY-OPEN raster pass whose single
         // colour attachment is `target`. `source` is the linear HDR texture to
-        // sample -- the canvas today, the post chain's last target at Task 10.
+        // sample -- the canvas on a frame with no post chain, the chain's last
+        // target on one with it, and IT MAY DIFFER BETWEEN CONSECUTIVE FRAMES:
+        // a scene's chain binds a few frames into an ordinary run. That is
+        // ordinary here, which is why `frameSlot` is a parameter -- only that
+        // slot's descriptor set is rewritten, and its previous submission has
+        // already retired.
         //
         // The PSO's attachment format is read back from `target`'s resolved
         // texture rather than assumed: NRI resolves a swapchain's channel order
         // instead of letting anyone pin it (NriSwapChain::Format), and a
         // pipeline bakes its attachment formats at creation. Emits no barrier:
         // the executor derives them.
-        void Record(RenderGraphNodeContext& context, RgTexture source, RgTexture target);
+        void Record(RenderGraphNodeContext& context, RgTexture source, RgTexture target,
+                    std::uint32_t frameSlot);
 
     private:
         TonemapNode() = default;
 
         bool Init(NriGraphContext& context);
-        // Creates (or reuses) the SHADER_RESOURCE view over `texture`.
-        [[nodiscard]] bool EnsureSource(const nri::CoreInterface& core, nri::Texture* texture);
+        // Binds `texture` into frame slot `frameSlot`'s descriptor set,
+        // creating (or reusing) the SHADER_RESOURCE view over it.
+        [[nodiscard]] bool EnsureSource(const nri::CoreInterface& core, nri::Texture* texture,
+                                        std::uint32_t frameSlot);
+        // Drops every cached view when the graph's POOL EPOCH moved -- the same
+        // mechanism, for the same reason, as PostChainNode's.
+        void SyncPoolEpoch(const RenderGraphNodeContext& context);
 
         // See Batch2DNode::kShaderPairBase: one shared cache, so the two nodes'
         // opaque shader-pair id spaces must not overlap.
@@ -395,16 +441,19 @@ namespace Arcane
         nri::Descriptor* m_sampler = nullptr;
 
         nri::DescriptorPool* m_pool = nullptr;
-        nri::DescriptorSet*  m_set  = nullptr;
+        // ONE SET PER FRAME SLOT (mechanism 2 above). Task 8 held a single
+        // shared set, which was correct while nothing in it was per-frame --
+        // Task 10's chain makes the source change mid-run, and rewriting a
+        // shared set with frames in flight is a real hazard.
+        nri::DescriptorSet*  m_set[kSwapchainFramesInFlight]{};
+        // The texture frame slot i's set currently binds at t0.
+        nri::Texture*        m_bound[kSwapchainFramesInFlight]{};
 
         std::uint32_t m_layoutId = NriPipelineCache::kInvalidLayout;
 
-        nri::Texture*    m_sourceTexture = nullptr;
-        nri::Descriptor* m_sourceView    = nullptr;
-        // Views a MISSED invalidation orphaned. Normally empty; kept so the
-        // backstop path in EnsureSource leaks nothing, and swept by
-        // InvalidateSource/Release.
-        std::vector<nri::Descriptor*> m_orphanedViews;
+        std::vector<FullscreenSourceView> m_views;
+        std::uint64_t                     m_poolEpoch = 0;
+        bool                              m_warnedViewChurn = false;
     };
 
     // Declares `passCount` post-chain nodes into `graph` -- one per chain

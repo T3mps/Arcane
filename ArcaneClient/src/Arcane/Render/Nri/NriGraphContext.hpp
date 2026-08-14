@@ -399,12 +399,6 @@ namespace Arcane
         // FrameDesc::globals, by VALUE -- see CurrentGlobals().
         GlobalParams m_currentGlobals{};
 
-        // How many post-chain nodes the LAST declared frame carried. The
-        // tonemap's source is the canvas at 0 and the last pass's target
-        // otherwise, so a change here means the tonemap must rebuild its
-        // source view -- see BuildFrame.
-        std::uint32_t m_postPassCount = 0;
-
         // See SetAssetResolver. Empty until the frame driver installs one.
         AssetResolveFn m_resolveAsset;
 

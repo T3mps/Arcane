@@ -1981,6 +1981,97 @@ TEST_CASE("rendergraph exec: the per-frame Reset-redeclare-compile-execute loop 
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
+TEST_CASE("rendergraph exec: the POOL EPOCH moves on a shrink and on a desc change, and not on "
+          "steady-state reuse", "[nri]")
+{
+    // THE MECHANISM a node caching views over pool textures depends on
+    // (RenderGraph::PoolEpoch). RealizePool buries pool textures from INSIDE
+    // Execute() -- after every declaration, before every exec fn -- so an
+    // owner has no ordering hook and a node has no other observable: NRI may
+    // hand the recreated texture the address the destroyed one vacated, so a
+    // pointer-keyed cache reports a HIT and binds freed memory.
+    //
+    // This was unreachable while the frame's shape was constant. It is
+    // reachable now because a post chain changes how many pool slots a frame
+    // needs -- it appears when its compile lands, goes away, and re-wires.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+
+    // ONE node with N colour attachments, deliberately: it makes the two
+    // shapes differ ONLY in slot count. Splitting them across nodes would also
+    // change the surviving transient's USAGE bits (a dropped reader takes
+    // SHADER_RESOURCE with it), which is a desc change -- and then the shrink
+    // case below would silently be testing recreation instead of a pure
+    // shrink, which is the case a create counter cannot see.
+    const auto declare = [](Arcane::RenderGraph& g, std::uint32_t count, std::uint32_t extent)
+    {
+        g.AddNode("a", Arcane::RenderGraph::NodeKind::Raster,
+            [&g, count, extent](Arcane::RenderGraphBuilder& builder)
+            {
+                std::vector<Arcane::RgTexture> targets;
+                for (std::uint32_t i = 0; i < count; ++i)
+                {
+                    const std::string name = "t" + std::to_string(i);
+                    targets.push_back(builder.CreateTexture(name.c_str(),
+                                                             MakeColorDesc(extent, extent)));
+                    builder.Write(targets.back(), Arcane::RgUsage::ColorWrite);
+                }
+                g.SetColorAttachments(targets);
+            },
+            [](Arcane::RenderGraphNodeContext&) {});
+    };
+
+    declare(graph, /*count=*/2, /*extent=*/64);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    REQUIRE(graph.DebugTransientCount() == 2);
+    const std::uint64_t afterFirst = graph.PoolEpoch();
+
+    // STEADY STATE: the same shape re-executed buries nothing, so a node's
+    // cached views stay valid and it must NOT be told to rebuild them. An
+    // epoch that moved every frame would be as useless as one that never did.
+    graph.Reset();
+    declare(graph, 2, 64);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    CHECK(graph.PoolEpoch() == afterFirst);
+    CHECK(graph.DebugTransientCreateCount() == 2);
+
+    // A PURE SHRINK: slot 1 is past the new slot count, so RealizePool buries
+    // it -- and DebugTransientCreateCount cannot see that, because nothing was
+    // created. That is precisely why the epoch is its own counter.
+    graph.Reset();
+    declare(graph, 1, 64);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    CHECK(graph.DebugTransientCount() == 1);
+    const std::uint64_t afterShrink = graph.PoolEpoch();
+    CHECK(afterShrink > afterFirst);
+    CHECK(graph.DebugTransientCreateCount() == 2);   // nothing new was made
+
+    // A DESC CHANGE: slot 0's extent no longer matches, so it is buried and
+    // recreated -- the case where the replacement can legitimately land on the
+    // freed address, which is exactly what makes a pointer comparison useless.
+    graph.Reset();
+    declare(graph, 1, 32);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    const std::uint64_t afterRecreate = graph.PoolEpoch();
+    CHECK(afterRecreate > afterShrink);
+    CHECK(graph.DebugTransientCreateCount() == 3);
+
+    // ...and the explicit release moves it too, so a node that checks the
+    // epoch after one cannot conclude its views are still current.
+    graph.ReleaseGpuResources();
+    CHECK(graph.PoolEpoch() > afterRecreate);
+
+    device->Graves().Reap(graph.DebugSubmitCount());
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
 TEST_CASE("rendergraph exec: the carried-over pool slot's first barrier picks up the previous frame's outgoing state", "[nri]")
 {
     // The correctness consequence of letting the pool cross frames. Compile()
@@ -3029,7 +3120,7 @@ TEST_CASE("nri graph frame: a post chain whose base reads the scene keeps the ca
     shape.canvasHeight = 200;
     shape.post         = &chain;
 
-    Arcane::DeclareGraphFrame(graph, shape, nullptr);
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
     REQUIRE(graph.NodeCount() == 4);
 
     const Arcane::RgCompiled compiled = CompileOk(graph);
@@ -3038,6 +3129,27 @@ TEST_CASE("nri graph frame: a post chain whose base reads the scene keeps the ca
     // driven by real lifetimes rather than by an assumption about chains.
     REQUIRE(compiled.transients.size() == 3);
     CHECK(compiled.poolSlotCount == 3);
+
+    // AND THE POINT THAT COST A REWRITE: the PASS COUNT IS NOT A PROXY for the
+    // frame's physical layout. This chain and MakeLinearChain(2) have the same
+    // node count and the same postPassCount, and compile to a DIFFERENT number
+    // of pool slots -- so a re-save between the two shapes changes which
+    // physical texture the tonemap ends up sampling while every count a caller
+    // could compare stays put. Anything that keys "did my source change?" on
+    // the pass count misses it; the tonemap's per-frame-slot sets and
+    // RenderGraph::PoolEpoch do not.
+    CHECK(handles.postPassCount == 2);
+    {
+        const Arcane::PostChainDesc linear = MakeLinearChain(2);
+        Arcane::RenderGraph other;
+        Arcane::RgFrameShape otherShape = shape;
+        otherShape.post = &linear;
+        const Arcane::RgFrameHandles otherHandles =
+            Arcane::DeclareGraphFrame(other, otherShape, nullptr);
+        CHECK(otherHandles.postPassCount == handles.postPassCount);
+        CHECK(other.NodeCount() == graph.NodeCount());
+        CHECK(CompileOk(other).poolSlotCount != compiled.poolSlotCount);
+    }
     // Pass 1 declares TWO reads (pass 0's target and the canvas) plus its own
     // write -- but the canvas is ALREADY in SHADER_RESOURCE from node 1, so no
     // barrier is emitted for it a second time.

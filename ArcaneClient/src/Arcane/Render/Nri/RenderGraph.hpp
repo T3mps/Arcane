@@ -647,6 +647,38 @@ namespace Arcane
         // keyed to.
         [[nodiscard]] std::uint64_t DebugSubmitCount() const noexcept { return m_submitValue; }
 
+        // =============================================================
+        // THE POOL EPOCH -- CONTRACT, NOT A TEST SEAM. Read this before
+        // caching ANYTHING that names a pool texture or buffer.
+        // =============================================================
+        // Bumped every time this graph buries a pool resource: a shrink or a
+        // desc change inside RealizePool (i.e. from INSIDE Execute()), an
+        // explicit ReleaseGpuResources(), and ~RenderGraph.
+        //
+        // It exists because a node that caches a descriptor over a pool
+        // texture cannot detect that burial any other way. NRI is free to hand
+        // a recreated texture the address a destroyed one just vacated, so a
+        // pointer-keyed cache reports a HIT and binds a descriptor over freed
+        // memory -- and the two RealizePool paths offer the owner no callback
+        // and no ordering hook, because they run in the middle of Execute(),
+        // after every declaration and before every exec fn. Only the node
+        // itself, at record time, is in a position to notice.
+        //
+        // The frame's SHAPE is what makes those paths live: a frame that
+        // declares a post chain needs more pool slots than one that does not,
+        // and a chain can appear (its compile lands a few frames in),
+        // disappear, or change its slot count (a DAG re-wire) at runtime. It
+        // was unreachable while the frame's shape was constant.
+        //
+        // CONTRACT for such a node: compare this against the value you last
+        // built views at -- an exec fn reaches the graph through
+        // RenderGraphNodeContext::graph -- and when it differs, bury every
+        // cached view (at DebugSubmitCount(), the submission that last used
+        // them) and rebuild. FullscreenNodes.cpp's TonemapNode and
+        // PostChainNode both do exactly that; it costs one comparison per node
+        // per frame.
+        [[nodiscard]] std::uint64_t PoolEpoch() const noexcept { return m_poolEpoch; }
+
         // The `before` triple actually RECORDED for the first barrier that
         // touched pool slot `slot` during the last Execute(). The only
         // observable of the cross-frame handover (PoolResource::carry): on a
@@ -917,6 +949,10 @@ namespace Arcane
 
         std::uint64_t m_submitValue           = 0;   // successful submits == last signalled fence value
         std::uint64_t m_transientCreateCount  = 0;   // lifetime physical-transient creations
+        // Bumped on every pool BURIAL -- see PoolEpoch(). Deliberately not
+        // derivable from m_transientCreateCount: a shrink destroys without
+        // creating, so a create counter cannot see it.
+        std::uint64_t m_poolEpoch             = 0;
 
         // Reused across every EmitBarriers call so translating a barrier
         // group costs no allocation on the record path once the frame shape

@@ -359,6 +359,14 @@ namespace Arcane
         // the frame that never came (a release, or teardown).
         ReleaseImportedViews();
 
+        // The POOL EPOCH bumps here too (RenderGraph.hpp): this path is the
+        // one the owner DOES get to sequence -- NriGraphContext invalidates
+        // its nodes before calling in -- but a node's epoch check must still
+        // agree with reality afterwards, and a release that left the epoch
+        // unchanged would leave a node believing its (now buried) views were
+        // still current.
+        if (!m_pool.empty())
+            ++m_poolEpoch;
         for (const PoolResource& slot : m_pool)
         {
             if (slot.texture)
@@ -621,8 +629,17 @@ namespace Arcane
         // Buries a pool entry AND every cached view that names its texture:
         // a view outliving the resource it views is a dangling descriptor,
         // and the graveyard is the only place that can free either safely.
+        //
+        // It also bumps the POOL EPOCH (RenderGraph.hpp), which is the ONLY
+        // way a NODE caching its own views over pool textures can learn that
+        // this happened: both callers below run in the middle of Execute(),
+        // after every declaration and before every exec fn, so there is no
+        // ordering hook and no callback the owner could be given. The bump is
+        // unconditional -- a slot has been invalidated whether or not it held
+        // anything.
         const auto buryPoolResource = [&](PoolResource& entry)
         {
+            ++m_poolEpoch;
             if (entry.texture)
             {
                 for (std::size_t v = 0; v < m_views.size();)

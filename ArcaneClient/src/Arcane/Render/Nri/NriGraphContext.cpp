@@ -414,23 +414,27 @@ namespace Arcane
         }
         m_captureRecorded = false;
 
-        // The tonemap's SHADER_RESOURCE view names the CANVAS -- a graph pool
-        // texture that ReleaseGpuResources below is about to bury, and whose
-        // address NRI is free to hand to the next frame's replacement. Drop it
-        // here, in the same order and for the same reason the graph turns its
-        // own imported views over: a descriptor that outlives the resource it
-        // views is a use-after-free a pointer comparison reports as a cache
-        // hit. This is the ONLY path that destroys pool textures, so it is the
-        // only invalidation the node needs (FullscreenNodes.hpp, THE SOURCE
-        // VIEW).
+        // Both fullscreen nodes hold SHADER_RESOURCE views over pool textures
+        // -- the tonemap over whatever it samples, the chain over the canvas
+        // and its own targets -- and ReleaseGpuResources below is about to
+        // bury every one of them, at addresses NRI is free to hand to their
+        // replacements. Drop them here, in the same order and for the same
+        // reason the graph turns its own imported views over: a descriptor
+        // that outlives the resource it views is a use-after-free a pointer
+        // comparison reports as a cache hit.
+        //
+        // NOT the only path that destroys pool textures -- RealizePool does
+        // too, on a shrink or a desc change, from inside Execute(). That one
+        // the nodes catch themselves through RenderGraph::PoolEpoch, because
+        // it happens where no owner can sequence it. THIS path is invalidated
+        // explicitly instead because it is followed by a graveyard DRAIN and
+        // possibly by teardown: there may be no later Record() to notice the
+        // epoch at all. (FullscreenNodes.hpp, SOURCE VIEWS AND THE POOL.)
+        const std::uint64_t viewFence = m_graph ? m_graph->DebugSubmitCount() : 0;
         if (m_tonemap)
-            m_tonemap->InvalidateSource(graves, m_graph ? m_graph->DebugSubmitCount() : 0);
-        // The post chain's passes sample the canvas and each other -- every
-        // one of those is a pool texture ReleaseGpuResources is about to bury,
-        // so this node owes the identical invalidation for the identical
-        // reason (FullscreenNodes.hpp, SOURCE VIEWS AND THE POOL).
+            m_tonemap->InvalidateSource(graves, viewFence);
         if (m_post)
-            m_post->InvalidateSources(graves, m_graph ? m_graph->DebugSubmitCount() : 0);
+            m_post->InvalidateSources(graves, viewFence);
 
         if (m_graph)
             m_graph->ReleaseGpuResources();
@@ -683,46 +687,24 @@ namespace Arcane
         shape.captureBytes  = m_captureSlicePitch;
         shape.post          = frame.post;
 
-        const RgFrameHandles handles = DeclareGraphFrame(*m_graph, shape, this);
-
-        // ==============================================================
-        // THE TONEMAP'S SOURCE CHANGED, SO ITS ONE DESCRIPTOR SET MUST BE
-        // REWRITTEN -- BEHIND AN IDLE.
-        // ==============================================================
-        // This is reachable in an ORDINARY run, not just at a resize: a scene
-        // that assigns a post material has no chain on frame 0 (the compile is
-        // still in flight) and gains one a few frames later, at which point
-        // the tonemap stops sampling the canvas and starts sampling the last
-        // pass's target -- a different nri::Texture. TonemapNode holds ONE
-        // descriptor set shared by every frame in flight (Task 8: nothing in
-        // it was per-frame), so rewriting it while an earlier frame may still
-        // be reading it is a genuine hazard, and its EnsureSource backstop
-        // would additionally report the unannounced change through the error
-        // latch -- which on this vehicle is a nonzero exit code.
+        // NOTHING follows the declaration, and that is worth stating because
+        // an earlier draft of this task needed something here.
         //
-        // Idling is honest here for the same reason it is in
-        // Batch2DNode::EnsureMaterial and PostChainNode::PrepareChain: this
-        // fires once or twice in a run (when the chain binds, and if it is
-        // ever dropped), never per frame. The alternative -- per-frame-slot
-        // sets in TonemapNode, the shape PostChainNode uses -- is the upgrade
-        // if a frame ever legitimately alternates its tonemap source.
+        // Two things change when a post chain appears, disappears or re-wires:
+        // the TONEMAP'S SOURCE texture (the canvas without a chain, the last
+        // pass's target with one), and the TRANSIENT POOL -- RealizePool
+        // buries a slot on a shrink or a desc change, from inside Execute().
+        // Both are now handled where they are actually observable, inside the
+        // nodes at record time: one descriptor set PER FRAME SLOT makes a
+        // changed source ordinary rather than a hazard, and
+        // RenderGraph::PoolEpoch is how a node learns its cached views were
+        // buried. See FullscreenNodes.hpp, SOURCE VIEWS AND THE POOL.
         //
-        // It runs AFTER the declaration and before Compile/Execute, which is
-        // in time: every exec fn runs inside Execute(), so the node rebuilds
-        // its view on this very frame.
-        if (handles.postPassCount != m_postPassCount)
-        {
-            ARC_INFO("[nri-graph] the post chain changed shape ({} -> {} pass(es)) -- the tonemap "
-                     "rebuilds its source view behind a device idle",
-                     m_postPassCount, handles.postPassCount);
-            m_postPassCount = handles.postPassCount;
-            if (m_tonemap)
-            {
-                const nri::CoreInterface& core = m_device->Core();
-                (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
-                m_tonemap->InvalidateSource(m_device->Graves(), m_graph->DebugSubmitCount());
-            }
-        }
+        // What that replaced was a DeviceWaitIdle here whenever the declared
+        // pass count moved -- a stall, and INCOMPLETE: the pass count is a
+        // proxy, and a chain re-wired from a DAG to a pipe keeps its count
+        // while changing which physical texture the tonemap ends up sampling.
+        (void)DeclareGraphFrame(*m_graph, shape, this);
     }
 
     NriGraphContext::FrameOutcome NriGraphContext::RenderFrame(const FrameDesc& frame)

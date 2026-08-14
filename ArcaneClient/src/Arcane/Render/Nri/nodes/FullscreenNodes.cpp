@@ -390,12 +390,9 @@ namespace Arcane
         const nri::CoreInterface& core = m_device->Core();
         (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
         if (m_pool) core.DestroyDescriptorPool(m_pool);
-        for (const CachedView& cached : m_views)
+        for (const FullscreenSourceView& cached : m_views)
             if (cached.view) core.DestroyDescriptor(cached.view);
-        for (nri::Descriptor* view : m_orphanedViews)
-            if (view) core.DestroyDescriptor(view);
         m_views.clear();
-        m_orphanedViews.clear();
         for (nri::Descriptor*& view : m_globalsView)
             if (view) { core.DestroyDescriptor(view); view = nullptr; }
         for (nri::Descriptor*& view : m_materialView)
@@ -422,14 +419,10 @@ namespace Arcane
         if (!m_device)
             return;
         const nri::CoreInterface* core = &m_device->Core();
-        for (const CachedView& cached : m_views)
+        for (const FullscreenSourceView& cached : m_views)
             if (cached.view)
                 graveyard.Bury(fence, [core, d = cached.view] { core->DestroyDescriptor(d); });
-        for (nri::Descriptor* view : m_orphanedViews)
-            if (view)
-                graveyard.Bury(fence, [core, d = view] { core->DestroyDescriptor(d); });
         m_views.clear();
-        m_orphanedViews.clear();
 
         // The sets still NAME the buried views, so nothing may bind one until
         // Record rewrites the texture range -- which `written = false` is
@@ -518,27 +511,40 @@ namespace Arcane
         }
     }
 
+    void PostChainNode::SyncPoolEpoch(const RenderGraphNodeContext& context)
+    {
+        // Mechanism 1 (see the header). Identical to TonemapNode::
+        // SyncPoolEpoch, and identical for the same reason: RealizePool may
+        // have buried a pool texture THIS Execute(), between the declarations
+        // and this exec fn, and the epoch is the only observable.
+        if (!context.graph || !m_device)
+            return;
+        const std::uint64_t epoch = context.graph->PoolEpoch();
+        if (epoch == m_poolEpoch)
+            return;
+        m_poolEpoch = epoch;
+        InvalidateSources(m_device->Graves(), context.graph->DebugSubmitCount());
+    }
+
     nri::Descriptor* PostChainNode::EnsureView(const nri::CoreInterface& core, nri::Texture* texture)
     {
         if (!texture)
             return nullptr;
-        for (const CachedView& cached : m_views)
+        for (const FullscreenSourceView& cached : m_views)
             if (cached.texture == texture)
                 return cached.view;
 
         // A CHAIN sees at most (canvas + one target per pass) distinct
         // textures, and the pool collapses those onto two physical ones -- so
-        // a cache that keeps growing means pool textures are being destroyed
-        // without InvalidateSources, which is the one bug a pointer-keyed
-        // cache cannot detect on its own (NRI is free to hand a recreated
-        // texture the address a destroyed one just vacated). Say so, once,
-        // rather than letting it grow silently.
+        // a cache that keeps growing past that means pool textures are being
+        // replaced without RenderGraph::PoolEpoch moving, which would be a bug
+        // in the graph rather than here. Say so, once, rather than letting it
+        // grow silently.
         if (m_views.size() >= (std::size_t)kMaxPasses + 2 && !m_warnedViewChurn)
         {
             m_warnedViewChurn = true;
-            GraphError("PostChainNode: more distinct source textures than a chain can have -- an "
-                       "owner path is releasing the transient pool without calling "
-                       "InvalidateSources");
+            GraphError("PostChainNode: more distinct source textures than a chain can have -- pool "
+                       "textures are being replaced without RenderGraph::PoolEpoch moving");
         }
 
         nri::TextureViewDesc viewDesc = {};
@@ -554,7 +560,7 @@ namespace Arcane
             GraphError("PostChainNode: a source shader-resource view could not be created");
             return nullptr;
         }
-        m_views.push_back(CachedView{ texture, view });
+        m_views.push_back(FullscreenSourceView{ texture, view });
         return view;
     }
 
@@ -817,9 +823,17 @@ namespace Arcane
             m_stamp   = stamp;
         }
         // A chain this node has already refused stays refused until it is
-        // re-bound. Without the latch the ERROR (and the RenderErrorCount it
-        // grows, which IS this vehicle's exit code) would repeat every frame
-        // for the rest of the run.
+        // re-bound; without the latch its ERROR would repeat every frame for
+        // the rest of the run.
+        //
+        // EXIT VISIBILITY, decided deliberately: refuse() below logs through
+        // ARC_ERROR, which does NOT grow RenderErrorCount and therefore does
+        // NOT fail a `--nri-graph` run's exit code. That is the same treatment
+        // Batch2DNode gives a material it cannot honour, and it is the right
+        // one: an over-cap or bytecode-less chain is a DEGRADATION (the frame
+        // renders canvas -> tonemap, correctly) rather than a rendering
+        // ERROR. The tagged GraphError seam -- which does latch -- is reserved
+        // for the things that mean this frame is wrong, and Record uses it.
         if (m_refused)
             return 0;
         if (!m_ready)
@@ -853,6 +867,36 @@ namespace Arcane
             GraphError("PostChainNode: asked to record a pass of a chain that is not prepared");
             return;
         }
+
+        // BEFORE anything reads m_views: this Execute() may already have
+        // buried a pool texture one of them names.
+        SyncPoolEpoch(context);
+
+        // ---------------------------------------------------------------
+        // The constant buffers, into THIS frame slot's arena regions, ONCE per
+        // frame (every pass reads the same two -- the chain shares one merged
+        // instance). FIRST, ahead of every failure path below: a pass 0 that
+        // cannot record for any reason must not leave passes 1..N-1 reading
+        // the PREVIOUS frame's constants out of this slot, which would be a
+        // silently wrong picture layered on an already-reported problem.
+        //
+        // Written at record time for the same reason the ring's allocations
+        // are: the frame-pacing fence this slot is safe behind is waited
+        // inside Execute, upstream of every exec fn. HOST_UPLOAD memory is
+        // host-coherent, so a memcpy is the whole of the upload -- and every
+        // CPU write here precedes the single submit that makes any of it
+        // readable by the GPU.
+        // ---------------------------------------------------------------
+        if (pass == 0 && m_arenaCpu)
+        {
+            auto* arena = static_cast<std::uint8_t*>(m_arenaCpu);
+            std::memcpy(arena + ArenaOffset(frameSlot, kGlobalsRegion), &m_globals,
+                        sizeof(GlobalParams));
+            if (m_cbSize > 0 && !m_packed.empty())
+                std::memcpy(arena + ArenaOffset(frameSlot, kMaterialRegion), m_packed.data(),
+                            m_packed.size());
+        }
+
         Pass& current = m_passes[pass];
 
         nri::Texture* targetTexture = context.Resolve(target);
@@ -925,26 +969,6 @@ namespace Arcane
             for (std::uint32_t t = 0; t < textureCount; ++t)
                 current.bound[frameSlot][t] = wanted[t];
             current.written[frameSlot] = true;
-        }
-
-        // ---------------------------------------------------------------
-        // The constant buffers, into THIS frame slot's arena regions, ONCE per
-        // frame (every pass reads the same two -- the chain shares one merged
-        // instance). Written at record time for the same reason the ring's
-        // allocations are: the frame-pacing fence this slot is safe behind is
-        // waited inside Execute, which is upstream of every exec fn.
-        // HOST_UPLOAD memory is host-coherent, so a memcpy is the whole of the
-        // upload -- and every CPU write here precedes the single submit that
-        // makes any of it readable by the GPU.
-        // ---------------------------------------------------------------
-        if (pass == 0 && m_arenaCpu)
-        {
-            auto* arena = static_cast<std::uint8_t*>(m_arenaCpu);
-            std::memcpy(arena + ArenaOffset(frameSlot, kGlobalsRegion), &m_globals,
-                        sizeof(GlobalParams));
-            if (m_cbSize > 0 && !m_packed.empty())
-                std::memcpy(arena + ArenaOffset(frameSlot, kMaterialRegion), m_packed.data(),
-                            m_packed.size());
         }
 
         core.CmdSetDescriptorPool(context.cmd, *m_pool);
@@ -1111,37 +1135,43 @@ namespace Arcane
             return false;
         }
 
+        // ONE SET PER FRAME SLOT -- see SOURCE VIEWS AND THE POOL, mechanism 2.
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum = 1;
-        poolDesc.textureMaxNum       = 1;
-        poolDesc.samplerMaxNum       = 1;
+        poolDesc.descriptorSetMaxNum = kSwapchainFramesInFlight;
+        poolDesc.textureMaxNum       = kSwapchainFramesInFlight;
+        poolDesc.samplerMaxNum       = kSwapchainFramesInFlight;
         if (!ARC_NRI_CHECK(core.CreateDescriptorPool(m_device->Device(), poolDesc, m_pool)) || !m_pool)
         {
             ARC_ERROR("[nri-graph] TonemapNode: descriptor pool creation failed");
             return false;
         }
-        if (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0, &m_set, 1, 0)) || !m_set)
+        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
         {
-            ARC_ERROR("[nri-graph] TonemapNode: descriptor set allocation failed");
-            return false;
-        }
+            if (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0, &m_set[slot], 1, 0))
+                || !m_set[slot])
+            {
+                ARC_ERROR("[nri-graph] TonemapNode: descriptor set allocation failed for frame slot {}",
+                          slot);
+                return false;
+            }
 
-        // The sampler half of the set never changes; the texture half is
-        // written by EnsureSource on the first frame and after every
-        // invalidation.
-        const nri::Descriptor* sampler = m_sampler;
-        nri::UpdateDescriptorRangeDesc update = {};
-        update.descriptorSet = m_set;
-        update.rangeIndex    = 1;
-        update.descriptors   = &sampler;
-        update.descriptorNum = 1;
-        core.UpdateDescriptorRanges(&update, 1);
+            // The sampler half of each set never changes; the texture half is
+            // written by EnsureSource on the first frame that uses the slot and
+            // whenever the source that frame resolves to changes.
+            const nri::Descriptor* sampler = m_sampler;
+            nri::UpdateDescriptorRangeDesc update = {};
+            update.descriptorSet = m_set[slot];
+            update.rangeIndex    = 1;
+            update.descriptors   = &sampler;
+            update.descriptorNum = 1;
+            core.UpdateDescriptorRanges(&update, 1);
+        }
         return true;
     }
 
     TonemapNode::~TonemapNode()
     {
-        if (!m_device || (!m_sampler && !m_pool && !m_sourceView && m_orphanedViews.empty()))
+        if (!m_device || (!m_sampler && !m_pool && m_views.empty()))
             return;
 
         ARC_WARN("[nri-graph] TonemapNode destroyed with live NRI objects -- either Create() failed "
@@ -1149,14 +1179,16 @@ namespace Arcane
                  "Destroying directly behind a DeviceWaitIdle.");
         const nri::CoreInterface& core = m_device->Core();
         (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
-        for (nri::Descriptor* view : m_orphanedViews)
-            core.DestroyDescriptor(view);
-        m_orphanedViews.clear();
-        if (m_sourceView) core.DestroyDescriptor(m_sourceView);
-        if (m_pool)       core.DestroyDescriptorPool(m_pool);
-        if (m_sampler)    core.DestroyDescriptor(m_sampler);
-        m_sourceView = nullptr; m_sourceTexture = nullptr;
-        m_pool = nullptr; m_set = nullptr; m_sampler = nullptr;
+        for (const FullscreenSourceView& cached : m_views)
+            if (cached.view) core.DestroyDescriptor(cached.view);
+        m_views.clear();
+        if (m_pool)    core.DestroyDescriptorPool(m_pool);
+        if (m_sampler) core.DestroyDescriptor(m_sampler);
+        m_pool = nullptr; m_sampler = nullptr;
+        for (nri::DescriptorSet*& set : m_set)
+            set = nullptr;
+        for (nri::Texture*& bound : m_bound)
+            bound = nullptr;
     }
 
     void TonemapNode::InvalidateSource(Graveyard& graveyard, std::uint64_t fence)
@@ -1164,15 +1196,36 @@ namespace Arcane
         if (!m_device)
             return;
         const nri::CoreInterface* core = &m_device->Core();
-        for (nri::Descriptor* view : m_orphanedViews)
-            graveyard.Bury(fence, [core, view] { core->DestroyDescriptor(view); });
-        m_orphanedViews.clear();
-        if (m_sourceView)
-        {
-            graveyard.Bury(fence, [core, view = m_sourceView] { core->DestroyDescriptor(view); });
-            m_sourceView = nullptr;
-        }
-        m_sourceTexture = nullptr;
+        for (const FullscreenSourceView& cached : m_views)
+            if (cached.view)
+                graveyard.Bury(fence, [core, view = cached.view] { core->DestroyDescriptor(view); });
+        m_views.clear();
+        // The sets still NAME the buried views, so nothing may bind one until
+        // EnsureSource rewrites the texture range -- which clearing this is
+        // exactly what forces.
+        for (nri::Texture*& bound : m_bound)
+            bound = nullptr;
+    }
+
+    void TonemapNode::SyncPoolEpoch(const RenderGraphNodeContext& context)
+    {
+        // Mechanism 1 (see the header). RealizePool may have buried a pool
+        // texture THIS Execute() -- a shrink or a desc change -- and it runs
+        // between the declarations and this exec fn, so there was no earlier
+        // point at which the owner could have told us. The epoch is the only
+        // observable; a pointer comparison cannot see it, because NRI may hand
+        // the recreated texture the vacated address.
+        if (!context.graph || !m_device)
+            return;
+        const std::uint64_t epoch = context.graph->PoolEpoch();
+        if (epoch == m_poolEpoch)
+            return;
+        m_poolEpoch = epoch;
+        // Buried, not destroyed: an earlier submitted frame may still be
+        // reading them. DebugSubmitCount() is the submission that last used
+        // them -- the same value the graph keys its OWN burials to, which is
+        // what keeps Graveyard's nondecreasing rule satisfied.
+        InvalidateSource(m_device->Graves(), context.graph->DebugSubmitCount());
     }
 
     void TonemapNode::Release(Graveyard& graveyard, std::uint64_t fence)
@@ -1186,7 +1239,8 @@ namespace Arcane
         {
             graveyard.Bury(fence, [core, p = m_pool] { core->DestroyDescriptorPool(p); });
             m_pool = nullptr;
-            m_set  = nullptr;   // owned by the pool
+            for (nri::DescriptorSet*& set : m_set)
+                set = nullptr;   // owned by the pool
         }
         if (m_sampler)
         {
@@ -1195,55 +1249,74 @@ namespace Arcane
         }
     }
 
-    bool TonemapNode::EnsureSource(const nri::CoreInterface& core, nri::Texture* texture)
+    bool TonemapNode::EnsureSource(const nri::CoreInterface& core, nri::Texture* texture,
+                                   std::uint32_t frameSlot)
     {
-        if (m_sourceView && m_sourceTexture == texture)
-            return true;
-
-        if (m_sourceView)
+        if (frameSlot >= kSwapchainFramesInFlight || !m_set[frameSlot])
         {
-            // BACKSTOP, not the mechanism. The owner is supposed to call
-            // InvalidateSource before anything can destroy the transient pool
-            // (header: THE SOURCE VIEW), so reaching here means an owner path
-            // skipped it -- which is exactly the class of bug that otherwise
-            // shows up as a use-after-free on a recycled texture address. Park
-            // the old view rather than destroy it (the GPU may still be reading
-            // it) and say so through the latch.
-            GraphError("TonemapNode: the source texture changed without an InvalidateSource -- an owner "
-                       "path is releasing the transient pool without telling the node");
-            m_orphanedViews.push_back(m_sourceView);
-            m_sourceView    = nullptr;
-            m_sourceTexture = nullptr;
-        }
-
-        nri::TextureViewDesc viewDesc = {};
-        viewDesc.texture  = texture;
-        viewDesc.type     = nri::TextureView::TEXTURE;
-        // The transient's ACTUAL format, read back from NRI -- never assumed.
-        viewDesc.format   = core.GetTextureDesc(*texture).format;
-        viewDesc.mipNum   = 1;
-        viewDesc.layerNum = 1;
-        if (!ARC_NRI_CHECK(core.CreateTextureView(viewDesc, m_sourceView)) || !m_sourceView)
-        {
-            m_sourceView = nullptr;
-            GraphError("TonemapNode: the source shader-resource view could not be created");
+            GraphError("TonemapNode: no descriptor set for this frame slot");
             return false;
         }
-        m_sourceTexture = texture;
+        if (m_bound[frameSlot] == texture)
+            return true;   // this slot's set already names it
 
-        const nri::Descriptor* view = m_sourceView;
+        nri::Descriptor* view = nullptr;
+        for (const FullscreenSourceView& cached : m_views)
+            if (cached.texture == texture)
+                view = cached.view;
+
+        if (!view)
+        {
+            // The tonemap samples the canvas OR the post chain's last target,
+            // and the pool collapses those onto two physical textures -- so a
+            // cache that keeps growing means pool textures are being destroyed
+            // without the epoch moving, which would be a bug in RenderGraph
+            // rather than here. Say so once instead of growing silently.
+            if (m_views.size() >= 4 && !m_warnedViewChurn)
+            {
+                m_warnedViewChurn = true;
+                GraphError("TonemapNode: more distinct source textures than this frame can have -- "
+                           "pool textures are being replaced without RenderGraph::PoolEpoch moving");
+            }
+
+            nri::TextureViewDesc viewDesc = {};
+            viewDesc.texture  = texture;
+            viewDesc.type     = nri::TextureView::TEXTURE;
+            // The transient's ACTUAL format, read back from NRI -- never assumed.
+            viewDesc.format   = core.GetTextureDesc(*texture).format;
+            viewDesc.mipNum   = 1;
+            viewDesc.layerNum = 1;
+            if (!ARC_NRI_CHECK(core.CreateTextureView(viewDesc, view)) || !view)
+            {
+                GraphError("TonemapNode: the source shader-resource view could not be created");
+                return false;
+            }
+            m_views.push_back(FullscreenSourceView{ texture, view });
+        }
+
+        // ONLY this frame slot's set is touched, and its previous submission
+        // has already retired (the pacing wait inside AcquireNextTexture) --
+        // which is what makes a mid-run source change ordinary rather than a
+        // hazard needing a device idle.
+        const nri::Descriptor* bound = view;
         nri::UpdateDescriptorRangeDesc update = {};
-        update.descriptorSet = m_set;
+        update.descriptorSet = m_set[frameSlot];
         update.rangeIndex    = 0;
-        update.descriptors   = &view;
+        update.descriptors   = &bound;
         update.descriptorNum = 1;
         core.UpdateDescriptorRanges(&update, 1);
+        m_bound[frameSlot] = texture;
         return true;
     }
 
-    void TonemapNode::Record(RenderGraphNodeContext& context, RgTexture source, RgTexture target)
+    void TonemapNode::Record(RenderGraphNodeContext& context, RgTexture source, RgTexture target,
+                             std::uint32_t frameSlot)
     {
         const nri::CoreInterface& core = context.core;
+
+        // BEFORE anything reads m_views: this Execute() may already have
+        // buried a pool texture one of them names.
+        SyncPoolEpoch(context);
 
         nri::Texture* sourceTexture = context.Resolve(source);
         nri::Texture* targetTexture = context.Resolve(target);
@@ -1252,7 +1325,7 @@ namespace Arcane
             GraphError("TonemapNode: the node could not resolve its source or its target");
             return;
         }
-        if (!EnsureSource(core, sourceTexture))
+        if (!EnsureSource(core, sourceTexture, frameSlot))
             return;   // already reported
 
         nri::PipelineLayout* layout = m_pipelines->Layout(m_layoutId);
@@ -1301,7 +1374,7 @@ namespace Arcane
 
         nri::SetDescriptorSetDesc setDesc = {};
         setDesc.setIndex      = 0;
-        setDesc.descriptorSet = m_set;
+        setDesc.descriptorSet = m_set[frameSlot];
         core.CmdSetDescriptorSet(context.cmd, setDesc);
 
         core.CmdSetPipeline(context.cmd, *pipeline);
@@ -1335,7 +1408,7 @@ namespace Arcane
                 if (!context)
                     return;   // headless declaration-shape drive
                 if (TonemapNode* node = context->Tonemap())
-                    node->Record(nodeContext, source, *backbuffer);
+                    node->Record(nodeContext, source, *backbuffer, context->FrameSlot());
             });
         return *backbuffer;
     }
