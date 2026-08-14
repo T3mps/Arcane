@@ -24,6 +24,7 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>// SetActiveGpuCrashBackend / ClearActiveGpuCrashBackendIfCurrent
 #include <Arcane/Render/IGpuCrashBackend.hpp>  // IGpuCrashBackend, for the marker-policy spy
 #include <Arcane/Render/Nri/NriDevice.hpp>
+#include <Arcane/Render/Nri/NriGraphContext.hpp>   // DeclareGraphFrame -- the vehicle's frame SHAPE
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
@@ -2534,76 +2535,162 @@ TEST_CASE("rendergraph exec: a crash backend on ANOTHER device gets CPU breadcru
 // frame presents, and a capture frame copies before it presents" a checked
 // property rather than a desk observation -- and it is the chain Task 8 will
 // insert its batch node into.
-TEST_CASE("nri graph vehicle: the clear + capture frame derives colour -> copy -> present", "[nri]")
+// ======================================================================
+// THE VEHICLE'S FRAME SHAPE (Phase 2, Tasks 7-8).
+//
+// These cases DRIVE Arcane::DeclareGraphFrame -- the very function
+// NriGraphContext::BuildFrame calls -- with a null context, so every
+// declaration, resource and attachment is the real one and only the exec fns
+// are inert. Task 7's version of this case TRANSCRIBED BuildFrame's
+// declarations instead, which meant a change to the frame could not make it
+// red; this can, and Task 8's frame change did.
+// ======================================================================
+
+TEST_CASE("nri graph frame: batch -> tonemap derives canvas colour -> shader-read -> present", "[nri]")
 {
     Arcane::RenderGraph graph;
-    Arcane::RgTexture backbuffer{};
-    Arcane::RgBuffer  capture{};
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 320;
+    shape.canvasHeight = 200;
 
-    // Node 0 -- exactly BuildFrame's clear node: import the swapchain, declare
-    // it as the colour attachment, write it. No draws; the clear itself is a
-    // CmdClearAttachments inside the exec fn (the clear-seam decision -- see
-    // NriGraphContext::BuildFrame), which is invisible to Compile by design.
-    graph.AddNode("clear", Arcane::RenderGraph::NodeKind::Raster,
-        [&](Arcane::RenderGraphBuilder& builder)
-        {
-            backbuffer = builder.ImportSwapChainTexture("backbuffer");
-            builder.Write(backbuffer, Arcane::RgUsage::ColorWrite);
-            graph.SetColorAttachments(std::span<const Arcane::RgTexture>(&backbuffer, 1));
-        },
-        [](Arcane::RenderGraphNodeContext&) {});
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
 
-    // Node 1 -- exactly BuildFrame's capture node. The staging buffer is
-    // IMPORTED (a transient would be DEVICE-local and unmappable) and declared
-    // ReadbackHost; the backbuffer is read as CopySrc.
-    graph.AddNode("capture", Arcane::RenderGraph::NodeKind::Copy,
-        [&](Arcane::RenderGraphBuilder& builder)
-        {
-            capture = builder.ImportBuffer("capture", nullptr, 4096);
-            builder.Read(backbuffer, Arcane::RgUsage::CopySrc);
-            builder.Write(capture, Arcane::RgUsage::ReadbackHost);
-        },
-        [](Arcane::RenderGraphNodeContext&) {});
+    REQUIRE(graph.NodeCount() == 2);
+    CHECK(std::string(graph.NodeName(0)) == "batch2d");
+    CHECK(std::string(graph.NodeName(1)) == "tonemap");
+
+    // The canvas is a TRANSIENT the graph owns; the backbuffer is the imported
+    // swapchain texture. That split is the whole point of the two nodes.
+    REQUIRE(graph.IsHandleValid(handles.canvas));
+    REQUIRE(graph.IsHandleValid(handles.backbuffer));
+    CHECK(graph.IsTransient(handles.canvas));
+    CHECK_FALSE(graph.IsTransient(handles.backbuffer));
+    CHECK(std::string(graph.NameOf(handles.canvas)) == "canvas");
+    CHECK(std::string(graph.NameOf(handles.backbuffer)) == "backbuffer");
 
     const Arcane::RgCompiled compiled = CompileOk(graph);
     REQUIRE(compiled.nodes.size() == 2);
 
-    // Node 0: the freshly acquired backbuffer's contents are not ours, so it
-    // enters discarding and becomes a colour attachment.
+    // Node 0 (batch2d): the canvas transient's pool slot starts undefined and
+    // becomes a colour attachment. On the FIRST frame that `before` is
+    // Compile()'s discarding {NONE, UNDEFINED, ALL}.
     REQUIRE(compiled.nodes[0].preBarriers.size() == 1);
+    CHECK(compiled.nodes[0].preBarriers[0].isTexture);
     CheckState(compiled.nodes[0].preBarriers[0].before, kUnknownState);
-    CheckState(compiled.nodes[0].preBarriers[0].after,
-               nri::AccessBits::COLOR_ATTACHMENT, nri::Layout::COLOR_ATTACHMENT,
-               nri::StageBits::COLOR_ATTACHMENT);
+    CheckState(compiled.nodes[0].preBarriers[0].after, kColorState);
 
-    // Node 1: the backbuffer becomes a copy source. The imported staging
-    // buffer also transitions (COPY_DESTINATION), and a buffer barrier's
-    // layout is meaningless by contract -- hence UNDEFINED on both sides.
+    // Node 1 (tonemap): TWO transitions, and neither is hand-written anywhere
+    // -- the canvas COLOR_ATTACHMENT -> SHADER_RESOURCE (so the fullscreen
+    // triangle can sample it) and the freshly acquired backbuffer's discarding
+    // entry -> COLOR_ATTACHMENT.
     REQUIRE(compiled.nodes[1].preBarriers.size() == 2);
-    const Arcane::RgBarrier& textureBarrier = compiled.nodes[1].preBarriers[0].isTexture
-                                                ? compiled.nodes[1].preBarriers[0]
-                                                : compiled.nodes[1].preBarriers[1];
-    const Arcane::RgBarrier& bufferBarrier  = compiled.nodes[1].preBarriers[0].isTexture
-                                                ? compiled.nodes[1].preBarriers[1]
-                                                : compiled.nodes[1].preBarriers[0];
+    bool sawCanvasRead = false;
+    bool sawBackbufferWrite = false;
+    for (const Arcane::RgBarrier& barrier : compiled.nodes[1].preBarriers)
+    {
+        REQUIRE(barrier.isTexture);
+        if (static_cast<std::uint32_t>(barrier.after.layout)
+            == static_cast<std::uint32_t>(nri::Layout::SHADER_RESOURCE))
+        {
+            sawCanvasRead = true;
+            CheckState(barrier.before, kColorState);
+            CheckState(barrier.after, nri::AccessBits::SHADER_RESOURCE,
+                       nri::Layout::SHADER_RESOURCE, kShaderReadStages);
+        }
+        else
+        {
+            sawBackbufferWrite = true;
+            CheckState(barrier.before, kUnknownState);
+            CheckState(barrier.after, kColorState);
+        }
+    }
+    CHECK(sawCanvasRead);
+    CHECK(sawBackbufferWrite);
+
+    // ...and the graph -- not the caller -- is what leaves the backbuffer
+    // present-ready. The canvas is a transient and gets no exit barrier.
+    REQUIRE(compiled.exitBarriers.size() == 1);
+    CHECK(compiled.exitBarriers[0].isTexture);
+    CheckState(compiled.exitBarriers[0].after, kPresentState);
+
+    // Exactly one transient (the canvas), in exactly one pool slot.
+    REQUIRE(compiled.transients.size() == 1);
+    CHECK(compiled.poolSlotCount == 1);
+}
+
+TEST_CASE("nri graph frame: a capture frame copies the backbuffer BEFORE it presents", "[nri]")
+{
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth   = 320;
+    shape.canvasHeight  = 200;
+    shape.capture       = true;
+    // ImportBuffer stores the pointer without dereferencing it, so a headless
+    // drive can declare the real capture node with no staging buffer at all.
+    shape.captureBuffer = nullptr;
+    shape.captureBytes  = 4096;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+    REQUIRE(graph.NodeCount() == 3);
+    CHECK(std::string(graph.NodeName(2)) == "capture");
+    REQUIRE(graph.IsHandleValid(handles.capture));
+    CHECK_FALSE(graph.IsTransient(handles.capture));
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.nodes.size() == 3);
+
+    // Node 2: the backbuffer becomes a copy SOURCE while it is still the
+    // graph's -- the copy is recorded before the present, not after it. The
+    // imported staging buffer transitions to COPY_DESTINATION, and a buffer
+    // barrier's layout is meaningless by contract (hence UNDEFINED).
+    REQUIRE(compiled.nodes[2].preBarriers.size() == 2);
+    const Arcane::RgBarrier& textureBarrier = compiled.nodes[2].preBarriers[0].isTexture
+                                                ? compiled.nodes[2].preBarriers[0]
+                                                : compiled.nodes[2].preBarriers[1];
+    const Arcane::RgBarrier& bufferBarrier  = compiled.nodes[2].preBarriers[0].isTexture
+                                                ? compiled.nodes[2].preBarriers[1]
+                                                : compiled.nodes[2].preBarriers[0];
     CHECK(textureBarrier.isTexture);
+    CheckState(textureBarrier.before, kColorState);
     CheckState(textureBarrier.after,
                nri::AccessBits::COPY_SOURCE, nri::Layout::COPY_SOURCE, nri::StageBits::COPY);
     CHECK_FALSE(bufferBarrier.isTexture);
     CheckState(bufferBarrier.after,
                nri::AccessBits::COPY_DESTINATION, nri::Layout::UNDEFINED, nri::StageBits::COPY);
 
-    // ...and the graph -- not the caller -- is what leaves the backbuffer
-    // present-ready. Exactly one exit barrier: the imported staging BUFFER
-    // gets none (ImportBuffer takes no exit state to restore it to).
+    // Still exactly one exit barrier: the imported staging BUFFER gets none
+    // (ImportBuffer takes no exit state to restore it to), and the canvas is a
+    // transient.
     REQUIRE(compiled.exitBarriers.size() == 1);
     CHECK(compiled.exitBarriers[0].isTexture);
     CheckState(compiled.exitBarriers[0].after, kPresentState);
+}
 
-    // Nothing transient: both resources are imported, so the frame allocates
-    // no pool slot at all.
-    CHECK(compiled.transients.empty());
-    CHECK(compiled.poolSlotCount == 0);
+TEST_CASE("nri graph frame: the canvas transient is swapchain-sized RGBA16F and reused across frames",
+          "[nri]")
+{
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 1280;
+    shape.canvasHeight = 720;
+
+    Arcane::DeclareGraphFrame(graph, shape, nullptr);
+    const Arcane::RgCompiled first = CompileOk(graph);
+    REQUIRE(first.transients.size() == 1);
+    CHECK(first.poolSlotCount == 1);
+
+    // Re-declaring the SAME shape after a Reset must compile to the same pool
+    // demand -- that is what makes the steady-state frame loop allocate
+    // nothing (RenderGraph::Reset's contract). Handles from the previous
+    // generation are dead, which is exactly why DeclareGraphFrame hands fresh
+    // ones back every frame.
+    graph.Reset();
+    Arcane::DeclareGraphFrame(graph, shape, nullptr);
+    const Arcane::RgCompiled second = CompileOk(graph);
+    CHECK(second.transients.size() == first.transients.size());
+    CHECK(second.poolSlotCount == first.poolSlotCount);
+    CHECK(second.nodes.size() == first.nodes.size());
 }
 
 // ======================================================================

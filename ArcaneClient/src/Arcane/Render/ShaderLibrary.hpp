@@ -29,6 +29,21 @@ namespace Arcane
             nvrhi::IDevice* device, GraphicsBackend backend,
             const std::filesystem::path& shaderDir);
 
+        // The directory Create() loads "<name>.bin" from: ARCANE_SHADER_DIR if
+        // set, else `shaderDir` (resolved against the EXECUTABLE when relative
+        // -- never the CWD), then the backend's flavor subdirectory
+        // (dxil/spirv). Empty path when that directory does not exist.
+        //
+        // Public because the NRI graph path loads the SAME .bin artifacts as
+        // raw bytecode (NRI's ShaderDesc takes a blob, not an
+        // nvrhi::ShaderHandle), and the one thing the two loaders must never
+        // disagree about is WHICH directory -- a desk user pointing
+        // ARCANE_SHADER_DIR at a live recompile would otherwise be feeding the
+        // two paths different shaders while comparing their pixels. Create()
+        // is implemented on top of this, so the two cannot drift.
+        [[nodiscard]] static std::filesystem::path ResolveFlavorDir(
+            GraphicsBackend backend, const std::filesystem::path& shaderDir);
+
         virtual ~ShaderLibrary() = default;
 
         // Loads (and caches) "<dir>/<dxil|spirv>/<name>.bin". Returns null

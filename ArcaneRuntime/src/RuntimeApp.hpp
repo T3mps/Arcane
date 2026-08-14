@@ -56,6 +56,13 @@ private:
     void MainLoop();
     void Shutdown();
 
+    // Pushes the scene's ACTIVE Camera entity into the plugin's stored camera,
+    // with the once-only diagnostics for "no usable camera" / "several".
+    // Extracted verbatim from MainLoop's NVRHI block by NRI Phase 2 Task 8 so
+    // the graph path -- which now also drives the plugin's render submission --
+    // gets the same view instead of a second copy of this reasoning.
+    void PushSceneCamera(float viewportWidth, float viewportHeight);
+
     // --nri-graph (NRI Phase 2, Task 7): destroy the vehicle and fold a grown
     // RenderErrorCount into m_graphExit. Idempotent, and a no-op when the flag
     // was not given -- MainLoop calls it on EVERY exit path (including the

@@ -853,49 +853,7 @@ void RuntimeApp::MainLoop()
             // in the correct module; then drive the plugin's RenderSubmissionSystem.
             // ArcaneRuntime stays camera-agnostic: SetRenderContext writes the STORED camera the
             // plugin drives via Runtime::SetCamera (default identity if it never does).
-            // Scene camera: the ACTIVE Camera entity owns the view. Pushed HERE, after
-            // the plugin's update ran, so a scene that ships a camera beats a plugin
-            // that also pushes one -- the scene is the authored artifact. No camera
-            // leaves the stored camera untouched (a plugin that drives the camera
-            // itself via Runtime::SetCamera therefore still works) and says so
-            // once, rather than substituting an identity view that would render an
-            // older scene as an unexplained black window.
-            {
-                int camCount = 0;
-                const auto view = Arcane::ActiveSceneCamera(m_runtime->Registry(),
-                                                            (float)m_gpu->Cnv().Width(),
-                                                            (float)m_gpu->Cnv().Height(),
-                                                            &camCount);
-                if (view)
-                    m_runtime->SetCamera(view->offset, view->zoom);
-                else if (!m_warnedNoSceneCamera)
-                {
-                    // The old message said "no active Camera entity" for THREE
-                    // different situations and cost a debugging round: no Camera
-                    // component in the scene at all, one present but active==false or
-                    // orthographicSize<=0, or a component view that is empty in THIS
-                    // module because it disagrees with the loader about the component
-                    // id. Count the components here, host-side, and say which it is --
-                    // the resolver logs its own census from inside Arcane.dll, so the
-                    // two lines together localise the last case.
-                    int total = 0;
-                    m_runtime->Registry().CreateView<Arcane::Camera>().ForEach(
-                        [&](Astra::Entity, Arcane::Camera&) { ++total; });
-                    if (total == 0)
-                        ARC_WARN("scene has no Camera component at all -- nothing sets the view. "
-                                 "Add a Camera component to an entity (a New Scene ships one).");
-                    else
-                        ARC_WARN("scene carries {} Camera component(s) but none is usable "
-                                 "(active == false, or orthographicSize <= 0) -- nothing sets "
-                                 "the view", total);
-                    m_warnedNoSceneCamera = true;
-                }
-                if (camCount > 1 && !m_warnedMultiSceneCamera)
-                {
-                    ARC_WARN("scene carries {} active Camera entities -- the first found wins", camCount);
-                    m_warnedMultiSceneCamera = true;
-                }
-            }
+            PushSceneCamera((float)m_gpu->Cnv().Width(), (float)m_gpu->Cnv().Height());
 
             {
                 // Scope names deliberately mirror FramePerf's acc* accumulators
@@ -1005,19 +963,24 @@ void RuntimeApp::MainLoop()
         // The GRAPH half (--nri-graph). One RenderGraph frame: Reset,
         // declare, Compile, Execute -- and Execute is what acquires the
         // backbuffer, records every node, submits and presents. Today that is
-        // a single Raster node clearing the backbuffer; Tasks 8-12 add the
-        // batcher, the post chain, tonemap, pick/outline and ImGui nodes
-        // inside NriGraphContext::BuildFrame, gated by the same --golden-stage
+        // batch2d -> tonemap (+ a capture node on the last frame of a golden /
+        // screenshot run); Tasks 10-12 add the post chain, pick/outline and
+        // ImGui inside DeclareGraphFrame, gated by the same --golden-stage
         // vocabulary passed here.
         //
-        // WHAT THIS PATH DOES NOT DO YET, named so it is a known gap and not a
-        // discovery: the plugin's RENDER submission (Runtime::SetRenderContext
-        // + Loop().SubmitRender(), which fills the batcher) lives in the NVRHI
-        // half above and does not run here, because Task 7's frame draws
-        // nothing. Task 8 -- which factors the batcher's read interface and
-        // adds the batch node -- is where it comes back, on both paths. The
-        // SIM half (FixedUpdate/Update) is untouched and runs identically:
-        // only the render half swaps.
+        // The plugin's RENDER submission runs on BOTH paths as of Task 8: the
+        // batcher is Begin()'d with no command list (nothing is recorded into
+        // NVRHI here), SubmitRender fills it exactly as it does above, and the
+        // graph's Batch2DNode DRAINS it -- one batcher, one batching algorithm,
+        // two recorders. End() is deliberately NOT called on this path: it is
+        // the NVRHI recorder, and calling it would need a target this path does
+        // not have.
+        //
+        // WHAT THIS PATH STILL DOES NOT DO, named so it stays a known gap: the
+        // post chain, the HUD, and -- inside the batch node -- sprite TEXTURES,
+        // which live on the engine's NVRHI device and cannot be sampled by the
+        // graph's own device (Batch2DNode.hpp, THE TEXTURE GAP). The SIM half
+        // (FixedUpdate/Update) is untouched and runs identically.
         // =============================================================
         else
         {
@@ -1029,12 +992,30 @@ void RuntimeApp::MainLoop()
             // the no-backbuffer path and --golden-stage batch|post make.
             ImGui::EndFrame();
 
+            // The 2D submission, CPU-identical to the NVRHI block above. The
+            // null command list / null framebuffer are what say "record
+            // nothing": Batcher2D::Begin only stores them, and every recording
+            // use is inside End(), which this path never calls. The canvas
+            // extent is still the NVRHI canvas's -- it is what the resolver
+            // reports into the material globals, and RuntimeApp resizes both
+            // canvases from the same event.
+            m_gpu->Batch().Begin(nullptr, nullptr,
+                                 m_gpu->Cnv().Width(), m_gpu->Cnv().Height());
+            m_gpu->Batch().SetGlobals(m_frameGlobals);
+            PushSceneCamera((float)m_gpu->Cnv().Width(), (float)m_gpu->Cnv().Height());
+            {
+                const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
+                m_runtime->SetRenderContext(&m_gpu->Batch());
+                m_runtime->Loop().SubmitRender();
+                m_perf.Add(m_perf.accRec, t0, m_perf.Now());
+            }
+
             Arcane::NriGraphContext::FrameDesc graphFrame;
             // Only read in golden mode (Parse refuses a non-Full stage
-            // outside it), and today every stage renders the same frame --
-            // passing it now means Tasks 8-12 add nodes without touching this
-            // call site.
+            // outside it). Every stage renders the same frame today, because
+            // the nodes the other two would add do not exist on this path yet.
             graphFrame.stage = m_config.goldenStage;
+            graphFrame.batch = &m_gpu->Batch();
             // The capture is taken on the LAST frame, which has to be known
             // BEFORE the frame is declared (the readback is a graph NODE, not
             // an after-the-fact copy). Hence `+ 1`: m_frameCount is bumped
@@ -1050,9 +1031,10 @@ void RuntimeApp::MainLoop()
             // AcquireNextTexture, which is inside this call). It is the whole
             // record + submit + present cost, not just the present: Execute()
             // does all three, and splitting one call across three
-            // accumulators would be a fiction. The NVRHI path's own
-            // accRec/accEnd/accTone stay 0 here, which is the honest reading
-            // -- none of those phases ran.
+            // accumulators would be a fiction. accRec IS real on this path
+            // (the submission above is the same work), but accEnd/accTone stay
+            // 0 -- the batcher's NVRHI flush and the NVRHI tonemap did not run;
+            // their graph counterparts are inside this one call.
             const auto graphT0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             const Arcane::NriGraphContext::FrameOutcome outcome =
                 m_graphContext->RenderFrame(graphFrame);
@@ -1159,6 +1141,50 @@ void RuntimeApp::MainLoop()
     // code -- read AFTER the last NRI object is gone, so a teardown-only
     // validation error still fails the run.
     ShutdownGraphPath();
+}
+
+void RuntimeApp::PushSceneCamera(float viewportWidth, float viewportHeight)
+{
+    // Scene camera: the ACTIVE Camera entity owns the view. Pushed HERE, after
+    // the plugin's update ran, so a scene that ships a camera beats a plugin
+    // that also pushes one -- the scene is the authored artifact. No camera
+    // leaves the stored camera untouched (a plugin that drives the camera
+    // itself via Runtime::SetCamera therefore still works) and says so
+    // once, rather than substituting an identity view that would render an
+    // older scene as an unexplained black window.
+    int camCount = 0;
+    const auto view = Arcane::ActiveSceneCamera(m_runtime->Registry(),
+                                                viewportWidth, viewportHeight,
+                                                &camCount);
+    if (view)
+        m_runtime->SetCamera(view->offset, view->zoom);
+    else if (!m_warnedNoSceneCamera)
+    {
+        // The old message said "no active Camera entity" for THREE
+        // different situations and cost a debugging round: no Camera
+        // component in the scene at all, one present but active==false or
+        // orthographicSize<=0, or a component view that is empty in THIS
+        // module because it disagrees with the loader about the component
+        // id. Count the components here, host-side, and say which it is --
+        // the resolver logs its own census from inside Arcane.dll, so the
+        // two lines together localise the last case.
+        int total = 0;
+        m_runtime->Registry().CreateView<Arcane::Camera>().ForEach(
+            [&](Astra::Entity, Arcane::Camera&) { ++total; });
+        if (total == 0)
+            ARC_WARN("scene has no Camera component at all -- nothing sets the view. "
+                     "Add a Camera component to an entity (a New Scene ships one).");
+        else
+            ARC_WARN("scene carries {} Camera component(s) but none is usable "
+                     "(active == false, or orthographicSize <= 0) -- nothing sets "
+                     "the view", total);
+        m_warnedNoSceneCamera = true;
+    }
+    if (camCount > 1 && !m_warnedMultiSceneCamera)
+    {
+        ARC_WARN("scene carries {} active Camera entities -- the first found wins", camCount);
+        m_warnedMultiSceneCamera = true;
+    }
 }
 
 void RuntimeApp::ShutdownGraphPath()

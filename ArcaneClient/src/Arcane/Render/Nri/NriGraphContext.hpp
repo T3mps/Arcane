@@ -100,14 +100,28 @@
 #include <Arcane/Render/Nri/NriSwapChain.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
+// The node types are held BY VALUE-OWNING unique_ptr below, and this class is
+// dllexported -- so every TU that sees this header must see complete node
+// types (MSVC instantiates the exported class's implicit members). Including
+// them here rather than forward-declaring is also the honest dependency: the
+// vehicle OWNS its nodes. The include is acyclic -- the node headers only
+// forward-declare NriGraphContext.
+#include <Arcane/Render/Nri/nodes/Batch2DNode.hpp>
+#include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace Arcane
 {
+    class Batcher2D;
+
     class ARCANE_API NriGraphContext
     {
     public:
@@ -118,9 +132,13 @@ namespace Arcane
             // The --golden-stage vocabulary, reused verbatim rather than
             // re-invented: `batch` = the batcher + tonemap only, `post` = plus
             // the post chain, `full` = plus the HUD. Tasks 8-12 attach their
-            // nodes under the stages that include them; TODAY every stage
-            // renders the same clear-only frame, so the flag round-trips
-            // without changing pixels.
+            // nodes under the stages that include them.
+            //
+            // AS OF TASK 8 every stage still renders the same frame -- batch +
+            // tonemap -- because neither the post chain (Task 10) nor the HUD
+            // (Task 12) exists on this path yet. That is the HONEST reading of
+            // the flag, not a stub: `batch` means "batcher + tonemap and
+            // nothing else", which is exactly what this frame is.
             GoldenStage stage = GoldenStage::Full;
 
             // Add the readback node to THIS frame's graph, so the presented
@@ -128,6 +146,13 @@ namespace Arcane
             // Set on the last frame of a --screenshot / --golden-* run, the
             // same timing the NVRHI path uses.
             bool capture = false;
+
+            // This frame's 2D content, ALREADY SUBMITTED into the batcher by
+            // the frame driver (Runtime::SetRenderContext + SubmitRender) and
+            // not yet End()ed -- the graph path drains it instead. Borrowed for
+            // the duration of the RenderFrame call and never stored; null
+            // renders a cleared canvas.
+            Batcher2D* batch = nullptr;
         };
 
         // What one frame did. Distinguishes the two false-y outcomes the frame
@@ -202,6 +227,41 @@ namespace Arcane
         [[nodiscard]] NriPipelineCache& Pipelines() noexcept { return m_pipelines; }
         [[nodiscard]] RenderGraph&      Graph()     noexcept { return *m_graph; }
 
+        // The node objects, reached from the free AddXxxNode() declarators (and
+        // therefore from their exec fns). Null only if Create() failed, which
+        // never returns a vehicle.
+        [[nodiscard]] Batch2DNode* Batch2D() noexcept { return m_batch2D.get(); }
+        [[nodiscard]] TonemapNode* Tonemap() noexcept { return m_tonemap.get(); }
+
+        // The batcher the frame CURRENTLY being declared should drain, i.e.
+        // FrameDesc::batch. Valid only inside a RenderFrame() call; null
+        // outside one and on a frame the driver submitted nothing for.
+        [[nodiscard]] Batcher2D* CurrentBatch() noexcept { return m_currentBatch; }
+
+        // The raw bytecode of the offline shader artifact `name` -- the SAME
+        // `<name>.bin` the NVRHI path loads through ShaderLibrary, from the same
+        // directory (ShaderLibrary::ResolveFlavorDir, so ARCANE_SHADER_DIR moves
+        // both paths together). Loaded once and cached; the returned bytes live
+        // as long as this vehicle, which is what NriPipelineCache's fill
+        // contract needs (CreateGraphicsPipeline dereferences the blob after the
+        // fill callback returns). Empty span, logged once, when the artifact is
+        // missing.
+        [[nodiscard]] std::span<const std::uint8_t> ShaderBytecode(const char* name);
+
+        // Called by the capture node's exec fn once the readback copy is
+        // actually recorded -- ReadCapture refuses without it rather than
+        // mapping whatever was already in host-readback memory. Public because
+        // the frame's declarations live in a free function (DeclareGraphFrame),
+        // not in a member.
+        void NoteCaptureRecorded() noexcept { m_captureRecorded = true; }
+
+        // The capture staging buffer's layout, read by that node's exec fn for
+        // the same reason.
+        [[nodiscard]] std::uint64_t CaptureRowPitch() const noexcept { return m_captureRowPitch; }
+        [[nodiscard]] std::uint64_t CaptureSlicePitch() const noexcept { return m_captureSlicePitch; }
+        [[nodiscard]] std::uint32_t CaptureWidth() const noexcept { return m_captureWidth; }
+        [[nodiscard]] std::uint32_t CaptureHeight() const noexcept { return m_captureHeight; }
+
         // Frames this vehicle has actually PRESENTED. Skipped frames do not
         // count -- it advances in lockstep with the swapchain's own frame
         // counter, which is what makes `frameIndex % kSwapchainFramesInFlight`
@@ -238,6 +298,19 @@ namespace Arcane
         NriUploadRing                      m_ring;
         NriPipelineCache                   m_pipelines;
         std::unique_ptr<RenderGraph>       m_graph;
+        // The nodes, after everything they borrow (device, cache) and after the
+        // graph whose transient pool the tonemap's source view names. Their
+        // objects are RELEASED explicitly in ~NriGraphContext, before the drain
+        // -- these destructors are the safety net, not the path.
+        std::unique_ptr<Batch2DNode>       m_batch2D;
+        std::unique_ptr<TonemapNode>       m_tonemap;
+
+        // Raw offline shader artifacts, keyed by artifact stem. unordered_map
+        // and not vector: the node authors hold SPANS into these vectors for
+        // their whole lifetime, and a node-based container never relocates a
+        // value (NriPipelineCache's fill contract, rule 2).
+        std::filesystem::path m_shaderDir;
+        std::unordered_map<std::string, std::vector<std::uint8_t>> m_shaderBins;
 
         // The capture staging buffer, owned here (the graph only IMPORTS it --
         // a transient graph buffer is DEVICE-local and could never be mapped).
@@ -252,12 +325,10 @@ namespace Arcane
         // writing whatever was already in host-readback memory.
         bool          m_captureRecorded  = false;
 
-        // This frame's handles, minted inside the first node's setup (the
-        // builder is the only place they can be minted) and read by the nodes
-        // that follow. Reset every frame; a handle from a previous frame fails
-        // to decode after Reset() bumps the graph's generation.
-        RgTexture m_backbuffer{};
-        RgBuffer  m_captureHandle{};
+        // FrameDesc::batch for the frame currently being declared -- see
+        // CurrentBatch(). Cleared at the end of every RenderFrame so a stale
+        // batcher can never be drained by a later frame.
+        Batcher2D* m_currentBatch = nullptr;
 
         nri::Format   m_format     = nri::Format::UNKNOWN;
         std::uint64_t m_frameIndex = 0;   // PRESENTED frames; the command-slot clock
@@ -279,4 +350,47 @@ namespace Arcane
         std::uint64_t                         m_errorBaseline = 0;
         std::chrono::steady_clock::time_point m_lastHeartbeat{};
     };
+
+    // =====================================================================
+    // THE FRAME'S SHAPE, as a free function both the vehicle and the headless
+    // [nri] tests DRIVE.
+    //
+    // NriGraphContext::BuildFrame is a two-line wrapper over
+    // DeclareGraphFrame, and RenderGraphTest.cpp's frame-shape case calls the
+    // same function with a null context. That is deliberate and it is the
+    // point: the previous shape test TRANSCRIBED BuildFrame's declarations
+    // into the test, so a change to the frame could not make it red. It can
+    // now -- change what the frame declares and the compiled barrier chain the
+    // test asserts changes with it.
+    //
+    // A null `context` means "declarations only": every AddNode call, every
+    // resource, every Read/Write and every attachment is identical, and only
+    // the exec fns become no-ops (they have no device to record against).
+    // =====================================================================
+    struct RgFrameShape
+    {
+        GoldenStage   stage        = GoldenStage::Full;
+        bool          capture      = false;
+        // The canvas transient's extent -- the swapchain's, so the tonemap
+        // samples 1:1.
+        std::uint32_t canvasWidth  = 0;
+        std::uint32_t canvasHeight = 0;
+        // The HOST_READBACK staging buffer the capture node copies into. It is
+        // IMPORTED rather than created as a transient because the graph
+        // realizes transients in MemoryLocation::DEVICE, which can never be
+        // mapped. May be null when `capture` is false (and headlessly even when
+        // it is true -- ImportBuffer stores the pointer without dereferencing).
+        nri::Buffer*  captureBuffer = nullptr;
+        std::uint64_t captureBytes  = 0;
+    };
+
+    struct RgFrameHandles
+    {
+        RgTexture backbuffer{};
+        RgTexture canvas{};
+        RgBuffer  capture{};
+    };
+
+    ARCANE_API RgFrameHandles DeclareGraphFrame(RenderGraph& graph, const RgFrameShape& shape,
+                                                 NriGraphContext* context);
 }

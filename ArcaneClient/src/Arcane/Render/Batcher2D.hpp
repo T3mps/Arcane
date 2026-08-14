@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace Arcane
@@ -78,6 +79,64 @@ namespace Arcane
     {
         uint32_t drawCalls = 0;
         uint32_t quads = 0;  // every primitive is quads under the hood
+    };
+
+    // =====================================================================
+    // THE DRAINED BATCH -- the batcher's READ interface (NRI Phase 2,
+    // Task 8).
+    //
+    // Everything below is what End() used to compute privately and then
+    // immediately record: the interleaved vertex stream, the index stream,
+    // and the sorted draw spans. It is now named, so the NRI graph path's
+    // Batch2DNode can consume the SAME CPU batching this class has always
+    // done rather than growing a second copy of it beside this one (the
+    // homogenized-submission mandate at the top of this file, applied to
+    // the second backend).
+    //
+    // This is an EXTRACTION, not a redesign: End() computes these three
+    // lists exactly as before, through the same code, and then records
+    // exactly as before. The NVRHI path is the phase's regression floor.
+    // =====================================================================
+
+    // One vertex of the batch stream. THE WIRE FORMAT: it is what the
+    // vertex buffer contains on both backends, and what data/shaders/
+    // sprite.hlsl's VSInput (POSITION/TEXCOORD0/COLOR0) declares.
+    struct Batch2DVertex
+    {
+        glm::vec2 pos;
+        glm::vec2 uv;
+        glm::vec4 color;
+    };
+    static_assert(sizeof(Batch2DVertex) == 32, "vertex layout is the wire format");
+
+    // One contiguous run of sorted quads sharing a material and a texture --
+    // i.e. exactly one draw call. `firstIndex`/`indexCount` index the drained
+    // INDEX stream; `material` is a Batcher2D::kMaterial* built-in or a
+    // registered id.
+    struct Batch2DDrawSpan
+    {
+        uint16_t material = 0;
+        nvrhi::ITexture* texture = nullptr;
+        uint32_t firstIndex = 0;
+        uint32_t indexCount = 0;
+    };
+
+    // A VIEW over the batcher's own storage -- it owns nothing. The spans stay
+    // valid until the next Begin() on the batcher that produced them, which is
+    // the whole of the consumer's contract (one graph frame is declared,
+    // recorded and submitted well inside that window).
+    struct Batch2DDrained
+    {
+        std::span<const Batch2DVertex>   vertices;
+        std::span<const uint32_t>        indices;
+        std::span<const Batch2DDrawSpan> spans;
+        // The viewport Begin() was given -- the canvas extent this batch's
+        // pixel coordinates were built against, and therefore what a consumer
+        // must derive its projection push-constants from (Batcher2D.cpp's
+        // PushConstants{2/viewport}).
+        glm::vec2 viewport{ 0.0f };
+
+        [[nodiscard]] bool Empty() const noexcept { return spans.empty(); }
     };
 
     class ARCANE_API Batcher2D
@@ -177,6 +236,20 @@ namespace Arcane
                               glm::vec4 color) = 0;
 
         virtual void End() = 0;
+
+        // Sorts this batch's recorded quads and builds the index + draw-span
+        // streams WITHOUT recording anything, then hands back a view of all
+        // three (see Batch2DDrained). The NRI graph path's Batch2DNode calls
+        // this instead of End(): it consumes the same CPU batching and issues
+        // its own draws through NRI.
+        //
+        // Idempotent inside one Begin() bracket -- End() runs the same work
+        // through the same code, so calling BOTH (never done today, but
+        // harmless) sorts and builds exactly once. Interface DEFAULT (not
+        // pure), for the same reason RegisterMaterial is: the geometry-
+        // recording test doubles stay valid, and a double that records nothing
+        // drainable honestly reports an empty batch.
+        virtual Batch2DDrained Drain() { return {}; }
 
         // Drops the cached texture->binding-set entry for `texture` (no-op
         // when absent or null). Call this BEFORE releasing a texture the

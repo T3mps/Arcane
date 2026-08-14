@@ -18,13 +18,11 @@ namespace Arcane
 {
     namespace
     {
-        struct Vertex
-        {
-            glm::vec2 pos;
-            glm::vec2 uv;
-            glm::vec4 color;
-        };
-        static_assert(sizeof(Vertex) == 32, "vertex layout is the wire format");
+        // The vertex layout moved to Batcher2D.hpp as Batch2DVertex by the NRI
+        // Phase 2 read-interface extraction (Task 8) -- same members, same
+        // static_assert, now nameable by the graph path's Batch2DNode. The
+        // alias keeps every use site below spelled exactly as it was.
+        using Vertex = Batch2DVertex;
 
         struct PushConstants
         {
@@ -47,13 +45,9 @@ namespace Arcane
         };
 
         // One contiguous run of sorted records sharing material + texture.
-        struct BatchRun
-        {
-            uint16_t material = 0;
-            nvrhi::ITexture* texture = nullptr;
-            uint32_t firstIndex = 0;
-            uint32_t indexCount = 0;
-        };
+        // Also moved to the header (Batch2DDrawSpan) by the Task 8 extraction
+        // -- identical members and names, so `run.material` etc. read the same.
+        using BatchRun = Batch2DDrawSpan;
 
         // Binding sets cache on (texture, material group). Built-ins all share
         // group 0 (identical layout + set contents), so pre-material content
@@ -237,6 +231,8 @@ namespace Arcane
                 m_textureSlotLookup.clear();
                 m_layer = 0;
                 m_order = 0;
+                m_drained = false;
+                m_anyRegistered = false;
             }
 
             void SetLayer(uint16_t layer, uint16_t orderInLayer) override
@@ -331,35 +327,8 @@ namespace Arcane
                     return;
                 }
 
-                // The sort-key pass: correct transparency ordering (layer,
-                // order) AND minimal state changes (kind, texture) in one
-                // sort. stable_sort keeps submission order on identical keys.
-                std::stable_sort(m_records.begin(), m_records.end(),
-                                 [](const DrawRecord& a, const DrawRecord& b)
-                                 { return a.key < b.key; });
-
-                m_indices.reserve(m_records.size() * 6);
-                bool anyRegistered = false;
-                for (const DrawRecord& record : m_records)
-                {
-                    if (m_runs.empty() || m_runs.back().material != record.material ||
-                        m_runs.back().texture != record.texture)
-                    {
-                        BatchRun run;
-                        run.material = record.material;
-                        run.texture = record.texture;
-                        run.firstIndex = (uint32_t)m_indices.size();
-                        m_runs.push_back(run);
-                    }
-                    anyRegistered = anyRegistered ||
-                                    record.material >= kBuiltInMaterialCount;
-                    const uint32_t base = record.firstVertex;
-                    const uint32_t quadIndices[6] = { base, base + 1, base + 2,
-                                                      base, base + 2, base + 3 };
-                    m_indices.insert(m_indices.end(), quadIndices,
-                                     quadIndices + 6);
-                    m_runs.back().indexCount += 6;
-                }
+                DrainInternal();
+                const bool anyRegistered = m_anyRegistered;
 
                 EnsureBuffers();
                 m_commandList->writeBuffer(m_vertexBuffer, m_vertices.data(),
@@ -438,6 +407,17 @@ namespace Arcane
                 m_commandList = nullptr;
             }
 
+            Batch2DDrained Drain() override
+            {
+                DrainInternal();
+                Batch2DDrained out;
+                out.vertices = std::span<const Batch2DVertex>(m_vertices);
+                out.indices  = std::span<const uint32_t>(m_indices);
+                out.spans    = std::span<const Batch2DDrawSpan>(m_runs);
+                out.viewport = m_viewport;
+                return out;
+            }
+
             void RemoveTexture(nvrhi::ITexture* texture) override
             {
                 // Evict-before-release (mirrors ImGuiNvrhiRenderer::
@@ -456,6 +436,53 @@ namespace Arcane
             Batch2DStats Stats() const override { return m_stats; }
 
         private:
+            // THE v1 "COMPILE" -- lifted verbatim out of End() by the NRI
+            // Phase 2 read-interface extraction (Task 8), so both consumers
+            // run the SAME batching: End() records it through NVRHI,
+            // Batch2DNode records it through NRI. Nothing here touches a
+            // device, a command list or a target; it is pure CPU work over
+            // m_records.
+            //
+            // Idempotent within one Begin() bracket (m_drained): Drain() is
+            // called at graph-DECLARATION time on the graph path while End()
+            // calls it at record time on the NVRHI path, and re-running it
+            // would append a second copy of every index and every run.
+            void DrainInternal()
+            {
+                if (m_drained)
+                    return;
+                m_drained = true;
+
+                // The sort-key pass: correct transparency ordering (layer,
+                // order) AND minimal state changes (kind, texture) in one
+                // sort. stable_sort keeps submission order on identical keys.
+                std::stable_sort(m_records.begin(), m_records.end(),
+                                 [](const DrawRecord& a, const DrawRecord& b)
+                                 { return a.key < b.key; });
+
+                m_indices.reserve(m_records.size() * 6);
+                for (const DrawRecord& record : m_records)
+                {
+                    if (m_runs.empty() || m_runs.back().material != record.material ||
+                        m_runs.back().texture != record.texture)
+                    {
+                        BatchRun run;
+                        run.material = record.material;
+                        run.texture = record.texture;
+                        run.firstIndex = (uint32_t)m_indices.size();
+                        m_runs.push_back(run);
+                    }
+                    m_anyRegistered = m_anyRegistered ||
+                                      record.material >= kBuiltInMaterialCount;
+                    const uint32_t base = record.firstVertex;
+                    const uint32_t quadIndices[6] = { base, base + 1, base + 2,
+                                                      base, base + 2, base + 3 };
+                    m_indices.insert(m_indices.end(), quadIndices,
+                                     quadIndices + 6);
+                    m_runs.back().indexCount += 6;
+                }
+            }
+
             uint16_t TextureSlot(nvrhi::ITexture* texture)
             {
                 auto [it, inserted] = m_textureSlotLookup.try_emplace(
@@ -721,6 +748,10 @@ namespace Arcane
             std::unordered_map<nvrhi::ITexture*, uint16_t> m_textureSlotLookup;
             uint16_t m_layer = 0;
             uint16_t m_order = 0;
+            // DrainInternal's once-per-Begin() guard and its one carried
+            // result (End() needs it for the registered-material uploads).
+            bool m_drained = false;
+            bool m_anyRegistered = false;
             Batch2DStats m_stats;
         };
     }

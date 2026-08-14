@@ -164,9 +164,8 @@ namespace Arcane
         };
     }
 
-    std::unique_ptr<ShaderLibrary> ShaderLibrary::Create(
-        nvrhi::IDevice* device, GraphicsBackend backend,
-        const std::filesystem::path& shaderDir)
+    std::filesystem::path ShaderLibrary::ResolveFlavorDir(
+        GraphicsBackend backend, const std::filesystem::path& shaderDir)
     {
         std::filesystem::path dir = shaderDir;
         if (const char* overrideDir = std::getenv("ARCANE_SHADER_DIR"))
@@ -188,8 +187,20 @@ namespace Arcane
         if (!std::filesystem::is_directory(dir))
         {
             ARC_ERROR("Shader directory not found: {}", dir.string());
-            return nullptr;
+            return {};
         }
+        return dir;
+    }
+
+    std::unique_ptr<ShaderLibrary> ShaderLibrary::Create(
+        nvrhi::IDevice* device, GraphicsBackend backend,
+        const std::filesystem::path& shaderDir)
+    {
+        // Resolution lives in ResolveFlavorDir so the NRI graph path -- which
+        // loads the same artifacts as raw bytecode -- cannot drift from it.
+        const std::filesystem::path dir = ResolveFlavorDir(backend, shaderDir);
+        if (dir.empty())
+            return nullptr;   // ResolveFlavorDir already logged why
         return std::make_unique<ShaderLibraryImpl>(device, dir);
     }
 }

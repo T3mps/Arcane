@@ -16,12 +16,14 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/Device.hpp>                 // RenderDeviceDesc, RenderErrorCount, ToString(GraphicsBackend)
 #include <Arcane/Render/NvrhiMessageCallback.hpp>   // the tagged "nri-graph" error seam
+#include <Arcane/Render/ShaderLibrary.hpp>          // ShaderLibrary::ResolveFlavorDir
 #include <Arcane/Render/Swapchain.hpp>              // kSwapchainFramesInFlight
 
 #undef ERROR
 
 #include <chrono>
 #include <cstring>
+#include <fstream>
 #include <optional>
 #include <span>
 #include <string>
@@ -40,21 +42,21 @@ namespace Arcane
             NvrhiMessageCallback::Instance().NoteError("nri-graph", text.c_str());
         }
 
-        // Deliberately the SAME colour RuntimeApp::MainLoop clears its canvas
-        // to (clearTextureFloat, 0.02/0.02/0.04/1). A clear-only graph frame
-        // and the NVRHI frame therefore share a background, so the first thing
-        // a desk screenshot proves is that the graph reached the same surface
-        // -- and a stage golden's background pixels match by construction
-        // rather than by coincidence.
-        constexpr float kClearColor[4] = { 0.02f, 0.02f, 0.04f, 1.0f };
-
-        // Per-frame-slot upload arena. Nothing in Task 7's clear-only frame
-        // allocates from it; it is sized here (and Init()'d at Create, so a
-        // mapping failure is found at boot rather than inside Task 8's first
-        // draw) for the sprite VB/IB + constants Task 8 puts through it. A
-        // starting point, not a measurement: NriUploadRing::HighWater() is the
-        // number to size it from once a real frame runs.
+        // Per-frame-slot upload arena -- the batch node's vertex + index
+        // streams (Task 8), the material/globals constant buffers (Task 9).
+        // Init()'d at Create so a mapping failure is found at boot rather than
+        // inside the first draw. A starting point, not a measurement:
+        // NriUploadRing::HighWater() is the number to size it from, and it is
+        // logged at shutdown. 4 MiB is ~27k quads of batch geometry
+        // (128 B of vertices + 24 B of indices each).
         constexpr std::uint64_t kUploadRingBytesPerFrame = 4ull * 1024 * 1024;
+
+        // Where the offline shader artifacts live, relative to the executable.
+        // The SAME literal GpuContext::Create hands ShaderLibrary
+        // (Host/GpuContext.cpp), resolved through the same function -- so a
+        // desk user pointing ARCANE_SHADER_DIR at a live recompile moves both
+        // render paths together instead of comparing two different shaders.
+        constexpr const char* kShaderDir = "data/shaders";
 
         // WritePngRgba wants RGBA; NRI resolves the swapchain's channel order
         // rather than pinning it (NriSwapChain::Format()), so a BGRA
@@ -205,6 +207,27 @@ namespace Arcane
         m_pipelines.Bind(*m_device);
         m_graph = std::make_unique<RenderGraph>();
 
+        // The offline artifacts the nodes below need as RAW BYTECODE (NRI's
+        // ShaderDesc takes a blob; ShaderLibrary hands back nvrhi handles).
+        // Resolved once, here, so a missing shader directory is one loud line
+        // at boot instead of a per-node mystery.
+        m_shaderDir = ShaderLibrary::ResolveFlavorDir(config.backend, kShaderDir);
+        if (m_shaderDir.empty())
+        {
+            ARC_ERROR("[nri-graph] no shader directory -- the graph path cannot build its pipelines");
+            return false;
+        }
+
+        // Built EAGERLY, not on the first frame: a node that cannot be created
+        // must fail the vehicle at boot rather than render a frame that
+        // silently draws nothing.
+        m_batch2D = Batch2DNode::Create(*this);
+        if (!m_batch2D)
+            return false;   // already logged
+        m_tonemap = TonemapNode::Create(*this);
+        if (!m_tonemap)
+            return false;   // already logged
+
         // See the header: the heartbeat exists for the open-ended drag-storm
         // run and nothing else. The baseline is taken here rather than at the
         // host's own baseline point so the number it prints means "errors this
@@ -218,6 +241,39 @@ namespace Arcane
                  m_swap->Width(), m_swap->Height(), (int)m_format, m_swap->TextureCount(),
                  kUploadRingBytesPerFrame / 1024);
         return true;
+    }
+
+    std::span<const std::uint8_t> NriGraphContext::ShaderBytecode(const char* name)
+    {
+        if (!name || m_shaderDir.empty())
+            return {};
+
+        const auto cached = m_shaderBins.find(name);
+        if (cached != m_shaderBins.end())
+            return std::span<const std::uint8_t>(cached->second);
+
+        const std::filesystem::path path = m_shaderDir / (std::string(name) + ".bin");
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (!file)
+        {
+            ARC_ERROR("[nri-graph] shader artifact missing/unreadable: {}", path.string());
+            return {};
+        }
+        const std::streamsize size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        std::vector<std::uint8_t> bytes(size > 0 ? (std::size_t)size : 0);
+        if (bytes.empty() || !file.read(reinterpret_cast<char*>(bytes.data()), size))
+        {
+            ARC_ERROR("[nri-graph] shader artifact could not be read: {}", path.string());
+            return {};
+        }
+
+        // Cached by VALUE in a node-based container: the node authors hold
+        // spans into these vectors for their whole lifetime, and
+        // NriPipelineCache dereferences the blob after the fill callback
+        // returns (its fill contract, rule 2).
+        const auto inserted = m_shaderBins.emplace(name, std::move(bytes));
+        return std::span<const std::uint8_t>(inserted.first->second);
     }
 
     NriGraphContext::~NriGraphContext()
@@ -249,6 +305,16 @@ namespace Arcane
             graves.Bury(fence, [graveCore, b = m_capture] { graveCore->DestroyBuffer(b); });
             m_capture = nullptr;
         }
+
+        // The nodes' own objects go out at the same fence, and BEFORE the
+        // graph releases its transient pool below -- the tonemap's source view
+        // names a POOL texture, so a view buried after the texture it views
+        // would reach DestroyDescriptor over freed memory (the same class of
+        // teardown bug as fix round 1's imported-view ordering).
+        if (m_tonemap)
+            m_tonemap->Release(graves, fence);
+        if (m_batch2D)
+            m_batch2D->Release(graves, fence);
 
         // The sanctioned cache release (see NriPipelineCache.hpp): explicit,
         // at a fence the caller knows, rather than the destructor's direct-
@@ -341,6 +407,18 @@ namespace Arcane
         }
         m_captureRecorded = false;
 
+        // The tonemap's SHADER_RESOURCE view names the CANVAS -- a graph pool
+        // texture that ReleaseGpuResources below is about to bury, and whose
+        // address NRI is free to hand to the next frame's replacement. Drop it
+        // here, in the same order and for the same reason the graph turns its
+        // own imported views over: a descriptor that outlives the resource it
+        // views is a use-after-free a pointer comparison reports as a cache
+        // hit. This is the ONLY path that destroys pool textures, so it is the
+        // only invalidation the node needs (FullscreenNodes.hpp, THE SOURCE
+        // VIEW).
+        if (m_tonemap)
+            m_tonemap->InvalidateSource(graves, m_graph ? m_graph->DebugSubmitCount() : 0);
+
         if (m_graph)
             m_graph->ReleaseGpuResources();
         graves.Drain();
@@ -354,13 +432,17 @@ namespace Arcane
         const nri::Format resolved = m_swap->Format();
         if (resolved != nri::Format::UNKNOWN && resolved != m_format)
         {
-            // Every cached PSO baked the OLD attachment format (that is why
-            // the format is in NriPipelineCache::GraphicsKey), so drawing
-            // through them after this would be undefined. Nothing in Task 7's
-            // clear-only frame owns a PSO yet, so this is a loud FYI rather
-            // than a refusal -- Task 8 is the first task that must act on it.
+            // Nothing to DO here, and that is by construction rather than by
+            // luck: the attachment format is part of NriPipelineCache's
+            // GraphicsKey, so the tonemap's next GetGraphics is a cache MISS
+            // and creates a pipeline for the new format -- a stale PSO can
+            // never be served. The old entries are released with the rest of
+            // the cache at teardown. Still WARNed, because a swapchain that
+            // changes channel order mid-run is worth knowing about when a
+            // capture suddenly looks wrong-hued.
             ARC_WARN("[nri-graph] swapchain format changed across a resize (was {}, now {}) -- "
-                     "every format-keyed pipeline is now stale", (int)m_format, (int)resolved);
+                     "format-keyed pipelines will be rebuilt on the next frame", (int)m_format,
+                     (int)resolved);
             m_format = resolved;
         }
     }
@@ -420,10 +502,11 @@ namespace Arcane
         return true;
     }
 
-    void NriGraphContext::BuildFrame(const FrameDesc& frame)
+    RgFrameHandles DeclareGraphFrame(RenderGraph& graph, const RgFrameShape& shape,
+                                      NriGraphContext* context)
     {
         // ---------------------------------------------------------------
-        // THE CLEAR SEAM (Task 7's deliberate choice; Task 8 inherits it).
+        // THE CLEAR SEAM (Task 7's decision; Task 8 is its first real user).
         //
         // Task 6's executor begins every raster pass with `nri::AttachmentDesc
         // = {}`, i.e. LoadOp::LOAD + StoreOp::STORE, and the graph's
@@ -441,11 +524,11 @@ namespace Arcane
         //     depth/stencil planes, and the compile-time validation that a
         //     CLEAR attachment is also declared as a Write) and deserves its
         //     own task rather than a rushed corner of this one.
-        //   - It is correct here. The graph pins an imported swapchain
-        //     texture's ENTRY state to the discarding {NONE, UNDEFINED, ALL}
-        //     (RenderGraphBuilder::ImportSwapChainTexture), so LOADing the
-        //     backbuffer loads undefined content -- which this node then
-        //     overwrites in full before anything reads it.
+        //   - It is correct here. The canvas is a TRANSIENT whose pool slot
+        //     the graph hands over with a contents-discarding barrier, so its
+        //     LOADed contents are undefined -- and Batch2DNode::Record clears
+        //     it in full before drawing. The BACKBUFFER needs no clear at all:
+        //     the tonemap covers it with a fullscreen triangle.
         //   - It costs nothing measurable at Phase 2's scale: one full-target
         //     clear per frame on an immediate-mode desktop GPU is what
         //     LoadOp::CLEAR lowers to anyway.
@@ -454,34 +537,27 @@ namespace Arcane
         // clear pattern CmdClearAttachments makes awkward. Both are a Phase
         // 4+ concern, and both want the declarative version -- so this is a
         // deferral, not a rejection.
+        //
+        // RING FOOTGUN, for whoever adds the next node here: the vehicle calls
+        // ring.BeginFrame(slot) AFTER this function returns, so an allocation
+        // made from a SETUP fn lands in the PREVIOUS frame's slot and is
+        // overwritten while the GPU still reads it. Allocate from the ring only
+        // inside exec fns (record time). Batch2DNode does.
         // ---------------------------------------------------------------
-        (void)frame.stage;   // Tasks 8-12: the stage selects which nodes below run
+        RgFrameHandles handles;
 
-        m_graph->AddNode("clear", RenderGraph::NodeKind::Raster,
-            [this](RenderGraphBuilder& builder)
-            {
-                // NOT ImportTexture: the graph owns acquire/present sequencing
-                // and there is no nri::Texture* to hand over at declaration
-                // time -- Execute() resolves this to the texture it acquires.
-                m_backbuffer = builder.ImportSwapChainTexture("backbuffer");
-                builder.Write(m_backbuffer, RgUsage::ColorWrite);
-                m_graph->SetColorAttachments(std::span<const RgTexture>(&m_backbuffer, 1));
-            },
-            [](RenderGraphNodeContext& ctx)
-            {
-                // The executor has already emitted this node's barriers and
-                // opened rendering with the declared attachment, and set the
-                // viewport + scissor to the full target -- an exec fn must not
-                // do any of that itself (RenderGraphNodeContext's contract).
-                nri::ClearAttachmentDesc clear = {};
-                clear.planes               = nri::PlaneBits::COLOR;
-                clear.colorAttachmentIndex = 0;
-                clear.value.color.f = { kClearColor[0], kClearColor[1], kClearColor[2], kClearColor[3] };
-                ctx.core.CmdClearAttachments(ctx.cmd, &clear, 1, nullptr, 0);
-            });
+        // Stage gating, honestly: `batch` is "batcher + tonemap and nothing
+        // else", and that is the whole frame today -- the post chain (Task 10)
+        // and the HUD (Task 12) do not exist on this path, so `post` and `full`
+        // currently render the same thing. When they land they attach HERE,
+        // under a stage test, and this switch stops being a no-op.
+        (void)shape.stage;
 
-        if (!frame.capture)
-            return;
+        handles.canvas     = AddBatch2DNode(graph, context, shape.canvasWidth, shape.canvasHeight);
+        handles.backbuffer = AddTonemapNode(graph, context, handles.canvas);
+
+        if (!shape.capture)
+            return handles;
 
         // The capture node. A Copy node, so the executor opens no rendering
         // for it; the backbuffer's COLOR_ATTACHMENT -> COPY_SOURCE transition
@@ -494,17 +570,27 @@ namespace Arcane
         // (RealizePool), which can never be mapped. RgUsage::ReadbackHost is
         // the declaration that says "this buffer is the host's to read"; it
         // derives the same COPY_DESTINATION state CopyDst does, by design.
-        m_graph->AddNode("capture", RenderGraph::NodeKind::Copy,
-            [this](RenderGraphBuilder& builder)
+        //
+        // Shared rather than captured by value for the same reason
+        // AddTonemapNode's backbuffer is: the handle is minted inside this
+        // node's own setup, which runs after both lambdas are constructed.
+        auto captureHandle = std::make_shared<RgBuffer>();
+        const RgTexture backbuffer = handles.backbuffer;
+        graph.AddNode("capture", RenderGraph::NodeKind::Copy,
+            [shape, backbuffer, captureHandle](RenderGraphBuilder& builder)
             {
-                m_captureHandle = builder.ImportBuffer("capture", m_capture, m_captureSlicePitch);
-                builder.Read(m_backbuffer, RgUsage::CopySrc);
-                builder.Write(m_captureHandle, RgUsage::ReadbackHost);
+                *captureHandle = builder.ImportBuffer("capture", shape.captureBuffer,
+                                                       shape.captureBytes);
+                builder.Read(backbuffer, RgUsage::CopySrc);
+                builder.Write(*captureHandle, RgUsage::ReadbackHost);
             },
-            [this](RenderGraphNodeContext& ctx)
+            [context, backbuffer, captureHandle](RenderGraphNodeContext& ctx)
             {
-                nri::Texture* source = ctx.Resolve(m_backbuffer);
-                nri::Buffer*  dest   = ctx.Resolve(m_captureHandle);
+                if (!context)
+                    return;   // headless declaration-shape drive
+
+                nri::Texture* source = ctx.Resolve(backbuffer);
+                nri::Buffer*  dest   = ctx.Resolve(*captureHandle);
                 if (!source || !dest)
                 {
                     GraphError("NriGraphContext: the capture node could not resolve its backbuffer "
@@ -513,17 +599,39 @@ namespace Arcane
                 }
 
                 nri::TextureDataLayoutDesc layout = {};
-                layout.rowPitch   = (std::uint32_t)m_captureRowPitch;
-                layout.slicePitch = (std::uint32_t)m_captureSlicePitch;
+                layout.rowPitch   = (std::uint32_t)context->CaptureRowPitch();
+                layout.slicePitch = (std::uint32_t)context->CaptureSlicePitch();
 
                 nri::TextureRegionDesc region = {};
-                region.width  = (nri::Dim_t)m_captureWidth;
-                region.height = (nri::Dim_t)m_captureHeight;
+                region.width  = (nri::Dim_t)context->CaptureWidth();
+                region.height = (nri::Dim_t)context->CaptureHeight();
                 region.depth  = 1;
 
                 ctx.core.CmdReadbackTextureToBuffer(ctx.cmd, *dest, layout, *source, region);
-                m_captureRecorded = true;
+                context->NoteCaptureRecorded();
             });
+
+        handles.capture = *captureHandle;
+        return handles;
+    }
+
+    void NriGraphContext::BuildFrame(const FrameDesc& frame)
+    {
+        // Thin on purpose: the frame's SHAPE lives in DeclareGraphFrame so the
+        // headless [nri] frame-shape cases drive the real declarations instead
+        // of transcribing them (see that function's comment block). The handles
+        // it returns belong to the nodes that use them -- each exec fn already
+        // captured what it needs -- so nothing here holds a per-frame handle
+        // that would go stale on the next Reset().
+        RgFrameShape shape;
+        shape.stage         = frame.stage;
+        shape.capture       = frame.capture;
+        shape.canvasWidth   = m_swap->Width();
+        shape.canvasHeight  = m_swap->Height();
+        shape.captureBuffer = m_capture;
+        shape.captureBytes  = m_captureSlicePitch;
+
+        (void)DeclareGraphFrame(*m_graph, shape, this);
     }
 
     NriGraphContext::FrameOutcome NriGraphContext::RenderFrame(const FrameDesc& frame)
@@ -543,9 +651,13 @@ namespace Arcane
         // the submission fence all survive, so a steady-state frame costs zero
         // GPU allocations (RenderGraph::Reset's contract).
         m_graph->Reset();
-        m_backbuffer    = RgTexture{};
-        m_captureHandle = RgBuffer{};
+
+        // Published for exactly the span of this frame's declaration: the batch
+        // node drains it from its declarator (AddBatch2DNode -> CurrentBatch),
+        // and nothing may reach a stale batcher afterwards.
+        m_currentBatch = effective.batch;
         BuildFrame(effective);
+        m_currentBatch = nullptr;
 
         std::string error;
         const std::optional<RgCompiled> compiled = m_graph->Compile(&error);
