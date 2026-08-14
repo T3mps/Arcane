@@ -248,6 +248,11 @@ namespace Arcane
             void CollectFault(Diag::Envelope& envelope) override;
             GpuBreadcrumbs& Breadcrumbs() override { return m_breadcrumbs; }
             const char* Name() const override { return "D3D12"; }
+            // The device the marker heap was placed on (F-1a's
+            // CreatePlacedResource) -- what a WriteBufferImmediate GPU virtual
+            // address is only meaningful on. Null when no native device
+            // resolved, which already means markers are off.
+            [[nodiscard]] void* NativeDevice() const override { return m_device; }
 
             // The Diagnostics GPU-section body: CollectFault plus the human
             // block plus the `.gpudump` sibling. Not on the interface -- the

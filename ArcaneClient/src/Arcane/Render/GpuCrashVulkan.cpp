@@ -175,6 +175,14 @@ namespace Arcane
             void CollectFault(Diag::Envelope& envelope) override;
             GpuBreadcrumbs& Breadcrumbs() override { return m_breadcrumbs; }
             const char* Name() const override { return "Vulkan"; }
+            // The VkDevice m_markerBuffer was created on. THE check that keeps
+            // vkCmdWriteBufferMarkerAMD's commonparent VUID satisfied when more
+            // than one VkDevice is alive (Phase 2's --nri-graph vehicle): a
+            // command buffer from any other device may not name this buffer.
+            [[nodiscard]] void* NativeDevice() const override
+            {
+                return static_cast<VkDevice>(m_device);
+            }
 
             // The Diagnostics GPU-section body: CollectFault plus the human
             // block plus the `.gpudump` sibling. Not on the interface -- the

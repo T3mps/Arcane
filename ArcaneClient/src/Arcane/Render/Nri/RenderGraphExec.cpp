@@ -39,6 +39,7 @@
 
 #undef ERROR
 
+#include <atomic>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -76,16 +77,55 @@ namespace Arcane
         // classes share no member and no branch once the two calls differ.
         //
         // The crash backend is the SAME process-wide one the NVRHI passes
-        // write into (installed by the device layer over the nvrhi device),
-        // and its marker buffer lives on the same native device NRI wrapped
-        // -- so both producers' markers replay out of one buffer into one
-        // report. Every step degrades independently: no backend, an unarmed
-        // backend, or a backend that hands back no native command list each
-        // disable exactly their own channel and nothing else.
+        // write into (installed by the device layer over the nvrhi device).
+        // Every step degrades independently: no backend, an unarmed backend, a
+        // backend that hands back no native command list, or a backend whose
+        // marker buffer lives on ANOTHER DEVICE each disable exactly their own
+        // channel and nothing else.
+        //
+        // THE CROSS-DEVICE RULE (D1 shakedown, finding B). Writing a native
+        // marker means recording, into THIS command buffer, a write to the
+        // backend's marker buffer -- and both APIs require the two to share one
+        // device. Through Phase 2 that is NOT guaranteed: `--nri-graph` boots
+        // the real engine first, so the installed backend was built over the
+        // ENGINE's device while the graph records on its own. The first desk
+        // run proved it, 20 errors deep:
+        //
+        //   vkCmdWriteBufferMarkerAMD(): dstBuffer (VkBuffer ...) was created
+        //   ... from VkDevice A, but command is using ... VkDevice B
+        //   VUID-vkCmdWriteBufferMarkerAMD-commonparent
+        //
+        // dx12 carried the identical bug (WriteBufferImmediate against a GPU
+        // virtual address minted by another device) and was merely mute about
+        // it -- its debug layer could not even load on that path (see
+        // DeviceD3D12.cpp's g_d3d12DeviceCreated).
+        //
+        // So the marker is gated on device IDENTITY rather than switched off
+        // for the phase: `nativeDevice` is the graph device's own native handle
+        // and the write happens only when the backend's marker buffer lives on
+        // that same device. Today, on the vehicle, that is false and native
+        // markers are silently off; after Phase 3's one-device flip it becomes
+        // true and they come back with no edit here. A TODO would have needed
+        // somebody to remember; this cannot be forgotten and cannot be wrong in
+        // the unsafe direction.
+        //
+        // WHAT IS NOT LOST while the gate is closed: the CPU-side breadcrumb
+        // ring (Breadcrumbs().BeginScope/EndScope) and the PIX/RenderDoc/DRED
+        // annotation are both device-agnostic and both still emitted -- and the
+        // ring is the half today's hang and crash reports are actually built
+        // from. What is lost is the GPU-written marker VALUE, i.e. how far into
+        // the frame the GPU got, on a run whose graph device has no crash
+        // backend of its own to collect it with anyway.
+        std::atomic<bool> g_crossDeviceMarkersNoted{ false };
+
         class NodeScope
         {
         public:
-            NodeScope(const nri::CoreInterface& core, nri::CommandBuffer& cmd, const std::string& label) noexcept
+            // `nativeDevice` is GetDeviceNativeObject for the device `cmd` was
+            // allocated from -- resolved once per Execute by the caller, not
+            // per node.
+            NodeScope(const nri::CoreInterface& core, nri::CommandBuffer& cmd, const std::string& label,
+                      void* nativeDevice) noexcept
                 : m_core(&core), m_cmd(&cmd)
             {
                 // The annotation goes out even with no crash backend
@@ -111,9 +151,28 @@ namespace Arcane
                 // Null on the NONE backend by construction (ImplNONE returns
                 // nullptr) and on any backend that has no native list to
                 // give -- both are ordinary, not errors.
-                m_native = m_core->GetCommandBufferNativeObject(m_cmd);
-                if (m_native)
-                    (void)m_backend->WriteMarkerNative(m_native, m_token, true);
+                void* const native = m_core->GetCommandBufferNativeObject(m_cmd);
+                if (!native)
+                    return;
+
+                // The cross-device rule (see this class's header comment). A
+                // mismatch leaves m_native null, so the destructor's mirror
+                // check keeps the two halves paired without a second flag.
+                if (!nativeDevice || m_backend->NativeDevice() != nativeDevice)
+                {
+                    if (!g_crossDeviceMarkersNoted.exchange(true, std::memory_order_acq_rel))
+                    {
+                        ARC_WARN("[nri-graph] native GPU markers are OFF on the graph path: the "
+                                 "active {} crash backend's marker buffer belongs to another "
+                                 "device (Phase 2 holds two). CPU breadcrumbs and pass annotations "
+                                 "are unaffected; Phase 3's one-device flip restores them.",
+                                 m_backend->Name());
+                    }
+                    return;
+                }
+
+                m_native = native;
+                (void)m_backend->WriteMarkerNative(m_native, m_token, true);
             }
 
             ~NodeScope()
@@ -1082,6 +1141,13 @@ namespace Arcane
 
         RenderGraphNodeContext context{ cmd, core, desc.ring, desc.pipelines, this };
 
+        // THIS graph's native device -- the identity every node's GPU marker is
+        // checked against (NodeScope's cross-device rule). Resolved once here
+        // rather than per node: it cannot change inside one Execute, and the
+        // NONE backend answers null, which closes the gate exactly as a
+        // mismatch would.
+        void* const nativeDevice = core.GetDeviceNativeObject(&m_device->Device());
+
         // The cached view for an attachment handle -- RealizeAttachmentViews
         // above already created every one of them, so a null here means the
         // handle did not decode (which Compile() has already refused).
@@ -1130,7 +1196,7 @@ namespace Arcane
 
             // Opened BEFORE the node's barriers so a capture attributes the
             // transitions to the pass that needed them.
-            NodeScope scope(core, cmd, node.passLabel);
+            NodeScope scope(core, cmd, node.passLabel, nativeDevice);
 
             EmitBarriers(cmd, compiledNode.preBarriers);
 

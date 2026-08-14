@@ -277,6 +277,31 @@ namespace Arcane
         // entry points stay separate rather than one void* overload.
         virtual bool WriteMarkerNative(void* nativeCommandList, std::uint32_t id, bool begin) = 0;
 
+        // The native device this backend's marker buffer lives on
+        // (ID3D12Device* on D3D12, VkDevice on Vulkan), or null if it never
+        // resolved one. Comparable against
+        // nri::CoreInterface::GetDeviceNativeObject, which is the ONLY way a
+        // producer holding an NRI device can tell whether WriteMarkerNative
+        // above is legal for it.
+        //
+        // WHY THIS IS ON THE SEAM AT ALL (NRI Phase 2, D1 shakedown): a GPU
+        // marker is a WRITE, from a command buffer, into the backend's marker
+        // buffer -- and both APIs require the two to belong to ONE device
+        // (Vulkan: VUID-vkCmdWriteBufferMarkerAMD-commonparent; D3D12:
+        // WriteBufferImmediate takes a GPU virtual address, which is
+        // meaningless on another device's address space). Phase 2's
+        // `--nri-graph` vehicle holds two devices at once -- the engine's NVRHI
+        // device, which is the one this backend was built over, and the graph's
+        // NRI device -- so the graph path MUST check before it writes. The
+        // first desk run fired 20 validation errors doing exactly this write
+        // across the boundary; D3D12 had the same bug and was merely mute.
+        //
+        // A null answer, or two devices that differ, means "no native markers
+        // for you" -- never an error. The CPU-side breadcrumb ring
+        // (Breadcrumbs()) is device-agnostic and keeps recording either way,
+        // and it is the half that feeds today's hang/crash reports.
+        [[nodiscard]] virtual void* NativeDevice() const = 0;
+
         // Fills `envelope`'s fault-classification fields (and anything
         // else this backend can determine -- DRED breadcrumbs, device-fault
         // page/address, ...) from whatever GPU-side crash state it can

@@ -20,6 +20,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Render/Device.hpp>            // RenderErrorCount / ResetRenderErrorCount
+#include <Arcane/Render/GpuBreadcrumbs.hpp>    // the CPU-side ring the marker-policy case reads
+#include <Arcane/Render/GpuInstrumentation.hpp>// SetActiveGpuCrashBackend / ClearActiveGpuCrashBackendIfCurrent
+#include <Arcane/Render/IGpuCrashBackend.hpp>  // IGpuCrashBackend, for the marker-policy spy
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
@@ -2426,6 +2429,98 @@ TEST_CASE("rendergraph exec: ReleaseGpuResources + Drain destroys imported views
     device->Graves().Drain();
     CHECK(device->Graves().Pending() == 0);
 
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+// ======================================================================
+// The GPU-marker policy on the graph path (D1 shakedown, finding B)
+// ======================================================================
+// The vehicle holds TWO devices through Phase 2 -- the engine's NVRHI device,
+// which the process-wide crash backend was built over, and the graph's NRI
+// device -- and a native GPU marker is a write from THIS command buffer into
+// THAT backend's marker buffer. Across a device boundary that is a spec
+// violation: the first desk run fired 20 x
+// VUID-vkCmdWriteBufferMarkerAMD-commonparent, and dx12 had the same bug
+// silently (a GPU virtual address from another device's address space).
+//
+// NodeScope now gates the native marker on device IDENTITY. This case pins the
+// gate from the closed side, which is the side that matters and the only one a
+// NONE device can reach: GetDeviceNativeObject and GetCommandBufferNativeObject
+// both answer null there, so the OPEN side (matching devices -> the marker goes
+// out) stays a desk property.
+namespace
+{
+    // Records what the graph path asked of a crash backend, and reports a
+    // NativeDevice() that is deliberately not the graph's -- the vehicle's
+    // two-device shape, headlessly.
+    class MarkerSpyBackend final : public Arcane::IGpuCrashBackend
+    {
+    public:
+        explicit MarkerSpyBackend(void* nativeDevice) noexcept : m_nativeDevice(nativeDevice) {}
+
+        bool WriteMarker(nvrhi::ICommandList*, std::uint32_t, bool) override
+        {
+            ++nvrhiMarkers;
+            return false;
+        }
+        bool WriteMarkerNative(void*, std::uint32_t, bool) override
+        {
+            ++nativeMarkers;
+            return false;
+        }
+        void CollectFault(Arcane::Diag::Envelope&) override {}
+        Arcane::GpuBreadcrumbs& Breadcrumbs() override { return m_breadcrumbs; }
+        const char* Name() const override { return "spy"; }
+        [[nodiscard]] void* NativeDevice() const override { return m_nativeDevice; }
+
+        int nvrhiMarkers  = 0;
+        int nativeMarkers = 0;
+
+    private:
+        void*                  m_nativeDevice = nullptr;
+        Arcane::GpuBreadcrumbs m_breadcrumbs;
+    };
+}
+
+TEST_CASE("rendergraph exec: a crash backend on ANOTHER device gets CPU breadcrumbs but no native marker", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    // Any address that is not this graph's native device. (A NONE device's is
+    // null, so the gate is closed here for BOTH reasons -- which is the honest
+    // headless approximation of the vehicle: never open by accident.)
+    int              foreignDevice = 0;
+    MarkerSpyBackend spy(&foreignDevice);
+    Arcane::SetActiveGpuCrashBackend(&spy);
+
+    {
+        Arcane::NriUploadRing    ring;
+        Arcane::NriPipelineCache pipelines;
+        Arcane::RenderGraph      graph;
+
+        ThreeNodeGraph shape;
+        shape.Declare(graph);
+
+        const Arcane::RgCompiled    compiled = CompileOk(graph);
+        const Arcane::RgExecuteDesc desc{ *device, /*swapChain=*/nullptr, ring, pipelines, /*frameSlot=*/0 };
+        REQUIRE(graph.Execute(desc, compiled));
+    }
+
+    // THE PROPERTY: not one native marker crossed the device boundary.
+    CHECK(spy.nativeMarkers == 0);
+    // ...and the graph never reaches for the nvrhi overload at all (it holds no
+    // nvrhi::ICommandList -- that is the whole reason WriteMarkerNative exists).
+    CHECK(spy.nvrhiMarkers == 0);
+
+    // The half that MUST survive the gate: the CPU breadcrumb ring still opened
+    // one scope per node. Tokens are monotonic from 0 and never reused, so the
+    // next one issued is exactly the number of scopes opened so far.
+    CHECK(spy.Breadcrumbs().BeginScope("probe") == 3);
+
+    REQUIRE(Arcane::ClearActiveGpuCrashBackendIfCurrent(&spy));
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
