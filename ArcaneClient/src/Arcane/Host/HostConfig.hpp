@@ -146,6 +146,31 @@ namespace Arcane
         // Non-Dist for the same reason --crash-gpu and --nri-smoke are: a
         // shipped build has no business carrying a dev render path.
         bool            nriGraph = false;
+
+        // DEV ONLY (NRI Phase 2, Task 11): `--pick-probe x,y` -- the SCRIPTED
+        // desk check for the graph path's pick + JFA outline nodes.
+        //
+        // Turning it on does three things, and all three are the point:
+        //   1. the frame grows the pick node (an R32_UINT entity-id target +
+        //      a 1-pixel readback) and the outline chain (seed -> N jump-flood
+        //      steps -> a composite over the tonemapped backbuffer). With the
+        //      flag ABSENT the frame's shape is byte-for-byte Task 10's, which
+        //      is what keeps the batch/post/full stage goldens comparable;
+        //   2. the SELECTION is scripted -- the first pickable drawable in the
+        //      scene (hit-proxy id 1) -- because there is no editor selection
+        //      on this host and Phase 3 owns the real wiring;
+        //   3. the run prints the id read back at (x, y) and exits 0 on a HIT
+        //      (a non-zero id) or 1 on a MISS, so a desk battery item is one
+        //      scriptable line instead of an eyeball.
+        //
+        // Refused at parse time without --nri-graph (the nodes exist only on
+        // that path, so it would be a silent no-op -- the same reasoning
+        // --golden-stage outside golden mode carries) and without --frames N
+        // (the readback lands with frames-in-flight latency, so an open-ended
+        // run would never report and would exit on a window close instead).
+        bool            pickProbe  = false;
+        std::int32_t    pickProbeX = 0;   // canvas px, y-down; only read when pickProbe
+        std::int32_t    pickProbeY = 0;
 #endif
 
         // Forward-declared here so it names HostConfig::ParseOutcome and can be the

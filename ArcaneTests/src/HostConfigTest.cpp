@@ -227,4 +227,87 @@ TEST_CASE("host config: the golden flags ARE legal with --nri-graph", "[host][nr
     REQUIRE_FALSE(smokeGolden.config.has_value());
     CHECK(smokeGolden.exitCode == 2);
 }
+// NRI Phase 2, Task 11 -- the pick/outline probe. Guarded like --nri-graph
+// (both are DEV scaffolding registered inside HostConfig.cpp's
+// `#if !defined(ARCANE_DIST)` block), and, like it, the parse round-trip is the
+// ONLY headless coverage the flag can have: everything past it needs a window,
+// a device and a scene.
+//
+// THE POINT of testing the refusals rather than just the happy path: the flag's
+// whole value is being SCRIPTABLE, so a malformed coordinate that parsed to
+// something plausible would report a confident id for a pixel nobody asked
+// about -- worse than an error.
+TEST_CASE("host config: --pick-probe round-trips x,y and defaults off", "[host][nri]") {
+    const auto o = Run({"--nri-graph", "--frames", "120", "--pick-probe", "640,360"});
+    REQUIRE(o.config.has_value());
+    CHECK(o.config->pickProbe);
+    CHECK(o.config->pickProbeX == 640);
+    CHECK(o.config->pickProbeY == 360);
+
+    // Absent flag = today's frame exactly: no pick node, no outline chain.
+    const auto def = Run({"--nri-graph"});
+    REQUIRE(def.config.has_value());
+    CHECK_FALSE(def.config->pickProbe);
+    CHECK(def.config->pickProbeX == 0);
+    CHECK(def.config->pickProbeY == 0);
+
+    // 0,0 is a legal probe (the canvas origin) and must not read as "absent".
+    const auto origin = Run({"--nri-graph", "--frames", "10", "--pick-probe", "0,0"});
+    REQUIRE(origin.config.has_value());
+    CHECK(origin.config->pickProbe);
+    CHECK(origin.config->pickProbeX == 0);
+    CHECK(origin.config->pickProbeY == 0);
+
+    // It composes with the rest of the vehicle's vocabulary, deliberately --
+    // a probe run is an ordinary --nri-graph run with two extra nodes.
+    const auto paired = Run({"--nri-graph", "--frames", "120", "--pick-probe", "12,34",
+                             "--backend", "vulkan", "--no-vsync", "--screenshot", "probe.png"});
+    REQUIRE(paired.config.has_value());
+    CHECK(paired.config->pickProbe);
+    CHECK(paired.config->pickProbeX == 12);
+    CHECK(paired.config->pickProbeY == 34);
+    CHECK(paired.config->backend == Arcane::GraphicsBackend::Vulkan);
+    CHECK(paired.config->screenshotPath == "probe.png");
+}
+TEST_CASE("host config: --pick-probe refuses bad syntax at parse time", "[host][nri]") {
+    const std::vector<std::string> bad[] = {
+        {"--pick-probe", "640"},        // no comma at all
+        {"--pick-probe", "640,"},       // nothing after it
+        {"--pick-probe", ",360"},       // nothing before it
+        {"--pick-probe", "640,360,1"},  // a third component is not a pixel
+        {"--pick-probe", "a,b"},        // not numbers
+        {"--pick-probe", "640, 360"},   // a space is not a digit -- refuse, do not trim
+        {"--pick-probe", "-1,360"},     // negative: a typo, not a coordinate
+        {"--pick-probe", "640,-1"},
+        {"--pick-probe", "6.5,360"},    // fractional pixels are not a thing here
+        {"--pick-probe", "99999999999,0"},   // past int32
+    };
+    for (const auto& args : bad) {
+        std::vector<std::string> full{"--nri-graph", "--frames", "60"};
+        full.insert(full.end(), args.begin(), args.end());
+        const auto o = Run(full);
+        REQUIRE_FALSE(o.config.has_value());
+        CHECK(o.exitCode == 2);
+    }
+}
+TEST_CASE("host config: --pick-probe refuses the two silent-no-op combinations", "[host][nri]") {
+    // The pick/outline nodes live ONLY in NriGraphContext's frame, so a probe
+    // on the NVRHI path would render nothing extra and exit 0 -- the same
+    // silent-no-op class --golden-stage outside golden mode is refused for.
+    const auto noGraph = Run({"--frames", "60", "--pick-probe", "640,360"});
+    REQUIRE_FALSE(noGraph.config.has_value());
+    CHECK(noGraph.exitCode == 2);
+
+    // And the readback lands a couple of frames after the pass that wrote it,
+    // so an open-ended run would exit on a window close having reported
+    // nothing at all.
+    const auto noFrames = Run({"--nri-graph", "--pick-probe", "640,360"});
+    REQUIRE_FALSE(noFrames.config.has_value());
+    CHECK(noFrames.exitCode == 2);
+
+    // ...but neither refusal touches a run that simply did not pass the flag.
+    const auto plain = Run({"--nri-graph"});
+    REQUIRE(plain.config.has_value());
+    CHECK_FALSE(plain.config->pickProbe);
+}
 #endif

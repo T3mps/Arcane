@@ -110,6 +110,7 @@
 // forward-declare NriGraphContext.
 #include <Arcane/Render/Nri/nodes/Batch2DNode.hpp>
 #include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>
+#include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -182,6 +183,33 @@ namespace Arcane
             // post chain's b1 is written at RECORD time, long after this
             // pointer's referent is out of scope. Null leaves them zeroed.
             const GlobalParams* globals = nullptr;
+
+            // ---- the pick + outline chain (Task 11) ---------------------
+            // THIS FRAME'S PICKABLE SILHOUETTES, already projected to canvas
+            // pixels by CollectPickables (Render/PickEmit.hpp) -- the k-th
+            // entry IS hit-proxy id k+1. Collected by the FRAME DRIVER, which
+            // is the thing that owns a registry and a camera; this class must
+            // not grow either (it is a RENDER vehicle, the same reasoning
+            // AssetResolveFn carries). Borrowed for the duration of the
+            // RenderFrame call and never stored.
+            //
+            // EMPTY IS LEGAL and is not "no pick": the chain is still declared
+            // when `pickOutline` is set, and a scene with nothing pickable
+            // simply produces an all-zero id target -- which is exactly what
+            // a probe over empty space must read back.
+            std::span<const PickDrawable> pickables;
+
+            // The hit-proxy ids the outline traces as ONE silhouette (their
+            // union). Task 11's driver scripts this to the scene's first
+            // pickable entity; Phase 3 replaces THIS ONE LINE at the host with
+            // the editor's real selection and nothing here changes.
+            std::span<const std::uint32_t> selectedIds;
+
+            // Add the pick node, the readback and the JFA outline chain to
+            // this frame's graph. Off on every ordinary run, which is what
+            // keeps the frame's shape -- and therefore the batch/post/full
+            // stage goldens -- byte-for-byte Task 10's.
+            bool pickOutline = false;
         };
 
         // What one frame did. Distinguishes the two false-y outcomes the frame
@@ -269,6 +297,36 @@ namespace Arcane
         [[nodiscard]] Batch2DNode*   Batch2D()   noexcept { return m_batch2D.get(); }
         [[nodiscard]] TonemapNode*   Tonemap()   noexcept { return m_tonemap.get(); }
         [[nodiscard]] PostChainNode* PostChain() noexcept { return m_post.get(); }
+
+        // The pick + outline pair (Task 11). NULL on every run that did not
+        // pass --pick-probe: they are built only when the config arms the
+        // probe, so an ordinary --nri-graph run creates no readback buffer, no
+        // descriptor pool and no extra pipeline layout -- and the frame that
+        // never declares them cannot be affected by their absence.
+        [[nodiscard]] PickNode*    Pick()    noexcept { return m_pick.get(); }
+        [[nodiscard]] OutlineNode* Outline() noexcept { return m_outline.get(); }
+
+        // FrameDesc::pickables / ::selectedIds for the frame currently being
+        // declared -- read by the pick and outline declarators the same way
+        // CurrentBatch() is. Empty outside a RenderFrame() call.
+        [[nodiscard]] std::span<const PickDrawable> CurrentPickables() const noexcept
+        { return m_currentPickables; }
+        [[nodiscard]] std::span<const std::uint32_t> CurrentSelectedIds() const noexcept
+        { return m_currentSelectedIds; }
+
+        // The --pick-probe pixel, in canvas px (y down). Doubles as the outline
+        // shader's HOVER cursor, deliberately: a desk eyeball then shows amber
+        // on the scripted selection and cyan on whatever the probe is over, so
+        // one run proves both halves of the composite.
+        [[nodiscard]] std::int32_t ProbeX() const noexcept { return m_probeX; }
+        [[nodiscard]] std::int32_t ProbeY() const noexcept { return m_probeY; }
+
+        // The entity id read back at the probe pixel, or nullopt when no
+        // readback has landed yet (the first kSwapchainFramesInFlight frames of
+        // a probe run) or the probe pixel was outside the surface. 0 is a
+        // legitimate value and means BACKGROUND -- the caller decides that is a
+        // miss, not this.
+        [[nodiscard]] std::optional<std::uint32_t> ProbeId() const noexcept;
 
         // The batcher the frame CURRENTLY being declared should drain, i.e.
         // FrameDesc::batch. Valid only inside a RenderFrame() call; null
@@ -370,6 +428,12 @@ namespace Arcane
         std::unique_ptr<Batch2DNode>       m_batch2D;
         std::unique_ptr<PostChainNode>     m_post;
         std::unique_ptr<TonemapNode>       m_tonemap;
+        // Built only under --pick-probe (see Pick()/Outline()). The outline
+        // node holds views over the graph's transient pool, so it is released
+        // in ~NriGraphContext beside the other two and BEFORE the graph
+        // releases that pool.
+        std::unique_ptr<PickNode>          m_pick;
+        std::unique_ptr<OutlineNode>       m_outline;
 
         // Raw offline shader artifacts, keyed by artifact stem. unordered_map
         // and not vector: the node authors hold SPANS into these vectors for
@@ -398,6 +462,30 @@ namespace Arcane
 
         // FrameDesc::globals, by VALUE -- see CurrentGlobals().
         GlobalParams m_currentGlobals{};
+
+        // FrameDesc::pickables / ::selectedIds, published for exactly the span
+        // of one frame's declaration and cleared afterwards -- the same
+        // treatment m_currentBatch gets, and for the same reason: nothing may
+        // reach a stale span from a later frame.
+        //
+        // BOTH ARE FULLY CONSUMED AT DECLARATION TIME, which is what makes a
+        // borrowed span the right shape here: PickNode::PrepareDrawables turns
+        // the drawables into vertices and OutlineNode::PrepareSelection COPIES
+        // the ids, both into node-owned storage, before this function returns.
+        // Reading either of these from an exec fn would read an empty span.
+        std::span<const PickDrawable>  m_currentPickables;
+        std::span<const std::uint32_t> m_currentSelectedIds;
+
+        // --pick-probe: armed at Create from the config, so an ordinary run
+        // never builds the nodes at all.
+        bool         m_pickArmed      = false;
+        std::int32_t m_probeX         = 0;
+        std::int32_t m_probeY         = 0;
+        // Latched when the probe pixel falls outside the current surface: the
+        // node would still copy a CLAMPED texel (the frame's shape must not
+        // depend on a coordinate), but reporting that id as the answer would be
+        // a confident lie about a pixel nobody asked for. Said once.
+        bool         m_probeOutOfRange = false;
 
         // See SetAssetResolver. Empty until the frame driver installs one.
         AssetResolveFn m_resolveAsset;
@@ -465,6 +553,19 @@ namespace Arcane
         // on nothing else, which is what lets the [nri] frame-shape cases
         // exercise the real chain shape with no device.
         const PostChainDesc* post = nullptr;
+
+        // Declare the pick + JFA outline chain after the tonemap (Task 11).
+        // The ONLY thing about that chain the declarations depend on is this
+        // flag and the canvas extent -- the drawables, the selection and the
+        // probe pixel are all RECORD-time data that travels through
+        // NriGraphContext -- which is exactly what lets the headless [nri]
+        // cases drive the real shape with a null context.
+        //
+        // Stage-independent, deliberately: --golden-stage names slices of the
+        // SCENE render (batch / post / full), and the outline is not one of
+        // them. A stage golden is taken without the probe, so the two never
+        // meet in practice.
+        bool pickOutline = false;
     };
 
     struct RgFrameHandles
@@ -477,6 +578,13 @@ namespace Arcane
         // in which case the tonemap sampled `canvas`.
         RgTexture     post{};
         std::uint32_t postPassCount = 0;
+
+        // The pick + outline chain's handles (Task 11). All invalid, and
+        // jfaStepCount 0, on a frame that did not declare it.
+        RgTexture     pickIds{};        // the R32_UINT entity-id transient
+        RgBuffer      pickReadback{};   // the imported HOST_READBACK staging buffer
+        RgTexture     outlineField{};   // the LAST JFA target -- what the composite sampled
+        std::uint32_t jfaStepCount = 0;
     };
 
     ARCANE_API RgFrameHandles DeclareGraphFrame(RenderGraph& graph, const RgFrameShape& shape,

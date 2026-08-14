@@ -176,4 +176,80 @@ namespace Arcane
         y = std::clamp(y, 0, (int)idH - 1);
         return glm::ivec2(x, y);
     }
+
+    // ------------------------------------------------------------------
+    // The id pass's geometry. Moved here VERBATIM from PickBuffer.cpp's
+    // anonymous namespace (NRI Phase 2, Task 11) so the NVRHI recorder and the
+    // graph's pick node share ONE emitter -- see the header's block comment.
+    // ------------------------------------------------------------------
+
+    uint32_t PickKindCode(PickDrawable::Kind kind)
+    {
+        switch (kind)
+        {
+        case PickDrawable::Kind::Quad:    return 0u;
+        case PickDrawable::Kind::Circle:  return 1u;
+        case PickDrawable::Kind::Capsule: return 2u;
+        case PickDrawable::Kind::Box:     return 3u;
+        }
+        return 0u;
+    }
+
+    glm::vec2 PickBoundHalfExtents(const PickDrawable& d)
+    {
+        switch (d.kind)
+        {
+        case PickDrawable::Kind::Circle:  return glm::vec2(d.radius, d.radius);
+        case PickDrawable::Kind::Capsule: return glm::vec2(d.halfLen + d.radius, d.radius);
+        case PickDrawable::Kind::Quad:
+        case PickDrawable::Kind::Box:
+        default:                          return d.halfExtents;
+        }
+    }
+
+    void BuildPickIdGeometry(std::span<const PickDrawable> drawables,
+                             std::vector<PickIdVertex>& outVertices,
+                             std::vector<uint32_t>& outIndices)
+    {
+        outVertices.clear();
+        outIndices.clear();
+
+        // Bounding-quad corner sign pattern: TL, TR, BR, BL.
+        static const glm::vec2 kSigns[4] = {
+            { -1.0f, -1.0f }, { 1.0f, -1.0f }, { 1.0f, 1.0f }, { -1.0f, 1.0f } };
+
+        for (std::size_t di = 0; di < drawables.size(); ++di)
+        {
+            const PickDrawable& d = drawables[di];
+            const uint32_t id     = (uint32_t)di + 1u;   // 1-based
+            const uint32_t code   = PickKindCode(d.kind);
+            const glm::vec2 bound = PickBoundHalfExtents(d);
+
+            // Rotate the bounding quad by the drawable's angle (the canvas map
+            // has no rotation -- only scale + offset, already folded into the
+            // drawable). The PS coverage test uses the UNROTATED `local`.
+            const float c = std::cos(d.angle);
+            const float s = std::sin(d.angle);
+            const uint32_t base = (uint32_t)outVertices.size();
+
+            for (int i = 0; i < 4; ++i)
+            {
+                const glm::vec2 local(kSigns[i].x * bound.x, kSigns[i].y * bound.y);
+                const glm::vec2 rot(c * local.x - s * local.y,
+                                    s * local.x + c * local.y);
+                PickIdVertex v;
+                v.pos     = d.center + rot;
+                v.local   = local;
+                v.radius  = d.radius;
+                v.halfLen = d.halfLen;
+                v.kind    = code;
+                v.id      = id;
+                outVertices.push_back(v);
+            }
+
+            const uint32_t quad[6] = { base, base + 1, base + 2,
+                                       base, base + 2, base + 3 };
+            outIndices.insert(outIndices.end(), quad, quad + 6);
+        }
+    }
 }

@@ -22,6 +22,7 @@
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
 #include <Arcane/Render/FullscreenMaterialChain.hpp>   // scene post hook
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuPassScope -- the F-8b pass seams
+#include <Arcane/Render/PickEmit.hpp>    // CollectPickables / PickEntityForId (--pick-probe)
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (the scene owns the view)
 #if !defined(ARCANE_DIST)
 #include <Arcane/Render/Nri/NriSmoke.hpp>   // --nri-smoke (Phase 1 scaffolding; deleted in Phase 2)
@@ -1032,6 +1033,41 @@ void RuntimeApp::MainLoop()
             }
 
             Arcane::NriGraphContext::FrameDesc graphFrame;
+#if !defined(ARCANE_DIST)
+            // --pick-probe (NRI Phase 2, Task 11). THE ONE PLACE the entity ids
+            // are produced: CollectPickables is a pure walk of the registry and
+            // the k-th drawable it appends IS hit-proxy id k+1, which is what
+            // the graph's pick node rasterises and what PickEntityForId below
+            // inverts. It lives here, not in the vehicle, because this is the
+            // object that owns a registry and a camera -- NriGraphContext is a
+            // render vehicle and must not grow either.
+            //
+            // The view is the SCENE camera PushSceneCamera just installed, so
+            // the id pass rasterises the same silhouettes the batch node drew.
+            // (The camera was fitted to the NVRHI canvas extent, which
+            // RuntimeApp resizes from the same event as the graph swapchain --
+            // the two agree at every size the host actually produces.)
+            if (m_config.pickProbe)
+            {
+                const Arcane::PickView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
+                m_pickDrawables.clear();
+                Arcane::CollectPickables(m_runtime->Registry(), view, m_pickDrawables);
+
+                // THE SCRIPTED SELECTION -- Task 11's stand-in for an editor
+                // selection this host does not have: the FIRST pickable entity
+                // in the scene, whose hit-proxy id is 1 by CollectPickables'
+                // own ordering contract. Phase 3 replaces exactly these three
+                // lines with the editor's real selection and nothing inside the
+                // vehicle or the nodes changes.
+                m_pickSelectedIds.clear();
+                if (!m_pickDrawables.empty())
+                    m_pickSelectedIds.push_back(1u);
+
+                graphFrame.pickOutline = true;
+                graphFrame.pickables   = m_pickDrawables;
+                graphFrame.selectedIds = m_pickSelectedIds;
+            }
+#endif
             // Only read in golden mode (Parse refuses a non-Full stage
             // outside it). Every stage renders the same frame today, because
             // the nodes the other two would add do not exist on this path yet.
@@ -1227,6 +1263,46 @@ void RuntimeApp::ShutdownGraphPath()
 {
     if (!m_graphContext)
         return;
+
+#if !defined(ARCANE_DIST)
+    // --pick-probe's ANSWER, read while the vehicle is still alive (the reset
+    // below takes the readback buffer with it) and reported as an exit code so
+    // a desk battery item is one scriptable line.
+    //
+    // 0/1 on hit/miss is the flag's own contract, and it is deliberately
+    // SUBORDINATE to the run's: a probe that never got to report because the
+    // run died already has m_graphExit == 1, and the errors-grew case sets 2
+    // below. So this only ever turns a CLEAN run into a miss.
+    if (m_config.pickProbe)
+    {
+        const std::optional<std::uint32_t> id = m_graphContext->ProbeId();
+        if (!id.has_value())
+        {
+            ARC_ERROR("[nri-graph] --pick-probe ({}, {}): NO READBACK LANDED -- the run was too "
+                      "short (the copy lands a couple of frames after the pass that wrote it) or "
+                      "the probe pixel was outside the surface",
+                      m_config.pickProbeX, m_config.pickProbeY);
+            if (m_graphExit == 0)
+                m_graphExit = 1;
+        }
+        else if (*id == 0u)
+        {
+            ARC_INFO("[nri-graph] --pick-probe ({}, {}): id 0 -- BACKGROUND (miss); {} pickable(s) "
+                     "were in the scene", m_config.pickProbeX, m_config.pickProbeY,
+                     m_pickDrawables.size());
+            if (m_graphExit == 0)
+                m_graphExit = 1;
+        }
+        else
+        {
+            const Astra::Entity hit = Arcane::PickEntityForId(m_pickDrawables, *id);
+            ARC_INFO("[nri-graph] --pick-probe ({}, {}): id {} -- HIT (entity {}) of {} pickable(s)",
+                     m_config.pickProbeX, m_config.pickProbeY, *id,
+                     hit.IsValid() ? std::to_string(hit.GetID()) : std::string("<unmapped>"),
+                     m_pickDrawables.size());
+        }
+    }
+#endif
 
     // Its own scope's end is what destroys every NRI object (device, swapchain,
     // graph, cache, ring, window), and teardown ordering is exactly the class of

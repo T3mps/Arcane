@@ -36,6 +36,13 @@ namespace Arcane
         cli.Flag  ("nri-graph",      "DEV: render through the NRI frame graph instead of NVRHI "
                                      "(boots the real engine; honours --frames/--screenshot/"
                                      "--golden-*)");
+        // Registered beside --nri-graph rather than beside the golden flags,
+        // because unlike those it is meaningless without it: the pick and
+        // outline nodes exist only on the graph path. Same non-Dist guard for
+        // the same reason.
+        cli.Option("pick-probe", "",  "DEV (--nri-graph): add the pick + JFA outline nodes, scripted "
+                                      "onto the scene's first pickable entity, and print the entity id "
+                                      "read back at canvas pixel x,y -- exit 0 on a hit, 1 on a miss");
 #endif
 
         const Cli::Result r = cli.Parse(argc, argv);
@@ -123,6 +130,74 @@ namespace Arcane
             std::fprintf(stderr, "error: --nri-smoke and --nri-graph are two different render "
                                  "paths -- pass exactly one\n");
             return { std::nullopt, 2 };
+        }
+
+        // --pick-probe x,y (NRI Phase 2, Task 11). Parsed HERE rather than at
+        // the use site, and refused rather than clamped, because the whole
+        // value of the flag is being scriptable: a probe whose coordinate was
+        // silently reinterpreted would report a confident id for a pixel
+        // nobody asked about. Cli has no pair type (documented non-goal), so
+        // the split is done by hand -- the refusals below are exactly the
+        // parse-time treatment --backend metal gets.
+        {
+            const std::string probe = r.Get("pick-probe");
+            if (!probe.empty())
+            {
+                const std::size_t comma = probe.find(',');
+                bool bad = comma == std::string::npos || comma == 0 || comma + 1 >= probe.size();
+                long long x = 0, y = 0;
+                if (!bad)
+                {
+                    const std::string xs = probe.substr(0, comma);
+                    const std::string ys = probe.substr(comma + 1);
+                    const auto whole = [](const std::string& text, long long& out)
+                    {
+                        if (text.empty())
+                            return false;
+                        out = 0;
+                        for (const char c : text)
+                        {
+                            if (c < '0' || c > '9')
+                                return false;
+                            out = out * 10 + (c - '0');
+                            if (out > 0x7FFFFFFFll)
+                                return false;
+                        }
+                        return true;
+                    };
+                    // Unsigned on purpose: a NEGATIVE probe pixel is not a
+                    // coordinate, it is a typo -- the id target has no texels
+                    // there and the run would report a miss that means nothing.
+                    bad = !whole(xs, x) || !whole(ys, y);
+                }
+                if (bad)
+                {
+                    std::fprintf(stderr, "error: --pick-probe wants two non-negative integers as "
+                                         "x,y (canvas pixels, y down) -- e.g. --pick-probe 640,360\n");
+                    return { std::nullopt, 2 };
+                }
+
+                // Silent-no-op refusals, the same class as --golden-stage
+                // outside golden mode: the pick/outline nodes live only in
+                // NriGraphContext's frame, and the readback lands with
+                // frames-in-flight latency so an open-ended run never reports.
+                if (!cfg.nriGraph)
+                {
+                    std::fprintf(stderr, "error: --pick-probe only applies to the NRI graph path; "
+                                         "pass --nri-graph\n");
+                    return { std::nullopt, 2 };
+                }
+                if (cfg.maxFrames == 0)
+                {
+                    std::fprintf(stderr, "error: --pick-probe requires --frames N (the readback "
+                                         "lands a couple of frames after the pass that wrote it)\n");
+                    return { std::nullopt, 2 };
+                }
+
+                cfg.pickProbe  = true;
+                cfg.pickProbeX = (std::int32_t)x;
+                cfg.pickProbeY = (std::int32_t)y;
+            }
         }
 #endif
 

@@ -23,6 +23,7 @@
 #include <glm/vec2.hpp>
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace Astra { class Registry; }
@@ -104,4 +105,54 @@ namespace Arcane
     // The id-buffer texel to sample for a 1x viewport click at `pixel1x` when the
     // id buffer is supersampled by `ss` (center subsample), clamped to [0, dim).
     ARCANE_API glm::ivec2 PickSampleTexel(glm::vec2 pixel1x, uint32_t ss, uint32_t idW, uint32_t idH);
+
+    // =====================================================================
+    // THE ID PASS'S GEOMETRY -- one emitter, two recorders (NRI Phase 2,
+    // Task 11).
+    //
+    // This used to be a file-local block inside PickBuffer.cpp. It moved here
+    // when the NRI graph path grew its own pick node (Render/Nri/nodes/
+    // PickOutlineNodes.cpp): both recorders MUST build the same vertices from
+    // the same drawables in the same order, because the 1-based id a vertex
+    // carries IS the id<->entity mapping every consumer inverts
+    // (PickEntityForId). Two independent copies of this loop would be two id
+    // assignments that agree until one of them is edited -- the same reasoning
+    // that keeps ONE Batcher2D feeding both 2D recorders.
+    //
+    // Pure and headless: no render device, no nvrhi, no nri.
+    // =====================================================================
+
+    // Per-vertex data for the id pass, matching entity_id.hlsl's VSInput. The
+    // C++ attribute array order at EITHER recorder MUST match that struct's
+    // member order (nvrhi assigns Vulkan input locations by declaration order;
+    // NRI takes an explicit vk.location, and D3D matches the custom semantic
+    // name at SemanticIndex 0).
+    struct PickIdVertex
+    {
+        glm::vec2 pos;      // canvas px: the rotated bounding-quad corner
+        glm::vec2 local;    // shape-local coords (unrotated), canvas px
+        float     radius;   // canvas px (circle/capsule)
+        float     halfLen;  // canvas px (capsule)
+        uint32_t  kind;     // 0=Quad 1=Circle 2=Capsule 3=Box
+        uint32_t  id;       // 1-based hit-proxy id
+    };
+    static_assert(sizeof(PickIdVertex) == 32, "id vertex is the wire format");
+
+    // kind -> the shader code entity_id.hlsl's PS switches on.
+    ARCANE_API uint32_t PickKindCode(PickDrawable::Kind kind);
+
+    // Bounding half-extents (canvas px) of a drawable's silhouette: the quad the
+    // id pass rasterizes. The PS analytically discards fragments outside
+    // circle/capsule shapes; Quad/Box fill the whole bound.
+    ARCANE_API glm::vec2 PickBoundHalfExtents(const PickDrawable& drawable);
+
+    // Build the id-pass vertex + index arrays from `drawables` (both vectors are
+    // CLEARED first). One quad (4 verts / 6 indices) per drawable; the k-th
+    // drawable (0-based) gets id k+1. Drawables are already ordered back-to-
+    // front, so index order = draw order = front-most last (the output merger,
+    // primitive-ordered, makes the last-drawn silhouette win a contested pixel
+    // -- no depth buffer anywhere on this path).
+    ARCANE_API void BuildPickIdGeometry(std::span<const PickDrawable> drawables,
+                                        std::vector<PickIdVertex>& outVertices,
+                                        std::vector<uint32_t>& outIndices);
 }

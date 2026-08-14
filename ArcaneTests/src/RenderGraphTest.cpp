@@ -28,6 +28,7 @@
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/nodes/Batch2DNode.hpp>   // SpriteMaterialLayout / the arena region math
 #include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>  // FullscreenMaterialLayout / PostChainNode
+#include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp> // OutlineJfaStepCount / PickNode / OutlineNode
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/PostChainCache.hpp>    // PostChainDesc -- the frame's post-chain wiring
@@ -3807,4 +3808,516 @@ TEST_CASE("nri post chain arena: every (frame slot, region) pair owns a distinct
     CHECK(Node::CbRegionOffset(256, 0, Node::kGlobalsRegion) == 0);
     CHECK(Node::CbRegionOffset(256, 1, Node::kGlobalsRegion)
           == (std::uint64_t)Node::kCbRegionsPerFrame * 256);
+}
+
+// ======================================================================
+// THE PICK + JFA OUTLINE CHAIN (Phase 2, Task 11).
+//
+// Same drive as every case above -- Arcane::DeclareGraphFrame with a null
+// context -- so these fail when the DECLARATIONS change, not when a
+// transcription of them goes stale. What they pin is the whole of the task's
+// shape contract: with the flag off the frame is byte-for-byte Task 10's, and
+// with it on the chain appears in exactly one place with exactly one derived
+// barrier chain.
+//
+// GPU-free by construction: none of this needs a device, because Compile() is
+// pure and the node OBJECTS (which do need one) are only reached from exec fns
+// a null context makes inert.
+// ======================================================================
+
+TEST_CASE("outline jfa: the step count floods the whole field and never exceeds the cap", "[nri]")
+{
+    // N = ceil(log2(maxDim)): jumps 2^(N-1)..1 sum to 2^N - 1, which must reach
+    // the far corner of a maxDim-wide field from any seed. THE property, not
+    // the formula -- an off-by-one here is a field that is silently incomplete
+    // in one corner, which no shape assertion could otherwise see.
+    const std::uint32_t dims[] = { 1, 2, 3, 4, 5, 7, 8, 9, 16, 17, 200, 320, 720, 1280, 1920, 4096 };
+    for (const std::uint32_t dim : dims)
+    {
+        const std::uint32_t steps = Arcane::OutlineJfaStepCount(dim, 1);
+        REQUIRE(steps >= 1);
+        REQUIRE(steps <= 32);
+        std::uint64_t reach = 0;
+        for (std::uint32_t s = 0; s < steps; ++s)
+            reach += (std::uint64_t)1 << s;          // 2^(steps-1) .. 1
+        CHECK(reach >= (std::uint64_t)dim - 1);      // the far corner is reachable
+        // ...and it is the SMALLEST such count: one step fewer must NOT reach.
+        if (steps > 1)
+            CHECK(reach - ((std::uint64_t)1 << (steps - 1)) < (std::uint64_t)dim - 1);
+    }
+
+    // The LONGER side decides -- the field is aspect-agnostic.
+    CHECK(Arcane::OutlineJfaStepCount(1280, 720) == Arcane::OutlineJfaStepCount(720, 1280));
+    CHECK(Arcane::OutlineJfaStepCount(1280, 720) == Arcane::OutlineJfaStepCount(1280, 1));
+    // A degenerate extent still asks for a pass rather than none: a zero-step
+    // chain would leave the composite reading a never-written transient, which
+    // Compile() refuses outright.
+    CHECK(Arcane::OutlineJfaStepCount(0, 0) == 1);
+}
+
+TEST_CASE("nri graph frame: the pick + outline chain is absent unless the frame asks for it", "[nri]")
+{
+    // THE REASON THE STAGE BASELINES STAY THE COMPARE TARGETS: a frame that did
+    // not ask for the probe must declare EXACTLY what Task 10 declared. Node
+    // count, node names and pool slots all pinned, so a node added "just for
+    // the pick path" cannot slip in unconditionally.
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 320;
+    shape.canvasHeight = 200;
+    shape.pickOutline  = false;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+    REQUIRE(graph.NodeCount() == 2);
+    CHECK(std::string(graph.NodeName(0)) == "batch2d");
+    CHECK(std::string(graph.NodeName(1)) == "tonemap");
+    CHECK_FALSE(graph.IsHandleValid(handles.pickIds));
+    CHECK_FALSE(graph.IsHandleValid(handles.pickReadback));
+    CHECK_FALSE(graph.IsHandleValid(handles.outlineField));
+    CHECK(handles.jfaStepCount == 0);
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    CHECK(compiled.nodes.size() == 2);
+    CHECK(compiled.transients.size() == 1);   // the canvas, and nothing else
+    CHECK(compiled.poolSlotCount == 1);
+}
+
+TEST_CASE("nri graph frame: the pick + outline chain lands between the tonemap and the capture",
+          "[nri]")
+{
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 320;
+    shape.canvasHeight = 200;
+    shape.pickOutline  = true;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+    // 320 wide -> ceil(log2(320)) == 9 jump-flood steps.
+    const std::uint32_t steps = Arcane::OutlineJfaStepCount(320, 200);
+    REQUIRE(steps == 9);
+    CHECK(handles.jfaStepCount == steps);
+
+    // SIX fixed nodes -- batch2d, tonemap, pick, pickreadback, outlineseed,
+    // outlinecomposite -- plus one outlinejfa per step.
+    REQUIRE(graph.NodeCount() == 6u + steps);
+    CHECK(std::string(graph.NodeName(0)) == "batch2d");
+    CHECK(std::string(graph.NodeName(1)) == "tonemap");
+    CHECK(std::string(graph.NodeName(2)) == "pick");
+    CHECK(std::string(graph.NodeName(3)) == "pickreadback");
+    CHECK(std::string(graph.NodeName(4)) == "outlineseed");
+    for (std::uint32_t step = 0; step < steps; ++step)
+        CHECK(std::string(graph.NodeName(5 + step)) == "outlinejfa" + std::to_string(step));
+    // THE COMPOSITING ORDER: the composite is the LAST node, so it draws onto
+    // the backbuffer the tonemap already wrote -- and, on a capture frame,
+    // before the copy that reads it (a later case).
+    CHECK(std::string(graph.NodeName(5 + steps)) == "outlinecomposite");
+
+    // The id target is a graph TRANSIENT; the readback staging buffer is an
+    // IMPORT, because the graph realizes transients in DEVICE memory and those
+    // can never be mapped.
+    REQUIRE(graph.IsHandleValid(handles.pickIds));
+    REQUIRE(graph.IsHandleValid(handles.pickReadback));
+    REQUIRE(graph.IsHandleValid(handles.outlineField));
+    CHECK(graph.IsTransient(handles.pickIds));
+    CHECK_FALSE(graph.IsTransient(handles.pickReadback));
+    CHECK(graph.IsTransient(handles.outlineField));
+    CHECK(std::string(graph.NameOf(handles.pickIds)) == "pickids");
+    CHECK(std::string(graph.NameOf(handles.pickReadback)) == "pickreadback");
+    // The field the composite sampled IS the last step's target, not the seed.
+    CHECK(std::string(graph.NameOf(handles.outlineField))
+          == "outlinejfa" + std::to_string(steps - 1));
+}
+
+TEST_CASE("nri graph frame: the pick chain's barriers are derived, including the readback copy",
+          "[nri]")
+{
+    // NOTHING in the chain records a CmdBarrier -- every transition below falls
+    // out of the Read/Write declarations alone (RgCompiled's contract block).
+    // This is the case that goes red if a node starts emitting its own.
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 320;
+    shape.canvasHeight = 200;
+    shape.pickOutline  = true;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+    const std::uint32_t steps = handles.jfaStepCount;
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.nodes.size() == 6u + steps);
+
+    constexpr nri::AccessLayoutStage kShaderReadState{
+        nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE, kShaderReadStages };
+    constexpr nri::AccessLayoutStage kCopySrcState{
+        nri::AccessBits::COPY_SOURCE, nri::Layout::COPY_SOURCE, nri::StageBits::COPY };
+
+    // Node 2 (pick): the id transient's pool slot -> colour attachment.
+    REQUIRE(compiled.nodes[2].preBarriers.size() == 1);
+    CHECK(compiled.nodes[2].preBarriers[0].isTexture);
+    CheckState(compiled.nodes[2].preBarriers[0].after, kColorState);
+
+    // Node 3 (pickreadback): the id target becomes a copy SOURCE and the
+    // IMPORTED staging buffer a copy DESTINATION. A buffer barrier's layout is
+    // meaningless by contract, hence UNDEFINED -- and RgUsage::ReadbackHost
+    // deriving the same state as CopyDst is by design, not an accident.
+    REQUIRE(compiled.nodes[3].preBarriers.size() == 2);
+    const Arcane::RgBarrier& idToCopy = compiled.nodes[3].preBarriers[0].isTexture
+                                          ? compiled.nodes[3].preBarriers[0]
+                                          : compiled.nodes[3].preBarriers[1];
+    const Arcane::RgBarrier& stagingBarrier = compiled.nodes[3].preBarriers[0].isTexture
+                                          ? compiled.nodes[3].preBarriers[1]
+                                          : compiled.nodes[3].preBarriers[0];
+    CHECK(idToCopy.isTexture);
+    CheckState(idToCopy.before, kColorState);
+    CheckState(idToCopy.after, kCopySrcState);
+    CHECK_FALSE(stagingBarrier.isTexture);
+    CheckState(stagingBarrier.after,
+               nri::AccessBits::COPY_DESTINATION, nri::Layout::UNDEFINED, nri::StageBits::COPY);
+
+    // Node 4 (outlineseed): the id target goes COPY_SOURCE -> SHADER_RESOURCE
+    // (the readback ran first), and the seed target becomes an attachment.
+    REQUIRE(compiled.nodes[4].preBarriers.size() == 2);
+    bool sawIdRead = false, sawSeedWrite = false;
+    for (const Arcane::RgBarrier& barrier : compiled.nodes[4].preBarriers)
+    {
+        REQUIRE(barrier.isTexture);
+        if (static_cast<std::uint32_t>(barrier.after.layout)
+            == static_cast<std::uint32_t>(nri::Layout::SHADER_RESOURCE))
+        {
+            sawIdRead = true;
+            CheckState(barrier.before, kCopySrcState);
+            CheckState(barrier.after, kShaderReadState);
+        }
+        else
+        {
+            sawSeedWrite = true;
+            CheckState(barrier.after, kColorState);
+        }
+    }
+    CHECK(sawIdRead);
+    CHECK(sawSeedWrite);
+
+    // Every JFA step: read the previous target, write its own. Two barriers,
+    // every time, with no hand-written ping-pong anywhere.
+    for (std::uint32_t step = 0; step < steps; ++step)
+    {
+        const Arcane::RgCompiledNode& node = compiled.nodes[5 + step];
+        REQUIRE(node.preBarriers.size() == 2);
+        bool read = false, write = false;
+        for (const Arcane::RgBarrier& barrier : node.preBarriers)
+        {
+            REQUIRE(barrier.isTexture);
+            if (static_cast<std::uint32_t>(barrier.after.layout)
+                == static_cast<std::uint32_t>(nri::Layout::SHADER_RESOURCE))
+            {
+                read = true;
+                CheckState(barrier.before, kColorState);
+                CheckState(barrier.after, kShaderReadState);
+            }
+            else
+            {
+                write = true;
+                CheckState(barrier.after, kColorState);
+            }
+        }
+        CHECK(read);
+        CHECK(write);
+    }
+
+    // The composite: ONE barrier, the field's COLOR_ATTACHMENT ->
+    // SHADER_RESOURCE. The backbuffer gets none, and that is DERIVED rather
+    // than forgotten -- the tonemap already left it in COLOR_ATTACHMENT and a
+    // consecutive same-state declaration produces no transition, which is
+    // exactly what nvrhi's own state tracker does for a non-UAV state
+    // (CommandListResourceStateTracker::requireTextureState).
+    const Arcane::RgCompiledNode& composite = compiled.nodes[5 + steps];
+    REQUIRE(composite.preBarriers.size() == 1);
+    CHECK(composite.preBarriers[0].isTexture);
+    CheckState(composite.preBarriers[0].before, kColorState);
+    CheckState(composite.preBarriers[0].after, kShaderReadState);
+
+    // ...and the graph still leaves the backbuffer present-ready. The staging
+    // buffer gets NO exit barrier: ImportBuffer takes no exit state.
+    REQUIRE(compiled.exitBarriers.size() == 1);
+    CHECK(compiled.exitBarriers[0].isTexture);
+    CheckState(compiled.exitBarriers[0].after, kPresentState);
+}
+
+TEST_CASE("nri graph frame: the outline field ping-pongs through TWO pool slots however many "
+          "steps it runs", "[nri]")
+{
+    // THE PING-PONG IS DERIVED, here as it is for the post chain: every step
+    // declares its OWN transient and the pool's lifetime-interval allocator is
+    // what collapses N+1 logical field targets onto two physical ones. A
+    // regression that hand-rolled the alternation would show up as a slot count
+    // that grows with the step count.
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 320;
+    shape.canvasHeight = 200;
+    shape.pickOutline  = true;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+
+    // canvas + pickids + outlineseed + N jfa targets.
+    REQUIRE(compiled.transients.size() == 3u + handles.jfaStepCount);
+    // ...in FOUR pool slots: the RGBA16F canvas, the R32_UINT id target (a
+    // different desc, so it can never share), and the two the whole SNORM field
+    // chain alternates through.
+    CHECK(compiled.poolSlotCount == 4);
+
+    // And the count is genuinely independent of the step count -- a smaller
+    // canvas runs fewer steps through the same two slots.
+    Arcane::RenderGraph small;
+    Arcane::RgFrameShape smallShape;
+    smallShape.canvasWidth  = 16;
+    smallShape.canvasHeight = 16;
+    smallShape.pickOutline  = true;
+    const Arcane::RgFrameHandles smallHandles =
+        Arcane::DeclareGraphFrame(small, smallShape, nullptr);
+    CHECK(smallHandles.jfaStepCount == 4);
+    CHECK(smallHandles.jfaStepCount < handles.jfaStepCount);
+    const Arcane::RgCompiled smallCompiled = CompileOk(small);
+    CHECK(smallCompiled.poolSlotCount == 4);
+}
+
+TEST_CASE("nri graph frame: a capture frame copies the backbuffer AFTER the outline composited "
+          "onto it", "[nri]")
+{
+    // The capture node exists to record what was PRESENTED, so an outline that
+    // landed after the copy would be visible on screen and absent from every
+    // artifact -- the kind of bug a screenshot cannot show you.
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth   = 320;
+    shape.canvasHeight  = 200;
+    shape.pickOutline   = true;
+    shape.capture       = true;
+    shape.captureBuffer = nullptr;   // ImportBuffer stores the pointer without dereferencing
+    shape.captureBytes  = 4096;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+    const std::uint32_t steps = handles.jfaStepCount;
+
+    REQUIRE(graph.NodeCount() == 7u + steps);
+    CHECK(std::string(graph.NodeName(5 + steps)) == "outlinecomposite");
+    CHECK(std::string(graph.NodeName(6 + steps)) == "capture");
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    const Arcane::RgCompiledNode& capture = compiled.nodes[6 + steps];
+
+    // The backbuffer transitions COLOR_ATTACHMENT -> COPY_SOURCE at the CAPTURE
+    // node, i.e. it was still an attachment through the composite.
+    REQUIRE(capture.preBarriers.size() == 2);
+    const Arcane::RgBarrier& textureBarrier = capture.preBarriers[0].isTexture
+                                                ? capture.preBarriers[0] : capture.preBarriers[1];
+    CHECK(textureBarrier.isTexture);
+    CheckState(textureBarrier.before, kColorState);
+    CheckState(textureBarrier.after,
+               nri::AccessBits::COPY_SOURCE, nri::Layout::COPY_SOURCE, nri::StageBits::COPY);
+
+    // TWO imported buffers now (the pick readback and the capture staging), and
+    // neither carries an exit barrier -- only the backbuffer does.
+    REQUIRE(compiled.exitBarriers.size() == 1);
+    CheckState(compiled.exitBarriers[0].after, kPresentState);
+}
+
+TEST_CASE("nri graph frame: the pick + outline chain composes with a post chain", "[nri]")
+{
+    // The two chains are independent and must not interfere: the post chain
+    // sits between the canvas and the tonemap, the outline after it. Pinned
+    // because both grow the pool and both ping-pong, and a slot-assignment bug
+    // that only appears when both are live would otherwise be desk-only.
+    Arcane::PostChainDesc desc;
+    desc.chainInputSlots = 1;
+    desc.passes.resize(3);
+    desc.passes[0].inputs = { Arcane::kSceneInput };
+    desc.passes[1].inputs = { 0u };
+    desc.passes[2].inputs = { 1u };
+
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 320;
+    shape.canvasHeight = 200;
+    shape.post         = &desc;
+    shape.pickOutline  = true;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+    CHECK(handles.postPassCount == 3);
+    REQUIRE(graph.IsHandleValid(handles.post));
+    REQUIRE(graph.IsHandleValid(handles.outlineField));
+
+    // batch2d + 3 post + tonemap + pick + pickreadback + seed + composite,
+    // plus one node per jump-flood step.
+    CHECK(graph.NodeCount() == 9u + handles.jfaStepCount);
+    CHECK(std::string(graph.NodeName(4)) == "tonemap");
+    CHECK(std::string(graph.NodeName(5)) == "pick");
+    CHECK(std::string(graph.NodeName(graph.NodeCount() - 1)) == "outlinecomposite");
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    // The two chains never share a slot, because their formats differ (RGBA16F
+    // vs RGBA16_SNORM) and descsMatch is exact: 2 for the post ping-pong (the
+    // canvas hosts the even targets), 1 for the id target, 2 for the field.
+    CHECK(compiled.poolSlotCount == 5);
+}
+
+TEST_CASE("nri pick readback: every frame slot owns a distinct, alignment-legal region", "[nri]")
+{
+    // NRI's TextureDataLayoutDesc documents the buffer OFFSET as a multiple of
+    // uploadBufferTextureSlice, so a region stride that ignored it would make
+    // every slot past 0 an invalid CmdReadbackTextureToBuffer destination --
+    // silently on some drivers, which is exactly the class of thing no test
+    // could catch after the fact.
+    using Node = Arcane::PickNode;
+
+    const std::uint64_t slices[] = { 0, 1, 4, 256, 512, 1024 };
+    const std::uint64_t rows[]   = { 4, 256, 512 };
+    for (const std::uint64_t slice : slices)
+    {
+        for (const std::uint64_t row : rows)
+        {
+            const std::uint64_t stride = Node::ReadbackRegionStride(row, slice);
+            REQUIRE(stride >= row);            // a region holds a whole aligned row
+            REQUIRE(stride >= sizeof(std::uint32_t));
+            if (slice > 1)
+                CHECK(stride % slice == 0);    // ...and every region offset is legal
+
+            const std::uint64_t bytes = stride * Arcane::kSwapchainFramesInFlight;
+            std::vector<std::uint64_t> seen;
+            for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+            {
+                const std::uint64_t offset = slot * stride;
+                if (slice > 1)
+                    CHECK(offset % slice == 0);
+                for (const std::uint64_t other : seen)
+                    REQUIRE(offset != other);                       // no aliasing, ever
+                REQUIRE(offset + sizeof(std::uint32_t) <= bytes);   // and none escapes
+                seen.push_back(offset);
+            }
+        }
+    }
+
+    // ONE REGION PER FRAME IN FLIGHT is the whole latency contract: fewer, and
+    // the CPU would read a region the GPU is still writing.
+    CHECK(Arcane::kSwapchainFramesInFlight >= 2);
+}
+
+TEST_CASE("nri outline arena: every (frame slot, region) pair owns a distinct, stride-aligned "
+          "byte range", "[nri]")
+{
+    // The third arena on this path, and the widest: seed + composite + one
+    // region per jump-flood step, because every step's CB carries a DIFFERENT
+    // jump and the descriptor a set binds bakes its offset in. Same invariants,
+    // same silence when they break.
+    using Node = Arcane::OutlineNode;
+    CHECK(Node::kSeedRegion == 0);
+    CHECK(Node::kCompositeRegion == 1);
+    CHECK(Node::kJfaRegionBase == 2);
+    CHECK(Node::kCbRegionsPerFrame == 2 + Node::kMaxJfaSteps);
+    // The cap must cover any extent a swapchain can actually take.
+    CHECK(Arcane::OutlineJfaStepCount(16384, 16384) <= Node::kMaxJfaSteps);
+
+    const std::uint64_t alignments[] = { 0, 1, 16, 64, 256, 512 };
+    for (const std::uint64_t alignment : alignments)
+    {
+        const std::uint64_t stride = Node::CbRegionStride(alignment);
+        // 288 bytes is outline_seed.hlsl's SeedCB -- the largest of the three
+        // blocks. A stride below it lets the seed spill into the composite's
+        // region, which would read as an outline with garbage colours.
+        REQUIRE(stride >= Node::kCbMaxBytes);
+        if (alignment > 1)
+            CHECK(stride % alignment == 0);
+        CHECK(stride - (alignment > 1 ? alignment : 1) < Node::kCbMaxBytes);
+    }
+    // 256-byte alignment (D3D12's) rounds 288 up to 512, not down to 256.
+    CHECK(Node::CbRegionStride(256) == 512);
+
+    const std::uint64_t strides[] = { 512, 288 };
+    for (const std::uint64_t stride : strides)
+    {
+        const std::uint64_t arenaBytes =
+            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight * stride;
+        std::vector<std::uint64_t> seen;
+        for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+        {
+            for (std::uint32_t region = 0; region < Node::kCbRegionsPerFrame; ++region)
+            {
+                const std::uint64_t offset = Node::CbRegionOffset(stride, slot, region);
+                CHECK(offset % stride == 0);
+                for (const std::uint64_t other : seen)
+                    REQUIRE(offset != other);            // no aliasing, ever
+                REQUIRE(offset + stride <= arenaBytes);  // and none escapes the buffer
+                seen.push_back(offset);
+            }
+        }
+        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight);
+    }
+
+    // Two DIFFERENT jump-flood steps never share a region -- the mistake that
+    // would otherwise show up as every step flooding at the same jump distance,
+    // i.e. an outline that is subtly wrong rather than obviously broken.
+    CHECK(Node::CbRegionOffset(512, 0, Node::kJfaRegionBase)
+          != Node::CbRegionOffset(512, 0, Node::kJfaRegionBase + 1));
+    CHECK(Node::CbRegionOffset(512, 0, Node::kSeedRegion)
+          != Node::CbRegionOffset(512, 0, Node::kCompositeRegion));
+    CHECK(Node::CbRegionOffset(512, 0, Node::kSeedRegion) == 0);
+}
+
+TEST_CASE("pick geometry: ONE emitter feeds both recorders -- id k+1, back-to-front, per drawable",
+          "[render]")
+{
+    // BuildPickIdGeometry was PickBuffer.cpp's private loop until the graph path
+    // grew a pick node of its own. It is shared now because the 1-based id a
+    // vertex carries IS the id<->entity mapping every consumer inverts, and two
+    // copies of this loop would be two id assignments that agree until one is
+    // edited. These are the properties both recorders depend on.
+    std::vector<Arcane::PickDrawable> drawables(3);
+    drawables[0].kind        = Arcane::PickDrawable::Kind::Quad;
+    drawables[0].center      = { 10.0f, 20.0f };
+    drawables[0].halfExtents = { 4.0f, 2.0f };
+    drawables[1].kind        = Arcane::PickDrawable::Kind::Circle;
+    drawables[1].center      = { 50.0f, 60.0f };
+    drawables[1].radius      = 7.0f;
+    drawables[2].kind        = Arcane::PickDrawable::Kind::Capsule;
+    drawables[2].center      = { 90.0f, 5.0f };
+    drawables[2].radius      = 3.0f;
+    drawables[2].halfLen     = 11.0f;
+
+    std::vector<Arcane::PickIdVertex> vertices;
+    std::vector<std::uint32_t>        indices;
+    Arcane::BuildPickIdGeometry(drawables, vertices, indices);
+
+    // One quad per drawable: 4 vertices, 6 indices.
+    REQUIRE(vertices.size() == 12);
+    REQUIRE(indices.size() == 18);
+
+    for (std::size_t d = 0; d < drawables.size(); ++d)
+    {
+        for (std::size_t v = 0; v < 4; ++v)
+        {
+            // id = index + 1, on EVERY vertex of the quad. 0 stays reserved for
+            // background, which is what the id target clears to.
+            CHECK(vertices[d * 4 + v].id == (std::uint32_t)d + 1u);
+            CHECK(vertices[d * 4 + v].kind == Arcane::PickKindCode(drawables[d].kind));
+        }
+        // ...and the indices are per-quad and in submission order, so the
+        // LAST-drawn silhouette wins a contested pixel (there is no depth
+        // buffer on either path).
+        CHECK(indices[d * 6] == (std::uint32_t)d * 4u);
+    }
+
+    // The rasterized quad is the drawable's BOUND, not its shape: a circle
+    // covers radius x radius, a capsule (halfLen + radius) x radius. The PS
+    // discards the rest analytically.
+    CHECK(Arcane::PickBoundHalfExtents(drawables[1]) == glm::vec2(7.0f, 7.0f));
+    CHECK(Arcane::PickBoundHalfExtents(drawables[2]) == glm::vec2(14.0f, 3.0f));
+    CHECK(Arcane::PickBoundHalfExtents(drawables[0]) == glm::vec2(4.0f, 2.0f));
+
+    // Both output vectors are CLEARED, not appended to -- a caller that reuses
+    // its buffers every frame (both recorders do) must not accumulate.
+    Arcane::BuildPickIdGeometry(std::span<const Arcane::PickDrawable>{}, vertices, indices);
+    CHECK(vertices.empty());
+    CHECK(indices.empty());
 }

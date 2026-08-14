@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/GpuContext.hpp>
 #include <Arcane/Host/FramePerf.hpp>
@@ -127,6 +128,20 @@ private:
     // the boot, not to the vehicle.
     int                                  m_graphExit  = 0;
     std::uint64_t                        m_graphErrorBaseline = 0;
+
+    // --pick-probe (NRI Phase 2, Task 11). THIS is the id<->entity table: the
+    // k-th drawable's hit-proxy id is k+1 (CollectPickables' ordering
+    // contract), so the vector the graph's pick node rasterised is the same one
+    // PickEntityForId inverts when the readback lands. Rebuilt every frame of a
+    // probe run and NOT cleared afterwards -- ShutdownGraphPath reads it to name
+    // the entity behind the id.
+    //
+    // NOT #if-guarded, for the same reason m_graphContext is not: a
+    // preprocessor-guarded member forces a guard at every use site, which is
+    // exactly how a Dist-only compile break gets introduced. Only the code that
+    // FILLS them is guarded, so a Dist build carries two empty vectors.
+    std::vector<Arcane::PickDrawable>    m_pickDrawables;
+    std::vector<std::uint32_t>           m_pickSelectedIds;
 
 #if !defined(ARCANE_DIST)
     // --crash-gpu N (GPU crash diagnostics arc, Task 11): the desk battery's

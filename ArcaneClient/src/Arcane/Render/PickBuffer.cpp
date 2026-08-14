@@ -22,54 +22,18 @@ namespace Arcane
         // clearTextureUInt zeroes it between picks.
         constexpr nvrhi::Format kIdFormat = nvrhi::Format::R32_UINT;
 
-        // Per-vertex data for the id pass, matching entity_id.hlsl's VSInput. The
-        // attribute array order below MUST match that struct's member order (nvrhi
-        // assigns Vulkan input locations by declaration order; D3D matches the
-        // custom semantic name at SemanticIndex 0).
-        struct IdVertex
-        {
-            glm::vec2 pos;      // canvas px: the rotated bounding-quad corner
-            glm::vec2 local;    // shape-local coords (unrotated), canvas px
-            float     radius;   // canvas px (circle/capsule)
-            float     halfLen;  // canvas px (capsule)
-            uint32_t  kind;     // 0=Quad 1=Circle 2=Capsule 3=Box
-            uint32_t  id;       // 1-based hit-proxy id
-        };
-        static_assert(sizeof(IdVertex) == 32, "id vertex is the wire format");
+        // The id vertex + its geometry builder moved to PickEmit (NRI Phase 2,
+        // Task 11): the graph path's pick node records the SAME quads from the
+        // same drawables, and the 1-based id a vertex carries IS the
+        // id<->entity mapping both recorders invert. See PickEmit.hpp's THE ID
+        // PASS'S GEOMETRY block. This alias keeps the local spelling.
+        using IdVertex = PickIdVertex;
 
         struct IdPushConstants
         {
             glm::vec2 invHalfViewport;   // 2.0 / (canvasW, canvasH)
             glm::vec2 pad;
         };
-
-        // kind -> shader code + the analytic-coverage kind used by the PS.
-        uint32_t KindCode(PickDrawable::Kind k)
-        {
-            switch (k)
-            {
-            case PickDrawable::Kind::Quad:    return 0u;
-            case PickDrawable::Kind::Circle:  return 1u;
-            case PickDrawable::Kind::Capsule: return 2u;
-            case PickDrawable::Kind::Box:     return 3u;
-            }
-            return 0u;
-        }
-
-        // Bounding half-extents (canvas px) of a drawable's silhouette: the quad
-        // the id pass rasterizes. The PS analytically discards fragments outside
-        // circle/capsule shapes; Quad/Box fill the whole bound.
-        glm::vec2 BoundHalfExtents(const PickDrawable& d)
-        {
-            switch (d.kind)
-            {
-            case PickDrawable::Kind::Circle:  return glm::vec2(d.radius, d.radius);
-            case PickDrawable::Kind::Capsule: return glm::vec2(d.halfLen + d.radius, d.radius);
-            case PickDrawable::Kind::Quad:
-            case PickDrawable::Kind::Box:
-            default:                          return d.halfExtents;
-            }
-        }
 
         class PickBufferImpl final : public PickBuffer
         {
@@ -374,53 +338,14 @@ namespace Arcane
                 return true;
             }
 
-            // Build the id-pass vertex + index arrays from m_drawables. One quad
-            // (4 verts / 6 indices) per drawable; the k-th drawable (0-based) gets
-            // id k+1. Drawables are already ordered back-to-front, so index order
-            // = draw order = front-most last (the output merger, primitive-ordered,
-            // makes the last-drawn silhouette win a contested pixel -- no depth).
+            // The id-pass vertex + index arrays for m_drawables, through the
+            // SHARED emitter (PickEmit.hpp). Nothing about the quads, the id
+            // assignment or the submission order is decided here any more --
+            // that is the point: the graph path's pick node calls the same
+            // function, so the two recorders cannot assign different ids.
             void BuildGeometry()
             {
-                m_vertices.clear();
-                m_indices.clear();
-
-                // Bounding-quad corner sign pattern: TL, TR, BR, BL.
-                static const glm::vec2 kSigns[4] = {
-                    { -1.0f, -1.0f }, { 1.0f, -1.0f }, { 1.0f, 1.0f }, { -1.0f, 1.0f } };
-
-                for (size_t di = 0; di < m_drawables.size(); ++di)
-                {
-                    const PickDrawable& d = m_drawables[di];
-                    const uint32_t id   = (uint32_t)di + 1u;   // 1-based
-                    const uint32_t code = KindCode(d.kind);
-                    const glm::vec2 bound = BoundHalfExtents(d);
-
-                    // Rotate the bounding quad by the drawable's angle (canvas has
-                    // no rotation, only scale + offset already folded into the
-                    // drawable). The PS coverage test uses the UNROTATED `local`.
-                    const float c = std::cos(d.angle);
-                    const float s = std::sin(d.angle);
-                    const uint32_t base = (uint32_t)m_vertices.size();
-
-                    for (int i = 0; i < 4; ++i)
-                    {
-                        const glm::vec2 local(kSigns[i].x * bound.x, kSigns[i].y * bound.y);
-                        const glm::vec2 rot(c * local.x - s * local.y,
-                                            s * local.x + c * local.y);
-                        IdVertex v;
-                        v.pos     = d.center + rot;
-                        v.local   = local;
-                        v.radius  = d.radius;
-                        v.halfLen = d.halfLen;
-                        v.kind    = code;
-                        v.id      = id;
-                        m_vertices.push_back(v);
-                    }
-
-                    const uint32_t quad[6] = { base, base + 1, base + 2,
-                                               base, base + 2, base + 3 };
-                    m_indices.insert(m_indices.end(), quad, quad + 6);
-                }
+                BuildPickIdGeometry(m_drawables, m_vertices, m_indices);
             }
 
             nvrhi::IGraphicsPipeline* GetPipeline()

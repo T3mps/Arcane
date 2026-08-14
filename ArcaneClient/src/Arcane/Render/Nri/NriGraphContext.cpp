@@ -233,6 +233,41 @@ namespace Arcane
         if (!m_tonemap)
             return false;   // already logged
 
+        // ---------------------------------------------------------------
+        // The pick + outline pair (Task 11) is built ONLY when the probe is
+        // armed, and that gate is not laziness -- it is what makes carry 8
+        // structural. An ordinary --nri-graph run (every stage-golden run) then
+        // creates NO readback buffer, NO descriptor pool, NO pipeline layout
+        // and NO arena for this chain, so nothing about it can perturb a
+        // baseline. Armed, it is built EAGERLY like the other three: a node
+        // that cannot be created must fail the vehicle at boot rather than
+        // render a probe frame that silently draws nothing.
+        // ---------------------------------------------------------------
+#if !defined(ARCANE_DIST)
+        m_pickArmed = config.pickProbe;
+        m_probeX    = config.pickProbeX;
+        m_probeY    = config.pickProbeY;
+#endif
+        if (m_pickArmed)
+        {
+            m_pick = PickNode::Create(*this);
+            if (!m_pick)
+                return false;   // already logged
+            m_outline = OutlineNode::Create(*this);
+            if (!m_outline)
+                return false;   // already logged
+            ARC_INFO("[nri-graph] --pick-probe armed at canvas pixel ({}, {}): the frame carries the "
+                     "entity-id pass, its readback and a {}-step JFA outline; the id lands after "
+                     "{} presented frames",
+                     m_probeX, m_probeY,
+                     // The CLAMPED count, i.e. what the declarator will actually
+                     // declare -- a log line that disagreed with the frame would
+                     // be worse than no log line.
+                     std::min(OutlineJfaStepCount(m_swap->Width(), m_swap->Height()),
+                              OutlineNode::kMaxJfaSteps),
+                     kSwapchainFramesInFlight);
+        }
+
         // See the header: the heartbeat exists for the open-ended drag-storm
         // run and nothing else. The baseline is taken here rather than at the
         // host's own baseline point so the number it prints means "errors this
@@ -315,7 +350,13 @@ namespace Arcane
         // graph releases its transient pool below -- the tonemap's source view
         // names a POOL texture, so a view buried after the texture it views
         // would reach DestroyDescriptor over freed memory (the same class of
-        // teardown bug as fix round 1's imported-view ordering).
+        // teardown bug as fix round 1's imported-view ordering). The outline
+        // node holds the same class of view (over the id target and the JFA
+        // ping-pong) and goes out for the same reason.
+        if (m_outline)
+            m_outline->Release(graves, fence);
+        if (m_pick)
+            m_pick->Release(graves, fence);
         if (m_tonemap)
             m_tonemap->Release(graves, fence);
         if (m_post)
@@ -435,6 +476,10 @@ namespace Arcane
             m_tonemap->InvalidateSource(graves, viewFence);
         if (m_post)
             m_post->InvalidateSources(graves, viewFence);
+        // Same reasoning, third holder of pool views: the outline node samples
+        // the id target and the JFA ping-pong, all of them pool transients.
+        if (m_outline)
+            m_outline->InvalidateSources(graves, viewFence);
 
         if (m_graph)
             m_graph->ReleaseGpuResources();
@@ -611,6 +656,38 @@ namespace Arcane
 
         handles.backbuffer = AddTonemapNode(graph, context, sceneColor);
 
+        // ---------------------------------------------------------------
+        // THE PICK + OUTLINE CHAIN (Task 11), declared BETWEEN the tonemap and
+        // the capture, which is both halves of the ordering contract:
+        //
+        //   * AFTER the tonemap, because the composite blends over the
+        //     DISPLAY-REFERRED backbuffer -- exactly what the editor does
+        //     (EditorApp::RenderSelectionOutline composites into the canvas's
+        //     post-tonemap OUTPUT framebuffer, after the scene render and
+        //     before the ImGui pass);
+        //   * BEFORE the capture, because the capture node copies the
+        //     backbuffer and must see the outline. Declaration order IS
+        //     execution order on this graph, so this placement is the whole
+        //     mechanism -- there is nothing else to get right.
+        //
+        // The pick pass itself does not depend on the tonemap at all and could
+        // sit anywhere; keeping the chain contiguous here is what makes "the
+        // flag off leaves Task 10's frame byte for byte" obvious by reading.
+        // ---------------------------------------------------------------
+        if (shape.pickOutline)
+        {
+            const RgPickHandles pick = AddPickNodes(graph, context,
+                                                     shape.canvasWidth, shape.canvasHeight);
+            handles.pickIds      = pick.ids;
+            handles.pickReadback = pick.readback;
+            handles.outlineField = AddOutlineNodes(graph, context, pick.ids,
+                                                    shape.canvasWidth, shape.canvasHeight);
+            handles.jfaStepCount = std::min(OutlineJfaStepCount(shape.canvasWidth, shape.canvasHeight),
+                                             OutlineNode::kMaxJfaSteps);
+            AddOutlineCompositeNode(graph, context, handles.outlineField, handles.backbuffer,
+                                     shape.canvasWidth, shape.canvasHeight);
+        }
+
         if (!shape.capture)
             return handles;
 
@@ -686,6 +763,9 @@ namespace Arcane
         shape.captureBuffer = m_capture;
         shape.captureBytes  = m_captureSlicePitch;
         shape.post          = frame.post;
+        // Armed at Create AND asked for by this frame. Both, so a driver that
+        // forgets the flag cannot declare a chain whose nodes were never built.
+        shape.pickOutline   = frame.pickOutline && m_pick && m_outline;
 
         // NOTHING follows the declaration, and that is worth stating because
         // an earlier draft of this task needed something here.
@@ -759,8 +839,32 @@ namespace Arcane
         // writes b1 inside its exec fn) -- see CurrentGlobals().
         m_currentGlobals = effective.globals ? *effective.globals : GlobalParams{};
         m_currentBatch = effective.batch;
+
+        // Published for exactly the span of this frame's declaration, like the
+        // batcher: the pick node builds its geometry from the drawables inside
+        // AddPickNodes, and the seed node copies the selection into this
+        // frame's arena region at record time from the node's own storage.
+        m_currentPickables   = effective.pickables;
+        m_currentSelectedIds = effective.selectedIds;
+
+        // A probe pixel outside the surface would still be CLAMPED into the id
+        // target by the readback node (PickSampleTexel), because the frame's
+        // shape must not depend on a coordinate -- but reporting that clamped
+        // texel's id as "the id at (x, y)" would be a confident answer about a
+        // pixel nobody asked for. Latch it here instead; ProbeId() then reports
+        // nothing and the run exits as a miss.
+        if (m_pickArmed && !m_probeOutOfRange
+            && (m_probeX >= (std::int32_t)m_swap->Width() || m_probeY >= (std::int32_t)m_swap->Height()))
+        {
+            m_probeOutOfRange = true;
+            ARC_ERROR("[nri-graph] --pick-probe ({}, {}) is outside the {}x{} surface -- no id will "
+                      "be reported", m_probeX, m_probeY, m_swap->Width(), m_swap->Height());
+        }
+
         BuildFrame(effective);
-        m_currentBatch = nullptr;
+        m_currentBatch       = nullptr;
+        m_currentPickables   = {};
+        m_currentSelectedIds = {};
 
         std::string error;
         const std::optional<RgCompiled> compiled = m_graph->Compile(&error);
@@ -813,6 +917,17 @@ namespace Arcane
         }
 
         return FrameOutcome::Presented;
+    }
+
+    std::optional<std::uint32_t> NriGraphContext::ProbeId() const noexcept
+    {
+        // No node, an out-of-range coordinate, or no readback landed yet (the
+        // first kSwapchainFramesInFlight frames of a probe run) all report
+        // NOTHING rather than 0 -- 0 is a real answer (background) and the
+        // caller must be able to tell the two apart.
+        if (!m_pick || m_probeOutOfRange)
+            return std::nullopt;
+        return m_pick->LastProbeId();
     }
 
     bool NriGraphContext::ReadCapture(std::uint32_t& width, std::uint32_t& height,
