@@ -75,6 +75,11 @@ namespace
     constexpr nri::AccessLayoutStage kUnknownState{
         nri::AccessBits::NONE, nri::Layout::UNDEFINED, nri::StageBits::ALL };
 
+    bool SameState(const nri::AccessLayoutStage& a, const nri::AccessLayoutStage& b) noexcept
+    {
+        return a.access == b.access && a.layout == b.layout && a.stages == b.stages;
+    }
+
     nri::AccessLayoutStage StateFor(Arcane::RgUsage usage, bool isTexture) noexcept
     {
         nri::AccessLayoutStage state = kUnknownState;
@@ -113,12 +118,28 @@ namespace
         // RgBarrier).
         if (!isTexture)
             state.layout = nri::Layout::UNDEFINED;
-        return state;
-    }
 
-    bool SameState(const nri::AccessLayoutStage& a, const nri::AccessLayoutStage& b) noexcept
-    {
-        return a.access == b.access && a.layout == b.layout && a.stages == b.stages;
+        // NO DECLARED USAGE MAY DERIVE kUnknownState. Two rules downstream
+        // rest on this and would both fail SILENTLY if a new RgUsage
+        // enumerator were added without a case here and fell through to the
+        // `state = kUnknownState` initialiser above:
+        //
+        //  * a transient's FIRST USE would emit no barrier at all (Compile's
+        //    `!SameState(current, want)` sees no edge out of kUnknownState);
+        //  * the executor's cross-frame handover patch is GUARDED on
+        //    `before == {NONE, UNDEFINED, ...}` (RenderGraphExec.cpp), so it
+        //    would silently claim a real first-use barrier as a slot's
+        //    unpatched one -- and, being already unable to tell the two
+        //    apart, would leave the reused resource with no availability
+        //    operation for the previous frame's writes.
+        //
+        // Compile-time coverage would be better, but the switch above is over
+        // a plain enum with no MAX_NUM sentinel, so there is nothing for
+        // -Wswitch to bite on. The gate's mapping-table test walks every
+        // enumerator against this same property.
+        ARC_ASSERT(!SameState(state, kUnknownState),
+                   "RenderGraph: an RgUsage derived the unknown state -- a missing StateFor case");
+        return state;
     }
 }
 
@@ -485,9 +506,12 @@ namespace Arcane
         // on D3D12, and it was the D2 blocker -- every `--nri-graph --dx12`
         // run died with EndCommandBuffer -> ID3D12GraphicsCommandList::Close()
         // failing. NRI's D3D12 backend derives LayoutBefore and AccessBefore
-        // INDEPENDENTLY and then sets D3D12_TEXTURE_BARRIER_FLAG_DISCARD from
+        // INDEPENDENTLY -- GetBarrierLayout is HANDED the access mask, but its
+        // only access-sensitive branch is Layout::INPUT_ATTACHMENT, which
+        // StateFor above never produces, so for our states the two really are
+        // uncoupled -- and then sets D3D12_TEXTURE_BARRIER_FLAG_DISCARD from
         // the layout alone (ThirdParty/NRI/Source/D3D12/CommandBufferD3D12.hpp
-        // :1054-1056 and :1078-1079 -- the latter carries NRI's own
+        // :1054-1056, :170-175 and :1078-1079 -- the last carries NRI's own
         // `// TODO: verify that it works`). So {previous access, UNDEFINED}
         // became a D3D12_TEXTURE_BARRIER pairing LayoutBefore = UNDEFINED with
         // AccessBefore != NO_ACCESS *and* FLAG_DISCARD; D3D12 enhanced

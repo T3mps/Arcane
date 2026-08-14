@@ -89,39 +89,23 @@ namespace
         CheckState(actual, expected.access, expected.layout, expected.stages);
     }
 
-    // Compile-must-succeed helper: surfaces the refusal message in the
-    // failure output when a case that should compile does not.
-    Arcane::RgCompiled CompileOk(const Arcane::RenderGraph& graph)
-    {
-        std::string error;
-        std::optional<Arcane::RgCompiled> compiled = graph.Compile(&error);
-        INFO("Compile() refused: " << error);
-        REQUIRE(compiled.has_value());
-        return *compiled;
-    }
-
-    std::size_t TotalBarriers(const Arcane::RgCompiled& compiled)
-    {
-        std::size_t total = 0;
-        for (const Arcane::RgCompiledNode& node : compiled.nodes)
-            total += node.preBarriers.size();
-        return total;
-    }
-
     // ------------------------------------------------------------------
     // THE D3D12 ENHANCED-BARRIER INVARIANT (D2 fix). NRI's D3D12 backend
-    // derives LayoutBefore and AccessBefore INDEPENDENTLY and then sets
-    // D3D12_TEXTURE_BARRIER_FLAG_DISCARD from the layout alone
-    // (ThirdParty/NRI/Source/D3D12/CommandBufferD3D12.hpp:1054-1056 and
-    // :1078-1079). A TEXTURE `before` that pairs Layout::UNDEFINED with a
-    // non-NONE access therefore becomes a D3D12_TEXTURE_BARRIER with
-    // LayoutBefore = UNDEFINED, AccessBefore != NO_ACCESS and FLAG_DISCARD --
-    // rejected by enhanced-barrier validation, which invalidates the command
-    // list, so EndCommandBuffer -> ID3D12GraphicsCommandList::Close() fails.
-    // Vulkan accepts that pairing happily, which is exactly why the shape
-    // shipped green on the VK half and killed every dx12 `--nri-graph` run.
-    // NRI states the same contract in its own public enum: Layout::UNDEFINED's
-    // "Compatible AccessBits" column is EMPTY (Include/NRIDescs.h:544-547).
+    // derives LayoutBefore and AccessBefore independently -- GetBarrierLayout
+    // is handed the access mask, but its ONLY access-sensitive branch is
+    // Layout::INPUT_ATTACHMENT, which RenderGraph.cpp's StateFor never
+    // produces -- and then sets D3D12_TEXTURE_BARRIER_FLAG_DISCARD from the
+    // layout alone (ThirdParty/NRI/Source/D3D12/CommandBufferD3D12.hpp
+    // :1054-1056, :170-175 and :1078-1079). A TEXTURE `before` that pairs
+    // Layout::UNDEFINED with a non-NONE access therefore becomes a
+    // D3D12_TEXTURE_BARRIER with LayoutBefore = UNDEFINED, AccessBefore !=
+    // NO_ACCESS and FLAG_DISCARD -- rejected by enhanced-barrier validation,
+    // which invalidates the command list, so EndCommandBuffer ->
+    // ID3D12GraphicsCommandList::Close() fails. Vulkan accepts that pairing
+    // happily, which is exactly why the shape shipped green on the VK half and
+    // killed every dx12 `--nri-graph` run. NRI states the same contract in its
+    // own public enum: Layout::UNDEFINED's "Compatible AccessBits" column is
+    // EMPTY (Include/NRIDescs.h:544-547).
     //
     // BUFFERS are exempt: RgBarrier's layout is meaningless for them by
     // contract (always UNDEFINED) and Task 6's translation drops it.
@@ -136,9 +120,13 @@ namespace
                    == static_cast<std::uint32_t>(nri::AccessBits::NONE)));
     }
 
-    // The same invariant over EVERY barrier one compile produced -- the
-    // regression net a Task-4-era version of this would have caught the D2
-    // blocker with.
+    // The same invariant over EVERY barrier one compile produced. CompileOk()
+    // below runs this on every compile the suite makes, which is the only
+    // form that actually earns the name "regression net": a handover-producing
+    // case added years from now inherits the coverage without its author
+    // having to know this exists. A Task-4-era version of THIS would have
+    // caught the D2 blocker before it shipped; a version applied case-by-case
+    // would only have covered the cases someone remembered to annotate.
     void CheckAllBarriersD3D12Legal(const Arcane::RgCompiled& compiled)
     {
         for (const Arcane::RgCompiledNode& node : compiled.nodes)
@@ -154,6 +142,33 @@ namespace
             INFO("exit barrier on resource " << barrier.resourceIndex);
             CheckBeforeIsD3D12Legal(barrier.before, barrier.isTexture);
         }
+    }
+
+    // Compile-must-succeed helper: surfaces the refusal message in the
+    // failure output when a case that should compile does not.
+    //
+    // It also asserts the D3D12 enhanced-barrier invariant over everything the
+    // compile derived. Putting it HERE rather than in the handover tests is
+    // the point -- see CheckAllBarriersD3D12Legal above. Every
+    // Layout::UNDEFINED-with-access expectation elsewhere in this file is a
+    // BUFFER barrier, which the helper exempts by contract, so this is
+    // universal rather than merely widespread.
+    Arcane::RgCompiled CompileOk(const Arcane::RenderGraph& graph)
+    {
+        std::string error;
+        std::optional<Arcane::RgCompiled> compiled = graph.Compile(&error);
+        INFO("Compile() refused: " << error);
+        REQUIRE(compiled.has_value());
+        CheckAllBarriersD3D12Legal(*compiled);
+        return *compiled;
+    }
+
+    std::size_t TotalBarriers(const Arcane::RgCompiled& compiled)
+    {
+        std::size_t total = 0;
+        for (const Arcane::RgCompiledNode& node : compiled.nodes)
+            total += node.preBarriers.size();
+        return total;
     }
 
     // Drives one RgUsage through Compile and hands back the state it derived.
@@ -634,6 +649,66 @@ TEST_CASE("rendergraph compile: a buffer's derived state never carries a layout"
                nri::AccessBits::SHADER_RESOURCE, nri::Layout::UNDEFINED, kShaderReadStages);
 }
 
+TEST_CASE("rendergraph compile: EVERY RgUsage derives a state distinct from the unknown one", "[nri]")
+{
+    // The unstated property TWO rules rest on, walked over every enumerator so
+    // that adding a ninth RgUsage without a StateFor case fails HERE rather
+    // than silently at runtime. `state = kUnknownState` is StateFor's
+    // initialiser, so a missing case falls through to it, and then:
+    //
+    //  * a transient's FIRST USE emits no barrier at all, because Compile's
+    //    edge test is `!SameState(current, want)` and `current` for a
+    //    first use IS kUnknownState; and
+    //  * the executor's cross-frame handover patch, which is guarded on
+    //    `before.access == NONE && before.layout == UNDEFINED`, can no longer
+    //    tell a slot's unpatched first-use barrier from a real one.
+    //
+    // Both failures are silent -- a dropped barrier and a mis-patched one, not
+    // a refusal. The switch is over a plain enum with no MAX_NUM sentinel, so
+    // -Wswitch has nothing to bite on and this walk is the coverage.
+    //
+    // The probe is the barrier's mere EXISTENCE: node 0 writes a fresh
+    // transient with the usage under test, so its one pre-barrier is the
+    // kUnknownState -> StateFor(usage) edge. If the two were equal there would
+    // be no barrier to read, which is exactly the failure being pinned.
+    const Arcane::RgUsage usages[] = {
+        Arcane::RgUsage::ColorWrite, Arcane::RgUsage::DepthWrite,
+        Arcane::RgUsage::ShaderRead, Arcane::RgUsage::ShaderWriteCs,
+        Arcane::RgUsage::CopySrc,    Arcane::RgUsage::CopyDst,
+        Arcane::RgUsage::Present,    Arcane::RgUsage::ReadbackHost,
+    };
+    // Guards the list itself against drifting out of sync with the enum: the
+    // enumerators are contiguous and unvalued (RenderGraph.hpp), so the count
+    // is the only thing that can silently change under this test.
+    STATIC_REQUIRE(std::size(usages) == static_cast<std::size_t>(Arcane::RgUsage::ReadbackHost) + 1u);
+
+    for (const Arcane::RgUsage usage : usages)
+    {
+        INFO("RgUsage enumerator " << static_cast<std::uint32_t>(usage));
+
+        Arcane::RenderGraph graph;
+        Arcane::RgTexture tex;
+        graph.AddNode("use", Arcane::RenderGraph::NodeKind::Copy,
+            [&](Arcane::RenderGraphBuilder& builder)
+            {
+                tex = builder.CreateTexture("tex", MakeColorDesc());
+                builder.Write(tex, usage);
+            },
+            [](Arcane::RenderGraphNodeContext&) {});
+
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        REQUIRE(compiled.nodes.size() == 1);
+        REQUIRE(compiled.nodes[0].preBarriers.size() == 1);
+        CheckState(compiled.nodes[0].preBarriers[0].before, kUnknownState);
+        CHECK_FALSE((static_cast<std::uint32_t>(compiled.nodes[0].preBarriers[0].after.access)
+                         == static_cast<std::uint32_t>(kUnknownState.access)
+                     && static_cast<std::uint32_t>(compiled.nodes[0].preBarriers[0].after.layout)
+                         == static_cast<std::uint32_t>(kUnknownState.layout)
+                     && static_cast<std::uint32_t>(compiled.nodes[0].preBarriers[0].after.stages)
+                         == static_cast<std::uint32_t>(kUnknownState.stages)));
+    }
+}
+
 // ---------------------------------------------------------------------
 // Rule: write->read and read->write edges each produce exactly ONE
 // barrier; an imported resource's entry state seeds the chain; a
@@ -1092,8 +1167,6 @@ TEST_CASE("rendergraph compile: (e) a pool-slot handover seeds the next tenant's
     CHECK(fresh.isTexture);
     CheckState(fresh.before, kUnknownState);   // no previous tenant -- unchanged behaviour
     CheckState(fresh.after, storageState);
-
-    CheckAllBarriersD3D12Legal(compiled);
 }
 
 TEST_CASE("rendergraph compile: a pool handover ALWAYS emits a barrier, even when both tenants "
@@ -1146,8 +1219,6 @@ TEST_CASE("rendergraph compile: a pool handover ALWAYS emits a barrier, even whe
     REQUIRE(compiled.nodes[1].preBarriers.size() == 1);
     CheckState(compiled.nodes[1].preBarriers[0].before, kUnknownState);
     CHECK(TotalBarriers(compiled) == 2);
-
-    CheckAllBarriersD3D12Legal(compiled);
 }
 
 TEST_CASE("rendergraph compile: (e) two identical transients with overlapping lifetimes get different pool slots", "[nri]")
@@ -3145,8 +3216,6 @@ TEST_CASE("nri graph frame: the post chain inserts one node per pass between the
     REQUIRE(compiled.transientPoolSlot.size() == 3);
     CHECK(compiled.transientPoolSlot[0] == compiled.transientPoolSlot[2]);
     CHECK(compiled.transientPoolSlot[0] != compiled.transientPoolSlot[1]);
-
-    CheckAllBarriersD3D12Legal(compiled);
 }
 
 TEST_CASE("nri graph frame: --golden-stage batch drops the post chain; post and full keep it",
@@ -3250,8 +3319,6 @@ TEST_CASE("nri graph frame: a four-pass post chain runs THREE tenants through on
     // ...while the FIRST tenant of each slot still starts from the discarding
     // entry, which is what makes the three assertions above meaningful.
     CheckState(ColorWriteBarrier(compiled.nodes[1]).before, kUnknownState);
-
-    CheckAllBarriersD3D12Legal(compiled);
 }
 
 TEST_CASE("nri graph frame: a post chain whose base reads the scene keeps the canvas alive past "
