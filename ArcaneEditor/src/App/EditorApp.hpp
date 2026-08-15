@@ -389,6 +389,23 @@ namespace Arcane::Editor
         // pinning discipline, no NVRHI renderer -- and the graph's ImGuiNriNode
         // draws its RenderToDrawData() output. The isolation is structural
         // again on both arms; nothing is holding it by control flow.
+        //
+        // ===== AND ITS POSITION IN THIS LIST IS LOAD-BEARING ON THE GRAPH ARM
+        // (Task 9 fix round 1). The viewport context's game ImGuiNriNode ADOPTS
+        // this context, and ImGuiNri::Release PINS the adopted context to walk
+        // its platform texture list -- which is a DEREFERENCE. So THIS OBJECT
+        // MUST OUTLIVE THAT NODE'S Release. It does, and by construction rather
+        // than luck: it is declared here, far ABOVE m_viewportTargets (which
+        // owns the offscreen NriGraphContext), so reverse-order destruction
+        // runs ~NriGraphContext -- and the Release inside it -- while this is
+        // still alive. Do not move either declaration past the other.
+        //
+        // TASK 12 OWES THE SAME ORDERING EXPLICITLY: switch_teardown destroys
+        // and rebuilds the graph contexts WITHOUT touching this one, so it must
+        // not reset m_gameImgui first -- and it must re-issue
+        // ImGuiNriNode::AdoptImGuiContext on the rebuilt node, or the HUD goes
+        // silently blank after the first switch. The full obligation is stated
+        // on ImGuiNri's m_imguiContext member.
         std::unique_ptr<Arcane::OffscreenImGuiLayer> m_gameImgui;
 
         Astra::TypeContext*               m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)

@@ -258,11 +258,15 @@ namespace Arcane
             return false;
         }
 
-        // A HOST-WINDOW context builds no optional node beyond what the
-        // config arms: both hosts' chrome frame draws the batch, the tonemap
-        // and its own HUD, and --pick-probe is the only thing that has ever
-        // added to that.
-        if (!InitCommon(config, NodeSet{}))
+        // A HOST-WINDOW CONTEXT PRESENTS CHROME BY DEFINITION, so it always
+        // builds the host HUD node -- this is the line that keeps the runtime's
+        // (and, from Task 10, the editor chrome frame's) HUD backend alive now
+        // that the node is gated (Task 9 fix round 1). Nothing else is asked
+        // for: this context's frame is the batch, the tonemap and its own HUD,
+        // and --pick-probe is the only thing that has ever added to that.
+        NodeSet chromeNodes;
+        chromeNodes.hostHud = true;
+        if (!InitCommon(config, chromeNodes))
             return false;   // already logged
 
         // See the header: the heartbeat exists for the open-ended drag-storm
@@ -458,22 +462,33 @@ namespace Arcane
         m_tonemap = TonemapNode::Create(*this);
         if (!m_tonemap)
             return false;   // already logged
-        // The HUD node (Task 12). Built on EVERY run, unlike the pick pair
-        // below: it costs one sampler, one pipeline layout and a small
-        // descriptor pool, and it declares nothing unless the driver hands a
-        // frame draw data -- so an ordinary run and a stage-golden run still
-        // differ only in what the frame ASKS for, which is what keeps carry 8's
-        // "the flag off leaves the previous task's frame byte for byte" true
-        // for the HUD as well.
-        m_imguiHud = ImGuiNriNode::Create(*this);
-        if (!m_imguiHud)
-            return false;   // already logged
-
-        // The GAME HUD's node (Task 9), and unlike the one above it is built
-        // only when the caller asks -- see NodeSet::gameUi for why it is a
-        // SECOND backend rather than a second use of the first. The caller owes
-        // it one AdoptImGuiContext call; this class never sees an ImGui context
-        // and so cannot make that call itself (ImGuiNri::AdoptContext).
+        // ---------------------------------------------------------------
+        // THE TWO HUD NODES (the host chrome's is Task 12's, the game's is Task
+        // 9's), each built ONLY when the caller asks for it. Either way the
+        // node declares nothing unless the driver hands that frame draw data,
+        // so an ordinary run and a stage-golden run still differ only in what
+        // the frame ASKS for -- carry 8's "the flag off leaves the previous
+        // task's frame byte for byte" holds for both HUDs.
+        //
+        // ASKING IS NOT BOOKKEEPING (Task 9 fix round 1). Each node ADOPTS an
+        // ImGui context, and its Release walks THAT context's platform texture
+        // list disowning every RefCount==1 ImTextureData. Two of them over ONE
+        // context is one backend disowning the other's LIVE atlas.
+        // `hostHud` was unconditional until fix round 1, which is precisely how
+        // a second backend landed on the editor context: the editor's OFFSCREEN
+        // viewport context built a host-HUD node it can never draw through,
+        // and -- created while the editor context was current -- adopted it.
+        // See NodeSet's invariant block.
+        // ---------------------------------------------------------------
+        if (nodes.hostHud)
+        {
+            m_imguiHud = ImGuiNriNode::Create(*this);
+            if (!m_imguiHud)
+                return false;   // already logged
+        }
+        // The GAME node's caller owes it one AdoptImGuiContext call. The host
+        // HUD's needs none only because a host builds its vehicle with its own
+        // ImGui context current, which is what ImGuiNri::Init records.
         if (nodes.gameUi)
         {
             m_imguiGame = ImGuiNriNode::Create(*this);

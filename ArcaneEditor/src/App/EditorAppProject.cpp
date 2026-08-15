@@ -619,6 +619,30 @@ namespace Arcane::Editor
         // the idle here on the graph flavor would be strictly worse than
         // leaving it unreachable -- it would tear a plugin down under a GPU
         // still reading its resources.
+        //
+        // ===== TWO OBLIGATIONS TASK 12 INHERITS FROM TASK 9'S GAME-UI HALF,
+        // both of which are SILENT when got wrong and neither of which any
+        // headless case can reach:
+        //
+        //   (a) ORDER: the viewport context's game ImGuiNriNode ADOPTED
+        //       m_gameImgui's ImGui context, and ImGuiNri::Release PINS the
+        //       adopted context to walk its platform texture list -- a
+        //       dereference. So a teardown that releases the graph contexts
+        //       must leave m_gameImgui ALIVE across it. At process exit that
+        //       is member declaration order (EditorApp.hpp); here it has to be
+        //       written, because this stage destroys the graph contexts while
+        //       every ImGui context in the process SURVIVES the switch.
+        //
+        //   (b) RE-ADOPT: a rebuilt viewport context's ImGuiGame() node is a
+        //       NEW ImGuiNri that installed its backend flags on whatever
+        //       context was current -- not the game one. Without a fresh
+        //       ImGuiNriNode::AdoptImGuiContext(m_gameImgui->Context()) after
+        //       the rebuild (the call CreateGraphVehicles makes), the game
+        //       context's draw lists carry no atlas for the node to upload and
+        //       the plugin HUD renders as NOTHING, with no error anywhere.
+        //
+        // ImGuiNri::AdoptContext and its m_imguiContext member carry the full
+        // statement of both.
         {
             Arcane::BootStage teardown;
             teardown.id = "switch_teardown";

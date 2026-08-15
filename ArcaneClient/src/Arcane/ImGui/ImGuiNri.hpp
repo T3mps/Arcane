@@ -422,21 +422,37 @@ namespace Arcane
         //
         // WHY IT IS WORTH A MEMBER (NRI Phase 3, Task 9). Release walks
         // ImGui::GetPlatformIO().Textures to catch ImTextureData this backend
-        // never serviced, and that walk reads WHATEVER CONTEXT IS CURRENT. With
+        // never serviced, and that walk read WHATEVER CONTEXT WAS CURRENT. With
         // one backend per process that was right by luck. With TWO -- the
         // editor's chrome backend over the editor context and its game backend
         // over the plugin context, released back to back from teardowns that
-        // pin neither -- one of the two would necessarily walk the OTHER's
-        // atlas and mark its textures Destroyed. At process exit that is
-        // invisible; across Task 12's project switch, where the ImGui contexts
-        // OUTLIVE the graph contexts, it is a context whose atlas ImGui now
-        // believes is live while its GPU texture is gone.
+        // pin neither -- one of them necessarily walks the OTHER's LIVE atlas.
+        //
+        // AND THE DAMAGE IS NOT "it reads as Destroyed", which is worth
+        // spelling out because it decides what an observer must look at:
+        // ImTextureData::SetStatus (imgui.h) BOUNCES a Destroyed request back
+        // to WantCreate whenever the CPU-side Pixels are still live, which for
+        // a live atlas they are. SetTexID carries no such guard. So the victim
+        // is left WANTCREATE WITH AN INVALID TexID -- ImGui asking the OWNING
+        // backend to create a SECOND texture for an ImTextureData it still
+        // holds a live cache Entry for, with the id its draw commands carried
+        // gone. At process exit that is invisible; across Task 12's project
+        // switch, where the ImGui contexts OUTLIVE the graph contexts, it is
+        // live. Pinned by the "Release stamps the ADOPTED context's atlas"
+        // [nri] case, which asserts on TexID for exactly that reason.
+        //
+        // THE INVARIANT THIS RESTS ON is ONE ImGuiNri PER ImGui CONTEXT, and it
+        // is enforced structurally rather than assumed -- see
+        // NriGraphContext::NodeSet, whose per-node gating is what stops a
+        // context that will never draw a HUD from building a second backend
+        // over somebody else's context.
         //
         // THE CALLER'S OBLIGATION, because a pin is a dereference: the ImGui
         // context a backend adopted must OUTLIVE that backend's Release. In the
         // editor that is declaration order (m_gameImgui is declared before
-        // m_viewportTargets, so it destructs after it); Task 12 owes the same
-        // ordering explicitly in its switch teardown.
+        // m_viewportTargets, so it destructs after it -- stated at that member
+        // too); Task 12 owes the same ordering explicitly in its switch
+        // teardown, where it is stated at the site.
         void* m_imguiContext = nullptr;
 
         bool m_warnedPoolFull = false;

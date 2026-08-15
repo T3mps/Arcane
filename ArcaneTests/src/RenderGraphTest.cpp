@@ -3080,6 +3080,125 @@ TEST_CASE("imgui-nri: both invalidation variants evict the pointer-keyed entry a
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
+TEST_CASE("imgui-nri: Release stamps the ADOPTED context's atlas, never whichever one is current",
+          "[nri]")
+{
+    // NRI Phase 3, Task 9 (fix round 1). Release walks
+    // ImGui::GetPlatformIO().Textures and, for every RefCount==1 ImTextureData,
+    // invalidates its TexID and asks for Destroyed -- the right thing for THE
+    // backend of that context (it catches an ImTextureData that was never
+    // serviced: a stuck WantCreate, or a WantDestroy that arrived after the
+    // last frame).
+    //
+    // IT USED TO WALK WHATEVER CONTEXT WAS CURRENT. With one backend per
+    // process that was right by luck. The editor now holds two -- a chrome
+    // backend over the editor context and a game backend over the plugin's --
+    // and BOTH are Released from teardowns that pin neither.
+    //
+    // WHAT THE DAMAGE ACTUALLY IS, because it is not "the texture reads as
+    // Destroyed": ImTextureData::SetStatus (imgui.h) BOUNCES a Destroyed
+    // request back to WantCreate whenever the CPU-side Pixels are still live,
+    // which for another context's live atlas they are. SetTexID has no such
+    // guard. So a foreign walk leaves the victim as WANTCREATE WITH AN INVALID
+    // TexID -- i.e. ImGui asks the owning backend to create a SECOND texture
+    // for an ImTextureData that backend still holds a live cache Entry for,
+    // and the id its draw commands were carrying is gone. That is why TexID is
+    // the observable below and Status is not: Status is where ImGui's own
+    // guard hides the stamp, and a test that asserted on it would go green
+    // over a live bug.
+    //
+    // WHAT MAKES IT PINNABLE ON NONE: the walk and its stamp are pure ImGui
+    // bookkeeping. Two contexts, each with its own atlas, each driven through
+    // one NewFrame/EndFrame so UpdateTexturesEndFrame publishes that atlas into
+    // its own PlatformIO.Textures at RefCount 1 -- exactly the condition the
+    // walk tests -- and each given a stand-in TexID, which is what a backend
+    // that HAD serviced it would have left behind.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    ImGuiContext* const previous = ImGui::GetCurrentContext();
+
+    // Publishes this context's atlas into its own platform texture list, and
+    // hands it back. RendererHasTextures is what keeps ImGui from locking the
+    // atlas into the legacy path; no texture is ever created for it here.
+    const auto publishAtlas = [](ImGuiContext* ctx) -> ImTextureData*
+    {
+        ImGui::SetCurrentContext(ctx);
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(1.0f, 1.0f);
+        io.DeltaTime   = 1.0f / 60.0f;
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+        ImGui::NewFrame();
+        ImGui::EndFrame();   // UpdateTexturesEndFrame builds PlatformIO.Textures
+        REQUIRE(ImGui::GetPlatformIO().Textures.Size >= 1);
+        return ImGui::GetPlatformIO().Textures[0];
+    };
+
+    ImGuiContext* const adopted = ImGui::CreateContext();
+    ImGuiContext* const foreign = ImGui::CreateContext();
+    REQUIRE(adopted != nullptr);
+    REQUIRE(foreign != nullptr);
+
+    ImTextureData* const adoptedTex = publishAtlas(adopted);
+    ImTextureData* const foreignTex = publishAtlas(foreign);
+    REQUIRE(adoptedTex != nullptr);
+    REQUIRE(foreignTex != nullptr);
+    REQUIRE(adoptedTex != foreignTex);
+
+    // The id a backend that HAD serviced these would have left behind. Both,
+    // so the two halves of the assertion below are symmetric and the pass
+    // cannot come from one of them never having had an id at all.
+    const ImTextureID kServiced = (ImTextureID)0xABCDu;
+    adoptedTex->SetTexID(kServiced);
+    foreignTex->SetTexID(kServiced);
+    REQUIRE(adoptedTex->TexID == kServiced);
+    REQUIRE(foreignTex->TexID == kServiced);
+
+    Arcane::Graveyard lane;
+    {
+        Arcane::NriPipelineCache pipelines;
+        pipelines.Bind(*device);
+        const std::uint8_t vsBytes[4] = { 1, 2, 3, 4 };
+        const std::uint8_t psBytes[4] = { 5, 6, 7, 8 };
+
+        Arcane::ImGuiNri backend;
+        // ADOPTED BY INIT, which records whatever is current -- the shape both
+        // hosts' primary context takes. (AdoptContext is the explicit form, for
+        // a context that was NOT current at Init; both land in the same member.)
+        ImGui::SetCurrentContext(adopted);
+        REQUIRE(backend.Init(*device, pipelines, vsBytes, psBytes));
+
+        // THE SETUP THE BUG NEEDED: a DIFFERENT context is current when the
+        // backend is torn down. In the editor that is simply whatever the last
+        // frame or the shutdown path left pinned -- nobody pins for a destructor.
+        ImGui::SetCurrentContext(foreign);
+        backend.Release(lane, 1);
+
+        // THE ASSERTION THE FIX EXISTS FOR, both halves. The adopted context's
+        // texture was disowned (that is this backend's job, on the way out);
+        // the FOREIGN context's -- another live backend's atlas -- was not
+        // touched at all.
+        CHECK(adoptedTex->TexID == ImTextureID_Invalid);
+        CHECK(foreignTex->TexID == kServiced);
+        // ...and the pin is restored, so a teardown cannot silently re-point
+        // whatever ran before it.
+        CHECK(ImGui::GetCurrentContext() == foreign);
+
+        lane.Drain();
+        pipelines.Clear(lane, 1);
+        lane.Drain();
+    }
+    CHECK(lane.Pending() == 0);
+
+    ImGui::DestroyContext(adopted);
+    ImGui::DestroyContext(foreign);
+    ImGui::SetCurrentContext(previous);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
 TEST_CASE("rendergraph exec: an RgCompiled from before a Reset is refused", "[nri]")
 {
     const std::uint64_t before = Arcane::RenderErrorCount();

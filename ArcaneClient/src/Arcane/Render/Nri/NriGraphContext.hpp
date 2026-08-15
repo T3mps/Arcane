@@ -332,30 +332,55 @@ namespace Arcane
 
         // WHICH OPTIONAL NODES THIS VEHICLE BUILDS (NRI Phase 3, Task 9).
         //
-        // The three core nodes (batch, post, tonemap) and the host HUD are
-        // built on every run; these two are not, and the gate is not laziness.
-        // Each costs real GPU objects that a context which will never DECLARE
-        // them should not hold: the pick pair costs a HOST_READBACK buffer, a
-        // descriptor pool, a pipeline layout and a constant arena; a second
-        // ImGui backend costs a sampler, a pool and its own font atlas.
+        // The three core nodes (batch, post, tonemap) are built on every run;
+        // the three below are not, and the gate is not laziness. Each costs
+        // real GPU objects a context that will never DECLARE them should not
+        // hold: the pick pair costs a HOST_READBACK buffer, a descriptor pool,
+        // a pipeline layout and a constant arena; each ImGui backend costs a
+        // sampler, a descriptor pool and a font-atlas cache.
         //
         // IT DOES NOT DECIDE THE FRAME'S SHAPE -- FrameDesc does. This decides
         // only whether the frame CAN ask, which is what keeps "the flag off
         // leaves the previous task's frame byte for byte" true: a context that
         // builds the nodes but is never asked for them declares the identical
         // graph.
+        //
+        // ===== AND IT IS WHAT MAKES "ONE ImGuiNri PER ImGui CONTEXT" TRUE =====
+        // (NRI Phase 3, Task 9 fix round 1.) That is an INVARIANT, not a
+        // tidiness claim: ImGuiNri::Release walks its adopted context's
+        // platform texture list and DISOWNS every RefCount==1 ImTextureData
+        // (invalid TexID, and a Destroyed request ImGui bounces to WantCreate
+        // while the CPU pixels live). Correct for THE backend of that context;
+        // destructive for a SECOND one over the same context, which leaves
+        // ImGui asking the OWNING backend to re-create an atlas it still holds
+        // a live cache entry for.
+        //
+        // Building the host HUD UNCONDITIONALLY is exactly how a second one
+        // appeared: the editor's OFFSCREEN viewport context got a host-HUD
+        // backend it can never draw through, and -- being created while the
+        // EDITOR context was current -- it adopted the editor context alongside
+        // the CHROME context's backend. Two backends, one context, and the
+        // viewport context destructs first. Inert at process exit; live at a
+        // project switch, which destroys the viewport context and keeps the
+        // chrome one. Hence the gate below.
         struct NodeSet
         {
+            // The HOST CHROME's ImGuiNriNode -- what FrameDesc::imgui draws
+            // through. Set by Create(), because a host-window context presents
+            // chrome by definition; left FALSE for an offscreen target, which
+            // by construction has no host chrome on it. An offscreen context
+            // that genuinely wants to draw chrome INTO its output says so here.
+            bool hostHud = false;
             // PickNode + OutlineNode. Also implied by --pick-probe, which arms
             // a fixed probe pixel on top of it; a host that sets this gets the
             // nodes with NO probe pixel of its own until it names one per frame
             // (FrameDesc::pickPixel).
             bool pickOutline = false;
-            // The SECOND ImGuiNriNode -- the GAME/plugin HUD, drawn from
-            // FrameDesc::gameUi between the tonemap and the pick/outline chain.
-            // Separate from the host HUD's node because the two draw datas come
-            // from two different ImGui CONTEXTS and an ImGuiNri's texture cache
-            // serves one atlas; see ImGuiNodeSlot.
+            // The GAME/plugin HUD's ImGuiNriNode, drawn from FrameDesc::gameUi
+            // between the tonemap and the pick/outline chain. A SEPARATE node
+            // from the host HUD's because the two draw datas come from two
+            // different ImGui CONTEXTS -- see ImGuiNodeSlot, and the invariant
+            // block above.
             bool gameUi = false;
         };
 
@@ -872,11 +897,13 @@ namespace Arcane
         [[nodiscard]] PickNode*    Pick()    noexcept { return m_pick.get(); }
         [[nodiscard]] OutlineNode* Outline() noexcept { return m_outline.get(); }
 
-        // The HUD node (Task 12). Built on every run -- unlike the pick pair
-        // it costs one sampler, one layout and one small descriptor pool, and
-        // the ONE thing that decides whether the frame draws it is whether the
-        // driver handed this frame draw data. Named ImGuiHud() rather than
-        // ImGui() because `ImGui` is a namespace this header's consumers use.
+        // The HOST CHROME HUD's node (Task 12). Non-null on every HOST-WINDOW
+        // context (Create asks for it) and null on an offscreen one unless it
+        // asked -- see NodeSet::hostHud and the invariant block above it.
+        // Given the node, the ONE thing that decides whether the frame draws it
+        // is whether the driver handed this frame draw data. Named ImGuiHud()
+        // rather than ImGui() because `ImGui` is a namespace this header's
+        // consumers use.
         [[nodiscard]] ImGuiNriNode* ImGuiHud() noexcept { return m_imguiHud.get(); }
 
         // The GAME HUD's node (Task 9) -- a SECOND backend over a SECOND ImGui
@@ -1147,13 +1174,15 @@ namespace Arcane
         // other two and BEFORE the graph releases that pool.
         std::unique_ptr<PickNode>          m_pick;
         std::unique_ptr<OutlineNode>       m_outline;
-        // The HUD node. It caches no view over the graph's transient pool (see
-        // ImGuiNriNode.hpp), but it is released in ~NriGraphContext beside the
-        // others anyway -- one teardown order for every node is cheaper to
+        // The two HUD nodes, built only under NodeSet::hostHud / ::gameUi.
+        // Neither caches a view over the graph's transient pool (see
+        // ImGuiNriNode.hpp), but both are released in ~NriGraphContext beside
+        // the others anyway -- one teardown order for every node is cheaper to
         // keep correct than a per-node exception.
+        //
+        // AT MOST ONE OF THESE MAY ADOPT ANY GIVEN ImGui CONTEXT -- NodeSet's
+        // invariant block says why, and the gating is what enforces it.
         std::unique_ptr<ImGuiNriNode>      m_imguiHud;
-        // The GAME HUD's node, built only under NodeSet::gameUi. Released
-        // beside m_imguiHud for the same reason.
         std::unique_ptr<ImGuiNriNode>      m_imguiGame;
 
         // Raw offline shader artifacts, keyed by artifact stem. unordered_map

@@ -975,13 +975,16 @@ namespace Arcane
         // backend owns.
         //
         // PINNED TO THE CONTEXT THIS BACKEND ADOPTED (NRI Phase 3, Task 9), not
-        // to whatever happens to be current. The walk marks ImTextureData
-        // Destroyed, so run against a FOREIGN context it tells another
-        // backend's ImGui that its live atlas is gone. That was unreachable
-        // while one process held one backend; it is reachable the moment a host
-        // holds two (the editor's chrome backend and its game backend, released
-        // back to back from a teardown that pins neither). See m_imguiContext
-        // for the caller obligation this pin creates.
+        // to whatever happens to be current. The walk DISOWNS an ImTextureData
+        // -- invalid TexID, plus a Destroyed request ImGui bounces back to
+        // WantCreate while the CPU pixels are live -- so run against a FOREIGN
+        // context it asks another backend to re-create an atlas that backend
+        // still holds a live entry for. Unreachable while one process held one
+        // backend; reachable the moment a host holds two (the editor's chrome
+        // backend and its game backend, released back to back from a teardown
+        // that pins neither). m_imguiContext carries the full account, the
+        // one-backend-per-context invariant this rests on, and the caller
+        // obligation the pin creates.
         if (ImGuiContext* const owned = static_cast<ImGuiContext*>(m_imguiContext))
         {
             ImGuiContext* const prev = ImGui::GetCurrentContext();
