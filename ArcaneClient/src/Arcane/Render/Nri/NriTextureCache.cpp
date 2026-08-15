@@ -55,7 +55,7 @@ namespace Arcane
                  m_textures.size());
         const nri::CoreInterface& core = m_device->Core();
         (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
-        for (auto& [id, resident] : m_textures)
+        for (auto& [key, resident] : m_textures)
         {
             if (resident.view)    core.DestroyDescriptor(resident.view);
             if (resident.texture) core.DestroyTexture(resident.texture);
@@ -71,7 +71,7 @@ namespace Arcane
 
         // Descriptors before the resources they view -- the graveyard runs
         // burials in order, so a view can never outlive its texture.
-        for (auto& [id, resident] : m_textures)
+        for (auto& [key, resident] : m_textures)
         {
             if (resident.view)
                 graveyard.Bury(fence, [core, d = resident.view] { core->DestroyDescriptor(d); });
@@ -86,32 +86,33 @@ namespace Arcane
     std::size_t NriTextureCache::ResidentCount() const noexcept
     {
         std::size_t count = 0;
-        for (const auto& [id, resident] : m_textures)
+        for (const auto& [key, resident] : m_textures)
             if (resident.texture)
                 ++count;
         return count;
     }
 
-    nri::Descriptor* NriTextureCache::View(const Guid& id) const
+    nri::Descriptor* NriTextureCache::View(const Guid& id, ColorSpace space) const
     {
-        const auto found = m_textures.find(id);
+        const auto found = m_textures.find(Key{ id, space });
         return found != m_textures.end() ? found->second.view : nullptr;
     }
 
-    nri::Texture* NriTextureCache::Resolve(const Guid& id)
+    nri::Texture* NriTextureCache::Resolve(const Guid& id, ColorSpace space)
     {
         // The ordinary untextured case -- every Rect, Line, Circle, glyph and
         // colored quad. Not a miss, not a warning, not an entry.
         if (!id.IsValid())
             return nullptr;
 
-        const auto cached = m_textures.find(id);
+        const Key key{ id, space };
+        const auto cached = m_textures.find(key);
         if (cached != m_textures.end())
             return cached->second.texture;   // null for a load this cache already failed
 
         // Inserted BEFORE any early return, so a failure is attempted once
         // rather than re-resolved every frame.
-        Resident& resident = m_textures[id];
+        Resident& resident = m_textures[key];
 
         // THE ONE-SHOT MISS WARN -- moved here from Batch2DNode, and it now
         // covers the SPRITE's own texture as well as a material's declared
@@ -153,10 +154,18 @@ namespace Arcane
         nri::TextureDesc textureDesc = {};
         textureDesc.type      = nri::TextureType::TEXTURE_2D;
         textureDesc.usage     = nri::TextureUsageBits::SHADER_RESOURCE;
-        // SRGB, matching Assets::GetTexture's nvrhi::Format::SRGBA8_UNORM: the
-        // canvas is linear and the hardware does the decode, so a UNORM here
-        // would render the same asset visibly brighter than the NVRHI path.
-        textureDesc.format    = nri::Format::RGBA8_SRGB;
+        // THE SPACE DECIDES THE FORMAT, and both halves mirror an existing
+        // NVRHI rule rather than being re-decided here (see ColorSpace):
+        //   Srgb    -> Assets::GetTexture's nvrhi::Format::SRGBA8_UNORM. The
+        //              canvas is linear and the hardware does the decode, so a
+        //              UNORM here would render the same asset visibly brighter
+        //              than the NVRHI path.
+        //   Display -> LoadDisplayTexture's nvrhi::Format::RGBA8_UNORM. The
+        //              sampled texel composites directly into a
+        //              display-referred target (ImGui draws post-tonemap), and
+        //              an SRGB view there decodes a second time and reads dark.
+        textureDesc.format    = space == ColorSpace::Display ? nri::Format::RGBA8_UNORM
+                                                             : nri::Format::RGBA8_SRGB;
         textureDesc.width     = (nri::Dim_t)pixels->width;
         textureDesc.height    = (nri::Dim_t)pixels->height;
         textureDesc.depth     = 1;
@@ -171,7 +180,9 @@ namespace Arcane
             resident.texture = nullptr;
             return nullptr;
         }
-        core.SetDebugName(resident.texture, ("asset " + id.ToString()).c_str());
+        core.SetDebugName(resident.texture,
+                          ("asset " + id.ToString()
+                           + (space == ColorSpace::Display ? " (display)" : "")).c_str());
 
         // Through NRI's OWN helper: UploadData submits and waits internally,
         // which is why every caller must reach this at DECLARATION time and
@@ -209,8 +220,9 @@ namespace Arcane
             return nullptr;
         }
 
-        ARC_INFO("[nri-graph] NriTextureCache: image {} ({}x{}) is resident on the graph device",
-                 id.ToString(), pixels->width, pixels->height);
+        ARC_INFO("[nri-graph] NriTextureCache: image {} ({}x{}, {}) is resident on the graph device",
+                 id.ToString(), pixels->width, pixels->height,
+                 space == ColorSpace::Display ? "display-referred" : "sRGB");
         return resident.texture;
     }
 }

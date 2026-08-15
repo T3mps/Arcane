@@ -140,6 +140,25 @@ namespace Arcane
     ARCANE_API nvrhi::TextureHandle LoadDisplayTexture(
         nvrhi::IDevice* device, const std::filesystem::path& path, uint32_t maxSize = 0);
 
+    // THE CPU HALF OF LoadDisplayTexture (NRI Phase 3, Task 11): the
+    // exe-relative resolve, the decode and the maxSize area-average downscale,
+    // with NO device -- the pixels the loader above would have uploaded.
+    //
+    // It exists because the graph path has a second uploader and no
+    // nvrhi::IDevice: an editor chrome image (the toolbar logo) reaches the GPU
+    // through NriTextureCache with ColorSpace::Display, which takes its bytes
+    // from a PixelSupplyFn rather than from a file. Same relationship
+    // RepackStagingToRgba has to SaveTexturePng -- one definition of what the
+    // pixels ARE, two ways of getting them onto a device.
+    //
+    // `out` is left default-constructed (i.e. !Valid()) on any failure, which
+    // is WARN-logged, never ERROR (a missing UI image must not trip the GPU
+    // tests' RenderErrorCount()==0 gate). maxSize (0 = off) caps the LARGER
+    // dimension, aspect preserved -- the loader's rule, not the thumbnail
+    // writer's width cap.
+    ARCANE_API bool LoadDisplayPixels(
+        const std::filesystem::path& path, uint32_t maxSize, PixelData& out);
+
     // The CPU half of SaveTexturePng, exported so its byte-order contract is
     // unit-testable without a device: repack mapped staging rows (rowPitch may
     // exceed w*4) into a tight RGBA buffer, swizzling when the source rows are
@@ -159,6 +178,26 @@ namespace Arcane
         nvrhi::IDevice* device, nvrhi::ITexture* texture,
         std::uint32_t& width, std::uint32_t& height,
         std::vector<unsigned char>& rgba);
+
+    // THE CPU HALF OF SaveTexturePng (NRI Phase 3, Task 11), exported for the
+    // same reason RepackStagingToRgba above is: it is the whole of what
+    // "write this image as a cover thumbnail" MEANS -- the width cap, the
+    // area-average downscale, the opaque-alpha rule and the PNG write -- and
+    // there is now a second producer of the pixels that has no nvrhi::ITexture
+    // to hand over. The graph path reads its image through
+    // NriGraphContext::ReadCapture (already tight, already BGRA-normalized)
+    // and lands here; SaveTexturePng below reads its own and lands here too,
+    // so the two cannot disagree about what a cover is.
+    //
+    // `rgba` is TIGHT RGBA8 (no row padding), `width` x `height`. maxWidth
+    // (0 = off) caps the WIDTH -- not the larger dimension, unlike the loader
+    // -- because the consumer is a fixed-width thumbnail tile and the source
+    // is a viewport whose aspect the user chose. Alpha is forced OPAQUE, the
+    // same rule and the same reason RepackStagingToRgba states. Parent
+    // directories are created. False on failure, logged as WARN, never ERROR.
+    ARCANE_API bool WriteThumbnailPngRgba(
+        const std::filesystem::path& path, std::uint32_t width, std::uint32_t height,
+        std::vector<unsigned char> rgba, uint32_t maxWidth = 0);
 
     // Save a GPU texture as a PNG on disk -- the writer twin of
     // LoadDisplayTexture (the editor's Saved/AutoScreenshot.png, which the

@@ -852,6 +852,24 @@ namespace Arcane::Editor
         // fine only because the dtor never drains -- it just un-publishes.
         std::unique_ptr<Arcane::SceneRenderResolver> m_resolver;
         Arcane::Editor::DocumentHost            m_documents;
+
+        // ---- Closed documents' preview vehicles (NRI Phase 3, Task 11) ----
+        // A shader document on the graph arm owns an offscreen
+        // NriGraphContext, and it is destroyed INSIDE the editor's ImGui pass
+        // (DocumentHost::DrawAll erases the unique_ptr right after its draw
+        // loop) -- while this frame's draw lists still name its output texture
+        // by raw pointer and the chrome frame that replays them has not been
+        // recorded. So the dying document hands the vehicle here instead, and
+        // DrainRetiredDocPreviews destroys it at the TOP of the next frame,
+        // invalidate first. Full reasoning: DocServices::retireGraphPreview.
+        //
+        // Declared AFTER m_graphChrome (which owns the device these borrow) so
+        // reverse-order destruction is correct even on a path that never
+        // drains -- though every path does: phase 13's top and
+        // ShutdownGraphPath.
+        std::vector<std::unique_ptr<Arcane::NriGraphContext>> m_retiredDocPreviews;
+        void RetireDocPreview(std::unique_ptr<Arcane::NriGraphContext> vehicle);
+        void DrainRetiredDocPreviews();
         Arcane::Editor::AssetBrowserState       m_assetBrowser;
         double m_editorClock = 0.0;   // the compile service's Poll/Submit clock
 
@@ -954,6 +972,36 @@ namespace Arcane::Editor
         // image is missing (the toolbar simply omits it). Holds an NVRHI handle, so like
         // the other render resources it is declared after m_gpu (destructs before the device).
         nvrhi::TextureHandle m_toolbarLogo;
+        // THE GRAPH ARM'S SAME MARK (NRI Phase 3, Task 11). The handle above
+        // cannot exist without an nvrhi device, so on `--nri-graph` the logo
+        // reaches the GPU the way every other image on that arm does: decoded
+        // device-free (Arcane::LoadDisplayPixels, the CPU half of
+        // LoadDisplayTexture) and uploaded by the CHROME context's
+        // NriTextureCache under a synthetic per-run Guid -- with
+        // ColorSpace::Display, because ImGui draws AFTER the tonemap and an
+        // sRGB view under it decodes a second time and reads dark.
+        //
+        // The pixels are RETAINED (rather than decoded on demand) because the
+        // cache's supply is a callback it may invoke at any Resolve, and this
+        // one answers exactly one Guid.
+        //
+        // NO INVALIDATE OBLIGATION, unlike the viewport output, and the reason
+        // is worth stating: this texture lives in the SAME context as the
+        // ImGuiNri that caches it, so ~NriGraphContext's own ordering covers
+        // it (nodes Release() before m_textures->Release(), i.e. the backend's
+        // view is buried before the cache's texture). Cross-context is what
+        // needs a caller-side hook; same-context does not.
+        Arcane::Guid      m_graphLogoId;
+        Arcane::PixelData m_graphLogoPixels;
+        std::uint64_t     m_graphLogoTexture = 0;   // ImTextureID (raw nri::Texture*)
+        // The toolbar's mark for whichever arm is live -- 0 = no mark, which
+        // DrawSimTimeToolbar already treats as "skip it".
+        [[nodiscard]] std::uint64_t ToolbarLogoTextureId() const noexcept
+        {
+            return m_graphLogoTexture != 0
+                       ? m_graphLogoTexture
+                       : (std::uint64_t)(std::intptr_t)m_toolbarLogo.Get();
+        }
 
         // File -> Open Project (soft-restart). The menu sets menuReq.openProject;
         // DrawEditorUi launches the async .arcproj FILE dialog via the shared
@@ -1105,6 +1153,17 @@ namespace Arcane::Editor
         // chain (Unreal's model). Called on scene save and on clean
         // shutdown; a no-op without a project, a viewport, or a device.
         void WriteAutoScreenshot();
+        // The graph arm's half of it (NRI Phase 3, Task 11): one extra
+        // VIEWPORT frame with FrameDesc::capture armed, then ReadCapture into
+        // the shared thumbnail writer. NEVER the chrome context -- an editor
+        // cover is a picture of the scene, and see PresentChromeFrame's
+        // absence table for why a chrome capture would redefine a golden.
+        //
+        // NOT #if-guarded, for the same reason m_graphChrome is not (see its
+        // declaration): a preprocessor-guarded member forces a guard at every
+        // use site. In Dist it is simply unreachable -- CreateGraphVehicles'
+        // whole body is guarded, so m_viewportTargets.graph is always null.
+        bool CaptureGraphViewportPng(const std::filesystem::path& file);
 
         // Window title, recomposed from project + scene + dirty state each frame
         // and pushed to the window only when it changes (SetTitle is an SDL call,

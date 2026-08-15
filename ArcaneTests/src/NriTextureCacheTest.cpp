@@ -239,3 +239,83 @@ TEST_CASE("nri texture cache: Release BURIES its objects rather than destroying 
 
     CHECK(Arcane::RenderErrorCount() == before);
 }
+
+// ===================================================================
+// COLOUR SPACE (NRI Phase 3, Task 11)
+// ===================================================================
+// The graph twin of the NVRHI split between Assets::GetTexture (sRGB, for the
+// linear scene canvas) and LoadDisplayTexture (UNORM, for ImGui's
+// display-referred target). The cache now keys on (Guid, space), and these
+// cases pin the two properties that has to have: the DEFAULT is unchanged
+// (every scene caller keeps sRGB without asking), and the two spaces are
+// genuinely SEPARATE residents rather than one entry serving both.
+//
+// What NONE cannot show is the FORMAT itself -- ImplNONE hands back a
+// dummy-but-non-null texture for any desc and there is no GetTextureDesc to
+// read it back through on that backend. The format branch is one ternary at
+// the create site and its consumer (ImGuiNri::EnsureEntry reads the texture's
+// ACTUAL format for its view) is a desk item, D3c: the logo drawn DARK is what
+// a wrong space looks like.
+
+TEST_CASE("nri texture cache: the colour space is part of an image's identity", "[nri]")
+{
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    auto cache = Arcane::NriTextureCache::Create(*device);
+    REQUIRE(cache != nullptr);
+
+    Arcane::PixelData pixels = MakePixels(4, 4);
+    CountingSupply supply;
+    supply.answer = &pixels;
+    cache->SetPixelSupply(supply.Fn());
+
+    using Space = Arcane::NriTextureCache::ColorSpace;
+
+    // The default IS sRGB -- the un-suffixed call and the explicit one are the
+    // same entry, so no existing caller's behaviour moved.
+    nri::Texture* srgb = cache->Resolve(kIdA);
+    REQUIRE(srgb != nullptr);
+    CHECK(cache->Resolve(kIdA, Space::Srgb) == srgb);
+    CHECK(supply.calls == 1);          // one upload, not two
+    CHECK(cache->ResidentCount() == 1);
+
+    // ...and the display-referred one is a SECOND resident: a different
+    // format is a different texture, because NRI has no typeless resource to
+    // hang two views off.
+    //
+    // OBSERVED AS A SECOND UPLOAD AND A SECOND ENTRY, not as a different
+    // pointer: ImplNONE hands back the SAME dummy handle (0x1) for every
+    // CreateCommittedTexture and every CreateTextureView, so `display != srgb`
+    // is unprovable on this backend -- it fails with 0x1 != 0x1 and would fail
+    // exactly the same way if the two spaces shared one entry. The supply call
+    // COUNT and ResidentCount are what actually distinguish the two, which is
+    // the same reasoning the memoization cases above already run on.
+    nri::Texture* display = cache->Resolve(kIdA, Space::Display);
+    REQUIRE(display != nullptr);
+    CHECK(supply.calls == 2);             // a second upload happened
+    CHECK(cache->ResidentCount() == 2);   // ...into a second entry
+
+    // Both are memoized independently: asking again for either uploads nothing.
+    CHECK(cache->Resolve(kIdA, Space::Display) == display);
+    CHECK(cache->Resolve(kIdA) == srgb);
+    CHECK(supply.calls == 2);
+    CHECK(cache->ResidentCount() == 2);
+    // Each space HAS a view of its own (the lookups do not miss), and the
+    // un-suffixed lookup is the sRGB one.
+    REQUIRE(cache->View(kIdA, Space::Srgb) != nullptr);
+    REQUIRE(cache->View(kIdA, Space::Display) != nullptr);
+    CHECK(cache->View(kIdA) == cache->View(kIdA, Space::Srgb));
+    // A space nobody resolved is a MISS, not a silent fallback to the other --
+    // this is the assertion that would fail if the key ignored the space,
+    // because kIdB has only ever been asked for in one of them.
+    CHECK(cache->View(kIdB, Space::Display) == nullptr);
+
+    // Release covers BOTH: 2 objects per resident (view + texture), 4 total.
+    Arcane::Graveyard& graves = device->Graves();
+    const std::size_t before = graves.Pending();
+    cache->Release(graves, 1);
+    CHECK(graves.Pending() == before + 4);
+    CHECK(cache->ResidentCount() == 0);
+    device->Graves().Reap(1);
+}

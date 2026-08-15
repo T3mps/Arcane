@@ -605,6 +605,48 @@ namespace Arcane
         }
     }
 
+    bool LoadDisplayPixels(const std::filesystem::path& path, uint32_t maxSize,
+                           PixelData& out)
+    {
+        out = PixelData{};
+
+        const std::filesystem::path resolved = ExeRelative(path);
+
+        int w = 0, h = 0, comp = 0;
+        unsigned char* data = stbi_load(resolved.string().c_str(), &w, &h, &comp, 4);
+        if (!data || w <= 0 || h <= 0)
+        {
+            // ARC_WARN (not ARC_ERROR): a missing UI image must not trip the GPU test's
+            // RenderErrorCount()==0 assertion (that counter tracks NVRHI validation only).
+            ARC_WARN("LoadDisplayPixels: not found or decode failed: {}", resolved.string());
+            if (data) stbi_image_free(data);
+            return false;
+        }
+
+        // Optional area-average downscale so the larger dimension fits maxSize (aspect
+        // preserved). Callers size maxSize to ~2x the on-screen draw size so
+        // the UI's own bilinear minification stays clean (see LoadDisplayTexture's doc).
+        if (maxSize > 0 && ((uint32_t)w > maxSize || (uint32_t)h > maxSize))
+        {
+            int dw, dh;
+            if (w >= h) { dw = (int)maxSize; dh = (h * (int)maxSize + w / 2) / w; }
+            else        { dh = (int)maxSize; dw = (w * (int)maxSize + h / 2) / h; }
+            if (dw < 1) dw = 1;
+            if (dh < 1) dh = 1;
+            DownsampleRGBA(data, w, h, out.rgba, dw, dh);
+            w = dw; h = dh;
+        }
+        else
+        {
+            out.rgba.assign(data, data + (size_t)w * h * 4);
+        }
+        stbi_image_free(data);
+
+        out.width  = (uint32_t)w;
+        out.height = (uint32_t)h;
+        return out.Valid();
+    }
+
     nvrhi::TextureHandle LoadDisplayTexture(nvrhi::IDevice* device,
                                             const std::filesystem::path& path,
                                             uint32_t maxSize)
@@ -615,61 +657,38 @@ namespace Arcane
             return nullptr;
         }
 
-        const std::filesystem::path resolved = ExeRelative(path);
-
-        int w = 0, h = 0, comp = 0;
-        unsigned char* data = stbi_load(resolved.string().c_str(), &w, &h, &comp, 4);
-        if (!data || w <= 0 || h <= 0)
-        {
-            // ARC_WARN (not ARC_ERROR): a missing UI image must not trip the GPU test's
-            // RenderErrorCount()==0 assertion (that counter tracks NVRHI validation only).
-            ARC_WARN("LoadDisplayTexture: not found or decode failed: {}", resolved.string());
-            if (data) stbi_image_free(data);
+        // The decode + downscale are LoadDisplayPixels' (NRI Phase 3, Task
+        // 11), so the graph path's own uploader and this one cannot disagree
+        // about what the image is. The one behavioural difference from the
+        // pre-split version is that the pixels are always copied into a
+        // std::vector before upload, even when no downscale ran -- the same
+        // buffer the downscale path always used.
+        PixelData pixels;
+        if (!LoadDisplayPixels(path, maxSize, pixels))
             return nullptr;
-        }
-
-        // Optional area-average downscale so the larger dimension fits maxSize (aspect
-        // preserved). `src`/w/h track the pixels uploaded -- either the stb buffer (no
-        // downscale) or `scaled`. Callers size maxSize to ~2x the on-screen draw size so
-        // the UI's own bilinear minification stays clean (see LoadDisplayTexture's doc).
-        const unsigned char* src = data;
-        std::vector<unsigned char> scaled;
-        if (maxSize > 0 && ((uint32_t)w > maxSize || (uint32_t)h > maxSize))
-        {
-            int dw, dh;
-            if (w >= h) { dw = (int)maxSize; dh = (h * (int)maxSize + w / 2) / w; }
-            else        { dh = (int)maxSize; dw = (w * (int)maxSize + h / 2) / h; }
-            if (dw < 1) dw = 1;
-            if (dh < 1) dh = 1;
-            DownsampleRGBA(src, w, h, scaled, dw, dh);
-            src = scaled.data();
-            w = dw; h = dh;
-        }
 
         // RGBA8_UNORM, NOT sRGB: the sampled texel goes straight to the display-referred
         // target (matches the ImGui backend's own font/texture format in ImGuiNvrhi.cpp).
         auto texDesc = nvrhi::TextureDesc()
-            .setWidth((uint32_t)w)
-            .setHeight((uint32_t)h)
+            .setWidth(pixels.width)
+            .setHeight(pixels.height)
             .setFormat(nvrhi::Format::RGBA8_UNORM)
             .setInitialState(nvrhi::ResourceStates::ShaderResource)
             .setKeepInitialState(true)
-            .setDebugName(resolved.filename().string().c_str());
+            .setDebugName(ExeRelative(path).filename().string().c_str());
         nvrhi::TextureHandle tex = device->createTexture(texDesc);
         if (!tex)
         {
-            ARC_WARN("LoadDisplayTexture: createTexture failed for: {}", resolved.string());
-            stbi_image_free(data);
+            ARC_WARN("LoadDisplayTexture: createTexture failed for: {}", path.string());
             return nullptr;
         }
 
         // Transient upload command list -- same pattern as Assets::GetTexture / Batcher2D.
         nvrhi::CommandListHandle upload = device->createCommandList();
         upload->open();
-        upload->writeTexture(tex, 0, 0, src, (size_t)w * 4);
+        upload->writeTexture(tex, 0, 0, pixels.rgba.data(), (size_t)pixels.width * 4);
         upload->close();
         device->executeCommandList(upload);
-        stbi_image_free(data);
 
         return tex;
     }
@@ -763,6 +782,45 @@ namespace Arcane
         return true;
     }
 
+    bool WriteThumbnailPngRgba(const std::filesystem::path& path,
+                               std::uint32_t width, std::uint32_t height,
+                               std::vector<unsigned char> rgba, uint32_t maxWidth)
+    {
+        if (width == 0 || height == 0 ||
+            rgba.size() < (std::size_t)width * height * 4)
+        {
+            ARC_WARN("WriteThumbnailPngRgba: {}x{} does not describe {} bytes: {}",
+                     width, height, rgba.size(), path.generic_string());
+            return false;
+        }
+
+        // OPAQUE, before the downscale so the box filter cannot average a
+        // transparent texel back in: a screenshot is a picture of the screen,
+        // and whatever coverage math left in the source's alpha channel must
+        // not punch holes in it. Byte-identical to RepackStagingToRgba's rule,
+        // which is why SaveTexturePng below can route through here without
+        // changing what it writes.
+        for (std::size_t i = 3; i < rgba.size(); i += 4)
+            rgba[i] = 0xFF;
+
+        if (maxWidth > 0 && width > maxWidth)
+        {
+            // Width-capped (not larger-dimension like the loader): the
+            // consumer is a fixed-width thumbnail tile, and the source is a
+            // viewport whose aspect the user chose.
+            const std::uint32_t dw = maxWidth;
+            std::uint32_t dh = (height * dw + width / 2) / width;
+            if (dh < 1) dh = 1;
+            std::vector<unsigned char> scaled;
+            DownsampleRGBA(rgba.data(), (int)width, (int)height, scaled, (int)dw, (int)dh);
+            rgba = std::move(scaled);
+            width = dw;
+            height = dh;
+        }
+
+        return WritePngRgba(path, width, height, rgba.data());
+    }
+
     bool SaveTexturePng(nvrhi::IDevice* device, nvrhi::ITexture* texture,
                         const std::filesystem::path& path, uint32_t maxWidth)
     {
@@ -770,25 +828,11 @@ namespace Arcane
         std::vector<unsigned char> rgba;
         if (!ReadTexturePixels(device, texture, w, h, rgba))
             return false;
-
-        if (maxWidth > 0 && w > maxWidth)
-        {
-            // Width-capped (not larger-dimension like the loader): the
-            // consumer is a fixed-width thumbnail tile, and the source is a
-            // viewport whose aspect the user chose.
-            const std::uint32_t dw = maxWidth;
-            std::uint32_t dh = (h * dw + w / 2) / w;
-            if (dh < 1) dh = 1;
-            std::vector<unsigned char> scaled;
-            DownsampleRGBA(rgba.data(), (int)w, (int)h, scaled, (int)dw, (int)dh);
-            rgba = std::move(scaled);
-            w = dw;
-            h = dh;
-        }
-
-        if (!WritePngRgba(path, w, h, rgba.data()))
-            return false;
-        return true;
+        // The cap, the downscale, the opaque-alpha rule and the write are ONE
+        // definition now, shared with the graph path's capture read (NRI
+        // Phase 3, Task 11). ReadTexturePixels already forced alpha opaque, so
+        // the pass inside is a no-op here -- this writes what it always wrote.
+        return WriteThumbnailPngRgba(path, w, h, std::move(rgba), maxWidth);
     }
 
     bool LoadPngRgba(const std::filesystem::path& path,

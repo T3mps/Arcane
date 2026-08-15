@@ -36,30 +36,62 @@
 
 namespace Arcane::Editor
 {
-    // NVRHI-ONLY, AND DELIBERATELY LEFT SO AT NRI PHASE 3 TASK 8. Both
-    // Device() reads below are unreachable accessors on the graph flavor
-    // (GpuContext ARC_ASSERTs, then hands back null in an optimized build), and
-    // that is not a live hazard mid-phase: this function is called ONLY from a
-    // document factory, i.e. only when a document is opened, which takes a
-    // click on editor chrome -- and a graph-mode editor presents no chrome
-    // (EditorAppFrame::PresentFrame) and installs no ImGui event tap
-    // (ImGuiLayer::CreateForGraph) until Task 10. Nothing in boot opens a
-    // document. The real answer is TASK 11's, which the plan scopes precisely
-    // here: null-device guards + blob retention on the preview compile sites,
-    // and the preview RENDER onto its own small CreateOffscreen context. A
-    // guard added here now would only convert a loud assert into a silently
-    // half-built document, which is the worse of the two.
+    // BOTH ARMS AS OF NRI PHASE 3 TASK 8 -> 11. Task 8 left this NVRHI-only
+    // and said why it was safe mid-phase (a graph-mode editor presented no
+    // chrome and had no event tap, so nothing could open a document); Task 10
+    // gave it chrome, and this is the task that owes the rest.
+    //
+    // The two Device() reads are now GATED rather than unconditional -- on the
+    // graph flavor GpuContext::Device() ARC_ASSERTs and then hands back null in
+    // an optimized build, which is a loud crash the moment a user
+    // double-clicks a material. In their place the graph seam
+    // (nriDevice/hostConfig/chromeHud) is filled, and the document builds its
+    // own small NriGraphContext::CreateOffscreen over the process's one device.
+    // Neither arm's fields are ever both set: `device`+`shaders` is the NVRHI
+    // supply, the three below are the graph supply, and every consumer gates on
+    // exactly one of them.
+    //
+    // `backend` is filled on BOTH arms and from different sources, the same
+    // substitution UpdateWindowTitle and RuntimeApp::StageSpriteTables make:
+    // the graph flavor has no RenderDevice to ask, and m_config.backend is by
+    // construction the value GpuContext::Create would have passed into it.
     Arcane::Editor::DocServices EditorApp::MakeDocServices()
     {
         Arcane::Editor::DocServices s;
-        s.device   = m_gpu->Device().Nvrhi();
-        s.shaders  = &m_gpu->Shaders();
+        const bool graph = GraphMode();
+        s.device   = graph ? nullptr : m_gpu->Device().Nvrhi();
+        s.shaders  = graph ? nullptr : &m_gpu->Shaders();
         s.compiler = m_shaderCompiler.get();
         s.sources  = &m_shaderSources;
         s.runtime  = &*m_runtime;
         s.undo     = m_undo ? &*m_undo : nullptr;
         s.clock    = &m_editorClock;
-        s.backend  = m_gpu->Device().Backend();
+        s.backend  = graph ? m_config.backend : m_gpu->Device().Backend();
+        if (graph && m_graphChrome)
+        {
+            // THE PROCESS'S ONE DEVICE, owned by the chrome context (Task 6):
+            // a document's preview context BORROWS it, exactly as the viewport
+            // context does, and must therefore be destroyed before the chrome
+            // context is. Documents die in DocumentHost, which EditorApp
+            // declares BEFORE m_graphChrome -- so reverse-order member
+            // destruction closes every open document first. CloseAll on a
+            // project switch (Task 12) is the other order, and it is the same
+            // one.
+            s.nriDevice  = &m_graphChrome->Device();
+            s.hostConfig = &m_config;
+            // The backend that will CACHE the preview texture when
+            // ImGui::Image draws it, and therefore the one owed an
+            // InvalidateUserTextureNow before that texture dies. The document
+            // makes that call from its destructor.
+            s.chromeHud  = m_graphChrome->ImGuiHud();
+            // ...and the one-frame retire, which is what makes closing a
+            // document safe at all on this arm. See DocServices'
+            // retireGraphPreview for why the destroy cannot happen inline.
+            s.retireGraphPreview = [this](std::unique_ptr<Arcane::NriGraphContext> v)
+            {
+                RetireDocPreview(std::move(v));
+            };
+        }
         s.onAssetSaved = [this](const Arcane::Guid& id)
         {
             if (m_resolver)

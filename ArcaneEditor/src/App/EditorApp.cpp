@@ -404,12 +404,18 @@ namespace Arcane::Editor
         // ~2x (a clean box). A much larger texture would leave ImGui doing a >2x single-tap
         // minify -> the aliased outline the raw 550px source produced.
         //
-        // NVRHI ARM ONLY (NRI Phase 3, Task 8): LoadDisplayTexture builds an
-        // nvrhi::TextureHandle and there is no NVRHI device on the graph
-        // flavor. The handle simply stays null there, which the toolbar already
-        // treats as "no mark" (DrawSimTimeToolbar's `0 skips it`) -- the same
-        // degraded-but-never-broken path a missing PNG takes. The graph-side
-        // logo (via NriTextureCache) is Task 11's, named in the plan.
+        // NVRHI ARM ONLY: LoadDisplayTexture builds an nvrhi::TextureHandle
+        // and there is no NVRHI device on the graph flavor.
+        //
+        // THE GRAPH ARM GETS THE SAME MARK FROM ELSEWHERE (NRI Phase 3, Task
+        // 11) -- CreateGraphVehicles decodes the same PNG at the same maxSize
+        // through LoadDisplayPixels and uploads it through the chrome
+        // context's NriTextureCache. It cannot happen HERE because that
+        // context does not exist yet: this stage runs inside boot, and the
+        // graph vehicles are built strictly after it (Main -> CreateGraphVehicles).
+        // The toolbar reads whichever of the two is set (ToolbarLogoTextureId),
+        // and 0 -- neither -- is still the degraded-but-never-broken "no mark"
+        // path a missing PNG takes.
         if (!m_gpu->GraphFlavor())
             m_toolbarLogo = Arcane::LoadDisplayTexture(m_gpu->Device().Nvrhi(), kLogoPath, 64);
 
@@ -1220,18 +1226,33 @@ namespace Arcane::Editor
     void EditorApp::WriteAutoScreenshot()
     {
         if (m_frameCount == 0) return;
-        // The `!m_viewportTargets.canvas` clause is ALSO the graph arm's gate
-        // (NRI Phase 3, Task 8): that member is null there by construction, so
-        // a graph session simply writes no cover. Deliberately not given a
-        // graph implementation here -- the graph read is the vehicle's own
-        // capture path (NriGraphContext::FrameDesc::capture + ReadCapture), and
-        // the plan assigns it to Task 11 beside the toolbar logo. A session
-        // that wrote no cover leaves the Hub the previous one, which is the
-        // same degradation a failed PNG encode already takes.
-        if (!m_runtime || !m_viewportTargets.canvas || !m_gpu) return;
+        if (!m_runtime || !m_gpu) return;
 
         const Arcane::Project* proj = m_runtime->CurrentProject();
         if (!proj) return;
+
+        const std::filesystem::path file = proj->Root() / "Saved" / "AutoScreenshot.png";
+
+        // ===== THE GRAPH ARM (NRI Phase 3, Task 11) ==========================
+        // Task 8 left this NVRHI-only and named the route: the vehicle's own
+        // capture path, FrameDesc::capture + ReadCapture. It is taken on the
+        // VIEWPORT context and never on the chrome one -- an editor cover is a
+        // picture of the SCENE, and a capture node on the chrome frame would
+        // copy a CHROMED backbuffer and silently redefine what an editor
+        // golden contains (PresentChromeFrame's four absences; Task 10 §8).
+        if (m_viewportTargets.graph)
+        {
+            if (CaptureGraphViewportPng(file))
+                ARC_INFO("Auto-screenshot {}", file.generic_string());
+            return;
+        }
+
+        // The `!m_viewportTargets.canvas` clause is ALSO the graph arm's gate
+        // for a run whose vehicle failed to build: that member is null there
+        // by construction, so such a session simply writes no cover, and the
+        // Hub keeps the previous one -- the same degradation a failed PNG
+        // encode already takes.
+        if (!m_viewportTargets.canvas) return;
 
         // TextureId() round-trips the output texture pointer -- the same seam
         // ImGui::Image consumes (precedent: OffscreenCanvasTest.cpp).
@@ -1239,13 +1260,74 @@ namespace Arcane::Editor
             static_cast<uintptr_t>(m_viewportTargets.canvas->TextureId()));
         if (!tex) return;
 
-        const std::filesystem::path file = proj->Root() / "Saved" / "AutoScreenshot.png";
         // 512 wide: the Hub tile draws ~230px, so ~2x for clean minification
         // (LoadDisplayTexture's own sizing rule), far under the Hub's 2 MB
         // cover cap. Failure is already WARN-logged inside; a screenshot that
         // cannot be written must not turn a save or a shutdown into an error.
         if (Arcane::SaveTexturePng(m_gpu->Device().Nvrhi(), tex, file, 512))
             ARC_INFO("Auto-screenshot {}", file.generic_string());
+    }
+
+    // ONE MORE VIEWPORT FRAME, ARMED FOR CAPTURE, then read it back.
+    //
+    // WHY A FRESH FRAME RATHER THAN A READ OF THE LAST ONE. The graph has no
+    // "read this texture" entry point at all: a capture is a NODE
+    // (RgUsage::CopySrc into an imported HOST_READBACK buffer), declared with
+    // the frame it belongs to, and ReadCapture refuses outright unless a
+    // submitted frame recorded one (m_captureRecorded). Arming capture on
+    // EVERY viewport frame instead would pay a full-surface copy per frame for
+    // an image taken twice a session.
+    //
+    // AND THE FRESH FRAME IS THE BETTER PICTURE, which is the part worth
+    // stating: it carries the scene, the post chain and the Edit-mode overlays
+    // (SubmitSceneToBatcher's gizmo + camera rect) but NOT the selection
+    // outline and NOT the game HUD, because it does not call
+    // ArmGraphViewportFrame. WriteAutoScreenshot's own comment calls the
+    // outline-free shot the one it would rather have, and rejects it because
+    // "an outline-free shot would need a second scene render" -- on this arm
+    // the second scene render is what a capture costs anyway.
+    //
+    // BOTH CALL SITES ARE RARE EVENTS (a scene save, shutdown), which is what
+    // pays for ReadCapture's DeviceWaitIdle -- the same stall SaveTexturePng
+    // makes on the other arm, for the same reason.
+    bool EditorApp::CaptureGraphViewportPng(const std::filesystem::path& file)
+    {
+        Arcane::NriGraphContext* graph = m_viewportTargets.graph.get();
+        if (!graph)
+            return false;
+
+        // The SAME submission phase 10 makes, through the same function, so
+        // the cover cannot drift from what the viewport shows. Re-Begin is
+        // safe at either call site: phase 10's own frame already drained this
+        // batcher, and the next frame's phase 10 re-Begins it again.
+        Arcane::Batcher2D& b = m_gpu->Batch();
+        b.Begin(nullptr, nullptr, graph->SurfaceWidth(), graph->SurfaceHeight());
+        SubmitSceneToBatcher(b);
+
+        const Arcane::GlobalParams globals =
+            m_resolver ? m_resolver->Globals() : Arcane::GlobalParams{};
+
+        Arcane::NriGraphContext::FrameDesc vp;
+        vp.batch   = &b;
+        vp.post    = m_resolver ? m_resolver->PostDesc() : nullptr;
+        vp.globals = &globals;
+        vp.capture = true;
+        if (graph->RenderFrameOffscreen(vp) != Arcane::NriGraphContext::FrameOutcome::Presented)
+            return false;   // Skipped (collapsed panel) or Failed (already latched + logged)
+
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> rgba;
+        // ReadCapture hands back TIGHT RGBA8, already swizzled out of the
+        // output's BGRA -- the same normalization the golden comparator
+        // relies on, so these bytes are directly the ones a PNG wants.
+        // A false here is NOT a run failure (its own contract says so).
+        if (!graph->ReadCapture(w, h, rgba))
+            return false;
+
+        // 512 wide, and every other rule about what a cover is, through the
+        // one shared definition the NVRHI arm's SaveTexturePng also routes
+        // through (Arcane::WriteThumbnailPngRgba).
+        return Arcane::WriteThumbnailPngRgba(file, w, h, std::move(rgba), 512);
     }
 
     namespace
@@ -1473,6 +1555,40 @@ namespace Arcane::Editor
         if (Arcane::ImGuiNriNode* chromeNode = m_graphChrome->ImGuiHud())
             chromeNode->AdoptImGuiContext(m_editorImguiContext);
 
+        // ===== THE TOOLBAR MARK, ON THIS ARM (NRI Phase 3, Task 11) =========
+        // StageEditorShell skips LoadDisplayTexture here (no nvrhi device), so
+        // the logo took the "missing PNG" path and the toolbar showed no mark.
+        // The graph route is the one the plan names: the CHROME context's
+        // NriTextureCache, which is the only uploader on this arm.
+        //
+        // A SYNTHETIC PER-RUN GUID, because this image is not a project asset
+        // -- it is a file beside the exe -- and the cache's whole vocabulary is
+        // Guids. Generated rather than hardcoded so it cannot collide with a
+        // real asset id in any project; the supply below is the only thing that
+        // answers it, and it answers nothing else (a real asset Guid arriving
+        // here returns null, which is the cache's own "not resident" path and
+        // is correct: the chrome context renders no scene content).
+        //
+        // ColorSpace::Display is load-bearing -- see NriTextureCache::ColorSpace.
+        // maxSize 64 is StageEditorShell's own number, and the same reasoning:
+        // ~2x the ~32px on-screen mark, so ImGui's single-tap bilinear only
+        // minifies cleanly instead of aliasing a 550px source.
+        if (Arcane::LoadDisplayPixels("data/images/arcane_logo.png", 64, m_graphLogoPixels))
+        {
+            m_graphLogoId = Arcane::Guid::Generate();
+            m_graphChrome->SetPixelSupply(
+                [this](const Arcane::Guid& id) -> const Arcane::PixelData*
+                {
+                    return id == m_graphLogoId ? &m_graphLogoPixels : nullptr;
+                });
+            if (Arcane::NriTextureCache* cache = m_graphChrome->Textures())
+                if (nri::Texture* logo = cache->Resolve(
+                        m_graphLogoId, Arcane::NriTextureCache::ColorSpace::Display))
+                {
+                    m_graphLogoTexture = (std::uint64_t)(std::intptr_t)logo;
+                }
+        }
+
         // THE VIEWPORT. 1280x720 is the size the NVRHI arm's OffscreenCanvas is
         // created at in StageRenderBridge, for the same reason: the panel's
         // real extent is not known until it has drawn once, and phase 8's
@@ -1585,10 +1701,76 @@ namespace Arcane::Editor
         m_requestExit = true;
     }
 
+    void EditorApp::RetireDocPreview(std::unique_ptr<Arcane::NriGraphContext> vehicle)
+    {
+        if (vehicle)
+            m_retiredDocPreviews.push_back(std::move(vehicle));
+    }
+
+    // Destroy every vehicle a document handed over, invalidate FIRST.
+    //
+    // WHY THE DEFERRAL EXISTS, in one line: the document died at phase 14 and
+    // the chrome frame naming its texture was recorded at phase 19. Draining
+    // here -- at the top of a LATER frame -- means that frame has been
+    // recorded and submitted, and InvalidateUserTextureNow's own
+    // DeviceWaitIdle is what makes "submitted" into "retired" before the view
+    // is destroyed. See DocServices::retireGraphPreview.
+    //
+    // The invalidate is the app's rather than the document's because by now
+    // the document is gone -- and because it always was the CHROME context's
+    // node that had to be told, which only the app holds.
+    void EditorApp::DrainRetiredDocPreviews()
+    {
+        if (m_retiredDocPreviews.empty())
+            return;
+        Arcane::ImGuiNriNode* chrome = m_graphChrome ? m_graphChrome->ImGuiHud() : nullptr;
+        for (std::unique_ptr<Arcane::NriGraphContext>& vehicle : m_retiredDocPreviews)
+        {
+            if (!vehicle)
+                continue;
+            // Same three-part order as ShutdownGraphPath: view (chrome's lane)
+            // before texture (this vehicle's lane), then the borrower dies.
+            // Unconditional and idempotent -- a preview that never drew is a
+            // routine miss.
+            if (chrome)
+                (void)chrome->InvalidateUserTextureNow(vehicle->OffscreenOutput());
+            vehicle.reset();
+        }
+        m_retiredDocPreviews.clear();
+    }
+
     void EditorApp::ShutdownGraphPath()
     {
         if (!m_graphChrome && !m_viewportTargets.graph)
             return;   // the NVRHI arm, or a graph run that never built a vehicle
+
+        // ===== OPEN DOCUMENTS FIRST (NRI Phase 3, Task 11) ===================
+        // A shader document on this arm owns its OWN offscreen context, built
+        // over the device m_graphChrome owns, and holds m_graphChrome's
+        // ImGuiNriNode to invalidate against on the way out. Both of those are
+        // gone the moment the two resets below run.
+        //
+        // MEMBER ORDER DOES NOT COVER IT, and it looks like it should:
+        // m_documents is declared AFTER m_graphChrome, so reverse-order
+        // destruction genuinely does close documents first -- but that happens
+        // in ~EditorApp, long after THIS function has already destroyed both
+        // contexts. The window between them is the whole hazard, and it is the
+        // same shape as the one this function exists to close: the fix is to
+        // close the borrowers at the point the owner is about to die, not to
+        // reason about a declaration order that runs later.
+        //
+        // CloseAll is the document host's own teardown (it is what a project
+        // switch runs), so this is not a special exit path -- it is the
+        // ordinary one, moved earlier. Graph arm only: on the NVRHI arm
+        // documents keep dying through member destruction exactly as they
+        // always have.
+        m_documents.CloseAll();
+        // ...which hands their preview vehicles to the retire list rather than
+        // destroying them inline, so the list has to be drained HERE, while
+        // m_graphChrome (whose ImGuiNri node the drain invalidates against) is
+        // still alive. No frame is recorded between the two, which is the one
+        // condition the deferral exists to satisfy.
+        DrainRetiredDocPreviews();
 
         // ===== THE TEARDOWN HALF OF THE VIEW-BEFORE-TEXTURE RULE =============
         // (NRI Phase 3, Task 8, fix round 1.) A RESIZE is not the only moment

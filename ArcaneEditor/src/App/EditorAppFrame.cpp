@@ -1650,6 +1650,14 @@ namespace Arcane::Editor
     // preview on its own OffscreenCanvas).
     void EditorApp::PumpEditorDocuments()
     {
+        // FIRST, and before anything can close another document: destroy the
+        // preview vehicles that LAST frame's closes handed over (NRI Phase 3,
+        // Task 11). By now the chrome frame whose draw lists named them has
+        // been recorded AND submitted, which is the whole condition the
+        // deferral exists to satisfy. Same idiom, one level up, as
+        // ShaderEditorDocument's own m_nodePreviewRetired.clear() at the top of
+        // Tick. A no-op on the NVRHI arm (nothing ever retires).
+        DrainRetiredDocPreviews();
         PollMaterialWatch();   // external .arcmat edits (~1 Hz mtime sweep)
         m_documents.TickAll(m_gameUi.frameDt);
     }
@@ -1686,7 +1694,7 @@ namespace Arcane::Editor
         // backstop before the spawn.
         if (Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime,
                                                m_plugin ? m_plugin->Vtable() : nullptr, m_playMode,
-                                               (uint64_t)(intptr_t)m_toolbarLogo.Get()))
+                                               ToolbarLogoTextureId()))
         {
             // Mid-ImGui-pass site -> the deferral convention (SceneSession::Request's
             // comment): clean+saved acts next frame top; dirty/never-saved parks

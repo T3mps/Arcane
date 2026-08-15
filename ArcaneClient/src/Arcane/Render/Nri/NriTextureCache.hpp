@@ -83,6 +83,30 @@ namespace Arcane
         // the buffer's lifetime and may evict it afterwards.
         using PixelSupplyFn = std::function<const PixelData*(const Guid&)>;
 
+        // ===== WHICH COLOUR SPACE THE VIEW SAMPLES IN (NRI Phase 3, Task 11)
+        // The graph twin of the split the NVRHI side has always had between
+        // Assets::GetTexture and LoadDisplayTexture, and it exists for exactly
+        // the same reason -- the two have DIFFERENT consumers and there is no
+        // format that serves both:
+        //
+        //   Srgb    -- the SCENE. Uploads RGBA8_SRGB, so the sampler decodes
+        //              to linear for the linear canvas and the hardware does
+        //              the work. THE SEVERANCE'S DEFAULT and what every
+        //              existing caller (Batch2DNode's sprites, PostChainNode's
+        //              declared params) gets without asking.
+        //   Display -- ImGui. Uploads RGBA8_UNORM, so the sampled texel goes
+        //              STRAIGHT to a display-referred target. ImGuiNri draws
+        //              after the tonemap and its own font atlas is UNORM for
+        //              this reason; an SRGB view under it decodes a second
+        //              time and the image renders visibly dark.
+        //
+        // THE SAME ASSET MAY BE RESIDENT IN BOTH, and that is deliberate
+        // rather than a leak: the entries are keyed on (Guid, space) and a
+        // second space is a second upload. NRI has no typeless textures to
+        // hang two views off, and an asset wanted in both spaces is rare (one
+        // is scene content, the other is chrome).
+        enum class ColorSpace : std::uint8_t { Srgb, Display };
+
         // Resolves the HelperInterface once and takes a borrowed reference to
         // the device, which must outlive this object (the vehicle owns both).
         // Null, already logged, if the helper is unavailable.
@@ -113,13 +137,17 @@ namespace Arcane
         // and then memoized.
         //
         // CALL AT DECLARATION TIME ONLY -- see NO BARRIERS above.
-        [[nodiscard]] nri::Texture* Resolve(const Guid& id);
+        //
+        // `space` defaults to Srgb, which is what every scene caller means and
+        // is what keeps this signature's old behaviour byte for byte.
+        [[nodiscard]] nri::Texture* Resolve(const Guid& id, ColorSpace space = ColorSpace::Srgb);
 
-        // The SHADER_RESOURCE view over Resolve(id), created with it. Null
-        // under exactly the same conditions, and it does NOT trigger a
+        // The SHADER_RESOURCE view over Resolve(id, space), created with it.
+        // Null under exactly the same conditions, and it does NOT trigger a
         // resolve: a caller that wants residency asks Resolve first (which is
         // what the nodes' Prepare passes do), so nothing uploads from a lookup.
-        [[nodiscard]] nri::Descriptor* View(const Guid& id) const;
+        [[nodiscard]] nri::Descriptor* View(const Guid& id,
+                                            ColorSpace space = ColorSpace::Srgb) const;
 
         // Buries every NRI object this cache owns at `fence` and empties it --
         // views before the textures they view, so the graveyard's in-order
@@ -146,10 +174,32 @@ namespace Arcane
             nri::Descriptor* view    = nullptr;
         };
 
+        // (asset, colour space) -- see ColorSpace. The SPACE is part of the
+        // identity because it decides the uploaded FORMAT, so two spaces are
+        // two textures and a lookup that ignored it would hand a caller the
+        // other one's.
+        struct Key
+        {
+            Guid       id;
+            ColorSpace space = ColorSpace::Srgb;
+            bool operator==(const Key&) const noexcept = default;
+        };
+        struct KeyHash
+        {
+            std::size_t operator()(const Key& k) const noexcept
+            {
+                // The Guid's own hash, mixed with the space through the
+                // 64-bit golden-ratio constant -- two spaces of one asset must
+                // not land in the same bucket chain by construction.
+                const std::size_t h = std::hash<Guid>{}(k.id);
+                return h ^ (static_cast<std::size_t>(k.space) + 0x9E3779B9u + (h << 6) + (h >> 2));
+            }
+        };
+
         NriDevice*          m_device = nullptr;
         nri::HelperInterface m_helper{};
         PixelSupplyFn       m_supply;
-        std::unordered_map<Guid, Resident> m_textures;
+        std::unordered_map<Key, Resident, KeyHash> m_textures;
         // THE ONE-SHOT MISS WARN (moved here from Batch2DNode): one line per
         // run, not one per span per frame.
         bool m_warnedMiss = false;

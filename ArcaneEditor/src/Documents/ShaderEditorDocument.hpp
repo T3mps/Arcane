@@ -22,6 +22,11 @@
 #include "Scene/EditGesture.hpp"
 #include "Documents/EditorDocument.hpp"
 #include "Widgets/EditorWidgets.hpp"   // TextCommitState / StableTextEdit
+// The grid's PURE half only -- GraphGridPass.hpp itself (nvrhi + ImGui) stays
+// behind the forward declaration below. The two phase members are held BY
+// VALUE because a canvas keeps its pan/zoom history whether or not a shader
+// pass exists to render it (NRI Phase 3, Task 11).
+#include "Widgets/GraphGridPhase.hpp"
 
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
@@ -30,6 +35,11 @@
 #include <Arcane/Render/FullscreenMaterialChain.hpp>
 #include <Arcane/Render/FullscreenMaterialPass.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
+// PostChainDesc -- the DEVICE-FREE description of a compiled fullscreen
+// material (bytecode + merged template + instance + input wiring). Held BY
+// VALUE below because it is what the graph arm's preview renders from and what
+// the headless tests read; see m_graphPost. (NRI Phase 3, Task 11.)
+#include <Arcane/Render/PostChainCache.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 #include <Arcane/Util/FunctionRef.hpp>
@@ -48,6 +58,17 @@ namespace Arcane
     class CommandStack;
     class Runtime;
     class ShaderLibrary;
+
+    // ---- The graph arm's preview vehicle (NRI Phase 3, Task 11) ----
+    // Forward-declared, never included: NriGraphContext.hpp pulls <NRI.h> plus
+    // every node header, and this header is included by the whole editor AND
+    // source-compiled into ArcaneTests. The unique_ptr member below is legal
+    // against an incomplete type because ~ShaderEditorDocument is out of line.
+    class Batcher2D;
+    struct HostConfig;
+    class ImGuiNriNode;
+    class NriDevice;
+    class NriGraphContext;
 }
 
 namespace ax::NodeEditor
@@ -104,6 +125,65 @@ namespace Arcane::Editor
         // unsaved edits stay). (guid, oldName, newName).
         std::function<void(const Arcane::Guid&, const std::string&, const std::string&)>
             onParamRenamed;
+
+        // ===== THE GRAPH ARM'S PREVIEW SEAM (NRI Phase 3, Task 11) ==========
+        // On `--nri-graph` there is no `device` above (StageRenderBridge hands
+        // the runtime (nullptr, nullptr)), so OffscreenCanvas /
+        // FullscreenMaterialPass / FullscreenMaterialChain / GraphGridPass all
+        // refuse to create and the document's preview would simply be absent.
+        // These three are what let it render instead, and all three are
+        // BORROWED from EditorApp (which outlives the document list):
+        //
+        //   nriDevice  -- the ONE device in the process, created and owned by
+        //                 the chrome context. The document builds its own small
+        //                 NriGraphContext::CreateOffscreen over it, which is
+        //                 the documented pattern for a render-to-texture
+        //                 surface and gives the document its own graveyard lane
+        //                 (see NriGraphContext.hpp, TWO CONTEXTS TWO LANES).
+        //   hostConfig -- the backend/validation knobs CreateOffscreen reads.
+        //                 Borrowed: EditorApp holds m_config for the run.
+        //   chromeHud  -- the CHROME context's ImGuiNriNode, i.e. the backend
+        //                 that CACHES this document's preview texture by raw
+        //                 pointer when ImGui::Image draws it. The document owes
+        //                 it an InvalidateUserTextureNow with that pointer
+        //                 BEFORE its own context is destroyed -- a document
+        //                 closes MID-SESSION while chrome keeps presenting,
+        //                 which is exactly the cross-context case that rule
+        //                 exists for. ~ShaderEditorDocument is the site.
+        //
+        // All three null on the NVRHI arm and in the headless tests, which is
+        // what keeps every gate below a single `if`.
+        Arcane::NriDevice*             nriDevice = nullptr;
+        const Arcane::HostConfig*      hostConfig = nullptr;
+        Arcane::ImGuiNriNode*          chromeHud = nullptr;
+
+        // ===== AND THE ONE-FRAME RETIRE, WHICH IS NOT OPTIONAL =============
+        // A document is DESTROYED INSIDE the editor's ImGui pass:
+        // DocumentHost::DrawAll collects requestClose and calls Close (which
+        // erases the unique_ptr) right after its draw loop -- i.e. at PHASE 14.
+        // The chrome frame that replays this frame's draw lists is recorded at
+        // PHASE 19. Those lists still carry an ImGui::Image naming this
+        // document's preview output BY RAW POINTER, so destroying the context
+        // in ~ShaderEditorDocument would hand ImGuiNri::EnsureEntry a freed
+        // nri::Texture* to build a view over.
+        //
+        // (The NVRHI arm survives the same shape only because nvrhi is
+        // ref-counted and defers destruction to its own garbage collection --
+        // NRI has no such grace, so this arm has to say it out loud.)
+        //
+        // So a closing document HANDS its vehicle over instead, and the app
+        // destroys it at the TOP of the next frame -- after the chrome frame
+        // that named it has been recorded AND submitted. The invalidate rides
+        // with the destroy at that point (the pair is one operation) and
+        // InvalidateUserTextureNow's own DeviceWaitIdle is what covers the
+        // in-flight submission. Exactly the deferral
+        // ShaderEditorDocument::m_nodePreviewRetired already makes one level
+        // down, for exactly the same reason.
+        //
+        // Null in the headless tests and on the NVRHI arm; a document with no
+        // sink destroys its vehicle inline, which is correct at shutdown (no
+        // further frame is recorded) and unreachable anywhere else.
+        std::function<void(std::unique_ptr<Arcane::NriGraphContext>)> retireGraphPreview;
     };
 
     class ShaderEditorDocument final : public EditorDocument
@@ -268,6 +348,42 @@ namespace Arcane::Editor
         void PublishDiagnostics();
         [[nodiscard]] std::string DiagnosticKey() const;
 
+        // ===== THE DEVICE-FREE PREVIEW DESCRIPTION (NRI Phase 3, Task 11) ===
+        // The compiled preview AS BYTES + merged template + instance, exactly
+        // the shape PostChainCache publishes for a scene post material and
+        // exactly what the graph's PostChainNode consumes. It is produced on
+        // BOTH arms -- a device-carrying run builds it beside the nvrhi
+        // pipelines rather than instead of them -- which is what makes it
+        // testable with no device at all, the same severance idiom Task 2's
+        // caches took.
+        //
+        // Null (`passes` empty / `templ` null) until a full set of stages has
+        // landed; a FAILED re-compile leaves the previous one published, the
+        // same last-good rule SetChain/SetMaterial carry.
+        //
+        // FULLSCREEN SURFACES ONLY. A sprite material's preview is a quad
+        // through a Batcher2D, not a fullscreen chain -- SpritePreviewBlobs()
+        // is its counterpart.
+        [[nodiscard]] const Arcane::PostChainDesc& GraphPreviewDesc() const noexcept
+        { return m_graphPost; }
+
+        // The sprite surface's device-free half: the stitched, compiled blobs
+        // the graph's Batch2DNode builds its own pipeline from
+        // (Material2DDesc::vsBytes/psBytes). Both null until a full pair has
+        // landed. Public for the same reason GraphPreviewDesc is.
+        struct SpriteBlobs
+        {
+            std::shared_ptr<const std::vector<std::uint8_t>> vs, ps;
+        };
+        [[nodiscard]] const SpriteBlobs& SpritePreviewBlobs() const noexcept
+        { return m_graphSpriteBlobs; }
+
+        // The graph arm's preview output as an ImGui texture id (the raw
+        // nri::Texture* through uintptr_t -- ImGuiNri's convention). 0 when
+        // this document has no graph preview vehicle, which is every NVRHI run
+        // and every headless test.
+        [[nodiscard]] std::uint64_t GraphPreviewTextureId() const noexcept;
+
     private:
         double Now() const { return m_services.clock ? *m_services.clock : 0.0; }
         void   Rebuild();          // parse + stitch + submit both stages (structural edit)
@@ -284,6 +400,38 @@ namespace Arcane::Editor
                    (!m_data.passes.empty() || !m_data.baseInputs.empty());
         }
         void   BindChainIfComplete();
+
+        // ---- The graph arm's preview (NRI Phase 3, Task 11) ----
+        // Republish m_graphPost / m_graphSpriteBlobs from the blobs and the
+        // freshly promoted template+instance. Called from the two bind sites,
+        // on BOTH arms, immediately after PromotePendingInstance -- the desc
+        // names the instance the pipelines were just built against, so the two
+        // can never describe different compiles.
+        void   PublishGraphPreview();
+        // Build (once) this document's own offscreen vehicle. No-op without
+        // the DocServices graph seam, i.e. everywhere but a --nri-graph editor.
+        void   EnsureGraphPreviewContext();
+        // One preview frame into that vehicle -- Tick's graph arm.
+        void   RenderGraphPreview(double dt);
+        // Re-register the sprite preview material on the OWN device-less
+        // batcher (the graph twin of RefreshSpritePreviewBinding).
+        void   RefreshGraphSpriteBinding();
+        // Invalidate-then-destroy, in the one order that is correct across two
+        // contexts. Called from the destructor; idempotent.
+        void   DestroyGraphPreview();
+
+        // THE ONE ANSWER TO "what do I draw for this document's preview", for
+        // whichever arm is live. `id` is 0 when there is nothing to draw --
+        // every ImGui::Image site gates on that instead of on `m_preview`, so
+        // neither arm can acquire a site the other one has.
+        // Both previews are square (512), so one extent describes the image.
+        struct PreviewImage
+        {
+            ImTextureID id = 0;
+            float extent = 0.0f;
+        };
+        [[nodiscard]] PreviewImage PreviewImageOf() const;
+
         // Promote pending template -> bound + rebuild the instance over it
         // (parent-chain layering, override migration, dirty re-baseline).
         void   PromotePendingInstance();
@@ -386,7 +534,12 @@ namespace Arcane::Editor
         // Blit one canvas's shader grid backdrop. MUST be called before that
         // canvas's ed::Begin (layering + ScreenToCanvas both require it); the
         // instance is a parameter because the grid's phase is per-canvas state.
-        void DrawCanvasBackdrop(std::unique_ptr<GraphGridPass>& grid);
+        // `phase` is the SAME canvas's grid history -- carried separately
+        // from `grid` because the ImGui-primitive fallback (the graph arm,
+        // and any run with no grid shader) has no pass object to hold it
+        // in, and a canvas must keep its history either way.
+        void DrawCanvasBackdrop(std::unique_ptr<GraphGridPass>& grid,
+                                GraphGridPhase& phase);
         void DrawGraphPanel();
         // `lod` is the canvas tier for THIS frame, computed once by
         // DrawGraphPanel before the node loop and branched on at the draw sites
@@ -577,6 +730,31 @@ namespace Arcane::Editor
 
         std::uint64_t m_vsJob = 0, m_psJob = 0;      // in-flight ids (0 = none)
         std::vector<std::uint8_t> m_vsBytes, m_psBytes;
+
+        // ===== THE GRAPH ARM'S PREVIEW (NRI Phase 3, Task 11) ==============
+        // The device-free description, published on BOTH arms (see
+        // GraphPreviewDesc), and the vehicle that renders it, built only when
+        // DocServices carried the graph seam.
+        Arcane::PostChainDesc m_graphPost;
+        SpriteBlobs           m_graphSpriteBlobs;
+        // 512x512 and FIXED, matching the NVRHI arm's OffscreenCanvas exactly
+        // -- and that is load-bearing rather than cosmetic: a preview that
+        // never resizes has no ResizeOffscreen seam at all, so the ONLY
+        // InvalidateUserTextureNow this document owes is the one at
+        // destruction (NriGraphContext.hpp, item (2)).
+        static constexpr std::uint32_t kGraphPreviewSize = 512;
+        std::unique_ptr<Arcane::NriGraphContext> m_graphPreview;
+        // The document's OWN device-less batcher -- the sprite surface's
+        // recorder, and the checkerboard backdrop's for every surface. Owned
+        // rather than shared with the editor's scene batcher: this frame is
+        // declared from Tick (phase 13), long after phase 10 drained that one,
+        // and two owners of one batcher is how two frames' content merges.
+        std::unique_ptr<Arcane::Batcher2D> m_graphBatch;
+        std::uint16_t m_graphSpriteMaterial = 0xFFFF;   // id on m_graphBatch
+        // Which blobs m_graphSpriteMaterial was registered from -- a re-compile
+        // is a NEW shared_ptr, which is what makes "did this change" a pointer
+        // compare rather than a memcmp.
+        const void* m_graphSpriteStamp = nullptr;
         double m_animTime = 0.0;                     // preview Time uniform
         // 1-based; 0 = no pending jump. Re-armed by RequestJumpToLine (Task 5,
         // the Problems panel) -- its previous driver, the old errors panel,
@@ -623,6 +801,16 @@ namespace Arcane::Editor
         // phase is per-canvas state (DrawCanvasBackdrop says why), and the two
         // views alternate.
         std::unique_ptr<GraphGridPass> m_passGrid;
+        // ...and the two canvases' PHASE, held here rather than inside the
+        // pass objects above (NRI Phase 3, Task 11). It has to outlive them:
+        // on the graph arm neither pass exists at all and the ImGui-primitive
+        // fallback draws the same lattice from these, and on a device-carrying
+        // run a grid whose shader artifacts are missing takes the same route.
+        // GraphGridPass keeps its OWN copy for its render key -- the two are
+        // never both live for one canvas, because the fallback runs only when
+        // there is no pass.
+        GraphGridPhase m_gridPhase{};
+        GraphGridPhase m_passGridPhase{};
         // Pass-canvas node widths, keyed by pass-canvas node id. Its own map:
         // chain-index-derived ids and graph node ids are unrelated counters.
         std::unordered_map<std::uint32_t, float> m_passNodeWidths;
