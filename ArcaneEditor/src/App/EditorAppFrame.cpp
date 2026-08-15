@@ -1401,9 +1401,19 @@ namespace Arcane::Editor
             // the SAME stage gate as every other frame of the run -- a
             // separate render call would have to re-derive vp.stage and
             // ArmGraphViewportFrame's suppression rather than inherit them.
-            const bool isGoldenLastFrame = m_config.GoldenMode() && m_config.maxFrames != 0 &&
-                                           (m_frameCount + 1) >= m_config.maxFrames;
-            vp.capture = isGoldenLastFrame;
+            // WIDENED TO --screenshot (whole-branch review, I4): both flags are
+            // shared HostConfig members that this host PARSES, and until now
+            // only the golden pair armed a capture -- so `ArcaneEditor
+            // --screenshot out.png --frames 60` exited 0 having written
+            // nothing. The runtime's CaptureTail has always armed on
+            // `!screenshotPath.empty() || GoldenMode()`; this is that predicate,
+            // on this host. `maxFrames != 0` stays, and matches the runtime:
+            // both capture on the LAST frame, and without --frames there is no
+            // last frame.
+            const bool isCaptureLastFrame = m_config.maxFrames != 0 &&
+                                            (m_frameCount + 1) >= m_config.maxFrames &&
+                                            (m_config.GoldenMode() || !m_config.screenshotPath.empty());
+            vp.capture = isCaptureLastFrame;
 
             const Arcane::NriGraphContext::FrameOutcome outcome =
                 m_viewportTargets.graph->RenderFrameOffscreen(vp);
@@ -1468,20 +1478,45 @@ namespace Arcane::Editor
             // fail. m_goldenCaptured is set on every attempt, retries
             // included -- each one is a genuine capture against a real,
             // just-presented target.
-            if (isGoldenLastFrame && outcome == Arcane::NriGraphContext::FrameOutcome::Presented)
+            if (isCaptureLastFrame && outcome == Arcane::NriGraphContext::FrameOutcome::Presented)
             {
-                m_goldenCaptured = true;
+                if (m_config.GoldenMode())
+                    m_goldenCaptured = true;
                 std::uint32_t cw = 0, ch = 0;
                 std::vector<unsigned char> actual;
                 if (!m_viewportTargets.graph->ReadCapture(cw, ch, actual))
                 {
-                    ARC_ERROR("golden: viewport capture readback failed");
-                    m_goldenExit = 3;
+                    // --screenshot has always degraded to a WARN and never an
+                    // exit code (SaveTexturePng's contract, mirrored by
+                    // RuntimeFrame::CaptureTail); only a golden run fails on a
+                    // readback. Folding the two arms into one predicate must
+                    // not quietly change that.
+                    if (m_config.GoldenMode())
+                    {
+                        ARC_ERROR("golden: viewport capture readback failed");
+                        m_goldenExit = 3;
+                    }
+                    else
+                    {
+                        ARC_WARN("screenshot FAILED: {} (viewport capture readback)",
+                                 m_config.screenshotPath);
+                    }
                 }
-                else if (Arcane::GoldenArtifact(m_config, cw, ch, actual,
-                                                Arcane::kEditorGoldenNamePrefix) != 0)
+                else
                 {
-                    m_goldenExit = 3;
+                    if (!m_config.screenshotPath.empty())
+                    {
+                        if (Arcane::WritePngRgba(m_config.screenshotPath, cw, ch, actual.data()))
+                            ARC_INFO("screenshot written: {}", m_config.screenshotPath);
+                        else
+                            ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
+                    }
+                    if (m_config.GoldenMode()
+                        && Arcane::GoldenArtifact(m_config, cw, ch, actual,
+                                                  Arcane::kEditorGoldenNamePrefix) != 0)
+                    {
+                        m_goldenExit = 3;
+                    }
                 }
             }
             return;
@@ -1690,10 +1725,15 @@ namespace Arcane::Editor
         }
 
         // ---- phases 12 + 17's content: the pick + outline chain ----------
+        // THE HOVER, PINNED IN GOLDEN MODE (whole-branch review, C2). See
+        // HoverLive()'s own comment: m_gameUi.inViewport is derived from the
+        // LIVE pointer, so leaving it in the gate below made the editor's
+        // `full` artifact a function of where the mouse happened to be.
+        const bool hoverLive = HoverLive();
         // PHASE 12'S GATE, VERBATIM: Edit mode, and something to outline
         // (a selection, or a cursor in the viewport that might hover one).
         const bool wantOutline = !InPlayMode()
-                              && (m_selection.HasSelection() || m_gameUi.inViewport);
+                              && (m_selection.HasSelection() || hoverLive);
         // ...and phase 17's: a click whose readback has not landed keeps the
         // chain declared even when nothing wants an outline, because the
         // readback node is the only thing that DRAINS the slot its copy went
@@ -1714,11 +1754,32 @@ namespace Arcane::Editor
         // engine would therefore be a real behaviour change to that flag, not
         // a shape-visible-but-inert one -- so this decision is taken HERE,
         // narrowly, changing only what the EDITOR arms for its OWN golden
-        // capture, rather than in DeclareGraphFrame. A scripted golden run
-        // never issues a viewport click or holds a selection, so in practice
-        // wantOutline/wantPick are already false; this makes the editor's
-        // stated stage semantics ("batch/post carry no outline") true by
-        // construction rather than by accident of an empty selection.
+        // capture, rather than in DeclareGraphFrame.
+        //
+        // AN EARLIER VERSION OF THIS COMMENT CLAIMED wantOutline/wantPick WERE
+        // "ALREADY FALSE" ON A SCRIPTED RUN, on the grounds that such a run
+        // never issues a viewport click and never holds a selection. Both
+        // halves are true and the conclusion was still wrong, which is the
+        // whole-branch review's C2: HOVER needs neither. m_gameUi.inViewport is
+        // re-derived from the LIVE pointer every frame (FrameInput), so with
+        // the mouse resting over the Viewport panel a scripted run DID arm this
+        // chain and DID outline whatever sat under the cursor -- the same
+        // command line producing a different `full` artifact depending on where
+        // the mouse was left. HoverLive() is what makes that impossible now,
+        // for every stage; what remains here is the STAGE rule, which only has
+        // to make "batch/post carry no outline" true when a genuine SELECTION
+        // is held.
+        //
+        // OPEN D3C DECISION, DELIBERATELY NOT TAKEN HERE: with hover pinned
+        // off, an editor golden run holds no selection either, so the editor's
+        // `full` baseline exercises NO outline nodes at all -- the pick/JFA/
+        // composite chain is captured only by the runtime's own `--pick-probe`
+        // battery item. Whether the editor's `full` should script a selection
+        // (the runtime's precedent: --pick-probe fabricates one -- hit-proxy id
+        // 1, HostConfig.hpp) is a coverage question for the user at D3c, not a
+        // fix: scripting one HERE would change what the not-yet-frozen
+        // editor-*.png baselines contain, which is exactly the decision that
+        // has to be made before they are captured, not after.
         if (goldenNonFull || (!wantOutline && !wantPick))
         {
             // Cleared rather than left stale: these are the spans the NEXT
@@ -1763,7 +1824,7 @@ namespace Arcane::Editor
         // the viewport-local pointer when it is over the viewport, and the
         // (-1,-1) "no hover" sentinel otherwise -- including in Play, where the
         // outline must not light anything.
-        vp.hoverPixel  = (wantOutline && m_gameUi.inViewport)
+        vp.hoverPixel  = (wantOutline && hoverLive)
                        ? glm::ivec2((int)m_gameUi.viewportMouse.x, (int)m_gameUi.viewportMouse.y)
                        : glm::ivec2(-1, -1);
 
@@ -1901,7 +1962,11 @@ namespace Arcane::Editor
         if (m_config.GoldenMode() && m_config.goldenStage != Arcane::GoldenStage::Full)
             return;
 
-        if (!InPlayMode() && (m_selection.HasSelection() || m_gameUi.inViewport))
+        // The graph arm's hover pin, on this arm too (whole-branch review, C2)
+        // -- and it matters MORE here: this is the arm that captures D3c's
+        // baselines. See HoverLive().
+        const bool hoverLive = HoverLive();
+        if (!InPlayMode() && (m_selection.HasSelection() || hoverLive))
         {
             const Arcane::PickView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
             m_viewportTargets.pick->RenderIdPass(m_runtime->Registry(), view);
@@ -1919,7 +1984,7 @@ namespace Arcane::Editor
 
             Arcane::SelectionOutline::Params op;
             op.selectedIds = selectedIds;
-            op.cursorPx   = m_gameUi.inViewport
+            op.cursorPx   = hoverLive
                           ? glm::ivec2((int)m_gameUi.viewportMouse.x, (int)m_gameUi.viewportMouse.y)
                           : glm::ivec2(-1, -1);
 
@@ -2985,7 +3050,13 @@ namespace Arcane::Editor
     {
         if (GraphMode())
             return;
-        if (!m_config.GoldenMode())
+        // GOLDEN **OR** --screenshot (whole-branch review, I4). Both are shared
+        // HostConfig members this host parses, and --screenshot did nothing at
+        // all here until now: `ArcaneEditor --screenshot out.png --frames 60`
+        // exited 0 having written no file. Same predicate the runtime's
+        // CaptureTail has always used, and the same asymmetry below -- a golden
+        // failure is an exit code, a screenshot failure is a WARN.
+        if (!m_config.GoldenMode() && m_config.screenshotPath.empty())
             return;
         // The SAME "+1" test RenderSceneToViewport's graph arm uses: this
         // frame has not been counted yet (EndFrame's ++m_frameCount runs
@@ -3003,7 +3074,8 @@ namespace Arcane::Editor
         // readback itself then fails (that failure already sets m_goldenExit
         // = 3 directly, below; the two are independent facts: "did we try"
         // vs "did it succeed").
-        m_goldenCaptured = true;
+        if (m_config.GoldenMode())
+            m_goldenCaptured = true;
 
         // TextureId() round-trips the output texture pointer -- the same seam
         // ImGui::Image and WriteAutoScreenshot's NVRHI half consume.
@@ -3013,12 +3085,30 @@ namespace Arcane::Editor
         std::vector<unsigned char> actual;
         if (!tex || !Arcane::ReadTexturePixels(m_gpu->Device().Nvrhi(), tex, w, h, actual))
         {
-            ARC_ERROR("golden: viewport backbuffer readback failed");
-            m_goldenExit = 3;
+            if (m_config.GoldenMode())
+            {
+                ARC_ERROR("golden: viewport backbuffer readback failed");
+                m_goldenExit = 3;
+            }
+            else
+            {
+                ARC_WARN("screenshot FAILED: {} (viewport backbuffer readback)",
+                         m_config.screenshotPath);
+            }
             return;
         }
-        if (Arcane::GoldenArtifact(m_config, w, h, actual, Arcane::kEditorGoldenNamePrefix) != 0)
+        if (!m_config.screenshotPath.empty())
+        {
+            if (Arcane::WritePngRgba(m_config.screenshotPath, w, h, actual.data()))
+                ARC_INFO("screenshot written: {}", m_config.screenshotPath);
+            else
+                ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
+        }
+        if (m_config.GoldenMode()
+            && Arcane::GoldenArtifact(m_config, w, h, actual, Arcane::kEditorGoldenNamePrefix) != 0)
+        {
             m_goldenExit = 3;
+        }
     }
 
     void EditorApp::EndFrame(LoopState& ls)

@@ -90,11 +90,32 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 // editor's golden exit to be "identical to GoldenArtifact" -- i.e. the SAME
 // 3 RuntimeApp::Run already reports -- so giving the editor's golden failure
 // a different number would break host-to-host parity to solve a Hub-only
-// ambiguity, and a real fix belongs in launch.rs (special-case a project
-// whose extra args carry `--frames`/`--golden-*`/`--nri-graph`, or widen the
-// boot watchdog's disambiguation), which is outside this task's file list.
-// Documented here, at EditorApp.hpp's m_goldenExit, and in the task-13
-// report for whoever next touches launch.rs.
+// ambiguity, and the real fix belongs in launch.rs. AS OF THE WHOLE-BRANCH
+// REVIEW'S FIX WAVE IT IS THERE: ArcaneHub/src-tauri/src/launch.rs guards its
+// pre-boot decode on the project's saved extra args carrying none of
+// `--frames`/`--golden-`/`--nri-graph`, so a scripted run's 2/3 is reported
+// verbatim instead of as a boot refusal.
+//
+// ===== WHICH SHARED HostConfig FLAGS THIS HOST ACTUALLY HONOURS ==============
+// The table above is exhaustive about EXIT CODES; this is the separate,
+// easily-confused question of FLAGS, and it is called out because HostConfig
+// is shared by both hosts, so a flag the editor parses is not automatically a
+// flag the editor DOES anything with. As of the whole-branch review (I4):
+//   --project/--plugin/--scene/--frames/--backend/--vsync/--perf  -- honoured.
+//   --screenshot        -- honoured (both render arms) since the fix wave; it
+//                          captures the VIEWPORT panel's texture, not the
+//                          editor window, exactly as --golden-* does here.
+//   --golden-*          -- honoured (Task 13); artifacts carry the `editor-`
+//                          stem prefix, not the runtime's `main-`.
+//   --nri-graph         -- honoured (Tasks 8-13).
+//   --crash-gpu N       -- honoured (also reachable from the Debug menu).
+//   --pick-probe x,y    -- PARSED AND INERT ON THIS HOST. It is a RUNTIME desk
+//                          item: one fixed canvas pixel reported as an exit
+//                          code. The editor's own pick is a live click through
+//                          FrameDesc::pickPixel, and NriGraphContext refuses to
+//                          latch the flag on an offscreen (viewport) context
+//                          for that reason -- passing it here is a no-op, not a
+//                          second pick mechanism.
 // =============================================================================
 int main(int argc, char** argv)
 {

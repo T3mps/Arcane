@@ -662,6 +662,33 @@ namespace Arcane::Editor
         [[nodiscard]] bool GraphMode() const noexcept
         { return m_gpu && m_gpu->GraphFlavor(); }
 
+        // ---- THE HOVER predicate (whole-branch review, C2) -------------------
+        // "The pointer is over the Viewport panel AND that fact is allowed to
+        // affect what is rendered." The second half is what this exists for:
+        // m_gameUi.inViewport is re-derived from the LIVE cursor every frame
+        // (FrameInput, EditorAppFrame.cpp), so a hover-driven outline makes the
+        // frame a function of where the mouse happens to be sitting -- and a
+        // GOLDEN artifact that depends on the mouse is not a baseline. The same
+        // scripted command line otherwise produces `full` identical to `post`
+        // with the cursor outside the panel, or an amber/cyan outline over
+        // whatever entity it happens to rest on.
+        //
+        // Golden mode pins it OFF rather than pinning a coordinate: there is no
+        // honest coordinate to pin (the panel's position is imgui.ini layout
+        // state, saved per project GUID), and "no hover" is already the chain's
+        // documented sentinel -- SelectionOutline::Params::cursorPx and
+        // FrameDesc::hoverPixel both spell it (-1, -1).
+        //
+        // READ BY BOTH RENDER ARMS, and it has to be: ArmGraphViewportFrame
+        // (graph) and RenderSelectionOutline (NVRHI -- the arm that captures
+        // the D3c baselines) each carry phase 12's gate and each derive a
+        // cursor from it, so a pin on one arm only would leave the two arms'
+        // notion of `full` different, which is the one property the editor
+        // golden harness exists to compare. Ordinary (non-golden) runs are
+        // untouched: hover behaves exactly as before.
+        [[nodiscard]] bool HoverLive() const noexcept
+        { return m_gameUi.inViewport && !m_config.GoldenMode(); }
+
         // THE VIEWPORT'S EXTENT, from whichever target this run actually has --
         // the OffscreenCanvas' on the NVRHI arm, the offscreen graph output's
         // on the graph arm. Every phase that needs a viewport size asks HERE,
