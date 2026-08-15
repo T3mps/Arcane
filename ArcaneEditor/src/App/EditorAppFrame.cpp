@@ -2206,9 +2206,24 @@ namespace Arcane::Editor
         // skips its ImGui::Image at 0 (EditorPanels.cpp) and still publishes
         // dockId/desiredW/desiredH, so the panel keeps measuring and the next
         // non-zero size heals it through phase 8.
+        //
+        // ...AND THAT IS WHY THE THIRD ARM IS 0 RATHER THAN A GraphMode()
+        // GATE (NRI Phase 3, Task 12 fix round 1). Unlike phases 11 and 12,
+        // this panel draws on BOTH arms, so it cannot early-out on the mode --
+        // it has to name a texture. `canvas` is null by construction on the
+        // graph arm (StageRenderBridge returns before creating it), so the old
+        // two-arm ternary dereferenced null the moment `graph` was null there:
+        // reachable exactly once, when a project switch's rebuild fails
+        // (SwitchProject's "render_bridge"), which sets m_requestExit -- read
+        // at the TOP of the next frame, so THIS frame still runs phase 16.
+        // That would have turned a designed clean exit 1 into an access
+        // violation inside the ImGui pass. The third arm hands the panel the
+        // value it already understands.
         const std::uint64_t vpTexture = m_viewportTargets.graph
                                           ? m_viewportTargets.graph->OffscreenTextureId()
-                                          : m_viewportTargets.canvas->TextureId();
+                                          : m_viewportTargets.canvas
+                                              ? m_viewportTargets.canvas->TextureId()
+                                              : 0;
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
                                             ViewportWidth(), ViewportHeight(),
                                             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,

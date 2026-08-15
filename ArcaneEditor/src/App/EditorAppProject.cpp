@@ -926,6 +926,14 @@ namespace Arcane::Editor
         // until the next one) and swallow a quit into nothing at all. A
         // graph-mode overlay -- a real chrome frame per stage tick -- is
         // possible but must be built against reason 2 above, not around it.
+        //
+        // WHAT IS *NOT* GIVEN UP, and the distinction is what a desk operator
+        // reading a diagnostics report needs: Diagnostics::Heartbeat() beats
+        // from BootSequence's OWN worker-park loop (BootSequence.cpp:287),
+        // independently of any presenter, so a briefly frozen-looking window
+        // during a graph-mode switch cannot escalate into a FALSE hang report.
+        // A hang report raised across a switch on this arm describes a real
+        // stall.
         Arcane::BootPresenter overlay(*m_gpu, Arcane::BootPresenterMode::Overlay);
         Arcane::BootSequence  seq(std::move(stages));
         const Arcane::BootResult r = seq.Run(GraphMode() ? nullptr : &overlay);
