@@ -516,7 +516,21 @@ namespace Arcane
         // line below all describe the flag rather than the nodes.
         // ---------------------------------------------------------------
 #if !defined(ARCANE_DIST)
-        m_pickArmed = config.pickProbe;
+        // ...AND ONLY A HOST-WINDOW CONTEXT MAY INHERIT THE FLAG (whole-branch
+        // review, I4's ledgered half). --pick-probe is a RUNTIME desk item: one
+        // fixed canvas pixel, reported once as an exit code. The editor's
+        // OFFSCREEN viewport context is the other consumer of these nodes, and
+        // its probe pixel is a CLICK -- driven per frame through
+        // FrameDesc::pickPixel/pickTicket, which needs no arming at all. Left
+        // inherited, an `ArcaneEditor --nri-graph --pick-probe x,y --frames N`
+        // run latched the flag on the viewport context too, and
+        // RenderFrameOffscreen's out-of-range check then measured the RUNTIME
+        // coordinate against the PANEL's extent -- a coordinate nobody chose
+        // for that surface. m_probeOutOfRange is a PERMANENT latch that
+        // ProbeId()/ProbeResult() refuse on, so one trip silently killed editor
+        // click-pick for the rest of the session while everything else kept
+        // working.
+        m_pickArmed = config.pickProbe && !IsOffscreen();
         m_probeX    = config.pickProbeX;
         m_probeY    = config.pickProbeY;
 #endif
