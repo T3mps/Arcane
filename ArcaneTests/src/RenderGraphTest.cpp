@@ -5428,6 +5428,79 @@ TEST_CASE("nri graph frame: the HUD node is absent unless the frame carries draw
     }
 }
 
+TEST_CASE("nri graph frame: the EDITOR'S CHROME frame is clear + tonemap + HUD and nothing else",
+          "[nri]")
+{
+    // NRI Phase 3, Task 10. The editor's main-window frame
+    // (EditorApp::PresentChromeFrame) declares this exact shape: a FrameDesc
+    // carrying draw data and NOTHING ELSE -- no batcher, no post chain, no
+    // pick/outline, no game HUD, and above all no capture.
+    //
+    // WHY IT IS PINNED SEPARATELY from the HUD case above, which drives the
+    // same three declarations. That case pins a GATE ("the node appears iff the
+    // frame carries draw data"); this one pins a HOST's frame -- the claim that
+    // the editor's chrome costs exactly one cleared canvas, one blit and one
+    // ImGui pass, and that four specific things are absent from it. Two of
+    // those absences are not tidiness:
+    //   * `capture` -- the editor's screenshot/golden semantics capture the
+    //     VIEWPORT (the offscreen context's output), so a capture node declared
+    //     on the CHROME frame would copy a chromed backbuffer and quietly
+    //     redefine what an editor golden contains;
+    //   * `gameUi` -- the plugin HUD lives INSIDE the viewport texture, never
+    //     over the editor chrome.
+    // A future edit that adds either to the chrome frame turns this red.
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 1280;
+    shape.canvasHeight = 720;
+    shape.imgui        = true;   // the ONLY field EditorApp::PresentChromeFrame sets
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+    REQUIRE(graph.NodeCount() == 3);
+    CHECK(std::string(graph.NodeName(0)) == "batch2d");
+    CHECK(std::string(graph.NodeName(1)) == "tonemap");
+    CHECK(std::string(graph.NodeName(2)) == "imgui");
+
+    // Named absences, so the failure message says WHICH node crept in.
+    for (std::size_t i = 0; i < graph.NodeCount(); ++i)
+    {
+        const std::string name = graph.NodeName(i);
+        CHECK(name != "gameui");
+        CHECK(name != "capture");
+        CHECK(name != "pick");
+        CHECK(name != "outlinecomposite");
+    }
+
+    // IT PRESENTS. The tonemap is the only thing in the tree that produces a
+    // backbuffer handle at all (ImportSwapChainTexture), which is why "clear +
+    // imgui + present" is three nodes rather than two -- and the imported,
+    // non-transient backbuffer is what distinguishes this from the viewport's
+    // offscreen frame.
+    REQUIRE(graph.IsHandleValid(handles.backbuffer));
+    CHECK_FALSE(graph.IsTransient(handles.backbuffer));
+    CHECK(std::string(graph.NameOf(handles.backbuffer)) == "backbuffer");
+    CHECK_FALSE(graph.IsHandleValid(handles.capture));
+    CHECK(handles.postPassCount == 0u);
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.nodes.size() == 3);
+
+    // The canvas is the frame's ONLY transient, in ONE pool slot: host chrome
+    // adds no GPU memory of its own (the font atlas is node-owned, not a graph
+    // resource).
+    CHECK(compiled.transients.size() == 1);
+    CHECK(compiled.poolSlotCount == 1);
+
+    // The HUD derives NO barrier -- it writes the same ColorWrite state the
+    // tonemap left the backbuffer in -- and the GRAPH, not the host, is what
+    // leaves it present-ready.
+    CHECK(compiled.nodes[2].preBarriers.empty());
+    REQUIRE(compiled.exitBarriers.size() == 1);
+    CHECK(compiled.exitBarriers[0].isTexture);
+    CheckState(compiled.exitBarriers[0].after, kPresentState);
+}
+
 TEST_CASE("nri graph frame: a capture frame copies the backbuffer AFTER the HUD drew on it",
           "[nri]")
 {

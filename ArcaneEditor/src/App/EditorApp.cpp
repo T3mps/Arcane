@@ -40,7 +40,8 @@
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
-#include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
+#include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD); RenderErrorCount (the graph latch fold)
+#include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved (Run()'s exit-code tail)
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
 #include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
 #include <Arcane/Sprite/SpriteAsset.hpp>  // Save/LoadSpriteAsset (SpriteDocument factory + peek)
@@ -1426,6 +1427,14 @@ namespace Arcane::Editor
         // once.
         m_gpu->Win().Show();
 
+        // THE LATCH BASELINE (NRI Phase 3, Task 10), taken HERE rather than at
+        // process start for the reason RuntimeApp::MainLoop states for its own:
+        // boot-time errors belong to the boot, and everything from this point
+        // until the last NRI object is gone belongs to the graph.
+        // ShutdownGraphPath reads it back after both contexts are destroyed --
+        // a teardown-only validation error must still fail the run.
+        m_graphErrorBaseline = Arcane::RenderErrorCount();
+
         // The chrome context ARMS the crash chain (NriGraphContext::Create ->
         // NriDiagnostics::Arm), exactly as the runtime's single context does.
         // The offscreen one below deliberately does NOT -- Arm/Disarm name one
@@ -1438,6 +1447,31 @@ namespace Arcane::Editor
             ARC_ERROR("--nri-graph: the editor's chrome graph context could not be created");
             return false;
         }
+
+        // ===== THE CHROME BACKEND'S ADOPTION, MADE EXPLICIT (Task 10) ========
+        // It was already CORRECT before this line and it is still correct
+        // without it: ImGuiNri::Init installs its backend identity on whatever
+        // ImGui context is CURRENT, and that is the editor's -- StageGpuCore
+        // left it pinned and every layer in this host re-pins its own context
+        // in every entry point, so nothing between there and here can leave
+        // another current for the duration of the Create above.
+        //
+        // IT IS SPELLED OUT ANYWAY, because as of THIS task that implicit
+        // adoption stops being inert bookkeeping and starts deciding real
+        // behaviour: this backend now RECORDS, and it now services the editor
+        // atlas's ImTextureData (create/update/destroy) every frame. Two things
+        // hang off which context it believes it serves -- the backend flags
+        // (ImGuiBackendFlags_RendererHasTextures, without which a draw list
+        // carries no Textures array and the atlas never reaches the GPU) and
+        // ImGuiNri::Release, which walks THAT context's platform texture list
+        // on teardown. A backend that silently adopted the wrong one would draw
+        // nothing and disown someone else's live atlas, with no error anywhere.
+        // Task 9's forward note asked for exactly this if the adoption moved;
+        // it has not moved, so this is a restatement rather than a fix.
+        // Idempotent by construction (AdoptContext pins, re-ORs two flags,
+        // restores) and null-safe.
+        if (Arcane::ImGuiNriNode* chromeNode = m_graphChrome->ImGuiHud())
+            chromeNode->AdoptImGuiContext(m_editorImguiContext);
 
         // THE VIEWPORT. 1280x720 is the size the NVRHI arm's OffscreenCanvas is
         // created at in StageRenderBridge, for the same reason: the panel's
@@ -1533,6 +1567,103 @@ namespace Arcane::Editor
         return m_viewportTargets.canvas ? m_viewportTargets.canvas->Height() : 0u;
     }
 
+    void EditorApp::NoteGraphFrameFailure(const char* what)
+    {
+        // Reported through the "nri-graph" seam already, which means the latch
+        // grew and ShutdownGraphPath's read would have produced exit 2 on its
+        // own. 1 is the stronger statement -- it says WHERE the run died -- and
+        // it is what RuntimeFrame::RenderGraph sets in the same situation, so
+        // the two hosts report one vocabulary. Precedence 1 > 2: FIRST failure
+        // wins and a later latch growth cannot demote it.
+        ARC_ERROR("--nri-graph: {}; stopping", what);
+        if (m_graphExit == 0)
+            m_graphExit = 1;
+        // The frame loop's own exit channel (see PumpFrameEvents, which reads
+        // this before any phase runs). Used rather than a break because the
+        // failure is discovered mid-frame, and the frame's ImGui pairing and
+        // its remaining phases have to finish before the loop may leave.
+        m_requestExit = true;
+    }
+
+    void EditorApp::ShutdownGraphPath()
+    {
+        if (!m_graphChrome && !m_viewportTargets.graph)
+            return;   // the NVRHI arm, or a graph run that never built a vehicle
+
+        // ===== THE TEARDOWN HALF OF THE VIEW-BEFORE-TEXTURE RULE =============
+        // (NRI Phase 3, Task 8, fix round 1.) A RESIZE is not the only moment
+        // the viewport's output texture dies -- PROCESS EXIT is the other, and
+        // unlike a resize it happens on every single run.
+        //
+        // WHY MEMBER ORDER CANNOT COVER IT. Reverse-declaration destruction runs
+        // m_viewportTargets.graph -- the offscreen context, which OWNS the
+        // output -- hundreds of declarations BEFORE m_graphChrome. That order is
+        // correct and required for the borrowed DEVICE (the borrower must die
+        // first). But the chrome context's ImGuiNri caches that output by RAW
+        // nri::Texture*, so ~ImGuiNri disposes its descriptor + set hundreds of
+        // declarations LATER: DestroyDescriptor after DestroyTexture, which is
+        // exactly the inversion NriGraphContext.hpp's TWO CONTEXTS, TWO LANES
+        // calls the part of the rule that "does not go away" (on Vulkan the
+        // error raises at image-destroy time). NO declaration order fixes it --
+        // the device wants one order and the view wants the opposite.
+        //
+        // So the caller closes it with the same hook the resize uses, for the
+        // same reason: destroy the view while the texture it views is still
+        // alive. Unconditional and idempotent -- a routine miss (nothing ever
+        // drew the output) returns false and buries nothing, and a null pointer
+        // early-outs ahead of the idle.
+        //
+        // LIVE AS OF TASK 10 -- it was inert while the chrome context rendered
+        // nothing, and this is the task that makes it record: the chrome frame
+        // draws the Viewport panel's ImGui::Image over OffscreenTextureId(), so
+        // there IS a pointer-keyed entry to evict now, on EVERY run. A grown
+        // RenderErrorCount here is precisely what the D3b/D3c watch lists read
+        // as a finding, and the line below is what makes it legible.
+        if (m_graphChrome && m_graphChrome->ImGuiHud() && m_viewportTargets.graph)
+        {
+            m_graphChrome->ImGuiHud()->InvalidateUserTextureNow(
+                m_viewportTargets.graph->OffscreenOutput());
+        }
+
+        // ===== THEN THE CONTEXTS, BORROWER FIRST =============================
+        // Explicit resets rather than member destruction, for the reason
+        // RuntimeApp::ShutdownGraphPath states: the latch has to be sampled
+        // strictly AFTER the last NRI object is gone (teardown ordering is
+        // exactly the class of mistake a validation layer exists to catch), and
+        // member destructors run after Run() has already returned its code.
+        //
+        // The order is the SAME one declaration order gives, restated because
+        // it is now this function's to get right: the viewport context BORROWS
+        // the device the chrome context owns, so the borrower dies first. Two
+        // other lifetimes bracket this and both are satisfied HERE and not in
+        // ~EditorApp: m_gameImgui (whose context the viewport's game
+        // ImGuiNriNode adopted, and whose platform texture list ImGuiNri::
+        // Release DEREFERENCES) and m_gpu's ImGuiLayer (whose context the
+        // chrome node adopted) are both still fully alive at this point in
+        // Shutdown -- which is a strictly stronger guarantee than the
+        // declaration-order one it replaces.
+        m_viewportTargets.graph.reset();
+        m_graphChrome.reset();
+
+        // ===== AND ONLY THEN THE LATCH =======================================
+        // The editor's equivalent of the runtime's line, and the reason it
+        // exists: "RenderErrorCount must not grow across a clean --nri-graph
+        // editor exit" is the observable proof that the invalidate above
+        // actually ordered the view ahead of the texture. Without the pair
+        // printed, a desk operator has a rule with nothing to read it against.
+        const std::uint64_t errorsNow = Arcane::RenderErrorCount();
+        ARC_INFO("[nri-graph] RenderErrorCount {} -> {}", m_graphErrorBaseline, errorsNow);
+        if (errorsNow > m_graphErrorBaseline)
+        {
+            ARC_ERROR("[nri-graph] FAILED: {} validation/render error(s) fired during the editor "
+                      "run (teardown included)", errorsNow - m_graphErrorBaseline);
+            // Precedence 1 > 2, the runtime's: a frame failure says WHERE the
+            // run died and outranks the errors it produced on the way out.
+            if (m_graphExit == 0)
+                m_graphExit = 2;
+        }
+    }
+
     void EditorApp::Shutdown()
     {
         // Deregister both sinks FIRST, before anything below can dispatch into
@@ -1571,55 +1702,20 @@ namespace Arcane::Editor
             }
         }
 
-        // ===== THE TEARDOWN HALF OF THE VIEW-BEFORE-TEXTURE RULE =============
-        // (NRI Phase 3, Task 8, fix round 1.) A RESIZE is not the only moment
-        // the viewport's output texture dies -- PROCESS EXIT is the other, and
-        // unlike a resize it happens on every single run.
-        //
-        // WHY MEMBER ORDER CANNOT COVER IT. Reverse-declaration destruction runs
-        // m_viewportTargets.graph -- the offscreen context, which OWNS the
-        // output -- hundreds of declarations BEFORE m_graphChrome. That order is
-        // correct and required for the borrowed DEVICE (the borrower must die
-        // first). But the chrome context's ImGuiNri caches that output by RAW
-        // nri::Texture*, so ~ImGuiNri disposes its descriptor + set hundreds of
-        // declarations LATER: DestroyDescriptor after DestroyTexture, which is
-        // exactly the inversion NriGraphContext.hpp's TWO CONTEXTS, TWO LANES
-        // calls the part of the rule that "does not go away" (on Vulkan the
-        // error raises at image-destroy time). NO declaration order fixes it --
-        // the device wants one order and the view wants the opposite.
-        //
-        // So the caller closes it with the same hook the resize uses, for the
-        // same reason: destroy the view while the texture it views is still
-        // alive. Unconditional and idempotent -- a routine miss (nothing ever
-        // drew the output) returns false and buries nothing, and a null pointer
-        // early-outs ahead of the idle.
-        //
-        // INERT TODAY, LIVE AT TASK 10: the chrome context renders nothing yet,
-        // so there is no entry to evict. It goes live on the first frame the
-        // chrome ImGui::Image()s OffscreenTextureId() -- and it would then land
-        // at process exit on EVERY run, where a grown RenderErrorCount is
-        // precisely what the D3b/D3c watch lists read as a finding.
-        //
-        // In Shutdown(), not in a destructor: this runs while BOTH contexts are
-        // provably alive, before any member unwinds.
-        if (m_graphChrome && m_graphChrome->ImGuiHud() && m_viewportTargets.graph)
-        {
-            m_graphChrome->ImGuiHud()->InvalidateUserTextureNow(
-                m_viewportTargets.graph->OffscreenOutput());
-        }
+        // The graph arm's whole teardown -- the view-before-texture invalidate,
+        // both contexts, and the latch read-back -- in the one order that is
+        // correct. See ShutdownGraphPath. A no-op on the NVRHI arm.
+        ShutdownGraphPath();
 
         // defensive: today Shutdown only runs after a successful Init, so m_gpu is non-null;
         // the guard covers a future partial-init/destructor path.
         //
         // NVRHI ARM ONLY (NRI Phase 3, Task 8) -- the same gate
-        // RuntimeApp::ShutdownGraphPath carries, for the same reason: the graph
-        // flavor has no NVRHI device to idle, and needs none. Each
-        // ~NriGraphContext idles the shared device and drains its own lane on
-        // the way out, and the two run in the order this class declares them
-        // (viewport offscreen first, then chrome, then the window). The
-        // invalidate above is the graph arm's counterpart, and it idles the
-        // device itself -- so this pair leaves BOTH arms settled before the
-        // members unwind.
+        // RuntimeApp::Shutdown carries, for the same reason: the graph flavor
+        // has no NVRHI device to idle, and needs none. ShutdownGraphPath above
+        // has already destroyed both contexts (each idles the shared device and
+        // drains its own lane on the way out), so by this point BOTH arms are
+        // settled and nothing NRI is left for the members to unwind.
         if (m_gpu && !m_gpu->GraphFlavor())
         {
             m_gpu->Device().Nvrhi()->waitForIdle();
@@ -1675,6 +1771,30 @@ namespace Arcane::Editor
 
         Shutdown();
         Destroy();
-        return exitCode;
+
+        // ===== THE EXIT-CODE FOLD (NRI Phase 3, Task 10) ======================
+        // Mirrors RuntimeApp::Run's tail, code for code, so one desk battery
+        // item reads the same against either host. Everything below is 0 on an
+        // ordinary NVRHI run, which is what keeps the default arm's contract
+        // ("0 clean, 1 boot/init failed") exactly what it was.
+        //
+        // A device-loss exit is an abnormal end even though it was orderly: the
+        // crash report exists, but the session did not do what it was asked to.
+        // First, because it outranks every other explanation -- a lost device is
+        // WHY the frames afterwards failed. This is also the fold the editor
+        // simply did not have: MainLoop has broken on GpuDeviceLostObserved
+        // since long before this phase, and reported it as a clean exit 0.
+        if (Arcane::GpuDeviceLostObserved())
+            return 1;
+        // A boot/init failure keeps its own code and outranks the graph's for
+        // the same reason: it says where the run died, and it died earlier.
+        if (exitCode != 0)
+            return exitCode;
+        // --nri-graph's own codes: 1 = a graph frame FAILED (either context --
+        // the viewport's, phase 10, or the chrome's, phase 19), 2 =
+        // RenderErrorCount GREW across the run, teardown included. Precedence
+        // 1 > 2, set at the two sites that produce them (NoteGraphFrameFailure
+        // and ShutdownGraphPath). Always 0 when --nri-graph was not given.
+        return m_graphExit;
     }
 }

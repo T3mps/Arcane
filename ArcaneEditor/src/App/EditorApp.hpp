@@ -276,7 +276,33 @@ namespace Arcane::Editor
         void HandleViewportPick(const FrameState& fs);
         void DrawSelectionPanels();
         bool PresentFrame();
+        // Phase 19's GRAPH arm (NRI Phase 3, Task 10): the editor's main-window
+        // frame as a graph frame -- clear + one ImGui node over the EDITOR
+        // context's draw data -> the chrome context's backbuffer -> present.
+        // Same return contract as PresentFrame (false = nothing was presented,
+        // MainLoop skips the rest of the frame). Its own definition carries the
+        // frame's declared shape and the four fields deliberately left default.
+        bool PresentChromeFrame();
         void EndFrame(LoopState& ls);
+
+        // ---- The graph arm's EXIT-CODE FOLD (NRI Phase 3, Task 10) ----------
+        // The editor's counterpart of RuntimeApp::m_graphExit + its
+        // ShutdownGraphPath, and deliberately the same codes and the same
+        // precedence (1 > 2): 1 = a graph frame FAILED (it says WHERE the run
+        // died), 2 = RenderErrorCount GREW across the run, teardown included.
+        //
+        // Both CONTEXTS fold into the one code -- a viewport frame that could
+        // not be recorded (RenderSceneToViewport, phase 10) and a chrome frame
+        // that could not be presented (PresentChromeFrame, phase 19) are the
+        // same class of failure and neither was visible in an exit code before.
+        void NoteGraphFrameFailure(const char* what);
+        // Destroys BOTH graph contexts, in the one order that is correct, and
+        // then reads the latch back -- which is the whole reason it exists as a
+        // function rather than as member destruction: a teardown-only
+        // validation error must still fail the run, and member destructors run
+        // after Run() has already returned its code. Mirrors
+        // RuntimeApp::ShutdownGraphPath. A no-op on the NVRHI arm.
+        void ShutdownGraphPath();
 
         HostConfig                        m_config;
         std::unique_ptr<GpuContext>       m_gpu;                    // destructs LAST
@@ -322,6 +348,20 @@ namespace Arcane::Editor
         // switch_teardown's NVRHI waitForIdle, applied to BOTH contexts. That
         // is Task 12's, and it is named at that call site (EditorAppProject.cpp).
         std::unique_ptr<Arcane::NriGraphContext> m_graphChrome;
+
+        // The graph arm's own exit code, 0 on every ordinary run -- see
+        // NoteGraphFrameFailure / ShutdownGraphPath above and Run()'s tail,
+        // which is where it reaches the process. Not #if-guarded, for the same
+        // reason m_graphChrome is not: a preprocessor-guarded member forces a
+        // guard at every use site.
+        int           m_graphExit = 0;
+        // RenderErrorCount at the moment the chrome context was created --
+        // BOOT-time errors belong to the boot, and everything from there until
+        // the last NRI object is gone belongs to the graph. Read back in
+        // ShutdownGraphPath, which prints the pair as one line so the desk
+        // watch item ("the count must not grow across a clean exit") is legible
+        // rather than inferred.
+        std::uint64_t m_graphErrorBaseline = 0;
 
         // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
         // Task 8c: this is now BootSequence::Run's presenter for the WHOLE

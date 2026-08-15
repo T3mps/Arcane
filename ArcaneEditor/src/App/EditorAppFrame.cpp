@@ -1236,13 +1236,29 @@ namespace Arcane::Editor
             // that mutates the scene must therefore land on the same frame on
             // both arms.
             ArmGraphViewportFrame(vp);
-            m_viewportTargets.graph->RenderFrameOffscreen(vp);
-            // The outcome is deliberately not acted on here. Skipped is routine
-            // (a collapsed panel, or a resize whose replacement could not be
+            const Arcane::NriGraphContext::FrameOutcome outcome =
+                m_viewportTargets.graph->RenderFrameOffscreen(vp);
+            // Skipped stays UNACTED-ON, and that is the routine case: a
+            // collapsed panel, or a resize whose replacement could not be
             // created -- OffscreenTextureId() is 0 then and phase 16 draws no
-            // Image, which IS the signal). Failed has already bumped
-            // RenderErrorCount, and folding that latch into the process exit
-            // code is Task 10's item, listed there beside the device-lost fold.
+            // Image, which IS the signal.
+            //
+            // Failed is the half Task 10 closes (it was listed here as owed).
+            // It has already bumped RenderErrorCount, so the run's exit code
+            // would be 2 on its own -- but 2 says "a validation error fired"
+            // where 1 says WHERE the run died, and a viewport frame that could
+            // not be recorded or submitted is the second thing. NoteGraphFrame-
+            // Failure records both halves: the exit code and the request to
+            // stop.
+            //
+            // THE REST OF THIS FRAME STILL RUNS, deliberately. Phases 11-19 are
+            // CPU work plus ONE chrome frame, and the ImGui frame phase 13
+            // begins owes exactly one Render/RenderToDrawData/EndFrameDiscard
+            // -- bailing out here would strand that pairing. The exit lands at
+            // the TOP of the next frame (PumpFrameEvents reads m_requestExit
+            // before any phase), so nothing renders after this one.
+            if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)
+                NoteGraphFrameFailure("the viewport frame could not be recorded or submitted");
             return;
         }
 
@@ -2383,50 +2399,136 @@ namespace Arcane::Editor
         // composited into the viewport texture above -- not the editor context.)
     }
 
+    // ===================== THE CHROME FRAME (NRI Phase 3, Task 10) =========
+    // Phase 19's GRAPH arm, and the moment the editor's main window starts
+    // showing something on a --nri-graph run. Task 8 left this arm discarding
+    // the ImGui frame and presenting nothing (an honest mid-phase state, stated
+    // as one); this is the replacement it named.
+    //
+    // ---- THE FRAME'S DECLARED SHAPE, and why it is what it is -------------
+    // Exactly three nodes: batch2d -> tonemap -> imgui -> present.
+    //
+    //   batch2d   with NO batcher. AddBatch2DNode drains nothing, and
+    //             Batch2DNode::Record's first statement is the canvas CLEAR --
+    //             so a null batcher IS the clear, not a degenerate draw ("an
+    //             empty frame is a cleared canvas, not an error").
+    //   tonemap   is the ONLY thing in the tree that produces a backbuffer
+    //             handle at all (AddTonemapNode -> ImportSwapChainTexture), so
+    //             it is not decoration on top of the clear -- it is how the
+    //             clear reaches the surface, and how a frame acquires one.
+    //             That is why "clear + imgui + present" has three nodes rather
+    //             than two, and why there is no shorter honest spelling of it
+    //             through this machinery.
+    //   imgui     draws the EDITOR context's draw data onto that backbuffer,
+    //             through the chrome context's ImGuiNriNode (NodeSet::hostHud,
+    //             set by NriGraphContext::Create because a host-window context
+    //             presents chrome by definition).
+    //
+    // AND NOTHING ELSE, which is a claim about four fields left DEFAULT:
+    //   * `post`        -- the scene's post chain belongs to the VIEWPORT
+    //                      frame (phase 10). Chrome is not graded.
+    //   * `pickOutline` -- likewise the viewport's; the chrome context was
+    //                      built with neither node (CreateGraphVehicles asks
+    //                      for them on the offscreen context only), so the
+    //                      declaration would be refused even if asked for.
+    //   * `gameUi`      -- the plugin HUD lives INSIDE the viewport texture,
+    //                      never over the editor chrome. Same node gate.
+    //   * `capture`     -- and this one is a RULE, not just an absence. The
+    //                      editor's screenshot/golden semantics capture the
+    //                      VIEWPORT (WriteAutoScreenshot reads the offscreen
+    //                      output; the editor golden harness is Task 13's), so
+    //                      chrome pixels must never reach a capture path. A
+    //                      capture node declared HERE would copy the chromed
+    //                      backbuffer and quietly redefine what an editor
+    //                      golden contains.
+    //
+    // ---- WHERE THE DRAW DATA COMES FROM ----------------------------------
+    // The ImGui frame phases 13-18 already built. RenderToDrawData() is
+    // ImGui::Render() plus the layer's SetCurrentContext pin -- the same call
+    // RuntimeFrame::RenderGraph makes, and the same reason it goes through the
+    // layer rather than calling ImGui::Render() bare: a document, the game
+    // context or a plugin may have left another context current, and the pin is
+    // what makes this the EDITOR's draw data rather than whoever's was last.
+    // The returned data lives until that context's next NewFrame -- a whole
+    // frame away -- which is what lets the node copy the geometry at RECORD
+    // time (NriGraphContext::FrameDesc::imgui).
+    //
+    // ---- WHAT IS INTERACTIVE, AND WHAT IS NOT ----------------------------
+    // This chrome IS the editor UI, so it is interactive by definition, and
+    // that is not the stance ImGuiLayer::CreateForGraph withholds the SDL event
+    // tap for -- that stance is about the RUNTIME's HUD (an accidental drag
+    // there would move the HUD in the shared imgui.ini and rewrite the very
+    // `full` baseline checkpoint D3b compares against). It costs the graph-mode
+    // editor its input until that tap is restored, which is a known gap of
+    // Task 6's stance rather than of this frame.
+    //
+    // ---- THE HEARTBEAT ---------------------------------------------------
+    // Published by NriGraphContext::RenderFrame itself, after the present and
+    // on Presented frames only (NriDiagnostics::PublishHeartbeat with the
+    // swapchain's COMPLETED fence value -- Task 5). It is the graph path's 1:1
+    // replacement for the NVRHI arm's m_gpu->FrameProgress().EndFrame() below,
+    // and it needs no line here: this call reaches it. Adding a second publish
+    // would report progress twice for one frame.
+    bool EditorApp::PresentChromeFrame()
+    {
+        // FIRST, and unconditionally: the ImGui frame DrawEditorUi began owes
+        // exactly one Render / RenderToDrawData / EndFrameDiscard, and every
+        // path out of this function must have discharged it. Doing it here --
+        // ahead of the null check and both non-Presented outcomes below --
+        // is what makes that true by structure rather than by three copies.
+        ImDrawData* const chrome = m_gpu->Imgui().RenderToDrawData();
+
+        // Defensive: CreateGraphVehicles refuses to continue past a chrome
+        // context that could not be created (Main() returns 1 without ever
+        // entering MainLoop), so this is unreachable rather than a state a run
+        // can sit in. TRUE, not false: a frame that cannot present is not a
+        // reason to stop counting frames and stop polling the plugin, which is
+        // what a false return means to MainLoop.
+        if (!m_graphChrome)
+            return true;
+
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.imgui = chrome;
+        // stage stays Full -- the ONE stage that declares a HUD node at all
+        // (DeclareGraphFrame gates the host HUD on it). The editor's golden
+        // harness and its stage semantics are Task 13's; Full is what an
+        // ordinary run means on both hosts.
+        const Arcane::NriGraphContext::FrameOutcome outcome =
+            m_graphChrome->RenderFrame(frame);
+
+        if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)
+        {
+            // Already latched (the "nri-graph" seam bumped RenderErrorCount),
+            // so the exit code would be 2 on its own -- but 1 says WHERE the
+            // run died and outranks it. Stops rather than spinning on a broken
+            // device, at the top of the NEXT frame: returning false here means
+            // MainLoop skips EndFrame and loops, and PumpFrameEvents reads
+            // m_requestExit before any phase runs.
+            NoteGraphFrameFailure("the chrome frame could not be recorded or presented");
+            return false;
+        }
+        if (outcome == Arcane::NriGraphContext::FrameOutcome::Skipped)
+        {
+            // Routine, and exactly what the NVRHI arm's no-backbuffer branch
+            // below is: a zero-sized surface or an OUT_OF_DATE acquire, both
+            // self-healing on the next resize event. FALSE for the same reason
+            // that branch returns false -- no frame was presented, so nothing
+            // downstream should count one. The sleep matches
+            // RuntimeFrame::RenderGraph's: without a presented frame there is
+            // no pacing wait, and a zero-sized window would otherwise spin.
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return false;
+        }
+        return true;
+    }
+
     // Phase 19: present. Returns false when the swapchain had no backbuffer, in
     // which case MainLoop skips the rest of the frame -- exactly as the original
     // `continue` did, so the plugin Poll + frame count below are skipped too.
     bool EditorApp::PresentFrame()
     {
-        // ============ THE GRAPH ARM'S MID-PHASE STATE (NRI Phase 3, Task 8)
-        // THE EDITOR'S MAIN WINDOW SHOWS NOTHING ON A --nri-graph RUN UNTIL
-        // TASK 10, and that is a decision rather than an omission. Every line
-        // below is NVRHI: Swap() is the NVRHI swapchain, Cmd() the NVRHI
-        // command list, Imgui().Render the ImGui-NVRHI renderer, FrameProgress
-        // the nvrhi EventQuery chain -- none of which exist on this flavor.
-        // Task 10 owns the replacement (the chrome frame: clear + one ImGui
-        // node over the editor context's draw data -> the chrome context's
-        // backbuffer -> present), and building it here would BE Task 10.
-        //
-        // So this arm does the one thing that is genuinely owed: END THE ImGui
-        // FRAME. DrawEditorUi called BeginFrame unconditionally, and
-        // ImGuiLayer's contract is "every BeginFrame is paired exactly once" --
-        // EndFrameDiscard is that pairing when nothing will render the result.
-        // It is the same discard RuntimeFrame::RenderGraph uses for the two
-        // non-Full golden stages, and it goes THROUGH the layer rather than
-        // calling ImGui::EndFrame() bare so the layer pins its own context
-        // (Task 6's rule: a document or a plugin may have left another current).
-        //
-        // WHAT A DESK OPERATOR SEES: an editor window with no frame ever
-        // presented into it -- undrawn/blank, not garbage-from-our-swapchain,
-        // since the chrome context's swapchain exists but is never acquired.
-        // The editor still boots, opens the project, loads the plugin, runs the
-        // sim and RENDERS THE SCENE into the offscreen viewport every frame;
-        // nothing is on screen to sample it until the chrome frame lands. That
-        // also means the graph-mode editor is not clickable mid-phase (no
-        // chrome to click, and ImGuiLayer::CreateForGraph withholds the SDL
-        // event tap anyway), which is why the desk proof for this task is
-        // checkpoint D3c and not a drive-around.
-        //
-        // Returns TRUE: the frame completed. Returning false is the "swapchain
-        // had no backbuffer" skip, and MainLoop reads it as "skip EndFrame" --
-        // which would stop the plugin hot-reload poll and freeze the --frames N
-        // budget, i.e. hang a scripted run forever.
         if (GraphMode())
-        {
-            m_gpu->Imgui().EndFrameDiscard();
-            return true;
-        }
+            return PresentChromeFrame();
 
         nvrhi::ITexture* backbuffer = m_gpu->Swap().BeginFrame();
         if (!backbuffer) { ImGui::EndFrame(); return false; }
