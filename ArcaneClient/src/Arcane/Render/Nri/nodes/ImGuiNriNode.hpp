@@ -77,6 +77,13 @@ namespace Arcane
         // Idempotent.
         void Release(Graveyard& graveyard, std::uint64_t fence);
 
+        // Point this backend at the ImGui context whose draw data it will be
+        // handed -- see ImGuiNri::AdoptContext for why Create() cannot always
+        // work it out for itself. Call once, right after Create, for any node
+        // that serves a context OTHER than the one current at Create time (the
+        // editor's game-UI node). Idempotent and null-safe.
+        void AdoptImGuiContext(void* imguiContext) { m_renderer.AdoptContext(imguiContext); }
+
         // DECLARATION-time half: the 1.92 texture protocol. See the header
         // block -- this submits and waits, so it must not be reached from an
         // exec fn. `graveyard`/`fence` are where and at what value destroyed
@@ -122,6 +129,31 @@ namespace Arcane
         ImGuiNri m_renderer;
     };
 
+    // WHICH ImGui node a declaration means, and therefore which backend and
+    // which of the frame's two ImDrawData it draws (NRI Phase 3, Task 9).
+    //
+    // They are TWO NODES over TWO BACKENDS rather than one node drawn twice,
+    // and that is structural rather than tidy: an ImGuiNri caches the 1.92
+    // texture protocol's ImTextureData-owned textures for ONE context's atlas,
+    // and the two draw datas here come from two different ImGui contexts (the
+    // host's chrome context, and the editor's game/plugin context -- whose
+    // io.IniFilename is deliberately null where the editor's is the per-project
+    // layout file). One backend serving both would interleave two atlases in
+    // one pointer-keyed cache against a fixed kMaxTextures.
+    enum class ImGuiNodeSlot : std::uint8_t
+    {
+        // The HOST CHROME hud, `FrameDesc::imgui`, declared LAST -- after the
+        // tonemap, after the outline composite, before the capture.
+        HostHud,
+        // The GAME's own HUD, `FrameDesc::gameUi`, declared between the tonemap
+        // and the pick/outline chain: the editor's phase 11 (CompositeGameUi)
+        // then phase 12 (RenderSelectionOutline) order, expressed against this
+        // recorder. The two are mutually exclusive by MODE in the editor (Play
+        // draws the HUD, Edit draws the outline), so the order is a fidelity
+        // guarantee rather than something a frame exercises today.
+        GameUi,
+    };
+
     // Declares the ImGui node into `graph`: reads nothing, writes `target`
     // (the imported backbuffer the tonemap has already written) with the SAME
     // ColorWrite state -- so the compile derives no transition between them,
@@ -138,5 +170,6 @@ namespace Arcane
     // context is the headless declaration-shape drive the [nri] frame-shape
     // cases use, where every declaration is identical and only the exec fn is
     // inert.
-    ARCANE_API void AddImGuiNode(RenderGraph& graph, NriGraphContext* context, RgTexture target);
+    ARCANE_API void AddImGuiNode(RenderGraph& graph, NriGraphContext* context, RgTexture target,
+                                 ImGuiNodeSlot slot = ImGuiNodeSlot::HostHud);
 }

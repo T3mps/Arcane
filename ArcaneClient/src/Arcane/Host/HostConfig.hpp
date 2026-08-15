@@ -146,13 +146,17 @@ namespace Arcane
         //       ArcaneEditor  -- TWO contexts on that one device: a host-window
         //         "chrome" one and an OFFSCREEN one the Viewport panel samples.
         //         Task 8 lands the SCENE, in Play and in Edit, through the
-        //         offscreen frame. Landing in order after it: the gameui/
-        //         outline/pick composite (Task 9), the chrome frame -- until
-        //         which the editor's MAIN WINDOW PRESENTS NOTHING on this flag
-        //         (Task 10) -- the documents/preview/logo/auto-screenshot (Task
-        //         11), project switch + module rebuild (Task 12), and the
-        //         editor's own golden harness (Task 13, which is what makes
-        //         --golden-* mean something on this host).
+        //         offscreen frame; Task 9 lands everything else that belongs
+        //         INSIDE that frame -- the game/plugin HUD in Play, the
+        //         selection + hover outline in Edit, and viewport click-pick
+        //         (deferred: the hit applies on the frame its readback lands,
+        //         about three frames after the click). Landing in order after
+        //         them: the chrome frame -- until which the editor's MAIN
+        //         WINDOW PRESENTS NOTHING on this flag (Task 10) -- the
+        //         documents/preview/logo/auto-screenshot (Task 11), project
+        //         switch + module rebuild (Task 12), and the editor's own
+        //         golden harness (Task 13, which is what makes --golden-* mean
+        //         something on this host).
         //     The editor's NVRHI path remains the DEFAULT and the floor: the
         //     flag is opt-in on both hosts and changes nothing without it.
         //

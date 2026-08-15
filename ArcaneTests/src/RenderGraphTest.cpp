@@ -5428,6 +5428,126 @@ TEST_CASE("nri graph frame: the HUD composes with the post chain and the outline
     CheckState(compiled.exitBarriers[0].after, kPresentState);
 }
 
+TEST_CASE("nri graph frame: the GAME UI node sits between the tonemap and the outline composite",
+          "[nri]")
+{
+    // NRI Phase 3, Task 9. The editor's viewport frame carries a SECOND ImGui
+    // node -- the game/plugin HUD -- and where it sits is the whole of what this
+    // declaration decides. It is the editor's own compositing order expressed
+    // against this recorder: EditorApp::CompositeGameUi (phase 11) runs after
+    // the scene render and BEFORE EditorApp::RenderSelectionOutline (phase 12).
+    //
+    // NOTHING EXERCISES THAT ORDER TODAY, which is exactly why it is pinned
+    // here: the two are mutually exclusive by MODE in the editor (Play draws
+    // the HUD, Edit draws the outline), so the first frame that ever carries
+    // both would be the first chance to discover the order was wrong -- by
+    // eye, on a picture, long after the fact.
+    {
+        // Alone: one node, straight after the tonemap, creating no resource of
+        // its own (the atlas is node-owned, not a graph transient).
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 320;
+        shape.canvasHeight = 200;
+        shape.gameUi       = true;
+
+        Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+        REQUIRE(graph.NodeCount() == 3);
+        CHECK(std::string(graph.NodeName(1)) == "tonemap");
+        CHECK(std::string(graph.NodeName(2)) == "gameui");
+
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        REQUIRE(compiled.nodes.size() == 3);
+        CHECK(compiled.transients.size() == 1);   // the canvas, and nothing else
+        CHECK(compiled.poolSlotCount == 1);
+        // Same ColorWrite the tonemap declared -> no derived transition, exactly
+        // like the host HUD's and the outline composite's.
+        CHECK(compiled.nodes[2].preBarriers.empty());
+    }
+
+    {
+        // ...and with the outline chain, which is the ordering claim itself.
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 320;
+        shape.canvasHeight = 200;
+        shape.gameUi       = true;
+        shape.pickOutline  = true;
+
+        const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+        const std::uint32_t steps = handles.jfaStepCount;
+
+        // batch2d + tonemap + gameui + pick + pickreadback + outlineseed
+        // + N jfa + outlinecomposite.
+        REQUIRE(graph.NodeCount() == 7u + steps);
+        CHECK(std::string(graph.NodeName(1)) == "tonemap");
+        CHECK(std::string(graph.NodeName(2)) == "gameui");
+        CHECK(std::string(graph.NodeName(3)) == "pick");
+        CHECK(std::string(graph.NodeName(graph.NodeCount() - 1)) == "outlinecomposite");
+    }
+
+    {
+        // ...and the two ImGui nodes are DISTINCT nodes with distinct names,
+        // in the order gameui-then-hostHUD: the game's HUD is content inside
+        // the rendered image, the host's is chrome on top of it. Same frame,
+        // both live, plus a capture to prove the HUD is still the last VISUAL
+        // writer.
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth   = 320;
+        shape.canvasHeight  = 200;
+        shape.gameUi        = true;
+        shape.pickOutline   = true;
+        shape.imgui         = true;
+        shape.capture       = true;
+        shape.captureBuffer = nullptr;
+        shape.captureBytes  = 4096;
+
+        const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+        const std::uint32_t steps = handles.jfaStepCount;
+
+        REQUIRE(graph.NodeCount() == 9u + steps);
+        CHECK(std::string(graph.NodeName(2)) == "gameui");
+        CHECK(std::string(graph.NodeName(graph.NodeCount() - 3)) == "outlinecomposite");
+        CHECK(std::string(graph.NodeName(graph.NodeCount() - 2)) == "imgui");
+        CHECK(std::string(graph.NodeName(graph.NodeCount() - 1)) == "capture");
+
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        // FOUR consecutive ColorWrite declarations on the backbuffer (tonemap,
+        // gameui, outlinecomposite, imgui) still derive exactly one transition
+        // out of it, and none between them.
+        CHECK(compiled.nodes[2].preBarriers.empty());
+        REQUIRE(compiled.exitBarriers.size() == 1);
+        CheckState(compiled.exitBarriers[0].after, kPresentState);
+        // The game HUD adds no pool slot -- its atlas is node-owned, not a
+        // graph transient. 1 for the canvas, 1 for the id target, 2 for the
+        // outline field's ping-pong.
+        CHECK(compiled.poolSlotCount == 4);
+    }
+
+    {
+        // NOT stage-gated where the host HUD is. `--golden-stage` names slices
+        // of the SCENE render and the game HUD is inside the image, not chrome
+        // over it -- and the editor's viewport frame is not a golden stage at
+        // all. Pinned so a later reader does not "fix" the asymmetry.
+        for (const Arcane::GoldenStage stage :
+             { Arcane::GoldenStage::Batch, Arcane::GoldenStage::Post, Arcane::GoldenStage::Full })
+        {
+            Arcane::RenderGraph graph;
+            Arcane::RgFrameShape shape;
+            shape.canvasWidth  = 320;
+            shape.canvasHeight = 200;
+            shape.stage        = stage;
+            shape.gameUi       = true;
+
+            Arcane::DeclareGraphFrame(graph, shape, nullptr);
+            REQUIRE(graph.NodeCount() == 3);
+            CHECK(std::string(graph.NodeName(2)) == "gameui");
+        }
+    }
+}
+
 TEST_CASE("nri pick readback: every frame slot owns a distinct, alignment-legal region", "[nri]")
 {
     // NRI's TextureDataLayoutDesc documents the buffer OFFSET as a multiple of

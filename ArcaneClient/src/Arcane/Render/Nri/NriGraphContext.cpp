@@ -258,7 +258,11 @@ namespace Arcane
             return false;
         }
 
-        if (!InitCommon(config))
+        // A HOST-WINDOW context builds no optional node beyond what the
+        // config arms: both hosts' chrome frame draws the batch, the tonemap
+        // and its own HUD, and --pick-probe is the only thing that has ever
+        // added to that.
+        if (!InitCommon(config, NodeSet{}))
             return false;   // already logged
 
         // See the header: the heartbeat exists for the open-ended drag-storm
@@ -285,16 +289,18 @@ namespace Arcane
     std::unique_ptr<NriGraphContext> NriGraphContext::CreateOffscreen(const HostConfig& config,
                                                                       NriDevice& shared,
                                                                       std::uint32_t width,
-                                                                      std::uint32_t height)
+                                                                      std::uint32_t height,
+                                                                      const NodeSet& nodes)
     {
         std::unique_ptr<NriGraphContext> context(new NriGraphContext());
-        if (!context->InitOffscreen(config, shared, width, height))
+        if (!context->InitOffscreen(config, shared, width, height, nodes))
             return nullptr;
         return context;
     }
 
     bool NriGraphContext::InitOffscreen(const HostConfig& config, NriDevice& shared,
-                                        std::uint32_t width, std::uint32_t height)
+                                        std::uint32_t width, std::uint32_t height,
+                                        const NodeSet& nodes)
     {
         m_mode = Mode::Offscreen;
         // NO WINDOW, NO SWAPCHAIN, NO VSYNC. m_vsync stays at its default and
@@ -341,7 +347,7 @@ namespace Arcane
         }
         m_device->Core().SetDebugName(m_offscreenFence, "nri-graph offscreen pacing fence");
 
-        if (!InitCommon(config))
+        if (!InitCommon(config, nodes))
             return false;   // already logged
 
         // NO HEARTBEAT ARMING. m_heartbeat is the open-ended drag-storm
@@ -401,7 +407,7 @@ namespace Arcane
         return true;
     }
 
-    bool NriGraphContext::InitCommon(const HostConfig& config)
+    bool NriGraphContext::InitCommon(const HostConfig& config, const NodeSet& nodes)
     {
         // Everything from here down is MODE-AGNOSTIC and is the same object
         // graph in the same order in both flavors -- which is what makes the
@@ -463,22 +469,49 @@ namespace Arcane
         if (!m_imguiHud)
             return false;   // already logged
 
+        // The GAME HUD's node (Task 9), and unlike the one above it is built
+        // only when the caller asks -- see NodeSet::gameUi for why it is a
+        // SECOND backend rather than a second use of the first. The caller owes
+        // it one AdoptImGuiContext call; this class never sees an ImGui context
+        // and so cannot make that call itself (ImGuiNri::AdoptContext).
+        if (nodes.gameUi)
+        {
+            m_imguiGame = ImGuiNriNode::Create(*this);
+            if (!m_imguiGame)
+                return false;   // already logged
+        }
+
         // ---------------------------------------------------------------
-        // The pick + outline pair (Task 11) is built ONLY when the probe is
-        // armed, and that gate is not laziness -- it is what makes carry 8
+        // The pick + outline pair (Task 11) is built ONLY when something asks
+        // for it, and that gate is not laziness -- it is what makes carry 8
         // structural. An ordinary --nri-graph run (every stage-golden run) then
         // creates NO readback buffer, NO descriptor pool, NO pipeline layout
         // and NO arena for this chain, so nothing about it can perturb a
-        // baseline. Armed, it is built EAGERLY like the other three: a node
+        // baseline. Asked for, it is built EAGERLY like the other three: a node
         // that cannot be created must fail the vehicle at boot rather than
         // render a probe frame that silently draws nothing.
+        //
+        // TWO THINGS CAN ASK, and they ask different questions (Task 9).
+        // `--pick-probe` arms a FIXED probe pixel and is a dev flag;
+        // NodeSet::pickOutline says only "this host will drive the chain per
+        // frame", which is what the editor's viewport does -- its probe pixel
+        // is a click that has not happened at Create time and its hover cursor
+        // moves every frame. m_pickArmed therefore keeps its NARROWER meaning
+        // (the FLAG), because the out-of-range latch, ProbeX/ProbeY and the log
+        // line below all describe the flag rather than the nodes.
         // ---------------------------------------------------------------
 #if !defined(ARCANE_DIST)
         m_pickArmed = config.pickProbe;
         m_probeX    = config.pickProbeX;
         m_probeY    = config.pickProbeY;
 #endif
-        if (m_pickArmed)
+        // The frame's default probe/hover, before any frame has named its own.
+        // Set unconditionally so a Dist build (where the flag does not exist)
+        // still has defined values rather than a coordinate nobody wrote.
+        m_currentPick  = glm::ivec2(m_probeX, m_probeY);
+        m_currentHover = m_currentPick;
+
+        if (m_pickArmed || nodes.pickOutline)
         {
             m_pick = PickNode::Create(*this);
             if (!m_pick)
@@ -486,6 +519,9 @@ namespace Arcane
             m_outline = OutlineNode::Create(*this);
             if (!m_outline)
                 return false;   // already logged
+        }
+        if (m_pickArmed)
+        {
             ARC_INFO("[nri-graph] --pick-probe armed at canvas pixel ({}, {}): the frame carries the "
                      "entity-id pass, its readback and a {}-step JFA outline; the id lands after "
                      "{} presented frames",
@@ -495,6 +531,16 @@ namespace Arcane
                      // be worse than no log line. Read through the mode-agnostic
                      // extent, which is the swapchain's here and the offscreen
                      // output's on that flavor.
+                     std::min(OutlineJfaStepCount(SurfaceWidth(), SurfaceHeight()),
+                              OutlineNode::kMaxJfaSteps),
+                     kSwapchainFramesInFlight);
+        }
+        else if (nodes.pickOutline)
+        {
+            ARC_INFO("[nri-graph] pick + outline nodes built for a per-frame driver: the frame "
+                     "carries the entity-id pass, its readback and up to a {}-step JFA outline "
+                     "whenever it asks; a readback lands {} rendered frames after the frame that "
+                     "armed it",
                      std::min(OutlineJfaStepCount(SurfaceWidth(), SurfaceHeight()),
                               OutlineNode::kMaxJfaSteps),
                      kSwapchainFramesInFlight);
@@ -643,6 +689,8 @@ namespace Arcane
         // teardown bug as fix round 1's imported-view ordering). The outline
         // node holds the same class of view (over the id target and the JFA
         // ping-pong) and goes out for the same reason.
+        if (m_imguiGame)
+            m_imguiGame->Release(graves, fence);
         if (m_imguiHud)
             m_imguiHud->Release(graves, fence);
         if (m_outline)
@@ -1145,6 +1193,24 @@ namespace Arcane
         handles.backbuffer = AddTonemapNode(graph, context, sceneColor, shape.offscreenOutput);
 
         // ---------------------------------------------------------------
+        // THE GAME HUD (Task 9), declared BETWEEN the tonemap and the
+        // pick/outline chain -- which is the editor's own compositing order
+        // expressed against this recorder: EditorApp::CompositeGameUi (phase
+        // 11) runs after the scene render and BEFORE
+        // EditorApp::RenderSelectionOutline (phase 12). The two are mutually
+        // exclusive by MODE there (Play draws the HUD, Edit draws the outline),
+        // so no frame exercises the order today -- which is exactly why it is
+        // pinned by declaration rather than left to be discovered by whoever
+        // first makes both true.
+        //
+        // AFTER the tonemap for the same reason the outline composite is: a HUD
+        // is display-referred and must not be graded. Not stage-gated (unlike
+        // the host HUD below) -- see RgFrameShape::gameUi.
+        // ---------------------------------------------------------------
+        if (shape.gameUi)
+            AddImGuiNode(graph, context, handles.backbuffer, ImGuiNodeSlot::GameUi);
+
+        // ---------------------------------------------------------------
         // THE PICK + OUTLINE CHAIN (Task 11), declared BETWEEN the tonemap and
         // the capture, which is both halves of the ordering contract:
         //
@@ -1255,6 +1321,23 @@ namespace Arcane
         return handles;
     }
 
+    void NriGraphContext::PublishFrameCoordinates(const FrameDesc& frame)
+    {
+        // ONE function, called from both RenderFrame and RenderFrameOffscreen,
+        // because the two paths publishing DIFFERENT defaults is precisely the
+        // drift this task must not introduce: the whole promise of the
+        // per-frame probe is that a driver which names nothing gets exactly the
+        // --pick-probe behaviour, on either flavor.
+        m_currentPick       = frame.pickPixel.value_or(glm::ivec2(m_probeX, m_probeY));
+        m_currentHover      = frame.hoverPixel.value_or(glm::ivec2(m_probeX, m_probeY));
+        m_currentPickTicket = frame.pickTicket;
+        // Published for the whole call, like m_currentImGui and for the same
+        // reason (the node copies the geometry at RECORD time). Re-set every
+        // frame including to null, so a later frame can never reach an earlier
+        // frame's lists.
+        m_currentGameUi     = frame.gameUi;
+    }
+
     void NriGraphContext::BuildFrame(const FrameDesc& frame)
     {
         // Thin on purpose: the frame's SHAPE lives in DeclareGraphFrame so the
@@ -1284,6 +1367,10 @@ namespace Arcane
         // DeclareGraphFrame, beside the post chain's, so the headless
         // frame-shape cases exercise the real rule.
         shape.imgui         = frame.imgui != nullptr && m_imguiHud != nullptr;
+        // ...and for the game HUD, against ITS node (Task 9). A driver that
+        // hands gameUi draw data to a vehicle built without NodeSet::gameUi
+        // declares nothing rather than declaring a node that does not exist.
+        shape.gameUi        = frame.gameUi != nullptr && m_imguiGame != nullptr;
 
         // NOTHING follows the declaration, and that is worth stating because
         // an earlier draft of this task needed something here.
@@ -1380,6 +1467,10 @@ namespace Arcane
         // every frame, including to null, so a later frame can never reach a
         // previous frame's lists.
         m_currentImGui = effective.imgui;
+
+        // ...and the frame's COORDINATES + the game HUD's draw data, both
+        // paths through one function -- see PublishFrameCoordinates.
+        PublishFrameCoordinates(effective);
 
         // A probe pixel outside the surface would still be CLAMPED into the id
         // target by the readback node (PickSampleTexel), because the frame's
@@ -1526,6 +1617,7 @@ namespace Arcane
         m_currentPickables   = effective.pickables;
         m_currentSelectedIds = effective.selectedIds;
         m_currentImGui       = effective.imgui;
+        PublishFrameCoordinates(effective);
 
         if (m_pickArmed && !m_probeOutOfRange
             && (m_probeX >= (std::int32_t)SurfaceWidth() || m_probeY >= (std::int32_t)SurfaceHeight()))
@@ -1616,6 +1708,16 @@ namespace Arcane
         if (!m_pick || m_probeOutOfRange)
             return std::nullopt;
         return m_pick->LastProbeId();
+    }
+
+    std::optional<NriGraphContext::PickReadback> NriGraphContext::ProbeResult() const noexcept
+    {
+        // ProbeId()'s refusals, verbatim -- one predicate, so the two accessors
+        // cannot disagree about whether a value exists.
+        const std::optional<std::uint32_t> id = ProbeId();
+        if (!id)
+            return std::nullopt;
+        return PickReadback{ *id, m_pick->LastProbeTicket() };
     }
 
     bool NriGraphContext::ReadCapture(std::uint32_t& width, std::uint32_t& height,

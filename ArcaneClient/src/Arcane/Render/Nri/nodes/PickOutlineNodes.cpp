@@ -428,7 +428,7 @@ namespace Arcane
     void PickNode::RecordReadback(RenderGraphNodeContext& context, RgTexture ids, RgBuffer readback,
                                   std::int32_t probeX, std::int32_t probeY,
                                   std::uint32_t width, std::uint32_t height,
-                                  std::uint32_t frameSlot)
+                                  std::uint32_t frameSlot, std::uint64_t ticket)
     {
         if (frameSlot >= kSwapchainFramesInFlight)
         {
@@ -451,6 +451,9 @@ namespace Arcane
                         static_cast<const std::uint8_t*>(m_readbackCpu) + frameSlot * m_readbackStride,
                         sizeof(id));
             m_probeId  = id;
+            // Published TOGETHER with the id, from the same slot, so the pair a
+            // host reads is always the pair one copy produced.
+            m_probeTicket = m_ticket[frameSlot];
             m_hasProbe = true;
             m_pending[frameSlot] = false;
         }
@@ -494,7 +497,10 @@ namespace Arcane
         region.depth  = 1;
 
         core.CmdReadbackTextureToBuffer(context.cmd, *dest, layout, *source, region);
-        m_pending[frameSlot] = true;
+        m_pending[frameSlot]  = true;
+        // Written with the pending flag and never without it, so a drain can
+        // only ever read a ticket the matching copy set.
+        m_ticket[frameSlot]   = ticket;
     }
 
     // =====================================================================
@@ -1110,8 +1116,14 @@ namespace Arcane
                     return;   // headless declaration-shape drive
                 if (PickNode* pick = context->Pick())
                     pick->RecordReadback(nodeContext, *ids, *readback,
-                                          context->ProbeX(), context->ProbeY(),
-                                          width, height, context->FrameSlot());
+                                          // THIS FRAME's probe pixel, which
+                                          // defaults to the --pick-probe one
+                                          // when the driver named none -- so
+                                          // the Phase-2 probe path reads
+                                          // exactly as it did.
+                                          context->PickPixelX(), context->PickPixelY(),
+                                          width, height, context->FrameSlot(),
+                                          context->CurrentPickTicket());
             });
 
         return RgPickHandles{ *ids, *readback };
@@ -1148,7 +1160,15 @@ namespace Arcane
                     return;   // headless declaration-shape drive
                 if (OutlineNode* node = context->Outline())
                     node->RecordSeed(nodeContext, ids, *seed,
-                                      context->ProbeX(), context->ProbeY(), PickNode::kSuperSample,
+                                      // THE HOVER CURSOR, which is a DIFFERENT
+                                      // per-frame value from the probe pixel
+                                      // above wherever a host has both (the
+                                      // editor hovers continuously and probes
+                                      // only on a click). Both fall back to the
+                                      // --pick-probe pixel, which is what makes
+                                      // that run still show cyan under its own
+                                      // probe.
+                                      context->HoverX(), context->HoverY(), PickNode::kSuperSample,
                                       width, height, context->FrameSlot());
             });
 

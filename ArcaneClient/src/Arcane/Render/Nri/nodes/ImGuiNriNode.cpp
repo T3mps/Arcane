@@ -60,26 +60,39 @@ namespace Arcane
         m_renderer.RenderDrawData(drawData, context, target);
     }
 
-    void AddImGuiNode(RenderGraph& graph, NriGraphContext* context, RgTexture target)
+    void AddImGuiNode(RenderGraph& graph, NriGraphContext* context, RgTexture target,
+                      ImGuiNodeSlot slot)
     {
+        // WHICH backend, and WHICH of the frame's two draw datas -- see
+        // ImGuiNodeSlot. Captured as a bool so both lambdas carry one byte
+        // rather than re-deciding, and so the null-context (headless) drive
+        // differs in the node NAME alone.
+        const bool gameUi = slot == ImGuiNodeSlot::GameUi;
+        // Distinct names: a node name is what a compile error, a barrier dump
+        // and the [nri] frame-shape cases all identify a node by, and two nodes
+        // called "imgui" in one frame would be indistinguishable in all three.
+        const char* const nodeName = gameUi ? "gameui" : "imgui";
+
         // The texture protocol runs HERE, at declaration time, exactly like
         // AddBatch2DNode's Drain and AddPickNodes' PrepareDrawables: it is the
         // last point before the frame's command buffer opens, and a texture
         // upload on this path goes through a helper that submits and waits.
         if (context)
         {
-            if (ImGuiNriNode* node = context->ImGuiHud())
+            if (ImGuiNriNode* node = gameUi ? context->ImGuiGame() : context->ImGuiHud())
             {
                 // THE CONTEXT'S LANE (Task 8-pre), not the device's: an atlas
                 // rebuild destroys a texture keyed to THIS graph's fence, and
                 // a second context on the same device has a fence timeline
                 // whose values mean nothing to it.
-                node->PrepareFrame(context->CurrentImGuiDrawData(), context->Graves(),
+                node->PrepareFrame(gameUi ? context->CurrentGameUiDrawData()
+                                          : context->CurrentImGuiDrawData(),
+                                    context->Graves(),
                                     context->Graph().DebugSubmitCount());
             }
         }
 
-        graph.AddNode("imgui", RenderGraph::NodeKind::Raster,
+        graph.AddNode(nodeName, RenderGraph::NodeKind::Raster,
             [&graph, target](RenderGraphBuilder& builder)
             {
                 // The SAME ColorWrite the tonemap (and the outline composite)
@@ -89,12 +102,15 @@ namespace Arcane
                 builder.Write(target, RgUsage::ColorWrite);
                 graph.SetColorAttachments(std::span<const RgTexture>(&target, 1));
             },
-            [context, target](RenderGraphNodeContext& nodeContext)
+            [context, target, gameUi](RenderGraphNodeContext& nodeContext)
             {
                 if (!context)
                     return;   // headless declaration-shape drive
-                if (ImGuiNriNode* node = context->ImGuiHud())
-                    node->Record(nodeContext, context->CurrentImGuiDrawData(), target);
+                if (ImGuiNriNode* node = gameUi ? context->ImGuiGame() : context->ImGuiHud())
+                    node->Record(nodeContext,
+                                 gameUi ? context->CurrentGameUiDrawData()
+                                        : context->CurrentImGuiDrawData(),
+                                 target);
             });
     }
 }

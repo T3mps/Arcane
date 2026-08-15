@@ -330,8 +330,39 @@ namespace Arcane
         // decides which of the RenderFrame/Resize pairs is legal to call.
         enum class Mode : std::uint8_t { HostWindow, Offscreen };
 
-        // What one RenderFrame() call renders. Grows as Tasks 8-12 add nodes;
-        // today only `capture` changes the graph's shape.
+        // WHICH OPTIONAL NODES THIS VEHICLE BUILDS (NRI Phase 3, Task 9).
+        //
+        // The three core nodes (batch, post, tonemap) and the host HUD are
+        // built on every run; these two are not, and the gate is not laziness.
+        // Each costs real GPU objects that a context which will never DECLARE
+        // them should not hold: the pick pair costs a HOST_READBACK buffer, a
+        // descriptor pool, a pipeline layout and a constant arena; a second
+        // ImGui backend costs a sampler, a pool and its own font atlas.
+        //
+        // IT DOES NOT DECIDE THE FRAME'S SHAPE -- FrameDesc does. This decides
+        // only whether the frame CAN ask, which is what keeps "the flag off
+        // leaves the previous task's frame byte for byte" true: a context that
+        // builds the nodes but is never asked for them declares the identical
+        // graph.
+        struct NodeSet
+        {
+            // PickNode + OutlineNode. Also implied by --pick-probe, which arms
+            // a fixed probe pixel on top of it; a host that sets this gets the
+            // nodes with NO probe pixel of its own until it names one per frame
+            // (FrameDesc::pickPixel).
+            bool pickOutline = false;
+            // The SECOND ImGuiNriNode -- the GAME/plugin HUD, drawn from
+            // FrameDesc::gameUi between the tonemap and the pick/outline chain.
+            // Separate from the host HUD's node because the two draw datas come
+            // from two different ImGui CONTEXTS and an ImGuiNri's texture cache
+            // serves one atlas; see ImGuiNodeSlot.
+            bool gameUi = false;
+        };
+
+        // What one RenderFrame() call renders. FOUR fields change the graph's
+        // SHAPE -- `capture`, `pickOutline`, `imgui` and `gameUi` -- and every
+        // other one is content the already-declared nodes read. Anything a
+        // vehicle was not built with (NodeSet) is ignored rather than declared.
         struct FrameDesc
         {
             // The --golden-stage vocabulary, reused verbatim rather than
@@ -392,9 +423,15 @@ namespace Arcane
             std::span<const PickDrawable> pickables;
 
             // The hit-proxy ids the outline traces as ONE silhouette (their
-            // union). Task 11's driver scripts this to the scene's first
-            // pickable entity; Phase 3 replaces THIS ONE LINE at the host with
-            // the editor's real selection and nothing here changes.
+            // union). Task 11's driver scripted this to the scene's first
+            // pickable entity; PHASE 3 REPLACED THIS ONE LINE AT THE HOST with
+            // the editor's real selection (EditorApp::RenderSceneToViewport
+            // maps m_selection through PickPassId over the same drawables it
+            // hands `pickables`) and nothing here changed -- which was the
+            // claim. An EMPTY span is the correct arming for a frame that must
+            // show no outline (Play mode, where the editor's phase 12 does not
+            // run at all): the seed then finds no selected silhouette and the
+            // composite discards every pixel.
             std::span<const std::uint32_t> selectedIds;
 
             // Add the pick node, the readback and the JFA outline chain to
@@ -402,6 +439,47 @@ namespace Arcane
             // keeps the frame's shape -- and therefore the batch/post/full
             // stage goldens -- byte-for-byte Task 10's.
             bool pickOutline = false;
+
+            // ---- the pick chain's PER-FRAME coordinates (Task 9) ---------
+            // Unset means "the --pick-probe pixel the config armed"
+            // (ProbeX/ProbeY), which is what keeps the Phase-2 probe path
+            // reading exactly as it did: a host that names neither gets the
+            // old behaviour, including the deliberate double duty where the
+            // probe pixel is ALSO the hover cursor.
+            //
+            // A host with a real cursor needs them apart. The editor hovers
+            // continuously (cyan follows the mouse every frame) but probes only
+            // when a click has to be resolved, and pointing the readback at the
+            // cursor every frame would answer a question nobody asked.
+            //
+            // Canvas pixels, y down -- the same space PickView projects into
+            // and the same one PickBuffer::Pick takes. (-1, -1) is the
+            // "no hover" convention the outline seed already understands.
+            std::optional<glm::ivec2> pickPixel;    // the readback's texel
+            std::optional<glm::ivec2> hoverPixel;   // the outline seed's cursor
+
+            // Rides with THIS frame's readback copy and comes back beside the
+            // id kSwapchainFramesInFlight frames later (PickNode::
+            // LastProbeTicket). The vehicle ascribes no meaning to any value:
+            // it is the HOST's label for "which request does this answer",
+            // which a host that probes a different pixel every frame cannot do
+            // without one. 0 is a perfectly ordinary label and the default.
+            std::uint64_t pickTicket = 0;
+
+            // ---- the GAME's own HUD (Task 9) ----------------------------
+            // A SECOND ImDrawData, from a SECOND ImGui context, drawn between
+            // the tonemap and the pick/outline chain -- the editor's phase 11
+            // (CompositeGameUi) then phase 12 (RenderSelectionOutline) order,
+            // expressed against this recorder. Same borrowing rules as `imgui`
+            // below (record-time consumption, valid until that context's next
+            // NewFrame). Null means "no game HUD this frame", which is what
+            // Edit mode passes.
+            //
+            // NOT the same field as `imgui`, and not stage-gated: `imgui` is
+            // HOST CHROME, which a stage golden must mask; this is CONTENT
+            // inside the rendered image. Ignored unless the vehicle was created
+            // with NodeSet::gameUi.
+            ImDrawData* gameUi = nullptr;
 
             // ---- the HUD (Task 12) --------------------------------------
             // THIS FRAME'S ImGui DRAW DATA, already built by the frame driver
@@ -511,10 +589,13 @@ namespace Arcane
         // would tear down the chain the host-window context owns. The device
         // this borrows is already covered by whoever created it; see
         // ~NriGraphContext.
+        // `nodes` names the OPTIONAL nodes this context may declare -- see
+        // NodeSet. Defaulted to none, which is exactly Task 7/8's vehicle.
         static std::unique_ptr<NriGraphContext> CreateOffscreen(const HostConfig& config,
                                                                 NriDevice& shared,
                                                                 std::uint32_t width,
-                                                                std::uint32_t height);
+                                                                std::uint32_t height,
+                                                                const NodeSet& nodes = {});
 
         ~NriGraphContext();
 
@@ -783,11 +864,11 @@ namespace Arcane
         [[nodiscard]] TonemapNode*   Tonemap()   noexcept { return m_tonemap.get(); }
         [[nodiscard]] PostChainNode* PostChain() noexcept { return m_post.get(); }
 
-        // The pick + outline pair (Task 11). NULL on every run that did not
-        // pass --pick-probe: they are built only when the config arms the
-        // probe, so an ordinary --nri-graph run creates no readback buffer, no
-        // descriptor pool and no extra pipeline layout -- and the frame that
-        // never declares them cannot be affected by their absence.
+        // The pick + outline pair (Task 11). NULL on every run that neither
+        // passed --pick-probe nor asked for them through NodeSet::pickOutline:
+        // an ordinary --nri-graph run creates no readback buffer, no descriptor
+        // pool and no extra pipeline layout -- and the frame that never
+        // declares them cannot be affected by their absence.
         [[nodiscard]] PickNode*    Pick()    noexcept { return m_pick.get(); }
         [[nodiscard]] OutlineNode* Outline() noexcept { return m_outline.get(); }
 
@@ -797,6 +878,18 @@ namespace Arcane
         // driver handed this frame draw data. Named ImGuiHud() rather than
         // ImGui() because `ImGui` is a namespace this header's consumers use.
         [[nodiscard]] ImGuiNriNode* ImGuiHud() noexcept { return m_imguiHud.get(); }
+
+        // The GAME HUD's node (Task 9) -- a SECOND backend over a SECOND ImGui
+        // context, built only when NodeSet::gameUi asked for it and null
+        // otherwise. Whoever creates a context with it owes exactly one call:
+        // ImGuiNriNode::AdoptImGuiContext, with the context whose draw data it
+        // will be handed (see ImGuiNri::AdoptContext for why this class cannot
+        // make that call itself -- it never sees an ImGui context).
+        [[nodiscard]] ImGuiNriNode* ImGuiGame() noexcept { return m_imguiGame.get(); }
+
+        // FrameDesc::gameUi for the frame currently being declared AND
+        // recorded, with exactly CurrentImGuiDrawData()'s lifetime rules.
+        [[nodiscard]] ImDrawData* CurrentGameUiDrawData() const noexcept { return m_currentGameUi; }
 
         // FrameDesc::imgui for the frame currently being declared AND
         // recorded. Unlike CurrentPickables()/CurrentSelectedIds(), which are
@@ -816,12 +909,29 @@ namespace Arcane
         [[nodiscard]] std::span<const std::uint32_t> CurrentSelectedIds() const noexcept
         { return m_currentSelectedIds; }
 
-        // The --pick-probe pixel, in canvas px (y down). Doubles as the outline
-        // shader's HOVER cursor, deliberately: a desk eyeball then shows amber
-        // on the scripted selection and cyan on whatever the probe is over, so
-        // one run proves both halves of the composite.
+        // The --pick-probe pixel, in canvas px (y down) -- the CONFIG's, fixed
+        // at Create. On a probe run it doubles as the outline shader's HOVER
+        // cursor, deliberately: a desk eyeball then shows amber on the scripted
+        // selection and cyan on whatever the probe is over, so one run proves
+        // both halves of the composite.
+        //
+        // The DECLARATORS read the four accessors below instead, which are this
+        // pair unless the frame named its own (FrameDesc::pickPixel /
+        // ::hoverPixel). Kept separate rather than overwritten so the
+        // out-of-range check and the boot log still describe the FLAG.
         [[nodiscard]] std::int32_t ProbeX() const noexcept { return m_probeX; }
         [[nodiscard]] std::int32_t ProbeY() const noexcept { return m_probeY; }
+
+        // THIS FRAME's readback texel and outline hover cursor -- see
+        // FrameDesc::pickPixel/::hoverPixel. Valid for the whole of one
+        // RenderFrame/RenderFrameOffscreen call; between calls they hold
+        // whatever the last frame published.
+        [[nodiscard]] std::int32_t PickPixelX() const noexcept { return m_currentPick.x; }
+        [[nodiscard]] std::int32_t PickPixelY() const noexcept { return m_currentPick.y; }
+        [[nodiscard]] std::int32_t HoverX()     const noexcept { return m_currentHover.x; }
+        [[nodiscard]] std::int32_t HoverY()     const noexcept { return m_currentHover.y; }
+        // FrameDesc::pickTicket for this frame -- opaque, see that field.
+        [[nodiscard]] std::uint64_t CurrentPickTicket() const noexcept { return m_currentPickTicket; }
 
         // The entity id read back at the probe pixel, or nullopt when no
         // readback has landed yet (the first kSwapchainFramesInFlight frames of
@@ -829,6 +939,22 @@ namespace Arcane
         // legitimate value and means BACKGROUND -- the caller decides that is a
         // miss, not this.
         [[nodiscard]] std::optional<std::uint32_t> ProbeId() const noexcept;
+
+        // ProbeId() with the LABEL the copy carried (FrameDesc::pickTicket), so
+        // a host that probes a different pixel every frame can tell which of
+        // its requests the value answers. Same nullopt cases as ProbeId().
+        //
+        // IT DOES NOT SELF-CLEAR: the pair stays readable until the next drain
+        // replaces it, so a host reading every frame sees the same answer over
+        // and over. Acting on it exactly once is the HOST's job -- this class
+        // knows when a value ARRIVED, only the host knows when it was CONSUMED
+        // (see PickNode::LastProbeTicket).
+        struct PickReadback
+        {
+            std::uint32_t id     = 0;   // 0 == background
+            std::uint64_t ticket = 0;
+        };
+        [[nodiscard]] std::optional<PickReadback> ProbeResult() const noexcept;
 
         // The batcher the frame CURRENTLY being declared should drain, i.e.
         // FrameDesc::batch. Valid only inside a RenderFrame() call; null
@@ -923,18 +1049,25 @@ namespace Arcane
 
         bool Init(const HostConfig& config, Window& window);
         bool InitOffscreen(const HostConfig& config, NriDevice& shared,
-                           std::uint32_t width, std::uint32_t height);
+                           std::uint32_t width, std::uint32_t height, const NodeSet& nodes);
         // The half both Init flavors share, in the order the teardown contract
         // below reverses: ring, pipeline cache, texture cache, graph, shader
         // dir, nodes. Everything above it (device, swapchain / output texture)
         // is the flavor's own.
-        bool InitCommon(const HostConfig& config);
+        bool InitCommon(const HostConfig& config, const NodeSet& nodes);
 
         // Creates the persistent offscreen output at `width` x `height` and
         // publishes it as m_offscreen. False (already logged + latched) on
         // failure. Does NOT destroy a previous one -- ResizeOffscreen sequences
         // that, because the destroy has to follow a drain.
         bool CreateOffscreenTarget(std::uint32_t width, std::uint32_t height);
+
+        // This frame's probe/hover pixels, its pick ticket and its game-UI draw
+        // data, published where the declarators and exec fns read them. Called
+        // from BOTH render paths, from one function, because the two publishing
+        // different defaults is exactly the drift the per-frame probe must not
+        // introduce.
+        void PublishFrameCoordinates(const FrameDesc& frame);
 
         // Declares this frame's nodes into m_graph (already Reset()). The one
         // place Tasks 8-12 add to. Mode-agnostic: the only thing the mode
@@ -1008,10 +1141,10 @@ namespace Arcane
         std::unique_ptr<Batch2DNode>       m_batch2D;
         std::unique_ptr<PostChainNode>     m_post;
         std::unique_ptr<TonemapNode>       m_tonemap;
-        // Built only under --pick-probe (see Pick()/Outline()). The outline
-        // node holds views over the graph's transient pool, so it is released
-        // in ~NriGraphContext beside the other two and BEFORE the graph
-        // releases that pool.
+        // Built only under --pick-probe or NodeSet::pickOutline (see
+        // Pick()/Outline()). The outline node holds views over the graph's
+        // transient pool, so it is released in ~NriGraphContext beside the
+        // other two and BEFORE the graph releases that pool.
         std::unique_ptr<PickNode>          m_pick;
         std::unique_ptr<OutlineNode>       m_outline;
         // The HUD node. It caches no view over the graph's transient pool (see
@@ -1019,6 +1152,9 @@ namespace Arcane
         // others anyway -- one teardown order for every node is cheaper to
         // keep correct than a per-node exception.
         std::unique_ptr<ImGuiNriNode>      m_imguiHud;
+        // The GAME HUD's node, built only under NodeSet::gameUi. Released
+        // beside m_imguiHud for the same reason.
+        std::unique_ptr<ImGuiNriNode>      m_imguiGame;
 
         // Raw offline shader artifacts, keyed by artifact stem. unordered_map
         // and not vector: the node authors hold SPANS into these vectors for
@@ -1066,12 +1202,20 @@ namespace Arcane
         // at the top of the next one, so a later frame can never reach a
         // previous frame's draw data. See CurrentImGuiDrawData().
         ImDrawData* m_currentImGui = nullptr;
+        // FrameDesc::gameUi, with m_currentImGui's lifetime exactly.
+        ImDrawData* m_currentGameUi = nullptr;
 
         // --pick-probe: armed at Create from the config, so an ordinary run
         // never builds the nodes at all.
         bool         m_pickArmed      = false;
         std::int32_t m_probeX         = 0;
         std::int32_t m_probeY         = 0;
+        // THIS FRAME's readback texel / hover cursor / request label, defaulted
+        // from the two above at the top of every RenderFrame so a driver that
+        // names neither reads exactly the --pick-probe behaviour.
+        glm::ivec2    m_currentPick{0, 0};
+        glm::ivec2    m_currentHover{0, 0};
+        std::uint64_t m_currentPickTicket = 0;
         // Latched when the probe pixel falls outside the current surface: the
         // node would still copy a CLAMPED texel (the frame's shape must not
         // depend on a coordinate), but reporting that id as the answer would be
@@ -1207,6 +1351,14 @@ namespace Arcane
         // NriGraphContext, which is what lets the headless [nri] cases drive
         // the real shape with a null context.
         bool imgui = false;
+
+        // Declare the GAME HUD's node between the tonemap and the pick/outline
+        // chain (Task 9) -- the editor's phase 11 then phase 12 order against
+        // this recorder. Deliberately NOT stage-gated where `imgui` is: that
+        // one is host chrome, which a stage golden has to mask; this one is
+        // content inside the image, and the editor's viewport frame is not a
+        // golden stage at all.
+        bool gameUi = false;
     };
 
     struct RgFrameHandles

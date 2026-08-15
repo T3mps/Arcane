@@ -166,6 +166,26 @@ namespace Arcane
         bool Init(NriDevice& device, NriPipelineCache& pipelines,
                   std::span<const std::uint8_t> vs, std::span<const std::uint8_t> ps);
 
+        // Install this backend's identity + capability flags on a NAMED ImGui
+        // context (an `ImGuiContext*`, spelled void* like every other
+        // context-passing seam in this tree -- Runtime::SetImGui,
+        // OffscreenImGuiLayer::Context). Pins it for the call and restores
+        // whatever was current. Idempotent and null-safe.
+        //
+        // WHY IT EXISTS (NRI Phase 3, Task 9). Init above sets those flags on
+        // whatever context is CURRENT, which is exactly right for a host whose
+        // ONE ImGui context is the one it just created and left pinned -- both
+        // hosts' primary context. It is WRONG for a SECOND context: the
+        // editor's game-UI context is created during boot, while the vehicle
+        // that renders it is built after boot with the EDITOR context current,
+        // so Init would flag the editor's and leave the game's without
+        // ImGuiBackendFlags_RendererHasTextures. A draw list built without that
+        // flag carries no `Textures` array for NewFrameTexUpdates to walk, so
+        // the font atlas never reaches the GPU and every draw samples nothing --
+        // a silently blank HUD rather than an error. Call this once, with the
+        // context this backend will actually be handed draw data from.
+        void AdoptContext(void* imguiContext);
+
         // The 1.92 texture protocol -- creates, updates and destroys the
         // ImTextureData-owned textures `drawData` names. MUST be called at
         // DECLARATION time, never from an exec fn: a create/update goes
@@ -301,6 +321,11 @@ namespace Arcane
         [[nodiscard]] std::size_t RetiredSetCount() const noexcept { return m_retired.size(); }
 
     private:
+        // The three lines Init and AdoptContext share, on an ALREADY-PINNED
+        // context. Never call it without pinning first. Also RECORDS that
+        // context as m_imguiContext.
+        void InstallBackendIdentity();
+
         // One texture this backend can draw from: the resource, its
         // SHADER_RESOURCE view, and the descriptor set that binds the pair
         // alongside the shared sampler. `owner` is the ImTextureData that
@@ -389,6 +414,30 @@ namespace Arcane
         // RenderDrawData calls, i.e. recorded frames. The clock the
         // retirement gate above is measured in.
         std::uint64_t           m_recordCount = 0;
+
+        // WHICH ImGui context this backend serves -- an `ImGuiContext*` held as
+        // void* so this header stays imgui-free (only Release compares it, and
+        // only after a cast in the .cpp). Recorded by InstallBackendIdentity,
+        // i.e. at Init or at AdoptContext, whichever named the context.
+        //
+        // WHY IT IS WORTH A MEMBER (NRI Phase 3, Task 9). Release walks
+        // ImGui::GetPlatformIO().Textures to catch ImTextureData this backend
+        // never serviced, and that walk reads WHATEVER CONTEXT IS CURRENT. With
+        // one backend per process that was right by luck. With TWO -- the
+        // editor's chrome backend over the editor context and its game backend
+        // over the plugin context, released back to back from teardowns that
+        // pin neither -- one of the two would necessarily walk the OTHER's
+        // atlas and mark its textures Destroyed. At process exit that is
+        // invisible; across Task 12's project switch, where the ImGui contexts
+        // OUTLIVE the graph contexts, it is a context whose atlas ImGui now
+        // believes is live while its GPU texture is gone.
+        //
+        // THE CALLER'S OBLIGATION, because a pin is a dereference: the ImGui
+        // context a backend adopted must OUTLIVE that backend's Release. In the
+        // editor that is declaration order (m_gameImgui is declared before
+        // m_viewportTargets, so it destructs after it); Task 12 owes the same
+        // ordering explicitly in its switch teardown.
+        void* m_imguiContext = nullptr;
 
         bool m_warnedPoolFull = false;
         bool m_warnedFormat   = false;

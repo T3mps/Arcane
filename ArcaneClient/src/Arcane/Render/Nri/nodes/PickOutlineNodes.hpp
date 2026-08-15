@@ -199,9 +199,20 @@ namespace Arcane
         // READBACK at the top of this file for why that ordering is the whole
         // synchronisation argument. A Copy node, so the executor opens no
         // rendering around it.
+        //
+        // `ticket` RIDES WITH THE COPY and comes back beside the id when this
+        // slot is next drained (NRI Phase 3, Task 9). It exists because the
+        // latency makes an unlabelled value ambiguous: a host that probes a
+        // DIFFERENT pixel every frame -- the editor, whose probe is the cursor
+        // between clicks and the click pixel on a click -- cannot otherwise
+        // tell which request the value in hand answers, and applying the wrong
+        // one is a selection change the user did not ask for. Opaque here: this
+        // node stores it per slot and hands it back, and ascribes no meaning to
+        // any value including 0.
         void RecordReadback(RenderGraphNodeContext& context, RgTexture ids, RgBuffer readback,
                             std::int32_t probeX, std::int32_t probeY,
-                            std::uint32_t width, std::uint32_t height, std::uint32_t frameSlot);
+                            std::uint32_t width, std::uint32_t height, std::uint32_t frameSlot,
+                            std::uint64_t ticket = 0);
 
         // The staging buffer the graph IMPORTS, and its size. Null/0 before a
         // successful Create -- ImportBuffer stores the pointer without
@@ -216,6 +227,15 @@ namespace Arcane
         {
             return m_hasProbe ? std::optional<std::uint32_t>(m_probeId) : std::nullopt;
         }
+
+        // The ticket the COPY that produced LastProbeId() carried -- see
+        // RecordReadback. Meaningless while LastProbeId() is nullopt. It does
+        // NOT reset once read: the value stays until the next drain replaces
+        // it, so a host that reads it every frame will see the same
+        // (id, ticket) pair repeatedly and is responsible for acting on it
+        // once. That is the correct division -- this node knows when a value
+        // ARRIVED, only the host knows when it has been CONSUMED.
+        [[nodiscard]] std::uint64_t LastProbeTicket() const noexcept { return m_probeTicket; }
 
         // The id pass runs at 1x -- no supersampling on this path. PickBuffer
         // offers ss for the editor's viewport, where the outline's sub-pixel
@@ -291,15 +311,20 @@ namespace Arcane
         // drained. Cleared by the drain, set by the record -- both inside the
         // readback node's exec fn.
         bool m_pending[kSwapchainFramesInFlight]{};
+        // The ticket each pending copy carried, written beside m_pending and
+        // published to m_probeTicket by the drain. Per SLOT because that is the
+        // granularity the copies themselves have.
+        std::uint64_t m_ticket[kSwapchainFramesInFlight]{};
 
         // The prepared geometry for the frame being declared. Members rather
         // than per-frame vectors so a steady-state probe run allocates nothing.
         std::vector<PickIdVertex> m_vertices;
         std::vector<std::uint32_t> m_indices;
 
-        std::uint32_t m_probeId  = 0;
-        bool          m_hasProbe = false;
-        bool          m_warnedRing = false;
+        std::uint32_t m_probeId     = 0;
+        std::uint64_t m_probeTicket = 0;
+        bool          m_hasProbe    = false;
+        bool          m_warnedRing  = false;
     };
 
     // =====================================================================

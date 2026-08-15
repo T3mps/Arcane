@@ -474,22 +474,26 @@ namespace Arcane::Editor
         // leaves the current ImGui context null; harmless -- the editor's
         // ImGuiLayer re-pins its own context on every BeginFrame/WantCapture*.)
         //
-        // NVRHI ARM ONLY (NRI Phase 3, Task 8): OffscreenImGuiLayer builds an
-        // ImGui-NVRHI renderer over m_gpu->Device(), and there is no device on
-        // the graph flavor. Task 9 gives the game HUD its graph answer -- a
-        // second ImDrawData drawn by an ImGuiNriNode into the offscreen frame,
-        // which is the same "the HUD lives inside the Viewport panel" rule
-        // expressed against the other recorder. Until then the graph arm
-        // composites NO game UI at all (see CompositeGameUi's own gate), and
-        // this member stays null; every use of it is guarded.
-        if (!m_gpu->GraphFlavor())
+        // BOTH ARMS BUILD ONE (NRI Phase 3, Task 9), and only the RENDERER half
+        // differs -- which is the whole shape of that task's game-UI work.
+        // OffscreenImGuiLayer::Create builds an ImGui-NVRHI renderer over
+        // m_gpu->Device(); CreateForGraph builds the identical CONTEXT (own
+        // atlas, io.IniFilename = nullptr, the same pinning discipline in every
+        // entry point) with no renderer at all, because on that arm the
+        // renderer is a node inside the viewport's frame graph
+        // (ImGuiNriNode over FrameDesc::gameUi) and there is no NVRHI device to
+        // build one from.
+        //
+        // Task 8 left this NULL on the graph arm and the plugin took the
+        // editor's context as a fallback; see the SetImGui block below for what
+        // that cost and why restoring this is not optional.
+        m_gameImgui = m_gpu->GraphFlavor()
+                        ? Arcane::OffscreenImGuiLayer::CreateForGraph()
+                        : Arcane::OffscreenImGuiLayer::Create(m_gpu->Device(), m_gpu->Shaders());
+        if (!m_gameImgui)
         {
-            m_gameImgui = Arcane::OffscreenImGuiLayer::Create(m_gpu->Device(), m_gpu->Shaders());
-            if (!m_gameImgui)
-            {
-                ARC_ERROR("Arcane Editor: OffscreenImGuiLayer creation failed");
-                return false;
-            }
+            ARC_ERROR("Arcane Editor: OffscreenImGuiLayer creation failed");
+            return false;
         }
 
         // ABI v2: install the ImGui context + allocators on the Runtime BEFORE the
@@ -503,39 +507,33 @@ namespace Arcane::Editor
             // pointer differs from the editor redirect.
             ImGuiMemAllocFunc allocFn = nullptr; ImGuiMemFreeFunc freeFn = nullptr; void* ud = nullptr;
             ImGui::GetAllocatorFunctions(&allocFn, &freeFn, &ud);
-            // WITH NO GAME CONTEXT (graph arm, above) THE PLUGIN GETS THE
-            // HOST'S -- which is exactly what ArcaneRuntime hands its plugin on
-            // BOTH of its arms (RuntimeApp::StageRenderBridge passes
-            // ImGui::GetCurrentContext()), so this is the runtime's shape
-            // rather than a new one. Handing over a REAL context matters even
-            // though nothing calls DrawUIAll on this arm yet (phase 11 is gated
-            // off until Task 9): a plugin that touches ImGui outside DrawUI
-            // would otherwise adopt a null GImGui across the ABI. m_editorImguiContext
-            // rather than GetCurrentContext() because it is the value
-            // StageGpuCore captured and StageEditorShell asserted on -- one
-            // named source instead of whatever happens to be pinned.
+            // ===== THE GAME CONTEXT, UNCONDITIONALLY, ON BOTH ARMS =====
+            // (NRI Phase 3, Task 9. This line WAS
+            // `m_gameImgui ? Context() : m_editorImguiContext`, and closing
+            // that fallback is one third of a single change -- the other two
+            // thirds are FrameInput's fs.gameUiClaims and phase 11's DrawUIAll
+            // call site. Task 8's fix round 1 named them as ONE change for the
+            // reason below, and they landed as one.)
             //
-            // ===== WHAT THIS FALLBACK COSTS, AND WHAT HOLDS THE LINE =====
-            // (Fix round 1.) The isolation being given up here is NOT only
+            // WHAT THE FALLBACK COST. The isolation it gave up was NOT only
             // "the HUD draws over the chrome". OffscreenImGuiLayer sets
             // io.IniFilename = nullptr on the game context ("no imgui.ini for
             // the game context", OffscreenImGuiLayer.cpp) -- while the EDITOR
             // context's IniFilename is the PER-PROJECT LAYOUT FILE
-            // (RetargetLayoutIni, below). So on this arm a plugin window that
-            // gets submitted would have its position, size and dock node
-            // PERSISTED into the user's project layout, permanently, and
-            // per-id ini state silently overrides authored UI on every later
-            // boot -- the imgui.ini veto class, which is the worst kind of bug
-            // this file can produce because it survives a rebuild.
+            // (RetargetLayoutIni, below). A plugin window submitted through the
+            // fallback would have had its position, size and dock node
+            // PERSISTED into the user's project layout, permanently, and per-id
+            // ini state silently overrides authored UI on every later boot --
+            // the imgui.ini veto class, which is the worst kind of bug this
+            // file can produce because it survives a rebuild.
             //
-            // THE ONLY THING PREVENTING IT is that nothing submits plugin
-            // windows on this arm: CompositeGameUi returns early (phase 11's
-            // GraphMode() gate, EditorAppFrame.cpp), so DrawUIAll never runs.
-            // THAT GATE IS LOAD-BEARING, not a placeholder -- Task 9 may remove
-            // it only TOGETHER WITH giving the game UI its own context again
-            // (an ImGuiNriNode over a second ImDrawData), never before. The
-            // gate's own comment says the same thing from the other side.
-            m_runtime->SetImGui(m_gameImgui ? m_gameImgui->Context() : m_editorImguiContext,
+            // What HELD the line until Task 9 was phase 11's GraphMode() gate:
+            // nothing submitted plugin windows on that arm, so DrawUIAll never
+            // ran. Control flow is a weaker guarantee than structure, which is
+            // exactly why the rule was "restore the context IN THE SAME CHANGE
+            // that lets DrawUIAll run". It is structure again now: there is no
+            // arm on which the plugin sees m_editorImguiContext.
+            m_runtime->SetImGui(m_gameImgui->Context(),
                                 reinterpret_cast<void*>(allocFn),
                                 reinterpret_cast<void*>(freeFn),
                                 ud);
@@ -1445,13 +1443,43 @@ namespace Arcane::Editor
         // created at in StageRenderBridge, for the same reason: the panel's
         // real extent is not known until it has drawn once, and phase 8's
         // deferred resize adopts it on the next frame.
+        //
+        // BOTH OPTIONAL NODE SETS (NRI Phase 3, Task 9). This context is the
+        // one that stands in for the NVRHI arm's WHOLE viewport trio, so it
+        // needs the two nodes that trio's other two members are:
+        //   * pickOutline -- PickNode + OutlineNode, the graph twins of
+        //     PickBuffer and SelectionOutline. Asked for here rather than
+        //     inferred from --pick-probe because the editor's probe pixel is a
+        //     click that has not happened yet and its hover cursor moves every
+        //     frame; the flag arms a FIXED pixel and is a different question.
+        //   * gameUi -- the second ImGuiNriNode, which draws the plugin HUD's
+        //     ImDrawData between the tonemap and the outline composite. That is
+        //     phase 11 then phase 12's order against this recorder.
+        // The CHROME context asks for neither: it draws chrome (Task 10), and
+        // a node it never declares is a readback buffer and a descriptor pool
+        // nobody reads.
+        Arcane::NriGraphContext::NodeSet viewportNodes;
+        viewportNodes.pickOutline = true;
+        viewportNodes.gameUi      = true;
         m_viewportTargets.graph = Arcane::NriGraphContext::CreateOffscreen(
-            m_config, m_graphChrome->Device(), 1280, 720);
+            m_config, m_graphChrome->Device(), 1280, 720, viewportNodes);
         if (!m_viewportTargets.graph)
         {
             ARC_ERROR("--nri-graph: the editor's offscreen viewport context could not be created");
             return false;
         }
+
+        // THE ONE OBLIGATION A gameUi CONTEXT CARRIES, discharged here because
+        // this is the first moment both halves exist. ImGuiNri installs
+        // ImGuiBackendFlags_RendererHasTextures on whatever ImGui context is
+        // CURRENT when it is built -- which is the EDITOR's, since that is what
+        // StageGpuCore left pinned and nothing since has moved it. Without this
+        // call the GAME context would never get the flag, its draw lists would
+        // carry no `Textures` array for the node to upload from, and the HUD
+        // would render as nothing at all -- silently, with no error anywhere.
+        // See ImGuiNri::AdoptContext.
+        if (Arcane::ImGuiNriNode* gameNode = m_viewportTargets.graph->ImGuiGame())
+            gameNode->AdoptImGuiContext(m_gameImgui ? m_gameImgui->Context() : nullptr);
 
         // The two injected seams the graph path needs to draw REAL content,
         // both copied from RuntimeApp::MainLoop's create block and both on the

@@ -38,6 +38,7 @@
 #include "Scene/SceneSession.hpp"
 #include "Scene/SelectionContext.hpp"
 #include "Documents/ShaderEditorDocument.hpp"
+#include "Viewport/DeferredPick.hpp"
 #include "Viewport/ViewportInput.hpp"
 
 #include <Arcane/Assets/Assets.hpp>
@@ -50,6 +51,7 @@
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only Build -> Diagnostics -> Crash GPU
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // dev-only --nri-graph vehicle (chrome + viewport)
 #include <Arcane/Render/OffscreenCanvas.hpp>
+#include <Arcane/Render/PickEmit.hpp>   // PickDrawable -- the graph arm's per-frame pickables
 #include <Arcane/Render/PickBuffer.hpp>
 #include <Arcane/Render/SelectionOutline.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
@@ -235,6 +237,26 @@ namespace Arcane::Editor
         // GpuContext batcher it Begin()s itself. Contains no target, no
         // command list and no device -- that is what makes it shareable.
         void SubmitSceneToBatcher(Arcane::Batcher2D& b);
+        // Phase 11's CPU HALF, shared by both arms (NRI Phase 3, Task 9): the
+        // game context's per-frame input, and -- in Play, with a plugin that
+        // draws one -- its BeginFrame + DrawUIAll. Returns true when a game-UI
+        // frame was BEGUN and therefore owes exactly one Render /
+        // RenderToDrawData / EndFrameDiscard; false when nothing was begun.
+        //
+        // Extracted so the two arms run the SAME statements in the same order
+        // against the same context, differing only in who renders the result:
+        // the NVRHI arm blits through OffscreenImGuiLayer::Render (phase 11),
+        // the graph arm hands RenderToDrawData()'s output to a graph node
+        // (phase 10). Same discipline, and the same reason, as
+        // SubmitSceneToBatcher.
+        [[nodiscard]] bool BeginGameUiFrame();
+        // The graph arm's FrameDesc arming for the pick + outline chain and the
+        // game HUD -- i.e. everything phases 11, 12 and 17 contribute to a frame
+        // that is DECLARED in phase 10. Fills the members the FrameDesc's spans
+        // point at (m_pickDrawables / m_pickSelectedIds) and returns nothing by
+        // value, because a span into a temporary is the one mistake this shape
+        // exists to make impossible.
+        void ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp);
         void CompositeGameUi();
         void RenderSelectionOutline();
         void PumpEditorDocuments();
@@ -353,6 +375,20 @@ namespace Arcane::Editor
         // during Unload/Shutdown, so this must outlive it). Its destructor
         // restores the editor context, so ~GpuContext's ImGuiLayer teardown stays
         // valid. See CompositeGameUi.
+        //
+        // NON-NULL ON BOTH ARMS AGAIN AS OF NRI PHASE 3, TASK 9, and that is
+        // the point of the whole game-UI half of that task rather than a detail
+        // of it. Task 8 left this null on the graph arm (OffscreenImGuiLayer was
+        // an ImGui-NVRHI object) and the plugin was handed the EDITOR's context
+        // instead -- whose io.IniFilename is the PER-PROJECT LAYOUT FILE, where
+        // this one's is deliberately null. A plugin window submitted through
+        // that fallback would have been persisted into the user's layout,
+        // permanently, and per-id ini state silently overrides authored UI on
+        // every later boot. The graph arm now builds the SAME class through
+        // OffscreenImGuiLayer::CreateForGraph -- same context, same io, same
+        // pinning discipline, no NVRHI renderer -- and the graph's ImGuiNriNode
+        // draws its RenderToDrawData() output. The isolation is structural
+        // again on both arms; nothing is holding it by control flow.
         std::unique_ptr<Arcane::OffscreenImGuiLayer> m_gameImgui;
 
         Astra::TypeContext*               m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)
@@ -698,6 +734,41 @@ namespace Arcane::Editor
             double       frameDt      = 0.0;         // per-frame dt (seconds)
         };
         GameUiInputHandoff m_gameUi;
+
+        // ---- The graph viewport's pick + outline arming (Task 9) ------------
+        // THIS FRAME's pickable silhouettes and the hit-proxy ids the outline
+        // traces, held as MEMBERS because FrameDesc borrows both as spans and a
+        // span into a per-frame temporary is a dangling read the moment the
+        // declaration outlives the statement. Reused rather than rebuilt, so a
+        // steady-state Edit frame allocates nothing.
+        //
+        // Produced by CollectPickables, whose k-th entry IS hit-proxy id k+1 --
+        // the SAME emitter PickBuffer::RenderIdPass uses on the NVRHI arm, so
+        // the two recorders cannot assign ids differently. Empty (and unread) on
+        // the NVRHI arm, which gets its ids from the PickBuffer instead.
+        std::vector<Arcane::PickDrawable> m_pickDrawables;
+        std::vector<std::uint32_t>        m_pickSelectedIds;
+
+        // The graph arm's click-pick, which cannot answer in the frame it is
+        // asked -- see DeferredPick.hpp for the three hazards it closes. Idle on
+        // the NVRHI arm, which resolves a click synchronously inside phase 17.
+        Arcane::Editor::DeferredPick m_deferredPick;
+
+        // WHICH SCENE the entities in flight belong to. Bumped by every path
+        // that REPLACES the registry's contents wholesale -- ClearSceneReferences
+        // (New/Open Scene, which also stops Play) and ResetPerProjectState (a
+        // project switch) -- so a readback armed against the outgoing scene
+        // cannot be applied to the incoming one. Play START/STOP is covered
+        // separately, by DeferredPick recording the mode alongside this: those
+        // two swap the registry object without going through either site.
+        //
+        // A COUNTER rather than a pointer comparison: Runtime swaps the registry
+        // OBJECT on Play/Stop and on plugin hot-reload, and a fresh one may land
+        // on the address the previous one just vacated -- the same ABA the
+        // ImGuiNri texture cache has to defend against, for the same reason.
+        std::uint64_t m_sceneEpoch = 0;
+        // Bumped from the two sites above; named so both read as one decision.
+        void NoteSceneReplaced() noexcept { ++m_sceneEpoch; m_deferredPick.Reset(); }
 
         // Shader-editor services + open documents (Slice 5). The compiler is the
         // app-shared compile service: documents Submit through it, and the

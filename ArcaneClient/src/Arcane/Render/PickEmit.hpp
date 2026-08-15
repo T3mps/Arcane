@@ -22,6 +22,7 @@
 
 #include <glm/vec2.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -100,6 +101,43 @@ namespace Arcane
         if (id == 0 || id > drawables.size())
             return Astra::Entity{};
         return drawables[id - 1].entity;
+    }
+
+    // The ENTITY-ONLY twin of PickEntityForId, same contract, for a consumer
+    // that RETAINED the id<->entity table rather than the drawables it came
+    // from. That is not a convenience: the NRI graph's pick readback lands
+    // kSwapchainFramesInFlight frames after the id pass that produced it, so
+    // the editor's deferred click-pick has to hold the table from the frame
+    // that RASTERISED the click -- by which time the live drawables vector has
+    // been rebuilt two or more times. Copying entities rather than whole
+    // PickDrawables is what makes retaining it cheap.
+    //
+    // A DISTINCT NAME rather than an overload, deliberately: `PickPassId({}, e)`
+    // and `PickEntityForId({}, id)` are both live call shapes in this tree, and
+    // a braced empty argument against two container types is ambiguous rather
+    // than convenient.
+    inline Astra::Entity PickEntityForPassId(std::span<const Astra::Entity> ordered, uint32_t id)
+    {
+        if (id == 0 || id > ordered.size())
+            return Astra::Entity{};
+        return ordered[id - 1];
+    }
+
+    // PickPassId over the DRAWABLES rather than a separate entity vector -- the
+    // form a caller that just ran CollectPickables already has in hand, and
+    // therefore the form that cannot disagree with the id pass it just fed.
+    // Same k+1 rule and the same FIRST-match tie-break (an entity with several
+    // fixtures emits several drawables; the first is the one the outline
+    // traces, which is what PickBuffer::PassIdOf reports too -- this is that
+    // method's loop, against a span instead of a member).
+    inline uint32_t PickPassIdOf(std::span<const PickDrawable> drawables, Astra::Entity e)
+    {
+        if (e == Astra::Entity::Invalid())
+            return 0u;
+        for (std::size_t k = 0; k < drawables.size(); ++k)
+            if (drawables[k].entity == e)
+                return static_cast<uint32_t>(k + 1);
+        return 0u;
     }
 
     // The id-buffer texel to sample for a 1x viewport click at `pixel1x` when the

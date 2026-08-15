@@ -99,6 +99,46 @@ namespace Arcane
         }
     }
 
+    void ImGuiNri::InstallBackendIdentity()
+    {
+        // Remembered, not merely installed -- see m_imguiContext. This is the
+        // one moment this class can know which context it serves.
+        m_imguiContext = ImGui::GetCurrentContext();
+
+        // Exactly ImGuiNvrhiRenderer::Init's three lines, on the context the
+        // caller has already pinned. HasTextures is the 1.92 protocol
+        // NewFrameTexUpdates implements; HasVtxOffset is what lets one
+        // concatenated vertex buffer serve every draw list
+        // (DrawIndexedDesc::baseVertex). Both flags are idempotent and the name
+        // is cosmetic, so re-running this on a context that already has them
+        // costs nothing -- which is what makes AdoptContext safe to call
+        // unconditionally.
+        ImGuiIO& io = ImGui::GetIO();
+        io.BackendRendererName = "imgui_impl_nri";
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+    }
+
+    void ImGuiNri::AdoptContext(void* imguiContext)
+    {
+        // THE PIN IS THE WHOLE POINT (see the declaration). Init installs on
+        // whatever is CURRENT, which is right only when the caller's context is
+        // the one it just created and left pinned; a SECOND context created
+        // earlier -- the editor's game-UI context, whose graph vehicle is built
+        // later, while the EDITOR context is current -- would never receive the
+        // flags at all, and a draw list produced without
+        // ImGuiBackendFlags_RendererHasTextures carries no Textures array for
+        // NewFrameTexUpdates to upload from: the atlas would never reach the
+        // GPU and every draw would sample nothing.
+        if (!imguiContext)
+            return;
+        ImGuiContext* const target = static_cast<ImGuiContext*>(imguiContext);
+        ImGuiContext* const prev   = ImGui::GetCurrentContext();
+        ImGui::SetCurrentContext(target);
+        InstallBackendIdentity();
+        ImGui::SetCurrentContext(prev);
+    }
+
     bool ImGuiNri::Init(NriDevice& device, NriPipelineCache& pipelines,
                         std::span<const std::uint8_t> vs, std::span<const std::uint8_t> ps)
     {
@@ -130,14 +170,12 @@ namespace Arcane
         if (ImGui::GetCurrentContext() == nullptr)
         {
             ARC_WARN("[nri-graph] ImGuiNri::Init ran with no current ImGui context -- the backend "
-                     "flags were not installed. The HUD will not draw until a context exists.");
+                     "flags were not installed. The HUD will not draw until a context exists. "
+                     "AdoptContext() is the explicit fix.");
         }
         else
         {
-            ImGuiIO& io = ImGui::GetIO();
-            io.BackendRendererName = "imgui_impl_nri";
-            io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
-            io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+            InstallBackendIdentity();
         }
 
         // The vertex input, in MEMBERS (fill contract, rule 2). Semantic names
@@ -935,8 +973,30 @@ namespace Arcane
         // re-Init is clean. The RefCount == 1 guard is the dx11 reference's
         // "only the platform list holds a ref", i.e. only destroy what this
         // backend owns.
-        if (ImGui::GetCurrentContext() != nullptr)
+        //
+        // PINNED TO THE CONTEXT THIS BACKEND ADOPTED (NRI Phase 3, Task 9), not
+        // to whatever happens to be current. The walk marks ImTextureData
+        // Destroyed, so run against a FOREIGN context it tells another
+        // backend's ImGui that its live atlas is gone. That was unreachable
+        // while one process held one backend; it is reachable the moment a host
+        // holds two (the editor's chrome backend and its game backend, released
+        // back to back from a teardown that pins neither). See m_imguiContext
+        // for the caller obligation this pin creates.
+        if (ImGuiContext* const owned = static_cast<ImGuiContext*>(m_imguiContext))
         {
+            ImGuiContext* const prev = ImGui::GetCurrentContext();
+            ImGui::SetCurrentContext(owned);
+            for (ImTextureData* tex : ImGui::GetPlatformIO().Textures)
+                if (tex->RefCount == 1)
+                    DestroyTexture(tex, graveyard, fence);
+            ImGui::SetCurrentContext(prev);
+        }
+        else if (ImGui::GetCurrentContext() != nullptr)
+        {
+            // Init ran with no context at all (already WARNed there). Fall back
+            // to the pre-Task-9 behaviour rather than skipping the walk: a
+            // process with no backend identity installed also has no second
+            // context to contaminate.
             for (ImTextureData* tex : ImGui::GetPlatformIO().Textures)
                 if (tex->RefCount == 1)
                     DestroyTexture(tex, graveyard, fence);
