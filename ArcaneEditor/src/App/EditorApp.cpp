@@ -646,10 +646,55 @@ namespace Arcane::Editor
     {
         // Shader-editor services (Slice 5): the shared compile service, the
         // template source root, and the .arcmat -> ShaderEditorDocument routing.
-        // A missing dxcompiler.dll degrades to a warn (documents show status).
+        // A missing dxcompiler.dll degrades to a warn (documents show status)
+        // OUTSIDE golden mode -- see the golden branch below for why that
+        // degradation is wrong there.
+        //
+        // NRI Phase 3, Task 13 fix round 1 (CRITICAL, review finding 1): the
+        // debounce is zeroed under golden mode, mirroring
+        // RuntimeApp::StageSpriteTables verbatim (RuntimeApp.cpp:305-313) --
+        // this line was the ONE golden-mode statement that call site has and
+        // this one did not have, and its absence made every editor golden
+        // run hang for the full warm-up timeout and then refuse. The chain:
+        // DrainSceneCompiles (Host/GoldenHarness.cpp) holds `frame.now` at a
+        // constant 0.0 every iteration by design (a golden run's pinned
+        // clock -- see that function's own comment); against the
+        // INTERACTIVE 0.2s debounce this Initialize call used to hardcode,
+        // ShaderCompiler::Submit stamps `readyAt = 0.2`, so `Poll(0.0)` can
+        // never cross it, `IsIdle()` never returns true, and the drain spins
+        // for the full kGoldenWarmupTimeoutSeconds (60s) before refusing --
+        // "did not settle", exit 3, with ZERO frames ever rendered. There is
+        // no escape from inside the loop: the editor's only Refresh call
+        // site is RefreshSceneResolution (phase 9), reached only once the
+        // warm-up has already returned true.
+        const bool golden = m_config.GoldenMode();
         m_shaderCompiler = std::make_unique<Arcane::ShaderCompiler>();
-        if (!m_shaderCompiler->Initialize(/*debounceSeconds=*/0.2))
+        if (!m_shaderCompiler->Initialize(/*debounceSeconds=*/golden ? 0.0 : 0.2))
+        {
+            // Loudness parity with the runtime (review finding 1's
+            // secondary): a golden run whose materials CANNOT bind must
+            // refuse the boot outright, the same rule
+            // RuntimeApp::StageSpriteTables states for itself -- a golden
+            // run that captured or compared a frame missing every sprite
+            // material and the post chain, and still exited 0, would freeze
+            // that hole into the baseline. Without this branch the ONLY
+            // thing catching a missing dxcompiler under golden mode was the
+            // warm-up's downstream census refusal (MainLoop) -- which does
+            // reach the same exit 3, but only after burning the full 60s
+            // warm-up timeout first, and with a message about materials not
+            // settling rather than the compiler being the actual cause.
+            // "sprite_tables" is BootPolicy::Fatal for both hosts
+            // (ProjectBoot.cpp), so `return false` here aborts the boot
+            // exactly the way it does on the runtime.
+            if (golden)
+            {
+                ARC_ERROR("Arcane Editor: dxcompiler.dll unavailable -- a golden run cannot bind "
+                          "sprite materials or the scene post chain, and would capture or compare "
+                          "a frame that is missing them");
+                return false;
+            }
             ARC_WARN("Arcane Editor: dxcompiler.dll unavailable -- material editing disabled");
+        }
         m_shaderSources.AddRoot("data/shaders");
         const auto materialFactory =
             [this](const std::filesystem::path& p)

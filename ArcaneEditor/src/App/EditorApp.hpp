@@ -294,8 +294,8 @@ namespace Arcane::Editor
         // frame's declared shape and the four fields deliberately left default.
         bool PresentChromeFrame();
         // NRI Phase 3, Task 13: the NVRHI arm's half of the editor golden
-        // harness. Runs on the last frame of a golden run only, right after
-        // the canvas output texture has its final content for the frame
+        // harness. Targets the last frame of a golden run, right after the
+        // canvas output texture has its final content for the frame
         // (CompositeGameUi/RenderSelectionOutline are the last writers into
         // it) -- reads it back via Arcane::ReadTexturePixels and hands the
         // pixels to Arcane::GoldenArtifact (Host/GoldenHarness.hpp), exactly
@@ -305,6 +305,21 @@ namespace Arcane::Editor
         // that method) -- there is no separate "read this texture" entry
         // point on that recorder, so piggybacking on the frame already being
         // declared is the only shape that exists.
+        //
+        // NOT ALWAYS EXACTLY ONCE, and the correction is deliberate (review
+        // fix round 1): this phase sits BEFORE PresentFrame in MainLoop's
+        // order, and PresentFrame can fail to acquire a backbuffer (a
+        // transient zero-size/out-of-date swapchain) and return false, which
+        // makes MainLoop `continue` WITHOUT running EndFrame -- so
+        // m_frameCount does not advance and the "is this the last frame"
+        // test above fires again, unchanged, on the retry iteration. The
+        // retry re-reads the (unchanged) canvas and re-runs GoldenArtifact,
+        // which simply overwrites the same file with equivalent content --
+        // harmless, not a correctness bug, and orthogonal to the backbuffer
+        // failure that caused the retry (this phase never touches the
+        // swapchain at all). m_goldenCaptured (below) is set on every
+        // attempt, retries included, which is exactly right: each retry IS a
+        // genuine capture attempt against a real target.
         void CaptureEditorGolden();
         void EndFrame(LoopState& ls);
 
@@ -473,6 +488,20 @@ namespace Arcane::Editor
         // exit code deliberately (this task's contract); not a defect to fix
         // here.
         int m_goldenExit = 0;
+        // NRI Phase 3, Task 13 fix round 1 (IMPORTANT, review finding 2):
+        // latches "a capture was genuinely ATTEMPTED", set by BOTH capture
+        // paths (CaptureEditorGolden, the NVRHI arm; RenderSceneToViewport's
+        // capture block, the graph arm) the moment either one confirms this
+        // is the run's last frame AND has a real target to read -- NOT
+        // merely that the last-frame arithmetic fired. Without this, a
+        // golden run whose last iteration's viewport frame came back
+        // Skipped (graph arm, a collapsed/zero-sized panel) or whose canvas
+        // was already gone (NVRHI arm, a lost viewport context) would reach
+        // maxFrames with m_goldenExit still 0 and exit 0 -- a PASS that
+        // compared NOTHING. Checked once, in MainLoop right after the frame
+        // loop exits (a whole-run property, not a per-frame one): `if
+        // (GoldenMode() && !m_goldenCaptured) m_goldenExit = 3;`.
+        bool m_goldenCaptured = false;
 
         // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
         // Task 8c: this is now BootSequence::Run's presenter for the WHOLE

@@ -16,12 +16,13 @@
 #include "Scene/SelectionOps.hpp"
 #include "Viewport/ViewportImGuiInput.hpp"
 
+#include <Arcane/Assets/Assets.hpp>      // Arcane::ReadTexturePixels (CaptureEditorGolden)
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
-#include <Arcane/Host/GoldenHarness.hpp>   // Arcane::DrainSceneCompiles/GoldenArtifact/kEditorGoldenNamePrefix (NRI Phase 3, Task 13)
 #include <Arcane/Edit/Gizmo.hpp>
+#include <Arcane/Host/GoldenHarness.hpp>   // Arcane::DrainSceneCompiles/GoldenArtifact/kEditorGoldenNamePrefix (NRI Phase 3, Task 13)
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuPassScope -- the F-8 pass seams
@@ -335,6 +336,32 @@ namespace Arcane::Editor
                 continue;
             }
             EndFrame(ls);
+        }
+
+        // NRI Phase 3, Task 13 fix round 1 (IMPORTANT, review finding 2): a
+        // whole-run property, checked once here rather than per-frame --
+        // "did this golden run ever actually capture a frame". Without it, a
+        // run whose every attempt landed on a Skipped viewport frame (graph
+        // arm, a collapsed/zero-sized panel) or a null canvas
+        // (NVRHI arm, a lost viewport context) would reach maxFrames with
+        // m_goldenExit still 0 and Run() would report a clean PASS having
+        // compared NOTHING. Reachable with no code change on this task's
+        // part: the Viewport panel's docked/visible state is imgui.ini
+        // layout state persisted per project GUID (see RetargetLayoutIni),
+        // so a saved layout with the panel's tab closed silently produces
+        // exactly this shape. m_goldenCaptured is set by BOTH capture paths
+        // (CaptureEditorGolden, RenderSceneToViewport's capture block) the
+        // moment either confirms a genuine attempt against a real target --
+        // see their own comments. Skipped when GoldenMode() is off (the
+        // member stays false and unread on every ordinary run) and after a
+        // warm-up refusal (that path already returns before the loop, with
+        // m_goldenExit already 3).
+        if (m_config.GoldenMode() && !m_goldenCaptured)
+        {
+            ARC_ERROR("golden: the run finished without ever capturing a frame to compare or "
+                      "write -- the viewport had nothing to capture on every attempt (a collapsed "
+                      "panel, a lost viewport context, or the run ended before reaching one)");
+            m_goldenExit = 3;
         }
     }
 
@@ -1424,12 +1451,26 @@ namespace Arcane::Editor
             // The golden readback, RIGHT HERE rather than a later phase:
             // ReadCapture is synchronous (it idles the device internally --
             // the same stall CaptureGraphViewportPng pays, and this call is
-            // exactly as rare: once, on the run's last frame), and the
-            // captured pixels belong to the frame that was JUST presented --
-            // reading them any later risks the next frame's Begin/Draw
-            // overwriting the vehicle's transient state first.
+            // rare -- ordinarily exactly once, on the run's last frame), and
+            // the captured pixels belong to the frame that was JUST
+            // presented -- reading them any later risks the next frame's
+            // Begin/Draw overwriting the vehicle's transient state first.
+            //
+            // NOT ALWAYS EXACTLY ONCE, though (review fix round 1's
+            // correction, mirrored from CaptureEditorGolden's own comment):
+            // if the CHROME frame (phase 19, PresentFrame/PresentChromeFrame)
+            // fails to present this same iteration, MainLoop `continue`s
+            // WITHOUT running EndFrame, m_frameCount does not advance, and
+            // `isGoldenLastFrame` is unchanged on the retry -- so a second
+            // viewport frame that DOES present here re-attempts the capture
+            // and simply overwrites the same file with equivalent content.
+            // Harmless, and orthogonal to whatever made the chrome frame
+            // fail. m_goldenCaptured is set on every attempt, retries
+            // included -- each one is a genuine capture against a real,
+            // just-presented target.
             if (isGoldenLastFrame && outcome == Arcane::NriGraphContext::FrameOutcome::Presented)
             {
+                m_goldenCaptured = true;
                 std::uint32_t cw = 0, ch = 0;
                 std::vector<unsigned char> actual;
                 if (!m_viewportTargets.graph->ReadCapture(cw, ch, actual))
@@ -2954,6 +2995,15 @@ namespace Arcane::Editor
             return;
         if (!m_viewportTargets.canvas)
             return;
+
+        // NRI Phase 3, Task 13 fix round 1 (IMPORTANT, review finding 2):
+        // latch that a genuine attempt is underway BEFORE the read, not
+        // after -- this is the "did the run ever have a real target" signal
+        // MainLoop's post-loop check reads, and it must be true even if the
+        // readback itself then fails (that failure already sets m_goldenExit
+        // = 3 directly, below; the two are independent facts: "did we try"
+        // vs "did it succeed").
+        m_goldenCaptured = true;
 
         // TextureId() round-trips the output texture pointer -- the same seam
         // ImGui::Image and WriteAutoScreenshot's NVRHI half consume.
