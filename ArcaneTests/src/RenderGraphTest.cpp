@@ -1879,10 +1879,20 @@ TEST_CASE("uploadring layout: high-water tracks the peak cursor across multiple 
 //     may assert that two distinct pool slots hold distinct nri::Texture*.
 //
 // The device is declared BEFORE the graph in every case on purpose: the
-// graph buries its resources in the device's graveyard on the way out, and
-// reverse declaration order is what makes the graph die first
-// (RgExecuteDesc::device's "must outlive the graph" contract, made
-// structural).
+// graph buries its resources in its LANE on the way out and destroys them
+// through the device's function table, and reverse declaration order is what
+// makes the graph die first (RgExecuteDesc::device's and ::graves' shared
+// "must outlive the graph" contract, made structural).
+//
+// WHICH LANE THESE CASES PASS, and why it is the device's (NRI Phase 3,
+// Task 8-pre): RgExecuteDesc::graves is a per-CONTEXT Graveyard, and a case
+// that drives ONE graph has exactly one context's worth of burials -- so
+// `device->Graves()` is a perfectly good lane for it, and passing it keeps
+// every assertion in this file reading the same object it always did. It is a
+// plain Graveyard that happens to be conveniently owned; nothing about a lane
+// requires it to belong to a device. The cases that actually exercise TWO
+// lanes declare their own Graveyards and never touch the device's -- see the
+// TWO CONTEXTS, ONE DEVICE family further down.
 // =========================================================================
 
 namespace
@@ -1966,7 +1976,7 @@ TEST_CASE("rendergraph exec: a 3-node write-read-copy graph records and submits 
     // packing ever changes, the rest of these numbers move with it.
     REQUIRE(compiled.poolSlotCount == 2);
 
-    const Arcane::RgExecuteDesc desc{ *device, /*swapChain=*/nullptr, ring, pipelines, /*frameSlot=*/0 };
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), /*swapChain=*/nullptr, ring, pipelines, /*frameSlot=*/0 };
     REQUIRE(graph.Execute(desc, compiled));
 
     // Every node's exec fn ran exactly once, in one command buffer.
@@ -2005,7 +2015,7 @@ TEST_CASE("rendergraph exec: node exec fns resolve their declared handles to rea
     shape.Declare(graph);
 
     const Arcane::RgCompiled    compiled = CompileOk(graph);
-    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
     REQUIRE(graph.Execute(desc, compiled));
 
     // Resolve() went through the handle seam and landed on the pool texture
@@ -2034,14 +2044,14 @@ TEST_CASE("rendergraph exec: a second Execute of the same compiled graph creates
 
     const Arcane::RgCompiled compiled = CompileOk(graph);
 
-    const Arcane::RgExecuteDesc first{ *device, nullptr, ring, pipelines, 0 };
+    const Arcane::RgExecuteDesc first{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
     REQUIRE(graph.Execute(first, compiled));
     const std::uint64_t created = graph.DebugTransientCreateCount();
     REQUIRE(created == compiled.poolSlotCount);
 
     // A different frame slot, same compiled graph -- the steady-state frame
     // shape. Nothing about the pool may change.
-    const Arcane::RgExecuteDesc second{ *device, nullptr, ring, pipelines, 1 };
+    const Arcane::RgExecuteDesc second{ *device, device->Graves(), nullptr, ring, pipelines, 1 };
     REQUIRE(graph.Execute(second, compiled));
 
     // The lifetime CREATION counter is what proves reuse: a
@@ -2073,7 +2083,7 @@ TEST_CASE("rendergraph exec: Reset alone releases nothing; ReleaseGpuResources b
     shape.Declare(graph);
 
     const Arcane::RgCompiled    compiled = CompileOk(graph);
-    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
     REQUIRE(graph.Execute(desc, compiled));
     REQUIRE(device->Graves().Pending() == 0);
 
@@ -2139,7 +2149,7 @@ TEST_CASE("rendergraph exec: the per-frame Reset-redeclare-compile-execute loop 
         shape.Declare(graph);
 
         const Arcane::RgCompiled    compiled = CompileOk(graph);
-        const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines,
+        const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines,
                                           frame % Arcane::kSwapchainFramesInFlight };
         REQUIRE(graph.Execute(desc, compiled));
 
@@ -2181,7 +2191,7 @@ TEST_CASE("rendergraph exec: the POOL EPOCH moves on a shrink and on a desc chan
     Arcane::NriUploadRing    ring;
     Arcane::NriPipelineCache pipelines;
     Arcane::RenderGraph      graph;
-    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
 
     // ONE node with N colour attachments, deliberately: it makes the two
     // shapes differ ONLY in slot count. Splitting them across nodes would also
@@ -2268,7 +2278,7 @@ TEST_CASE("rendergraph exec: the carried-over pool slot's first barrier picks up
     Arcane::NriUploadRing    ring;
     Arcane::NriPipelineCache pipelines;
     Arcane::RenderGraph      graph;
-    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
 
     {
         ThreeNodeGraph shape;
@@ -2327,7 +2337,7 @@ TEST_CASE("rendergraph exec: a desc change after Reset re-creates and buries exa
     Arcane::NriUploadRing    ring;
     Arcane::NriPipelineCache pipelines;
     Arcane::RenderGraph      graph;
-    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
 
     std::uint32_t firstPoolSlots = 0;
     {
@@ -2414,7 +2424,7 @@ TEST_CASE("rendergraph exec: a graph with no nodes still submits and advances th
     CHECK(compiled.nodes.empty());
     CHECK(compiled.exitBarriers.empty());
 
-    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
     REQUIRE(graph.Execute(desc, compiled));
 
     CHECK(graph.DebugTransientCount() == 0);
@@ -2451,7 +2461,7 @@ TEST_CASE("rendergraph exec: a swapchain-importing node refuses a null swapChain
     CheckState(compiled.exitBarriers[0].after, kPresentState);
 
     // No swapchain to acquire from: refused, loudly, before any recording.
-    const Arcane::RgExecuteDesc desc{ *device, /*swapChain=*/nullptr, ring, pipelines, 0 };
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), /*swapChain=*/nullptr, ring, pipelines, 0 };
     CHECK_FALSE(graph.Execute(desc, compiled));
     CHECK(graph.DebugSubmitCount() == 0);
 
@@ -2499,7 +2509,7 @@ TEST_CASE("rendergraph exec: an offscreen frame executes with NO swapchain -- no
         Arcane::NriUploadRing    ring;
         Arcane::NriPipelineCache pipelines;
         Arcane::RenderGraph      graph;
-        const Arcane::RgExecuteDesc desc{ *device, /*swapChain=*/nullptr, ring, pipelines, 0 };
+        const Arcane::RgExecuteDesc desc{ *device, device->Graves(), /*swapChain=*/nullptr, ring, pipelines, 0 };
 
         Arcane::RgFrameShape shape;
         shape.canvasWidth     = 320;
@@ -2575,51 +2585,216 @@ TEST_CASE("rendergraph exec: an offscreen frame executes with NO swapchain -- no
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
-TEST_CASE("rendergraph exec: a graph whose Execute was never ENTERED buries nothing -- not on "
-          "release, not on destruction", "[nri]")
+// =========================================================================
+// TWO CONTEXTS, ONE DEVICE -- the per-context Graveyard LANE (NRI Phase 3,
+// Task 8-pre). The topology Task 8 wires up: an editor holding a host-window
+// context (chrome -> present) and an offscreen context (the viewport) over ONE
+// NriDevice, because Vulkan-Hpp's default dispatcher binds one VkDevice per
+// process and DXGI allows one flip-model swapchain per HWND.
+//
+// WHAT WAS WRONG WITH ONE GRAVEYARD. Burials are keyed to the burying GRAPH's
+// own submission fence, and two contexts have two RenderGraphs and therefore
+// two INDEPENDENT fence timelines whose values mean nothing to each other. In
+// one shared graveyard that is (i) a Debug nondecreasing assert the moment the
+// counters interleave out of order and (ii) -- with no assert at all -- each
+// Execute reaping the OTHER graph's thunks against ITS completed value, i.e.
+// destroying resources a submission is still reading.
+//
+// These cases drive TWO RenderGraphs on ONE NONE device with TWO lanes, which
+// is exactly the shape two NriGraphContexts have (the contexts themselves need
+// a window, a swapchain and real shaders, so they are desk items; the lane
+// property is not). Everything below deliberately leaves device->Graves()
+// ALONE except as a stand-in for "some other owner's pending burials", which
+// is the state a real second context would find it in.
+// =========================================================================
+
+TEST_CASE("rendergraph exec: two graphs on one device bury into their OWN lanes, and each "
+          "Execute reaps only its own", "[nri]")
 {
-    // THE INVARIANT ~NriGraphContext's never-submitted teardown branch rests on
-    // (NRI Phase 3, Task 7, fix round 1) -- and READ THE SCOPE: this pins
-    // exactly ONE of the two sub-cases that branch is taken for.
-    //
-    // An OFFSCREEN context borrows a SHARED device and therefore shares that
-    // device's Graveyard with the context that owns it -- while burials are
-    // keyed to the burying GRAPH's own fence. A context that never submitted
-    // would bury at 0 behind a graveyard the owner has already driven to N,
-    // tripping Bury's nondecreasing assert in Debug. That destructor routes its
-    // OWN burials into a LOCAL graveyard, which is complete only where
-    // RenderGraph contributes nothing of its own -- RenderGraph buries into the
-    // DEVICE's graveyard directly and has no parameter to receive a lane.
-    //
-    // PINNED HERE -- Execute() NEVER ENTERED (a failed InitOffscreen, or a
-    // context created and dropped without a frame). RenderGraph then never
-    // latched a device, and ReleaseGpuResourcesInternal returns early while
-    // that pointer is null, so it buries nothing from anywhere: there are no
-    // command buffers, allocators or fence to bury, because Execute is what
-    // creates them. A later change allocating any of those ahead of Execute()
-    // would silently reopen the fence-0 burial -- this makes that red instead
-    // of making a Debug assert fire in the editor.
-    //
-    // DELIBERATELY NOT PINNED HERE, BECAUSE IT IS NOT TRUE -- Execute() entered
-    // and FAILED. m_device is latched unconditionally at Execute's ENTRY while
-    // m_submitValue advances only after a successful QueueSubmit, so such a
-    // graph has a latched device and DebugSubmitCount() == 0: it goes on
-    // burying through the shared graveyard at fence 0, and
-    // EnsureExecutionResources does so SYNCHRONOUSLY inside the failing
-    // Execute, before any destructor runs. That window is closed by the
-    // per-context Graveyard lane and by nothing this case or that branch does
-    // -- see prerequisite (1), window (b2), in NriGraphContext.hpp.
+    // THE CASE THE OLD SHAPE CORRUPTED. Two graphs, interleaved burials, and
+    // the assertion is that neither lane ever contains the other's work and
+    // neither graph's reap can run the other's thunks.
     const std::uint64_t before = Arcane::RenderErrorCount();
 
     auto device = Arcane::NriDevice::CreateNoneForTests();
     REQUIRE(device != nullptr);
 
-    // Seed the shared graveyard at a HIGH value, exactly as the owning
-    // host-window context would have. This is the value a fence-0 burial would
-    // be asserted against.
+    // Stands in for a THIRD owner (or simply for whatever the device's
+    // graveyard holds): nothing below may touch it. Reaped by hand at the end
+    // so ~Graveyard is not left holding it.
+    bool deviceLaneRan = false;
+    device->Graves().Bury(4096, [&deviceLaneRan] { deviceLaneRan = true; });
+
+    // Declared BEFORE the graphs, so each graph is destroyed before its lane --
+    // RgExecuteDesc::graves' "must outlive the graph" contract, made structural
+    // exactly as NriGraphContext's member order makes it.
+    Arcane::Graveyard hostLane;
+    Arcane::Graveyard viewportLane;
+
+    {
+        Arcane::NriUploadRing    ring;
+        Arcane::NriPipelineCache pipelines;
+        Arcane::RenderGraph      hostGraph;
+        Arcane::RenderGraph      viewportGraph;
+
+        const Arcane::RgExecuteDesc hostDesc{ *device, hostLane, nullptr, ring, pipelines, 0 };
+        const Arcane::RgExecuteDesc viewportDesc{ *device, viewportLane, nullptr, ring, pipelines, 0 };
+
+        // Both graphs run the same 3-node shape. Two pool slots each, so a
+        // ReleaseGpuResources on either buries a known, nonzero amount.
+        ThreeNodeGraph hostShape, viewportShape;
+        hostShape.Declare(hostGraph);
+        viewportShape.Declare(viewportGraph);
+
+        REQUIRE(hostGraph.Execute(hostDesc, CompileOk(hostGraph)));
+        REQUIRE(viewportGraph.Execute(viewportDesc, CompileOk(viewportGraph)));
+        CHECK(hostGraph.DebugSubmitCount() == 1);
+        CHECK(viewportGraph.DebugSubmitCount() == 1);
+
+        // Each graph latched ITS lane, and says so.
+        CHECK(hostGraph.Graves() == &hostLane);
+        CHECK(viewportGraph.Graves() == &viewportLane);
+
+        // Drive the HOST's timeline several submissions ahead, which is the
+        // realistic asymmetry: chrome renders every frame, a viewport panel may
+        // not. This is what used to make the shared graveyard's nondecreasing
+        // invariant unsatisfiable for the viewport.
+        for (int frame = 0; frame < 4; ++frame)
+        {
+            hostGraph.Reset();
+            hostShape.Declare(hostGraph);
+            REQUIRE(hostGraph.Execute(hostDesc, CompileOk(hostGraph)));
+        }
+        CHECK(hostGraph.DebugSubmitCount() == 5);
+        CHECK(viewportGraph.DebugSubmitCount() == 1);
+
+        // ---- INTERLEAVED BURIALS, out of order across the two timelines ----
+        // The viewport buries at 1 AFTER the host has buried at 5. In one
+        // shared graveyard that is Bury's nondecreasing assert, verbatim.
+        hostGraph.ReleaseGpuResources();
+        const std::size_t hostPending = hostLane.Pending();
+        CHECK(hostPending > 0);
+        CHECK(viewportLane.Pending() == 0);   // nothing of the viewport's landed there
+
+        viewportGraph.ReleaseGpuResources();
+        const std::size_t viewportPending = viewportLane.Pending();
+        CHECK(viewportPending > 0);
+        // ...and the host's lane did not grow: the two are disjoint.
+        CHECK(hostLane.Pending() == hostPending);
+
+        // ---- EACH REAPS ONLY ITS OWN ----
+        // The viewport's next Execute reaps with ITS fence (NONE hard-wires
+        // GetFenceValue to 0, so nothing is due) and must not touch the host's
+        // lane, which is pending at 5.
+        viewportGraph.Reset();
+        viewportShape.Declare(viewportGraph);
+        REQUIRE(viewportGraph.Execute(viewportDesc, CompileOk(viewportGraph)));
+        CHECK(hostLane.Pending() == hostPending);
+
+        // By hand, since NONE cannot advance a fence: reaping the HOST's lane
+        // at the host's completed value clears the host's burials and leaves
+        // every one of the viewport's alone. Under the old shape this same
+        // number (5) would have swept the viewport's fence-1 thunks with it --
+        // the use-after-free no assert catches.
+        hostLane.Reap(hostGraph.DebugSubmitCount());
+        CHECK(hostLane.Pending() == 0);
+        CHECK(viewportLane.Pending() == viewportPending);
+
+        // The shared device graveyard was never a party to any of it.
+        CHECK(device->Graves().Pending() == 1);
+        CHECK_FALSE(deviceLaneRan);
+
+        // Both graphs die here, burying their command slots and fences into
+        // their own lanes...
+    }
+    // ...which is what these drains run. (Order matters only within a lane.)
+    hostLane.Drain();
+    viewportLane.Drain();
+    CHECK(hostLane.Pending() == 0);
+    CHECK(viewportLane.Pending() == 0);
+
+    CHECK(device->Graves().Pending() == 1);
+    device->Graves().Drain();
+    CHECK(deviceLaneRan);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("rendergraph exec: a second Graveyard lane is refused on a graph that already buried "
+          "into another", "[nri]")
+{
+    // The lane's half of the "one graph belongs to one device" refusal. Every
+    // burial already pending sits in the FIRST lane, keyed to this graph's
+    // fence timeline; splitting the rest across a second would leave two
+    // graveyards holding halves of ONE ordered sequence, and the ordering IS
+    // the contract (a view must be destroyed before the texture it views).
+    // Nothing can enforce that across two graveyards, so it is refused rather
+    // than silently adopted -- exactly like a second device.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::Graveyard firstLane;
+    Arcane::Graveyard secondLane;
+    {
+        Arcane::NriUploadRing    ring;
+        Arcane::NriPipelineCache pipelines;
+        Arcane::RenderGraph      graph;
+
+        ThreeNodeGraph shape;
+        shape.Declare(graph);
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+
+        const Arcane::RgExecuteDesc first{ *device, firstLane, nullptr, ring, pipelines, 0 };
+        REQUIRE(graph.Execute(first, compiled));
+
+        const Arcane::RgExecuteDesc second{ *device, secondLane, nullptr, ring, pipelines, 0 };
+        graph.Reset();
+        shape.Declare(graph);
+        CHECK_FALSE(graph.Execute(second, CompileOk(graph)));
+        // Refused BEFORE recording: the submit count did not move.
+        CHECK(graph.DebugSubmitCount() == 1);
+        CHECK(secondLane.Pending() == 0);
+        CHECK(graph.Graves() == &firstLane);
+    }
+    firstLane.Drain();
+    CHECK(secondLane.Pending() == 0);
+
+    CHECK(Arcane::RenderErrorCount() == before + 1);
+    Arcane::ResetRenderErrorCount();
+}
+
+TEST_CASE("rendergraph exec: a graph whose Execute was never ENTERED buries nothing -- not on "
+          "release, not on destruction", "[nri]")
+{
+    // Header window (b1) (NriGraphContext.hpp, TWO CONTEXTS, TWO LANES): a
+    // failed InitOffscreen, or a context created and dropped without a frame.
+    // RenderGraph never latched a device OR a lane, and
+    // ReleaseGpuResourcesInternal returns early while either is null -- so it
+    // buries nothing ANYWHERE: there are no command buffers, allocators or
+    // fence to bury, because Execute is what creates them.
+    //
+    // WHAT CHANGED AT TASK 8-pre. This used to be the one window Task 7's
+    // LOCAL-graveyard branch in ~NriGraphContext could close, and the case
+    // existed to keep that branch honest. That branch is GONE -- the lane
+    // subsumes it, since a context's lane starts EMPTY and 0 is nondecreasing
+    // against nothing. The case is kept and re-aimed at the structural fact it
+    // always really pinned: a later change that allocated command buffers, an
+    // allocator or the fence AHEAD of Execute() would start burying at fence 0
+    // from a graph with no lane latched at all. That must be red here rather
+    // than a null-deref in the editor.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    // Seeded high, exactly as a live sibling context's lane would be -- the
+    // value a stray fence-0 burial would have to be nondecreasing against.
     bool reaped = false;
-    device->Graves().Bury(4096, [&reaped] { reaped = true; });
-    REQUIRE(device->Graves().Pending() == 1);
+    Arcane::Graveyard siblingLane;
+    siblingLane.Bury(4096, [&reaped] { reaped = true; });
+    REQUIRE(siblingLane.Pending() == 1);
 
     {
         Arcane::RenderGraph graph;
@@ -2636,22 +2811,99 @@ TEST_CASE("rendergraph exec: a graph whose Execute was never ENTERED buries noth
         Arcane::DeclareGraphFrame(graph, shape, nullptr);
         CHECK(graph.NodeCount() == 2);
 
-        // Nothing was realized, so there is nothing to release.
+        // Nothing was realized, so there is nothing to release -- and no lane
+        // was latched to release it into.
         CHECK(graph.DebugSubmitCount() == 0);
         CHECK(graph.DebugTransientCount() == 0);
+        CHECK(graph.Graves() == nullptr);
 
         graph.ReleaseGpuResources();
-        CHECK(device->Graves().Pending() == 1);   // still only the seed
+        CHECK(siblingLane.Pending() == 1);           // still only the seed
+        CHECK(device->Graves().Pending() == 0);      // and nothing leaked to the device's
     }
     // ...and ~RenderGraph added nothing either: there are no command buffers,
     // no allocators and no submission fence to bury, because Execute() is what
     // creates them.
-    CHECK(device->Graves().Pending() == 1);
+    CHECK(siblingLane.Pending() == 1);
+    CHECK(device->Graves().Pending() == 0);
     CHECK_FALSE(reaped);
 
-    device->Graves().Drain();
+    siblingLane.Drain();
     CHECK(reaped);
     CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("rendergraph exec: a graph whose Execute ENTERED and FAILED buries its tail in its own "
+          "lane, at fence 0, past a sibling lane already at 4096", "[nri]")
+{
+    // HEADER WINDOW (b2) -- the sharpest edge, and the one the lane exists for.
+    //
+    // RenderGraph latches its device UNCONDITIONALLY at Execute's ENTRY, before
+    // anything fallible, while m_submitValue only advances after a successful
+    // QueueSubmit. So a first frame that reaches Execute and fails inside it (a
+    // first-frame device loss on the viewport is the realistic Task-8 shape)
+    // leaves a graph that HAS realized command buffers, an allocator and a
+    // fence and WILL bury them -- at fence 0. Before the lane those went into
+    // the shared device graveyard, behind whatever the sibling context had
+    // already driven to N: a Debug nondecreasing assert, and in Release a reap
+    // against a foreign fence.
+    //
+    // The failure driven here is an out-of-range frameSlot, which is refused
+    // AFTER EnsureExecutionResources has created everything -- the same
+    // "entered, realized, never submitted" state a mid-Execute device loss
+    // leaves behind, and the only one a NONE device can be made to produce
+    // (every NONE Create* succeeds, so the all-or-nothing cleanup inside
+    // EnsureExecutionResources itself cannot be driven headlessly).
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    bool siblingRan = false;
+    Arcane::Graveyard siblingLane;
+    siblingLane.Bury(4096, [&siblingRan] { siblingRan = true; });
+
+    Arcane::Graveyard viewportLane;
+    {
+        Arcane::NriUploadRing    ring;
+        Arcane::NriPipelineCache pipelines;
+        Arcane::RenderGraph      graph;
+
+        ThreeNodeGraph shape;
+        shape.Declare(graph);
+
+        const Arcane::RgExecuteDesc desc{ *device, viewportLane, nullptr, ring, pipelines,
+                                          Arcane::kSwapchainFramesInFlight };
+        CHECK_FALSE(graph.Execute(desc, CompileOk(graph)));
+
+        // ENTERED: the lane and the device are latched. NEVER SUCCEEDED: the
+        // submit value is still 0, so every burial below keys at 0.
+        CHECK(graph.Graves() == &viewportLane);
+        CHECK(graph.DebugSubmitCount() == 0);
+        CHECK(shape.execCount[0] == 0);
+
+        // Destroys the graph, which buries the realized command buffers, their
+        // allocators and the submission fence at 0 -- INTO ITS OWN LANE.
+    }
+
+    // THE ASSERTION: a real, nonzero tail, all of it in the viewport's lane,
+    // none of it in the sibling's (which is pending at 4096) and none of it in
+    // the device's. Under the old shape those same burials went into the shared
+    // graveyard at 0 behind the 4096 entry.
+    CHECK(viewportLane.Pending() > 0);
+    CHECK(siblingLane.Pending() == 1);
+    CHECK(device->Graves().Pending() == 0);
+
+    viewportLane.Drain();
+    CHECK(viewportLane.Pending() == 0);
+    CHECK_FALSE(siblingRan);   // draining one lane cannot run another's thunks
+
+    siblingLane.Drain();
+    CHECK(siblingRan);
+
+    // The refused frameSlot is the one latch bump this case makes.
+    CHECK(Arcane::RenderErrorCount() == before + 1);
+    Arcane::ResetRenderErrorCount();
 }
 
 TEST_CASE("rendergraph exec: an RgCompiled from before a Reset is refused", "[nri]")
@@ -2683,7 +2935,7 @@ TEST_CASE("rendergraph exec: an RgCompiled from before a Reset is refused", "[nr
         },
         [](Arcane::RenderGraphNodeContext&) { FAIL("a refused Execute must record nothing"); });
 
-    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
     CHECK_FALSE(graph.Execute(desc, stale));
     CHECK(graph.DebugSubmitCount() == 0);
 
@@ -2706,7 +2958,7 @@ TEST_CASE("rendergraph exec: an out-of-range frame slot is refused", "[nri]")
     shape.Declare(graph);
     const Arcane::RgCompiled compiled = CompileOk(graph);
 
-    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines,
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines,
                                       Arcane::kSwapchainFramesInFlight };
     CHECK_FALSE(graph.Execute(desc, compiled));
     CHECK(graph.DebugSubmitCount() == 0);
@@ -2739,7 +2991,7 @@ TEST_CASE("rendergraph exec: an imported attachment's view is rebuilt every Exec
     Arcane::NriUploadRing    ring;
     Arcane::NriPipelineCache pipelines;
     Arcane::RenderGraph      graph;
-    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
 
     // Two distinct stand-in addresses for "the backbuffer before the resize"
     // and "the backbuffer after it". Nothing ever dereferences them: on NONE
@@ -2847,7 +3099,7 @@ TEST_CASE("rendergraph exec: ReleaseGpuResources + Drain destroys imported views
     Arcane::NriUploadRing    ring;
     Arcane::NriPipelineCache pipelines;
     Arcane::RenderGraph      graph;
-    const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
 
     // Stands in for an acquired backbuffer -- never dereferenced (every NONE
     // Cmd* is a no-op and the graph only stores/compares the pointer).
@@ -3010,7 +3262,7 @@ TEST_CASE("rendergraph exec: a crash backend on ANOTHER device gets CPU breadcru
         shape.Declare(graph);
 
         const Arcane::RgCompiled    compiled = CompileOk(graph);
-        const Arcane::RgExecuteDesc desc{ *device, /*swapChain=*/nullptr, ring, pipelines, /*frameSlot=*/0 };
+        const Arcane::RgExecuteDesc desc{ *device, device->Graves(), /*swapChain=*/nullptr, ring, pipelines, /*frameSlot=*/0 };
         REQUIRE(graph.Execute(desc, compiled));
     }
 
@@ -3450,7 +3702,7 @@ TEST_CASE("nri graph frame: a zero-extent canvas COMPILES but is a latched refus
         Arcane::NriUploadRing    ring;
         Arcane::NriPipelineCache pipelines;
         Arcane::RenderGraph      graph;
-        const Arcane::RgExecuteDesc desc{ *device, nullptr, ring, pipelines, 0 };
+        const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
 
         Arcane::RgTexture canvas;
         graph.AddNode("batch2d", Arcane::RenderGraph::NodeKind::Raster,

@@ -66,6 +66,7 @@ namespace Arcane
     class NriPipelineCache;
     class NriDevice;
     class NriSwapChain;
+    class Graveyard;
 
     class RenderGraph;
 
@@ -225,13 +226,49 @@ namespace Arcane
     // (plan, Task 6).
     struct RgExecuteDesc
     {
-        // Owns the queue, the CoreInterface and the graveyard every transient
-        // is buried into. MUST outlive the graph: the graph's resources are
-        // destroyed through this device's function table, and a graph that
+        // Owns the queue and the CoreInterface every resource here is created
+        // and destroyed through. MUST outlive the graph: the graph's resources
+        // are destroyed through this device's function table, and a graph that
         // outlived its device would bury thunks into freed memory. The same
         // device must be passed to every Execute() on one graph (a second
         // device is refused, not silently adopted).
         NriDevice& device;
+
+        // ============ THE GRAVEYARD LANE (NRI Phase 3, Task 8-pre) ==========
+        // WHERE EVERYTHING THIS GRAPH DESTROYS GOES -- the pool, the cached
+        // attachment views, the per-execute imported views, the per-frame-slot
+        // command buffers and allocators, and the submission fence. It is a
+        // parameter rather than `device.Graves()` because a fence value only
+        // means something inside ONE submission timeline, and this graph's
+        // timeline is its own m_fence: reaping with it against a graveyard some
+        // OTHER graph also buries into would run that graph's thunks before its
+        // submission retired.
+        //
+        // ONE LANE PER CONTEXT, NOT PER DEVICE. Two NriGraphContexts on one
+        // NriDevice (the editor's chrome context + its offscreen viewport
+        // context) have two RenderGraphs and therefore two INDEPENDENT fence
+        // timelines whose values mean nothing to each other. Before this field
+        // existed both buried into NriDevice::Graves(), where the interleaving
+        // tripped Graveyard::Bury's nondecreasing assert in Debug and, worse,
+        // let each Execute reap the OTHER graph's burials early -- a
+        // use-after-free no assert catches.
+        //
+        // LATCHED AT THE FIRST Execute(), beside `device`, and a second lane is
+        // REFUSED for the same reason a second device is: every pending burial
+        // names thunks the first lane will run. The latch is what carries the
+        // lane to the burial sites no RgExecuteDesc reaches --
+        // ReleaseGpuResources() and ~RenderGraph -- and to the ones INSIDE a
+        // FAILING Execute (EnsureExecutionResources's all-or-nothing cleanup),
+        // which is the sharpest edge the lane exists to close: it buries at
+        // m_submitValue == 0 synchronously, before any destructor runs.
+        //
+        // MUST OUTLIVE THE GRAPH, exactly as `device` must. NriGraphContext
+        // guarantees it by declaring its Graveyard BEFORE its RenderGraph and
+        // by destroying the graph EXPLICITLY in its destructor body, ahead of
+        // the drain -- so ~RenderGraph's own tail lands in a lane that is still
+        // drained afterwards rather than in a shared structure nothing revisits.
+        // ===================================================================
+        Graveyard& graves;
 
         // Optional: null = headless/offscreen. Required as soon as any node
         // declared ImportSwapChainTexture() -- Execute() refuses that
@@ -437,11 +474,14 @@ namespace Arcane
 
         // Releases everything Execute() realized -- the transient pool, the
         // cached attachment views, the per-frame-slot command buffers and the
-        // submission fence -- by BURYING it in the device's graveyard at the
-        // last submitted fence value. ~NriDevice drains that graveyard behind
-        // a DeviceWaitIdle, which is why the device must outlive the graph
-        // (RgExecuteDesc::device). A graph that never executed owns nothing
-        // and this is a no-op.
+        // submission fence -- by BURYING it in THIS GRAPH'S LANE
+        // (RgExecuteDesc::graves, latched at the first Execute) at the last
+        // submitted fence value. Somebody must still DRAIN that lane behind a
+        // DeviceWaitIdle afterwards, which is why both the lane and the device
+        // must outlive the graph; NriGraphContext does it by destroying its
+        // graph explicitly, in its destructor body, right before the drain. A
+        // graph that never executed latched neither and owns nothing, so this
+        // is a no-op.
         ~RenderGraph();
 
         // Non-copyable, non-movable since Task 6: this object owns live NRI
@@ -592,9 +632,9 @@ namespace Arcane
         // mismatch), an explicit ReleaseGpuResources(), and ~RenderGraph.
         void Reset();
 
-        // Buries the transient pool and every cached attachment view in the
-        // device's graveyard, keyed to this graph's last submitted fence
-        // value -- the explicit "give the memory back" entry point, for a
+        // Buries the transient pool and every cached attachment view in this
+        // graph's LANE (RgExecuteDesc::graves), keyed to its last submitted
+        // fence value -- the explicit "give the memory back" entry point, for a
         // frame driver parking a graph it will not run for a while (project
         // switch, minimised-to-tray, shutdown ahead of the device). The
         // per-frame-slot command buffers and the submission fence are NOT
@@ -661,6 +701,21 @@ namespace Arcane
         // signalled on its own fence, and the fence value every burial is
         // keyed to.
         [[nodiscard]] std::uint64_t DebugSubmitCount() const noexcept { return m_submitValue; }
+
+        // THIS GRAPH'S GRAVEYARD LANE -- RgExecuteDesc::graves, latched at the
+        // first Execute(). Null before it, which is exactly the state in which
+        // the graph owns nothing to bury.
+        //
+        // FOR NODES, and it is the reason this is public: a node that caches a
+        // descriptor over a pool texture must bury it when PoolEpoch() moves
+        // (see the contract below), and its exec fn runs inside THIS graph's
+        // Execute -- so this graph's lane, reached through
+        // RenderGraphNodeContext::graph, is the one lane those burials belong
+        // in. Reaching for the DEVICE's graveyard there is the bug this field
+        // exists to make impossible: it would split one context's burials
+        // across two graveyards whose relative drain order nothing defines,
+        // and a view destroyed after the texture it views is a use-after-free.
+        [[nodiscard]] Graveyard* Graves() const noexcept { return m_graves; }
 
         // =============================================================
         // THE POOL EPOCH -- CONTRACT, NOT A TEST SEAM. Read this before
@@ -919,6 +974,12 @@ namespace Arcane
         std::uint32_t                m_generation = 0;
 
         NriDevice*                m_device = nullptr;   // latched by the first Execute(); must outlive this graph
+        // The graveyard lane, latched by the first Execute() BESIDE m_device
+        // and never independently -- every burial site in RenderGraphExec.cpp
+        // reads one and writes the other's contents, so "m_device is latched"
+        // and "m_graves is latched" are the same fact. See RgExecuteDesc::
+        // graves. Must outlive this graph.
+        Graveyard*                m_graves = nullptr;
         std::vector<PoolResource>  m_pool;
 
         // Views over POOL textures. These persist across frames, because the

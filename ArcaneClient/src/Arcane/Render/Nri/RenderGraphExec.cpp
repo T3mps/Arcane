@@ -289,11 +289,19 @@ namespace Arcane
     RenderGraph::~RenderGraph()
     {
         // Buried, not destroyed: the last submission may still be reading
-        // them. ~NriDevice drains the graveyard behind a DeviceWaitIdle,
-        // which is the one place that can honor Graveyard's "the caller has
-        // already made the GPU idle" contract on the way out -- and the
-        // reason RgExecuteDesc::device documents that the device must
+        // them. They go into THIS GRAPH'S LANE (RgExecuteDesc::graves), and
+        // the lane's owner is what drains it behind a DeviceWaitIdle -- the
+        // one operation that can honor Graveyard's "the caller has already
+        // made the GPU idle" contract on the way out, and the reason
+        // RgExecuteDesc documents that BOTH the device and the lane must
         // outlive the graph.
+        //
+        // NriGraphContext therefore destroys its graph EXPLICITLY, in its
+        // destructor body, immediately before that drain. Leaving it to the
+        // member destructor would put this tail in a lane whose only remaining
+        // drain is ~Graveyard's -- fatal in Debug, un-fenced in Release. That
+        // is header window (a), and this is the half of its closure that lives
+        // here: the tail is buried in a lane somebody still drains.
         ReleaseGpuResourcesInternal(/*all=*/true);
     }
 
@@ -308,10 +316,10 @@ namespace Arcane
 
     void RenderGraph::ReleaseImportedViews()
     {
-        if (!m_device || m_importedViews.empty())
+        if (!m_device || !m_graves || m_importedViews.empty())
             return;
 
-        Graveyard&                graves = m_device->Graves();
+        Graveyard&                graves = *m_graves;
         const nri::CoreInterface* core   = &m_device->Core();
 
         // m_submitValue is the submission that last USED these views, so
@@ -330,14 +338,18 @@ namespace Arcane
 
     void RenderGraph::ReleaseGpuResourcesInternal(bool all)
     {
-        if (!m_device)
+        if (!m_device || !m_graves)
         {
             // Nothing was ever realized (no Execute), so there is nothing to
-            // bury -- and no device to bury it into.
+            // bury -- and neither a device to destroy it through nor a lane to
+            // bury it into. The two are latched together at Execute's entry, so
+            // this one test covers both; the second half is spelled out anyway
+            // because it is what makes the never-entered-Execute window (header
+            // window (b1)) a NON-event rather than a fence-0 burial.
             return;
         }
 
-        Graveyard&                graves = m_device->Graves();
+        Graveyard&                graves = *m_graves;
         const nri::CoreInterface* core   = &m_device->Core();
 
         // Every burial in this call uses the SAME fence value -- the last
@@ -454,7 +466,15 @@ namespace Arcane
                     // next call, and Execute() would then reset a null
                     // allocator -- turning a create failure into a crash one
                     // frame later.
-                    Graveyard&                graves    = m_device->Graves();
+                    //
+                    // THE LANE MATTERS MOST HERE (header window (b2), the
+                    // sharpest edge): this runs SYNCHRONOUSLY inside a FAILING
+                    // Execute, at m_submitValue == 0, before any destructor.
+                    // Into a graveyard some other context had already driven to
+                    // N that is a nondecreasing-assert in Debug and a foreign
+                    // reap in Release; into this graph's own lane it is simply
+                    // the first burial that lane ever saw.
+                    Graveyard&                graves    = *m_graves;
                     const nri::CoreInterface* graveCore = &core;
                     for (const GpuFrameSlot& partial : m_frames)
                     {
@@ -624,7 +644,7 @@ namespace Arcane
         // makes a second Execute() of the same compiled graph create nothing
         // (DebugTransientCreateCount()).
         // ------------------------------------------------------------
-        Graveyard&                graves    = m_device->Graves();
+        Graveyard&                graves    = *m_graves;
         const nri::CoreInterface* graveCore = &core;
 
         // Buries a pool entry AND every cached view that names its texture:
@@ -999,7 +1019,13 @@ namespace Arcane
     {
         if (m_device == nullptr)
         {
+            // The device and the LANE latch together, atomically, before
+            // anything fallible -- which is what puts every burial a FAILING
+            // Execute makes (EnsureExecutionResources's all-or-nothing cleanup
+            // below) in this context's own lane rather than in a shared one at
+            // fence 0. See RgExecuteDesc::graves.
             m_device = &desc.device;
+            m_graves = &desc.graves;
         }
         else if (m_device != &desc.device)
         {
@@ -1008,6 +1034,18 @@ namespace Arcane
             // that device's function table.
             GraphError("RenderGraph::Execute: a second NriDevice was passed to a graph that already "
                        "realized resources on another -- one graph belongs to one device");
+            return false;
+        }
+        else if (m_graves != &desc.graves)
+        {
+            // Same argument one level down: every burial already pending for
+            // this graph sits in the FIRST lane, keyed to this graph's fence
+            // timeline. Splitting the rest across a second lane would leave two
+            // graveyards holding halves of one ordered sequence -- and the
+            // ordering IS the contract (a view must be destroyed before the
+            // texture it views), which nothing can enforce across two of them.
+            GraphError("RenderGraph::Execute: a second Graveyard lane was passed to a graph that "
+                       "already buried into another -- one graph belongs to one lane");
             return false;
         }
 
@@ -1043,7 +1081,14 @@ namespace Arcane
         // the NONE backend GetFenceValue is hard-wired to 0, so this reaps
         // only value-0 burials -- headless tests feed the graveyard their own
         // values by hand.
-        m_device->Graves().Reap(core.GetFenceValue(*m_fence));
+        //
+        // OWN FENCE, OWN LANE. This is the pairing the whole lane exists for:
+        // reaping THIS graph's completed value against a graveyard a SECOND
+        // graph also buries into would run that graph's thunks while its
+        // submission was still in flight. m_fence is private to this graph and
+        // m_graves is private to its context, so the two can only ever describe
+        // each other.
+        m_graves->Reap(core.GetFenceValue(*m_fence));
 
         // Transient slot mapping for this frame, built before anything reads
         // it (RealizePool's attachment-role pass does).

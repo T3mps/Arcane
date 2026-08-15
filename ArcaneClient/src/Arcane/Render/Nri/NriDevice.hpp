@@ -137,12 +137,32 @@ namespace Arcane
         // which would otherwise surface as an UNSUPPORTED far from the cause).
         [[nodiscard]] nri::Queue* GraphicsQueue() const { return m_graphicsQueue; }
 
-        // Fence-tagged deferred destruction for this device's queue timeline.
-        // Per the plan's resolved plan-input, the graveyard is a per-device
-        // object owned HERE, one per queue timeline -- Phase 1 has a single
-        // graphics timeline, so there is one. (Named Graves() because a
-        // member function called Graveyard() would shadow the type inside
-        // this class.)
+        // Fence-tagged deferred destruction for objects owned by the DEVICE
+        // ITSELF -- i.e. by an owner with no submission timeline of its own.
+        // (Named Graves() because a member function called Graveyard() would
+        // shadow the type inside this class.)
+        //
+        // ===== IT IS DRAIN-ONLY, AND IT IS NOT A DEFAULT (Task 8-pre) =====
+        // Phase 1 made this per-device because there was one queue timeline and
+        // one owner. There are now N owners -- one per NriGraphContext -- and a
+        // fence value only means something inside ONE submission timeline, so
+        // "per device" is the wrong granularity for anything a context owns.
+        // EVERY graph-context-owned object is buried in that context's OWN lane
+        // (NriGraphContext::Graves(), threaded into RenderGraph through
+        // RgExecuteDesc::graves). Nothing in the tree buries here, and nothing
+        // REAPS here: this graveyard has no clock. ~NriDevice drains it exactly
+        // once, behind a DeviceWaitIdle.
+        //
+        // SO: burying here means "destroy at device teardown", full stop --
+        // fence values are burial-ORDER hints and nothing more. If what you own
+        // needs fence-paced reclamation, own a Graveyard, do not borrow this
+        // one. Two owners burying here on their own fence clocks is the exact
+        // hazard NriGraphContext.hpp's TWO CONTEXTS, TWO LANES block describes:
+        // a Debug nondecreasing assert, or a reap against a foreign fence.
+        //
+        // The headless [nri] cases DO drive it by hand (Bury/Reap/Drain with
+        // their own values) -- as a plain, conveniently-owned Graveyard, which
+        // is all it is.
         [[nodiscard]] Graveyard& Graves() { return m_graveyard; }
 
     private:

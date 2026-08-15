@@ -596,68 +596,38 @@ namespace Arcane
         const std::uint64_t fence = m_graph ? m_graph->DebugSubmitCount() : 0;
 
         // ==============================================================
-        // WHICH GRAVEYARD -- and the one case where it is NOT the device's.
+        // WHICH GRAVEYARD -- THIS CONTEXT'S OWN, ALWAYS AND ONLY.
         // ==============================================================
-        // An OFFSCREEN context that NEVER SUBMITTED buries at `fence` == 0 by
-        // construction, and its graveyard is the SHARED one, which the owning
-        // context has very likely already driven to some value N. That trips
-        // Graveyard::Bury's nondecreasing assert in Debug for a reason that has
-        // nothing to do with this context's correctness.
+        // One mechanism, no special cases (NRI Phase 3, Task 8-pre). m_graves
+        // is a member of this object, it starts empty, only this context's
+        // graph/nodes/caches bury into it, and only this context's graph reaps
+        // it -- with the one fence that describes those burials. Every window
+        // the Task-7 local-graveyard branch used to cover, and the three it
+        // could not, are closed by that alone:
         //
-        // A LOCAL graveyard fixes that exactly rather than as a dodge: nothing
-        // on this context was ever submitted, so no burial here has anything to
-        // be deferred BEHIND -- the fence value carries no information at all.
-        // The GPU is idle (the DeviceWaitIdle above), this body drains what it
-        // fills before returning, and a fresh graveyard satisfies nondecreasing
-        // trivially. Everything THIS BODY buries takes its graveyard as an
-        // argument, so all of that lands in the local.
+        //   (b1) EXECUTE NEVER ENTERED -- burials key at fence 0, and 0 is
+        //        nondecreasing against an EMPTY lane. (RenderGraph in fact
+        //        buries nothing at all: it gates on the device it latches at
+        //        Execute's entry.) No branch needed.
+        //   (b2) EXECUTE ENTERED, NEVER SUCCEEDED -- RenderGraph latches the
+        //        LANE beside the device, at that same entry and before anything
+        //        fallible, so EnsureExecutionResources's all-or-nothing cleanup
+        //        (which buries SYNCHRONOUSLY inside the failing Execute, at
+        //        m_submitValue == 0, before any destructor runs) lands here too.
+        //   (a)  ~RenderGraph's TAIL -- the command buffers, the allocators and
+        //        the submission fence. A member destructor would run AFTER this
+        //        body, i.e. after the drain below, leaving them pending in a
+        //        lane nothing revisits. m_graph is therefore destroyed
+        //        EXPLICITLY below, inside this body, ahead of that drain.
         //
-        // ===== WHAT IT COVERS, AND WHAT IT DOES NOT -- read before trusting
-        // it. `everSubmitted` is a PROXY, and it is NOT equivalent to "this
-        // graph never latched a device". Header window (b) splits in two here:
-        //
-        //   (b1) EXECUTE NEVER ENTERED -- a failed InitOffscreen (the fence
-        //        create or InitCommon refused after the output texture already
-        //        existed), or a context created and dropped without a frame.
-        //        FULLY COVERED. RenderGraph latches its device at Execute's
-        //        entry and gates every burial of its own on that pointer
-        //        (ReleaseGpuResourcesInternal returns early while it is null),
-        //        so a graph whose Execute was never entered buries nothing here
-        //        AND nothing from ~RenderGraph -- there are no command buffers,
-        //        allocators or fence to bury, because Execute is what creates
-        //        them. Pinned by an [nri] case.
-        //
-        //   (b2) EXECUTE ENTERED, NEVER SUCCEEDED -- the first
-        //        RenderFrameOffscreen reached RenderGraph::Execute and failed
-        //        inside it (first-frame device loss on the viewport is the
-        //        realistic Task-8 shape). STILL OPEN; this local lane does NOT
-        //        close it. The device is latched at Execute's ENTRY, before
-        //        anything fallible, while m_submitValue advances only after a
-        //        successful QueueSubmit -- so this branch is TAKEN
-        //        (DebugSubmitCount() == 0) while RenderGraph goes on burying
-        //        through its OWN captured m_device->Graves(), which has no
-        //        parameter to receive this local. And the sharpest edge is
-        //        already behind us by then: EnsureExecutionResources buries its
-        //        partially created command buffers and allocators at
-        //        m_submitValue == 0 SYNCHRONOUSLY inside the failing Execute,
-        //        before any destructor runs at all.
-        //
-        // (b2) is closed by the PER-CONTEXT GRAVEYARD LANE and by nothing short
-        // of it -- its burial sites are inside RenderGraph, so closing them IS
-        // that lane. Same for the submitted case, and for ~RenderGraph's own
-        // tail, which runs after this body. See prerequisite (1) in the header.
-        // =====
-        //
-        // HOST-WINDOW MODE IS DELIBERATELY EXCLUDED. Its graveyard belongs to
-        // the device it also owns and is therefore empty at fence 0, so this
-        // would be a no-op change to the exact teardown sequence desk
-        // checkpoint D3b is pinning -- and a no-op change to that path is still
-        // a change to it.
-        Graveyard  localGraves;
-        // NOT "never latched a device" -- see (b2) above for the gap.
-        const bool everSubmitted = m_graph && m_graph->DebugSubmitCount() > 0;
-        const bool ownLane       = (m_mode == Mode::Offscreen) && !everSubmitted;
-        Graveyard& graves        = ownLane ? localGraves : m_device->Graves();
+        // HOST-WINDOW MODE IS NOT AN EXCEPTION and deliberately so: the
+        // objects, their fence values and their burial ORDER are identical to
+        // what the device graveyard used to receive -- the only change is which
+        // object holds them, plus the graph's tail now being drained here
+        // instead of by ~NriDevice a few members later, behind the same
+        // DeviceWaitIdle. That is what keeps desk checkpoint D3b's path
+        // behaviour-equivalent.
+        Graveyard& graves = m_graves;
 
         if (m_capture)
         {
@@ -697,12 +667,25 @@ namespace Arcane
         // destroy safety net.
         m_pipelines.Clear(graves, fence);
 
-        // Buries the transient pool + EVERY cached attachment view at the same
-        // value -- including the IMPORTED views, which name this frame's
-        // swapchain backbuffers (ReleaseGpuResources -> ReleaseImportedViews),
-        // or, offscreen, the output texture below.
-        if (m_graph)
-            m_graph->ReleaseGpuResources();
+        // DESTROYED HERE, EXPLICITLY, not left to the member destructor --
+        // which is the closure of header window (a) (NRI Phase 3, Task 8-pre).
+        //
+        // ~RenderGraph buries EVERYTHING it owns at its own last submitted
+        // fence value: the transient pool and every cached attachment view
+        // (including the IMPORTED ones, which name this frame's swapchain
+        // backbuffers -- or, offscreen, the output texture below), AND the
+        // per-frame-slot command buffers, their allocators and the submission
+        // fence. A MEMBER destructor runs after this BODY, i.e. after the drain
+        // below, so that tail would sit pending in a lane nothing revisits: in
+        // Debug ~Graveyard makes that fatal, and in Release it runs those
+        // thunks from a destructor with no fence-completion guarantee.
+        //
+        // Doing it here puts the whole graph in one lane and one sweep. The
+        // objects and their fence values are exactly what the shared graveyard
+        // used to receive; only the sweep's SITE moves -- from ~NriDevice, a
+        // few members later, to this line -- and both sit behind the same
+        // DeviceWaitIdle above, with the swapchain still alive.
+        m_graph.reset();
 
         // ---- offscreen mode's own two objects (Task 7) -------------------
         // STRICTLY AFTER the release above, because Graveyard::Drain runs
@@ -731,46 +714,39 @@ namespace Arcane
             m_offscreenFence = nullptr;
         }
 
-        // ...and RUNS those burials HERE rather than leaving them pending.
+        // ...and RUNS every burial above HERE rather than leaving it pending.
         // Load-bearing, and Vulkan-only in its consequences (fix round 1,
         // finding 1):
         //
-        // The graveyard's ordinary drain site is ~NriDevice -- which runs AFTER
-        // ~NriSwapChain in this class's member order, and NriSwapChain's
-        // teardown destroys the backbuffer IMAGES along with the swapchain. A
-        // view left buried above would therefore reach DestroyDescriptor with
-        // its VkImage already gone: "a VkImageView outliving its
-        // VkSwapchainKHR is a validation error". On a vehicle whose entire
-        // exit-code contract is "the latch did not grow", that is not an
-        // ordering nit -- it is a guaranteed nonzero exit on vulkan.
+        // A pending view must not outlive the image it views, and this class's
+        // member order destroys the SWAPCHAIN -- backbuffer IMAGES included --
+        // a few lines after this body returns. A view left buried would then
+        // reach DestroyDescriptor with its VkImage already gone: "a VkImageView
+        // outliving its VkSwapchainKHR is a validation error". On a vehicle
+        // whose entire exit-code contract is "the latch did not grow", that is
+        // not an ordering nit -- it is a guaranteed nonzero exit on vulkan.
         //
         // Draining here fixes it structurally: a destructor BODY runs before
         // any member is destroyed, so the swapchain and its images are still
         // alive at this line. Graveyard::Drain's precondition -- the caller has
         // already made the GPU idle -- is satisfied by the DeviceWaitIdle at
-        // the top of this function. Everything buried above (capture buffer,
-        // pipeline cache, pool, views) goes out in this one sweep; ~RenderGraph
-        // then buries the command slots and the submission fence into a now-
-        // EMPTY graveyard (so nondecreasing holds trivially), and ~NriDevice
-        // drains that as usual. Neither of those names a swapchain image, so
-        // their ordering is unchanged and safe.
+        // the top of this function.
         //
-        // OFFSCREEN MODE NEEDS THIS DRAIN EVEN MORE, because there is no
+        // THIS SWEEP IS NOW COMPLETE, which it was not before Task 8-pre.
+        // Everything this context ever created goes out in it: the capture
+        // buffer, the nodes' objects, the texture cache, the pipeline cache,
+        // the graph's pool and views AND -- because m_graph was reset above
+        // rather than left to its member destructor -- the graph's command
+        // buffers, allocators and submission fence, plus the offscreen output
+        // and pacing fence just buried. Nothing of this context's is pending
+        // anywhere when this line returns, which is what ~Graveyard asserts a
+        // few members later.
+        //
+        // OFFSCREEN MODE NEEDED THAT COMPLETENESS MOST, because it has no
         // ~NriDevice to fall back on: the device is BORROWED and outlives this
-        // object, so anything left pending here would sit in a live device's
-        // graveyard naming objects nothing else remembers. When `graves` is the
-        // SHARED one it also means this sweep covers whatever the sharing owner
-        // had pending -- correct (Drain's precondition is an idle GPU, and the
-        // DeviceWaitIdle above idles the whole device), just eager. When it is
-        // the local lane above, this is what empties it before `localGraves`
-        // goes out of scope (~Graveyard asserts it was left empty).
-        //
-        // WHAT THIS DRAIN CANNOT REACH is ~RenderGraph's own tail: a MEMBER
-        // destructor runs after this BODY, and a graph that DID execute buries
-        // its command buffers, allocators and fence there, into the shared
-        // graveyard, at its own m_submitValue. See prerequisite (1) in the
-        // header -- that window is the per-context lane's to close, not this
-        // function's.
+        // object. Before the lane, an offscreen context's leftovers sat in a
+        // LIVE device's shared graveyard naming objects nothing else
+        // remembered; now there is no shared structure for them to sit in.
         graves.Drain();
 
         // The number to size kUploadRingBytesPerFrame from once a real frame
@@ -846,7 +822,11 @@ namespace Arcane
         if (core.DeviceWaitIdle)
             (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
 
-        Graveyard& graves = m_device->Graves();
+        // THIS CONTEXT'S LANE, never the device's (Task 8-pre): everything
+        // buried below belongs to this context and is keyed to its graph's
+        // fence, and the Drain a few lines on must not sweep another context's
+        // pending burials.
+        Graveyard& graves = m_graves;
         if (m_capture)
         {
             const nri::CoreInterface* graveCore = &core;
@@ -955,7 +935,11 @@ namespace Arcane
         if (core.DeviceWaitIdle)
             (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
 
-        Graveyard& graves = m_device->Graves();
+        // THIS CONTEXT'S LANE (Task 8-pre) -- see Resize() above. It matters
+        // more here than there: an offscreen context is by construction the
+        // SECOND one on a shared device, so the device's graveyard is exactly
+        // where another context's un-reaped burials would be sitting.
+        Graveyard& graves = m_graves;
         const std::uint64_t fence = m_graph ? m_graph->DebugSubmitCount() : 0;
         const nri::CoreInterface* graveCore = &core;
 
@@ -1028,8 +1012,8 @@ namespace Arcane
         if (m_capture)
         {
             const nri::CoreInterface* graveCore = &core;
-            m_device->Graves().Bury(m_graph ? m_graph->DebugSubmitCount() : 0,
-                                     [graveCore, b = m_capture] { graveCore->DestroyBuffer(b); });
+            m_graves.Bury(m_graph ? m_graph->DebugSubmitCount() : 0,
+                          [graveCore, b = m_capture] { graveCore->DestroyBuffer(b); });
             m_capture         = nullptr;
             m_captureRecorded = false;
         }
@@ -1432,7 +1416,7 @@ namespace Arcane
         const std::uint32_t slot = (std::uint32_t)(m_frameIndex % kSwapchainFramesInFlight);
         m_ring.BeginFrame(slot);   // the caller owes this before Execute()
 
-        const RgExecuteDesc desc{ *m_device, m_swap.get(), m_ring, m_pipelines, slot };
+        const RgExecuteDesc desc{ *m_device, m_graves, m_swap.get(), m_ring, m_pipelines, slot };
 
         // Execute() returns false for TWO different things and the frame
         // driver must treat them differently: a skipped acquire (routine --
@@ -1575,7 +1559,11 @@ namespace Arcane
         // graveyard's clock, and this frame's only completion signal). No
         // executor change was needed for this task; the [nri] NONE cases pin
         // both halves of that path.
-        const RgExecuteDesc desc{ *m_device, /*swapChain=*/nullptr, m_ring, m_pipelines, slot };
+        // The lane beside it is the OTHER half of what makes an offscreen
+        // context safe on a shared device (Task 8-pre): the fence this Execute
+        // reaps with is THIS graph's, and m_graves is the only graveyard it
+        // describes. The host-window context's lane is untouched by it.
+        const RgExecuteDesc desc{ *m_device, m_graves, /*swapChain=*/nullptr, m_ring, m_pipelines, slot };
 
         const std::uint64_t errorsBefore = RenderErrorCount();
         if (!m_graph->Execute(desc, *compiled))

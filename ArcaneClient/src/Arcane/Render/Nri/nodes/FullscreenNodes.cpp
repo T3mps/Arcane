@@ -521,11 +521,19 @@ namespace Arcane
         // and this exec fn, and the epoch is the only observable.
         if (!context.graph || !m_device)
             return;
+        // THE GRAPH'S LANE, not the device's (NRI Phase 3, Task 8-pre): this
+        // exec fn runs inside that graph's Execute, so its lane is where the
+        // views it is about to bury belong -- and it is the same lane the pool
+        // burial that moved the epoch went into, which is what keeps the two in
+        // one ordered sequence.
+        Graveyard* graves = context.graph->Graves();
+        if (!graves)
+            return;   // unreachable from an exec fn: Execute latches the lane before recording
         const std::uint64_t epoch = context.graph->PoolEpoch();
         if (epoch == m_poolEpoch)
             return;
         m_poolEpoch = epoch;
-        InvalidateSources(m_device->Graves(), context.graph->DebugSubmitCount());
+        InvalidateSources(*graves, context.graph->DebugSubmitCount());
     }
 
     nri::Descriptor* PostChainNode::EnsureView(const nri::CoreInterface& core, nri::Texture* texture)
@@ -1239,6 +1247,11 @@ namespace Arcane
         // the recreated texture the vacated address.
         if (!context.graph || !m_device)
             return;
+        // The GRAPH's lane rather than the device's -- see
+        // PostChainNode::SyncPoolEpoch above for why (NRI Phase 3, Task 8-pre).
+        Graveyard* graves = context.graph->Graves();
+        if (!graves)
+            return;   // unreachable from an exec fn: Execute latches the lane before recording
         const std::uint64_t epoch = context.graph->PoolEpoch();
         if (epoch == m_poolEpoch)
             return;
@@ -1247,7 +1260,7 @@ namespace Arcane
         // reading them. DebugSubmitCount() is the submission that last used
         // them -- the same value the graph keys its OWN burials to, which is
         // what keeps Graveyard's nondecreasing rule satisfied.
-        InvalidateSource(m_device->Graves(), context.graph->DebugSubmitCount());
+        InvalidateSource(*graves, context.graph->DebugSubmitCount());
     }
 
     void TonemapNode::Release(Graveyard& graveyard, std::uint64_t fence)

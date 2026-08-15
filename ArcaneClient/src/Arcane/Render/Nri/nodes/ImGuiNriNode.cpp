@@ -38,9 +38,10 @@ namespace Arcane
         m_renderer.Release(graveyard, fence);
     }
 
-    void ImGuiNriNode::PrepareFrame(ImDrawData* drawData, std::uint64_t fence)
+    void ImGuiNriNode::PrepareFrame(ImDrawData* drawData, Graveyard& graveyard,
+                                     std::uint64_t fence)
     {
-        m_renderer.NewFrameTexUpdates(drawData, fence);
+        m_renderer.NewFrameTexUpdates(drawData, graveyard, fence);
     }
 
     void ImGuiNriNode::Record(RenderGraphNodeContext& context, ImDrawData* drawData, RgTexture target)
@@ -57,8 +58,14 @@ namespace Arcane
         if (context)
         {
             if (ImGuiNriNode* node = context->ImGuiHud())
-                node->PrepareFrame(context->CurrentImGuiDrawData(),
+            {
+                // THE CONTEXT'S LANE (Task 8-pre), not the device's: an atlas
+                // rebuild destroys a texture keyed to THIS graph's fence, and
+                // a second context on the same device has a fence timeline
+                // whose values mean nothing to it.
+                node->PrepareFrame(context->CurrentImGuiDrawData(), context->Graves(),
                                     context->Graph().DebugSubmitCount());
+            }
         }
 
         graph.AddNode("imgui", RenderGraph::NodeKind::Raster,

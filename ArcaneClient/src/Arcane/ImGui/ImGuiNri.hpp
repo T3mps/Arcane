@@ -133,14 +133,25 @@ namespace Arcane
         // ImTextureData-owned textures `drawData` names. MUST be called at
         // DECLARATION time, never from an exec fn: a create/update goes
         // through nri::HelperInterface::UploadData, which submits and waits
-        // on the graphics queue. `fence` is the value destroyed objects are
-        // buried at (the graph's own last submitted value).
+        // on the graphics queue. `graveyard`/`fence` are where and at what
+        // value destroyed objects are buried -- THE OWNING CONTEXT'S LANE and
+        // its graph's own last submitted value (NriGraphContext::Graves(),
+        // Graph().DebugSubmitCount()).
+        //
+        // THE LANE IS A PARAMETER, not `device.Graves()`, for the reason
+        // NriGraphContext.hpp's TWO CONTEXTS, TWO LANES block states in full:
+        // one device may carry several contexts, each with its own submission
+        // timeline, and a fence value means nothing outside the one it came
+        // from. Every disposal this class makes takes it the same way, so a
+        // backend's objects can never be split across two graveyards -- and
+        // ordering across two graveyards is undefined, while ordering WITHIN
+        // one is the contract (a view must die before the texture it views).
         //
         // This is ImGuiNvrhiRenderer's inline texture loop lifted out of
         // RenderDrawData, and the lift is forced rather than stylistic: the
         // NVRHI version could write a texture into the SAME open command list
         // it was about to draw with, and NRI's helper cannot.
-        void NewFrameTexUpdates(ImDrawData* drawData, std::uint64_t fence);
+        void NewFrameTexUpdates(ImDrawData* drawData, Graveyard& graveyard, std::uint64_t fence);
 
         // Records `drawData` into an ALREADY-OPEN raster pass whose single
         // colour attachment is `target`. Emits no barrier and begins no
@@ -219,11 +230,12 @@ namespace Arcane
         // otherwise a fresh allocation. Null when the pool is exhausted.
         [[nodiscard]] nri::DescriptorSet* AcquireSet(const nri::CoreInterface& core);
 
-        void UpdateTexture(ImTextureData* tex, std::uint64_t fence);
-        void DestroyTexture(ImTextureData* tex, std::uint64_t fence);
-        // Buries `entry`'s view (and its texture when we own it) and retires
-        // its descriptor set. Removes it from m_textures.
-        void ReleaseEntry(Entry& entry, std::uint64_t fence);
+        void UpdateTexture(ImTextureData* tex, Graveyard& graveyard, std::uint64_t fence);
+        void DestroyTexture(ImTextureData* tex, Graveyard& graveyard, std::uint64_t fence);
+        // Buries `entry`'s view (and its texture when we own it) in
+        // `graveyard` and retires its descriptor set. Clears the entry in
+        // place; the caller erases it from m_textures.
+        void ReleaseEntry(Entry& entry, Graveyard& graveyard, std::uint64_t fence);
 
         // One shared cache, so every node's opaque shader-pair id space must
         // stay disjoint: Batch2DNode 0x2000+, TonemapNode 0x3000, the outline

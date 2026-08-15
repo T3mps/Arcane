@@ -787,6 +787,13 @@ namespace Arcane
         // so a resize genuinely re-shapes the pool.
         if (!context.graph || !m_device)
             return;
+        // The GRAPH's lane rather than the device's (NRI Phase 3, Task 8-pre):
+        // this exec fn runs inside that graph's Execute, so its lane is where
+        // these views belong -- the same lane the pool burial that moved the
+        // epoch went into.
+        Graveyard* graves = context.graph->Graves();
+        if (!graves)
+            return;   // unreachable from an exec fn: Execute latches the lane before recording
         const std::uint64_t epoch = context.graph->PoolEpoch();
         if (epoch == m_poolEpoch)
             return;
@@ -797,7 +804,7 @@ namespace Arcane
         // Graveyard's nondecreasing rule satisfied. Views before resources: this
         // buries ONLY views, and the arena/pool burials in Release() happen
         // after this call there too.
-        InvalidateSources(m_device->Graves(), context.graph->DebugSubmitCount());
+        InvalidateSources(*graves, context.graph->DebugSubmitCount());
     }
 
     nri::Descriptor* OutlineNode::EnsureView(const nri::CoreInterface& core, nri::Texture* texture)

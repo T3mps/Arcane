@@ -374,16 +374,17 @@ namespace Arcane
         return &m_textures.back();
     }
 
-    void ImGuiNri::ReleaseEntry(Entry& entry, std::uint64_t fence)
+    void ImGuiNri::ReleaseEntry(Entry& entry, Graveyard& graveyard, std::uint64_t fence)
     {
         // BURIED, not destroyed: an earlier submitted frame may still be
-        // reading them. m_device->Graves() is the ONE graveyard on this device
-        // -- the same object Release()'s caller hands in -- so a texture
-        // destroyed mid-run (an atlas rebuild, at declaration time, where
-        // there is no graveyard parameter to pass) and one destroyed at
-        // teardown go out through the same queue in burial order.
+        // reading them. The lane comes in as a PARAMETER (Task 8-pre) rather
+        // than being read off the device, so every disposal this backend makes
+        // -- an atlas rebuild mid-run, a user-texture invalidation, teardown --
+        // lands in the OWNING CONTEXT's one lane, in burial order. See
+        // NewFrameTexUpdates in the header for why the device's graveyard is
+        // the wrong answer once one device carries two contexts.
         const nri::CoreInterface* core = &m_device->Core();
-        Graveyard& graves = m_device->Graves();
+        Graveyard& graves = graveyard;
         if (entry.view)
         {
             nri::Descriptor* view = entry.view;
@@ -404,7 +405,7 @@ namespace Arcane
         entry.owned   = false;
     }
 
-    void ImGuiNri::DestroyTexture(ImTextureData* tex, std::uint64_t fence)
+    void ImGuiNri::DestroyTexture(ImTextureData* tex, Graveyard& graveyard, std::uint64_t fence)
     {
         // Evict the cache entry BEFORE the texture is buried -- the ABA rule
         // ImGuiNvrhiRenderer::DestroyTexture states, and it is load-bearing
@@ -416,7 +417,7 @@ namespace Arcane
         {
             if (m_textures[i].owner != tex)
                 continue;
-            ReleaseEntry(m_textures[i], fence);
+            ReleaseEntry(m_textures[i], graveyard, fence);
             m_textures.erase(m_textures.begin() + (std::ptrdiff_t)i);
             break;
         }
@@ -428,7 +429,7 @@ namespace Arcane
         tex->SetStatus(ImTextureStatus_Destroyed);
     }
 
-    void ImGuiNri::UpdateTexture(ImTextureData* tex, std::uint64_t fence)
+    void ImGuiNri::UpdateTexture(ImTextureData* tex, Graveyard& graveyard, std::uint64_t fence)
     {
         const nri::CoreInterface& core = m_device->Core();
 
@@ -539,7 +540,7 @@ namespace Arcane
                 if (!EnsureEntry(core, texture, tex))
                 {
                     const nri::CoreInterface* c = &core;
-                    m_device->Graves().Bury(fence, [c, texture] { c->DestroyTexture(texture); });
+                    graveyard.Bury(fence, [c, texture] { c->DestroyTexture(texture); });
                     return;   // already reported
                 }
                 // THE ImTextureID CONVENTION (§7.3): the raw backend texture
@@ -554,16 +555,17 @@ namespace Arcane
         // ImGuiNvrhiRenderer's guard, kept verbatim: ImGui only means it once
         // the texture has gone unused for a frame.
         if (tex->Status == ImTextureStatus_WantDestroy && tex->UnusedFrames > 0)
-            DestroyTexture(tex, fence);
+            DestroyTexture(tex, graveyard, fence);
     }
 
-    void ImGuiNri::NewFrameTexUpdates(ImDrawData* drawData, std::uint64_t fence)
+    void ImGuiNri::NewFrameTexUpdates(ImDrawData* drawData, Graveyard& graveyard,
+                                       std::uint64_t fence)
     {
         if (!m_device || !drawData || drawData->Textures == nullptr)
             return;
         for (ImTextureData* tex : *drawData->Textures)
             if (tex->Status != ImTextureStatus_OK)
-                UpdateTexture(tex, fence);
+                UpdateTexture(tex, graveyard, fence);
     }
 
     void ImGuiNri::RenderDrawData(ImDrawData* drawData, RenderGraphNodeContext& context,
@@ -797,13 +799,13 @@ namespace Arcane
         {
             for (ImTextureData* tex : ImGui::GetPlatformIO().Textures)
                 if (tex->RefCount == 1)
-                    DestroyTexture(tex, fence);
+                    DestroyTexture(tex, graveyard, fence);
         }
 
         // Anything the walk above did not reach (a USER texture's view + set,
         // which no ImTextureData owns).
         for (Entry& entry : m_textures)
-            ReleaseEntry(entry, fence);
+            ReleaseEntry(entry, graveyard, fence);
         m_textures.clear();
         m_retired.clear();
 

@@ -125,86 +125,88 @@
 // binds one VkDevice per process and DXGI allows one flip-model swapchain per
 // HWND, so a second device is exactly the topology Task 6 removed.
 //
-// ========= TWO PREREQUISITES BEFORE A SECOND CONTEXT GOES LIVE =========
-// READ BOTH BEFORE WIRING AN OFFSCREEN CONTEXT ONTO A LIVE DEVICE (Task 8).
-// Each is a Debug assert or a release-build use-after-free, not a nit, and
-// NEITHER is fixed by this task -- it adds the capability and no caller.
+// ===== TWO CONTEXTS, TWO LANES -- WHAT A SECOND CONTEXT OWES (Task 8-pre) ==
+// Prerequisite (1) -- the shared graveyard -- is CLOSED by the per-context
+// lane below. What survives of it is not a warning list but a RULE, and it is
+// the rule a third context would have to obey too. Prerequisite (2) --
+// ImGuiNri's missing user-texture invalidation hook -- is STILL OPEN and is
+// the other half of this enabler.
 //
-// ---- (1) TWO CONTEXTS, ONE GRAVEYARD --------------------------------
-// The Graveyard is per-DEVICE (NriDevice::Graves()), not per-context, and
-// every burial is keyed to the burying GRAPH's own submission fence value.
-// Two contexts have two RenderGraphs and therefore two INDEPENDENT fence
-// timelines whose values mean nothing to each other:
-//   * Graveyard::Bury's nondecreasing-fenceValue assert can fire in Debug the
+// ---- (1) ONE GRAVEYARD LANE PER CONTEXT ------------------------------
+// EVERY NRI object a context owns is buried in THAT CONTEXT'S OWN Graveyard
+// (NriGraphContext::Graves()), never in the shared NriDevice::Graves(), and is
+// keyed to THAT context's graph's submission fence. RenderGraph receives the
+// lane through RgExecuteDesc::graves and latches it beside the device at
+// Execute's ENTRY; nodes reach it from an exec fn through
+// RenderGraphNodeContext::graph->Graves(); ImGuiNri takes it as a parameter on
+// every disposal it makes.
+//
+// WHY IT HAD TO BE PER-CONTEXT. A fence value only means something inside ONE
+// submission timeline. Two contexts have two RenderGraphs and therefore two
+// INDEPENDENT timelines, so with one shared graveyard:
+//   * Graveyard::Bury's nondecreasing-fenceValue assert fires in Debug the
 //     moment the two counters interleave out of order; and, worse,
-//   * RenderGraph::Execute reaps with ITS fence's completed value, which can
-//     run the OTHER graph's thunks before that graph's submission retired --
-//     a use-after-free no assert catches.
+//   * each RenderGraph::Execute reaps with ITS fence's completed value, which
+//     runs the OTHER graph's thunks before that graph's submission has
+//     retired -- a use-after-free no assert catches.
+// Both are now impossible by construction: a lane is reaped only by the one
+// graph that buries into it, with the one fence that describes those burials.
 //
-// IT IS NOT SCOPED TO "WHILE BOTH RENDER". Four windows outlive that:
-//   (a) OFFSCREEN-CONTEXT TEARDOWN. ~RenderGraph buries the command buffers,
-//       the allocators and its own fence at its m_submitValue
-//       (RenderGraphExec.cpp, ReleaseGpuResourcesInternal(all=true)) -- and a
-//       MEMBER destructor runs AFTER this class's destructor BODY, i.e. after
-//       its graves.Drain(). Those thunks therefore land in a shared graveyard
-//       that nothing here will drain again: they trip Bury's assert if the
-//       host's graveyard holds an un-reaped entry at a higher value at that
-//       instant, and are afterwards reaped against the HOST's foreign fence
-//       value -- harmless only because this destructor's DeviceWaitIdle
-//       happens to make it so.
+// THE FOUR WINDOWS THAT USED TO OUTLIVE "while both render", and how each is
+// closed -- keep this list, it is what a future edit must not reopen:
+//   (a) CONTEXT TEARDOWN. ~RenderGraph buries the command buffers, the
+//       allocators and its own fence at its m_submitValue
+//       (ReleaseGpuResourcesInternal(all=true)) -- and a MEMBER destructor runs
+//       AFTER this class's destructor BODY, i.e. after its drain. CLOSED by
+//       ~NriGraphContext destroying m_graph EXPLICITLY, in the body, right
+//       before the drain: the tail lands in this context's lane and that lane
+//       is then emptied. Nothing is left pending anywhere (~Graveyard asserts
+//       exactly that in Debug, on the way out).
 //   (b1) EXECUTE WAS NEVER ENTERED -- a failed InitOffscreen, or a context
-//       created and dropped without a frame. `fence` is 0, so every burial
-//       would go in at 0 behind a shared graveyard already at N. CLOSED IN
-//       THIS FILE (~NriGraphContext's never-submitted branch) with a LOCAL
-//       graveyard, touching no shared machinery, so it does not wait on the
-//       lane fix below. Complete for this window precisely because a graph
-//       whose Execute was never entered never latched a device, and therefore
-//       buries nothing of its own from anywhere.
-//   (b2) EXECUTE WAS ENTERED AND NEVER SUCCEEDED -- the first
-//       RenderFrameOffscreen reached RenderGraph::Execute and failed inside
-//       it (a first-frame device loss on the viewport is the realistic Task-8
-//       shape). ***OPEN.*** RenderGraph::m_device is latched UNCONDITIONALLY
-//       at Execute's ENTRY, before any fallible step, while m_submitValue only
-//       advances after a successful QueueSubmit -- so this context has a
-//       latched device and DebugSubmitCount() == 0, and the local-lane branch
-//       above cannot cover it: RenderGraph buries through its OWN captured
-//       m_device->Graves() and has no parameter to receive a lane.
-//       THE SHARPEST EDGE IS NOT EVEN AT TEARDOWN: EnsureExecutionResources's
-//       all-or-nothing cleanup buries the partially created command buffers
-//       and allocators at m_submitValue == 0 SYNCHRONOUSLY, inside the failing
-//       Execute, before any destructor runs. Closed by the lane fix below and
-//       by nothing short of it.
-//   (c) Any future owner burying into NriDevice::Graves() on its own clock.
+//       created and dropped without a frame. Every burial would key at fence 0.
+//       CLOSED by the lane, which starts EMPTY: 0 is nondecreasing against
+//       nothing. The Task-7 local-graveyard special case that used to cover
+//       only this window is GONE -- one mechanism, not two.
+//   (b2) EXECUTE WAS ENTERED AND NEVER SUCCEEDED -- the first frame reached
+//       RenderGraph::Execute and failed inside it (a first-frame device loss on
+//       the viewport is the realistic shape). CLOSED by the lane, and it is the
+//       window that REQUIRED it: m_device is latched unconditionally at
+//       Execute's ENTRY while m_submitValue only advances after a successful
+//       QueueSubmit, so such a graph buries at 0 with a latched device. The
+//       sharpest edge was never at teardown at all --
+//       EnsureExecutionResources's all-or-nothing cleanup buries the partially
+//       created command buffers and allocators at m_submitValue == 0
+//       SYNCHRONOUSLY, inside the failing Execute, before any destructor runs.
+//       The lane latches at that same entry, so it is already in place.
+//   (c) ANY FUTURE OWNER burying on its own clock. Still the live hazard, and
+//       now with a stated rule: NriDevice::Graves() is DRAIN-ONLY (nothing in
+//       the tree reaps it; ~NriDevice drains it once, behind a DeviceWaitIdle).
+//       An owner that needs fence-paced reclamation must own a lane, exactly
+//       like this class does. See NriDevice::Graves().
 //
-// THE FIX for (a), (b2) and (c) is one thing: a PER-CONTEXT Graveyard lane
-// threaded through RgExecuteDesc and the node Release() calls -- the burial
-// sites for (b2) are inside RenderGraph, so closing them IS that lane. Every
-// burial in this class is already keyed to its graph's fence, so the boundary
-// is drawn; it just lands in the wrong object today. Deliberately NOT done
-// here, because changing which graveyard the HOST-WINDOW graph buries into is
-// a diff straight through the path desk checkpoint D3b is currently pinning.
-// It is its own dispatched task, ahead of Task 8.
+// A LANE IS PRIVATE TO ITS CONTEXT. That is the part that does not go away:
+// nothing may bury one context's objects into another's lane, and nothing may
+// split one context's objects ACROSS two lanes -- ordering is the contract (a
+// view must be destroyed before the texture it views), and no ordering exists
+// between two graveyards.
 //
-// ---- (2) ImGuiNri HAS NO INVALIDATION HOOK FOR USER TEXTURES --------
+// ---- (2) ImGuiNri HAS NO INVALIDATION HOOK FOR USER TEXTURES -- OPEN --
 // ResizeOffscreen destroys the output texture and creates a replacement, and
 // NRI does not ref-count -- so it may hand the replacement the address the
 // destroyed one just vacated. ImGuiNri caches per texture by RAW POINTER
-// (ImGuiNri::EnsureEntry matches `entry.texture == texture`) and its ONLY
-// eviction path matches on `entry.owner`, an ImTextureData a USER texture
-// never has (ImGuiNri::DestroyTexture). So the cache cannot evict the entry
-// for an offscreen output at all, and after a resize a bit-identical
-// ImTextureID reports a cache HIT on an nri::Descriptor + descriptor set that
-// still name the DESTROYED texture: a stale-SRV sample or a GPU fault on every
-// viewport-panel drag.
+// (EnsureEntry matches `entry.texture == texture`) and its ONLY eviction path
+// matches on `entry.owner`, an ImTextureData a USER texture never has. So the
+// cache cannot evict the entry for an offscreen output at all, and after a
+// resize a bit-identical ImTextureID reports a cache HIT on an nri::Descriptor
+// + descriptor set that still name the DESTROYED texture: a stale-SRV sample
+// or a GPU fault on every viewport-panel drag.
 //
 // RE-READING OffscreenTextureId() DOES NOT FIX THIS -- the id may legitimately
 // come back identical, and the stale state is inside ImGuiNri, not in the id.
 // ImGuiNri.hpp says so itself and names the remedy: "the fix when the editor
-// path lands is an explicit invalidation hook, not a heuristic." TASK 7 IS
-// THAT EDITOR PATH ARRIVING, so Task 8 owes ImGuiNri that hook (an
-// "invalidate the entry for this nri::Texture*" entry point, called from the
-// viewport's resize handler beside ResizeOffscreen) before it puts an
-// offscreen output through ImGui::Image.
+// path lands is an explicit invalidation hook, not a heuristic." That hook is
+// the SECOND half of this enabler and lands next; until it does, no offscreen
+// output may go through ImGui::Image.
 // =====================================================================
 //
 // Adapted, where marked, from .example/NRISamples (MIT -- see that tree's
@@ -434,23 +436,21 @@ namespace Arcane
         // THE OFFSCREEN FLAVOR (NRI Phase 3, Task 7) -- see OFFSCREEN MODE in
         // the file header for the full contract.
         //
-        // ============ BEFORE YOU CALL THIS ALONGSIDE A LIVE HOST-WINDOW
-        // CONTEXT: two known defects bite, and each is a Debug assert or a
-        // release-build use-after-free, not a nit. FIX BOTH FIRST.
-        //   1. the per-device Graveyard is shared across the two contexts'
-        //      independent fence timelines (needs the per-context lane). This
-        //      class closes exactly ONE window of it in-file -- a context whose
-        //      Execute was never entered. A context whose FIRST frame entered
-        //      RenderGraph::Execute and failed there is NOT covered and is a
-        //      realistic Task-8 shape (first-frame device loss on the
-        //      viewport); so is teardown after any successful frame.
-        //   2. ImGuiNri cannot evict its cached descriptor for a USER texture,
-        //      so ResizeOffscreen's destroy/recreate leaves it sampling the
-        //      dead one (needs ImGuiNri's invalidation hook).
-        // Both are stated in full -- with the mechanism, the exact windows and
-        // the remedy -- under TWO PREREQUISITES BEFORE A SECOND CONTEXT GOES
-        // LIVE in the file header. A LONE offscreen context (no second context
-        // sharing the graveyard, no ImGui sampling) is unaffected by both.
+        // ============ RUNNING THIS ALONGSIDE A LIVE HOST-WINDOW CONTEXT:
+        // one of the two known defects is closed, one is not.
+        //   1. THE GRAVEYARD is no longer shared (Task 8-pre). This context
+        //      owns its own lane (Graves()) and reaps it with its own fence, so
+        //      the two contexts' independent fence timelines never meet.
+        //      Nothing to do -- it is a member, created and drained by this
+        //      class.
+        //   2. STILL OPEN: ImGuiNri cannot evict its cached descriptor for a
+        //      USER texture, so ResizeOffscreen's destroy/recreate leaves it
+        //      sampling the dead one. It needs ImGuiNri's invalidation hook,
+        //      which is this enabler's second half. Until that lands, do not
+        //      put an offscreen output through ImGui::Image.
+        // Both are stated in full -- mechanism, windows, closure -- under TWO
+        // CONTEXTS, TWO LANES in the file header. A LONE offscreen context (no
+        // second context, no ImGui sampling) is unaffected by both.
         // ============
         //
         // No window, no swapchain: builds the ring, the cache, the graph, the
@@ -562,11 +562,12 @@ namespace Arcane
         // dodge.
         //
         // RE-READING IT AFTER A RESIZE IS NECESSARY BUT NOT SUFFICIENT, and
-        // that distinction is the whole of prerequisite (2) in the file header:
-        // any cache DOWNSTREAM keyed on this pointer -- ImGuiNri's is, and it
-        // cannot evict a user texture's entry -- must be invalidated
-        // explicitly, because the new pointer may compare EQUAL to the old one
-        // and the staleness lives in that cache rather than in this value.
+        // that distinction is the whole of item (2) under TWO CONTEXTS, TWO
+        // LANES in the file header: any cache DOWNSTREAM keyed on this pointer
+        // -- ImGuiNri's is, and it cannot evict a user texture's entry -- must
+        // be invalidated explicitly, because the new pointer may compare EQUAL
+        // to the old one and the staleness lives in that cache rather than in
+        // this value.
         [[nodiscard]] nri::Texture* OffscreenOutput() noexcept { return m_offscreen; }
 
         // OffscreenOutput() as an ImGui texture id, ready for ImGui::Image().
@@ -583,11 +584,12 @@ namespace Arcane
         // nri::Texture* itself, not a descriptor. 0 on a host-window context,
         // which is ImTextureID_Invalid.
         //
-        // HANDING THIS TO ImGui::Image REQUIRES prerequisite (2) in the file
-        // header to be closed first: because the id IS the raw pointer, an id
-        // that is unchanged across a ResizeOffscreen is exactly the case that
-        // makes ImGuiNri's pointer-keyed, never-evicted user-texture entry
-        // serve a descriptor over the destroyed texture. See OffscreenOutput().
+        // HANDING THIS TO ImGui::Image REQUIRES item (2) under TWO CONTEXTS,
+        // TWO LANES in the file header to be closed first: because the id IS
+        // the raw pointer, an id that is unchanged across a ResizeOffscreen is
+        // exactly the case that makes ImGuiNri's pointer-keyed, never-evicted
+        // user-texture entry serve a descriptor over the destroyed texture.
+        // See OffscreenOutput().
         [[nodiscard]] std::uint64_t OffscreenTextureId() const noexcept;
 
         // Destroy + recreate the output at the new size. MUST be called
@@ -621,6 +623,19 @@ namespace Arcane
         // Accessors for the node authors of Tasks 8-12. All references stay
         // valid for this object's lifetime.
         [[nodiscard]] NriDevice&        Device()    noexcept { return *m_device; }
+
+        // THIS CONTEXT'S GRAVEYARD LANE -- where every NRI object this context
+        // owns is buried, keyed to Graph()'s own submission fence value
+        // (Graph().DebugSubmitCount()).
+        //
+        // USE THIS, NEVER Device().Graves(), for anything this context owns.
+        // The device's graveyard is SHARED between every context on that device
+        // and has no fence timeline of its own; two contexts' fence values mean
+        // nothing to each other, so a burial that lands there is either an
+        // assert (Graveyard::Bury's nondecreasing rule) or a reap against a
+        // foreign fence. See TWO CONTEXTS, TWO LANES in the file header.
+        [[nodiscard]] Graveyard&        Graves()    noexcept { return m_graves; }
+
         // HOST-WINDOW MODE ONLY: an offscreen context holds no swapchain and
         // this would dereference null. SurfaceWidth()/SurfaceHeight() above are
         // the mode-agnostic readings of its two most-asked questions.
@@ -801,13 +816,15 @@ namespace Arcane
         bool EnsureCaptureBuffer();
 
         // --- TEARDOWN CONTRACT: declaration order == reverse destruction ---
-        // m_graph dies first (it buries its pool/views/command slots into the
-        // device's graveyard at its own last submitted fence value), then the
-        // cache and the ring, then the swapchain, then the NRI device (whose
-        // destructor idles the device and DRAINS that graveyard), then the
-        // native device it wrapped. Do NOT reorder: this is contract item 15
-        // (the NRI device is destroyed BEFORE the native one) plus the
-        // graveyard's "everything buried must outlive nothing".
+        // m_graph dies first -- EXPLICITLY, from ~NriGraphContext's body rather
+        // than as a member (it buries its pool/views/command slots into THIS
+        // CONTEXT'S LANE at its own last submitted fence value, and the body is
+        // the only place that still drains that lane afterwards) -- then the
+        // cache and the ring, then the swapchain, then m_graves itself, then
+        // the NRI device, then the native device it wrapped. Do NOT reorder:
+        // this is contract item 15 (the NRI device is destroyed BEFORE the
+        // native one) plus the graveyard's "everything buried must outlive
+        // nothing".
         //
         // THE WINDOW IS NO LONGER PART OF THIS CONTRACT because this object no
         // longer owns one (Task 6). It is the host's, and the swapchain that
@@ -829,6 +846,19 @@ namespace Arcane
         std::unique_ptr<NativeDeviceOwner> m_native;
         std::unique_ptr<NriDevice>         m_ownedDevice;
         NriDevice*                         m_device = nullptr;
+        // ---- THIS CONTEXT'S GRAVEYARD LANE (NRI Phase 3, Task 8-pre) -------
+        // Everything this context, its graph, its nodes and its caches destroy
+        // goes in HERE, keyed to m_graph's own submission fence -- see Graves()
+        // and the TWO CONTEXTS, TWO LANES block in the file header.
+        //
+        // ITS POSITION IS THE CONTRACT. Declared ABOVE every object that buries
+        // into it, so it is destroyed AFTER all of them; and BELOW m_device /
+        // m_ownedDevice, so the device whose function table its thunks call is
+        // still alive when Release's ~Graveyard drains a straggler. Nothing
+        // should ever reach that drain -- ~NriGraphContext empties this lane
+        // itself, after destroying m_graph explicitly -- and in Debug
+        // ~Graveyard asserts exactly that.
+        Graveyard                          m_graves;
         std::unique_ptr<NriSwapChain>      m_swap;
         NriUploadRing                      m_ring;
         NriPipelineCache                   m_pipelines;

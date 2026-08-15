@@ -79,9 +79,10 @@ namespace Arcane
 
         // DECLARATION-time half: the 1.92 texture protocol. See the header
         // block -- this submits and waits, so it must not be reached from an
-        // exec fn. `fence` is what destroyed textures are buried at (the
-        // graph's own last submitted value).
-        void PrepareFrame(ImDrawData* drawData, std::uint64_t fence);
+        // exec fn. `graveyard`/`fence` are where and at what value destroyed
+        // textures are buried: the OWNING CONTEXT's lane
+        // (NriGraphContext::Graves()) and its graph's own last submitted value.
+        void PrepareFrame(ImDrawData* drawData, Graveyard& graveyard, std::uint64_t fence);
 
         // RECORD-time half: records `drawData` into an ALREADY-OPEN raster
         // pass whose single colour attachment is `target`. Emits no barrier.
