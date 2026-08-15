@@ -293,6 +293,19 @@ namespace Arcane::Editor
         // MainLoop skips the rest of the frame). Its own definition carries the
         // frame's declared shape and the four fields deliberately left default.
         bool PresentChromeFrame();
+        // NRI Phase 3, Task 13: the NVRHI arm's half of the editor golden
+        // harness. Runs on the last frame of a golden run only, right after
+        // the canvas output texture has its final content for the frame
+        // (CompositeGameUi/RenderSelectionOutline are the last writers into
+        // it) -- reads it back via Arcane::ReadTexturePixels and hands the
+        // pixels to Arcane::GoldenArtifact (Host/GoldenHarness.hpp), exactly
+        // the pairing RuntimeFrame::CaptureTail uses for the NVRHI backbuffer.
+        // A no-op on the graph arm, where the equivalent capture is armed as
+        // a NODE inside RenderSceneToViewport's own FrameDesc instead (see
+        // that method) -- there is no separate "read this texture" entry
+        // point on that recorder, so piggybacking on the frame already being
+        // declared is the only shape that exists.
+        void CaptureEditorGolden();
         void EndFrame(LoopState& ls);
 
         // ---- The graph arm's EXIT-CODE FOLD (NRI Phase 3, Task 10) ----------
@@ -436,6 +449,30 @@ namespace Arcane::Editor
         // watch item ("the count must not grow across a clean exit") is legible
         // rather than inferred.
         std::uint64_t m_graphErrorBaseline = 0;
+
+        // ---- The editor's golden harness (NRI Phase 3, Task 13) -------------
+        // The editor's counterpart of RuntimeApp::m_goldenExit: 0 ordinarily;
+        // set to 3 by the golden warm-up's census refusal (MainLoop, before
+        // the frame loop starts) or by a capture/compare failure on the last
+        // frame (CaptureEditorGolden on the NVRHI arm, RenderSceneToViewport
+        // on the graph arm) -- the SAME exit code RuntimeApp::Run reports for
+        // the identical failure, and the same Arcane::GoldenArtifact call
+        // produces it on both hosts. Read by Run()'s tail, OUTRANKED by
+        // m_graphExit (precedence 1 > 2 > 3, matching RuntimeApp::Run's own
+        // 1 > 2 > 3 -- a run failure says WHERE the run died and a validation
+        // error explains a bad capture rather than the reverse, so both
+        // outrank a golden mismatch). Not #if-guarded, for the same reason
+        // m_graphExit is not: a preprocessor-guarded member forces a guard at
+        // every use site.
+        //
+        // EXIT CODE 3 COLLIDES WITH main.cpp's PRE-BOOT "rival editor" exit
+        // 3 from ArcaneHub's launch.rs's point of view (its boot watchdog
+        // reads any exit inside 2s as the pre-boot meaning) -- see the full
+        // exit-code table and reconciliation in ArcaneEditor/src/main.cpp,
+        // right above `int main`. Kept identical to RuntimeApp's own golden
+        // exit code deliberately (this task's contract); not a defect to fix
+        // here.
+        int m_goldenExit = 0;
 
         // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
         // Task 8c: this is now BootSequence::Run's presenter for the WHOLE

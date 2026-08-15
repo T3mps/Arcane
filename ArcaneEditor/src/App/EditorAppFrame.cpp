@@ -20,6 +20,7 @@
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
+#include <Arcane/Host/GoldenHarness.hpp>   // Arcane::DrainSceneCompiles/GoldenArtifact/kEditorGoldenNamePrefix (NRI Phase 3, Task 13)
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Project/Project.hpp>
@@ -182,6 +183,60 @@ namespace Arcane::Editor
         ls.simPrev       = std::chrono::steady_clock::now();
         ls.lastFrameTime = ls.simPrev;
 
+        // ===== THE GOLDEN WARM-UP (NRI Phase 3, Task 13) =====================
+        // The editor's counterpart of RuntimeApp::MainLoop's warm-up block,
+        // reusing Arcane::DrainSceneCompiles VERBATIM (Host/GoldenHarness.hpp)
+        // -- see that function's own comment for the failure it closes: a
+        // pinned frame clock (below, FrameInput/AdvanceSim) makes Time a pure
+        // function of the frame index, but does NOT pin what the frame
+        // CONTAINS, and a golden captured before the scene's materials have
+        // bound would freeze an unshaded sprite as the baseline.
+        //
+        // Runs BEFORE the while loop -- zero frames render on a warm-up
+        // failure, exactly like the runtime's early return, rather than
+        // letting the loop start and asking a later phase to notice. m_resolver
+        // is already built by here (StageSpriteTables, a boot stage that ran
+        // before Main()/MainLoop()); ViewportWidth/Height read whatever extent
+        // the viewport targets have at boot (1280x720 by default -- see
+        // BuildGraphViewportContext), the same "boot-time extent" the runtime
+        // warm-up uses before its own first frame.
+        if (m_config.GoldenMode() && m_resolver)
+        {
+            Arcane::Diagnostics::SetPhase("golden compile warm-up");
+            const float warmupW = (float)ViewportWidth();
+            const float warmupH = (float)ViewportHeight();
+            if (!Arcane::DrainSceneCompiles(*m_resolver, *m_shaderCompiler, warmupW, warmupH))
+            {
+                ARC_ERROR("golden: shader compiles did not settle within {:.0f}s -- refusing to "
+                          "capture or compare a frame whose content is not bound yet",
+                          Arcane::kGoldenWarmupTimeoutSeconds);
+                m_goldenExit = 3;
+                return;
+            }
+
+            // Quiescent is not the same as complete: a compile that FAILED
+            // also leaves the service idle. Same census RuntimeApp::MainLoop
+            // reads, same postBound split between the two recorders (the
+            // graph arm's post chain is bytes with no NVRHI object to ask
+            // Ready() of).
+            const Arcane::SceneRenderResolver::MaterialCensus census = m_resolver->Materials();
+            const bool postBound = GraphMode() ? (m_resolver->PostDesc() != nullptr) : census.postBound;
+            if (census.spriteBound != census.spriteReferenced ||
+                (census.postReferenced && !postBound))
+            {
+                ARC_ERROR("golden: the scene's materials did not all bind ({}/{} sprite material(s), "
+                          "post chain {}) -- refusing rather than freezing an incomplete frame as "
+                          "the baseline; the compile failures are logged above",
+                          census.spriteBound, census.spriteReferenced,
+                          census.postReferenced ? (postBound ? "bound" : "UNBOUND") : "none");
+                m_goldenExit = 3;
+                return;
+            }
+            ARC_INFO("golden: scene materials settled before frame 1 -- {} sprite material(s), "
+                     "post chain {}", census.spriteBound,
+                     census.postReferenced ? "bound" : "none");
+        }
+
         // Boot is over; anything the watchdog reports from here on belongs to
         // the frame loop, not to a stale boot stage.
         Arcane::Diagnostics::SetPhase("editor frame loop");
@@ -260,6 +315,14 @@ namespace Arcane::Editor
             RenderSceneToViewport();
             CompositeGameUi();
             RenderSelectionOutline();
+            // NRI Phase 3, Task 13: the NVRHI arm's golden capture -- the
+            // canvas output texture has its final content for this frame by
+            // here (CompositeGameUi/RenderSelectionOutline were its last
+            // writers), and PumpEditorDocuments/DrawEditorUi below touch only
+            // the editor's OWN ImGui frame, never the viewport texture. A
+            // no-op on every ordinary run and on the graph arm (see
+            // CaptureEditorGolden's own comment).
+            CaptureEditorGolden();
             PumpEditorDocuments();
             DrawEditorUi(ls, fs);
             DrawModals(ls);
@@ -476,8 +539,20 @@ namespace Arcane::Editor
         m_editBinding.editMode = !InPlayMode();
 
         const auto now = std::chrono::steady_clock::now();
-        const double frameDt = std::chrono::duration<double>(now - ls.lastFrameTime).count();
+        const double wallDt = std::chrono::duration<double>(now - ls.lastFrameTime).count();
         ls.lastFrameTime = now;
+        // NRI Phase 3, Task 13: golden runs pin the frame clock too, before
+        // m_gameUi.frameDt/m_editorClock (RefreshSceneResolution) consume it
+        // -- the same pin RuntimeFrame::AdvanceSim applies to its own wall-dt
+        // read (RuntimeFrame.cpp:227) and AdvanceSim below applies to simDt,
+        // for the identical reason: a golden run must make every animated
+        // shader input a pure function of the frame index, not of how fast
+        // this desk happens to be running. Split across two phase functions
+        // here (FrameInput's wall dt, AdvanceSim's sim dt) rather than one --
+        // the editor's frame is not laid out the way RuntimeApp::MainLoop's
+        // was before Task 4 extracted it -- so both need the identical pin;
+        // see AdvanceSim's own comment for its half.
+        const double frameDt = m_config.GoldenMode() ? 1.0 / 60.0 : wallDt;
         const Arcane::InputSnapshot snap = m_gpu->InDevices().Sample(m_gpu->Imgui().WantCaptureKeyboard(), m_gpu->Imgui().WantCaptureMouse());
 
         // The plugin only sees scene-relevant input when the Viewport panel
@@ -976,6 +1051,14 @@ namespace Arcane::Editor
         double simDt = std::chrono::duration<double>(now - ls.simPrev).count();
         ls.simPrev = now;
         if (simDt > 0.25) simDt = 0.25;
+        // NRI Phase 3, Task 13: pinned under golden mode -- see FrameInput's
+        // frameDt pin just above this phase for the shared reasoning, and
+        // RuntimeFrame::AdvanceSim's matching pin (RuntimeFrame.cpp:253) for
+        // the runtime's half of the same rule. One fixed 60 Hz step per
+        // rendered frame, so --frames N gives N identical steps regardless of
+        // how fast this desk is running.
+        if (m_config.GoldenMode())
+            simDt = 1.0 / 60.0;
         m_runtime->Loop().Advance(simDt,
             [&](double dt)          { if (m_plugin) m_plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ if (m_plugin) m_plugin->UpdateAll(dt, a); });
@@ -1179,8 +1262,22 @@ namespace Arcane::Editor
         // graph arm.
         if (!GraphMode())
         {
+            // NRI Phase 3, Task 13: `batch` drops the post chain even when
+            // the scene binds one -- the SAME bypass RuntimeFrame::RenderNvrhi
+            // applies (io.config.goldenStage == Batch) and the graph arm's
+            // own frame gets for free from DeclareGraphFrame's stage gate
+            // (RenderSceneToViewport sets vp.stage; the engine does the rest).
+            // This is the NVRHI arm's half of the identical rule, spelled out
+            // here because the canvas's post binding is set-then-forget
+            // (SetPostChain), not re-read per draw the way the graph frame's
+            // vp.post is. Honoured only in golden mode: an ordinary run's
+            // stage is always Full (HostConfig::Parse refuses otherwise), so
+            // this is inert there.
+            const bool goldenSkipsPost = m_config.GoldenMode() &&
+                                        m_config.goldenStage == Arcane::GoldenStage::Batch;
             m_viewportTargets.canvas->SetPostGlobals(postGlobals);
-            m_viewportTargets.canvas->SetPostChain(postChain, postInst,
+            m_viewportTargets.canvas->SetPostChain(goldenSkipsPost ? nullptr : postChain,
+                                     goldenSkipsPost ? nullptr : postInst,
                                      &m_runtime->AssetsFacade());
         }
     }
@@ -1206,16 +1303,31 @@ namespace Arcane::Editor
         // the frame. ArmGraphViewportFrame below is the other phases' half; see
         // its comment for why it has to run HERE and not where those phases sit.
         //
-        // WHAT THIS FRAME STILL DELIBERATELY DOES NOT CARRY, so the gap stays
-        // named rather than discovered:
+        // WHAT THIS FRAME CARRIES, so the gap stays named rather than
+        // discovered:
         //   * imgui        -- HOST CHROME's draw data. Not the game HUD (that
         //                     is `gameUi`): this viewport has no chrome on it,
         //                     and the editor's own chrome is Task 10's, on the
-        //                     CHROME context.
-        //   * capture      -- the auto-screenshot read. Task 11.
-        //   * stage        -- Full, always: the editor golden harness and its
-        //                     stage semantics are Task 13's. `Full` is what an
-        //                     ordinary (non-golden) run means on both hosts.
+        //                     CHROME context. STILL absent -- unaffected by
+        //                     Task 13.
+        //   * capture      -- the auto-screenshot read (Task 11) still runs
+        //                     through CaptureGraphViewportPng's OWN fresh
+        //                     frame, not this one. The GOLDEN capture (Task
+        //                     13) piggybacks on THIS declaration instead, on
+        //                     the run's last frame only -- see below.
+        //   * stage        -- Task 13: the editor's own golden-stage
+        //                     vocabulary, unconditional exactly like
+        //                     RuntimeFrame::RenderGraph's graphFrame.stage.
+        //                     Full outside golden mode (HostConfig::Parse
+        //                     refuses a non-Full stage otherwise), so this is
+        //                     a no-op on every ordinary run.
+        //                     DeclareGraphFrame's own stage gate (`batch`
+        //                     drops the post chain) is what actually bypasses
+        //                     vp.post below -- no separate check is needed
+        //                     here for it, unlike the NVRHI arm's
+        //                     RefreshSceneResolution, where the canvas' post
+        //                     binding is set-then-forget rather than re-read
+        //                     per frame.
         if (m_viewportTargets.graph)
         {
             const std::uint32_t w = ViewportWidth();
@@ -1237,9 +1349,12 @@ namespace Arcane::Editor
             // Re-read every frame, like the runtime's: a drain may swap the
             // bound instance under an asset re-save. Null (no PostProcess
             // assignment, or the compile has not landed) simply renders
-            // canvas -> tonemap.
+            // canvas -> tonemap. `batch`-stage bypass happens inside
+            // DeclareGraphFrame (shape.stage != GoldenStage::Batch) -- see the
+            // header comment above.
             vp.post    = m_resolver ? m_resolver->PostDesc() : nullptr;
             vp.globals = &globals;
+            vp.stage   = m_config.goldenStage;
             // Phases 11, 12 and 17's contribution to THIS declaration. Strictly
             // AFTER SubmitSceneToBatcher above, which is not incidental: it runs
             // the plugin's DrawUI, and on the NVRHI arm that call also lands
@@ -1247,12 +1362,33 @@ namespace Arcane::Editor
             // that mutates the scene must therefore land on the same frame on
             // both arms.
             ArmGraphViewportFrame(vp);
+
+            // NRI Phase 3, Task 13: the golden capture, armed on the LAST
+            // frame of a golden run only -- the same "+1" the runtime's
+            // RenderGraph uses (io.frameCount is bumped in CaptureTail, i.e.
+            // after this arm returns; here EndFrame's own m_frameCount
+            // increment happens later still, at phase 20). Piggybacking on
+            // the frame ALREADY being declared here, rather than a second
+            // render the way CaptureGraphViewportPng does for the
+            // auto-screenshot, is what keeps the captured picture governed by
+            // the SAME stage gate as every other frame of the run -- a
+            // separate render call would have to re-derive vp.stage and
+            // ArmGraphViewportFrame's suppression rather than inherit them.
+            const bool isGoldenLastFrame = m_config.GoldenMode() && m_config.maxFrames != 0 &&
+                                           (m_frameCount + 1) >= m_config.maxFrames;
+            vp.capture = isGoldenLastFrame;
+
             const Arcane::NriGraphContext::FrameOutcome outcome =
                 m_viewportTargets.graph->RenderFrameOffscreen(vp);
             // Skipped stays UNACTED-ON, and that is the routine case: a
             // collapsed panel, or a resize whose replacement could not be
             // created -- OffscreenTextureId() is 0 then and phase 16 draws no
-            // Image, which IS the signal.
+            // Image, which IS the signal. A golden run whose last frame lands
+            // Skipped simply does not capture this iteration -- m_frameCount
+            // is driven by phase 19/20 (the CHROME frame's own success), not
+            // by this outcome, so a persistently collapsed panel is a desk
+            // condition D3c would notice long before a golden capture matters
+            // (see the task-13 report's concerns).
             //
             // Failed is the half Task 10 closes (it was listed here as owed).
             // It has already bumped RenderErrorCount, so the run's exit code
@@ -1280,7 +1416,33 @@ namespace Arcane::Editor
             // frame instead, where PumpFrameEvents reads m_requestExit before
             // any phase runs: nothing renders after this frame.
             if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)
+            {
                 NoteGraphFrameFailure("the viewport frame could not be recorded or submitted");
+                return;
+            }
+
+            // The golden readback, RIGHT HERE rather than a later phase:
+            // ReadCapture is synchronous (it idles the device internally --
+            // the same stall CaptureGraphViewportPng pays, and this call is
+            // exactly as rare: once, on the run's last frame), and the
+            // captured pixels belong to the frame that was JUST presented --
+            // reading them any later risks the next frame's Begin/Draw
+            // overwriting the vehicle's transient state first.
+            if (isGoldenLastFrame && outcome == Arcane::NriGraphContext::FrameOutcome::Presented)
+            {
+                std::uint32_t cw = 0, ch = 0;
+                std::vector<unsigned char> actual;
+                if (!m_viewportTargets.graph->ReadCapture(cw, ch, actual))
+                {
+                    ARC_ERROR("golden: viewport capture readback failed");
+                    m_goldenExit = 3;
+                }
+                else if (Arcane::GoldenArtifact(m_config, cw, ch, actual,
+                                                Arcane::kEditorGoldenNamePrefix) != 0)
+                {
+                    m_goldenExit = 3;
+                }
+            }
             return;
         }
 
@@ -1447,13 +1609,44 @@ namespace Arcane::Editor
     // points at this function.
     void EditorApp::ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp)
     {
+        // NRI Phase 3, Task 13: `full` is the only editor golden stage that
+        // carries the game HUD and the selection/pick outline -- both are
+        // overlay content drawn on top of the scene, the same class of thing
+        // the host HUD's own stage gate exists to mask (DeclareGraphFrame;
+        // RuntimeFrame::RenderNvrhi's matching NVRHI-arm gate). Honoured only
+        // in golden mode: an ordinary run's stage is always Full
+        // (HostConfig::Parse refuses otherwise), so `goldenNonFull` folds to
+        // false there and nothing below changes.
+        //
+        // TWO DIFFERENT MECHANISMS for the two overlays below, and the
+        // asymmetry is deliberate -- see the pick/outline block's own comment
+        // for why gating it HERE, at the call site, rather than in the shared
+        // engine declaration (the way gameUi now is) is the correct, narrower
+        // choice for THAT one.
+        const bool goldenNonFull = m_config.GoldenMode() &&
+                                   m_config.goldenStage != Arcane::GoldenStage::Full;
+
         // ---- phase 11's content: the game HUD ---------------------------
         // Play-mode only, exactly as that phase is, and through the SAME
         // helper the NVRHI arm calls. The draw data lives in the game context
         // until its next NewFrame -- a whole frame away -- which is what lets
         // the node copy the geometry at record time (FrameDesc::gameUi).
         if (BeginGameUiFrame())
-            vp.gameUi = m_gameImgui->RenderToDrawData();
+        {
+            // Same discard-vs-render split RuntimeFrame::RenderGraph applies
+            // to the HOST HUD: `full` hands the draw data to the graph;
+            // batch/post end the ImGui frame without rendering it, so a stage
+            // golden is never masked by overlay content. This call site gates
+            // TOO rather than leaning solely on DeclareGraphFrame's own
+            // belt-and-braces recheck (RgFrameShape::gameUi, stage-gated as
+            // of this task) -- the same "re-check so the two cannot drift
+            // apart" reasoning the engine's own comment states for the host
+            // HUD gate.
+            if (goldenNonFull)
+                m_gameImgui->EndFrameDiscard();
+            else
+                vp.gameUi = m_gameImgui->RenderToDrawData();
+        }
 
         // ---- phases 12 + 17's content: the pick + outline chain ----------
         // PHASE 12'S GATE, VERBATIM: Edit mode, and something to outline
@@ -1468,7 +1661,24 @@ namespace Arcane::Editor
         // true from the click until the answer lands or is abandoned, which is
         // exactly the window this needs.
         const bool wantPick = m_deferredPick.Busy();
-        if (!wantOutline && !wantPick)
+        // `goldenNonFull` suppresses the WHOLE chain (id pass + outline),
+        // unconditionally -- unlike RgFrameShape::pickOutline itself, which
+        // stays deliberately STAGE-INDEPENDENT at the engine level (its own
+        // header comment: "a stage golden is taken without the probe, so the
+        // two never meet in practice"). That reasoning covers --pick-probe on
+        // the RUNTIME arm, which is NOT inert the way gameUi was:
+        // RuntimeFrame::RenderGraph arms pickOutline whenever --pick-probe is
+        // passed, REGARDLESS of --golden-stage, and there is no Parse-time
+        // refusal against combining them. Gating shape.pickOutline in the
+        // engine would therefore be a real behaviour change to that flag, not
+        // a shape-visible-but-inert one -- so this decision is taken HERE,
+        // narrowly, changing only what the EDITOR arms for its OWN golden
+        // capture, rather than in DeclareGraphFrame. A scripted golden run
+        // never issues a viewport click or holds a selection, so in practice
+        // wantOutline/wantPick are already false; this makes the editor's
+        // stated stage semantics ("batch/post carry no outline") true by
+        // construction rather than by accident of an empty selection.
+        if (goldenNonFull || (!wantOutline && !wantPick))
         {
             // Cleared rather than left stale: these are the spans the NEXT
             // armed frame will publish, and a leftover from three frames ago is
@@ -1582,6 +1792,23 @@ namespace Arcane::Editor
         if (!BeginGameUiFrame())
             return;
 
+        // NRI Phase 3, Task 13: `full` is the only editor golden stage that
+        // carries the game HUD -- same reasoning as RuntimeFrame::RenderNvrhi's
+        // ImGui stage gate (the HUD would sit on top of every stage golden and
+        // mask exactly the pixels a node-by-node comparison needs), and the
+        // same rule ArmGraphViewportFrame applies on the graph arm. The frame
+        // was still BEGUN above (BeginGameUiFrame's input-reset discipline is
+        // NOT conditional on stage, see its own comment), so it is discharged
+        // with EndFrameDiscard rather than left unbalanced -- "exactly one of
+        // Render/RenderToDrawData/EndFrameDiscard" holds either way. Honoured
+        // only in golden mode: an ordinary run's stage is always Full
+        // (HostConfig::Parse refuses otherwise), so this is inert there.
+        if (m_config.GoldenMode() && m_config.goldenStage != Arcane::GoldenStage::Full)
+        {
+            m_gameImgui->EndFrameDiscard();
+            return;
+        }
+
         // Composite the game HUD into the viewport output texture on a one-off
         // command list (mirrors the backbuffer pass below). The OffscreenCanvas
         // owns a SEPARATE command list for its scene pass, so m_gpu->Cmd() is
@@ -1621,6 +1848,16 @@ namespace Arcane::Editor
         // viewport) and maps m_selection through the same k+1 id assignment the
         // loop below reads out of the PickBuffer.
         if (GraphMode())
+            return;
+
+        // NRI Phase 3, Task 13: `full` only -- same reasoning as
+        // CompositeGameUi's stage gate immediately above it in the frame (the
+        // two are mutually exclusive by mode, never both live in one frame).
+        // No BeginFrame/EndFrame obligation to discharge here -- unlike the
+        // game HUD, this phase never begins an ImGui frame of its own; it
+        // draws a GPU pass directly into the canvas output. Honoured only in
+        // golden mode.
+        if (m_config.GoldenMode() && m_config.goldenStage != Arcane::GoldenStage::Full)
             return;
 
         if (!InPlayMode() && (m_selection.HasSelection() || m_gameUi.inViewport))
@@ -2505,9 +2742,27 @@ namespace Arcane::Editor
     // nodes a shape did not ask for, and it would stay green if the line below
     // grew `frame.capture = true`. So the four absences above are held by this
     // comment and by review, and nothing else. Anyone adding a field here is
-    // the only check there is -- and Task 13, which gives the editor a golden
-    // harness, owes the `capture` rule a check that can actually see this
-    // function.
+    // the only check there is.
+    //
+    // NRI Phase 3, Task 13 LANDED the golden harness this comment used to
+    // point at as future work, and the honest update is that it does NOT add
+    // an automated check that can see THIS function either -- same TU, same
+    // "not compiled into ArcaneTests" wall. What it DOES give the `capture`
+    // rule is a structural, greppably-provable guarantee one level up: every
+    // golden-capture code path (EditorApp::CaptureEditorGolden, the NVRHI
+    // arm; RenderSceneToViewport's capture block, the graph arm) reads pixels
+    // ONLY from `m_viewportTargets` (the canvas texture / the offscreen
+    // graph's ReadCapture) -- neither one names `m_graphChrome`,
+    // `PresentChromeFrame`, or the swapchain backbuffer anywhere
+    // (`grep -n "m_graphChrome\|PresentChromeFrame" EditorApp*.cpp` inside
+    // either capture function returns nothing). So a chrome pixel reaching an
+    // editor golden would require capture code that does not exist yet, not a
+    // gate this function could silently defeat -- which is a materially
+    // stronger position than "held by review alone", even though it is still
+    // not a runnable assertion. D3c's self-compare (maxDelta 0 against its own
+    // just-captured baseline) is the closest thing to a live proof this
+    // constraint gets, and it is desk-only by nature (it needs a window and a
+    // device).
     //
     // ---- WHERE THE DRAW DATA COMES FROM ----------------------------------
     // The ImGui frame phases 13-18 already built. RenderToDrawData() is
@@ -2666,6 +2921,56 @@ namespace Arcane::Editor
     // ImGui pass that samples it. The other half of the build flow (the
     // re-engage + scene reload that PollModuleBuild performs when NO host is
     // watching) is at the frame TOP for the same family of reason.
+    // NRI Phase 3, Task 13: the NVRHI arm's golden capture. Called from
+    // MainLoop right after RenderSelectionOutline (the canvas output
+    // texture's last writer for this frame, on whichever of it and
+    // CompositeGameUi the current mode actually runs) and before
+    // PumpEditorDocuments/DrawEditorUi, neither of which touches the
+    // viewport texture. Mirrors RuntimeFrame::CaptureTail's NVRHI half
+    // (ReadTexturePixels off the presented target -> Arcane::GoldenArtifact)
+    // -- the ONE difference is WHERE the pixels come from: the runtime reads
+    // the swapchain backbuffer after Present, this reads the OffscreenCanvas
+    // output after its last composite, because the editor's viewport is a
+    // panel texture rather than the window's own backbuffer.
+    //
+    // A no-op on the graph arm: that capture is armed as a NODE inside
+    // RenderSceneToViewport's own FrameDesc instead (vp.capture), and read
+    // back synchronously right there -- there is no separate "read this
+    // texture" entry point on that recorder for a later phase to use, which
+    // is exactly the reasoning CaptureGraphViewportPng's own comment gives
+    // for why an auto-screenshot re-renders rather than reads the last
+    // frame.
+    void EditorApp::CaptureEditorGolden()
+    {
+        if (GraphMode())
+            return;
+        if (!m_config.GoldenMode())
+            return;
+        // The SAME "+1" test RenderSceneToViewport's graph arm uses: this
+        // frame has not been counted yet (EndFrame's ++m_frameCount runs
+        // after this phase, at phase 20), so m_frameCount + 1 is the frame
+        // INDEX this iteration represents.
+        if (m_config.maxFrames == 0 || (m_frameCount + 1) < m_config.maxFrames)
+            return;
+        if (!m_viewportTargets.canvas)
+            return;
+
+        // TextureId() round-trips the output texture pointer -- the same seam
+        // ImGui::Image and WriteAutoScreenshot's NVRHI half consume.
+        auto* tex = reinterpret_cast<nvrhi::ITexture*>(
+            static_cast<uintptr_t>(m_viewportTargets.canvas->TextureId()));
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> actual;
+        if (!tex || !Arcane::ReadTexturePixels(m_gpu->Device().Nvrhi(), tex, w, h, actual))
+        {
+            ARC_ERROR("golden: viewport backbuffer readback failed");
+            m_goldenExit = 3;
+            return;
+        }
+        if (Arcane::GoldenArtifact(m_config, w, h, actual, Arcane::kEditorGoldenNamePrefix) != 0)
+            m_goldenExit = 3;
+    }
+
     void EditorApp::EndFrame(LoopState& ls)
     {
         if (m_plugin) m_plugin->Poll();

@@ -7,9 +7,10 @@
 #include "RuntimeApp.hpp"
 #include "RuntimeFrame.hpp"   // NRI Phase 3, Task 4: MainLoop's frame body
 
+#include <Arcane/Host/GoldenHarness.hpp>  // Arcane::DrainSceneCompiles/kGoldenWarmupTimeoutSeconds (NRI Phase 3, Task 13: shared with ArcaneEditor -- see that header's extraction history)
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Assets/Assets.hpp>      // Arcane::Assets (AssetsFacade().PixelsFor -- the pre-loop SetPixelSupply lambda)
-#include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat/SetPhase (DrainSceneCompiles + pre-loop phase markers)
+#include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat/SetPhase (pre-loop phase markers)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Guid.hpp>          // Arcane::Guid::FromString (--scene override; not pulled in transitively by any of the below)
@@ -41,79 +42,16 @@
 #include <thread>
 #include <vector>
 
-namespace
-{
-    // Bound on the golden warm-up below. Generous -- a cold dxcompiler.dll plus
-    // a dozen first-time compiles is a few hundred ms at worst -- but BOUNDED:
-    // an unbounded wait turns a stuck compile into a hung capture, which is a
-    // worse outcome than a loud refusal.
-    constexpr double kGoldenWarmupTimeoutSeconds = 60.0;
-
-    // Bring the scene's asset resolution to QUIESCENCE before the first counted
-    // frame. False on timeout (the caller refuses the run).
-    //
-    // WHY THIS EXISTS. Golden mode pins the frame clock, which makes Time -- and
-    // therefore every animated shader input -- a pure function of the frame
-    // index. It does NOT pin what the frame CONTAINS. Sprite materials and post
-    // chains bind asynchronously: SceneRenderResolver::Refresh submits the
-    // compiles, the `shader.compile` worker finishes them in WALL CLOCK, and
-    // whichever later Refresh happens to run after that drains and binds them.
-    // The compile cache is in-memory only, so every process pays the cold cost.
-    // With --no-vsync on a four-quad scene the entire 120-frame run can be over
-    // in well under the time a cold dxc needs for the scene's ~12 compiles, so
-    // the captured frame would show an unshaded sprite and no post chain --
-    // silently, with no failed assertion anywhere, and differently on a faster
-    // or slower machine. A baseline captured from that is a baseline of the
-    // wrong picture, and every compare afterwards inherits the same race.
-    //
-    // Draining HERE rather than "letting the loop run more frames" is what keeps
-    // the pinned clock honest: this loop never advances m_hostClock, so Time at
-    // counted frame N stays exactly N/60 and --frames never quietly becomes part
-    // of the golden contract.
-    bool DrainSceneCompiles(Arcane::SceneRenderResolver& resolver,
-                            Arcane::ShaderCompiler& compiler,
-                            float viewportWidth, float viewportHeight)
-    {
-        // Nothing this loop writes can survive into a captured pixel: Refresh's
-        // only per-frame output is the material globals, and the frame loop's
-        // own Refresh overwrites them before anything is recorded.
-        Arcane::SceneRenderResolver::FrameInfo frame;
-        frame.now            = 0.0;
-        frame.dt             = 1.0 / 60.0;
-        frame.viewportWidth  = viewportWidth;
-        frame.viewportHeight = viewportHeight;
-
-        const auto start = std::chrono::steady_clock::now();
-        for (;;)
-        {
-            // Sweep -> request -> poll -> drain -> bind, the ordinary per-frame
-            // call. With the golden run's ZERO debounce the very first call also
-            // dispatches every job the scene declares (Poll's window is
-            // `now >= now + 0`), which is why a constant `now` is enough to make
-            // progress -- with the interactive 0.2 s window it never would be.
-            resolver.Refresh(frame);
-            if (compiler.IsIdle())
-                return true;   // nothing pending, in flight, or waiting to drain
-
-            // The hang watchdog's liveness signal. This loop legitimately blocks
-            // for a second or two on a cold toolchain, and a silent gap that
-            // long is precisely what Diagnostics reports as a hang.
-            Arcane::Diagnostics::Heartbeat();
-
-            if (std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - start).count() >
-                kGoldenWarmupTimeoutSeconds)
-                return false;
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    }
-
-    // GoldenArtifact (the golden capture/compare tail shared by both render
-    // paths) moved to RuntimeFrame.cpp's anonymous namespace at NRI Phase 3
-    // Task 4: its one call site (the capture tail) moved there too, and an
-    // anonymous-namespace helper has internal linkage -- it cannot be called
-    // across translation units. See RuntimeFrame.cpp and the task-4 report.
-}
+// DrainSceneCompiles (the golden warm-up drain) and GoldenArtifact (the
+// capture/compare tail RuntimeFrame.cpp's CaptureTail calls) both moved to
+// the shared Arcane::Host seam at NRI Phase 3 Task 13
+// (Arcane/Host/GoldenHarness.hpp/.cpp) -- ArcaneEditor's own golden mode
+// needed the identical machinery, and an anonymous-namespace helper has
+// internal linkage: it cannot be called across translation units, let alone
+// a second executable. GoldenArtifact made this same hop once before, from
+// here to RuntimeFrame.cpp's anonymous namespace at Task 4 -- see that
+// file's own history comment. Both moves are VERBATIM; see the task-13
+// report for the diff-match.
 
 RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
     : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash),
@@ -620,11 +558,11 @@ void RuntimeApp::MainLoop()
                                              : (float)m_gpu->Cnv().Width();
         const float warmupH = m_graphContext ? (float)m_graphContext->Swap().Height()
                                              : (float)m_gpu->Cnv().Height();
-        if (!DrainSceneCompiles(*m_resolver, m_shaderCompiler, warmupW, warmupH))
+        if (!Arcane::DrainSceneCompiles(*m_resolver, m_shaderCompiler, warmupW, warmupH))
         {
             ARC_ERROR("golden: shader compiles did not settle within {:.0f}s -- refusing to "
                       "capture or compare a frame whose content is not bound yet",
-                      kGoldenWarmupTimeoutSeconds);
+                      Arcane::kGoldenWarmupTimeoutSeconds);
             m_goldenExit = 3;
             ShutdownGraphPath();
             return;

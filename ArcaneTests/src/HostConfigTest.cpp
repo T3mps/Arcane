@@ -122,6 +122,55 @@ TEST_CASE("host config: --golden-stage round-trips all three values", "[host][go
     REQUIRE(orphanFull.config.has_value());
     CHECK(orphanFull.config->goldenStage == Arcane::GoldenStage::Full);
 }
+// NRI Phase 3, Task 13 -- THE EDITOR JOINS THE GOLDEN HONOR LIST. Same
+// precedent as the "--nri-graph composes with the EDITOR's launch
+// vocabulary" case below: HostConfig::Parse needed NO new flags (the task's
+// own constraint) -- what changed is that EditorApp now ACTS on
+// --golden-capture/--golden-compare/--golden-stage/--golden-name instead of
+// ignoring them. The parse-level obligation that follows is that the golden
+// vocabulary composes with the editor's own launch vocabulary (--project),
+// which had never been exercised alongside it before this task, and that
+// the two existing silent-no-op refusals (golden without --frames, a
+// non-Full stage outside golden mode) still fire when the command line also
+// names a project -- a project path must not accidentally satisfy either
+// guard.
+//
+// As with the cases below, this is the only headless coverage available:
+// the editor's golden capture/compare/warm-up lives in EditorApp*.cpp, which
+// is not compiled into this exe, and everything past the flags needs a
+// window and a real device (desk checkpoint D3c).
+TEST_CASE("host config: the golden flags compose with the EDITOR's launch vocabulary", "[host][golden]") {
+    const auto editorGolden = Run({"--project", "ReferenceProject", "--golden-capture", "goldens/editor",
+                                   "--golden-stage", "batch", "--frames", "60", "--backend", "vulkan"});
+    REQUIRE(editorGolden.config.has_value());
+    CHECK(editorGolden.config->projectPath == "ReferenceProject");
+    CHECK(editorGolden.config->GoldenMode());
+    CHECK(editorGolden.config->goldenStage == Arcane::GoldenStage::Batch);
+    CHECK(editorGolden.config->backend == Arcane::GraphicsBackend::Vulkan);
+
+    // Refusal 1 still fires with a project on the command line: --project
+    // does not supply the --frames a golden run needs.
+    const auto noFrames = Run({"--project", "ReferenceProject", "--golden-capture", "goldens/editor"});
+    REQUIRE_FALSE(noFrames.config.has_value());
+    CHECK(noFrames.exitCode == 2);
+
+    // Refusal 2 likewise: a project on the command line does not turn a bare
+    // --golden-stage batch into a golden run.
+    const auto orphanStage = Run({"--project", "ReferenceProject", "--golden-stage", "batch"});
+    REQUIRE_FALSE(orphanStage.config.has_value());
+    CHECK(orphanStage.exitCode == 2);
+
+#if !defined(ARCANE_DIST)
+    // And the full editor stack: --project + --nri-graph + golden -- the
+    // exact combination D3c's baseline capture runs (both editor NVRHI and
+    // editor graph mode reuse this same parse).
+    const auto graphGolden = Run({"--nri-graph", "--project", "ReferenceProject",
+                                  "--golden-capture", "goldens/editor", "--frames", "120"});
+    REQUIRE(graphGolden.config.has_value());
+    CHECK(graphGolden.config->nriGraph);
+    CHECK(graphGolden.config->GoldenMode());
+#endif
+}
 #if !defined(ARCANE_DIST)
 // NRI Phase 2, Task 7 -- the graph vehicle's flag. DEV scaffolding registered
 // inside HostConfig.cpp's `#if !defined(ARCANE_DIST)` block, so in a Dist

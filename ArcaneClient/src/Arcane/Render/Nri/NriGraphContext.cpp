@@ -1219,10 +1219,28 @@ namespace Arcane
         // first makes both true.
         //
         // AFTER the tonemap for the same reason the outline composite is: a HUD
-        // is display-referred and must not be graded. Not stage-gated (unlike
-        // the host HUD below) -- see RgFrameShape::gameUi.
+        // is display-referred and must not be graded.
+        //
+        // STAGE-GATED AS OF NRI PHASE 3, TASK 13 -- re-taking Task 9's
+        // "not stage-gated (unlike the host HUD below)" ruling, which was
+        // written when the editor's viewport frame carried no stage
+        // vocabulary at all. Task 13 gives it one, and states the editor's
+        // stage semantics explicitly: `full` = +outline/gameui composite,
+        // i.e. the game HUD is `full`-only overlay content, exactly like
+        // the host HUD immediately below. Same reasoning either way -- an
+        // overlay drawn on top of the scene would sit on top of a
+        // batch/post stage golden and mask exactly the pixels a
+        // node-by-node comparison needs.
+        //
+        // BEHAVIOUR-INERT ON THE RUNTIME: RuntimeFrame.cpp never sets
+        // FrameDesc::gameUi (only EditorApp::ArmGraphViewportFrame does),
+        // so this gate is reachable only through the editor. See
+        // RgFrameShape::gameUi and FrameDesc::gameUi for the full account,
+        // and RenderGraphTest.cpp's "NOT stage-gated" case (now "IS
+        // stage-gated, matching the host HUD, as of Task 13") for the
+        // pinning the report says to re-take honestly rather than inherit.
         // ---------------------------------------------------------------
-        if (shape.gameUi)
+        if (shape.gameUi && shape.stage == GoldenStage::Full)
             AddImGuiNode(graph, context, handles.backbuffer, ImGuiNodeSlot::GameUi);
 
         // ---------------------------------------------------------------

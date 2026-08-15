@@ -503,9 +503,13 @@ namespace Arcane
             // NewFrame). Null means "no game HUD this frame", which is what
             // Edit mode passes.
             //
-            // NOT the same field as `imgui`, and not stage-gated: `imgui` is
-            // HOST CHROME, which a stage golden must mask; this is CONTENT
-            // inside the rendered image. Ignored unless the vehicle was created
+            // NOT the same field as `imgui` -- `imgui` is HOST CHROME, this is
+            // CONTENT inside the rendered image -- but AS OF NRI PHASE 3 TASK
+            // 13 IT IS STAGE-GATED THE SAME WAY: DeclareGraphFrame now
+            // declares this node under `stage == GoldenStage::Full` only,
+            // reversing Task 9's original "not stage-gated" ruling once the
+            // editor's own stage vocabulary made its premise false (see
+            // RgFrameShape::gameUi). Ignored unless the vehicle was created
             // with NodeSet::gameUi.
             ImDrawData* gameUi = nullptr;
 
@@ -1386,10 +1390,17 @@ namespace Arcane
 
         // Declare the GAME HUD's node between the tonemap and the pick/outline
         // chain (Task 9) -- the editor's phase 11 then phase 12 order against
-        // this recorder. Deliberately NOT stage-gated where `imgui` is: that
-        // one is host chrome, which a stage golden has to mask; this one is
-        // content inside the image, and the editor's viewport frame is not a
-        // golden stage at all.
+        // this recorder.
+        //
+        // AS OF NRI PHASE 3, TASK 13 THIS IS STAGE-GATED LIKE `imgui`,
+        // reversing Task 9's original ruling: that ruling's premise -- "the
+        // editor's viewport frame is not a golden stage at all" -- stopped
+        // being true the moment the editor's own stage vocabulary landed.
+        // The editor's stage semantics (`full` = +outline/gameui composite)
+        // treat the game HUD as `full`-only overlay content, the same class
+        // `imgui` already was: both would sit on top of a batch/post stage
+        // golden and mask exactly the pixels a node-by-node comparison
+        // needs. See DeclareGraphFrame's gate for the full account.
         bool gameUi = false;
     };
 

@@ -2211,6 +2211,19 @@ namespace Arcane::Editor
         // RenderErrorCount GREW across the run, teardown included. Precedence
         // 1 > 2, set at the two sites that produce them (NoteGraphFrameFailure
         // and ShutdownGraphPath). Always 0 when --nri-graph was not given.
-        return m_graphExit;
+        if (m_graphExit != 0)
+            return m_graphExit;
+        // The golden harness's own code (NRI Phase 3, Task 13), OUTRANKED by
+        // everything above it for the same reason RuntimeApp::Run's tail
+        // orders 1 > 2 > 3: a run failure says WHERE the run died, and a
+        // validation error explains a bad capture rather than the reverse, so
+        // both outrank a golden mismatch. 0 on every run that did not pass
+        // --golden-capture/--golden-compare (HostConfig::Parse refuses the
+        // combination without --frames, so a golden run always terminates
+        // through EndFrame's own maxFrames check rather than a live quit).
+        // See ArcaneEditor/src/main.cpp's exit-code table (right above `int
+        // main`) for this code's collision with the pre-boot exit 3 the Hub's
+        // launch.rs decodes differently, and m_goldenExit's own comment.
+        return m_goldenExit;
     }
 }

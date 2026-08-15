@@ -5730,12 +5730,24 @@ TEST_CASE("nri graph frame: the GAME UI node sits between the tonemap and the ou
     }
 
     {
-        // NOT stage-gated where the host HUD is. `--golden-stage` names slices
-        // of the SCENE render and the game HUD is inside the image, not chrome
-        // over it -- and the editor's viewport frame is not a golden stage at
-        // all. Pinned so a later reader does not "fix" the asymmetry.
-        for (const Arcane::GoldenStage stage :
-             { Arcane::GoldenStage::Batch, Arcane::GoldenStage::Post, Arcane::GoldenStage::Full })
+        // IS STAGE-GATED WHERE THE HOST HUD IS, as of NRI Phase 3 Task 13 --
+        // this block used to pin the opposite (see git history / the task-9
+        // report §9 for Task 9's original ruling and its own note that Task
+        // 13 was expected to re-take it). `--golden-stage` names slices of
+        // the SCENE render; once the EDITOR grew its own stage vocabulary
+        // (Task 13: `full` = +outline/gameui composite), the game HUD became
+        // exactly the kind of overlay a batch/post stage golden must mask --
+        // the same reasoning the host HUD's gate immediately above already
+        // encodes. `full` still draws it; `batch`/`post` now do not.
+        //
+        // BEHAVIOUR-INERT ON THE RUNTIME: RuntimeFrame.cpp never sets
+        // FrameDesc::gameUi (only the editor's ArmGraphViewportFrame does),
+        // so this gate is reachable only through the editor -- this case
+        // pins the ENGINE side of that (DeclareGraphFrame's declaration),
+        // not the editor's own call site, which ArcaneTests cannot compile
+        // (EditorApp*.cpp is not a test TU -- see the standing "a green gate
+        // proves nothing about either host" rule).
+        for (const Arcane::GoldenStage stage : { Arcane::GoldenStage::Batch, Arcane::GoldenStage::Post })
         {
             Arcane::RenderGraph graph;
             Arcane::RgFrameShape shape;
@@ -5745,9 +5757,20 @@ TEST_CASE("nri graph frame: the GAME UI node sits between the tonemap and the ou
             shape.gameUi       = true;
 
             Arcane::DeclareGraphFrame(graph, shape, nullptr);
-            REQUIRE(graph.NodeCount() == 3);
-            CHECK(std::string(graph.NodeName(2)) == "gameui");
+            REQUIRE(graph.NodeCount() == 2);   // batch2d + tonemap only -- no gameui node
+            CHECK(std::string(graph.NodeName(1)) == "tonemap");
         }
+
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 320;
+        shape.canvasHeight = 200;
+        shape.stage        = Arcane::GoldenStage::Full;
+        shape.gameUi       = true;
+
+        Arcane::DeclareGraphFrame(graph, shape, nullptr);
+        REQUIRE(graph.NodeCount() == 3);
+        CHECK(std::string(graph.NodeName(2)) == "gameui");
     }
 }
 

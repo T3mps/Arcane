@@ -7,15 +7,15 @@
 #include "RuntimeFrame.hpp"
 #include "RuntimeApp.hpp"   // FrameIo::app.PushSceneCamera -- see that method's comment
 
-#include <Arcane/Assets/Assets.hpp>       // Arcane::ReadTexturePixels/WritePngRgba (CaptureTail, GoldenArtifact)
-#include <Arcane/Assets/GoldenImage.hpp>  // Arcane::CompareRgbaImages/WriteDiffPng (GoldenArtifact)
+#include <Arcane/Assets/Assets.hpp>       // Arcane::ReadTexturePixels (CaptureTail)
 #include <Arcane/Audio/AudioDevice.hpp>   // complete type for AudioSystem().Update (AdvanceSim's voice reap)
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (PumpAndResize)
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Host/GoldenHarness.hpp>  // Arcane::GoldenArtifact (NRI Phase 3, Task 13: shared with ArcaneEditor -- moved out of this file's anonymous namespace)
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Render/Batcher2D.hpp>              // Arcane::Batch2DStats (BuildHud's HUD text, CaptureTail's perf tick)
-#include <Arcane/Render/Device.hpp>                 // Arcane::GraphicsBackend / ToString (BuildHud's HUD text, GoldenArtifact)
+#include <Arcane/Render/Device.hpp>                 // Arcane::GraphicsBackend / ToString (BuildHud's HUD text)
 #include <Arcane/Render/FullscreenMaterialChain.hpp>// scene post hook (RenderNvrhi)
 #include <Arcane/Render/GpuInstrumentation.hpp>     // Arcane::GpuPassScope, GpuDeviceLostObserved (RenderNvrhi, PumpAndResize)
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N on the graph arm (RenderGraph)
@@ -31,89 +31,16 @@
 
 namespace
 {
-    // The golden artifact tail, shared by BOTH render paths (NRI Phase 2,
-    // Task 7). It takes display-referred RGBA8 pixels of the frame that was
-    // just presented and nothing else -- so --nri-graph inherits the artifact
-    // NAMING, the comparator, the tolerances and the exit code from the NVRHI
-    // path by construction rather than by a second implementation that could
-    // drift from it. Returns 0, or 3 on any capture-write or compare failure
-    // (the host's documented golden exit code).
-    //
-    // The two paths differ only in where the pixels came from: nvrhi
-    // ReadTexturePixels off the backbuffer, or NriGraphContext::ReadCapture
-    // off the graph's readback node (which normalizes BGRA -> RGBA, since NRI
-    // resolves the swapchain's channel order rather than letting us pin it).
-    //
-    // Moved verbatim from RuntimeApp.cpp's anonymous namespace (NRI Phase 3,
-    // Task 4): its one and only call site (the capture tail, below in
-    // CaptureTail) moved here too, and an anonymous-namespace helper has
-    // internal linkage -- it cannot be called across translation units, so
-    // duplicating it was the only alternative to moving it. See the task-4
-    // report.
-    int GoldenArtifact(const Arcane::HostConfig& config, std::uint32_t width, std::uint32_t height,
-                       const std::vector<unsigned char>& actual)
-    {
-        // Stage-golden stem (HostConfig::goldenStage's own comment carries the
-        // contract). Full resolves to EXACTLY the pre-Phase-2 string, so Phase
-        // 0's captured goldens keep working under their existing filenames;
-        // batch/post get their own stem so a scripted three-stage run writes
-        // three files instead of overwriting one.
-        const char* stage =
-            config.goldenStage == Arcane::GoldenStage::Batch ? "batch"
-          : config.goldenStage == Arcane::GoldenStage::Post  ? "post"
-                                                             : nullptr;
-        const std::string name =
-            !config.goldenName.empty()
-                // Explicit stem = the whole filename stem (the cross-backend
-                // compare names the OTHER backend's golden here), so the stage
-                // can only be appended to it.
-                ? (stage ? config.goldenName + "-" + stage : config.goldenName)
-                : std::string("main-") + (stage ? std::string(stage) + "-" : "") +
-                  (config.backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12");
-
-        // --golden-capture takes priority if both flags were somehow given;
-        // ordinary invocations pass exactly one, matching the harness scripts.
-        if (!config.goldenCapturePath.empty())
-        {
-            const std::filesystem::path out =
-                std::filesystem::path(config.goldenCapturePath) / (name + ".png");
-            if (Arcane::WritePngRgba(out, width, height, actual.data()))
-            {
-                ARC_INFO("golden captured: {} ({}x{})", out.generic_string(), width, height);
-                return 0;
-            }
-            ARC_ERROR("golden capture FAILED: {}", out.generic_string());
-            return 3;
-        }
-
-        const std::filesystem::path dir(config.goldenComparePath);
-        const std::filesystem::path goldenPath = dir / (name + ".png");
-        std::uint32_t gw = 0, gh = 0;
-        std::vector<unsigned char> golden;
-        if (!Arcane::LoadPngRgba(goldenPath, gw, gh, golden))
-        {
-            ARC_ERROR("golden: no golden at {}", goldenPath.generic_string());
-            return 3;
-        }
-
-        const Arcane::GoldenCompareResult r =
-            Arcane::CompareRgbaImages(golden.data(), gw, gh, actual.data(), width, height);
-        if (r.ok)
-        {
-            ARC_INFO("golden PASS: {} (maxDelta {}, bad {:.4f}%)",
-                     name, r.maxChannelDelta, r.badPixelFraction * 100.0f);
-            return 0;
-        }
-        ARC_ERROR("golden FAIL: {} (dims {}, maxDelta {}, bad {:.4f}%, first ({},{}))",
-                  name, r.dimensionsMatch ? "ok" : "MISMATCH",
-                  r.maxChannelDelta, r.badPixelFraction * 100.0f, r.firstBadX, r.firstBadY);
-        (void)Arcane::WritePngRgba(dir / (name + ".actual.png"), width, height, actual.data());
-        if (r.dimensionsMatch)
-            (void)Arcane::WriteDiffPng(dir / (name + ".diff.png"),
-                                        golden.data(), actual.data(), gw, gh,
-                                        Arcane::GoldenCompareParams{}.channelTolerance);
-        return 3;
-    }
+    // GoldenArtifact (the golden capture/compare tail shared by both render
+    // paths) moved to the shared Arcane::Host seam at NRI Phase 3 Task 13
+    // (Arcane/Host/GoldenHarness.hpp/.cpp): ArcaneEditor's own golden mode
+    // needed the identical machinery, and an anonymous-namespace helper has
+    // internal linkage -- it cannot be called across translation units, let
+    // alone a second executable. See that header's extraction history and
+    // the task-13 report for the diff-match; CaptureTail's call site below
+    // needed no change beyond the include (unqualified `GoldenArtifact`
+    // still resolves -- ordinary unqualified lookup finds Arcane::
+    // GoldenArtifact from this enclosing Arcane::RuntimeFrame namespace).
 
     // =============================================================
     // THE FRAME'S EXTENT (NRI Phase 3, Task 6).
