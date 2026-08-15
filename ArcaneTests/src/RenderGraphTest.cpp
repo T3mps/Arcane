@@ -5428,32 +5428,43 @@ TEST_CASE("nri graph frame: the HUD node is absent unless the frame carries draw
     }
 }
 
-TEST_CASE("nri graph frame: the EDITOR'S CHROME frame is clear + tonemap + HUD and nothing else",
+TEST_CASE("nri graph frame: an imgui-only shape (the editor's chrome) declares clear + tonemap + "
+          "HUD, imports its backbuffer, and adds no capture",
           "[nri]")
 {
-    // NRI Phase 3, Task 10. The editor's main-window frame
-    // (EditorApp::PresentChromeFrame) declares this exact shape: a FrameDesc
-    // carrying draw data and NOTHING ELSE -- no batcher, no post chain, no
-    // pick/outline, no game HUD, and above all no capture.
+    // NRI Phase 3, Task 10. The shape EditorApp::PresentChromeFrame ASKS FOR:
+    // an imgui-only RgFrameShape, i.e. draw data and nothing else -- no
+    // batcher, no post chain, no pick/outline, no game HUD, no capture.
     //
-    // WHY IT IS PINNED SEPARATELY from the HUD case above, which drives the
-    // same three declarations. That case pins a GATE ("the node appears iff the
-    // frame carries draw data"); this one pins a HOST's frame -- the claim that
-    // the editor's chrome costs exactly one cleared canvas, one blit and one
-    // ImGui pass, and that four specific things are absent from it. Two of
-    // those absences are not tidiness:
-    //   * `capture` -- the editor's screenshot/golden semantics capture the
-    //     VIEWPORT (the offscreen context's output), so a capture node declared
-    //     on the CHROME frame would copy a chromed backbuffer and quietly
-    //     redefine what an editor golden contains;
-    //   * `gameUi` -- the plugin HUD lives INSIDE the viewport texture, never
-    //     over the editor chrome.
-    // A future edit that adds either to the chrome frame turns this red.
+    // ===== WHAT THIS CASE DOES AND DOES NOT PIN. READ BEFORE TRUSTING IT. ====
+    // It pins the ENGINE SIDE of the arrangement: given an imgui-only shape,
+    // DeclareGraphFrame emits exactly batch2d/tonemap/imgui, imports (rather
+    // than creates) the backbuffer, adds no capture node, and costs one
+    // transient in one pool slot. That is drift protection for
+    // DeclareGraphFrame, and it is real -- an engine edit that started
+    // declaring a capture or a gameUi node for a shape that asked for neither
+    // turns this red.
+    //
+    // IT DOES NOT PIN EditorApp::PresentChromeFrame'S OWN FrameDesc, and it
+    // CANNOT: the shape below is constructed here, by hand, and ArcaneTests
+    // does not compile the editor at all (EditorAppFrame.cpp is not in that
+    // project). Adding `frame.capture = true` to PresentChromeFrame would leave
+    // this case GREEN. The editor's four absences are held by the comment block
+    // on PresentChromeFrame and by review -- nothing more -- and the `capture`
+    // one is the load-bearing member of that set, because the editor's
+    // screenshot/golden semantics capture the VIEWPORT: a capture node on the
+    // CHROME frame would copy a chromed backbuffer and quietly redefine what an
+    // editor golden contains. Whoever gives the editor a golden harness (Task
+    // 13) owes that claim a check that can actually see the editor.
+    // ========================================================================
     Arcane::RenderGraph graph;
     Arcane::RgFrameShape shape;
     shape.canvasWidth  = 1280;
     shape.canvasHeight = 720;
-    shape.imgui        = true;   // the ONLY field EditorApp::PresentChromeFrame sets
+    // Transcribed from PresentChromeFrame's FrameDesc, which sets `imgui` and
+    // leaves everything else default -- a TRANSCRIPTION, with all the drift
+    // risk that word carries, not a linkage. See the block above.
+    shape.imgui        = true;
 
     const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
 

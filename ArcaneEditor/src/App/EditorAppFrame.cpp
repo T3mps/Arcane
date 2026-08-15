@@ -1251,12 +1251,23 @@ namespace Arcane::Editor
             // Failure records both halves: the exit code and the request to
             // stop.
             //
-            // THE REST OF THIS FRAME STILL RUNS, deliberately. Phases 11-19 are
-            // CPU work plus ONE chrome frame, and the ImGui frame phase 13
-            // begins owes exactly one Render/RenderToDrawData/EndFrameDiscard
-            // -- bailing out here would strand that pairing. The exit lands at
-            // the TOP of the next frame (PumpFrameEvents reads m_requestExit
-            // before any phase), so nothing renders after this one.
+            // THE REST OF THIS FRAME STILL RUNS, and the reason is NOT an ImGui
+            // pairing: nothing is owed at this point in the frame. Phase 10
+            // runs BEFORE DrawEditorUi (phase 13) begins the editor's frame, so
+            // there is nothing begun to pair; and the GAME context's frame is
+            // begun and paired entirely inside ArmGraphViewportFrame above,
+            // before the call that just failed. Bailing here would strand
+            // neither.
+            //
+            // The reason is that this phase has no stop channel and should not
+            // grow one: RenderSceneToViewport returns void, and threading an
+            // immediate bail through the nine phases between here and the loop
+            // bottom would be real control flow added for a case that costs one
+            // more chrome frame. That frame is safe to run -- if the device is
+            // genuinely gone it fails too and folds to the same exit code (1,
+            // first-failure-wins). So the exit lands at the TOP of the next
+            // frame instead, where PumpFrameEvents reads m_requestExit before
+            // any phase runs: nothing renders after this frame.
             if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)
                 NoteGraphFrameFailure("the viewport frame could not be recorded or submitted");
             return;
@@ -2441,6 +2452,19 @@ namespace Arcane::Editor
     //                      capture node declared HERE would copy the chromed
     //                      backbuffer and quietly redefine what an editor
     //                      golden contains.
+    //
+    // ===== AND NOT ONE OF THOSE FOUR IS PINNED BY A TEST. ==================
+    // ArcaneTests does not compile this TU at all (EditorAppFrame.cpp is not in
+    // that project -- see this file's header comment), so nothing in the gate
+    // can observe the FrameDesc built below. The [nri] case named "an
+    // imgui-only shape (the editor's chrome)..." drives DeclareGraphFrame with
+    // a shape it TRANSCRIBES by hand; it protects the ENGINE against declaring
+    // nodes a shape did not ask for, and it would stay green if the line below
+    // grew `frame.capture = true`. So the four absences above are held by this
+    // comment and by review, and nothing else. Anyone adding a field here is
+    // the only check there is -- and Task 13, which gives the editor a golden
+    // harness, owes the `capture` rule a check that can actually see this
+    // function.
     //
     // ---- WHERE THE DRAW DATA COMES FROM ----------------------------------
     // The ImGui frame phases 13-18 already built. RenderToDrawData() is
