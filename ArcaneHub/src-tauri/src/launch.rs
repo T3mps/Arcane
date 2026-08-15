@@ -179,6 +179,23 @@ pub fn do_open_project(
         .map(|e| project::split_args(&e.args))
         .unwrap_or_default();
 
+    // IS THIS A SCRIPTED RUN? (whole-branch review, M5.) The exit-code decoder
+    // in the wait thread below reads 2 and 3 as PRE-BOOT meanings -- "refused
+    // the project" and "already open elsewhere" -- for any exit inside the 2s
+    // watchdog. Those are only the editor's meanings before its window opens;
+    // a run carrying the scripted vocabulary reuses the same numbers for
+    // something else entirely (ArcaneEditor/src/main.cpp's exit table: 2 =
+    // RenderErrorCount grew, 3 = a golden capture/compare failed), and a short
+    // `--frames N` run finishing inside two seconds is ordinary rather than
+    // exotic. Since the args appended above are the user's own saved tokens,
+    // verbatim, this is the one place that can tell the two apart.
+    let scripted = extra.iter().any(|a| {
+        a == "--frames"
+            || a.starts_with("--frames=")
+            || a.starts_with("--golden-")
+            || a == "--nri-graph"
+    });
+
     // Adopt what the probe just said: the entry's cached abi/build refresh so
     // the UI's next load speaks about the binary that actually launched.
     let exe_key = state::normalise_path(&exe.to_string_lossy());
@@ -271,12 +288,21 @@ pub fn do_open_project(
                 let why = match status.and_then(|s| s.code()) {
                     // Exit 2 is the editor's own project gate (ArcaneEditor
                     // main.cpp): wrong abi, unreadable manifest, refused boot.
-                    Some(2) => "the editor refused the project (engine/abi gate)".to_string(),
+                    // Guarded on `scripted`: on a run carrying --frames /
+                    // --golden-* / --nri-graph the SAME code means
+                    // "RenderErrorCount grew", and claiming an abi gate would
+                    // send the user hunting the wrong thing.
+                    Some(2) if !scripted => {
+                        "the editor refused the project (engine/abi gate)".to_string()
+                    }
                     // Exit 3 is the editor's OWN double-open refusal (it
                     // focused the rival before exiting). Rare from here --
                     // this Hub's guard focuses first -- but reachable when a
                     // rival appeared between the guard and the editor's boot.
-                    Some(3) => "that project is already open in another editor".to_string(),
+                    // Same guard: on a scripted run 3 is a golden failure.
+                    Some(3) if !scripted => {
+                        "that project is already open in another editor".to_string()
+                    }
                     Some(c) => format!("the editor exited immediately with code {c}"),
                     None => "the editor was killed before it opened".to_string(),
                 };
