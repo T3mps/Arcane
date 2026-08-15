@@ -58,12 +58,16 @@ namespace Arcane
         // memoized before a device was available.
         virtual void SetDevice(nvrhi::IDevice* device) = 0;
 
-        // Base directory prepended to RELATIVE paths in GetTexture/GetBytes/GetJson;
-        // absolute paths pass through unchanged. The host sets this from the open
-        // project's game:// mount (project Content/) so loose-file loads resolve under
-        // the project instead of exe-relative. Empty (default) == the legacy
-        // exe-relative behavior. GUID loads resolve behind the AssetId seam below;
-        // this stays as the fallback for legacy path loads.
+        // Base directory prepended to RELATIVE paths in the PATH overloads of
+        // GetTexture/GetBytes/GetJson; absolute paths pass through unchanged. The
+        // host sets this from the open project's game:// mount (project Content/)
+        // so loose-file loads resolve under the project instead of exe-relative.
+        // Empty (default) == the legacy exe-relative behavior.
+        //
+        // ANCHORING CONVENTION -- it applies to CALLER-SUPPLIED paths ONLY. It is
+        // never applied to a path the AssetResolver returned: those are already
+        // load-ready (see SetAssetResolver). Anchoring both ends is what produced
+        // "<root>/Content/<root>/Content/..." for a relatively-opened project.
         virtual void SetContentRoot(const std::filesystem::path& root) = 0;
 
         // The GUID resolution seam: AssetId -> physical file. The host installs the
@@ -72,6 +76,15 @@ namespace Arcane
         // cached loaders as the path overloads. Installing a resolver (or a new one)
         // clears the unresolved-id memos so a rescan gets a clean retry. No resolver
         // (default) fails every AssetId load with one warning.
+        //
+        // CONTRACT: the resolver returns a LOAD-READY path -- one that opens as-is
+        // (relative results are relative to the process CWD, like any ifstream).
+        // The MountTable has already joined the asset onto its OWN mount root, and
+        // those roots are not all under the content root (diag:// is <project>/
+        // Saved/Diagnostics, plugin/<x>:// is <plugin>/Content), so this facade
+        // must not re-anchor the result. Every other consumer of the same resolver
+        // -- SpriteCache, SpriteMaterialCache, PostChainCache, ProjectBoot, the
+        // editor, the NRI graph vehicle -- already opens it verbatim.
         using AssetResolver =
             std::function<std::optional<std::filesystem::path>(const AssetId&)>;
         virtual void SetAssetResolver(AssetResolver resolver) = 0;

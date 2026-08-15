@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Project/Project.hpp>
@@ -399,6 +401,144 @@ TEST_CASE("Assets resolves AssetId loads through the installed resolver", "[asse
     }
 
     fs::remove_all(root, ec);
+}
+
+// THE JOIN the two tests above never made: a registry resolver AND a content
+// root, installed together exactly as Runtime::OpenProject installs them,
+// against a project opened by a RELATIVE path -- i.e. `ArcaneRuntime --project
+// ReferenceProject`. That combination is the hole the suite had: every other
+// resolver test hands back an ABSOLUTE temp path, which ResolveAssetPath passes
+// through untouched, so a second anchoring step on the id route was
+// unobservable. With a relative project root it is anything but: contentRoot /
+// <resolver result> yields "Proj/Content/Proj/Content/textures/marker.png" --
+// the desk-observed LoadPngRgba failure that left the D3a goldens untextured on
+// both render paths and both backends.
+//
+// A DECOY is planted at exactly that doubled location so a regression names the
+// MECHANISM rather than reporting a missing file: against the pre-fix facade
+// every id-shaped load below reads the decoy (4x4, payload 13) in place of the
+// real asset (2x2, payload 7).
+TEST_CASE("assets: registry-resolved ids are load-ready -- the content root must not anchor them twice",
+          "[assets][project]")
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    const fs::path sandbox = fs::temp_directory_path() / "arcane_assets_anchoring";
+    fs::remove_all(sandbox, ec);
+    fs::create_directories(sandbox, ec);
+
+    // A relative project root only means something against a CWD, so pin one --
+    // and restore it on EVERY exit path, including a throwing REQUIRE.
+    struct CwdGuard
+    {
+        fs::path prev;
+        ~CwdGuard() { std::error_code e; fs::current_path(prev, e); }
+    } const cwdGuard{ fs::current_path(ec) };
+    fs::current_path(sandbox, ec);
+    REQUIRE(!ec);
+
+    const auto writePng = [](const fs::path& p, int w, int h)
+    {
+        std::vector<unsigned char> px((std::size_t)w * h * 4, 255);
+        REQUIRE(stbi_write_png(p.string().c_str(), w, h, 4, px.data(), w * 4) != 0);
+    };
+    const auto writeText = [](const fs::path& p, const std::string& s)
+    {
+        std::ofstream f(p, std::ios::binary);
+        REQUIRE(f.is_open());
+        f << s;
+    };
+
+    constexpr const char* kPngGuid  = "11111111-2222-4333-8444-555555555555";
+    constexpr const char* kJsonGuid = "66666666-7777-4888-8999-aaaaaaaaaaaa";
+
+    fs::create_directories("Proj/Content/textures");
+    fs::create_directories("Proj/Content/data");
+    writeText("Proj/Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Anchoring", "engine": { "abi": 5 } })");
+    writePng("Proj/Content/textures/marker.png", 2, 2);
+    writeText("Proj/Content/textures/marker.png.meta",
+              std::string(R"({"guid":")") + kPngGuid + R"(","version":1})");
+    const std::string realJson = std::string(R"({"id":")") + kJsonGuid + R"(","payload":7})";
+    writeText("Proj/Content/data/thing.json", realJson);
+
+    // THE DECOY, sitting at contentRoot/contentRoot/... -- precisely the path the
+    // pre-fix id route built. Different dimensions and a different payload so a
+    // wrong read is loud instead of merely absent.
+    fs::create_directories("Proj/Content/Proj/Content/textures");
+    fs::create_directories("Proj/Content/Proj/Content/data");
+    writePng("Proj/Content/Proj/Content/textures/marker.png", 4, 4);
+    writeText("Proj/Content/Proj/Content/textures/marker.png.meta",
+              R"({"guid":"deadbeef-1111-4222-8333-444444444444","version":1})");
+    writeText("Proj/Content/Proj/Content/data/thing.json",
+              R"({"id":"deadbeef-5555-4666-8777-888888888888","payload":13,"decoy":true})");
+
+    auto proj = Arcane::Project::Open(fs::path("Proj"));   // RELATIVE, like --project
+    REQUIRE(proj.has_value());
+    REQUIRE(proj->Root() == fs::path("Proj"));
+
+    const auto pngId  = Arcane::Guid::FromString(kPngGuid);
+    const auto jsonId = Arcane::Guid::FromString(kJsonGuid);
+    REQUIRE(pngId.has_value());
+    REQUIRE(jsonId.has_value());
+
+    // The PRECONDITION the bug needs: the registry hands back a RELATIVE path
+    // that is ALREADY anchored at its mount root. Asserted, not assumed -- if
+    // this ever becomes absolute, double-anchoring stops being reachable and
+    // everything below would pass for the wrong reason.
+    const auto resolvedPng = proj->ResolveAsset(Arcane::AssetId::FromGuid(*pngId));
+    REQUIRE(resolvedPng.has_value());
+    CHECK_FALSE(resolvedPng->is_absolute());
+    CHECK(resolvedPng->generic_string() == "Proj/Content/textures/marker.png");
+
+    auto assets = Arcane::Assets::Create(nullptr);
+    REQUIRE(assets != nullptr);
+    // Exactly Runtime::OpenProject's two calls, in its order.
+    assets->SetContentRoot(proj->Root() / "Content");
+    assets->SetAssetResolver(
+        [p = &*proj](const Arcane::AssetId& id) { return p->ResolveAsset(id); });
+
+    // PixelsFor: the NRI graph path's ENTIRE texture supply -- RuntimeApp's
+    // SetPixelSupply lambda is a direct call to this.
+    const Arcane::PixelData* pixels = assets->PixelsFor(*pngId);
+    REQUIRE(pixels != nullptr);
+    CHECK(pixels->width  == 2u);   // 4 == the decoy at the doubled path
+    CHECK(pixels->height == 2u);
+
+    // GetJson(AssetId) / GetBytes(AssetId): the same ResolveId seam, device-free.
+    auto doc = assets->GetJson(Arcane::AssetId::FromGuid(*jsonId));
+    REQUIRE(doc != nullptr);
+    CHECK((*doc)["payload"].get<int>() == 7);   // 13 == the decoy
+    auto bytes = assets->GetBytes(Arcane::AssetId::FromGuid(*jsonId));
+    REQUIRE(bytes != nullptr);
+    CHECK(bytes->size() == realJson.size());
+
+    // The OTHER half of the convention is untouched: a caller-supplied LOOSE
+    // relative path still anchors under the content root -- and lands on the very
+    // cache entry the id route just filled, one file, one entry.
+    auto byPath = assets->GetJson(fs::path("data/thing.json"));
+    REQUIRE(byPath != nullptr);
+    CHECK(byPath.get() == doc.get());
+
+    // GetTexture(AssetId) proved WITHOUT a device: it decodes through the same
+    // retained pixel supply before it ever needs one, so a fresh facade that has
+    // only ever seen GetTexture must be holding the REAL file's pixels. Overwrite
+    // the file afterwards -- a PixelsFor that still answers 2x2 can only be
+    // serving what GetTexture decoded, and it decoded the right file.
+    auto texAssets = Arcane::Assets::Create(nullptr);
+    texAssets->SetContentRoot(proj->Root() / "Content");
+    texAssets->SetAssetResolver(
+        [p = &*proj](const Arcane::AssetId& id) { return p->ResolveAsset(id); });
+    CHECK(texAssets->GetTexture(Arcane::AssetId::FromGuid(*pngId)) == nullptr);   // headless
+    writePng("Proj/Content/textures/marker.png", 8, 8);
+    const Arcane::PixelData* cached = texAssets->PixelsFor(*pngId);
+    REQUIRE(cached != nullptr);
+    CHECK(cached->width  == 2u);   // 4 == GetTexture read the decoy; 8 == it re-read disk
+    CHECK(cached->height == 2u);
+
+    fs::current_path(cwdGuard.prev, ec);   // step out of the tree before removing it
+    fs::remove_all(sandbox, ec);
 }
 
 TEST_CASE("assets: json loader -- parse, cache identity, memoized failure", "[gpu][d3d12][assets]")

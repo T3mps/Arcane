@@ -116,37 +116,91 @@ namespace Arcane
                 Diagnostics::Clear("assets.unresolved");
             }
 
+            // THE ANCHORING CONVENTION, for all four id-shaped overloads below:
+            // a path that came OUT of the installed AssetResolver is already
+            // LOAD-READY and must go straight to the resolved-path workers --
+            // never back through ResolveAssetPath. The registry turned the Guid
+            // into a mount path and the MountTable joined it onto THAT MOUNT's
+            // own root (game:// = <project>/Content, diag:// =
+            // <project>/Saved/Diagnostics, plugin/<x>:// = <plugin>/Content), so
+            // there is nothing left for this facade to anchor. Re-anchoring it
+            // under m_contentRoot is not merely redundant -- for a relative
+            // project root it produces <root>/Content/<root>/Content/... (the
+            // desk-observed "failed to load ReferenceProject\Content\
+            // ReferenceProject\Content\textures\uv_marker.png"), and for the
+            // diag://+plugin:// mounts it is wrong even when the root is
+            // absolute, because those mounts do not live under Content/ at all.
+            // Every OTHER consumer of the same resolver -- SpriteCache,
+            // SpriteMaterialCache, PostChainCache (via SceneRenderResolver),
+            // ProjectBoot's boot-scene lookup, the editor, the NRI graph
+            // vehicle's own SetAssetResolver -- opens the returned path verbatim
+            // with an ifstream, so verbatim IS the convention and this facade was
+            // the sole violator of it. See ResolveAssetPath for the other half of
+            // the rule (who DOES anchor).
             nvrhi::TextureHandle GetTexture(const AssetId& id) override
             {
                 const auto p = ResolveId(id);
-                return p ? GetTexture(*p) : nullptr;
+                return p ? TextureForResolved(*p) : nullptr;
             }
 
             const PixelData* PixelsFor(const Guid& id) override
             {
                 const auto p = ResolveId(AssetId::FromGuid(id));
-                if (!p)
-                    return nullptr;
-                const auto resolved = ResolveAssetPath(*p);
-                return PixelsForResolved(resolved, CacheKey(resolved));
+                return p ? PixelsForResolved(*p, CacheKey(*p)) : nullptr;
             }
 
             BytesPtr GetBytes(const AssetId& id) override
             {
                 const auto p = ResolveId(id);
-                return p ? GetBytes(*p) : nullptr;
+                return p ? BytesForResolved(*p) : nullptr;
             }
 
             JsonPtr GetJson(const AssetId& id) override
             {
                 const auto p = ResolveId(id);
-                return p ? GetJson(*p) : nullptr;
+                return p ? JsonForResolved(*p) : nullptr;
             }
 
+            // The PATH overloads: a caller-supplied LOOSE relative path is the
+            // OTHER half of the convention -- the half the content root does
+            // anchor. Both routes converge on the same *Resolved workers below,
+            // so a file reached by Guid and the same file reached by path still
+            // share ONE cache entry (CacheKey canonicalises both).
             nvrhi::TextureHandle GetTexture(
                 const std::filesystem::path& path) override
             {
-                const auto resolved = ResolveAssetPath(path);
+                return TextureForResolved(ResolveAssetPath(path));
+            }
+
+            BytesPtr GetBytes(const std::filesystem::path& path) override
+            {
+                return BytesForResolved(ResolveAssetPath(path));
+            }
+
+            JsonPtr GetJson(const std::filesystem::path& path) override
+            {
+                return JsonForResolved(ResolveAssetPath(path));
+            }
+
+            AssetStats Stats() const override
+            {
+                AssetStats s;
+                s.totalBytes = TotalBytes();
+                s.count = (uint32_t)(m_textures.Count() +
+                                     m_bytes.Count() +
+                                     m_json.Count() +
+                                     m_pixels.Count());
+                return s;
+            }
+
+        private:
+            // The loaders, keyed on an ALREADY-RESOLVED path -- whichever of the
+            // two routes above produced it. They never anchor anything
+            // themselves: the anchoring decision is made exactly once, by the
+            // caller, which is what makes the id route's "already load-ready"
+            // contract structural instead of incidental.
+            nvrhi::TextureHandle TextureForResolved(const std::filesystem::path& resolved)
+            {
                 const std::string key = CacheKey(resolved);
 
                 if (m_textures.Has(key))
@@ -221,9 +275,8 @@ namespace Arcane
                 return tex;
             }
 
-            BytesPtr GetBytes(const std::filesystem::path& path) override
+            BytesPtr BytesForResolved(const std::filesystem::path& resolved)
             {
-                const auto resolved = ResolveAssetPath(path);
                 const std::string key = CacheKey(resolved);
 
                 if (m_bytes.Has(key))
@@ -250,9 +303,8 @@ namespace Arcane
                 return ptr;
             }
 
-            JsonPtr GetJson(const std::filesystem::path& path) override
+            JsonPtr JsonForResolved(const std::filesystem::path& resolved)
             {
-                const auto resolved = ResolveAssetPath(path);
                 const std::string key = CacheKey(resolved);
 
                 if (m_json.Has(key))
@@ -291,23 +343,11 @@ namespace Arcane
                 return ptr;
             }
 
-            AssetStats Stats() const override
-            {
-                AssetStats s;
-                s.totalBytes = TotalBytes();
-                s.count = (uint32_t)(m_textures.Count() +
-                                     m_bytes.Count() +
-                                     m_json.Count() +
-                                     m_pixels.Count());
-                return s;
-            }
-
-        private:
             // Decode-once pixel supply shared by PixelsFor(Guid) and
             // GetTexture (both overloads): `resolved`/`key` are the SAME
-            // content-root-anchored path + CacheKey the texture cache uses,
-            // so a Guid's pixels and its eventual GPU upload -- however either
-            // is reached -- share ONE decode and ONE cache entry.
+            // already-resolved path + CacheKey the texture cache uses, so a
+            // Guid's pixels and its eventual GPU upload -- however either is
+            // reached -- share ONE decode and ONE cache entry.
             const PixelData* PixelsForResolved(const std::filesystem::path& resolved,
                                                const std::string& key)
             {
@@ -407,9 +447,14 @@ namespace Arcane
                 }
             }
 
-            // Content-root-aware resolve, shadowing the free ExeRelative helper for
-            // the three Get* methods: absolute paths pass through; a set content root
-            // anchors relatives under it; otherwise the legacy exe-relative anchor.
+            // Content-root-aware resolve, shadowing the free ExeRelative helper:
+            // absolute paths pass through; a set content root anchors relatives
+            // under it; otherwise the legacy exe-relative anchor.
+            //
+            // WHO ANCHORS: this function, and ONLY for a path the CALLER handed
+            // us (the three path overloads). It is NOT applied to anything the
+            // AssetResolver produced -- those are already anchored at their own
+            // mount's root. One anchor per path, decided at the entry point.
             std::filesystem::path ResolveAssetPath(const std::filesystem::path& path) const
             {
                 if (path.is_absolute())
@@ -421,8 +466,17 @@ namespace Arcane
 
             // AssetId -> physical file through the installed resolver. Unresolved ids
             // warn ONCE (per id, until a new resolver is installed) -- a per-frame
-            // caller polling a dead reference must not storm the log. The resolved
-            // path feeds the path loaders, whose own caches key on the file.
+            // caller polling a dead reference must not storm the log.
+            //
+            // WHO DOES NOT ANCHOR: this one. What comes back is LOAD-READY and is
+            // handed to the *Resolved workers verbatim -- never through
+            // ResolveAssetPath. A relative result (the host opened the project by
+            // a relative path, e.g. `--project ReferenceProject`) is relative to
+            // the process CWD, which is exactly how every other consumer of this
+            // same resolver opens it (a plain ifstream), so the two agree by
+            // construction. Pinned by AssetsTest.cpp's "registry-resolved ids are
+            // load-ready" case (a real Project opened by a RELATIVE path, with a
+            // decoy planted at the doubled location).
             std::optional<std::filesystem::path> ResolveId(const AssetId& id)
             {
                 if (!id.IsValid())
