@@ -1,6 +1,7 @@
 #include <Arcane/Render/SpriteCache.hpp>
 
 #include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Project/AssetId.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
@@ -65,9 +66,8 @@ namespace Arcane
 
         // Success: the entry always carries the asset's own pivot. Texture/
         // UV/size resolve only when the texture Guid is valid AND the Assets
-        // facade yields a live handle -- Assets::GetTexture is a cached facade
-        // (Assets.hpp:79-81), so a memoized prior load failure returns null
-        // here too, same as an unset texture Guid. Either way
+        // facade yields something -- a memoized prior load failure returns
+        // null here too, same as an unset texture Guid. Either way
         // ComputeSpriteGeom(data, 0, 0) is the documented 1x1 m / full-UV
         // fallback (SpriteAsset.hpp:64-66, SpriteAsset.cpp:104-106), so the
         // untextured case needs no special-case geometry of its own.
@@ -75,15 +75,34 @@ namespace Arcane
         entry.pivot = data->pivot;
 
         nvrhi::TextureHandle tex;
+        const PixelData* pixels = nullptr;
         if (data->texture.IsValid() && m_impl->services.assets)
+        {
+            // Geometry's dimensions come from PixelsFor -- device-free, so
+            // this resolves even with no render device bound (null-device
+            // legal). GetTexture routes its own upload through the SAME
+            // retained pixels (Assets.cpp), so this is a decode cache hit
+            // whichever of the two is called first.
+            pixels = m_impl->services.assets->PixelsFor(data->texture);
             tex = m_impl->services.assets->GetTexture(AssetId::FromGuid(data->texture));
+        }
 
         std::uint32_t texWidth = 0, texHeight = 0;
+        if (pixels)
+        {
+            texWidth = pixels->width;
+            texHeight = pixels->height;
+        }
         if (tex)
         {
+            // The live GPU texture's desc describes the SAME decode PixelsFor
+            // just supplied (GetTexture is a consumer of it) -- the two must
+            // always agree when both exist. A mismatch here would mean the
+            // NVRHI upload path and the device-free pixel supply have drifted
+            // apart, which the "identical GPU result" contract forbids.
             const auto& desc = tex->getDesc();
-            texWidth = desc.width;
-            texHeight = desc.height;
+            ARC_ASSERT(pixels != nullptr && texWidth == desc.width && texHeight == desc.height,
+                       "SpriteCache: PixelsFor and GetTexture disagree on texture dimensions");
         }
         const ResolvedSpriteGeom g = ComputeSpriteGeom(*data, texWidth, texHeight);
         entry.uvMin = g.uvMin;

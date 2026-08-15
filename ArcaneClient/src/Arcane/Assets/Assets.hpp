@@ -30,15 +30,16 @@ namespace Arcane
 
     struct AssetsDesc
     {
-        // Facade-wide byte budget across ALL caches (textures + bytes +
-        // JSON). On insert, least-recently-used unpinned entries are evicted
-        // -- cross-cache, on one shared recency clock -- until the total is
-        // back under budget. The budget is strict: an asset larger than the
-        // whole budget is served to the caller but swept right back out
-        // (never cached). Memoized failures cost ~0 bytes and are never
-        // evicted by the sweep. 0 disables eviction (unbounded, the legacy
-        // contract). Default: 256 MiB -- roughly 16 uncompressed 2048^2 RGBA
-        // atlases, generous for the 2D engine while still bounding growth.
+        // Facade-wide byte budget across ALL caches (textures + bytes + JSON
+        // + decoded pixels). On insert, least-recently-used unpinned entries
+        // are evicted -- cross-cache, on one shared recency clock -- until
+        // the total is back under budget. The budget is strict: an asset
+        // larger than the whole budget is served to the caller but swept
+        // right back out (never cached). Memoized failures cost ~0 bytes and
+        // are never evicted by the sweep. 0 disables eviction (unbounded,
+        // the legacy contract). Default: 256 MiB -- roughly 16 uncompressed
+        // 2048^2 RGBA atlases, generous for the 2D engine while still
+        // bounding growth.
         uint64_t byteBudget = 256ull * 1024 * 1024;
     };
 
@@ -80,6 +81,21 @@ namespace Arcane
         virtual nvrhi::TextureHandle GetTexture(
             const std::filesystem::path& path) = 0;
         virtual nvrhi::TextureHandle GetTexture(const AssetId& id) = 0;
+
+        // Decoded pixels for a texture asset, device-free: no render device is
+        // ever required (null-device legal, unlike GetTexture). Resolves `id`
+        // through the installed AssetResolver exactly like GetTexture(AssetId),
+        // then decodes once and retains the result -- a second call for the
+        // same id is a cache hit, returning the SAME pointer. GetTexture reads
+        // its own upload bytes through this same retained cache, so a prior
+        // GetTexture(AssetId::FromGuid(id)) call makes this a cache hit too
+        // (and vice versa). Null on an invalid/unresolvable id or a decode
+        // failure (logged once, memoized). The returned pointer is owned by
+        // the facade's LRU-budgeted pixel cache (bytes-weighted, beside
+        // GetTexture's texture cache) and is valid only until evicted --
+        // callers that need it to outlive the current call must copy it, not
+        // hold the pointer.
+        virtual const PixelData* PixelsFor(const Guid& id) = 0;
 
         // Raw file bytes (fonts, blobs). Null on failure (memoized).
         virtual std::shared_ptr<const std::vector<uint8_t>> GetBytes(

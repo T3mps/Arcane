@@ -68,8 +68,9 @@ namespace Arcane
             return canon.string();
         }
 
-        using BytesPtr = std::shared_ptr<const std::vector<uint8_t>>;
-        using JsonPtr  = std::shared_ptr<const nlohmann::json>;
+        using BytesPtr     = std::shared_ptr<const std::vector<uint8_t>>;
+        using JsonPtr      = std::shared_ptr<const nlohmann::json>;
+        using PixelDataPtr = std::shared_ptr<PixelData>;
 
         class AssetsImpl final : public Assets
         {
@@ -87,7 +88,9 @@ namespace Arcane
                 // Cached textures belong to the old device, and any failure
                 // memoized while the device was null (see GetTexture's guard)
                 // was not a real load failure -- drop both so a bound device
-                // gets a clean retry. Bytes/JSON caches are device-independent.
+                // gets a clean retry. Bytes/JSON/pixel caches are device-
+                // independent -- PixelsFor's decoded pixels never touch a
+                // device at all, so a device rebind must not evict them.
                 m_textures.Clear();
             }
 
@@ -119,6 +122,15 @@ namespace Arcane
                 return p ? GetTexture(*p) : nullptr;
             }
 
+            const PixelData* PixelsFor(const Guid& id) override
+            {
+                const auto p = ResolveId(AssetId::FromGuid(id));
+                if (!p)
+                    return nullptr;
+                const auto resolved = ResolveAssetPath(*p);
+                return PixelsForResolved(resolved, CacheKey(resolved));
+            }
+
             BytesPtr GetBytes(const AssetId& id) override
             {
                 const auto p = ResolveId(id);
@@ -144,6 +156,23 @@ namespace Arcane
                     return m_textures.Get(key);
                 }
 
+                // CONSUMER of the retained pixel supply: decode itself moved
+                // into PixelsFor (device-free, shared with the graph's own
+                // per-Guid lookups -- a prior PixelsFor(id) or GetTexture call
+                // for this same path is a cache hit here). Runs even with no
+                // device bound yet, so the pixels are ready the moment a
+                // device does bind (SetDevice does not clear m_pixels).
+                const PixelData* pixels = PixelsForResolved(resolved, key);
+                if (!pixels)
+                {
+                    // PixelsForResolved already WARN-logged the specific
+                    // decode failure and memoized it in m_pixels; memoize the
+                    // texture-cache entry too so a repeat GetTexture call
+                    // short-circuits here without even a hash lookup there.
+                    m_textures.PutFailure(key);
+                    return nullptr;
+                }
+
                 // No render device yet (headless, or GetTexture raced ahead of
                 // SetDevice/SetRenderResources): degrade to null instead of
                 // dereferencing a null m_device. Memoize the miss so a per-frame
@@ -155,34 +184,10 @@ namespace Arcane
                     return nullptr;
                 }
 
-                int w = 0, h = 0, comp = 0;
-                unsigned char* data = stbi_load(
-                    resolved.string().c_str(), &w, &h, &comp, 4);
-                if (!data)
-                {
-                    // ARC_WARN chosen over ARC_ERROR: asset-not-found does NOT
-                    // increment RenderErrorCount() (which is fed only by NVRHI
-                    // validation callbacks). Using ARC_WARN keeps the
-                    // RenderErrorCount() == 0 assertion clean in the GPU test.
-                    ARC_WARN("Assets: texture not found or decode failed: {}",
-                             resolved.string());
-                    m_textures.PutFailure(key);
-                    return nullptr;
-                }
-
-                if (w <= 0 || h <= 0)
-                {
-                    ARC_WARN("Assets: texture has non-positive dimensions ({}x{}): {}",
-                             w, h, resolved.string());
-                    stbi_image_free(data);
-                    m_textures.PutFailure(key);
-                    return nullptr;
-                }
-
-                const uint64_t bytes = (uint64_t)w * h * 4;
+                const uint64_t bytes = (uint64_t)pixels->width * pixels->height * 4;
                 auto texDesc = nvrhi::TextureDesc()
-                    .setWidth((uint32_t)w)
-                    .setHeight((uint32_t)h)
+                    .setWidth(pixels->width)
+                    .setHeight(pixels->height)
                     .setFormat(nvrhi::Format::SRGBA8_UNORM)
                     .setInitialState(nvrhi::ResourceStates::ShaderResource)
                     .setKeepInitialState(true)
@@ -192,22 +197,24 @@ namespace Arcane
                 {
                     ARC_WARN("Assets: createTexture failed for: {}",
                              resolved.string());
-                    stbi_image_free(data);
                     m_textures.PutFailure(key);
                     return nullptr;
                 }
 
                 // Upload via transient command list -- exact pattern from
-                // Batcher2D::Init (white texel upload).
+                // Batcher2D::Init (white texel upload). Source bytes come from
+                // the retained pixel cache now, not a fresh stbi_load -- no
+                // matching free here; eviction of the m_pixels entry is the
+                // new reclaim point for this buffer.
                 {
                     nvrhi::CommandListHandle upload =
                         m_device->createCommandList();
                     upload->open();
-                    upload->writeTexture(tex, 0, 0, data, (size_t)w * 4);
+                    upload->writeTexture(tex, 0, 0, pixels->rgba.data(),
+                                         (size_t)pixels->width * 4);
                     upload->close();
                     m_device->executeCommandList(upload);
                 }
-                stbi_image_free(data);
 
                 m_textures.Put(key, tex, bytes);
                 EnforceBudget();
@@ -290,20 +297,64 @@ namespace Arcane
                 s.totalBytes = TotalBytes();
                 s.count = (uint32_t)(m_textures.Count() +
                                      m_bytes.Count() +
-                                     m_json.Count());
+                                     m_json.Count() +
+                                     m_pixels.Count());
                 return s;
             }
 
         private:
+            // Decode-once pixel supply shared by PixelsFor(Guid) and
+            // GetTexture (both overloads): `resolved`/`key` are the SAME
+            // content-root-anchored path + CacheKey the texture cache uses,
+            // so a Guid's pixels and its eventual GPU upload -- however either
+            // is reached -- share ONE decode and ONE cache entry.
+            const PixelData* PixelsForResolved(const std::filesystem::path& resolved,
+                                               const std::string& key)
+            {
+                if (m_pixels.Has(key))
+                {
+                    if (m_pixels.IsFailure(key))
+                        return nullptr;
+                    return m_pixels.Get(key).get();
+                }
+
+                auto pixels = std::make_shared<PixelData>();
+                if (!LoadPngRgba(resolved, pixels->width, pixels->height, pixels->rgba))
+                {
+                    // LoadPngRgba already WARN-logged the specific reason
+                    // (missing file, corrupt data, non-positive dims).
+                    m_pixels.PutFailure(key);
+                    return nullptr;
+                }
+
+                const uint64_t bytes = (uint64_t)pixels->width * pixels->height * 4;
+                const PixelData* raw = pixels.get();
+                m_pixels.Put(key, pixels, bytes);
+                // Pin the fresh entry for the duration of the sweep below:
+                // unlike GetTexture/GetBytes/GetJson (which return an owning
+                // handle/shared_ptr that survives its own cache eviction),
+                // PixelsFor returns a bare pointer -- if EnforceBudget evicted
+                // THIS entry before we return (the "bigger than the whole
+                // budget" edge case other caches tolerate), `raw` would dangle
+                // the instant this function returns. Released immediately
+                // after: on every LATER call this is an ordinary, evictable
+                // LRU citizen like any other entry.
+                m_pixels.Acquire(key);
+                EnforceBudget();
+                m_pixels.Release(key);
+                return raw;
+            }
+
             uint64_t TotalBytes() const
             {
                 return m_textures.TotalBytes() +
                        m_bytes.TotalBytes() +
-                       m_json.TotalBytes();
+                       m_json.TotalBytes() +
+                       m_pixels.TotalBytes();
             }
 
             // Budget sweep, run after every insert: evict the globally
-            // least-recently-used entry -- across ALL three caches, comparable
+            // least-recently-used entry -- across ALL FOUR caches, comparable
             // via the shared recency clock -- until the facade total is back
             // under budget. Pinned (refcounted) entries are never offered by
             // LeastRecentEvictable and Evict refuses them; memoized failures
@@ -336,6 +387,11 @@ namespace Arcane
                     {
                         key = candKey; used = candUsed; which = 2;
                     }
+                    if (m_pixels.LeastRecentEvictable(candKey, candUsed) &&
+                        candUsed < used)
+                    {
+                        key = candKey; used = candUsed; which = 3;
+                    }
 
                     bool evicted = false;
                     switch (which)
@@ -343,6 +399,7 @@ namespace Arcane
                     case 0: evicted = m_textures.Evict(key); break;
                     case 1: evicted = m_bytes.Evict(key); break;
                     case 2: evicted = m_json.Evict(key); break;
+                    case 3: evicted = m_pixels.Evict(key); break;
                     default: break;
                     }
                     if (!evicted)
@@ -436,13 +493,14 @@ namespace Arcane
             // insertion order is the row order the user sees.
             std::vector<Guid> m_unresolvedDiagnosticIds;
 
-            // ONE recency clock across the three caches (declared first: the
+            // ONE recency clock across the four caches (declared first: the
             // caches capture its address) so the budget sweep can compare LRU
             // candidates cross-cache. See AssetCache's shared-clock ctor.
             uint64_t m_lruClock = 0;
-            AssetCache<nvrhi::TextureHandle>  m_textures{&m_lruClock};
-            AssetCache<BytesPtr>              m_bytes{&m_lruClock};
-            AssetCache<JsonPtr>               m_json{&m_lruClock};
+            AssetCache<nvrhi::TextureHandle>     m_textures{&m_lruClock};
+            AssetCache<BytesPtr>                 m_bytes{&m_lruClock};
+            AssetCache<JsonPtr>                  m_json{&m_lruClock};
+            AssetCache<PixelDataPtr>             m_pixels{&m_lruClock};
         };
     }
 
