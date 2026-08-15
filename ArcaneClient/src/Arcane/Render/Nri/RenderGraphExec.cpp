@@ -336,6 +336,31 @@ namespace Arcane
         m_importedViews.clear();
     }
 
+    void RenderGraph::FlushRetiredPool()
+    {
+        if (m_retiredPool.empty() || !m_device || !m_graves)
+            return;
+
+        Graveyard&                graves = *m_graves;
+        const nri::CoreInterface* core   = &m_device->Core();
+
+        // m_submitValue, like every other burial in this file. At the top of an
+        // Execute() this is the value the LAST submission signalled -- the same
+        // value the node views buried during (and at the declaration of) that
+        // frame carry -- so Graveyard's nondecreasing rule holds and the due
+        // prefix replays views-then-textures, which is the entire point of the
+        // staging area. From ReleaseGpuResourcesInternal it is the same value
+        // that call's own burials use, appended after them.
+        for (const PoolResource& retired : m_retiredPool)
+        {
+            if (retired.texture)
+                graves.Bury(m_submitValue, [core, t = retired.texture] { core->DestroyTexture(t); });
+            if (retired.buffer)
+                graves.Bury(m_submitValue, [core, b = retired.buffer] { core->DestroyBuffer(b); });
+        }
+        m_retiredPool.clear();
+    }
+
     void RenderGraph::ReleaseGpuResourcesInternal(bool all)
     {
         if (!m_device || !m_graves)
@@ -371,6 +396,14 @@ namespace Arcane
         // The imported half normally turns over inside Execute(); this catches
         // the frame that never came (a release, or teardown).
         ReleaseImportedViews();
+
+        // Anything an earlier Execute() retired and staged, buried HERE rather
+        // than stranded: the next Execute() that would have flushed it may
+        // never come (this call IS the teardown on the ~RenderGraph path).
+        // After the view burials above and before the pool's below, which keeps
+        // this call's own burial order views-then-resources exactly like every
+        // other path's.
+        FlushRetiredPool();
 
         // The POOL EPOCH bumps here too (RenderGraph.hpp): this path is the
         // one the owner DOES get to sequence -- NriGraphContext invalidates
@@ -647,9 +680,20 @@ namespace Arcane
         Graveyard&                graves    = *m_graves;
         const nri::CoreInterface* graveCore = &core;
 
-        // Buries a pool entry AND every cached view that names its texture:
-        // a view outliving the resource it views is a dangling descriptor,
-        // and the graveyard is the only place that can free either safely.
+        // RETIRES a pool entry: buries every cached view of the graph's OWN
+        // that names its texture, then STAGES the resource itself for burial
+        // at the top of the next Execute().
+        //
+        // THE TWO HALVES ARE DELIBERATELY ASYMMETRIC, and that asymmetry IS
+        // the ordering rule (whole-branch review, I1 -- see m_retiredPool for
+        // the full statement). A Graveyard replays its due prefix in BURIAL
+        // ORDER, so "a view must never be destroyed after the texture it
+        // views" means "a view must never be buried after it". The graph's own
+        // views go in RIGHT HERE, ahead of everything; the texture goes into
+        // the staging area, i.e. behind every burial any node makes for the
+        // rest of this frame AND at this frame's declaration-time sync. Burying
+        // the texture here (what this did through Phase 2) put it AHEAD of the
+        // node views that follow inside the very same Execute.
         //
         // It also bumps the POOL EPOCH (RenderGraph.hpp), which is the ONLY
         // way a NODE caching its own views over pool textures can learn that
@@ -677,10 +721,15 @@ namespace Arcane
                     }
                     ++v;
                 }
-                graves.Bury(m_submitValue, [graveCore, t = entry.texture] { graveCore->DestroyTexture(t); });
             }
-            if (entry.buffer)
-                graves.Bury(m_submitValue, [graveCore, b = entry.buffer] { graveCore->DestroyBuffer(b); });
+            if (entry.texture || entry.buffer)
+            {
+                PoolResource retired;
+                retired.isTexture = entry.isTexture;
+                retired.texture   = entry.texture;
+                retired.buffer    = entry.buffer;
+                m_retiredPool.push_back(retired);
+            }
             entry = PoolResource{};
         };
 
@@ -1089,6 +1138,17 @@ namespace Arcane
         // m_graves is private to its context, so the two can only ever describe
         // each other.
         m_graves->Reap(core.GetFenceValue(*m_fence));
+
+        // Whatever a PREVIOUS Execute() retired out of the pool, buried now
+        // (whole-branch review, I1 -- see m_retiredPool). It has to be here,
+        // at the top of a LATER Execute: by this point every view any node
+        // cached over those textures has already been buried -- by the exec
+        // fns of the frame that retired them, and, for a node that skipped
+        // that frame entirely, by the declaration-time SyncPoolEpoch sweep
+        // NriGraphContext runs before calling in. A graveyard replays in
+        // burial order, so "later" is exactly what makes the texture die after
+        // its views.
+        FlushRetiredPool();
 
         // Transient slot mapping for this frame, built before anything reads
         // it (RealizePool's attachment-role pass does).

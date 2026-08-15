@@ -519,21 +519,32 @@ namespace Arcane
         // SyncPoolEpoch, and identical for the same reason: RealizePool may
         // have buried a pool texture THIS Execute(), between the declarations
         // and this exec fn, and the epoch is the only observable.
-        if (!context.graph || !m_device)
+        if (!context.graph)
             return;
-        // THE GRAPH'S LANE, not the device's (NRI Phase 3, Task 8-pre): this
+        SyncPoolEpoch(*context.graph);
+    }
+
+    void PostChainNode::SyncPoolEpoch(const RenderGraph& graph)
+    {
+        if (!m_device)
+            return;
+        // THE GRAPH'S LANE, not the device's (NRI Phase 3, Task 8-pre): an
         // exec fn runs inside that graph's Execute, so its lane is where the
         // views it is about to bury belong -- and it is the same lane the pool
-        // burial that moved the epoch went into, which is what keeps the two in
-        // one ordered sequence.
-        Graveyard* graves = context.graph->Graves();
+        // retirement that moved the epoch stages into, which is what keeps the
+        // two in one ordered sequence. The owner's declaration-time call
+        // (whole-branch review, I1) names the same graph and therefore the same
+        // lane, one step EARLIER in that sequence.
+        Graveyard* graves = graph.Graves();
         if (!graves)
-            return;   // unreachable from an exec fn: Execute latches the lane before recording
-        const std::uint64_t epoch = context.graph->PoolEpoch();
+            return;   // from an exec fn: unreachable (Execute latches the lane before recording).
+                      // From the owner at declaration time: the graph has never Executed, so it
+                      // owns no pool and this node can hold no view over one.
+        const std::uint64_t epoch = graph.PoolEpoch();
         if (epoch == m_poolEpoch)
             return;
         m_poolEpoch = epoch;
-        InvalidateSources(*graves, context.graph->DebugSubmitCount());
+        InvalidateSources(*graves, graph.DebugSubmitCount());
     }
 
     nri::Descriptor* PostChainNode::EnsureView(const nri::CoreInterface& core, nri::Texture* texture)
@@ -1245,14 +1256,23 @@ namespace Arcane
         // point at which the owner could have told us. The epoch is the only
         // observable; a pointer comparison cannot see it, because NRI may hand
         // the recreated texture the vacated address.
-        if (!context.graph || !m_device)
+        if (!context.graph)
+            return;
+        SyncPoolEpoch(*context.graph);
+    }
+
+    void TonemapNode::SyncPoolEpoch(const RenderGraph& graph)
+    {
+        if (!m_device)
             return;
         // The GRAPH's lane rather than the device's -- see
         // PostChainNode::SyncPoolEpoch above for why (NRI Phase 3, Task 8-pre).
-        Graveyard* graves = context.graph->Graves();
+        Graveyard* graves = graph.Graves();
         if (!graves)
-            return;   // unreachable from an exec fn: Execute latches the lane before recording
-        const std::uint64_t epoch = context.graph->PoolEpoch();
+            return;   // from an exec fn: unreachable (Execute latches the lane before recording).
+                      // From the owner at declaration time: the graph has never Executed, so it
+                      // owns no pool and this node can hold no view over one.
+        const std::uint64_t epoch = graph.PoolEpoch();
         if (epoch == m_poolEpoch)
             return;
         m_poolEpoch = epoch;
@@ -1260,7 +1280,7 @@ namespace Arcane
         // reading them. DebugSubmitCount() is the submission that last used
         // them -- the same value the graph keys its OWN burials to, which is
         // what keeps Graveyard's nondecreasing rule satisfied.
-        InvalidateSource(*graves, context.graph->DebugSubmitCount());
+        InvalidateSource(*graves, graph.DebugSubmitCount());
     }
 
     void TonemapNode::Release(Graveyard& graveyard, std::uint64_t fence)

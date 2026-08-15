@@ -1373,6 +1373,31 @@ namespace Arcane
 
     void NriGraphContext::BuildFrame(const FrameDesc& frame)
     {
+        // ===== EVERY OWNED NODE SYNCS ITS POOL EPOCH, IN FRAME OR NOT =======
+        // (whole-branch review, I1.) The three nodes below cache descriptors
+        // over RenderGraph POOL textures, and the epoch is the only signal that
+        // one of those textures has been retired (RenderGraph::PoolEpoch's
+        // contract). Each already syncs from its own exec fn -- but an exec fn
+        // only runs when the node is IN the frame, and the reachable case is
+        // precisely the opposite one: the outline chain is declared only while
+        // something wants an outline, so toggling the selection off shrinks the
+        // pool on a frame OutlineNode does not record; the post chain does the
+        // same across a re-wire. Such a node would hold stale descriptors until
+        // it next happened to record, and bury them then -- after the texture
+        // they name had already been destroyed, which is a use-after-free and
+        // not merely an untidy order.
+        //
+        // HERE, at declaration time, is the one place that covers it: it runs
+        // before Execute(), and Execute() opens by flushing the graph's
+        // retirement staging area (RenderGraph::m_retiredPool, whose one-frame
+        // delay is this fix's other half). So every node's views are already in
+        // the graveyard, ahead of the textures they view, whatever the frame's
+        // shape was. Cheap: one uint64 compare per node per frame, and a no-op
+        // in the steady state.
+        if (m_post)     m_post->SyncPoolEpoch(*m_graph);
+        if (m_tonemap)  m_tonemap->SyncPoolEpoch(*m_graph);
+        if (m_outline)  m_outline->SyncPoolEpoch(*m_graph);
+
         // Thin on purpose: the frame's SHAPE lives in DeclareGraphFrame so the
         // headless [nri] frame-shape cases drive the real declarations instead
         // of transcribing them (see that function's comment block). The handles

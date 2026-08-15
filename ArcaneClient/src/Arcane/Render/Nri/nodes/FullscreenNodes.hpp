@@ -284,6 +284,27 @@ namespace Arcane
             return ((std::uint64_t)frameSlot * kCbRegionsPerFrame + region) * regionStride;
         }
 
+        // ===== THE OWNER'S DECLARATION-TIME POOL SYNC (whole-branch review, I1)
+        // Same operation as the private, exec-fn-driven SyncPoolEpoch below --
+        // "if the graph's pool epoch moved, bury every cached view and start
+        // over" -- reachable by the object that OWNS this node, from OUTSIDE a
+        // frame. It exists because the exec-fn call alone cannot cover a node
+        // that is not in the frame at all, and that is the reachable case:
+        // a post chain that has been re-wired away, an outline chain with the
+        // selection toggled off. Such a node keeps descriptors over pool
+        // textures the graph retired frames ago, and buries them only whenever
+        // it next happens to record -- long after the texture's own burial.
+        //
+        // The OWNER therefore calls this on EVERY node it owns, in frame,
+        // skipped or idle, at DECLARATION time -- which is before Execute()
+        // flushes the graph's retirement staging area (RenderGraph::
+        // m_retiredPool), so the views are always buried first. The two halves
+        // are a pair; see NriGraphContext::BuildFrame.
+        //
+        // Idempotent, cheap (one uint64 comparison) and a no-op before the
+        // graph's first Execute() (no lane latched yet, and nothing cached).
+        void SyncPoolEpoch(const RenderGraph& graph);
+
     private:
         PostChainNode() = default;
 
@@ -431,6 +452,12 @@ namespace Arcane
         // the executor derives them.
         void Record(RenderGraphNodeContext& context, RgTexture source, RgTexture target,
                     std::uint32_t frameSlot);
+
+        // The owner's declaration-time pool sync -- see PostChainNode's
+        // identically-named overload for the full reasoning; this node caches
+        // views over pool textures for exactly the same reason and owes the
+        // same discipline.
+        void SyncPoolEpoch(const RenderGraph& graph);
 
     private:
         TonemapNode() = default;

@@ -791,16 +791,27 @@ namespace Arcane
         // REACHABLE HERE, not theoretical: the outline chain's own slot count
         // moves with the canvas extent (OutlineJfaStepCount is extent-derived),
         // so a resize genuinely re-shapes the pool.
-        if (!context.graph || !m_device)
+        if (!context.graph)
+            return;
+        SyncPoolEpoch(*context.graph);
+    }
+
+    void OutlineNode::SyncPoolEpoch(const RenderGraph& graph)
+    {
+        if (!m_device)
             return;
         // The GRAPH's lane rather than the device's (NRI Phase 3, Task 8-pre):
-        // this exec fn runs inside that graph's Execute, so its lane is where
-        // these views belong -- the same lane the pool burial that moved the
-        // epoch went into.
-        Graveyard* graves = context.graph->Graves();
+        // an exec fn runs inside that graph's Execute, so its lane is where
+        // these views belong -- the same lane the pool retirement that moved
+        // the epoch stages into. The owner's declaration-time call
+        // (whole-branch review, I1) names the same graph and the same lane, one
+        // step earlier -- which is what covers the frames this node is NOT in.
+        Graveyard* graves = graph.Graves();
         if (!graves)
-            return;   // unreachable from an exec fn: Execute latches the lane before recording
-        const std::uint64_t epoch = context.graph->PoolEpoch();
+            return;   // from an exec fn: unreachable (Execute latches the lane before recording).
+                      // From the owner at declaration time: the graph has never Executed, so it
+                      // owns no pool and this node can hold no view over one.
+        const std::uint64_t epoch = graph.PoolEpoch();
         if (epoch == m_poolEpoch)
             return;
         m_poolEpoch = epoch;
@@ -810,7 +821,7 @@ namespace Arcane
         // Graveyard's nondecreasing rule satisfied. Views before resources: this
         // buries ONLY views, and the arena/pool burials in Release() happen
         // after this call there too.
-        InvalidateSources(*graves, context.graph->DebugSubmitCount());
+        InvalidateSources(*graves, graph.DebugSubmitCount());
     }
 
     nri::Descriptor* OutlineNode::EnsureView(const nri::CoreInterface& core, nri::Texture* texture)

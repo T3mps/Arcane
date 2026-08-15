@@ -2268,6 +2268,195 @@ TEST_CASE("rendergraph exec: the POOL EPOCH moves on a shrink and on a desc chan
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
+TEST_CASE("rendergraph exec: a retired pool texture is buried AFTER every view naming it -- "
+          "including a holder that SKIPPED the reshaping frame", "[nri]")
+{
+    // THE ORDERING HALF of the pool-epoch contract (whole-branch review, I1).
+    // The epoch case above pins that a holder is TOLD; this one pins that the
+    // telling happens in time to matter.
+    //
+    // A Graveyard replays its due prefix in BURIAL ORDER (Graveyard.hpp), so
+    // "a view must never be destroyed after the texture it views" is really "a
+    // view must never be BURIED after it". Through Phase 2 RealizePool buried
+    // the texture inline, from the middle of Execute() -- ahead of every node
+    // view buried by the exec fns that follow (same value, same lane), and
+    // frames ahead of a node that was not in the reshaping frame at all. That
+    // second case is the routine one now: the outline chain is declared only
+    // while something wants an outline, so toggling the selection off shrinks
+    // the pool on a frame OutlineNode does not record.
+    //
+    // WHAT PROVES THE ORDER HERE: a Graveyard is append-only and Pending()
+    // counts what is queued, so the SEQUENCE in which Pending() grows IS the
+    // burial order. The case therefore asserts the deltas at three points and
+    // nothing about the thunks themselves (NONE's Destroy* record nothing, and
+    // every CreateTexture hands back the same dummy pointer, so neither the
+    // device nor a pointer comparison can be the witness).
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
+
+    // The epoch case's shape helper, verbatim: ONE node with N colour
+    // attachments, so the two shapes differ ONLY in pool slot count.
+    const auto declare = [](Arcane::RenderGraph& g, std::uint32_t count, std::uint32_t extent)
+    {
+        g.AddNode("a", Arcane::RenderGraph::NodeKind::Raster,
+            [&g, count, extent](Arcane::RenderGraphBuilder& builder)
+            {
+                std::vector<Arcane::RgTexture> targets;
+                for (std::uint32_t i = 0; i < count; ++i)
+                {
+                    const std::string name = "t" + std::to_string(i);
+                    targets.push_back(builder.CreateTexture(name.c_str(),
+                                                             MakeColorDesc(extent, extent)));
+                    builder.Write(targets.back(), Arcane::RgUsage::ColorWrite);
+                }
+                g.SetColorAttachments(targets);
+            },
+            [](Arcane::RenderGraphNodeContext&) {});
+    };
+
+    // A STAND-IN for the three real nodes that cache descriptors over pool
+    // textures (PostChainNode, TonemapNode, OutlineNode). It does exactly what
+    // their SyncPoolEpoch does and nothing else: compare the graph's epoch,
+    // and on a move bury every cached view at DebugSubmitCount(). The real
+    // nodes cannot be built headlessly (they need a live device, a pipeline
+    // cache and shader bytecode), so this case pins the MECHANISM and its
+    // ORDER; that NriGraphContext::BuildFrame drives the real three at
+    // declaration time is inspection-verified, like the Dist guards.
+    struct ViewHolder
+    {
+        std::uint64_t epoch  = 0;
+        int           cached = 0;
+        int           freed  = 0;
+
+        void Sync(Arcane::RenderGraph& g)
+        {
+            Arcane::Graveyard* graves = g.Graves();
+            if (!graves || g.PoolEpoch() == epoch)
+                return;
+            epoch = g.PoolEpoch();
+            for (int i = 0; i < cached; ++i)
+                graves->Bury(g.DebugSubmitCount(), [this] { ++freed; });
+            cached = 0;
+        }
+    };
+    ViewHolder holder;
+
+    // ---- frame 1: two pool slots; the holder builds views over them --------
+    declare(graph, /*count=*/2, /*extent=*/64);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    REQUIRE(graph.DebugTransientCount() == 2);
+    REQUIRE(device->Graves().Pending() == 0);
+    REQUIRE(graph.DebugRetiredPoolCount() == 0);
+    holder.Sync(graph);        // adopts the current epoch (nothing was buried)
+    holder.cached = 2;         // ...and now holds a descriptor over each slot
+
+    // ---- frame 2: THE RESHAPE, on a frame the holder is not in -------------
+    graph.Reset();
+    declare(graph, /*count=*/1, /*extent=*/64);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    CHECK(graph.DebugTransientCount() == 1);
+
+    // The retired texture is STAGED, not buried: nothing about it has reached
+    // the graveyard yet, and it will not until an Execute that every holder
+    // has had its declaration-time chance to precede. This single assertion is
+    // what the pre-fix code fails -- there the texture went into the graveyard
+    // right here, ahead of the two views below.
+    CHECK(graph.DebugRetiredPoolCount() == 1);
+    CHECK(holder.freed == 0);
+    const std::size_t afterReshape = device->Graves().Pending();
+
+    // ---- frame 3: declaration first, then Execute --------------------------
+    graph.Reset();
+    // What NriGraphContext::BuildFrame does for EVERY node it owns, in frame
+    // or not. The holder skipped the reshaping frame entirely; this is the
+    // only point at which it can still bury first.
+    holder.Sync(graph);
+    CHECK(device->Graves().Pending() == afterReshape + 2);   // the two views went in HERE...
+
+    declare(graph, /*count=*/1, /*extent=*/64);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    CHECK(graph.DebugRetiredPoolCount() == 0);
+    CHECK(device->Graves().Pending() == afterReshape + 3);   // ...and the texture AFTER them
+
+    // The steady state is unaffected: a frame that reshapes nothing stages
+    // nothing and buries nothing.
+    graph.Reset();
+    declare(graph, 1, 64);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    CHECK(graph.DebugRetiredPoolCount() == 0);
+    CHECK(device->Graves().Pending() == afterReshape + 3);
+
+    // And the whole queue drains cleanly, in that order.
+    device->Graves().Reap(graph.DebugSubmitCount());
+    CHECK(device->Graves().Pending() == 0);
+    CHECK(holder.freed == 2);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("rendergraph exec: a release with a staged retirement buries it too, rather than "
+          "stranding it", "[nri]")
+{
+    // The staging area's other exit (whole-branch review, I1). The flush lives
+    // at the top of the next Execute() -- and that Execute may never come: a
+    // ReleaseGpuResources (the editor's project switch / resize path) or
+    // ~RenderGraph is the end of the line. ReleaseGpuResourcesInternal
+    // therefore flushes too, after its own view burials and before the pool's,
+    // so the order it produces is the same views-then-resources one.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
+
+    const auto declare = [](Arcane::RenderGraph& g, std::uint32_t count)
+    {
+        g.AddNode("a", Arcane::RenderGraph::NodeKind::Raster,
+            [&g, count](Arcane::RenderGraphBuilder& builder)
+            {
+                std::vector<Arcane::RgTexture> targets;
+                for (std::uint32_t i = 0; i < count; ++i)
+                {
+                    const std::string name = "t" + std::to_string(i);
+                    targets.push_back(builder.CreateTexture(name.c_str(), MakeColorDesc(64, 64)));
+                    builder.Write(targets.back(), Arcane::RgUsage::ColorWrite);
+                }
+                g.SetColorAttachments(targets);
+            },
+            [](Arcane::RenderGraphNodeContext&) {});
+    };
+
+    declare(graph, 2);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    graph.Reset();
+    declare(graph, 1);
+    REQUIRE(graph.Execute(desc, CompileOk(graph)));
+    REQUIRE(graph.DebugRetiredPoolCount() == 1);
+
+    const std::size_t staged = device->Graves().Pending();
+    graph.ReleaseGpuResources();
+    CHECK(graph.DebugRetiredPoolCount() == 0);
+    // The staged texture PLUS the surviving slot: nothing was stranded, and a
+    // graveyard destroyed with pending burials is fatal in Debug anyway.
+    CHECK(device->Graves().Pending() > staged);
+    CHECK(graph.DebugTransientCount() == 0);
+
+    device->Graves().Reap(graph.DebugSubmitCount());
+    CHECK(device->Graves().Pending() == 0);
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
 TEST_CASE("rendergraph exec: the carried-over pool slot's first barrier picks up the previous frame's outgoing state", "[nri]")
 {
     // The correctness consequence of letting the pool cross frames. Compile()
@@ -2396,18 +2585,30 @@ TEST_CASE("rendergraph exec: a desc change after Reset re-creates and buries exa
     CHECK(graph.DebugTransientCount() == resized.poolSlotCount);
     CHECK(graph.DebugTransientCreateCount() == firstPoolSlots + resized.poolSlotCount);
 
-    // Buried: the old pool textures, plus the old colour-attachment view
-    // (swept with the texture it named -- a view outliving its resource is a
-    // dangling descriptor).
-    CHECK(device->Graves().Pending() == firstPoolSlots + 1);
-    device->Graves().Reap(graph.DebugSubmitCount());
-    CHECK(device->Graves().Pending() == 0);
+    // THE TWO HALVES RETIRE ON DIFFERENT SCHEDULES, and the split is the
+    // ordering fix (whole-branch review, I1 -- see the "buried AFTER every view
+    // naming it" case). The VIEWS go into the graveyard immediately, here: one
+    // of them, because on the NONE backend every CreateTexture hands back the
+    // same dummy pointer, so all three transients share one cached attachment
+    // view and the first slot's sweep takes it. The TEXTURES are staged instead
+    // and buried at the top of the NEXT Execute -- which is what puts them
+    // behind every node view, including a node that skipped this frame.
+    CHECK(device->Graves().Pending() == 1);
+    CHECK(graph.DebugRetiredPoolCount() == firstPoolSlots);
 
     // A re-realized slot starts genuinely undefined, so no carry state from
-    // the buried texture may leak into it.
+    // the retired texture may leak into it.
     const auto firstBarrier = graph.DebugFirstBarrierBefore(0);
     REQUIRE(firstBarrier.has_value());
     CheckState(*firstBarrier, kUnknownState);
+
+    // The staged textures are discharged by the next Execute -- or, as here,
+    // by an explicit release, which flushes the staging area too rather than
+    // stranding it.
+    graph.ReleaseGpuResources();
+    CHECK(graph.DebugRetiredPoolCount() == 0);
+    device->Graves().Reap(graph.DebugSubmitCount());
+    CHECK(device->Graves().Pending() == 0);
 
     CHECK(Arcane::RenderErrorCount() == before);
 }

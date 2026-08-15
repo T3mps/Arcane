@@ -441,6 +441,13 @@ namespace Arcane
             return ((std::uint64_t)frameSlot * kCbRegionsPerFrame + region) * regionStride;
         }
 
+        // The owner's declaration-time pool sync -- see PostChainNode's
+        // identically-named overload for the full reasoning. THIS node is the
+        // one that made the case reachable: the outline chain is declared only
+        // while something wants an outline, so toggling the selection off
+        // shrinks the pool while this node is not in the frame to notice.
+        void SyncPoolEpoch(const RenderGraph& graph);
+
     private:
         OutlineNode() = default;
 

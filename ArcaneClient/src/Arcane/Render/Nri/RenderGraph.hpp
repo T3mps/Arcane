@@ -691,6 +691,13 @@ namespace Arcane
         // once a later compile asks for fewer slots.
         [[nodiscard]] std::size_t DebugTransientCount() const noexcept { return m_pool.size(); }
 
+        // Pool resources RETIRED but not yet buried -- the staging area whose
+        // one-frame delay makes "views are buried before the textures they
+        // view" hold across a pool reshape (see m_retiredPool). Non-zero only
+        // between the Execute() that reshaped the pool and the next one; a
+        // headless [nri] case reads it to pin exactly that window.
+        [[nodiscard]] std::size_t DebugRetiredPoolCount() const noexcept { return m_retiredPool.size(); }
+
         // Physical transients ever created by this graph, monotonically.
         // Unchanged across a second Execute() of the same compiled graph AND
         // across a Reset()-then-redeclare-the-same-shape frame loop -- that is
@@ -948,6 +955,13 @@ namespace Arcane
         // Buries last frame's imported-texture views. Called once per
         // Execute(), before this frame's are created -- see m_importedViews.
         void ReleaseImportedViews();
+        // Buries whatever RealizePool retired on an EARLIER Execute() and
+        // staged rather than buried (see m_retiredPool). Called at the top of
+        // every Execute() -- after the Reap, before RealizePool -- and again
+        // from ReleaseGpuResourcesInternal so nothing can be stranded.
+        // Idempotent and a no-op in the steady state (the vector is empty on
+        // every frame that reshaped nothing).
+        void FlushRetiredPool();
         bool EnsureExecutionResources();
         // Buries the pool + views (the public ReleaseGpuResources() and
         // ~RenderGraph); buries the command slots + fence too when `all`
@@ -982,11 +996,48 @@ namespace Arcane
         Graveyard*                m_graves = nullptr;
         std::vector<PoolResource>  m_pool;
 
+        // ================= THE RETIREMENT STAGING AREA =====================
+        // Pool resources that RealizePool has taken OUT of m_pool (a shrink or
+        // a desc change) but has NOT buried yet. They are buried at the top of
+        // the NEXT Execute(), and the one-frame delay is the whole point.
+        //
+        // WHY, in one sentence: a graveyard replays its due prefix in BURIAL
+        // ORDER, so a view must be BURIED before the texture it views, and
+        // burying the texture from inside RealizePool put it ahead of every
+        // node view that had not been buried yet -- destroying an image and
+        // then a descriptor over it, which is the use-after-free this file's
+        // teardown comments and PoolEpoch's own contract call out.
+        //
+        // The inversion, concretely (whole-branch review, I1): RealizePool runs
+        // mid-Execute, after the declarations and before the exec fns. It
+        // buried at m_submitValue; the exec fns that follow call their node's
+        // SyncPoolEpoch, which buries THAT node's cached views at
+        // DebugSubmitCount() -- the same value, the same lane -- i.e. AFTER.
+        // Worse, a node that is not in this frame's shape at all (the outline
+        // chain with the selection toggled off; the post chain between
+        // re-wires) does not run, so its views were buried FRAMES later.
+        //
+        // The pairing that closes both halves:
+        //   1. this staging area moves the texture's burial to the next
+        //      Execute(), i.e. after every burial the previous frame made; and
+        //   2. NriGraphContext calls SyncPoolEpoch on EVERY node it owns at
+        //      DECLARATION time -- which is before that flush -- so a node that
+        //      skipped a frame still buries its views first.
+        // Neither alone is sufficient; see NriGraphContext::BuildFrame.
+        //
+        // A staged entry is never "lost": ReleaseGpuResourcesInternal flushes
+        // it too (both the public release and ~RenderGraph go through it), so
+        // the only thing that ever changes is WHEN the destroy thunk is
+        // recorded -- never whether.
+        std::vector<PoolResource>  m_retiredPool;
+
         // Views over POOL textures. These persist across frames, because the
         // graph OWNS the texture each one names: a pool texture only ever goes
         // away through buryPoolResource(), which sweeps the views naming it in
-        // the same breath. Nothing can invalidate one behind the graph's back,
-        // so caching them is free and correct.
+        // the same breath (the VIEWS are buried immediately even though the
+        // texture is staged -- that ordering is the fix, not an inconsistency).
+        // Nothing can invalidate one behind the graph's back, so caching them
+        // is free and correct.
         std::vector<CachedView>    m_views;
 
         // Views over IMPORTED textures. These are PER-EXECUTE: buried and
