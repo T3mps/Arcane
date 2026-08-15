@@ -81,18 +81,16 @@
 //     leaves a live cache entry that the very next frame can hit on a
 //     recycled address.
 //
-// A SECOND, PHASE-2-ONLY HAZARD FROM THE SAME CONVENTION, stated because it is
-// a crash rather than a wrong pixel: while `--nri-graph` holds TWO devices
-// (NriGraphContext.hpp, THE TWO-DEVICE WINDOW), an ImTextureID is only
-// meaningful for ONE of them, and a raw pointer carries no evidence of which.
-// A game module that calls ImGui::Image with an NVRHI handle on that path
-// would have it dereferenced here as an nri::Texture*. The backend cannot
-// detect it and deliberately does not try -- refusing unknown ids would break
-// the legitimate user-texture case at Phase 3, where there is one device and
-// the convention is sound again. It is a HOST invariant for the duration of
-// the two-device window, and the same root cause as Batch2DNode.hpp's THE
-// TEXTURE GAP. Nothing in the tree violates it: ReferenceGame's
-// GamePlugin_DrawUI is empty and the vehicle's own HUD draws text only.
+// A SECOND HAZARD FROM THE SAME CONVENTION -- HISTORY, kept only because a
+// reader may have the old wording in mind. Through Phase 2 `--nri-graph` held
+// TWO devices at once, so an ImTextureID (a raw pointer, carrying no evidence
+// of which device it belongs to) could be an NVRHI handle that this backend
+// would dereference as an nri::Texture*. Both of that hazard's referents are
+// gone: NriGraphContext's two-device window was deleted at 53a71201, and
+// Batch2DNode.hpp's THE TEXTURE GAP now reads IS CLOSED (Phase 3, Task 2 --
+// spans carry the image's device-independent asset Guid). There is ONE device
+// on this path now and the convention is sound again; nothing here needs to
+// refuse or sniff an id.
 //
 // ================= WHAT IT OWNS =================
 //   * one LINEAR/clamp sampler (ImGui's default filtering);

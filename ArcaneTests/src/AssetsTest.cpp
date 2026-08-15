@@ -212,7 +212,12 @@ TEST_CASE("assets: GetTexture before a render device is set returns null (no cra
     CHECK(assets->GetTexture(png) == nullptr); // ...still null: no device to upload to
     CHECK(assets->GetTexture(png) == nullptr); // memoized: second call also null, no retry
 
-    // A missing path is likewise null (and never reaches stbi_load).
+    // A missing path is likewise null -- but for a DIFFERENT reason than the
+    // two calls above, and this comment used to have it backwards ("never
+    // reaches stbi_load"). Since NRI Phase 3 Task 1 the DECODE PRECEDES the
+    // device-null check: GetTexture routes through PixelsForResolved first, so
+    // a missing file fails inside LoadPngRgba -- which does call stbi_load and
+    // gets null back -- and never reaches the device gate at all.
     CHECK(assets->GetTexture("does/not/exist.png") == nullptr);
 
     std::remove(png.string().c_str());

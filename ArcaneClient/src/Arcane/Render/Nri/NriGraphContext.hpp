@@ -637,17 +637,13 @@ namespace Arcane
         [[nodiscard]] Mode Kind()        const noexcept { return m_mode; }
         [[nodiscard]] bool IsOffscreen() const noexcept { return m_mode == Mode::Offscreen; }
 
-        // The window this swapchain is bound to -- the HOST's, borrowed (see
-        // THE BORROWED WINDOW above). Handed back so a caller that only holds
-        // the graph context can reach it; the frame driver pumps the same
-        // object through its own GpuContext and feeds resizes here.
-        //
-        // HOST-WINDOW MODE ONLY. An offscreen context borrows no window and
-        // this would dereference null -- check IsOffscreen() first. It has no
-        // caller in the tree yet (the plan expects the editor tasks to consume
-        // it); it is kept rather than deleted for that reason, and the
-        // precondition is stated here rather than left to be discovered.
-        [[nodiscard]] Window& Win() noexcept { return *m_borrowedWindow; }
+        // NO Win() ACCESSOR (whole-branch review, M3). One existed here through
+        // Phase 2, kept on the expectation that the editor tasks would consume
+        // it; every one of them has now landed and none did -- both hosts reach
+        // the window through their own GpuContext::Win(), which is the object
+        // that actually owns it. A null-dereferencing accessor (an offscreen
+        // context borrows no window) with no caller is a trap, not an
+        // affordance. m_borrowedWindow stays: Init/Resize use it.
 
         // The extent the frame is being rendered at, whichever mode this is --
         // the swapchain's, or the offscreen output's. The mode-agnostic reading

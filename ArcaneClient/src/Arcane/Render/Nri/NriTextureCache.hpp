@@ -189,8 +189,9 @@ namespace Arcane
             std::size_t operator()(const Key& k) const noexcept
             {
                 // The Guid's own hash, mixed with the space through the
-                // 64-bit golden-ratio constant -- two spaces of one asset must
-                // not land in the same bucket chain by construction.
+                // 32-BIT golden-ratio constant (0x9E3779B9; the 64-bit one is
+                // 0x9E3779B97F4A7C15) -- two spaces of one asset must not land
+                // in the same bucket chain by construction.
                 const std::size_t h = std::hash<Guid>{}(k.id);
                 return h ^ (static_cast<std::size_t>(k.space) + 0x9E3779B9u + (h << 6) + (h >> 2));
             }

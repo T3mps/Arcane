@@ -270,7 +270,16 @@ namespace Arcane
 
             if (hook)
                 NvrhiMessageCallback::Instance().SetDeviceRemovedHook(hook);
-            Diagnostics::SetGpuSectionProvider(&NriGraphGpuSectionProvider, backend.get());
+            // THE UPCAST IS EXPLICIT (whole-branch review, T5). The provider
+            // recovers `user` as an IGpuCrashBackend* before down-casting, and
+            // says so in its own comment -- but this call used to hand it a
+            // NriGraphCrashBackend* that decayed straight to void*, so that
+            // round trip was true only by the accident of a single non-virtual
+            // base sharing the derived object's address. Stated in the code
+            // rather than relied on; D3b's fault injector drives this provider,
+            // so the path is live rather than decorative.
+            Diagnostics::SetGpuSectionProvider(&NriGraphGpuSectionProvider,
+                                               static_cast<IGpuCrashBackend*>(backend.get()));
             SetActiveGpuCrashBackend(backend.get());
 
             g_installedHook = hook;

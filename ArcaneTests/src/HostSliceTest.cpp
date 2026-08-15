@@ -30,9 +30,13 @@ namespace
         REQUIRE(device != nullptr);
 
         auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "data/shaders");
+        // REQUIRE'd BEFORE it is dereferenced: Batcher2D::Create takes
+        // shaders.get(), so a failed ShaderLibrary would reach the batcher as a
+        // null and be reported as a batcher failure two lines later (or crash
+        // inside it) instead of naming the shader library.
+        REQUIRE(shaders != nullptr);
         auto canvas  = Arcane::CreateCanvas(device->Nvrhi(), 1280, 720);
         auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), shaders.get());
-        REQUIRE(shaders != nullptr);
         REQUIRE(canvas  != nullptr);
         REQUIRE(batcher != nullptr);
 

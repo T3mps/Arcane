@@ -85,9 +85,14 @@ namespace Arcane
 
     std::size_t NriTextureCache::ResidentCount() const noexcept
     {
+        // Counted on the VIEW, for the same reason Resolve's hit is gated on it
+        // (whole-branch review, M2): counting textures over-reported by one for
+        // every entry whose upload or view creation failed after the texture
+        // itself was created -- entries that are memoized FAILURES, not
+        // residents.
         std::size_t count = 0;
         for (const auto& [key, resident] : m_textures)
-            if (resident.texture)
+            if (resident.view)
                 ++count;
         return count;
     }
@@ -108,7 +113,20 @@ namespace Arcane
         const Key key{ id, space };
         const auto cached = m_textures.find(key);
         if (cached != m_textures.end())
-            return cached->second.texture;   // null for a load this cache already failed
+        {
+            // THE VIEW, NOT THE TEXTURE, IS WHAT "RESIDENT" MEANS (whole-branch
+            // review, M2). This used to return `texture` with the comment "null
+            // for a load this cache already failed", which was false for two of
+            // the four failure paths below: an upload failure and a view-create
+            // failure both leave `texture` NON-null (it was created before they
+            // ran), so a memoized failure was served as a hit and the caller
+            // then found View() null. The cache's product is a bindable view --
+            // a texture with no view is nothing anyone can use -- so that is
+            // what the hit is gated on. The texture object itself stays owned
+            // and is destroyed by Release()/ClearImmediate like any other, so
+            // this leaks nothing; it just stops lying about what is resident.
+            return cached->second.view ? cached->second.texture : nullptr;
+        }
 
         // Inserted BEFORE any early return, so a failure is attempted once
         // rather than re-resolved every frame.

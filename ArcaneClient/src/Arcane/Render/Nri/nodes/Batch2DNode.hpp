@@ -261,7 +261,26 @@ namespace Arcane
         // third pool-sizing cap, and the one Task 2 added. Past it a span
         // degrades to the white texel with one ERROR naming this constant,
         // exactly as the other two caps degrade.
-        static constexpr std::uint32_t kMaxSpriteTextures   = 8;
+        //
+        // RAISED 8 -> 64 (whole-branch review, M6). 8 was chosen while the only
+        // content on this path was ReferenceProject's handful of markers, with
+        // the deferral stated as "revisit before the editor tasks land content".
+        // Those tasks have landed and the editor opens ARBITRARY projects, where
+        // a tileset plus a few characters plus UI art passes 8 without anything
+        // unusual happening -- and the failure is quiet in the way that matters:
+        // the sprites draw as flat tint, the ERROR is one log line, and
+        // RenderErrorCount (the --nri-graph exit-code gate) does not move, so a
+        // scripted run still exits 0.
+        //
+        // 64 rather than higher because the cost is NOT linear: PoolSizes()
+        // spends (1 + kMaxSpriteTextures) descriptor sets per material slot per
+        // frame slot, so this multiplies the whole pool. At 64 that is 65
+        // built-in sets and 8 * 2 * 65 = 1040 material sets -- ~1105 sets and
+        // ~9425 texture descriptors, tens of KiB of descriptor heap, created
+        // once at node creation. Comfortably inside both backends' limits while
+        // covering an ordinary 2D scene by a wide margin; 256 would quadruple it
+        // for content this renderer has no other reason to expect.
+        static constexpr std::uint32_t kMaxSpriteTextures   = 64;
         // Arena region size BEFORE alignment. A sprite material's cbuffer is a
         // handful of 16-byte registers (the reference material's is 32 bytes);
         // 256 is also D3D12's constant-buffer placement alignment, so on that
@@ -308,11 +327,7 @@ namespace Arcane
         // carries an invariant no device can show and no golden can fail on.
         // Spans repeat ids freely (the sort splits a run whenever the layer or
         // the material changes), so this is a COUNT OF DISTINCT ids, not of
-        // spans.
-        // How many DISTINCT non-nil texture ids `spans` names -- i.e. how many
-        // per-texture descriptor sets this node must have written before it can
-        // record them, and therefore how much of kMaxSpriteTextures the frame
-        // spends. Prepare() CALLS THIS (it is the frame's up-front budget
+        // spans. Prepare() CALLS THIS (it is the frame's up-front budget
         // check), so a case that asserts it asserts the node's own arithmetic
         // rather than a lookalike.
         [[nodiscard]] static std::uint32_t DistinctTextureCount(
