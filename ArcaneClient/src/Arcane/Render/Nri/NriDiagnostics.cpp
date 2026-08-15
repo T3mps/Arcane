@@ -365,6 +365,21 @@ namespace Arcane
             std::uint32_t sinkMask   = 0;
         };
 
+        // D3D12 requires a CBV's SizeInBytes to be a multiple of 256
+        // (D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT), and the view must
+        // fit inside its resource -- so BOTH the buffer and the view are sized
+        // to this, not to sizeof(FaultCB) (16). Vulkan has no equivalent size
+        // rule (its alignment constraint is on the OFFSET, which is 0 here),
+        // which is exactly why D3b saw this fail on dx12 only: NRI's
+        // ID3D12Device15::TryCreateConstantBufferView returned E_INVALIDARG
+        // (0x80070057) for a 16-byte view, and the resulting ERROR-severity
+        // ReportMessage aborted the process before the injector could ever
+        // dispatch. The shader reads only the first 16 bytes; the rest is
+        // zero-filled padding.
+        constexpr std::uint32_t kFaultCBSize       = 256u;
+        static_assert(sizeof(FaultCB) <= kFaultCBSize,
+                      "the fault constant buffer must fit in one 256-byte CBV window");
+
         constexpr std::uint32_t kFaultSinkElements = 256u;
         constexpr std::uint32_t kFaultSinkStride   = sizeof(std::uint32_t);
         constexpr std::uint32_t kFaultThreadGroups = 256u;
@@ -501,7 +516,7 @@ namespace Arcane
             }
 
             nri::BufferDesc cbDesc = {};
-            cbDesc.size  = sizeof(FaultCB);
+            cbDesc.size  = kFaultCBSize;   // 256-aligned; see kFaultCBSize
             cbDesc.usage = nri::BufferUsageBits::CONSTANT_BUFFER;
             if (!ARC_NRI_CHECK(core.CreateCommittedBuffer(device.Device(), nri::MemoryLocation::HOST_UPLOAD,
                                                           0.0f, cbDesc, objects.cb))
@@ -537,6 +552,11 @@ namespace Arcane
                 params.oobElement = kFaultOobElement;
                 params.seed       = 0x9E3779B9u;   // any non-zero constant; keeps the chain from folding
                 params.sinkMask   = kFaultSinkElements - 1u;
+                // Zero the whole 256-byte window before the payload: the CBV
+                // spans kFaultCBSize, so the padding past sizeof(FaultCB) is
+                // readable by the shader and a HOST_UPLOAD allocation arrives
+                // uninitialised.
+                std::memset(cpu, 0, kFaultCBSize);
                 std::memcpy(cpu, &params, sizeof(params));
                 core.UnmapBuffer(*objects.cb);
             }
@@ -551,7 +571,7 @@ namespace Arcane
             cbViewDesc.buffer = objects.cb;
             cbViewDesc.type   = nri::BufferView::CONSTANT_BUFFER;
             cbViewDesc.offset = 0;
-            cbViewDesc.size   = sizeof(FaultCB);
+            cbViewDesc.size   = kFaultCBSize;   // 256-aligned; see kFaultCBSize
 
             nri::BufferViewDesc sinkViewDesc = {};
             sinkViewDesc.buffer          = objects.sink;

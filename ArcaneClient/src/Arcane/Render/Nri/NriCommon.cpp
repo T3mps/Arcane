@@ -95,6 +95,36 @@ namespace Arcane
                 break;
             }
         }
+
+        // NRI invokes this after every ReportMessage whose Result is
+        // non-SUCCESS (Shared/SharedExternal.hpp: "if
+        // (m_CallbackInterface.AbortExecution && (int8_t)result > 0)"), and
+        // NRI's OWN default for the slot is DebugBreak()
+        // (Creation/Creation.cpp:68).
+        //
+        // This function exists because leaving the field null does NOT opt
+        // out: Creation.cpp:140-141 fills a null AbortExecution with that
+        // DebugBreak default, silently inverting the intent this file used to
+        // state as `AbortExecution = nullptr`. Desk checkpoint D3b caught the
+        // consequence -- a recoverable dx12 CreateBufferView failure inside
+        // the --crash-gpu injector became an unhandled STATUS_BREAKPOINT
+        // (0x80000003) that killed the process before the host's own
+        // device-removed reporting and exit-1 path could run, while the vulkan
+        // twin exited cleanly. A no-op is the only real opt-out.
+        //
+        // The MESSAGE channel is untouched: NriMessageCallback above still
+        // logs every ERROR and still routes it into RenderErrorCount, so the
+        // error latch and the zero-errors gate keep their teeth, and
+        // ARC_NRI_CHECK still sees the typed failing Result at the call site.
+        // Only the process-breaking half goes -- matching what the nvrhi arm
+        // has always done for the same class of signal
+        // (Render/DeviceD3D12.cpp arms the D3D12 InfoQueue with
+        // SetBreakOnSeverity(..., FALSE) on all three severities and lets the
+        // host do the reporting).
+        void NRI_CALL NriAbortExecution(void* /*userArg*/)
+        {
+            // Deliberately empty. See above.
+        }
     }
 
     bool NriCheckImpl(nri::Result result, const char* expr, const char* file, int line)
@@ -137,7 +167,10 @@ namespace Arcane
     {
         nri::CallbackInterface callbacks{};
         callbacks.MessageCallback = &NriMessageCallback;
-        callbacks.AbortExecution  = nullptr; // let the engine decide whether to keep running past an ERROR
+        // NOT nullptr: NRI fills a null slot with its DebugBreak default
+        // (Creation.cpp:140-141). The explicit no-op is what actually lets the
+        // engine decide whether to keep running past an ERROR.
+        callbacks.AbortExecution  = &NriAbortExecution;
         callbacks.userArg         = nullptr;
         return callbacks;
     }
