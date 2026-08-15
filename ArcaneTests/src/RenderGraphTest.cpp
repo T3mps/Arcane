@@ -4729,33 +4729,61 @@ TEST_CASE("pick geometry: ONE emitter feeds both recorders -- id k+1, back-to-fr
 }
 
 // ======================================================================
-// TEXTURES ARE NOT GRAPH RESOURCES (NRI Phase 3, Task 2).
+// TEXTURES ARE NOT GRAPH RESOURCES (NRI Phase 3, Task 2), and what that
+// leaves headlessly provable -- READ THIS BEFORE TRUSTING THE CASES BELOW.
 //
 // A sprite's own texture is now REAL on the graph path: a drained span
 // carries the image's asset Guid and Batch2DNode binds the shared
-// NriTextureCache's view at t0. The question that decision raises for the
-// frame graph is whether those textures have to be DECLARED -- and the answer
-// is no, deliberately: they are persistent, uploaded once through
-// HelperInterface::UploadData (which submits and waits, at declaration time),
-// and never written by a node. The graph derives barriers for resources whose
-// state a frame changes; a texture that is SHADER_RESOURCE from its upload
-// until its burial changes none.
+// NriTextureCache's view at t0 through a per-texture descriptor set. The
+// question that raises for the frame graph is whether those textures have to
+// be DECLARED -- and the answer is no, deliberately: they are persistent,
+// uploaded once through HelperInterface::UploadData (which submits and waits,
+// at declaration time), and never written by a node. The graph derives
+// barriers for resources whose state a frame changes; a texture that is
+// SHADER_RESOURCE from its upload until its burial changes none.
 //
-// So the observable contract has two halves, and both are pinned here:
-//   1. the frame's SHAPE is untouched -- same nodes, same transients, same
-//      pool slots, whatever the batch is textured with;
-//   2. what DOES scale with textures is the number of DESCRIPTOR SETS the
-//      batch node must have written before it can record, which is exactly
-//      the number of distinct texture keys the drained spans name. That is a
-//      pure function of the batch and is asserted directly, because it is the
-//      thing a golden cannot show and a device is not needed to compute.
+// WHAT IS PROVED HERE, PRECISELY, AND WHAT IS NOT.
+//
+// These cases drive DeclareGraphFrame with a NULL context. That means no
+// vehicle, therefore no batcher, no drain and no span -- so the first case
+// below CANNOT be made red by a textured batch, and it is named for what it
+// actually pins: the batch stage's resource census. It is still the right
+// assertion for the claim in this block's title (a texture cannot appear in a
+// census that has no way to learn about one; a future change that DID declare
+// a per-sprite import would land here), but it is a STRUCTURAL statement, not
+// an execution of the texture path.
+//
+// The two cases after it pin the node's own ARITHMETIC -- the pure functions
+// Batch2DNode actually runs: DistinctTextureCount (which Prepare() calls as
+// the frame's up-front budget check) and PoolSizes() (which CreateBindings()
+// passes straight to CreateDescriptorPool). Those are real coverage of real
+// production code, and both carry failures a device cannot show.
+//
+// WHAT HAS NO EXECUTED HEADLESS COVERAGE, AND WHY -- DESK DEBT, OWED AT D3a.
+// EnsureSpriteSet, EnsureMaterialVariant, WriteMaterialSet and Record's
+// variant scan are NOT executed by any case in the ~[gpu] gate, and cannot be:
+// Batch2DNode::Create fails on the NONE backend by construction, because
+// CreateConstantArena persistently maps its HOST_UPLOAD arena and ImplNONE's
+// MapBuffer returns null unconditionally (the node's own header says so: "this
+// node is a [gpu] path from here down"). Even past that, every NONE
+// DescriptorSet* is the same dummy pointer and UpdateDescriptorRanges is a
+// no-op, so a set-per-texture could not be told from a set-for-everything.
+// Their proof is therefore desk-side and specific: D3a's stage compares on the
+// textured ReferenceProject scene, where a wrong set selection shows up as the
+// wrong image (or the white texel) at t0. BatcherTest.cpp's
+// "[gpu][d3d12] a DEVICE-LESS batcher drains identical spans..." is the other
+// half and is likewise desk-run.
 // ======================================================================
 
-TEST_CASE("nri graph frame: a textured batch adds no graph resource and no node", "[nri]")
+TEST_CASE("nri graph frame: the batch stage declares one canvas transient and nothing else",
+          "[nri]")
 {
-    // The batch stage's census, restated so a future change that made a
-    // texture a graph resource (an import per sprite, say) would land here
-    // rather than in a desk golden.
+    // The batch stage's RESOURCE CENSUS. A texture cannot appear in it -- this
+    // drive has no vehicle and therefore no span to be textured -- and that is
+    // the point: the census is where a future change that DID make a sprite
+    // texture a graph resource (an import per sprite, say) would land, instead
+    // of in a desk golden. It does not exercise the texture path; see the
+    // block comment above for what does and what is owed at D3a.
     Arcane::RenderGraph graph;
     Arcane::RgFrameShape shape;
     shape.stage        = Arcane::GoldenStage::Batch;
@@ -4781,7 +4809,12 @@ TEST_CASE("nri graph frame: the batch's descriptor-set count is its distinct tex
           "[nri]")
 {
     // Driven through a REAL device-less Batcher2D, so what is counted is what
-    // the graph path actually drains rather than a hand-built span list.
+    // the graph path actually drains rather than a hand-built span list -- and
+    // DistinctTextureCount is the function Batch2DNode::Prepare itself calls to
+    // decide whether the frame is over its per-texture set budget, so this is
+    // the node's arithmetic, not a restatement of it. What it does NOT cover is
+    // the ALLOCATION that arithmetic gates (EnsureSpriteSet) -- see the block
+    // comment above.
     auto batcher = Arcane::Batcher2D::Create(nullptr, nullptr);
     REQUIRE(batcher != nullptr);
 
@@ -4817,7 +4850,54 @@ TEST_CASE("nri graph frame: the batch's descriptor-set count is its distinct tex
     const Arcane::Batch2DDrained plain = batcher->Drain();
     CHECK(Arcane::Batch2DNode::DistinctTextureCount(plain.spans) == 0);
 
-    // And the cap that sizes the descriptor pool is a real number, not a
+    // And the cap that budget is measured against is a real number, not a
     // sentinel -- the node degrades to the white texel past it.
     CHECK(Arcane::Batch2DNode::kMaxSpriteTextures >= 2);
+}
+
+TEST_CASE("nri graph frame: the batch node's descriptor pool covers what its caps allow", "[nri]")
+{
+    // THE POOL ARITHMETIC, and the reason it is worth a case of its own: a
+    // descriptor pool's sizes are fixed at creation and NRI cannot free a
+    // single set, so a capacity that does not cover what the caps ALLOW is not
+    // a compile error and not a wrong pixel -- it is an AllocateDescriptorSets
+    // failure part-way through a frame at the desk, after which that material
+    // or that texture silently draws with the white texel. Task 2 added a whole
+    // dimension to this (a set per sprite texture, and a material set per
+    // texture VARIANT per frame slot), which is exactly the kind of change that
+    // gets the multiplication wrong.
+    //
+    // The expectations are recomputed here from the PUBLIC caps rather than
+    // copied from the implementation, so a cap that moves without the pool
+    // moving with it fails here.
+    const nri::DescriptorPoolDesc pool = Arcane::Batch2DNode::PoolSizes();
+
+    constexpr std::uint32_t kSpriteTex   = Arcane::Batch2DNode::kMaxSpriteTextures;
+    constexpr std::uint32_t kMatSlots    = Arcane::Batch2DNode::kMaxMaterialSlots;
+    constexpr std::uint32_t kMatTextures = Arcane::Batch2DNode::kMaxMaterialTextures;
+    constexpr std::uint32_t kFrames      = Arcane::kSwapchainFramesInFlight;
+
+    // Built-in sets: the nil-texture one plus one per distinct sprite texture.
+    // No frame-slot dimension -- their contents (t0 + s0) carry nothing
+    // per-frame, so each is written once and never rewritten.
+    constexpr std::uint32_t builtInSets = 1 + kSpriteTex;
+    // Material sets: per material slot, per FRAME SLOT, per texture variant --
+    // and variant 0 is the nil-texture one, hence (1 + kSpriteTex).
+    constexpr std::uint32_t materialSets = kMatSlots * kFrames * (1 + kSpriteTex);
+
+    CHECK(pool.descriptorSetMaxNum >= builtInSets + materialSets);
+    // A built-in set binds t0 alone; a material set binds t0 plus its declared
+    // t1..N.
+    CHECK(pool.textureMaxNum >= builtInSets + (1 + kMatTextures) * materialSets);
+    // Every set of either family binds s0.
+    CHECK(pool.samplerMaxNum >= builtInSets + materialSets);
+    // Material sets alone carry constant buffers: b1 (numeric params) and b2
+    // (globals). Built-in sets carry neither.
+    CHECK(pool.constantBufferMaxNum >= 2 * materialSets);
+
+    // The frame-slot dimension is genuinely IN the material count -- a pool
+    // sized for one frame slot would double-book the sets a frame in flight is
+    // still reading, which is the failure this multiplication exists to avoid.
+    static_assert(kFrames >= 2, "the arena and the material sets are double-buffered");
+    CHECK(pool.descriptorSetMaxNum >= kMatSlots * kFrames);
 }

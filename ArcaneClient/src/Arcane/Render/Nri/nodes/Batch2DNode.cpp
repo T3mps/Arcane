@@ -226,6 +226,33 @@ namespace Arcane
         return true;
     }
 
+    nri::DescriptorPoolDesc Batch2DNode::PoolSizes() noexcept
+    {
+        // THREE set families since Task 2 (the middle one is new):
+        //   * the ONE built-in nil-texture set (the white texel);
+        //   * one built-in set per distinct SPRITE TEXTURE, capped at
+        //     kMaxSpriteTextures -- no frame-slot dimension, because a built-in
+        //     set's contents (t0 + s0) carry nothing per-frame, so it is
+        //     written once and never rewritten;
+        //   * per registered material: one set per (texture variant, frame
+        //     slot), where variant 0 is the nil-texture one Task 9 had. Hence
+        //     the (1 + kMaxSpriteTextures) factor.
+        constexpr std::uint32_t kBuiltInSets  = 1 + kMaxSpriteTextures;
+        constexpr std::uint32_t kMaterialSets =
+            kMaxMaterialSlots * kSwapchainFramesInFlight * (1 + kMaxSpriteTextures);
+
+        nri::DescriptorPoolDesc poolDesc = {};
+        poolDesc.descriptorSetMaxNum  = kBuiltInSets + kMaterialSets;
+        // Per material set: the sprite's t0 plus its declared t1..N. Per
+        // built-in set: t0 alone.
+        poolDesc.textureMaxNum        = kBuiltInSets + (1 + kMaxMaterialTextures) * kMaterialSets;
+        poolDesc.samplerMaxNum        = kBuiltInSets + kMaterialSets;
+        // Per material set: material CB b1 (when the template has numeric
+        // params) and globals CB b2. A built-in set has neither.
+        poolDesc.constantBufferMaxNum = 2 * kMaterialSets;
+        return poolDesc;
+    }
+
     bool Batch2DNode::CreateBindings()
     {
         const nri::CoreInterface& core = m_device->Core();
@@ -315,28 +342,14 @@ namespace Arcane
         // lots of descriptor sets can be created in advance and reused without
         // calling ResetDescriptorPool" (NRI.h).
         //
-        // Capacity is the hard cap kMaxMaterialSlots/kMaxMaterialTextures name:
-        // a pool's sizes are fixed at creation and a single set cannot be freed,
-        // so the numbers are decided here rather than discovered mid-frame.
-        // Sized for THREE families now (Task 2 added the middle one):
-        //   * the ONE built-in nil-texture set (the white texel);
-        //   * one built-in set per distinct SPRITE TEXTURE, capped at
-        //     kMaxSpriteTextures -- no frame-slot dimension, because a
-        //     built-in set's contents (t0 + s0) carry nothing per-frame;
-        //   * per registered material: one set per (texture variant, frame
-        //     slot), where variant 0 is the nil-texture one Task 9 had.
-        constexpr std::uint32_t kBuiltInSets  = 1 + kMaxSpriteTextures;
-        constexpr std::uint32_t kMaterialSets =
-            kMaxMaterialSlots * kSwapchainFramesInFlight * (1 + kMaxSpriteTextures);
-        nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum  = kBuiltInSets + kMaterialSets;
-        // Per material set: the sprite's t0 plus its declared t1..N. Per
-        // built-in set: t0 alone.
-        poolDesc.textureMaxNum        = kBuiltInSets + (1 + kMaxMaterialTextures) * kMaterialSets;
-        poolDesc.samplerMaxNum        = kBuiltInSets + kMaterialSets;
-        // Per material set: material CB b1 (when the template has numeric
-        // params) and globals CB b2.
-        poolDesc.constantBufferMaxNum = 2 * kMaterialSets;
+        // Capacity is the hard cap kMaxMaterialSlots/kMaxMaterialTextures/
+        // kMaxSpriteTextures name: a pool's sizes are fixed at creation and a
+        // single set cannot be freed, so the numbers are decided up front
+        // rather than discovered mid-frame. The arithmetic itself is PoolSizes()
+        // -- pure, public and headlessly pinned, because this device call is the
+        // only thing standing between a wrong constant and a mid-frame
+        // allocation failure at the desk.
+        const nri::DescriptorPoolDesc poolDesc = PoolSizes();
         if (!ARC_NRI_CHECK(core.CreateDescriptorPool(m_device->Device(), poolDesc, m_pool)) || !m_pool)
         {
             ARC_ERROR("[nri-graph] Batch2DNode: descriptor pool creation failed");
@@ -1178,6 +1191,21 @@ namespace Arcane
         // The result is memoized in m_spriteSets (including the misses), so a
         // scene that draws the same sprites every frame does this once.
         // ---------------------------------------------------------------
+        // The budget is checked ONCE, up front, from the same pure count the
+        // [nri] cases pin -- so the number in the message is the frame's real
+        // distinct-texture count rather than "the ninth one I happened to
+        // reach". EnsureSpriteSet still enforces per-texture (it is the
+        // allocation point); both share m_warnedTextureBudget, so a frame over
+        // budget says this exactly once.
+        const std::uint32_t distinct = DistinctTextureCount(batch.spans);
+        if (distinct > kMaxSpriteTextures && !m_warnedTextureBudget)
+        {
+            m_warnedTextureBudget = true;
+            ARC_ERROR("[nri-graph] Batch2DNode: this frame names {} distinct sprite textures, over "
+                      "this node's cap of {} -- the ones past the cap draw with the white texel. "
+                      "Raise kMaxSpriteTextures (it sizes the descriptor pool).",
+                      distinct, kMaxSpriteTextures);
+        }
         for (const Batch2DDrawSpan& span : batch.spans)
             (void)EnsureSpriteSet(span.textureId);
 

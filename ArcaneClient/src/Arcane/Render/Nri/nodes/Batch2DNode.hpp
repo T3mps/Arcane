@@ -309,8 +309,25 @@ namespace Arcane
         // Spans repeat ids freely (the sort splits a run whenever the layer or
         // the material changes), so this is a COUNT OF DISTINCT ids, not of
         // spans.
+        // How many DISTINCT non-nil texture ids `spans` names -- i.e. how many
+        // per-texture descriptor sets this node must have written before it can
+        // record them, and therefore how much of kMaxSpriteTextures the frame
+        // spends. Prepare() CALLS THIS (it is the frame's up-front budget
+        // check), so a case that asserts it asserts the node's own arithmetic
+        // rather than a lookalike.
         [[nodiscard]] static std::uint32_t DistinctTextureCount(
             std::span<const Batch2DDrawSpan> spans);
+
+        // THE DESCRIPTOR POOL'S CAPACITY, as pure arithmetic over the three
+        // caps above. PUBLIC and separated from CreateBindings for the same
+        // reason CbRegionOffset is separated from the arena: a pool's sizes are
+        // fixed at creation and NRI cannot free one descriptor set, so a
+        // capacity that does not cover what the caps ALLOW is not a compile
+        // error or a wrong pixel -- it is an allocation that fails part-way
+        // through a frame at the desk, after which that material or texture
+        // silently draws with the white texel. No device can show that the
+        // numbers agree; a headless case can, and does ([nri], RenderGraphTest).
+        [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes() noexcept;
 
     private:
         Batch2DNode() = default;

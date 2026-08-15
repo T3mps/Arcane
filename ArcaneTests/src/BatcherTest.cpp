@@ -440,6 +440,15 @@ TEST_CASE("d3d12: a DEVICE-LESS batcher drains identical spans to a device-carry
     // Everything is compared except the `texture` POINTERS, which cannot
     // match by construction: one instance has texture objects and the other
     // has no device to have made any on.
+    //
+    // DESK DEBT, STATED WHERE IT IS OWED: this case is [gpu] and therefore did
+    // NOT run in the task's ~[gpu] gate -- it is verified at D3a with the rest
+    // of the textured-content checkpoint. It is the only proof that the two
+    // instances agree, and its headless companions (SeveranceTest.cpp) pin only
+    // the device-less side's shape. See RenderGraphTest.cpp's
+    // "TEXTURES ARE NOT GRAPH RESOURCES" block for the matching statement about
+    // Batch2DNode's per-texture descriptor-set machinery, which is unrunnable
+    // headlessly for the same class of reason.
     GpuFixture fx(Arcane::GraphicsBackend::D3D12);
 
     auto deviceless = Arcane::Batcher2D::Create(nullptr, nullptr);
