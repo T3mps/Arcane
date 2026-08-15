@@ -349,6 +349,38 @@ namespace Arcane::Editor
         // is Task 12's, and it is named at that call site (EditorAppProject.cpp).
         std::unique_ptr<Arcane::NriGraphContext> m_graphChrome;
 
+        // ---- Closed documents' preview vehicles (NRI Phase 3, Task 11) ----
+        // A shader document on the graph arm owns an offscreen
+        // NriGraphContext, and it is destroyed INSIDE the editor's ImGui pass
+        // (DocumentHost::DrawAll erases the unique_ptr right after its draw
+        // loop) -- while this frame's draw lists still name its output texture
+        // by raw pointer and the chrome frame that replays them has not been
+        // recorded. So the dying document hands the vehicle here instead, and
+        // DrainRetiredDocPreviews destroys it at the TOP of the next frame,
+        // invalidate first. Full reasoning: DocServices::retireGraphPreview.
+        //
+        // DECLARED HERE, AND THE POSITION IS THE POINT (fix round 1). It has to
+        // sit BETWEEN m_graphChrome and m_documents, because reverse-order
+        // destruction then runs:
+        //     ~m_documents  ->  ~m_retiredDocPreviews  ->  ~m_graphChrome
+        // i.e. a document destroyed by ~EditorApp can still push its vehicle in
+        // here, and every vehicle in here still dies before the context that
+        // owns the device it borrows. Declared after m_documents (where it
+        // first was) the vector would be GONE by the time ~ShaderEditorDocument
+        // pushed into it.
+        //
+        // WHAT THAT ORDER DOES NOT PROVIDE, stated rather than glossed: ~vector
+        // destroys a vehicle WITHOUT the chrome-side InvalidateUserTextureNow,
+        // which only DrainRetiredDocPreviews does. That is not a live hole --
+        // a vehicle exists only if MakeDocServices saw m_graphChrome, nothing
+        // nulls it before Shutdown, and ShutdownGraphPath therefore always runs
+        // its CloseAll + drain -- so the destructor path is unreachable with a
+        // non-empty vector. The declaration order is what keeps it SAFE rather
+        // than merely unreached.
+        std::vector<std::unique_ptr<Arcane::NriGraphContext>> m_retiredDocPreviews;
+        void RetireDocPreview(std::unique_ptr<Arcane::NriGraphContext> vehicle);
+        void DrainRetiredDocPreviews();
+
         // The graph arm's own exit code, 0 on every ordinary run -- see
         // NoteGraphFrameFailure / ShutdownGraphPath above and Run()'s tail,
         // which is where it reaches the process. Not #if-guarded, for the same
@@ -852,24 +884,6 @@ namespace Arcane::Editor
         // fine only because the dtor never drains -- it just un-publishes.
         std::unique_ptr<Arcane::SceneRenderResolver> m_resolver;
         Arcane::Editor::DocumentHost            m_documents;
-
-        // ---- Closed documents' preview vehicles (NRI Phase 3, Task 11) ----
-        // A shader document on the graph arm owns an offscreen
-        // NriGraphContext, and it is destroyed INSIDE the editor's ImGui pass
-        // (DocumentHost::DrawAll erases the unique_ptr right after its draw
-        // loop) -- while this frame's draw lists still name its output texture
-        // by raw pointer and the chrome frame that replays them has not been
-        // recorded. So the dying document hands the vehicle here instead, and
-        // DrainRetiredDocPreviews destroys it at the TOP of the next frame,
-        // invalidate first. Full reasoning: DocServices::retireGraphPreview.
-        //
-        // Declared AFTER m_graphChrome (which owns the device these borrow) so
-        // reverse-order destruction is correct even on a path that never
-        // drains -- though every path does: phase 13's top and
-        // ShutdownGraphPath.
-        std::vector<std::unique_ptr<Arcane::NriGraphContext>> m_retiredDocPreviews;
-        void RetireDocPreview(std::unique_ptr<Arcane::NriGraphContext> vehicle);
-        void DrainRetiredDocPreviews();
         Arcane::Editor::AssetBrowserState       m_assetBrowser;
         double m_editorClock = 0.0;   // the compile service's Poll/Submit clock
 

@@ -5813,31 +5813,51 @@ namespace Arcane::Editor
         FillRgba(colors.minor,  kGridMinorColor);
         FillRgba(colors.major,  kGridMajorColor);
 
-        // ===== NO SHADER PASS: THE ImGui-PRIMITIVE BACKDROP (Task 11) =======
-        // Reached on the graph arm (no nvrhi device -> GraphGridPass::Create
-        // cannot run) and, unchanged, on a device-carrying run whose grid
-        // shader artifacts are missing. It is the SAME lattice: the shared
-        // GraphGridPhase state machine, the same snapped period, the same two
-        // octaves -- see THE GRAPH ARM'S GRID in GraphGridPass.hpp for what it
-        // keeps and what it drops. A CHOICE, recorded there: the grid is
-        // chrome, and an offscreen graph context per canvas is a RenderGraph,
-        // a descriptor pool, a graveyard lane and a chrome-side user-texture
-        // entry to invalidate -- to draw straight lines.
+        // ===== NO PASS OBJECT: RETURN, AND ON THE GRAPH ARM DRAW INSTEAD ====
+        // THE `!grid` RETURN IS LOAD-BEARING AND IS NOT THE ARM GATE. Every
+        // path out of a null `grid` ends here, because `grid->Update` below
+        // would dereference a null unique_ptr. Two shapes reach it WITH a
+        // device, and both are why this cannot be folded into the arm test:
+        //   * GraphGridPass::Create returned null because Init() failed -- any
+        //     nvrhi binding-layout / buffer / binding-set / command-list
+        //     creation failure on a device-carrying run;
+        //   * m_services.shaders is null with m_services.device set, so Create
+        //     was never attempted at all (the `&&` above).
+        // Both previously drew no backdrop and CONTINUED, and they must keep
+        // doing exactly that.
+        //
+        // NOT the missing-shader-artifact case, which is what an earlier
+        // version of this comment wrongly claimed: a missing graph_grid_vs/ps
+        // still leaves a live pass object (Create only builds device objects),
+        // whose GetPipeline latches m_shaderMissing, whose Update returns null,
+        // which the `if (tex)` guard below absorbs. That case never reaches
+        // here.
+        //
+        // ===== THE ImGui-PRIMITIVE BACKDROP (Task 11) =======================
+        // The graph arm has no nvrhi device, so GraphGridPass::Create cannot
+        // run at all and there is never a pass. It draws the SAME lattice
+        // instead: the shared GraphGridPhase state machine, the same snapped
+        // period, the same two octaves -- see THE GRAPH ARM'S GRID in
+        // GraphGridPass.hpp for what it keeps and what it drops. A CHOICE,
+        // recorded there: the grid is chrome, and an offscreen graph context
+        // per canvas is a RenderGraph, a descriptor pool, a graveyard lane and
+        // a chrome-side user-texture entry to invalidate -- to draw straight
+        // lines.
         //
         // The phase state rides on the DOCUMENT (one per canvas, exactly like
         // the pass instances) so a canvas keeps its history when the grid
         // itself does not exist.
         //
-        // GATED ON THE ARM, not merely on `!grid`, and deliberately: a
-        // DEVICE-CARRYING run whose grid shader artifacts are missing also has
-        // no pass, and giving it a backdrop it did not have before would be an
-        // observable NVRHI-arm change in a task whose contract is that the
-        // NVRHI arm does not move. It would be an improvement, and it is one
-        // clause away -- flagged rather than taken.
-        if (!grid && !m_services.device)
+        // GATED ON THE ARM so the two device-carrying shapes above keep their
+        // existing no-backdrop behaviour: giving them one they did not have
+        // would be an observable NVRHI-arm change in a task whose contract is
+        // that the NVRHI arm does not move. It would be an improvement, and it
+        // is one clause away -- flagged rather than taken.
+        if (!grid)
         {
-            DrawGraphGridFallback(ImGui::GetWindowDrawList(), canvasMin, canvasSize,
-                                  view, colors, phase);
+            if (!m_services.device)
+                DrawGraphGridFallback(ImGui::GetWindowDrawList(), canvasMin, canvasSize,
+                                      view, colors, phase);
             return;
         }
 

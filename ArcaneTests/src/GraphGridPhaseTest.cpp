@@ -16,9 +16,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include "Widgets/GraphGridPass.hpp"
 #include "Widgets/GraphGridPhase.hpp"
 
 #include <cmath>
+#include <cstdint>
 
 using Arcane::Editor::GraphGridPhase;
 using Arcane::Editor::GraphGridView;
@@ -138,4 +140,43 @@ TEST_CASE("graph grid phase: a long pan stays bounded, and the wrap is invisible
     const float unwrapped = -(5000.0f * 37.0f);
     const float diff = std::fmod(std::fabs(phase.x - unwrapped), wrap);
     CHECK((diff < 1e-1f || std::fabs(diff - wrap) < 1e-1f));
+}
+
+// ===================================================================
+// THE NULL-PASS SHAPES (NRI Phase 3, Task 11, fix round 1)
+// ===================================================================
+// Review found a null dereference I introduced: DrawCanvasBackdrop's
+// `if (!grid || ...) return;` had been narrowed to an ARM test
+// (`!grid && !m_services.device`), which lets a DEVICE-CARRYING run with a
+// null pass fall through to `grid->Update(...)`. Restored to a plain
+// `if (!grid)` return, with the fallback draw nested inside it.
+//
+// WHAT THIS CASE PINS, precisely: the PREMISE the crash depended on -- that
+// `grid` can legitimately be null on a run that HAS a device, so the return
+// cannot be folded into the arm test. It does not pin DrawCanvasBackdrop
+// itself, which submits ImGui and node-editor calls from inside a live
+// ed::Begin and cannot be driven headlessly; that guard is held by the
+// comment block at the site and by review.
+TEST_CASE("graph grid: Create refuses without EITHER of its two inputs",
+          "[editor][material]")
+{
+    using Arcane::Editor::GraphGridPass;
+
+    // Neither -- the graph arm, where DocServices carries no device and no
+    // ShaderLibrary at all.
+    CHECK(GraphGridPass::Create(nullptr, nullptr) == nullptr);
+
+    // ...and the shape the Critical was about: a DEVICE but no ShaderLibrary.
+    // Create's very first statement is `if (!device || !shaders) return
+    // nullptr;`, so the pointer below is never dereferenced -- it exists only
+    // to make "device present, pass absent" expressible without a real device.
+    // That combination is exactly what a caller reaching `grid->Update()`
+    // behind an arm-only gate would crash on.
+    auto* fakeDevice = reinterpret_cast<nvrhi::IDevice*>(std::uintptr_t{ 0x1 });
+    CHECK(GraphGridPass::Create(fakeDevice, nullptr) == nullptr);
+
+    // The third shape a device-carrying run reaches -- Create() entered and
+    // Init() failed on an nvrhi object -- needs a real (failing) device and is
+    // desk/GPU territory. Named here so the inventory is complete: it lands on
+    // the same `if (!grid) return;`.
 }

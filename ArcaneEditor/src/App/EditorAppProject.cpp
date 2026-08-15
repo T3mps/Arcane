@@ -72,11 +72,21 @@ namespace Arcane::Editor
             // THE PROCESS'S ONE DEVICE, owned by the chrome context (Task 6):
             // a document's preview context BORROWS it, exactly as the viewport
             // context does, and must therefore be destroyed before the chrome
-            // context is. Documents die in DocumentHost, which EditorApp
-            // declares BEFORE m_graphChrome -- so reverse-order member
-            // destruction closes every open document first. CloseAll on a
-            // project switch (Task 12) is the other order, and it is the same
-            // one.
+            // context is.
+            //
+            // THE DECLARATION ORDER THAT MAKES THAT TRUE (corrected, fix round
+            // 1 -- this comment previously stated it backwards, twice):
+            // m_graphChrome is declared FIRST (EditorApp.hpp:350) and
+            // m_documents LAST (:886), with m_retiredDocPreviews (:380)
+            // deliberately between them. Reverse-order destruction therefore
+            // runs ~m_documents -> ~m_retiredDocPreviews -> ~m_graphChrome:
+            // every borrower dies before the owner of the device it borrowed.
+            //
+            // BUT DESTRUCTION ORDER IS NOT WHAT ACTUALLY CLOSES THESE, and the
+            // distinction matters to Task 12. EditorApp::ShutdownGraphPath
+            // destroys both contexts EXPLICITLY, long before any member
+            // destructor runs, so it does its own CloseAll + drain first. A
+            // project switch owes the same sequence at switch_teardown.
             s.nriDevice  = &m_graphChrome->Device();
             s.hostConfig = &m_config;
             // The backend that will CACHE the preview texture when
