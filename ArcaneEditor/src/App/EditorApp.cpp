@@ -586,10 +586,13 @@ namespace Arcane::Editor
         }
 
         // GPU hit-proxy picker, sized to match the viewport (resized together).
-        // Supersampled 2x: the id target feeds the JFA outline below, which needs
-        // sub-pixel silhouette coverage to seed a smooth distance field.
+        // Supersampled: the id target feeds the JFA outline below, which needs
+        // sub-pixel silhouette coverage to seed a smooth distance field. The
+        // factor is Arcane::kPickSupersample (PickEmit.hpp) rather than a
+        // literal, because the GRAPH arm's PickNode has to size its own id
+        // target by the same number -- see that constant's comment.
         m_viewportTargets.pick = Arcane::PickBuffer::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(),
-                                            1280, 720, /*supersample*/ 2);
+                                            1280, 720, Arcane::kPickSupersample);
         if (!m_viewportTargets.pick)
         {
             ARC_ERROR("Arcane Editor: PickBuffer create failed");

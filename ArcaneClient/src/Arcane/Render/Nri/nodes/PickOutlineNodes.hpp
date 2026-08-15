@@ -8,13 +8,16 @@
 //   batch2d -> [post..] -> tonemap -> pick -> pickreadback -> outlineseed
 //           -> outlinejfa0 .. outlinejfaN-1 -> outlinecomposite -> [capture]
 //
-// EDITOR WIRING IS PHASE 3. What lands here is the NODES, driven by
+// EDITOR WIRING IS PHASE 3. What landed here in Phase 2 was the NODES, driven by
 // `--nri-graph --pick-probe x,y` and a SCRIPTED selection, so they render real
 // ReferenceProject content and are desk-comparable against the NVRHI twins
-// (Render/PickBuffer.cpp and Render/SelectionOutline.cpp). With the probe flag
-// absent NOTHING below is declared, created or recorded, and the frame is
-// byte-for-byte Task 10's -- which is what keeps the batch/post/full stage
-// goldens the compare targets they are.
+// (Render/PickBuffer.cpp and Render/SelectionOutline.cpp). TWO THINGS can arm
+// them now: that flag (RuntimeFrame.cpp, the ONLY arming on the runtime host)
+// and NodeSet::pickOutline (EditorApp's viewport context, per-frame). With
+// NEITHER, nothing below is declared, created or recorded and the frame is
+// byte-for-byte Task 10's -- which is what keeps the runtime's frozen `main-*`
+// goldens untouchable from this file, and the batch/post/full stage goldens the
+// compare targets they are.
 //
 // ===================================================================
 // ONE EMITTER, TWO RECORDERS -- where the entity ids come from.
@@ -130,21 +133,42 @@ namespace Arcane
     // both backends.
     inline constexpr nri::Format kGraphOutlineFieldFormat = nri::Format::RGBA16_SNORM;
 
-    // How many jump-flood steps a `width` x `height` field needs: jumps
-    // 2^(N-1) .. 1 sum to 2^N - 1, so N = ceil(log2(maxDim)) reaches every
-    // pixel of the field from any seed. Always at least 1.
+    // The outline field's maximum useful radius, in 1x px --
+    // SelectionOutline.cpp's `kMaxThicknessPx`, and the ONLY input to the
+    // jump-flood schedule below. The composite discards any pixel farther than
+    // half the outline width from an edge, so the field only has to be exact
+    // near a silhouette; the field is deliberately EMPTY (w == 0) beyond this.
+    inline constexpr std::uint32_t kOutlineMaxThicknessPx = 32;
+
+    // How many jump-flood steps the chain declares for a `maxThicknessPx`-px
+    // field: the halving schedule 2^(N-1) .. 1 (N = ceil(log2(maxThicknessPx)),
+    // whose jumps sum to 2^N - 1 >= maxThicknessPx - 1), PLUS one TRAILING
+    // jump == 1 refinement pass. Always at least 2.
     //
-    // DELIBERATELY DIFFERENT FROM SelectionOutline's `JfaPassCount`, which
-    // derives its count from the outline THICKNESS (32 px) instead: that is an
-    // optimisation the composite makes legal (it discards any pixel farther
-    // than half the outline width from an edge, so the field only has to be
-    // exact near a silhouette). Both produce the same composited picture; this
-    // one produces a COMPLETE field, which is what the brief pins and what a
-    // debug visualisation of the field would want. If a profile ever shows the
-    // extra passes matter, switching to the thickness-derived count is a
-    // one-function change with no other consequence.
-    [[nodiscard]] ARCANE_API std::uint32_t OutlineJfaStepCount(std::uint32_t width,
-                                                               std::uint32_t height) noexcept;
+    // THIS IS SelectionOutline's SCHEDULE, NOT A SECOND OPINION (NRI Phase 3,
+    // D3c). It used to be extent-derived -- ceil(log2(max(width, height))),
+    // starting at a jump that spans the whole field -- on the reasoning that a
+    // COMPLETE field is a superset of a near-silhouette one and the two
+    // therefore composite the same picture. The second half of that is FALSE:
+    // JFA is an APPROXIMATION whose result depends on the jump sequence, so a
+    // different schedule assigns different nearest-seeds a few px from an edge,
+    // which is precisely where the composite's 1-px AA ramp lives. The editor's
+    // `full` golden compare across the two arms is what proved it. The NVRHI
+    // arm is the authored look and the captured baseline, so the graph follows
+    // it exactly -- including the trailing jump == 1 pass, whose whole job is to
+    // sand off the errors the halving schedule leaves.
+    //
+    // Cost: 7 fullscreen triangles over the viewport, once per editor frame
+    // that has a selection -- and FEWER than the extent-derived count it
+    // replaces (10 at the D3c golden's 654x330), because the schedule now
+    // starts at 32 rather than at 512.
+    [[nodiscard]] ARCANE_API std::uint32_t OutlineJfaStepCount(std::uint32_t maxThicknessPx) noexcept;
+
+    // The jump for step `step` of a `steps`-step schedule: 2^(steps-2-step)
+    // down to 1, then 1 again for the trailing step. Byte-for-byte
+    // SelectionOutline::Render's `jc.jump` for the same iteration.
+    [[nodiscard]] ARCANE_API std::int32_t OutlineJfaJump(std::uint32_t step,
+                                                         std::uint32_t steps) noexcept;
 
     // =====================================================================
     // PickNode -- the entity-id (hit-proxy) pass plus its 1-pixel readback.
@@ -237,14 +261,22 @@ namespace Arcane
         // ARRIVED, only the host knows when it has been CONSUMED.
         [[nodiscard]] std::uint64_t LastProbeTicket() const noexcept { return m_probeTicket; }
 
-        // The id pass runs at 1x -- no supersampling on this path. PickBuffer
-        // offers ss for the editor's viewport, where the outline's sub-pixel
-        // seeding wants it; the vehicle's job is to prove the NODES, and a
-        // supersampled id target is an extent multiplier the seed shader
-        // already handles through gSuperSample. Stated as a constant rather
-        // than left implicit so the seed CB and the sample texel cannot
-        // disagree about it.
-        static constexpr std::uint32_t kSuperSample = 1;
+        // The id pass's supersample factor: the id target is declared at
+        // kSuperSample*width x kSuperSample*height while the root constants stay
+        // LOGICAL, so the same silhouettes rasterise at ss x density and the
+        // seed shader averages them into a sub-pixel edge centroid through
+        // gSuperSample. Stated as a constant rather than left implicit so the id
+        // target's extent, the seed CB and the readback texel cannot disagree
+        // about it.
+        //
+        // It was 1 through Phase 2 -- the vehicle's job was to prove the NODES
+        // and the probe run had no NVRHI twin in the same process to match. In
+        // Phase 3 the editor drives BOTH arms over one scene and its NVRHI arm
+        // supersamples (EditorApp's PickBuffer::Create), so 1 here was a
+        // quarter-pixel shift in every seed position and a visibly different
+        // outline edge in the `full` golden. Both arms now read
+        // Arcane::kPickSupersample -- see PickEmit.hpp.
+        static constexpr std::uint32_t kSuperSample = kPickSupersample;
 
         // data/shaders/entity_id.hlsl's BatchConstants: float2 invHalfViewport
         // + float2 pad, byte-identical to PickBuffer.cpp's IdPushConstants.
@@ -537,17 +569,19 @@ namespace Arcane
 
     struct RgPickHandles
     {
-        RgTexture ids{};        // the R32_UINT entity-id transient
+        RgTexture ids{};        // the R32_UINT entity-id transient, at PickNode::kSuperSample x
         RgBuffer  readback{};   // the imported HOST_READBACK staging buffer
     };
 
     // Declares "pick" (Raster, the id pass) and "pickreadback" (Copy, the
-    // 1-texel probe copy) into `graph`. The id target is created here and read
-    // by both the readback and the outline seed.
+    // 1-texel probe copy) into `graph`. `width`/`height` are the LOGICAL 1x
+    // extent: the id target is created here at PickNode::kSuperSample times
+    // that, and is read by both the readback and the outline seed (which are
+    // told the factor rather than left to infer it).
     ARCANE_API RgPickHandles AddPickNodes(RenderGraph& graph, NriGraphContext* context,
                                           std::uint32_t width, std::uint32_t height);
 
-    // Declares "outlineseed" plus OutlineJfaStepCount(width, height)
+    // Declares "outlineseed" plus OutlineJfaStepCount(kOutlineMaxThicknessPx)
     // "outlinejfaN" nodes, and hands back the LAST step's target -- the field
     // the composite samples. Every target is its OWN RGBA16_SNORM transient at
     // the 1x extent; the two-physical-texture ping-pong is the transient pool

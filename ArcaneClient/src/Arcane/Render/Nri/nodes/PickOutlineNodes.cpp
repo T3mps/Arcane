@@ -110,22 +110,32 @@ namespace Arcane
         }
     }
 
-    std::uint32_t OutlineJfaStepCount(std::uint32_t width, std::uint32_t height) noexcept
+    std::uint32_t OutlineJfaStepCount(std::uint32_t maxThicknessPx) noexcept
     {
-        const std::uint32_t maxDim = width > height ? width : height;
-        if (maxDim <= 1)
-            return 1;
-        // ceil(log2(maxDim)): the number of halvings from a jump that covers
-        // the whole field down to 1. Jumps 2^(N-1)..1 sum to 2^N - 1 >= maxDim - 1,
-        // so every pixel can reach every seed.
-        std::uint32_t steps = 0;
-        std::uint32_t value = maxDim - 1;
-        while (value)
+        // SelectionOutline.cpp's JfaPassCount, character for character -- the
+        // halving schedule's length -- and then the +1 for the trailing jump==1
+        // pass its Render loop runs (`for (i = 0; i <= passes; ++i)`). Copied
+        // rather than called because SelectionOutline.hpp pulls nvrhi into a
+        // file whose whole point is the NRI recorder; RenderGraphTest's
+        // "outline jfa" case asserts the two agree, which is the seam that
+        // makes the copy safe.
+        std::uint32_t passes = 1;
+        if (maxThicknessPx > 1u)
         {
-            value >>= 1;
-            ++steps;
+            std::uint32_t n = 0, v = maxThicknessPx - 1u;
+            while (v) { v >>= 1; ++n; }   // ceil(log2(maxThicknessPx))
+            passes = n + 1u;
         }
-        return steps;
+        return passes + 1u;
+    }
+
+    std::int32_t OutlineJfaJump(std::uint32_t step, std::uint32_t steps) noexcept
+    {
+        // `steps` counts the trailing refinement, so the HALVING schedule is one
+        // shorter: jumps 2^(passes-1) .. 1, then 1 once more. Same expression as
+        // SelectionOutline::Render's `jc.jump`, with `i` and `passes` renamed.
+        const std::uint32_t passes = steps > 0u ? steps - 1u : 0u;
+        return step < passes ? (std::int32_t)(1u << (passes - 1u - step)) : 1;
     }
 
     // =====================================================================
@@ -788,9 +798,12 @@ namespace Arcane
         // us. The epoch is the only observable; a pointer comparison cannot see
         // it, because NRI may hand the recreated texture the vacated address.
         //
-        // REACHABLE HERE, not theoretical: the outline chain's own slot count
-        // moves with the canvas extent (OutlineJfaStepCount is extent-derived),
-        // so a resize genuinely re-shapes the pool.
+        // REACHABLE HERE, not theoretical: every texture this chain samples --
+        // the id target and both field ping-pong slots -- is declared at an
+        // extent derived from the canvas, so a resize genuinely re-shapes the
+        // pool and recreates the physicals these views name. (The STEP COUNT no
+        // longer moves with the extent as of D3c; the extents still do, which is
+        // what this guards.)
         if (!context.graph)
             return;
         SyncPoolEpoch(*context.graph);
@@ -1087,8 +1100,14 @@ namespace Arcane
             {
                 RgTextureDesc desc;
                 desc.format = kGraphPickIdFormat;
-                desc.width  = width;
-                desc.height = height;
+                // SUPERSAMPLED, exactly as PickBuffer's target is: the extent is
+                // the only thing that grows (the root constants below stay
+                // logical and the executor takes the viewport from the
+                // attachment), so the same silhouettes rasterise at ss x density
+                // and outline_seed.hlsl gets the sub-pixel coverage its centroid
+                // needs. See PickNode::kSuperSample.
+                desc.width  = width  * PickNode::kSuperSample;
+                desc.height = height * PickNode::kSuperSample;
                 *ids = builder.CreateTexture("pickids", desc);
                 builder.Write(*ids, RgUsage::ColorWrite);
                 graph.SetColorAttachments(std::span<const RgTexture>(ids.get(), 1));
@@ -1183,8 +1202,11 @@ namespace Arcane
                                       width, height, context->FrameSlot());
             });
 
+        // EXTENT-INDEPENDENT since D3c: the schedule is derived from the
+        // outline's max thickness, which is what makes it identical to the
+        // NVRHI twin's on every surface size. See OutlineJfaStepCount.
         const std::uint32_t steps =
-            std::min(OutlineJfaStepCount(width, height), OutlineNode::kMaxJfaSteps);
+            std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx), OutlineNode::kMaxJfaSteps);
 
         // Each step CREATES its own transient and the pool allocator collapses
         // them onto two physical textures -- step k overlaps step k-1 (both live
@@ -1197,10 +1219,9 @@ namespace Arcane
         {
             const RgTexture source = step == 0 ? *seed : (*targets)[step - 1];
             const std::string name = "outlinejfa" + std::to_string(step);
-            // Jumps halve from 2^(steps-1) down to 1 -- the classic schedule,
-            // and the reason `steps` is ceil(log2(maxDim)): the jumps then sum
-            // to 2^steps - 1, which reaches the far corner of the field.
-            const std::int32_t jump = (std::int32_t)(1u << (steps - 1u - step));
+            // Jumps halve from 2^(steps-2) down to 1 and then repeat 1 once --
+            // SelectionOutline::Render's schedule, expression included.
+            const std::int32_t jump = OutlineJfaJump(step, steps);
 
             graph.AddNode(name.c_str(), RenderGraph::NodeKind::Raster,
                 [&graph, targets, source, step, width, height](RenderGraphBuilder& builder)

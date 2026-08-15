@@ -1419,9 +1419,11 @@ namespace Arcane
 
         // The pick + outline chain's handles (Task 11). All invalid, and
         // jfaStepCount 0, on a frame that did not declare it.
-        RgTexture     pickIds{};        // the R32_UINT entity-id transient
+        RgTexture     pickIds{};        // the R32_UINT entity-id transient, at kPickSupersample x
         RgBuffer      pickReadback{};   // the imported HOST_READBACK staging buffer
         RgTexture     outlineField{};   // the LAST JFA target -- what the composite sampled
+        // Thickness-derived, so it is the SAME on every surface size (D3c) --
+        // OutlineJfaStepCount(kOutlineMaxThicknessPx), clamped to kMaxJfaSteps.
         std::uint32_t jfaStepCount = 0;
     };
 

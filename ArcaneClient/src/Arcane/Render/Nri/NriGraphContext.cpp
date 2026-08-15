@@ -557,10 +557,10 @@ namespace Arcane
                      m_probeX, m_probeY,
                      // The CLAMPED count, i.e. what the declarator will actually
                      // declare -- a log line that disagreed with the frame would
-                     // be worse than no log line. Read through the mode-agnostic
-                     // extent, which is the swapchain's here and the offscreen
-                     // output's on that flavor.
-                     std::min(OutlineJfaStepCount(SurfaceWidth(), SurfaceHeight()),
+                     // be worse than no log line. Thickness-derived and
+                     // therefore surface-independent (D3c), which is exactly why
+                     // it can be stated once here at boot.
+                     std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx),
                               OutlineNode::kMaxJfaSteps),
                      kSwapchainFramesInFlight);
         }
@@ -570,7 +570,7 @@ namespace Arcane
                      "carries the entity-id pass, its readback and up to a {}-step JFA outline "
                      "whenever it asks; a readback lands {} rendered frames after the frame that "
                      "armed it",
-                     std::min(OutlineJfaStepCount(SurfaceWidth(), SurfaceHeight()),
+                     std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx),
                               OutlineNode::kMaxJfaSteps),
                      kSwapchainFramesInFlight);
         }
@@ -1283,7 +1283,7 @@ namespace Arcane
             handles.pickReadback = pick.readback;
             handles.outlineField = AddOutlineNodes(graph, context, pick.ids,
                                                     shape.canvasWidth, shape.canvasHeight);
-            handles.jfaStepCount = std::min(OutlineJfaStepCount(shape.canvasWidth, shape.canvasHeight),
+            handles.jfaStepCount = std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx),
                                              OutlineNode::kMaxJfaSteps);
             AddOutlineCompositeNode(graph, context, handles.outlineField, handles.backbuffer,
                                      shape.canvasWidth, shape.canvasHeight);
