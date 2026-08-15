@@ -41,4 +41,29 @@ namespace Arcane
     // D3D12 removal silence a later Vulkan one.
     void ObserveDeviceRemovedD3D12();
     void ObserveDeviceRemovedVulkan();
+
+    // THE ONCE-ONLY LATCH THOSE OBSERVERS GUARD, RE-ARMED (Task 5, fix 1).
+    //
+    // `ObserveDeviceRemoved` reports the FIRST removal it sees and then
+    // latches: one device loss cascades into many callbacks and one report is
+    // the truth. So the latch has to be cleared whenever a NEW device arms --
+    // the loss it described is over, and the next removal is a different event
+    // that owes its own `.arcdiag`. Both device TUs already do exactly that at
+    // their own arming site, one line above ResetGpuDeviceLost()
+    // (DeviceD3D12.cpp / DeviceVulkan.cpp: "Reset when a new backend arms
+    // (project switch recreates the device)") -- the two calls are a PAIR, and
+    // ResetGpuDeviceLost's own header comment names this latch as its twin.
+    //
+    // `Render/Nri/NriDiagnostics.cpp` is the second arming site, and after
+    // Task 6 the ONLY one. It therefore owes the same pair, and the latch is
+    // file-local with no other way to reach it. Without this, a host that
+    // survives a loss and rebuilds its graph context re-arms into a still-
+    // latched observer, and the SECOND removal writes nothing at all: no
+    // report, no `.gpudump`, and no NoteGpuDeviceLost for the host to quit on.
+    //
+    // Per-backend for the same reason the observers above are: the latch IS
+    // per-backend, so one shared reset would let a D3D12 arm silently re-arm
+    // Vulkan's reporting and vice versa.
+    void ResetDeviceRemovedLatchD3D12();
+    void ResetDeviceRemovedLatchVulkan();
 }

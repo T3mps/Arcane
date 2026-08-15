@@ -208,6 +208,19 @@ namespace Arcane
             }
             return nullptr;
         }
+
+        // The observer's other half, resolved the same way for the same reason
+        // (DeviceFactories.hpp): re-arming the once-only latch is what makes
+        // the observer above report the NEXT removal rather than latch out on
+        // the last device's.
+        void ResetRemovalLatchFor(GraphicsBackend backend) noexcept
+        {
+            switch (backend)
+            {
+            case GraphicsBackend::D3D12:  ResetDeviceRemovedLatchD3D12();  return;
+            case GraphicsBackend::Vulkan: ResetDeviceRemovedLatchVulkan(); return;
+            }
+        }
     }
 
     namespace NriDiagnostics
@@ -238,10 +251,21 @@ namespace Arcane
 
             auto backend = std::make_unique<NriGraphCrashBackend>(device);
 
-            // A new device means the loss an old latch described is over; a
-            // stale latch would quit the host the moment this healthy device
-            // started presenting. Same call, same reason, same position as
-            // DeviceD3D12::Init's.
+            // BOTH latches a new device invalidates, cleared as the PAIR the
+            // device TUs clear them as (DeviceD3D12::Init, DeviceVulkan::Init:
+            // these two calls, adjacent, in this order):
+            //
+            //   * the observer's once-only removal latch -- it says "this
+            //     process already reported ITS device loss", which was true of
+            //     the device that just went away and is false of this one. Left
+            //     set, the observer this Arm is about to install would swallow
+            //     the next removal entirely: no report, no `.gpudump`, no
+            //     NoteGpuDeviceLost for the host to quit on. (Reachable the
+            //     moment a host survives a loss and rebuilds its graph context
+            //     -- and after Task 6 this is the only site that clears it.)
+            //   * the process-wide device-lost latch -- a stale one would quit
+            //     the host the moment this healthy device started presenting.
+            ResetRemovalLatchFor(device.Backend());
             ResetGpuDeviceLost();
 
             if (hook)

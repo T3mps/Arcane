@@ -111,6 +111,20 @@ namespace
         Arcane::IGpuCrashBackend* m_backend;
     };
 
+    // RAII for the process-wide device-lost latch. A case that FIRES the
+    // device-removed observer sets it (NoteGpuDeviceLost), and a host polling
+    // that latch quits on it -- so a case must never leave it set for the next
+    // one, assertion failure or not. Cleared with the same call every arming
+    // site makes.
+    struct ScopedGpuDeviceLostLatch
+    {
+        ScopedGpuDeviceLostLatch() = default;
+        ~ScopedGpuDeviceLostLatch() { Arcane::ResetGpuDeviceLost(); }
+
+        ScopedGpuDeviceLostLatch(const ScopedGpuDeviceLostLatch&)            = delete;
+        ScopedGpuDeviceLostLatch& operator=(const ScopedGpuDeviceLostLatch&) = delete;
+    };
+
     // Diagnostics::Install is a no-op when something is already armed, so a
     // case that installs MUST fully disarm -- and by RAII, since a failing
     // REQUIRE unwinds. Same struct, same reason, as DiagnosticsTest.cpp's.
@@ -421,4 +435,83 @@ TEST_CASE("nri diagnostics: an armed NRI chain fills a real report's GPU section
     REQUIRE(second->queues.size() == 1);
     REQUIRE(second->queues[0].inFlight.size() == 1);
     CHECK(second->queues[0].inFlight[0] == "pass:gpu-fault");
+}
+
+// =============================================================================
+// Step 2, continued: re-arming re-arms the OBSERVER, not just the slots
+// =============================================================================
+// `ObserveDeviceRemoved` reports the first removal it sees and then latches --
+// one loss cascades into many callbacks and one report is the truth. Both
+// device TUs clear that latch at their own arming site, one line above
+// ResetGpuDeviceLost(); NriDiagnostics::Arm is the SECOND arming site (and
+// after Task 6 the only one), so it owes the same pair.
+//
+// The property is reachable headlessly because the observer touches no device
+// at all: latch -> Diagnostics::WriteReport -> NoteGpuDeviceLost. So the hook
+// can be FIRED here, through the same read-back the arming cases use, and "a
+// second loss after a re-arm still writes a report" is an exact statement
+// rather than a proxy for one.
+
+TEST_CASE("nri diagnostics: re-arming clears the removal latch, so a second device loss still reports", "[nri]")
+{
+    REQUIRE_FALSE(Arcane::NriDiagnostics::IsArmed());
+    REQUIRE(Arcane::ActiveGpuCrashBackend() == nullptr);
+
+    const std::filesystem::path dir = FreshReportDir("nri-relatch");
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "NriDiagTest";
+    cfg.dumpDir             = dir.string();
+    cfg.installCrashHandler = false;
+    cfg.startHangWatchdog   = false;
+
+    ArmedDiagnostics armed(cfg);
+
+    // The observer sets the process-wide device-lost latch (hosts poll it and
+    // quit on it), so this case must put it back even if an assertion below
+    // unwinds first -- same reasoning as every other guard in this file.
+    ScopedGpuDeviceLostLatch lostLatch;
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    // ---- the first device's life: armed, then lost ----
+    {
+        ScopedNriDiagnostics guard;
+        REQUIRE(Arcane::NriDiagnostics::Arm(*device));
+
+        void (*const hook)() = Arcane::RenderDeviceRemovedHookForTest();
+        REQUIRE(hook != nullptr);
+
+        const std::uint32_t before = Arcane::Diagnostics::ReportCount();
+        hook();   // exactly what NvrhiMessageCallback does on a removal
+        CHECK(Arcane::Diagnostics::ReportCount() == before + 1);
+        CHECK(Arcane::GpuDeviceLostObserved());
+    }
+
+    // ---- the host survives it and rebuilds the graph context ----
+    {
+        ScopedNriDiagnostics guard;
+        REQUIRE(Arcane::NriDiagnostics::Arm(*device));
+
+        // The pair, both halves: the loss the old latches described is over.
+        CHECK_FALSE(Arcane::GpuDeviceLostObserved());
+
+        void (*const hook)() = Arcane::RenderDeviceRemovedHookForTest();
+        REQUIRE(hook != nullptr);
+
+        // THE REGRESSION THIS CASE EXISTS FOR. With the removal latch left set
+        // by the previous device's loss, this call returns at its first line
+        // and the second loss is SILENT -- no report, no `.gpudump`, and no
+        // NoteGpuDeviceLost for the host to quit on. The count is the whole
+        // assertion.
+        const std::uint32_t before = Arcane::Diagnostics::ReportCount();
+        hook();
+        CHECK(Arcane::Diagnostics::ReportCount() == before + 1);
+        CHECK(Arcane::GpuDeviceLostObserved());
+    }
+
+    // The removal latch is left SET here, deliberately: clearing it is Arm()'s
+    // job and nobody else's, which is the property this case just stated. Any
+    // later case that arms therefore gets a cleared latch by construction.
 }

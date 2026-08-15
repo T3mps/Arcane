@@ -825,6 +825,15 @@ namespace Arcane
         ObserveDeviceRemoved();
     }
 
+    // Its twin (DeviceFactories.hpp): the SAME store DeviceD3D12::Init makes
+    // one line above its own ResetGpuDeviceLost(), for the other arming site.
+    // The latch stays file-local and keeps its single meaning -- this only
+    // lets NriDiagnostics::Arm re-arm it, exactly as Init does.
+    void ResetDeviceRemovedLatchD3D12()
+    {
+        g_deviceRemovedReported.store(false, std::memory_order_release);
+    }
+
     std::unique_ptr<RenderDevice> CreateDeviceD3D12(const RenderDeviceDesc& desc)
     {
         auto device = std::make_unique<DeviceD3D12>();

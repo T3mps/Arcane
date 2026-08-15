@@ -1370,6 +1370,15 @@ namespace Arcane
         ObserveDeviceRemoved();
     }
 
+    // Its twin (DeviceFactories.hpp): the SAME store DeviceVulkan::Init makes
+    // one line above its own ResetGpuDeviceLost(), for the other arming site.
+    // The latch stays file-local and keeps its single meaning -- this only
+    // lets NriDiagnostics::Arm re-arm it, exactly as Init does.
+    void ResetDeviceRemovedLatchVulkan()
+    {
+        g_deviceRemovedReported.store(false, std::memory_order_release);
+    }
+
     std::unique_ptr<RenderDevice> CreateDeviceVulkan(const RenderDeviceDesc& desc)
     {
         try
