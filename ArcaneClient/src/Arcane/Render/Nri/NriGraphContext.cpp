@@ -602,36 +602,59 @@ namespace Arcane
         // construction, and its graveyard is the SHARED one, which the owning
         // context has very likely already driven to some value N. That trips
         // Graveyard::Bury's nondecreasing assert in Debug for a reason that has
-        // nothing to do with this context's correctness. The live shapes are a
-        // failed InitOffscreen (the fence create or InitCommon refused, after
-        // the output texture already existed) and a context created and dropped
-        // without a frame.
+        // nothing to do with this context's correctness.
         //
-        // A LOCAL graveyard is the whole fix, and it is exact rather than a
-        // dodge: nothing on this context was ever submitted, so no burial here
-        // has anything to be deferred BEHIND -- the fence value carries no
-        // information at all. The GPU is idle (the DeviceWaitIdle above), this
-        // body drains what it fills before returning, and a fresh graveyard
-        // satisfies nondecreasing trivially.
+        // A LOCAL graveyard fixes that exactly rather than as a dodge: nothing
+        // on this context was ever submitted, so no burial here has anything to
+        // be deferred BEHIND -- the fence value carries no information at all.
+        // The GPU is idle (the DeviceWaitIdle above), this body drains what it
+        // fills before returning, and a fresh graveyard satisfies nondecreasing
+        // trivially. Everything THIS BODY buries takes its graveyard as an
+        // argument, so all of that lands in the local.
         //
-        // It is COMPLETE for this path, not partial: RenderGraph's own burials
-        // are gated on the device it latches at its FIRST Execute
-        // (ReleaseGpuResourcesInternal returns early while that is null), so a
-        // graph that never executed buries nothing here AND nothing from
-        // ~RenderGraph -- there are no command buffers, allocators or fence to
-        // bury, because Execute is what creates them. Everything else below
-        // takes its graveyard as an argument, so all of it lands in this local.
+        // ===== WHAT IT COVERS, AND WHAT IT DOES NOT -- read before trusting
+        // it. `everSubmitted` is a PROXY, and it is NOT equivalent to "this
+        // graph never latched a device". Header window (b) splits in two here:
+        //
+        //   (b1) EXECUTE NEVER ENTERED -- a failed InitOffscreen (the fence
+        //        create or InitCommon refused after the output texture already
+        //        existed), or a context created and dropped without a frame.
+        //        FULLY COVERED. RenderGraph latches its device at Execute's
+        //        entry and gates every burial of its own on that pointer
+        //        (ReleaseGpuResourcesInternal returns early while it is null),
+        //        so a graph whose Execute was never entered buries nothing here
+        //        AND nothing from ~RenderGraph -- there are no command buffers,
+        //        allocators or fence to bury, because Execute is what creates
+        //        them. Pinned by an [nri] case.
+        //
+        //   (b2) EXECUTE ENTERED, NEVER SUCCEEDED -- the first
+        //        RenderFrameOffscreen reached RenderGraph::Execute and failed
+        //        inside it (first-frame device loss on the viewport is the
+        //        realistic Task-8 shape). STILL OPEN; this local lane does NOT
+        //        close it. The device is latched at Execute's ENTRY, before
+        //        anything fallible, while m_submitValue advances only after a
+        //        successful QueueSubmit -- so this branch is TAKEN
+        //        (DebugSubmitCount() == 0) while RenderGraph goes on burying
+        //        through its OWN captured m_device->Graves(), which has no
+        //        parameter to receive this local. And the sharpest edge is
+        //        already behind us by then: EnsureExecutionResources buries its
+        //        partially created command buffers and allocators at
+        //        m_submitValue == 0 SYNCHRONOUSLY inside the failing Execute,
+        //        before any destructor runs at all.
+        //
+        // (b2) is closed by the PER-CONTEXT GRAVEYARD LANE and by nothing short
+        // of it -- its burial sites are inside RenderGraph, so closing them IS
+        // that lane. Same for the submitted case, and for ~RenderGraph's own
+        // tail, which runs after this body. See prerequisite (1) in the header.
+        // =====
         //
         // HOST-WINDOW MODE IS DELIBERATELY EXCLUDED. Its graveyard belongs to
         // the device it also owns and is therefore empty at fence 0, so this
         // would be a no-op change to the exact teardown sequence desk
         // checkpoint D3b is pinning -- and a no-op change to that path is still
         // a change to it.
-        //
-        // This does NOT close prerequisite (1) in the header. The submitted
-        // case -- and ~RenderGraph's own tail, which runs after this body --
-        // still needs the per-context lane.
         Graveyard  localGraves;
+        // NOT "never latched a device" -- see (b2) above for the gap.
         const bool everSubmitted = m_graph && m_graph->DebugSubmitCount() > 0;
         const bool ownLane       = (m_mode == Mode::Offscreen) && !everSubmitted;
         Graveyard& graves        = ownLane ? localGraves : m_device->Graves();

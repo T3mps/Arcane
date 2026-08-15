@@ -2575,29 +2575,40 @@ TEST_CASE("rendergraph exec: an offscreen frame executes with NO swapchain -- no
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
-TEST_CASE("rendergraph exec: a graph that NEVER executed buries nothing -- not on release, not on "
-          "destruction", "[nri]")
+TEST_CASE("rendergraph exec: a graph whose Execute was never ENTERED buries nothing -- not on "
+          "release, not on destruction", "[nri]")
 {
     // THE INVARIANT ~NriGraphContext's never-submitted teardown branch rests on
-    // (NRI Phase 3, Task 7, fix round 1).
+    // (NRI Phase 3, Task 7, fix round 1) -- and READ THE SCOPE: this pins
+    // exactly ONE of the two sub-cases that branch is taken for.
     //
     // An OFFSCREEN context borrows a SHARED device and therefore shares that
     // device's Graveyard with the context that owns it -- while burials are
     // keyed to the burying GRAPH's own fence. A context that never submitted
     // would bury at 0 behind a graveyard the owner has already driven to N,
-    // tripping Bury's nondecreasing assert in Debug (the live shapes: a failed
-    // InitOffscreen, or a context created and dropped without a frame). That
-    // destructor therefore routes those burials into a LOCAL graveyard -- which
-    // is only COMPLETE if RenderGraph itself contributes nothing on that path,
-    // because RenderGraph buries into the DEVICE's graveyard directly and
-    // cannot be handed a different one.
+    // tripping Bury's nondecreasing assert in Debug. That destructor routes its
+    // OWN burials into a LOCAL graveyard, which is complete only where
+    // RenderGraph contributes nothing of its own -- RenderGraph buries into the
+    // DEVICE's graveyard directly and has no parameter to receive a lane.
     //
-    // It contributes nothing because every GPU resource it owns is created by
-    // Execute(), and ReleaseGpuResourcesInternal returns early while the device
-    // it latches at the first Execute() is still null. Pinned here so that a
-    // later change allocating anything ahead of Execute() -- and thus silently
-    // reopening the fence-0 burial -- makes THIS red, instead of making a Debug
-    // assert fire in the editor.
+    // PINNED HERE -- Execute() NEVER ENTERED (a failed InitOffscreen, or a
+    // context created and dropped without a frame). RenderGraph then never
+    // latched a device, and ReleaseGpuResourcesInternal returns early while
+    // that pointer is null, so it buries nothing from anywhere: there are no
+    // command buffers, allocators or fence to bury, because Execute is what
+    // creates them. A later change allocating any of those ahead of Execute()
+    // would silently reopen the fence-0 burial -- this makes that red instead
+    // of making a Debug assert fire in the editor.
+    //
+    // DELIBERATELY NOT PINNED HERE, BECAUSE IT IS NOT TRUE -- Execute() entered
+    // and FAILED. m_device is latched unconditionally at Execute's ENTRY while
+    // m_submitValue advances only after a successful QueueSubmit, so such a
+    // graph has a latched device and DebugSubmitCount() == 0: it goes on
+    // burying through the shared graveyard at fence 0, and
+    // EnsureExecutionResources does so SYNCHRONOUSLY inside the failing
+    // Execute, before any destructor runs. That window is closed by the
+    // per-context Graveyard lane and by nothing this case or that branch does
+    // -- see prerequisite (1), window (b2), in NriGraphContext.hpp.
     const std::uint64_t before = Arcane::RenderErrorCount();
 
     auto device = Arcane::NriDevice::CreateNoneForTests();

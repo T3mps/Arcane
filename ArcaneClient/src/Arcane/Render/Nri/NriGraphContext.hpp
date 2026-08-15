@@ -141,7 +141,7 @@
 //     run the OTHER graph's thunks before that graph's submission retired --
 //     a use-after-free no assert catches.
 //
-// IT IS NOT SCOPED TO "WHILE BOTH RENDER". Three windows outlive that:
+// IT IS NOT SCOPED TO "WHILE BOTH RENDER". Four windows outlive that:
 //   (a) OFFSCREEN-CONTEXT TEARDOWN. ~RenderGraph buries the command buffers,
 //       the allocators and its own fence at its m_submitValue
 //       (RenderGraphExec.cpp, ReleaseGpuResourcesInternal(all=true)) -- and a
@@ -152,20 +152,38 @@
 //       instant, and are afterwards reaped against the HOST's foreign fence
 //       value -- harmless only because this destructor's DeviceWaitIdle
 //       happens to make it so.
-//   (b) A FAILED InitOffscreen, or any offscreen context that never submitted:
-//       `fence` is 0 there, so every burial would go in at 0 behind a shared
-//       graveyard already at N. CLOSED IN THIS FILE (see ~NriGraphContext's
-//       never-submitted branch) -- with a LOCAL graveyard, not by changing any
-//       shared machinery, so it does not depend on the lane fix below.
+//   (b1) EXECUTE WAS NEVER ENTERED -- a failed InitOffscreen, or a context
+//       created and dropped without a frame. `fence` is 0, so every burial
+//       would go in at 0 behind a shared graveyard already at N. CLOSED IN
+//       THIS FILE (~NriGraphContext's never-submitted branch) with a LOCAL
+//       graveyard, touching no shared machinery, so it does not wait on the
+//       lane fix below. Complete for this window precisely because a graph
+//       whose Execute was never entered never latched a device, and therefore
+//       buries nothing of its own from anywhere.
+//   (b2) EXECUTE WAS ENTERED AND NEVER SUCCEEDED -- the first
+//       RenderFrameOffscreen reached RenderGraph::Execute and failed inside
+//       it (a first-frame device loss on the viewport is the realistic Task-8
+//       shape). ***OPEN.*** RenderGraph::m_device is latched UNCONDITIONALLY
+//       at Execute's ENTRY, before any fallible step, while m_submitValue only
+//       advances after a successful QueueSubmit -- so this context has a
+//       latched device and DebugSubmitCount() == 0, and the local-lane branch
+//       above cannot cover it: RenderGraph buries through its OWN captured
+//       m_device->Graves() and has no parameter to receive a lane.
+//       THE SHARPEST EDGE IS NOT EVEN AT TEARDOWN: EnsureExecutionResources's
+//       all-or-nothing cleanup buries the partially created command buffers
+//       and allocators at m_submitValue == 0 SYNCHRONOUSLY, inside the failing
+//       Execute, before any destructor runs. Closed by the lane fix below and
+//       by nothing short of it.
 //   (c) Any future owner burying into NriDevice::Graves() on its own clock.
 //
-// THE FIX for (a) and (c) is one thing: a PER-CONTEXT Graveyard lane threaded
-// through RgExecuteDesc and the node Release() calls. Every burial in this
-// class is already keyed to its graph's fence, so the lane boundary is drawn
-// -- it just lands in the wrong object today. Deliberately NOT done here,
-// because changing which graveyard the HOST-WINDOW graph buries into is a diff
-// straight through the path desk checkpoint D3b is currently pinning. It is
-// its own dispatched task, ahead of Task 8.
+// THE FIX for (a), (b2) and (c) is one thing: a PER-CONTEXT Graveyard lane
+// threaded through RgExecuteDesc and the node Release() calls -- the burial
+// sites for (b2) are inside RenderGraph, so closing them IS that lane. Every
+// burial in this class is already keyed to its graph's fence, so the boundary
+// is drawn; it just lands in the wrong object today. Deliberately NOT done
+// here, because changing which graveyard the HOST-WINDOW graph buries into is
+// a diff straight through the path desk checkpoint D3b is currently pinning.
+// It is its own dispatched task, ahead of Task 8.
 //
 // ---- (2) ImGuiNri HAS NO INVALIDATION HOOK FOR USER TEXTURES --------
 // ResizeOffscreen destroys the output texture and creates a replacement, and
@@ -420,14 +438,20 @@ namespace Arcane
         // CONTEXT: two known defects bite, and each is a Debug assert or a
         // release-build use-after-free, not a nit. FIX BOTH FIRST.
         //   1. the per-device Graveyard is shared across the two contexts'
-        //      independent fence timelines (needs the per-context lane);
+        //      independent fence timelines (needs the per-context lane). This
+        //      class closes exactly ONE window of it in-file -- a context whose
+        //      Execute was never entered. A context whose FIRST frame entered
+        //      RenderGraph::Execute and failed there is NOT covered and is a
+        //      realistic Task-8 shape (first-frame device loss on the
+        //      viewport); so is teardown after any successful frame.
         //   2. ImGuiNri cannot evict its cached descriptor for a USER texture,
         //      so ResizeOffscreen's destroy/recreate leaves it sampling the
         //      dead one (needs ImGuiNri's invalidation hook).
-        // Both are stated in full, with the mechanism and the remedy, under
-        // TWO PREREQUISITES BEFORE A SECOND CONTEXT GOES LIVE in the file
-        // header. A LONE offscreen context (no second context, no ImGui
-        // sampling) is unaffected by both. ============
+        // Both are stated in full -- with the mechanism, the exact windows and
+        // the remedy -- under TWO PREREQUISITES BEFORE A SECOND CONTEXT GOES
+        // LIVE in the file header. A LONE offscreen context (no second context
+        // sharing the graveyard, no ImGui sampling) is unaffected by both.
+        // ============
         //
         // No window, no swapchain: builds the ring, the cache, the graph, the
         // nodes and ONE persistent kGraphOffscreenFormat output texture at
