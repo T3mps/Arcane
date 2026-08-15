@@ -514,6 +514,27 @@ namespace Arcane::Editor
             // rather than GetCurrentContext() because it is the value
             // StageGpuCore captured and StageEditorShell asserted on -- one
             // named source instead of whatever happens to be pinned.
+            //
+            // ===== WHAT THIS FALLBACK COSTS, AND WHAT HOLDS THE LINE =====
+            // (Fix round 1.) The isolation being given up here is NOT only
+            // "the HUD draws over the chrome". OffscreenImGuiLayer sets
+            // io.IniFilename = nullptr on the game context ("no imgui.ini for
+            // the game context", OffscreenImGuiLayer.cpp) -- while the EDITOR
+            // context's IniFilename is the PER-PROJECT LAYOUT FILE
+            // (RetargetLayoutIni, below). So on this arm a plugin window that
+            // gets submitted would have its position, size and dock node
+            // PERSISTED into the user's project layout, permanently, and
+            // per-id ini state silently overrides authored UI on every later
+            // boot -- the imgui.ini veto class, which is the worst kind of bug
+            // this file can produce because it survives a rebuild.
+            //
+            // THE ONLY THING PREVENTING IT is that nothing submits plugin
+            // windows on this arm: CompositeGameUi returns early (phase 11's
+            // GraphMode() gate, EditorAppFrame.cpp), so DrawUIAll never runs.
+            // THAT GATE IS LOAD-BEARING, not a placeholder -- Task 9 may remove
+            // it only TOGETHER WITH giving the game UI its own context again
+            // (an ImGuiNriNode over a second ImDrawData), never before. The
+            // gate's own comment says the same thing from the other side.
             m_runtime->SetImGui(m_gameImgui ? m_gameImgui->Context() : m_editorImguiContext,
                                 reinterpret_cast<void*>(allocFn),
                                 reinterpret_cast<void*>(freeFn),
@@ -1522,6 +1543,43 @@ namespace Arcane::Editor
             }
         }
 
+        // ===== THE TEARDOWN HALF OF THE VIEW-BEFORE-TEXTURE RULE =============
+        // (NRI Phase 3, Task 8, fix round 1.) A RESIZE is not the only moment
+        // the viewport's output texture dies -- PROCESS EXIT is the other, and
+        // unlike a resize it happens on every single run.
+        //
+        // WHY MEMBER ORDER CANNOT COVER IT. Reverse-declaration destruction runs
+        // m_viewportTargets.graph -- the offscreen context, which OWNS the
+        // output -- hundreds of declarations BEFORE m_graphChrome. That order is
+        // correct and required for the borrowed DEVICE (the borrower must die
+        // first). But the chrome context's ImGuiNri caches that output by RAW
+        // nri::Texture*, so ~ImGuiNri disposes its descriptor + set hundreds of
+        // declarations LATER: DestroyDescriptor after DestroyTexture, which is
+        // exactly the inversion NriGraphContext.hpp's TWO CONTEXTS, TWO LANES
+        // calls the part of the rule that "does not go away" (on Vulkan the
+        // error raises at image-destroy time). NO declaration order fixes it --
+        // the device wants one order and the view wants the opposite.
+        //
+        // So the caller closes it with the same hook the resize uses, for the
+        // same reason: destroy the view while the texture it views is still
+        // alive. Unconditional and idempotent -- a routine miss (nothing ever
+        // drew the output) returns false and buries nothing, and a null pointer
+        // early-outs ahead of the idle.
+        //
+        // INERT TODAY, LIVE AT TASK 10: the chrome context renders nothing yet,
+        // so there is no entry to evict. It goes live on the first frame the
+        // chrome ImGui::Image()s OffscreenTextureId() -- and it would then land
+        // at process exit on EVERY run, where a grown RenderErrorCount is
+        // precisely what the D3b/D3c watch lists read as a finding.
+        //
+        // In Shutdown(), not in a destructor: this runs while BOTH contexts are
+        // provably alive, before any member unwinds.
+        if (m_graphChrome && m_graphChrome->ImGuiHud() && m_viewportTargets.graph)
+        {
+            m_graphChrome->ImGuiHud()->InvalidateUserTextureNow(
+                m_viewportTargets.graph->OffscreenOutput());
+        }
+
         // defensive: today Shutdown only runs after a successful Init, so m_gpu is non-null;
         // the guard covers a future partial-init/destructor path.
         //
@@ -1530,7 +1588,10 @@ namespace Arcane::Editor
         // flavor has no NVRHI device to idle, and needs none. Each
         // ~NriGraphContext idles the shared device and drains its own lane on
         // the way out, and the two run in the order this class declares them
-        // (viewport offscreen first, then chrome, then the window).
+        // (viewport offscreen first, then chrome, then the window). The
+        // invalidate above is the graph arm's counterpart, and it idles the
+        // device itself -- so this pair leaves BOTH arms settled before the
+        // members unwind.
         if (m_gpu && !m_gpu->GraphFlavor())
         {
             m_gpu->Device().Nvrhi()->waitForIdle();

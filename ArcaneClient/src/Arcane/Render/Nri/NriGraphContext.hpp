@@ -208,6 +208,17 @@
 // **BEFORE** ResizeOffscreen -- whenever the size actually changed, and then
 // unconditionally (never gated on the pointer having changed).
 //
+// ...AND ONCE MORE BEFORE THIS CONTEXT IS DESTROYED. Same rule, other end of
+// the object's life, and easy to miss because it LOOKS like something member
+// ordering should handle. It is not: the offscreen context BORROWS the chrome
+// context's device, so it must be destroyed FIRST -- while the view over its
+// output, which the CHROME backend owns, must be destroyed first too. Opposite
+// orders; no declaration order satisfies both, which is why the owner's last
+// living moment is the only place this can close. EditorApp::Shutdown is that
+// site (NRI Phase 3, Task 8); a project switch is the other one (Task 12 --
+// switch_teardown destroys and rebuilds both contexts). Unconditional and
+// idempotent there too: a miss is routine, a null is an early-out.
+//
 // AND NOTHING MAY RENDER BETWEEN THE TWO CALLS. The invalidate leaves NO entry
 // for that pointer, so a chrome frame recorded before the resize would take
 // EnsureEntry's create path and build a fresh view + set over a texture that is

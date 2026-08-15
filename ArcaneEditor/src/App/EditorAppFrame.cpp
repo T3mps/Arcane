@@ -1354,6 +1354,17 @@ namespace Arcane::Editor
         // the outline composite, which is this phase's slot expressed against
         // the other recorder. UNTIL THEN A GRAPH-MODE PLAY SESSION SHOWS NO
         // GAME HUD. Named, accepted, mid-phase.
+        //
+        // AND THIS GATE IS LOAD-BEARING WHILE IT STANDS (fix round 1). With no
+        // OffscreenImGuiLayer on this arm, the plugin was handed the EDITOR's
+        // ImGui context (StageRenderBridge) -- whose io.IniFilename is the
+        // PER-PROJECT LAYOUT FILE, where the game context's is deliberately
+        // null. A DrawUIAll reached from here would therefore PERSIST plugin
+        // windows into the user's project layout, permanently, and per-id ini
+        // state silently overrides authored UI on every later boot. TASK 9 MAY
+        // REMOVE THIS GATE ONLY TOGETHER WITH restoring a separate game-UI
+        // context, never before it. The SetImGui site states the same rule from
+        // the other end.
         if (GraphMode())
             return;
 

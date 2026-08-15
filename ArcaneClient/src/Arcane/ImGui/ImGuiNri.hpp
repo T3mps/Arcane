@@ -54,10 +54,24 @@
 //     InvalidateUserTexture only for a texture dying in the same lane after it.
 //   * UNCONDITIONALLY, regardless of whether the replacement's address changed
 //     -- an unchanged address is precisely the case a recycled one fakes.
-// The first real caller is the editor's viewport resize, which is the
-// cross-context case and therefore owes the `Now` variant BEFORE its resize:
-// NriGraphContext::ResizeOffscreen carries the exact sequence, the reason the
-// order is load-bearing, and the adjacency rule that goes with it.
+// THE CALLERS, and note there are TWO KINDS -- "destroys" above means every
+// way a texture dies, not only the one that gets talked about:
+//   * A RESIZE. The editor's viewport resize is the first real caller and the
+//     cross-context case, so it owes the `Now` variant BEFORE its resize:
+//     NriGraphContext::ResizeOffscreen carries the exact sequence, the reason
+//     the order is load-bearing, and the adjacency rule that goes with it.
+//   * A DESTRUCTION -- the owner going away, which for a host means PROCESS
+//     TEARDOWN and (Task 12) a project switch. Easy to miss because it looks
+//     like something member ordering should handle, and it is NOT: when the two
+//     contexts share a device, the borrower must be destroyed FIRST (for the
+//     device) while its texture's VIEW, held by the other context's backend,
+//     must be destroyed first too (for this rule) -- opposite orders, so no
+//     declaration order satisfies both. The owner's last living moment is the
+//     only place it can be closed, explicitly. EditorApp::Shutdown (NRI Phase 3,
+//     Task 8) is that call for the editor's viewport output, and it is
+//     unconditional and idempotent: a miss is routine and a null is an
+//     early-out, so a host that is not sure whether anything ever drew the
+//     texture should simply make the call.
 //
 // A SECOND, PHASE-2-ONLY HAZARD FROM THE SAME CONVENTION, stated because it is
 // a crash rather than a wrong pixel: while `--nri-graph` holds TWO devices
