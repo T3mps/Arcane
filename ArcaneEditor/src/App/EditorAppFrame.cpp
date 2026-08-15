@@ -927,8 +927,14 @@ namespace Arcane::Editor
         // defensive: gameUiClaims is Play-only and this is already
         // !IsPlaying()-gated, so it is a no-op today, but it keeps this
         // gate correct if the gizmo is ever allowed to run in Play.
+        //
+        // GizmoLive() rather than m_gizmoEnabled (NRI Phase 3, Task 13
+        // follow-up): a golden run holds a SCRIPTED selection now, so this gate
+        // is one W keypress away from arming a live hit-test against the desk
+        // mouse -- and a stray press on a handle would MOVE the entity
+        // mid-capture. See the predicate's own comment.
         const bool gizmoActive = !InPlayMode() && !gameUiClaims &&
-                                 m_gizmoEnabled && m_selection.HasSelection() &&
+                                 GizmoLive() && m_selection.HasSelection() &&
                                  (m_gizmoDrag.active || inViewport);
         Astra::Registry*        regPtr = nullptr;
         Arcane::Transform* lt     = nullptr;
@@ -1248,7 +1254,20 @@ namespace Arcane::Editor
         if (!InPlayMode())
         {
             Arcane::TransformPropagationSystem{}(m_runtime->Registry());
-            FrameSceneIfPending();
+            // NRI Phase 3, Task 13 follow-up: THE GOLDEN VIEW/SELECTION PIN,
+            // standing exactly where the ordinary run's deferred first-open
+            // framing stands. Same discipline as the clock pin in FrameInput/
+            // AdvanceSim -- `GoldenMode() ? pinned : live` -- applied to the
+            // other two inputs that decide what the captured picture CONTAINS
+            // rather than merely when it is taken. HERE and not in phase 6c
+            // (UpdateEditorCamera) for two reasons: this is after
+            // ApplyPendingViewportResize, so the fit sees THIS frame's viewport
+            // extent, and it is before the SetCamera push below -- the one
+            // every render path on both arms reads. See PinGoldenViewport.
+            if (m_config.GoldenMode())
+                PinGoldenViewport();
+            else
+                FrameSceneIfPending();
         }
 
         // Editor camera -> the Runtime slot SetRenderContext reads, for
@@ -1610,7 +1629,14 @@ namespace Arcane::Editor
             }
         }
 
-        if (!InPlayMode() && m_gizmoEnabled && m_selection.HasSelection())
+        // GizmoLive() rather than m_gizmoEnabled (NRI Phase 3, Task 13
+        // follow-up): this draw goes into the SCENE BATCH, so under a scripted
+        // golden selection the gizmo would land in `batch` and `post` too --
+        // and the scripted selection is only allowed to change `full`. There is
+        // no stage gate that could confine it here; the batcher content IS the
+        // batch stage. Pinned off in golden mode instead. Ordinary runs are
+        // unchanged (GizmoLive() == m_gizmoEnabled there).
+        if (!InPlayMode() && GizmoLive() && m_selection.HasSelection())
         {
             Astra::Registry& drawReg = m_runtime->Registry();
             Arcane::Transform* lt = drawReg.GetComponent<Arcane::Transform>(
@@ -1770,16 +1796,26 @@ namespace Arcane::Editor
         // to make "batch/post carry no outline" true when a genuine SELECTION
         // is held.
         //
-        // OPEN D3C DECISION, DELIBERATELY NOT TAKEN HERE: with hover pinned
-        // off, an editor golden run holds no selection either, so the editor's
-        // `full` baseline exercises NO outline nodes at all -- the pick/JFA/
-        // composite chain is captured only by the runtime's own `--pick-probe`
-        // battery item. Whether the editor's `full` should script a selection
-        // (the runtime's precedent: --pick-probe fabricates one -- hit-proxy id
-        // 1, HostConfig.hpp) is a coverage question for the user at D3c, not a
-        // fix: scripting one HERE would change what the not-yet-frozen
-        // editor-*.png baselines contain, which is exactly the decision that
-        // has to be made before they are captured, not after.
+        // THE D3C DECISION, NOW TAKEN (Task 13 follow-up): the editor's `full`
+        // DOES script a selection, and that is the only reason this chain is
+        // ever armed on a golden run. The first D3c capture proved why it had
+        // to be: with hover pinned off and nothing selected, `full` armed no
+        // outline nodes and came out byte-identical to `post` (one md5 across
+        // editor-post-* and editor-* on both backends) -- a stage that provably
+        // equals its predecessor is a dead gate, and the pick/JFA/composite
+        // chain is the most editor-specific rendering there is.
+        //
+        // WHAT IS SELECTED, and where: PinGoldenViewport (phase 9, before the
+        // camera push) selects the entity the id pass calls HIT-PROXY ID 1 --
+        // the same handle the runtime's `--pick-probe` fabricates, derived from
+        // CollectPickables itself so the NVRHI and graph arms cannot disagree
+        // about which entity that is. See Viewport/GoldenViewPin.hpp.
+        //
+        // THE STAGE RULE BELOW IS WHAT KEEPS THAT HONEST: `goldenNonFull` still
+        // suppresses the whole chain, so the scripted selection reaches `full`
+        // ONLY. Its one other rendered consequence -- the transform gizmo,
+        // which draws into the scene batch and would therefore have leaked into
+        // `batch`/`post` -- is pinned off by GizmoLive() (EditorApp.hpp).
         if (goldenNonFull || (!wantOutline && !wantPick))
         {
             // Cleared rather than left stale: these are the spans the NEXT

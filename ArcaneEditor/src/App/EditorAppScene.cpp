@@ -10,6 +10,7 @@
 
 #include "App/EditorApp.hpp"
 #include "Viewport/EditorCamera.hpp"
+#include "Viewport/GoldenViewPin.hpp"   // golden-mode camera/selection pins (NRI Phase 3, Task 13 follow-up)
 #include "Project/RuntimeLaunch.hpp"
 
 #include <Arcane/Base/Log.hpp>
@@ -122,6 +123,66 @@ namespace Arcane::Editor
         // An empty scene has nothing to fit, but the origin is where the user is
         // about to build -- centre it rather than leaving it in the corner.
         m_camera.offset = panel * 0.5f;
+    }
+
+    // The golden run's view + selection pin (NRI Phase 3, Task 13 follow-up).
+    // Stands where FrameSceneIfPending stands in an ordinary run -- same phase,
+    // same point in the frame (RefreshSceneResolution, after this frame's
+    // TransformPropagationSystem and before the SetCamera push every render
+    // path reads) -- and answers the two questions that decide what the
+    // baseline CONTAINS. GoldenViewPin.hpp holds both answers and the reasoning
+    // for each; this function is only their application.
+    //
+    // WHY EVERY FRAME rather than once before the loop, which is where the
+    // clock pin and the compile warm-up sit:
+    //   * the viewport EXTENT is not settled at boot. The targets start at the
+    //     BuildGraphViewportContext default (1280x720) and only take the docked
+    //     panel's real size when ApplyPendingViewportResize lands it, some
+    //     frames in -- a fit computed once, early, is a fit to the wrong
+    //     rectangle, which is precisely how the first D3c captures ended up
+    //     framed for 1280x720 and cropped to a 654x330 panel. Re-fitting every
+    //     frame makes the capture frame's fit the capture frame's extent, with
+    //     no dependency on WHEN the resize happened to land.
+    //   * it also makes the pin absorb anything that could have moved either
+    //     one mid-run: a wheel notch or an RMB drag over the panel
+    //     (UpdateEditorCamera runs earlier in the same frame), an F/Home press,
+    //     or a click-pick changing the selection (HandleViewportPick runs
+    //     LATER, so only a re-application can outlast it). None of those should
+    //     happen during a scripted run; a baseline that merely hopes so is the
+    //     hover bug again.
+    //
+    // Deliberately NOT routed through FrameCamera(false), even though that
+    // helper computes the same fit from the same two pieces: it fits IN PLACE
+    // on m_camera, and EditorCamera::Frame leaves `zoom` untouched for a
+    // zero-extent (single-point) box -- so a scene with one framable thing
+    // would inherit whatever zoom the live camera happened to hold. The pin
+    // starts from a DEFAULT camera so its answer is total.
+    void EditorApp::PinGoldenViewport()
+    {
+        // Superseded: this runs every frame, so the deferred first-open framing
+        // has nothing left to do. Cleared rather than left armed so it cannot
+        // fire on some later frame and fit to a different rectangle.
+        m_frameOnSceneOpen = false;
+
+        Astra::Registry& reg = m_runtime->Registry();
+        if (const auto pinned = Arcane::Editor::GoldenPinnedCamera(
+                reg, glm::vec2((float)ViewportWidth(), (float)ViewportHeight())))
+        {
+            m_camera = *pinned;
+        }
+        // else: nothing framable (an empty scene). Leaving the camera alone is
+        // the same choice FrameCamera makes, and there is no content to miss.
+
+        // The scripted selection -- what makes `full` differ from `post` at all
+        // (the outline chain has no other seed in a run with hover pinned off).
+        // Cleared rather than left when the scene has nothing pickable, so
+        // "empty scene" cannot be silently carrying a stale selection into the
+        // outline gate.
+        const Astra::Entity sel = Arcane::Editor::GoldenPinnedSelection(reg);
+        if (sel.IsValid())
+            m_selection.Select(sel);
+        else
+            m_selection.Clear();
     }
 
     // Scene dialogs start in the project's Content/scenes, created on demand:

@@ -669,9 +669,16 @@ namespace Arcane::Editor
         // (FrameInput, EditorAppFrame.cpp), so a hover-driven outline makes the
         // frame a function of where the mouse happens to be sitting -- and a
         // GOLDEN artifact that depends on the mouse is not a baseline. The same
-        // scripted command line otherwise produces `full` identical to `post`
-        // with the cursor outside the panel, or an amber/cyan outline over
-        // whatever entity it happens to rest on.
+        // scripted command line otherwise produces `full` with a cyan hover
+        // outline over whatever entity the pointer happens to rest on -- or
+        // none at all when it rests elsewhere.
+        //
+        // STILL THE RIGHT PIN after the Task 13 follow-up gave `full` a
+        // scripted SELECTION (PinGoldenViewport): what the outline traces is
+        // now decided by that selection, deterministically, and hover would
+        // only add a second, mouse-shaped source of pixels on top of it. The
+        // two are different inputs to the same chain -- one is pinned OFF, the
+        // other is pinned ON to a stable entity.
         //
         // Golden mode pins it OFF rather than pinning a coordinate: there is no
         // honest coordinate to pin (the panel's position is imgui.ini layout
@@ -688,6 +695,34 @@ namespace Arcane::Editor
         // untouched: hover behaves exactly as before.
         [[nodiscard]] bool HoverLive() const noexcept
         { return m_gameUi.inViewport && !m_config.GoldenMode(); }
+
+        // ---- THE GIZMO predicate (NRI Phase 3, Task 13 follow-up) -----------
+        // "The transform gizmo may interact and draw." HoverLive()'s sibling,
+        // and it exists for the same reason at one remove: the golden run now
+        // SCRIPTS a selection (PinGoldenViewport), and a selection is exactly
+        // what the gizmo waits for.
+        //
+        // TWO THINGS WOULD OTHERWISE FOLLOW FROM THAT SELECTION, both bad:
+        //   * the gizmo is drawn by SubmitSceneToBatcher -- i.e. into the
+        //     SCENE BATCH -- so it would appear in `batch` and `post` as well
+        //     as `full`, and the scripted selection is only allowed to change
+        //     `full`. There is no stage gate that could confine it: the
+        //     batcher content is the batch stage.
+        //   * m_gizmoHovered comes from a hit-test against the LIVE cursor
+        //     (UpdateGizmoInteraction), so which axis is highlighted -- and
+        //     whether a stray press starts a drag that MOVES the entity
+        //     mid-run -- would depend on where the mouse was left. That is the
+        //     hover-dependency class HoverLive() closed, arriving by a
+        //     different door.
+        //
+        // NOT left to "m_gizmoEnabled defaults to false (the Select tool), so
+        // a scripted run has no gizmo anyway". That is true, incidental, and
+        // one W keypress away from false -- and "already false on a scripted
+        // run" is the exact reasoning the whole-branch review's C2 caught being
+        // wrong about the outline chain. Pinned, so it is a property rather
+        // than a coincidence. Ordinary runs are untouched.
+        [[nodiscard]] bool GizmoLive() const noexcept
+        { return m_gizmoEnabled && !m_config.GoldenMode(); }
 
         // THE VIEWPORT'S EXTENT, from whichever target this run actually has --
         // the OffscreenCanvas' on the NVRHI arm, the offscreen graph output's
@@ -887,6 +922,14 @@ namespace Arcane::Editor
         // view is never thrown away by an F press that had no target.
         void FrameCamera(bool selectionOnly);
         void FrameSceneIfPending();
+        // GOLDEN MODE'S REPLACEMENT FOR FrameSceneIfPending (NRI Phase 3, Task
+        // 13 follow-up): re-derives the viewport camera AND the selection from
+        // the scene, every frame, so the captured artifact is a pure function
+        // of (scene, viewport extent, command line). See GoldenViewPin.hpp for
+        // the two answers and why each is the one that is stable; see the
+        // definition (EditorAppScene.cpp) for why re-applying beats a one-shot.
+        // Called only under GoldenMode(); ordinary runs never reach it.
+        void PinGoldenViewport();
         // Set whenever a scene becomes the current one, consumed on the first frame
         // the viewport has a real size. See FrameSceneIfPending for why it cannot
         // be immediate.

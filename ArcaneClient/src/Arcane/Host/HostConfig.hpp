@@ -27,8 +27,12 @@ namespace Arcane
     // the difference is otherwise only discoverable in the editor's frame.
     // ArcaneEditor captures the VIEWPORT PANEL, not its window: the editor
     // chrome (dockspace, menus, panels) is excluded by construction, and the
-    // plugin's HUD is Play-mode only there. `Batch`/`Post` mean the same thing
-    // on both -- the same seams, truncated the same way.
+    // plugin's HUD is Play-mode only there. What the editor's `Full` carries
+    // INSTEAD of that HUD is the Edit-mode selection outline: its golden run
+    // scripts a selection (the same hit-proxy id 1 `--pick-probe` fabricates
+    // below -- ArcaneEditor/src/Viewport/GoldenViewPin.hpp) precisely so the
+    // stage has content its predecessor does not. `Batch`/`Post` mean the same
+    // thing on both -- the same seams, truncated the same way.
     //
     // Honoured ONLY in golden mode (see HostConfig::GoldenMode) -- an ordinary
     // run always draws the whole frame, whatever this says.
