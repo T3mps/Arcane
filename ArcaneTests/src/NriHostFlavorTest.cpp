@@ -74,6 +74,58 @@ TEST_CASE("nri landing: GpuContext's graph flavor builds the device-less half an
     (void)gpu->Imgui().WantCaptureKeyboard();
 }
 
+TEST_CASE("nri landing: the graph ImGuiLayer installs its platform backend on ITS OWN context",
+          "[nri]")
+{
+    // Fix round 1. ImGui::CreateContext RESTORES whatever context was current
+    // if there was one, so a layer built while ANOTHER context is current can
+    // hand its platform backend to that other context -- and then abort on the
+    // first BeginFrame (or trip imgui_impl_sdl3's own "Already initialized a
+    // platform backend!" assert). Neither host reaches this today, so the
+    // property has to be stated somewhere a future second-context host (the
+    // editor's own flip) cannot quietly break it.
+    //
+    // Device-free in full: the graph flavor builds no renderer at all, so the
+    // whole scenario runs on NONE.
+    Arcane::Window window;
+    Arcane::WindowDesc wd;
+    wd.title  = "ArcaneTests nri imgui decoy";
+    wd.width  = 320;
+    wd.height = 200;
+    wd.hidden = true;
+    REQUIRE(window.Create(wd));
+
+    // The decoy, left current -- exactly the state CreateContext restores.
+    ImGuiContext* const decoy = ImGui::CreateContext();
+    REQUIRE(decoy != nullptr);
+    ImGui::SetCurrentContext(decoy);
+
+    auto layer = Arcane::ImGuiLayer::CreateForGraph(window);
+    REQUIRE(layer != nullptr);
+
+    // The PRIMARY layer leaves its OWN context current (deliberately unlike
+    // OffscreenImGuiLayer, which restores): both hosts read
+    // ImGui::GetCurrentContext() right after GpuContext::Create to publish it
+    // across the plugin ABI. So this doubles as the layer's context handle.
+    ImGuiContext* const owned = ImGui::GetCurrentContext();
+    REQUIRE(owned != nullptr);
+    REQUIRE(owned != decoy);
+
+    // The SDL3 platform backend landed here...
+    CHECK(ImGui::GetIO().BackendPlatformUserData != nullptr);
+    CHECK(ImGui::GetIO().BackendPlatformName != nullptr);
+
+    // ...and NOT on the decoy, which is precisely what a missing pin would do.
+    ImGui::SetCurrentContext(decoy);
+    CHECK(ImGui::GetIO().BackendPlatformUserData == nullptr);
+    CHECK(ImGui::GetIO().BackendPlatformName == nullptr);
+
+    ImGui::SetCurrentContext(owned);
+    layer.reset();                  // pins + shuts the backend down on `owned`
+    ImGui::DestroyContext(decoy);
+    window.Destroy();
+}
+
 TEST_CASE("nri landing: the graph ImGuiLayer pins its own context across Begin/Render",
           "[nri]")
 {

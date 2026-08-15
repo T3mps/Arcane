@@ -52,12 +52,35 @@ namespace Arcane
             bool InitCommon(bool installTap)
             {
                 IMGUI_CHECKVERSION();
-                m_context = ImGui::CreateContext();
+                m_context = ImGui::CreateContext();   // own atlas; a PRIOR context stays current, so we pin m_context explicitly below
                 if (!m_context)
                 {
                     ARC_ERROR("ImGui::CreateContext failed");
                     return false;
                 }
+                // THE PIN, and it is not decoration: ImGui::CreateContext
+                // RESTORES whatever context was current if there was one
+                // (imgui.cpp's CreateContext -- "Restore previous context if
+                // any, else keep new one"). Without this line the
+                // ImGui_ImplSDL3_InitForOther below installs the platform
+                // backend on a FOREIGN context -- either tripping its own
+                // "Already initialized a platform backend!" assert, or leaving
+                // THIS layer's context with no platform backend at all, which
+                // aborts on the first BeginFrame. Neither host can reach that
+                // today (GpuContext is the first context creator in both), but
+                // this class's contract is that EVERY entry point pins before
+                // touching ImGui state, and Init is an entry point.
+                //
+                // UNLIKE OffscreenImGuiLayer::Init -- which pins the same way
+                // and then RESTORES the previous context -- this one
+                // deliberately LEAVES m_context current. It is the host's
+                // PRIMARY context, and both hosts read
+                // ImGui::GetCurrentContext() straight after building their
+                // GpuContext to publish it across the plugin ABI
+                // (RuntimeApp::StageRenderBridge). The offscreen layer is the
+                // SECOND context in the process and must never steal currency;
+                // this one is the first and is required to hold it.
+                ImGui::SetCurrentContext(m_context);
 
                 if (!ImGui_ImplSDL3_InitForOther(m_window->SdlWindow()))
                 {
