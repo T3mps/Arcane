@@ -1491,6 +1491,29 @@ namespace Arcane::Editor
             if (pj.vsBytes.empty() || pj.psBytes.empty())
                 return;   // a stage is still in flight (or failed -- last-good stays)
 
+        // THE CHAIN OBJECT FIRST, ahead of the retention loop that CONSUMES
+        // this compile (whole-branch review, I3). The base order was
+        // create-then-consume; Task 11 moved the device gate down past the
+        // loop, and the loop std::move()s every pass's bytes out of m_passJobs
+        // and clears them -- so a FullscreenMaterialChain::Create failure now
+        // spent the compile on the way to giving up. That is unrecoverable
+        // rather than merely a lost frame: the readiness guard above returns
+        // while ANY pass is empty, so every stage would have to recompile
+        // before this function could ever be reached again, and until then the
+        // chain can never bind. Creating first restores "a failure here costs
+        // this attempt, not the bytes".
+        //
+        // Only the CREATE moves. The createShader/SetChain failures further
+        // down consume the compile exactly as they always did -- they are
+        // per-attempt failures of THIS bytecode, so re-offering the same bytes
+        // would only fail again.
+        if (m_services.device && !m_chain)
+        {
+            m_chain = Arcane::FullscreenMaterialChain::Create(m_services.device);
+            if (!m_chain)
+                return;
+        }
+
         // Retained first, and for every pass, so the two arms read ONE compile
         // (see BindIfComplete's severance note). Built before the device gate
         // because a device-less run's whole product is this vector.
@@ -1513,8 +1536,9 @@ namespace Arcane::Editor
 
         if (m_services.device)
         {
-            if (!m_chain)
-                m_chain = Arcane::FullscreenMaterialChain::Create(m_services.device);
+            // m_chain is non-null here by construction: the block above either
+            // created it or returned. Kept as a defensive read rather than an
+            // assert because nothing downstream tolerates a null chain.
             if (!m_chain)
                 return;
 
