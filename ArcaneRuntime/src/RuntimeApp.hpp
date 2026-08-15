@@ -128,6 +128,23 @@ private:
     // exit code (device-loss stays exit code 1, checked first).
     int                                  m_goldenExit = 0;
 
+    // "Did this golden run ever actually capture a frame to compare or write"
+    // -- a WHOLE-RUN property, checked once after MainLoop's frame loop rather
+    // than per frame (whole-branch review, I2; the editor's counterpart is
+    // EditorApp::m_goldenCaptured, added at 38b94b76, and this host -- the
+    // FROZEN FLOOR the whole phase is measured against -- was the one without
+    // it). RuntimeFrame::CaptureTail fires its capture block only on
+    // `lastFrame`, so every early break out of the loop that is neither
+    // device-loss nor graph-failure -- a window close, the "quit" input action,
+    // a run whose --frames count was never reached -- left m_goldenExit at 0
+    // and made Run() report a clean PASS having compared NOTHING.
+    //
+    // Two INDEPENDENT facts, which is why this is not folded into m_goldenExit:
+    // "did we try" (this) and "did it succeed" (that). The latch is set BEFORE
+    // the readback, so a failed readback is still a genuine attempt and reports
+    // its own, more specific error.
+    bool                                 m_goldenCaptured = false;
+
     // --nri-graph's exit code, which OUTRANKS m_goldenExit (Run()'s tail):
     // 1 = the graph run failed, 2 = RenderErrorCount grew during it. 0 on
     // every run that did not pass the flag. The latch baseline it is measured

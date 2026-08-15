@@ -84,6 +84,11 @@ namespace Arcane::RuntimeFrame
         Arcane::FramePerf&     perf;
         std::uint64_t&         frameCount;
         int&                   goldenExit;
+        // "Did this golden run ever actually reach a capture" -- latched by
+        // CaptureTail on the one frame that attempts one, read ONCE by MainLoop
+        // after the loop (whole-branch review, I2). See RuntimeApp::
+        // m_goldenCaptured for what the two facts are and why they are separate.
+        bool&                  goldenCaptured;
         int&                   graphExit;
         Arcane::GlobalParams&  frameGlobals;
         double&                hostClock;

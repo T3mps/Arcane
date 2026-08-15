@@ -628,6 +628,7 @@ void RuntimeApp::MainLoop()
         .perf            = m_perf,
         .frameCount      = m_frameCount,
         .goldenExit      = m_goldenExit,
+        .goldenCaptured  = m_goldenCaptured,
         .graphExit       = m_graphExit,
         .frameGlobals    = m_frameGlobals,
         .hostClock       = m_hostClock,
@@ -694,6 +695,27 @@ void RuntimeApp::MainLoop()
         // false;` -- the while condition above ends the loop, not a break.
         if (Arcane::RuntimeFrame::CaptureTail(io))
             running = false;
+    }
+
+    // A WHOLE-RUN property, checked once here rather than per frame
+    // (whole-branch review, I2) -- the mirror of EditorApp::MainLoop's own
+    // post-loop check, which 38b94b76 added to the EDITOR while leaving the
+    // host that IS the frozen floor without it. CaptureTail's capture block
+    // fires only on `lastFrame`, so every early break above that is not
+    // device-loss (exit 1) or a graph failure (exit 1) -- a window close, the
+    // "quit" input action, a Skipped-frame loop that never reached --frames N
+    // -- would otherwise reach here with m_goldenExit still 0 and Run() would
+    // report a clean PASS having compared nothing at all.
+    //
+    // Skipped when GoldenMode() is off (the member stays false and unread on
+    // every ordinary run) and after a warm-up refusal (both of those paths
+    // return before the loop, with m_goldenExit already 3).
+    if (m_config.GoldenMode() && !m_goldenCaptured)
+    {
+        ARC_ERROR("golden: the run finished without ever capturing a frame to compare or "
+                  "write -- it ended before reaching frame {} (a window close, the quit "
+                  "action, or a frame loop that never presented)", m_config.maxFrames);
+        m_goldenExit = 3;
     }
 
     // Destroys the vehicle and folds a grown RenderErrorCount into the exit

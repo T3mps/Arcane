@@ -715,6 +715,18 @@ bool CaptureTail(FrameIo& io)
     // comparator, the tolerances, the exit code) is shared.
     if (lastFrame && (!io.config.screenshotPath.empty() || io.config.GoldenMode()))
     {
+        // LATCHED BEFORE THE READBACK, not after (whole-branch review, I2;
+        // exactly the editor's rule at CaptureEditorGolden): this is the
+        // "did the run ever reach a real capture" signal MainLoop's post-loop
+        // check reads, and it must be true even when the readback then fails
+        // -- that failure sets goldenExit = 3 itself, below, and the two are
+        // independent facts. Every path out of the loop that never reaches
+        // here (a window close, the quit action, a --frames count the run
+        // never got to) therefore leaves it false, which is precisely the
+        // "PASS that compared nothing" this closes.
+        if (io.config.GoldenMode())
+            io.goldenCaptured = true;
+
         std::uint32_t w = 0, h = 0;
         std::vector<unsigned char> actual;
         const bool read =
