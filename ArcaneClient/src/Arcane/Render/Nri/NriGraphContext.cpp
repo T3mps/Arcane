@@ -14,6 +14,7 @@
 
 #include "NriCommon.hpp"
 
+#include <Arcane/Base/Diagnostics.hpp>              // Heartbeat / GpuHeartbeatRefresh -- the offscreen pacing wait
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/Device.hpp>                 // RenderDeviceDesc, RenderErrorCount, ToString(GraphicsBackend)
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>     // the crash chain, armed by whichever device exists
@@ -21,6 +22,8 @@
 #include <Arcane/Render/PostChainCache.hpp>         // PostChainDesc -- the frame's post-chain shape
 #include <Arcane/Render/ShaderLibrary.hpp>          // ShaderLibrary::ResolveFlavorDir
 #include <Arcane/Render/Swapchain.hpp>              // kSwapchainFramesInFlight
+
+#include <SDL3/SDL_timer.h>                         // SDL_DelayNS -- the offscreen pacing wait's sleep
 
 #undef ERROR
 
@@ -75,6 +78,50 @@ namespace Arcane
         {
             return alignment == 0 ? value : ((value + alignment - 1) / alignment) * alignment;
         }
+
+        // ---------------------------------------------------------------
+        // THE OFFSCREEN PACING WAIT (NRI Phase 3, Task 7).
+        //
+        // A DELIBERATE TWIN of NriSwapChain.cpp's PollingWaitForTimelineFence:
+        // same constants, same two heartbeat beats in the same order, same
+        // blocking fallback past the window, and the same reasoning -- that
+        // file's header states it in full, and it is the reason a bare
+        // Core().Wait() cannot be used (both backends' nri::Fence::Wait blocks
+        // internally for up to NRI_TIMEOUT_FENCE = 5s publishing nothing, so a
+        // hung GPU would look like a hung process).
+        //
+        // DUPLICATED RATHER THAN EXTRACTED, on purpose and for one reason: the
+        // shared version would have to be called from NriSwapChain.cpp too, and
+        // that file is the host-window present path desk checkpoint D3b is
+        // currently pinning -- a behaviour-preserving refactor is still a diff
+        // through the exact code under test. The extraction is a follow-up, not
+        // a decision (Task 7 report).
+        // ---------------------------------------------------------------
+        constexpr Uint64 kFencePollSleepNs = 1'000'000;         // 1ms, matching NriSwapChain.cpp
+        constexpr std::chrono::seconds kFencePollWindow{ 15 };  // ...and its 15s window
+
+        void PollingWaitForTimelineFence(const nri::CoreInterface& core, nri::Fence* fence,
+                                         std::uint64_t value)
+        {
+            if (!fence)
+                return;
+            if (core.GetFenceValue(*fence) >= value)
+                return;   // fast path: the slot's frame retired long ago
+
+            const auto start = std::chrono::steady_clock::now();
+            while (std::chrono::steady_clock::now() - start < kFencePollWindow)
+            {
+                Diagnostics::Heartbeat();
+                Diagnostics::GpuHeartbeatRefresh();
+
+                SDL_DelayNS(kFencePollSleepNs);
+
+                if (core.GetFenceValue(*fence) >= value)
+                    return;
+            }
+
+            core.Wait(*fence, value);
+        }
     }
 
     std::unique_ptr<NriGraphContext> NriGraphContext::Create(const HostConfig& config, Window& window)
@@ -87,6 +134,7 @@ namespace Arcane
 
     bool NriGraphContext::Init(const HostConfig& config, Window& window)
     {
+        m_mode           = Mode::HostWindow;
         m_vsync          = config.vsync;
         m_borrowedWindow = &window;
 
@@ -155,12 +203,15 @@ namespace Arcane
             return false;
         }
 
-        m_device = NriDevice::Wrap(*m_native);
-        if (!m_device)
+        m_ownedDevice = NriDevice::Wrap(*m_native);
+        if (!m_ownedDevice)
         {
             ARC_ERROR("[nri-graph] wrapping the native device failed");
             return false;
         }
+        // The reading pointer, for every line below and for the offscreen
+        // flavor's borrowed case -- see the member declarations.
+        m_device = m_ownedDevice.get();
 
         // THE CRASH CHAIN, armed by whichever device exists (Task 5). Since
         // Task 6 this is the ONLY arming call in the process -- there is no
@@ -174,7 +225,17 @@ namespace Arcane
         // anywhere below is already covered by a live device-removed
         // observation point and a live GPU-section provider. Disarmed in
         // ~NriGraphContext, before the device it names goes away.
-        (void)NriDiagnostics::Arm(*m_device);
+        //
+        // THE RETURN VALUE IS NOW KEPT (NRI Phase 3, Task 7) and it is what
+        // gates the Disarm in the destructor. Behaviour here is unchanged in
+        // every existing topology -- one device means Arm() returns true and
+        // the destructor disarms exactly as before; the two-device transition
+        // means it returns false and Disarm() was already a no-op. What it buys
+        // is the topology this task introduces: a SECOND context on this same
+        // device must not be able to disarm the chain THIS one installed, and
+        // NriDiagnostics keeps one process-wide slot with no owner identity, so
+        // the ownership has to be remembered here.
+        m_armedDiagnostics = NriDiagnostics::Arm(*m_device);
 
         m_swap = NriSwapChain::Create(*m_device, window, m_vsync);
         if (!m_swap)
@@ -196,6 +257,155 @@ namespace Arcane
             ARC_ERROR("[nri-graph] the swapchain resolved no format (zero-sized window at create?)");
             return false;
         }
+
+        if (!InitCommon(config))
+            return false;   // already logged
+
+        // See the header: the heartbeat exists for the open-ended drag-storm
+        // run and nothing else. The baseline is taken here rather than at the
+        // host's own baseline point so the number it prints means "errors this
+        // vehicle has produced", which is the question a desk user is asking
+        // mid-drag.
+        m_heartbeat     = (config.maxFrames == 0);
+        m_errorBaseline = RenderErrorCount();
+        m_lastHeartbeat = std::chrono::steady_clock::now();
+
+        ARC_INFO("[nri-graph] ready: {}x{} format={} textures={} ring={}KiB/slot",
+                 m_swap->Width(), m_swap->Height(), (int)m_format, m_swap->TextureCount(),
+                 kUploadRingBytesPerFrame / 1024);
+        return true;
+    }
+
+    // =====================================================================
+    // THE OFFSCREEN FLAVOR (NRI Phase 3, Task 7) -- see the header's OFFSCREEN
+    // MODE for the contract, and CALLER CONTRACT: TWO CONTEXTS, ONE GRAVEYARD
+    // for what a second live context on one device owes.
+    // =====================================================================
+
+    std::unique_ptr<NriGraphContext> NriGraphContext::CreateOffscreen(const HostConfig& config,
+                                                                      NriDevice& shared,
+                                                                      std::uint32_t width,
+                                                                      std::uint32_t height)
+    {
+        std::unique_ptr<NriGraphContext> context(new NriGraphContext());
+        if (!context->InitOffscreen(config, shared, width, height))
+            return nullptr;
+        return context;
+    }
+
+    bool NriGraphContext::InitOffscreen(const HostConfig& config, NriDevice& shared,
+                                        std::uint32_t width, std::uint32_t height)
+    {
+        m_mode = Mode::Offscreen;
+        // NO WINDOW, NO SWAPCHAIN, NO VSYNC. m_vsync stays at its default and
+        // is never read on this path: there is no present to pace against a
+        // refresh, and the frame's own pacing fence is what bounds it instead.
+
+        ARC_INFO("[nri-graph] starting the graph render half OFFSCREEN: {}x{} format={} on the "
+                 "shared {} device", width, height, (int)kGraphOffscreenFormat,
+                 ToString(shared.Backend()));
+
+        // A zero extent is a CALLER BUG here, unlike the minimised-window case
+        // the present path treats as routine: nothing outside this call chose
+        // the size, so there is nobody to wait for.
+        if (width == 0 || height == 0)
+        {
+            ARC_ERROR("[nri-graph] offscreen create refused: a {}x{} output is not a target",
+                      width, height);
+            return false;
+        }
+
+        // BORROWED. No NativeDeviceOwner, no Wrap, and deliberately no
+        // NriDiagnostics::Arm -- the crash chain is already installed by
+        // whoever created this device, and Arm/Disarm name ONE process-wide
+        // slot with no owner identity, so an offscreen context that armed would
+        // be harmless while one that DISARMED would unplug the host-window
+        // context's chain. m_armedDiagnostics therefore stays false and the
+        // destructor's Disarm is skipped.
+        m_device = &shared;
+        m_format = kGraphOffscreenFormat;
+
+        if (!CreateOffscreenTarget(width, height))
+            return false;   // already logged
+
+        // The pacing timeline this frame loop has instead of a swapchain's.
+        // Created ONCE and never recreated -- ResizeOffscreen leaves it alone
+        // for the same reason NriSwapChain::Resize leaves its frame fence
+        // alone: the frame counter and the pacing depth survive a resize.
+        if (!ARC_NRI_CHECK(m_device->Core().CreateFence(m_device->Device(), 0, m_offscreenFence))
+            || !m_offscreenFence)
+        {
+            ARC_ERROR("[nri-graph] offscreen pacing-fence creation failed");
+            m_offscreenFence = nullptr;
+            return false;
+        }
+        m_device->Core().SetDebugName(m_offscreenFence, "nri-graph offscreen pacing fence");
+
+        if (!InitCommon(config))
+            return false;   // already logged
+
+        // NO HEARTBEAT ARMING. m_heartbeat is the open-ended drag-storm
+        // affordance and a drag storm is a window event; an offscreen context
+        // has no window and (in the editor topology) sits beside a host-window
+        // context that already prints one.
+        m_errorBaseline = RenderErrorCount();
+
+        ARC_INFO("[nri-graph] offscreen ready: {}x{} format={} ring={}KiB/slot, pacing {} frames deep",
+                 m_offscreenWidth, m_offscreenHeight, (int)m_format,
+                 kUploadRingBytesPerFrame / 1024, kSwapchainFramesInFlight);
+        return true;
+    }
+
+    bool NriGraphContext::CreateOffscreenTarget(std::uint32_t width, std::uint32_t height)
+    {
+        // nri::Dim_t is 16-bit; an extent that does not round-trip through it
+        // would create successfully as a DIFFERENT texture. Refused here rather
+        // than discovered as a wrong-sized viewport.
+        if (width == 0 || height == 0 || width > 0xFFFFu || height > 0xFFFFu)
+        {
+            ARC_ERROR("[nri-graph] offscreen extent {}x{} is not expressible (nri::Dim_t is 16-bit, "
+                      "and 0 is not a valid dimension)", width, height);
+            return false;
+        }
+
+        const nri::CoreInterface& core = m_device->Core();
+
+        nri::TextureDesc desc = {};
+        desc.type      = nri::TextureType::TEXTURE_2D;
+        // BOTH bits, and both are load-bearing: the tonemap renders into it
+        // (COLOR_ATTACHMENT) and the consumer samples it (SHADER_RESOURCE),
+        // which is the exit state the graph restores. NRI's validation layer
+        // checks every barrier's access and layout against this mask, so a
+        // missing bit rejects the frame's exit barrier rather than merely
+        // looking wrong.
+        desc.usage     = nri::TextureUsageBits::COLOR_ATTACHMENT | nri::TextureUsageBits::SHADER_RESOURCE;
+        desc.format    = kGraphOffscreenFormat;
+        desc.width     = (nri::Dim_t)width;
+        desc.height    = (nri::Dim_t)height;
+        desc.depth     = 1;
+        desc.mipNum    = 1;
+        desc.layerNum  = 1;
+        desc.sampleNum = 1;
+        if (!ARC_NRI_CHECK(core.CreateCommittedTexture(m_device->Device(), nri::MemoryLocation::DEVICE,
+                                                        0.0f, desc, m_offscreen))
+            || !m_offscreen)
+        {
+            ARC_ERROR("[nri-graph] offscreen output creation failed at {}x{}", width, height);
+            m_offscreen = nullptr;
+            return false;
+        }
+        core.SetDebugName(m_offscreen, "nri-graph offscreen output");
+
+        m_offscreenWidth  = width;
+        m_offscreenHeight = height;
+        return true;
+    }
+
+    bool NriGraphContext::InitCommon(const HostConfig& config)
+    {
+        // Everything from here down is MODE-AGNOSTIC and is the same object
+        // graph in the same order in both flavors -- which is what makes the
+        // teardown contract in the header one contract rather than two.
 
         // The upload ring is [gpu]-only by construction (NONE's MapBuffer
         // returns null), so this is its first real Init in the tree.
@@ -282,25 +492,33 @@ namespace Arcane
                      m_probeX, m_probeY,
                      // The CLAMPED count, i.e. what the declarator will actually
                      // declare -- a log line that disagreed with the frame would
-                     // be worse than no log line.
-                     std::min(OutlineJfaStepCount(m_swap->Width(), m_swap->Height()),
+                     // be worse than no log line. Read through the mode-agnostic
+                     // extent, which is the swapchain's here and the offscreen
+                     // output's on that flavor.
+                     std::min(OutlineJfaStepCount(SurfaceWidth(), SurfaceHeight()),
                               OutlineNode::kMaxJfaSteps),
                      kSwapchainFramesInFlight);
         }
 
-        // See the header: the heartbeat exists for the open-ended drag-storm
-        // run and nothing else. The baseline is taken here rather than at the
-        // host's own baseline point so the number it prints means "errors this
-        // vehicle has produced", which is the question a desk user is asking
-        // mid-drag.
-        m_heartbeat     = (config.maxFrames == 0);
-        m_errorBaseline = RenderErrorCount();
-        m_lastHeartbeat = std::chrono::steady_clock::now();
-
-        ARC_INFO("[nri-graph] ready: {}x{} format={} textures={} ring={}KiB/slot",
-                 m_swap->Width(), m_swap->Height(), (int)m_format, m_swap->TextureCount(),
-                 kUploadRingBytesPerFrame / 1024);
         return true;
+    }
+
+    std::uint32_t NriGraphContext::SurfaceWidth() const noexcept
+    {
+        return m_mode == Mode::Offscreen ? m_offscreenWidth : (m_swap ? m_swap->Width() : 0);
+    }
+
+    std::uint32_t NriGraphContext::SurfaceHeight() const noexcept
+    {
+        return m_mode == Mode::Offscreen ? m_offscreenHeight : (m_swap ? m_swap->Height() : 0);
+    }
+
+    std::uint64_t NriGraphContext::OffscreenTextureId() const noexcept
+    {
+        // THE ImGuiNri CONVENTION (that header's §7.3): the RAW texture handle
+        // through intptr_t -- not a descriptor. 0 is ImTextureID_Invalid, which
+        // is what a host-window context correctly reports.
+        return (std::uint64_t)(std::intptr_t)m_offscreen;
     }
 
     std::span<const std::uint8_t> NriGraphContext::ShaderBytecode(const char* name)
@@ -344,11 +562,19 @@ namespace Arcane
         // registration hazard every other owner in this tree guards against.
         // Disarm() is conditional-and-idempotent (it clears only what IT
         // installed, and no-ops when Arm no-oped -- which since Task 6 is only
-        // the case when some other owner armed first), so calling it
-        // unconditionally here is correct in every topology and after a failed
-        // Init. It stays FIRST in this body, before the borrowed window's owner
-        // can possibly run its own teardown, for the same reason.
-        NriDiagnostics::Disarm();
+        // the case when some other owner armed first). It stays FIRST in this
+        // body, before the borrowed window's owner can possibly run its own
+        // teardown, for the same reason.
+        //
+        // GATED ON m_armedDiagnostics SINCE TASK 7, and the gate is what makes
+        // a second context on one device safe: NriDiagnostics holds ONE
+        // process-wide slot with no owner identity, so an unconditional Disarm
+        // from an offscreen context would clear the chain the HOST-WINDOW
+        // context armed and still owns. It changes nothing for a host-window
+        // context in any existing topology -- the flag is exactly Arm()'s own
+        // return value, and Disarm() already no-oped whenever that was false.
+        if (m_armedDiagnostics)
+            NriDiagnostics::Disarm();
 
         if (!m_device)
             return;   // Init() failed before the device existed; nothing was created on one
@@ -410,9 +636,37 @@ namespace Arcane
 
         // Buries the transient pool + EVERY cached attachment view at the same
         // value -- including the IMPORTED views, which name this frame's
-        // swapchain backbuffers (ReleaseGpuResources -> ReleaseImportedViews).
+        // swapchain backbuffers (ReleaseGpuResources -> ReleaseImportedViews),
+        // or, offscreen, the output texture below.
         if (m_graph)
             m_graph->ReleaseGpuResources();
+
+        // ---- offscreen mode's own two objects (Task 7) -------------------
+        // STRICTLY AFTER the release above, because Graveyard::Drain runs
+        // thunks in BURIAL ORDER: the graph's imported COLOR_ATTACHMENT view
+        // names this exact texture, so burying the texture first would destroy
+        // it and then destroy a view over freed memory -- precisely the
+        // teardown bug fix round 1 closed for the swapchain's backbuffers.
+        //
+        // The swapchain half gets this ordering from OUTER ownership (the host
+        // window, and NRI's swapchain textures with it, outlive this object).
+        // An offscreen context has no outer owner, so the order is explicit
+        // here instead.
+        //
+        // The pacing fence goes out beside it: nothing else names it, and the
+        // idle at the top of this body means nothing is still waiting on it.
+        if (m_offscreen)
+        {
+            const nri::CoreInterface* graveCore = &core;
+            graves.Bury(fence, [graveCore, t = m_offscreen] { graveCore->DestroyTexture(t); });
+            m_offscreen = nullptr;
+        }
+        if (m_offscreenFence)
+        {
+            const nri::CoreInterface* graveCore = &core;
+            graves.Bury(fence, [graveCore, f = m_offscreenFence] { graveCore->DestroyFence(f); });
+            m_offscreenFence = nullptr;
+        }
 
         // ...and RUNS those burials HERE rather than leaving them pending.
         // Load-bearing, and Vulkan-only in its consequences (fix round 1,
@@ -437,6 +691,15 @@ namespace Arcane
         // EMPTY graveyard (so nondecreasing holds trivially), and ~NriDevice
         // drains that as usual. Neither of those names a swapchain image, so
         // their ordering is unchanged and safe.
+        //
+        // OFFSCREEN MODE NEEDS THIS DRAIN EVEN MORE, because there is no
+        // ~NriDevice to fall back on: the device is BORROWED and outlives this
+        // object, so anything left pending here would sit in a live device's
+        // graveyard naming objects nothing else remembers. It also means the
+        // sweep below covers whatever the SHARING owner had pending -- correct
+        // (Drain's precondition is an idle GPU, and the DeviceWaitIdle above
+        // idles the whole device), just eager. See the header's CALLER
+        // CONTRACT: TWO CONTEXTS, ONE GRAVEYARD.
         graves.Drain();
 
         // The number to size kUploadRingBytesPerFrame from once a real frame
@@ -444,19 +707,44 @@ namespace Arcane
         std::uint64_t ringPeak = 0;
         for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
             ringPeak = ringPeak < m_ring.HighWater(slot) ? m_ring.HighWater(slot) : ringPeak;
-        ARC_INFO("[nri-graph] graph render half shut down after {} presented frame(s); upload-ring "
-                 "peak {} of {} bytes per slot", m_frameIndex, ringPeak, kUploadRingBytesPerFrame);
+        // Two lines rather than one composed one, because the host-window
+        // wording is what a desk log is read against (D3b) and must not move.
+        if (m_mode == Mode::Offscreen)
+        {
+            ARC_INFO("[nri-graph] offscreen graph render half shut down after {} rendered frame(s); "
+                     "upload-ring peak {} of {} bytes per slot", m_frameIndex, ringPeak,
+                     kUploadRingBytesPerFrame);
+        }
+        else
+        {
+            ARC_INFO("[nri-graph] graph render half shut down after {} presented frame(s); upload-ring "
+                     "peak {} of {} bytes per slot", m_frameIndex, ringPeak, kUploadRingBytesPerFrame);
+        }
         // NOTHING releases the window here, and nothing may start to: it is the
         // host's (THE BORROWED WINDOW). Every NRI object that named its HWND or
         // its VkSurfaceKHR -- the swapchain above all -- is destroyed by the
         // member destructors that run right after this body, which is strictly
         // before the host destroys the window it borrowed.
+        //
+        // NOTHING RELEASES THE DEVICE ON THE OFFSCREEN PATH EITHER, and for the
+        // same shape of reason: m_ownedDevice is empty there, so the member
+        // destructors leave the shared NriDevice (and the NativeDeviceOwner
+        // behind it) entirely to the context that created them.
     }
 
     void NriGraphContext::Resize(std::uint32_t width, std::uint32_t height)
     {
+        // Host-window only. An offscreen context has no swapchain to resize and
+        // its twin is ResizeOffscreen; falling through here would silently do
+        // nothing and leave a viewport rendering at the old extent, so the
+        // no-swapchain early-out below covers it -- loudly, once, rather than
+        // by accident.
         if (!m_swap)
+        {
+            if (m_mode == Mode::Offscreen)
+                ARC_ERROR("[nri-graph] Resize() on an OFFSCREEN context -- call ResizeOffscreen()");
             return;
+        }
 
         // ==============================================================
         // EVERYTHING THAT NAMES A BACKBUFFER DIES BEFORE THE BACKBUFFERS DO.
@@ -551,10 +839,107 @@ namespace Arcane
         }
     }
 
+    void NriGraphContext::ResizeOffscreen(std::uint32_t width, std::uint32_t height)
+    {
+        if (m_mode != Mode::Offscreen)
+        {
+            ARC_ERROR("[nri-graph] ResizeOffscreen() on a HOST-WINDOW context -- call Resize()");
+            return;
+        }
+        if (width == 0 || height == 0)
+        {
+            // A panel collapsed to nothing. Unlike a minimised window there is
+            // no state to fall into and nothing to acquire, so the existing
+            // output is simply KEPT: the caller stops drawing the panel, and
+            // the next non-zero size resizes for real. Recreating at 0x0 would
+            // mean refusing a texture (nri::Dim_t cannot express it) and losing
+            // the one the ImTextureID still names.
+            ARC_WARN("[nri-graph] ResizeOffscreen({}, {}) ignored -- the current {}x{} output is "
+                     "kept until a non-zero size arrives", width, height,
+                     m_offscreenWidth, m_offscreenHeight);
+            return;
+        }
+        if (width == m_offscreenWidth && height == m_offscreenHeight)
+            return;   // no-op, matching NriSwapChain::Resize's unchanged-size contract
+
+        // ==============================================================
+        // THE SAME FIVE STEPS Resize() PERFORMS, and each still needs the one
+        // above it -- see that function for the full argument. What is being
+        // protected here is the OUTPUT TEXTURE rather than the swapchain's
+        // backbuffers, but the hazard is identical: the graph holds a
+        // COLOR_ATTACHMENT view over it from the last Execute and turns those
+        // over by BURYING them, so at this instant they are live descriptors
+        // naming an image about to be freed.
+        //
+        //   1. idle -- Graveyard::Drain's stated precondition;
+        //   2. drop the capture staging buffer, whose size is the old extent;
+        //   3. invalidate the nodes' cached pool views (PoolEpoch discipline
+        //      unchanged: this path is invalidated EXPLICITLY because it is
+        //      followed by a drain and there may be no later Record to notice
+        //      the epoch), then release the pool + every view;
+        //   4. DRAIN, so 2 and 3 execute while the output still exists;
+        //   5. only now destroy the output and create its replacement.
+        // ==============================================================
+        const nri::CoreInterface& core = m_device->Core();
+        if (core.DeviceWaitIdle)
+            (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
+
+        Graveyard& graves = m_device->Graves();
+        const std::uint64_t fence = m_graph ? m_graph->DebugSubmitCount() : 0;
+        const nri::CoreInterface* graveCore = &core;
+
+        if (m_capture)
+        {
+            graves.Bury(fence, [graveCore, b = m_capture] { graveCore->DestroyBuffer(b); });
+            m_capture = nullptr;
+        }
+        m_captureRecorded = false;
+
+        if (m_tonemap)
+            m_tonemap->InvalidateSource(graves, fence);
+        if (m_post)
+            m_post->InvalidateSources(graves, fence);
+        if (m_outline)
+            m_outline->InvalidateSources(graves, fence);
+
+        if (m_graph)
+            m_graph->ReleaseGpuResources();
+
+        // AFTER the release, because Drain runs thunks in BURIAL ORDER and the
+        // release is what buries the imported view naming this texture -- the
+        // identical ordering ~NriGraphContext uses, and the reason neither
+        // destroys the output directly.
+        if (m_offscreen)
+        {
+            graves.Bury(fence, [graveCore, t = m_offscreen] { graveCore->DestroyTexture(t); });
+            m_offscreen = nullptr;
+        }
+
+        graves.Drain();
+
+        const std::uint32_t oldWidth = m_offscreenWidth, oldHeight = m_offscreenHeight;
+        if (!CreateOffscreenTarget(width, height))
+        {
+            // Already logged + latched. m_offscreen stays null and every later
+            // RenderFrameOffscreen refuses rather than declaring a frame whose
+            // final target does not exist -- and OffscreenTextureId() reports
+            // ImTextureID_Invalid, so a viewport draws nothing instead of
+            // sampling a destroyed texture.
+            m_offscreenWidth = m_offscreenHeight = 0;
+            ARC_ERROR("[nri-graph] offscreen resize {}x{} -> {}x{} failed; this context can no "
+                      "longer render", oldWidth, oldHeight, width, height);
+            return;
+        }
+
+        // NOTHING to do about the format: it is a constant here, not something
+        // a driver resolves (kGraphOffscreenFormat), so the tonemap's
+        // format-keyed pipeline stays a cache HIT across every resize.
+    }
+
     bool NriGraphContext::EnsureCaptureBuffer()
     {
-        const std::uint32_t width  = m_swap->Width();
-        const std::uint32_t height = m_swap->Height();
+        const std::uint32_t width  = SurfaceWidth();
+        const std::uint32_t height = SurfaceHeight();
         if (width == 0 || height == 0)
         {
             ARC_WARN("[nri-graph] capture requested on a zero-sized surface");
@@ -697,7 +1082,12 @@ namespace Arcane
             }
         }
 
-        handles.backbuffer = AddTonemapNode(graph, context, sceneColor);
+        // The frame's FINAL TARGET: the acquired backbuffer, or -- when the
+        // shape carries one -- the vehicle's persistent offscreen output
+        // (Task 7). Everything below writes `handles.backbuffer` and neither
+        // knows nor cares which it got, which is what keeps the two modes one
+        // frame shape rather than two.
+        handles.backbuffer = AddTonemapNode(graph, context, sceneColor, shape.offscreenOutput);
 
         // ---------------------------------------------------------------
         // THE PICK + OUTLINE CHAIN (Task 11), declared BETWEEN the tonemap and
@@ -821,11 +1211,16 @@ namespace Arcane
         RgFrameShape shape;
         shape.stage         = frame.stage;
         shape.capture       = frame.capture;
-        shape.canvasWidth   = m_swap->Width();
-        shape.canvasHeight  = m_swap->Height();
+        shape.canvasWidth   = SurfaceWidth();
+        shape.canvasHeight  = SurfaceHeight();
         shape.captureBuffer = m_capture;
         shape.captureBytes  = m_captureSlicePitch;
         shape.post          = frame.post;
+        // THE ONE LINE THAT MAKES A FRAME OFFSCREEN (Task 7). Null in
+        // host-window mode, so the tonemap imports the swapchain exactly as it
+        // always has; the vehicle's output texture otherwise. Nothing else in
+        // this function -- or anywhere downstream of it -- is mode-aware.
+        shape.offscreenOutput = m_offscreen;
         // Armed at Create AND asked for by this frame. Both, so a driver that
         // forgets the flag cannot declare a chain whose nodes were never built.
         shape.pickOutline   = frame.pickOutline && m_pick && m_outline;
@@ -857,6 +1252,15 @@ namespace Arcane
 
     NriGraphContext::FrameOutcome NriGraphContext::RenderFrame(const FrameDesc& frame)
     {
+        // HOST-WINDOW ONLY. An offscreen context has no swapchain, so every
+        // line below would dereference null; the twin is RenderFrameOffscreen.
+        if (m_mode == Mode::Offscreen)
+        {
+            GraphError("NriGraphContext: RenderFrame() on an OFFSCREEN context -- call "
+                       "RenderFrameOffscreen()");
+            return FrameOutcome::Failed;
+        }
+
         // ==============================================================
         // A ZERO-SIZED SURFACE IS ROUTINE, AND IT HAS TO BE CAUGHT HERE.
         // ==============================================================
@@ -1005,6 +1409,142 @@ namespace Arcane
             }
         }
 
+        return FrameOutcome::Presented;
+    }
+
+    NriGraphContext::FrameOutcome NriGraphContext::RenderFrameOffscreen(const FrameDesc& frame)
+    {
+        if (m_mode != Mode::Offscreen)
+        {
+            GraphError("NriGraphContext: RenderFrameOffscreen() on a HOST-WINDOW context -- call "
+                       "RenderFrame()");
+            return FrameOutcome::Failed;
+        }
+
+        // A failed ResizeOffscreen leaves no output. Refuse rather than declare
+        // a frame whose final target does not exist -- the resize already
+        // latched the reason, and repeating it every frame would bury it.
+        if (!m_offscreen)
+            return FrameOutcome::Skipped;
+
+        // The same guard, in the same place and for the same reason, as
+        // RenderFrame's: at 0x0 the canvas transient is a texture NRI cannot
+        // express, and RealizePool's refusal is LATCHED -- Failed, not the
+        // routine Skipped this actually is. Only reachable through a resize
+        // that could not create its replacement.
+        if (SurfaceWidth() == 0 || SurfaceHeight() == 0)
+            return FrameOutcome::Skipped;
+
+        // ==============================================================
+        // PACING, WITHOUT A SWAPCHAIN TO DO IT.
+        // ==============================================================
+        // On the present path NriSwapChain::AcquireNextTexture holds the wait
+        // that makes this frame's slot safe to reuse -- and it is not
+        // decoration: the frame is about to reset frame slot
+        // `m_frameIndex % kSwapchainFramesInFlight`'s command allocator
+        // (RgExecuteDesc::frameSlot's caller contract), reset that slot's
+        // upload-ring arena, and rewrite that slot's descriptor sets in the
+        // tonemap, the post chain and the HUD. Every one of those is a write to
+        // memory the GPU may still be reading kSwapchainFramesInFlight frames
+        // back. Nothing acquires here, so the wait has to be ours.
+        //
+        // Same shape as the swapchain's, deliberately: ONE timeline fence,
+        // 1-based signal values, wait for `m_frameIndex - depth + 1`, and no
+        // call at all for the first `depth` frames (nothing has been submitted
+        // to wait on, and value 0 is what an unsignalled fence already reads).
+        if (m_frameIndex >= kSwapchainFramesInFlight)
+        {
+            PollingWaitForTimelineFence(m_device->Core(), m_offscreenFence,
+                                        m_frameIndex - kSwapchainFramesInFlight + 1);
+        }
+
+        FrameDesc effective = frame;
+        if (effective.capture && !EnsureCaptureBuffer())
+            effective.capture = false;
+
+        m_graph->Reset();
+
+        // Published exactly as RenderFrame publishes them -- same lifetimes,
+        // same clearing points. See that function for what each one owes.
+        m_currentGlobals     = effective.globals ? *effective.globals : GlobalParams{};
+        m_currentBatch       = effective.batch;
+        m_currentPickables   = effective.pickables;
+        m_currentSelectedIds = effective.selectedIds;
+        m_currentImGui       = effective.imgui;
+
+        if (m_pickArmed && !m_probeOutOfRange
+            && (m_probeX >= (std::int32_t)SurfaceWidth() || m_probeY >= (std::int32_t)SurfaceHeight()))
+        {
+            m_probeOutOfRange = true;
+            ARC_ERROR("[nri-graph] --pick-probe ({}, {}) is outside the {}x{} offscreen target -- no "
+                      "id will be reported", m_probeX, m_probeY, SurfaceWidth(), SurfaceHeight());
+        }
+
+        BuildFrame(effective);
+        m_currentBatch       = nullptr;
+        m_currentPickables   = {};
+        m_currentSelectedIds = {};
+
+        std::string error;
+        const std::optional<RgCompiled> compiled = m_graph->Compile(&error);
+        if (!compiled)
+        {
+            GraphError("NriGraphContext: the offscreen frame did not compile -- " + error);
+            return FrameOutcome::Failed;
+        }
+
+        const std::uint32_t slot = (std::uint32_t)(m_frameIndex % kSwapchainFramesInFlight);
+        m_ring.BeginFrame(slot);   // the caller owes this before Execute()
+
+        // THE ONE LINE THAT DIFFERS FROM THE PRESENT PATH'S EXECUTE: no
+        // swapchain. RgExecuteDesc documents null as "headless/offscreen" and
+        // the executor already honours it end to end -- it acquires nothing,
+        // waits on no acquire fence, signals no release fence and presents
+        // nothing, while still signalling the graph's OWN fence (the
+        // graveyard's clock, and this frame's only completion signal). No
+        // executor change was needed for this task; the [nri] NONE cases pin
+        // both halves of that path.
+        const RgExecuteDesc desc{ *m_device, /*swapChain=*/nullptr, m_ring, m_pipelines, slot };
+
+        const std::uint64_t errorsBefore = RenderErrorCount();
+        if (!m_graph->Execute(desc, *compiled))
+            return RenderErrorCount() > errorsBefore ? FrameOutcome::Failed : FrameOutcome::Skipped;
+
+        // ...and the pacing stamp the present path gets from
+        // NriSwapChain::Present: a submission carrying no command buffers and
+        // ONE signal, which the queue's in-order semantics make "signal once
+        // everything submitted before this has retired". Exactly the shape (and
+        // the 1-based value) NriSwapChain uses, and the reason that class
+        // stamps AFTER the present rather than inside the frame's own submit.
+        //
+        // A FAILED STAMP IS NOT A FAILED FRAME -- the frame's pixels landed.
+        // But it IS latched (ARC_NRI_CHECK) and it does break pacing, so
+        // m_frameIndex is deliberately still advanced: leaving the counter
+        // behind the fence's values would make every later wait ask for a value
+        // that was already signalled, which is silently worse than a loud one-
+        // off error.
+        nri::FenceSubmitDesc signalFence = {};
+        signalFence.fence = m_offscreenFence;
+        signalFence.value = m_frameIndex + 1;
+
+        nri::QueueSubmitDesc stamp = {};
+        stamp.signalFences   = &signalFence;
+        stamp.signalFenceNum = 1;
+        (void)ARC_NRI_CHECK(m_device->Core().QueueSubmit(*m_device->GraphicsQueue(), stamp));
+
+        ++m_frameIndex;
+
+        // NO HEARTBEAT IS PUBLISHED HERE, and that is a choice rather than an
+        // omission. Diagnostics::GpuHeartbeat holds ONE process-wide counter
+        // and its stall rule fires on "the value stopped changing"; two
+        // publishers with unrelated timelines would alternate values and read
+        // as progress forever, which would disarm the rule on exactly the case
+        // it exists to catch. The presenting context is the process's
+        // publisher (there is one), and its pacing fence only advances when the
+        // queue retires -- including this context's work, which shares the
+        // queue. An offscreen-ONLY host would therefore publish nothing and get
+        // silence, which is the documented behaviour for a host that never
+        // renders; giving it a publisher is a follow-up for whoever builds one.
         return FrameOutcome::Presented;
     }
 

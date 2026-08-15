@@ -493,10 +493,26 @@ namespace Arcane
                                            std::uint32_t passCount,
                                            std::uint32_t width, std::uint32_t height);
 
-    // Declares the tonemap node into `graph`: imports the swapchain backbuffer
+    // Declares the tonemap node into `graph`: imports the frame's FINAL TARGET
     // as its colour attachment, reads `source` as a shader resource, and hands
-    // the backbuffer handle back for the nodes downstream (the capture node).
-    // `context` may be null -- see AddBatch2DNode's signature note.
+    // that target's handle back for the nodes downstream (outline composite,
+    // HUD, capture). `context` may be null -- see AddBatch2DNode's signature
+    // note.
+    //
+    // `offscreenOutput` chooses which target (NRI Phase 3, Task 7):
+    //   * NULL -- the swapchain backbuffer, via ImportSwapChainTexture: no
+    //     nri::Texture* exists at declaration time because the graph owns
+    //     acquire/present, and the fixed PRESENT exit state is what makes "the
+    //     graph presents" structural.
+    //   * NON-NULL -- an ordinary ImportTexture of the vehicle's PERSISTENT
+    //     output, with a contents-discarding entry ({NONE, UNDEFINED, ALL},
+    //     the same triple a freshly acquired backbuffer carries -- correct
+    //     because the tonemap's opaque fullscreen triangle writes every pixel,
+    //     and the one entry that is D3D12-enhanced-barrier legal on frame 1 as
+    //     well as frame N) and a SHADER_RESOURCE exit, so the frame ends with
+    //     the texture in a state a sampler can read. NOTHING is presented.
+    // The pointer is recorded, never dereferenced here.
     ARCANE_API RgTexture AddTonemapNode(RenderGraph& graph, NriGraphContext* context,
-                                        RgTexture source);
+                                        RgTexture source,
+                                        nri::Texture* offscreenOutput = nullptr);
 }

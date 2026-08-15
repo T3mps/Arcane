@@ -1407,20 +1407,64 @@ namespace Arcane
         core.CmdDraw(context.cmd, draw);
     }
 
-    RgTexture AddTonemapNode(RenderGraph& graph, NriGraphContext* context, RgTexture source)
+    RgTexture AddTonemapNode(RenderGraph& graph, NriGraphContext* context, RgTexture source,
+                             nri::Texture* offscreenOutput)
     {
-        // Shared rather than captured by value: the backbuffer handle is minted
+        // The offscreen import's entry/exit pair (NRI Phase 3, Task 7). Stated
+        // here, beside the one call that uses them, rather than on
+        // NriGraphContext: they describe how THE TONEMAP treats its target, and
+        // the swapchain's equivalents live in RenderGraphBuilder::
+        // ImportSwapChainTexture for exactly the same reason.
+        //
+        // ENTRY is contents-discarding -- byte-for-byte the triple a freshly
+        // acquired backbuffer carries. That is not indifference about the
+        // previous frame's contents: the tonemap covers the whole target with
+        // an opaque fullscreen triangle, so nothing is lost, and it makes frame
+        // 1 (a just-created texture, genuinely undefined) and frame N (left in
+        // SHADER_RESOURCE by the last frame's exit barrier) ONE case rather
+        // than two. It is also the only entry unconditionally legal under D3D12
+        // enhanced barriers, whose UNDEFINED layout admits no access bits
+        // (RenderGraphTest.cpp's CheckBeforeIsD3D12Legal carries the citation).
+        //
+        // EXIT is SHADER_RESOURCE, and that is the whole feature: the frame
+        // hands its output back in a state a sampler can read, without anybody
+        // writing a barrier for it. The stages are the same three
+        // RgUsage::ShaderRead derives, so the exit matches what a sampler in
+        // any of them expects.
+        constexpr nri::AccessLayoutStage kOffscreenEntry{
+            nri::AccessBits::NONE, nri::Layout::UNDEFINED, nri::StageBits::ALL };
+        constexpr nri::AccessLayoutStage kOffscreenExit{
+            nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE,
+            nri::StageBits::VERTEX_SHADER | nri::StageBits::FRAGMENT_SHADER
+                | nri::StageBits::COMPUTE_SHADER };
+
+        // Shared rather than captured by value: the target handle is minted
         // INSIDE this node's own setup fn, which AddNode runs after both
         // lambdas have already been constructed. A by-value capture would
         // freeze the default (invalid) handle.
         auto backbuffer = std::make_shared<RgTexture>();
         graph.AddNode("tonemap", RenderGraph::NodeKind::Raster,
-            [&graph, source, backbuffer](RenderGraphBuilder& builder)
+            [&graph, source, backbuffer, offscreenOutput](RenderGraphBuilder& builder)
             {
-                // NOT ImportTexture: the graph owns acquire/present sequencing
-                // and there is no nri::Texture* to hand over at declaration
-                // time -- Execute() resolves this to the texture it acquires.
-                *backbuffer = builder.ImportSwapChainTexture("backbuffer");
+                if (offscreenOutput)
+                {
+                    // An ORDINARY import: unlike the swapchain there IS a
+                    // texture at declaration time, this vehicle owns it, and it
+                    // outlives the frame -- so `persistent` is true, and the
+                    // graph restores it to a sampler-readable state on the way
+                    // out instead of to PRESENT.
+                    *backbuffer = builder.ImportTexture("offscreen", offscreenOutput,
+                                                        kOffscreenEntry, kOffscreenExit,
+                                                        /*persistent=*/true);
+                }
+                else
+                {
+                    // NOT ImportTexture: the graph owns acquire/present
+                    // sequencing and there is no nri::Texture* to hand over at
+                    // declaration time -- Execute() resolves this to the
+                    // texture it acquires.
+                    *backbuffer = builder.ImportSwapChainTexture("backbuffer");
+                }
                 builder.Read(source, RgUsage::ShaderRead);
                 builder.Write(*backbuffer, RgUsage::ColorWrite);
                 graph.SetColorAttachments(std::span<const RgTexture>(backbuffer.get(), 1));

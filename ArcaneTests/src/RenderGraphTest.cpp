@@ -2461,6 +2461,120 @@ TEST_CASE("rendergraph exec: a swapchain-importing node refuses a null swapChain
     Arcane::ResetRenderErrorCount();
 }
 
+TEST_CASE("rendergraph exec: an offscreen frame executes with NO swapchain -- no acquire, no "
+          "present, and the graph's own fence still advances", "[nri]")
+{
+    // The executor half of NRI Phase 3, Task 7. RgExecuteDesc::swapChain is
+    // documented as "null = headless/offscreen" and the refusal case above
+    // proves the NEGATIVE (a swapchain IMPORT with no swapchain is refused);
+    // this proves the POSITIVE, which is what NriGraphContext::
+    // RenderFrameOffscreen actually runs: a frame whose final target is an
+    // ordinary imported texture records, submits and signals with no acquire
+    // and no present anywhere in the call.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    // A REAL (NONE-backend) texture, because unlike the declaration-only cases
+    // this one runs the executor: it resolves the import, reads its desc and
+    // creates a COLOR_ATTACHMENT view over it.
+    const nri::CoreInterface& core = device->Core();
+    nri::TextureDesc outputDesc = {};
+    outputDesc.type      = nri::TextureType::TEXTURE_2D;
+    outputDesc.usage     = nri::TextureUsageBits::COLOR_ATTACHMENT | nri::TextureUsageBits::SHADER_RESOURCE;
+    outputDesc.format    = nri::Format::BGRA8_UNORM;
+    outputDesc.width     = 320;
+    outputDesc.height    = 200;
+    outputDesc.depth     = 1;
+    outputDesc.mipNum    = 1;
+    outputDesc.layerNum  = 1;
+    outputDesc.sampleNum = 1;
+    nri::Texture* output = nullptr;
+    REQUIRE(core.CreateCommittedTexture(device->Device(), nri::MemoryLocation::DEVICE, 0.0f,
+                                         outputDesc, output) == nri::Result::SUCCESS);
+    REQUIRE(output != nullptr);
+
+    {
+        Arcane::NriUploadRing    ring;
+        Arcane::NriPipelineCache pipelines;
+        Arcane::RenderGraph      graph;
+        const Arcane::RgExecuteDesc desc{ *device, /*swapChain=*/nullptr, ring, pipelines, 0 };
+
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth     = 320;
+        shape.canvasHeight    = 200;
+        shape.offscreenOutput = output;
+
+        Arcane::DeclareGraphFrame(graph, shape, nullptr);
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        REQUIRE(graph.Execute(desc, compiled));
+
+        // The graph's own fence is what a swapchain-less frame has instead of
+        // a present, and it advanced -- so the graveyard has a clock and the
+        // pacing wait NriGraphContext::RenderFrameOffscreen performs has
+        // something to wait on.
+        CHECK(graph.DebugSubmitCount() == 1);
+        CHECK(graph.DebugTransientCount() == 1);   // the canvas; the output is imported
+
+        // A SECOND frame reuses the pool and creates nothing -- the steady
+        // state an editor viewport lives in.
+        graph.Reset();
+        Arcane::DeclareGraphFrame(graph, shape, nullptr);
+        REQUIRE(graph.Execute(desc, CompileOk(graph)));
+        CHECK(graph.DebugSubmitCount() == 2);
+        CHECK(graph.DebugTransientCreateCount() == 1);
+
+        // ------------------------------------------------------------
+        // THE RESIZE SEQUENCE ResizeOffscreen performs, in order: idle,
+        // invalidate the nodes' cached views (no nodes here -- that half is
+        // FullscreenNodes' own coverage), release the graph's GPU resources,
+        // DRAIN, and only then destroy + recreate the output.
+        //
+        // What is pinned here is the ORDER and the EPOCH: the release bumps the
+        // POOL EPOCH (the only signal a node caching views over pool textures
+        // gets), and the drain empties the graveyard -- running every view
+        // burial the release queued -- while the output texture is still alive,
+        // which is the whole reason the drain sits between the release and the
+        // destroy rather than after both. (On the NONE backend every
+        // CreateTexture hands back the SAME dummy pointer, so this cannot also
+        // assert that the imported view is a DISTINCT one from the canvas's --
+        // see this section's header comment.)
+        // ------------------------------------------------------------
+        const std::uint64_t epochBeforeResize = graph.PoolEpoch();
+        graph.ReleaseGpuResources();
+        CHECK(graph.PoolEpoch() > epochBeforeResize);
+        CHECK(device->Graves().Pending() > 0);
+        device->Graves().Drain();
+        CHECK(device->Graves().Pending() == 0);
+
+        core.DestroyTexture(output);
+        output = nullptr;
+
+        nri::TextureDesc resized = outputDesc;
+        resized.width  = 640;
+        resized.height = 400;
+        REQUIRE(core.CreateCommittedTexture(device->Device(), nri::MemoryLocation::DEVICE, 0.0f,
+                                             resized, output) == nri::Result::SUCCESS);
+
+        // ...and the next frame at the new extent runs clean against the fresh
+        // texture, realizing a new canvas slot (the old one's desc changed).
+        graph.Reset();
+        shape.canvasWidth     = 640;
+        shape.canvasHeight    = 400;
+        shape.offscreenOutput = output;
+        Arcane::DeclareGraphFrame(graph, shape, nullptr);
+        REQUIRE(graph.Execute(desc, CompileOk(graph)));
+        CHECK(graph.DebugSubmitCount() == 3);
+
+        graph.ReleaseGpuResources();
+        device->Graves().Drain();
+    }
+
+    core.DestroyTexture(output);
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
 TEST_CASE("rendergraph exec: an RgCompiled from before a Reset is refused", "[nri]")
 {
     const std::uint64_t before = Arcane::RenderErrorCount();
@@ -2976,6 +3090,246 @@ TEST_CASE("nri graph frame: a capture frame copies the backbuffer BEFORE it pres
     REQUIRE(compiled.exitBarriers.size() == 1);
     CHECK(compiled.exitBarriers[0].isTexture);
     CheckState(compiled.exitBarriers[0].after, kPresentState);
+}
+
+// ======================================================================
+// THE OFFSCREEN FRAME (NRI Phase 3, Task 7).
+//
+// Same drive as every case above -- Arcane::DeclareGraphFrame with a null
+// context -- because the ONE thing that differs between an offscreen frame and
+// a presenting one is a declaration: the tonemap imports the vehicle's
+// persistent output texture instead of calling ImportSwapChainTexture. Every
+// other node, read, write and attachment is byte-for-byte the present frame's,
+// which is exactly the property the census case below pins.
+//
+// RgFrameShape::offscreenOutput is a bare nri::Texture* and ImportTexture
+// stores it WITHOUT dereferencing (RenderGraph::ImportTextureInternal), so a
+// headless drive can declare the real node with a stand-in pointer -- the same
+// licence the capture cases take with shape.captureBuffer.
+// ======================================================================
+namespace
+{
+    // A stand-in for the vehicle's persistent output. Never dereferenced: the
+    // declaration side only records the pointer, and Compile() reads
+    // importEntry/importExit and nothing else.
+    nri::Texture* const kFakeOffscreenOutput = reinterpret_cast<nri::Texture*>(0x0FF5C1EE);
+
+    // The state the offscreen output is RESTORED to on the way out -- what
+    // makes it samplable by the editor's ImGui pass the moment the frame's
+    // submission retires. Restated here independently of AddTonemapNode's own
+    // constant, exactly as kPresentState restates the swapchain's.
+    constexpr nri::AccessLayoutStage kShaderResourceState{
+        nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE, kShaderReadStages };
+
+    // True if ANY barrier the compile produced -- pre or exit -- names
+    // nri::Layout::PRESENT on either side. An offscreen frame must produce
+    // none: nothing it declares is a swapchain texture, so nothing may be left
+    // present-ready.
+    bool MentionsPresentLayout(const Arcane::RgCompiled& compiled)
+    {
+        const auto names = [](const Arcane::RgBarrier& barrier)
+        {
+            return static_cast<std::uint32_t>(barrier.before.layout)
+                       == static_cast<std::uint32_t>(nri::Layout::PRESENT)
+                || static_cast<std::uint32_t>(barrier.after.layout)
+                       == static_cast<std::uint32_t>(nri::Layout::PRESENT);
+        };
+        for (const Arcane::RgCompiledNode& node : compiled.nodes)
+            for (const Arcane::RgBarrier& barrier : node.preBarriers)
+                if (names(barrier))
+                    return true;
+        for (const Arcane::RgBarrier& barrier : compiled.exitBarriers)
+            if (names(barrier))
+                return true;
+        return false;
+    }
+}
+
+TEST_CASE("nri graph frame: an OFFSCREEN frame tonemaps into the imported output and never presents",
+          "[nri]")
+{
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth     = 320;
+    shape.canvasHeight    = 200;
+    shape.offscreenOutput = kFakeOffscreenOutput;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+    // Node for node the presenting frame's -- only what the tonemap writes
+    // changed.
+    REQUIRE(graph.NodeCount() == 2);
+    CHECK(std::string(graph.NodeName(0)) == "batch2d");
+    CHECK(std::string(graph.NodeName(1)) == "tonemap");
+
+    // The output is IMPORTED (the vehicle owns it and it survives every frame),
+    // not a transient the graph would recycle through its pool -- and it is
+    // named for what it is, so a barrier dump reads honestly.
+    REQUIRE(graph.IsHandleValid(handles.backbuffer));
+    CHECK_FALSE(graph.IsTransient(handles.backbuffer));
+    CHECK(std::string(graph.NameOf(handles.backbuffer)) == "offscreen");
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.nodes.size() == 2);
+
+    // Node 1 (tonemap): the SAME two transitions the presenting frame derives
+    // -- the canvas COLOR_ATTACHMENT -> SHADER_RESOURCE, and the output's
+    // contents-discarding entry -> COLOR_ATTACHMENT. The discarding entry is
+    // what makes frame 1 (a freshly created texture, genuinely undefined) and
+    // frame N (left in SHADER_RESOURCE by the previous frame's exit) one case
+    // rather than two: the tonemap's opaque fullscreen triangle writes every
+    // pixel, so nothing is lost by discarding, and {NONE, UNDEFINED, ALL} is
+    // the one entry that is D3D12-enhanced-barrier legal unconditionally.
+    REQUIRE(compiled.nodes[1].preBarriers.size() == 2);
+    bool sawCanvasRead = false;
+    bool sawOutputWrite = false;
+    for (const Arcane::RgBarrier& barrier : compiled.nodes[1].preBarriers)
+    {
+        REQUIRE(barrier.isTexture);
+        if (static_cast<std::uint32_t>(barrier.after.layout)
+            == static_cast<std::uint32_t>(nri::Layout::SHADER_RESOURCE))
+        {
+            sawCanvasRead = true;
+            CheckState(barrier.before, kColorState);
+        }
+        else
+        {
+            sawOutputWrite = true;
+            CheckState(barrier.before, kUnknownState);
+            CheckState(barrier.after, kColorState);
+        }
+    }
+    CHECK(sawCanvasRead);
+    CHECK(sawOutputWrite);
+
+    // THE WHOLE POINT: the frame ends by restoring the output to
+    // SHADER_RESOURCE, so whoever samples it next (the editor's ImGui pass)
+    // finds it in a state a sampler can read -- and NOTHING anywhere in the
+    // frame mentions PRESENT, because there is no swapchain in it.
+    REQUIRE(compiled.exitBarriers.size() == 1);
+    CHECK(compiled.exitBarriers[0].isTexture);
+    CheckState(compiled.exitBarriers[0].before, kColorState);
+    CheckState(compiled.exitBarriers[0].after, kShaderResourceState);
+    CHECK_FALSE(MentionsPresentLayout(compiled));
+
+    // Exactly one transient (the canvas) in one pool slot -- the output is
+    // imported and is not a pool tenant.
+    REQUIRE(compiled.transients.size() == 1);
+    CHECK(compiled.poolSlotCount == 1);
+}
+
+TEST_CASE("nri graph frame: the offscreen frame's node census is the presenting frame's, node for node",
+          "[nri]")
+{
+    // The property that makes Tasks 8-13 cheap: offscreen is not a second
+    // frame shape, it is the same shape with a different final target. Driven
+    // at the BUSIEST shape -- post chain + pick/outline + HUD + capture -- so a
+    // future node added under a `shape.offscreenOutput` branch (rather than
+    // unconditionally) makes this red.
+    const auto declare = [](Arcane::RenderGraph& graph, const Arcane::PostChainDesc& post,
+                            nri::Texture* output)
+    {
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth     = 320;
+        shape.canvasHeight    = 200;
+        shape.stage           = Arcane::GoldenStage::Full;
+        shape.post            = &post;
+        shape.pickOutline     = true;
+        shape.imgui           = true;
+        shape.capture         = true;
+        shape.captureBuffer   = nullptr;
+        shape.captureBytes    = 4096;
+        shape.offscreenOutput = output;
+        return Arcane::DeclareGraphFrame(graph, shape, nullptr);
+    };
+
+    // A two-pass LINEAR chain, built inline rather than through this file's
+    // MakeLinearChain helper -- that one is declared with the post-chain family
+    // further down, and this case reads better beside its offscreen siblings
+    // than it would three hundred lines away from them.
+    Arcane::PostChainDesc chain;
+    chain.chainInputSlots = 1;
+    {
+        Arcane::PostChainPassDesc base;
+        base.inputs.push_back(Arcane::kSceneInput);
+        chain.passes.push_back(std::move(base));
+        Arcane::PostChainPassDesc second;
+        second.inputs.push_back(0u);
+        chain.passes.push_back(std::move(second));
+    }
+
+    Arcane::RenderGraph presenting;
+    declare(presenting, chain, /*output=*/nullptr);
+    const Arcane::RgCompiled presentingCompiled = CompileOk(presenting);
+
+    Arcane::RenderGraph offscreen;
+    declare(offscreen, chain, kFakeOffscreenOutput);
+    const Arcane::RgCompiled offscreenCompiled = CompileOk(offscreen);
+
+    REQUIRE(offscreen.NodeCount() == presenting.NodeCount());
+    for (std::size_t i = 0; i < presenting.NodeCount(); ++i)
+    {
+        INFO("node " << i);
+        CHECK(std::string(offscreen.NodeName(i)) == std::string(presenting.NodeName(i)));
+        REQUIRE(offscreenCompiled.nodes[i].preBarriers.size()
+                == presentingCompiled.nodes[i].preBarriers.size());
+    }
+
+    // Same pool demand too: the final target is imported in BOTH shapes (a
+    // swapchain backbuffer is an import as well), so neither becomes a
+    // transient and the allocator sees the identical set.
+    CHECK(offscreenCompiled.transients.size() == presentingCompiled.transients.size());
+    CHECK(offscreenCompiled.poolSlotCount == presentingCompiled.poolSlotCount);
+
+    // ...and the ONE difference is the exit state, which is the whole feature.
+    REQUIRE(presentingCompiled.exitBarriers.size() == 1);
+    CheckState(presentingCompiled.exitBarriers[0].after, kPresentState);
+    REQUIRE(offscreenCompiled.exitBarriers.size() == 1);
+    CheckState(offscreenCompiled.exitBarriers[0].after, kShaderResourceState);
+    CHECK_FALSE(MentionsPresentLayout(offscreenCompiled));
+}
+
+TEST_CASE("nri graph frame: an offscreen capture frame copies the output BEFORE restoring it to "
+          "SHADER_RESOURCE", "[nri]")
+{
+    // Task 13's harness reads its goldens back off the offscreen target, so the
+    // capture node has to compose with the import the same way it composes with
+    // the swapchain: copy while the frame still owns the texture, then let the
+    // graph restore the exit state.
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth     = 320;
+    shape.canvasHeight    = 200;
+    shape.capture         = true;
+    shape.captureBuffer   = nullptr;
+    shape.captureBytes    = 4096;
+    shape.offscreenOutput = kFakeOffscreenOutput;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+    REQUIRE(graph.NodeCount() == 3);
+    CHECK(std::string(graph.NodeName(2)) == "capture");
+    REQUIRE(graph.IsHandleValid(handles.capture));
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.nodes.size() == 3);
+    REQUIRE(compiled.nodes[2].preBarriers.size() == 2);
+
+    const Arcane::RgBarrier& textureBarrier = compiled.nodes[2].preBarriers[0].isTexture
+                                                ? compiled.nodes[2].preBarriers[0]
+                                                : compiled.nodes[2].preBarriers[1];
+    CheckState(textureBarrier.before, kColorState);
+    CheckState(textureBarrier.after,
+               nri::AccessBits::COPY_SOURCE, nri::Layout::COPY_SOURCE, nri::StageBits::COPY);
+
+    // The exit barrier now runs from COPY_SOURCE, not COLOR_ATTACHMENT -- the
+    // graph restores whatever the frame's LAST access left, which is the
+    // property that keeps the sampled texture correct however the frame grows.
+    REQUIRE(compiled.exitBarriers.size() == 1);
+    CheckState(compiled.exitBarriers[0].before,
+               nri::AccessBits::COPY_SOURCE, nri::Layout::COPY_SOURCE, nri::StageBits::COPY);
+    CheckState(compiled.exitBarriers[0].after, kShaderResourceState);
+    CHECK_FALSE(MentionsPresentLayout(compiled));
 }
 
 TEST_CASE("nri graph frame: a zero-extent canvas COMPILES but is a latched refusal at Execute",
