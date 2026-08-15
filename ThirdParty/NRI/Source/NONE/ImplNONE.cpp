@@ -432,7 +432,23 @@ static Result NRI_CALL CreatePlacedTexture(Device&, Memory*, uint64_t, const Tex
     return Result::SUCCESS;
 }
 
-static Result NRI_CALL AllocateDescriptorSets(DescriptorPool&, const PipelineLayout&, uint32_t, DescriptorSet**, uint32_t, uint32_t) {
+// ARCANE LOCAL FIX (NRI Phase 3, Task 8-pre). Upstream returned SUCCESS while
+// leaving `descriptorSets` untouched -- the ONE out-param in this file that is
+// not filled with a DummyObject, against the convention every other entry here
+// follows (CreateDescriptorPool, CreateTextureView, CreateSampler, ...). A
+// caller that value-initializes its handle and then checks it -- which every
+// careful one does, since SUCCESS-with-null is indistinguishable from a driver
+// bug -- read null and reported an allocation failure. That made every
+// descriptor-set-using object in the engine (ImGuiNri, Batch2DNode, the
+// fullscreen nodes) undrivable on the NONE backend, i.e. undrivable in the
+// headless [nri] gate. Backend-local: NONE is test-only in this tree
+// (NriDevice::CreateNoneForTests) and D3D12/VK have their own implementations.
+static Result NRI_CALL AllocateDescriptorSets(DescriptorPool&, const PipelineLayout&, uint32_t, DescriptorSet** descriptorSets, uint32_t instanceNum, uint32_t) {
+    if (descriptorSets) {
+        for (uint32_t i = 0; i < instanceNum; i++)
+            descriptorSets[i] = DummyObject<DescriptorSet>();
+    }
+
     return Result::SUCCESS;
 }
 

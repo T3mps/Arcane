@@ -429,6 +429,67 @@ namespace Arcane
         tex->SetStatus(ImTextureStatus_Destroyed);
     }
 
+    bool ImGuiNri::HasEntryFor(nri::Texture* texture) const noexcept
+    {
+        if (!texture)
+            return false;
+        for (const Entry& entry : m_textures)
+            if (entry.texture == texture)
+                return true;
+        return false;
+    }
+
+    bool ImGuiNri::EnsureUserTexture(nri::Texture* texture)
+    {
+        if (!m_device || !texture)
+            return false;
+        // owner = null IS what makes it a user texture: this backend creates
+        // the view + set and owns neither the texture nor its lifetime (Entry::
+        // owned stays false, so nothing here will ever bury it).
+        return EnsureEntry(m_device->Core(), texture, /*owner=*/nullptr) != nullptr;
+    }
+
+    bool ImGuiNri::InvalidateUserTexture(nri::Texture* texture, Graveyard& graveyard,
+                                          std::uint64_t fence)
+    {
+        if (!m_device || !texture)
+            return false;
+
+        for (std::size_t i = 0; i < m_textures.size(); ++i)
+        {
+            if (m_textures[i].texture != texture)
+                continue;
+
+            if (m_textures[i].owner != nullptr)
+            {
+                // An ImTextureData-owned entry. The 1.92 protocol owns its
+                // lifetime and DestroyTexture is its path -- which also has to
+                // bury the TEXTURE and stamp the ImTextureData's status, and
+                // this hook deliberately does neither. Refuse rather than
+                // half-dispose it.
+                GraphError("ImGuiNri::InvalidateUserTexture: that texture is owned by an "
+                           "ImTextureData -- the 1.92 protocol destroys it (WantDestroy), not "
+                           "this hook. Nothing was invalidated.");
+                return false;
+            }
+
+            // EXACTLY DestroyTexture's disposal, minus the texture (it is the
+            // caller's): the view is BURIED -- an earlier submitted frame may
+            // still be sampling it -- and the descriptor set is RETIRED rather
+            // than destroyed, because NRI cannot free a single set and the GPU
+            // may still be reading it. AcquireSet hands it back out only after
+            // kSwapchainFramesInFlight recorded frames.
+            ReleaseEntry(m_textures[i], graveyard, fence);
+            m_textures.erase(m_textures.begin() + (std::ptrdiff_t)i);
+            return true;
+        }
+
+        // No entry: nothing has drawn this texture yet. ROUTINE -- the caller
+        // contract is to invalidate unconditionally after every destroy, and a
+        // resize before the first frame legitimately finds nothing.
+        return false;
+    }
+
     void ImGuiNri::UpdateTexture(ImTextureData* tex, Graveyard& graveyard, std::uint64_t fence)
     {
         const nri::CoreInterface& core = m_device->Core();

@@ -19,6 +19,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/ImGui/ImGuiNri.hpp>           // the user-texture invalidation hook (Task 8-pre)
 #include <Arcane/Render/Device.hpp>            // RenderErrorCount / ResetRenderErrorCount
 #include <Arcane/Render/GpuBreadcrumbs.hpp>    // the CPU-side ring the marker-policy case reads
 #include <Arcane/Render/GpuInstrumentation.hpp>// SetActiveGpuCrashBackend / ClearActiveGpuCrashBackendIfCurrent
@@ -35,6 +36,12 @@
 #include <Arcane/Render/PostChainCache.hpp>    // PostChainDesc -- the frame's post-chain wiring
 #include <Arcane/Material/MaterialSource.hpp>  // kSceneInput
 #include <Arcane/Render/Swapchain.hpp>         // kSwapchainFramesInFlight
+
+// AFTER the NRI + engine headers, deliberately: this file's include-order note
+// above pins NRI first, and imgui.h is an ordinary header with no ERROR clash.
+// Needed only by the ImGuiNri hook case, which creates and destroys its OWN
+// ImGui context so the backend's platform-texture walk sees nothing but it.
+#include <imgui.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -2904,6 +2911,137 @@ TEST_CASE("rendergraph exec: a graph whose Execute ENTERED and FAILED buries its
     // The refused frameSlot is the one latch bump this case makes.
     CHECK(Arcane::RenderErrorCount() == before + 1);
     Arcane::ResetRenderErrorCount();
+}
+
+TEST_CASE("imgui-nri: InvalidateUserTexture evicts the pointer-keyed entry, buries its view in "
+          "the lane and RETIRES its set", "[nri]")
+{
+    // THE ABA CLOSURE (NRI Phase 3, Task 8-pre; NriGraphContext.hpp item (2)).
+    //
+    // THE HAZARD. ImGuiNri caches per texture by RAW POINTER, because that is
+    // what an ImTextureID is on this backend (§7.3). NRI does not ref-count, so
+    // when the editor's ResizeOffscreen destroys the viewport output and creates
+    // its replacement, NRI is free to hand the replacement the address the
+    // destroyed one just vacated -- and a bit-identical ImTextureID then reports
+    // a cache HIT on an nri::Descriptor + descriptor set that still name the
+    // DEAD resource. A pointer comparison cannot tell you it happened; that is
+    // precisely why the header calls for "an explicit invalidation hook, not a
+    // heuristic".
+    //
+    // WHAT IS PINNABLE ON NONE, and it is the whole hook: this case never needs
+    // a real texture. Every NONE Create* hands back the same dummy handle and
+    // GetTextureDesc ignores its argument (ImplNONE.cpp), so a STAND-IN address
+    // exercises the cache exactly as a real one would -- and reusing that one
+    // address for "before" and "after" IS the ABA case, not an approximation of
+    // it. What NONE cannot show is a real sampler reading real texels; that is
+    // desk work, and it is not what this hook is.
+    //
+    // RenderDrawData is what creates a user entry in production and cannot run
+    // here (it allocates from the upload ring first, and NONE's MapBuffer
+    // refuses), so the pair is created through EnsureUserTexture -- the same
+    // EnsureEntry call, hoisted.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    // OUR OWN context, saved/restored: Release()'s platform-texture walk
+    // destroys every ImTextureData with RefCount == 1, and under Catch2's
+    // random ordering it must not be some other case's.
+    ImGuiContext* const previous = ImGui::GetCurrentContext();
+    ImGuiContext* const context  = ImGui::CreateContext();
+    REQUIRE(context != nullptr);
+
+    // BEFORE the backend, so the backend is destroyed first -- the lane must
+    // outlive everything that buries into it, the same ordering
+    // NriGraphContext's member declarations establish.
+    Arcane::Graveyard lane;
+    {
+        Arcane::NriPipelineCache pipelines;
+        pipelines.Bind(*device);
+
+        // Never dereferenced: the bytecode reaches NRI only through
+        // GetGraphics, which no headless path here calls. Non-empty is all
+        // Init checks.
+        const std::uint8_t vsBytes[4] = { 1, 2, 3, 4 };
+        const std::uint8_t psBytes[4] = { 5, 6, 7, 8 };
+
+        Arcane::ImGuiNri backend;
+        REQUIRE(backend.Init(*device, pipelines, vsBytes, psBytes));
+
+        // "The offscreen output", as an ImTextureID would carry it.
+        auto* const output = reinterpret_cast<nri::Texture*>(0x0FF5C1EE);
+
+        // ---- invalidating something never drawn is ROUTINE, not an error ----
+        // The caller contract is UNCONDITIONAL invalidation, so a resize before
+        // the first frame legitimately lands here. No burial, no latch.
+        CHECK_FALSE(backend.HasEntryFor(output));
+        CHECK_FALSE(backend.InvalidateUserTexture(output, lane, 0));
+        CHECK(lane.Pending() == 0);
+
+        // ---- the entry a draw would have created -------------------------
+        REQUIRE(backend.EnsureUserTexture(output));
+        CHECK(backend.HasEntryFor(output));
+        CHECK(backend.LiveTextureCount() == 1);
+        CHECK(backend.RetiredSetCount() == 0);
+        // Nothing was buried by CREATING one.
+        CHECK(lane.Pending() == 0);
+
+        // ---- the hook ----------------------------------------------------
+        // Fence 7 stands in for the chrome graph's DebugSubmitCount() at the
+        // moment the viewport resized.
+        CHECK(backend.InvalidateUserTexture(output, lane, 7));
+
+        // THE ASSERTION THE WHOLE HOOK EXISTS FOR: the entry is GONE, so the
+        // next ImTextureID naming this exact address is a cache MISS rather
+        // than a hit on a descriptor over a destroyed texture.
+        CHECK_FALSE(backend.HasEntryFor(output));
+        CHECK(backend.LiveTextureCount() == 0);
+
+        // ...and it was DISPOSED, not destroyed. The view went into the LANE
+        // (an in-flight frame may still be sampling it) --
+        CHECK(lane.Pending() == 1);
+        // -- and the descriptor set was RETIRED for age-gated recycling, which
+        // is the only thing that can be done with one: NRI cannot free a single
+        // set, and rewriting it now would rewrite it under a reading GPU.
+        CHECK(backend.RetiredSetCount() == 1);
+
+        // The burial is FENCED, not immediate: a reap short of 7 leaves it.
+        lane.Reap(6);
+        CHECK(lane.Pending() == 1);
+        lane.Reap(7);
+        CHECK(lane.Pending() == 0);
+
+        // ---- THE ABA CASE ITSELF -----------------------------------------
+        // The "replacement" at the SAME address. Post-hook this is a MISS and a
+        // fresh view + set are built; pre-hook it was a HIT on the dead one.
+        REQUIRE(backend.EnsureUserTexture(output));
+        CHECK(backend.HasEntryFor(output));
+        CHECK(backend.LiveTextureCount() == 1);
+        // The retired set is NOT recycled into it -- no frame has been recorded
+        // since the retirement, so the gate (kSwapchainFramesInFlight recorded
+        // frames) has not opened and a fresh one was allocated instead.
+        CHECK(backend.RetiredSetCount() == 1);
+
+        // ---- teardown, through the same lane ------------------------------
+        // The user TEXTURE is never buried by any of this: it is the caller's,
+        // which is what makes it a user texture. Only the view, the pool and
+        // the sampler are ours.
+        backend.Release(lane, 8);
+        CHECK(backend.LiveTextureCount() == 0);
+        CHECK(lane.Pending() > 0);
+        lane.Drain();
+        CHECK(lane.Pending() == 0);
+
+        pipelines.Clear(lane, 8);
+        lane.Drain();
+    }
+    CHECK(lane.Pending() == 0);
+
+    ImGui::DestroyContext(context);
+    ImGui::SetCurrentContext(previous);
+
+    CHECK(Arcane::RenderErrorCount() == before);
 }
 
 TEST_CASE("rendergraph exec: an RgCompiled from before a Reset is refused", "[nri]")

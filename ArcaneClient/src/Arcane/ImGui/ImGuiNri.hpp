@@ -32,9 +32,18 @@
 // host passed straight to ImGui::Image) the key is a bare pointer this class
 // cannot pin, so a host that destroys such a texture and lets NRI hand its
 // address to a replacement would get a cache HIT on a descriptor naming the
-// old resource. Nothing on the Phase-2 vehicle reaches that -- the font atlas
-// is the only texture in play -- and the fix when the editor path lands is an
-// explicit invalidation hook, not a heuristic.
+// old resource.
+//
+// THE CLOSURE IS InvalidateUserTexture (NRI Phase 3, Task 8-pre) -- the
+// explicit hook this header used to owe, and deliberately not a heuristic:
+// there is no observable a heuristic could key on, because the replacement's
+// pointer may compare EQUAL to the destroyed one's. THE CALLER CONTRACT IS
+// UNCONDITIONAL: whoever destroys a texture it has handed to ImGui::Image must
+// call the hook with that pointer, BEFORE the next frame's RenderDrawData and
+// regardless of whether the replacement's address changed. The first real
+// caller is the editor's viewport resize
+// (NriGraphContext::ResizeOffscreen -- see that declaration, which carries the
+// exact call).
 //
 // A SECOND, PHASE-2-ONLY HAZARD FROM THE SAME CONVENTION, stated because it is
 // a crash rather than a wrong pixel: while `--nri-graph` holds TWO devices
@@ -153,6 +162,45 @@ namespace Arcane
         // it was about to draw with, and NRI's helper cannot.
         void NewFrameTexUpdates(ImDrawData* drawData, Graveyard& graveyard, std::uint64_t fence);
 
+        // ============ THE USER-TEXTURE INVALIDATION HOOK ============
+        // (NRI Phase 3, Task 8-pre -- the closure named under ONE HAZARD above.)
+        //
+        // Drops this backend's cached binding for `texture`: buries its
+        // SHADER_RESOURCE view in `graveyard` at `fence` and RETIRES its
+        // descriptor set for age-gated recycling. Byte for byte the disposal
+        // DestroyTexture applies to an ImTextureData-owned entry, and it must
+        // be -- an in-flight frame may still be reading that set, so neither
+        // may be destroyed here and now.
+        //
+        // The TEXTURE itself is never touched: it is the caller's, which is
+        // what makes it a USER texture. Calling this on an ImTextureData-owned
+        // entry is refused (the 1.92 protocol owns those; DestroyTexture is
+        // their path) and reported, rather than half-disposing a texture this
+        // backend must also bury.
+        //
+        // Returns true when an entry was evicted. FALSE IS ROUTINE AND NOT AN
+        // ERROR: a texture that was never drawn has no entry, and a caller that
+        // invalidates unconditionally (which it should -- see the contract
+        // above) will hit that on the first resize before the first frame.
+        //
+        // The next ImGui::Image over the same pointer re-creates the view and
+        // takes a fresh set, so this is invalidation, not teardown.
+        bool InvalidateUserTexture(nri::Texture* texture, Graveyard& graveyard, std::uint64_t fence);
+
+        // Creates the view + descriptor set for a USER texture up front, if it
+        // has none yet -- the SAME call RenderDrawData makes on first sight of
+        // an ImTextureID, hoisted out of record time. False (already reported)
+        // when the pool is exhausted or NRI refused the view.
+        //
+        // TWO CALLERS, both legitimate: a host that knows it is about to draw a
+        // texture and would rather learn about a full pool where it can still
+        // report it than inside an open command buffer; and the [nri] cases,
+        // for which this is the ONLY way to reach the user-texture half of the
+        // cache at all -- RenderDrawData allocates from the upload ring first,
+        // and NONE's MapBuffer refuses, so an Init'd ring does not exist on the
+        // one backend the headless gate can drive.
+        bool EnsureUserTexture(nri::Texture* texture);
+
         // Records `drawData` into an ALREADY-OPEN raster pass whose single
         // colour attachment is `target`. Emits no barrier and begins no
         // rendering: both are the executor's. Re-sets the SCISSOR per draw
@@ -186,6 +234,15 @@ namespace Arcane
         // Introspection for the [nri] tests and the node's logging. Not part
         // of any cross-task contract.
         [[nodiscard]] std::size_t LiveTextureCount() const noexcept { return m_textures.size(); }
+        // True while a cached view + descriptor set exists for `texture` --
+        // i.e. while an ImTextureID naming it would report a cache HIT. The
+        // observable InvalidateUserTexture flips.
+        [[nodiscard]] bool HasEntryFor(nri::Texture* texture) const noexcept;
+        // Descriptor sets evicted but not yet recycled. NRI cannot free a
+        // single set, so a disposed entry's set lands here for
+        // kSwapchainFramesInFlight recorded frames rather than being destroyed
+        // -- this is what proves a disposal took the RETIREMENT path.
+        [[nodiscard]] std::size_t RetiredSetCount() const noexcept { return m_retired.size(); }
 
     private:
         // One texture this backend can draw from: the resource, its

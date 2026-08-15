@@ -84,9 +84,29 @@ namespace Arcane
         // (NriGraphContext::Graves()) and its graph's own last submitted value.
         void PrepareFrame(ImDrawData* drawData, Graveyard& graveyard, std::uint64_t fence);
 
+        // THE USER-TEXTURE INVALIDATION HOOK, forwarded (NRI Phase 3,
+        // Task 8-pre). Call it after destroying ANY texture this backend may
+        // have drawn -- the editor's offscreen viewport output above all, whose
+        // replacement NRI may hand the address the destroyed one just vacated.
+        // ImGuiNri::InvalidateUserTexture carries the full contract; the exact
+        // call the viewport owes sits on NriGraphContext::ResizeOffscreen.
+        //
+        // NOTE WHOSE NODE THIS IS: the one belonging to the context that DRAWS
+        // the texture (the editor's chrome/host-window context), not the
+        // offscreen context that owns it. They are different objects with
+        // different lanes.
+        bool InvalidateUserTexture(nri::Texture* texture, Graveyard& graveyard,
+                                   std::uint64_t fence);
+
         // RECORD-time half: records `drawData` into an ALREADY-OPEN raster
         // pass whose single colour attachment is `target`. Emits no barrier.
         void Record(RenderGraphNodeContext& context, ImDrawData* drawData, RgTexture target);
+
+        // The backend itself, for the [nri] cases' introspection
+        // (LiveTextureCount/HasEntryFor/RetiredSetCount) and for a host that
+        // wants to PRE-WARM a user texture's binding outside a frame. Not part
+        // of any cross-task contract.
+        [[nodiscard]] ImGuiNri& Renderer() noexcept { return m_renderer; }
 
     private:
         ImGuiNriNode() = default;

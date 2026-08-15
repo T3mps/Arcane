@@ -44,6 +44,12 @@ namespace Arcane
         m_renderer.NewFrameTexUpdates(drawData, graveyard, fence);
     }
 
+    bool ImGuiNriNode::InvalidateUserTexture(nri::Texture* texture, Graveyard& graveyard,
+                                              std::uint64_t fence)
+    {
+        return m_renderer.InvalidateUserTexture(texture, graveyard, fence);
+    }
+
     void ImGuiNriNode::Record(RenderGraphNodeContext& context, ImDrawData* drawData, RgTexture target)
     {
         m_renderer.RenderDrawData(drawData, context, target);
