@@ -594,7 +594,47 @@ namespace Arcane
         // fixed low sentinel (fence 0, after an idle) would violate it here,
         // because the graph has been burying at m_submitValue all run.
         const std::uint64_t fence = m_graph ? m_graph->DebugSubmitCount() : 0;
-        Graveyard& graves = m_device->Graves();
+
+        // ==============================================================
+        // WHICH GRAVEYARD -- and the one case where it is NOT the device's.
+        // ==============================================================
+        // An OFFSCREEN context that NEVER SUBMITTED buries at `fence` == 0 by
+        // construction, and its graveyard is the SHARED one, which the owning
+        // context has very likely already driven to some value N. That trips
+        // Graveyard::Bury's nondecreasing assert in Debug for a reason that has
+        // nothing to do with this context's correctness. The live shapes are a
+        // failed InitOffscreen (the fence create or InitCommon refused, after
+        // the output texture already existed) and a context created and dropped
+        // without a frame.
+        //
+        // A LOCAL graveyard is the whole fix, and it is exact rather than a
+        // dodge: nothing on this context was ever submitted, so no burial here
+        // has anything to be deferred BEHIND -- the fence value carries no
+        // information at all. The GPU is idle (the DeviceWaitIdle above), this
+        // body drains what it fills before returning, and a fresh graveyard
+        // satisfies nondecreasing trivially.
+        //
+        // It is COMPLETE for this path, not partial: RenderGraph's own burials
+        // are gated on the device it latches at its FIRST Execute
+        // (ReleaseGpuResourcesInternal returns early while that is null), so a
+        // graph that never executed buries nothing here AND nothing from
+        // ~RenderGraph -- there are no command buffers, allocators or fence to
+        // bury, because Execute is what creates them. Everything else below
+        // takes its graveyard as an argument, so all of it lands in this local.
+        //
+        // HOST-WINDOW MODE IS DELIBERATELY EXCLUDED. Its graveyard belongs to
+        // the device it also owns and is therefore empty at fence 0, so this
+        // would be a no-op change to the exact teardown sequence desk
+        // checkpoint D3b is pinning -- and a no-op change to that path is still
+        // a change to it.
+        //
+        // This does NOT close prerequisite (1) in the header. The submitted
+        // case -- and ~RenderGraph's own tail, which runs after this body --
+        // still needs the per-context lane.
+        Graveyard  localGraves;
+        const bool everSubmitted = m_graph && m_graph->DebugSubmitCount() > 0;
+        const bool ownLane       = (m_mode == Mode::Offscreen) && !everSubmitted;
+        Graveyard& graves        = ownLane ? localGraves : m_device->Graves();
 
         if (m_capture)
         {
@@ -695,11 +735,19 @@ namespace Arcane
         // OFFSCREEN MODE NEEDS THIS DRAIN EVEN MORE, because there is no
         // ~NriDevice to fall back on: the device is BORROWED and outlives this
         // object, so anything left pending here would sit in a live device's
-        // graveyard naming objects nothing else remembers. It also means the
-        // sweep below covers whatever the SHARING owner had pending -- correct
-        // (Drain's precondition is an idle GPU, and the DeviceWaitIdle above
-        // idles the whole device), just eager. See the header's CALLER
-        // CONTRACT: TWO CONTEXTS, ONE GRAVEYARD.
+        // graveyard naming objects nothing else remembers. When `graves` is the
+        // SHARED one it also means this sweep covers whatever the sharing owner
+        // had pending -- correct (Drain's precondition is an idle GPU, and the
+        // DeviceWaitIdle above idles the whole device), just eager. When it is
+        // the local lane above, this is what empties it before `localGraves`
+        // goes out of scope (~Graveyard asserts it was left empty).
+        //
+        // WHAT THIS DRAIN CANNOT REACH is ~RenderGraph's own tail: a MEMBER
+        // destructor runs after this BODY, and a graph that DID execute buries
+        // its command buffers, allocators and fence there, into the shared
+        // graveyard, at its own m_submitValue. See prerequisite (1) in the
+        // header -- that window is the per-context lane's to close, not this
+        // function's.
         graves.Drain();
 
         // The number to size kUploadRingBytesPerFrame from once a real frame

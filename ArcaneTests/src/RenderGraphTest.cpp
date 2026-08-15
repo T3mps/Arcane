@@ -2575,6 +2575,74 @@ TEST_CASE("rendergraph exec: an offscreen frame executes with NO swapchain -- no
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
+TEST_CASE("rendergraph exec: a graph that NEVER executed buries nothing -- not on release, not on "
+          "destruction", "[nri]")
+{
+    // THE INVARIANT ~NriGraphContext's never-submitted teardown branch rests on
+    // (NRI Phase 3, Task 7, fix round 1).
+    //
+    // An OFFSCREEN context borrows a SHARED device and therefore shares that
+    // device's Graveyard with the context that owns it -- while burials are
+    // keyed to the burying GRAPH's own fence. A context that never submitted
+    // would bury at 0 behind a graveyard the owner has already driven to N,
+    // tripping Bury's nondecreasing assert in Debug (the live shapes: a failed
+    // InitOffscreen, or a context created and dropped without a frame). That
+    // destructor therefore routes those burials into a LOCAL graveyard -- which
+    // is only COMPLETE if RenderGraph itself contributes nothing on that path,
+    // because RenderGraph buries into the DEVICE's graveyard directly and
+    // cannot be handed a different one.
+    //
+    // It contributes nothing because every GPU resource it owns is created by
+    // Execute(), and ReleaseGpuResourcesInternal returns early while the device
+    // it latches at the first Execute() is still null. Pinned here so that a
+    // later change allocating anything ahead of Execute() -- and thus silently
+    // reopening the fence-0 burial -- makes THIS red, instead of making a Debug
+    // assert fire in the editor.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    // Seed the shared graveyard at a HIGH value, exactly as the owning
+    // host-window context would have. This is the value a fence-0 burial would
+    // be asserted against.
+    bool reaped = false;
+    device->Graves().Bury(4096, [&reaped] { reaped = true; });
+    REQUIRE(device->Graves().Pending() == 1);
+
+    {
+        Arcane::RenderGraph graph;
+
+        // A full frame's worth of DECLARATIONS -- and no Execute() at all.
+        // An OFFSCREEN frame specifically, since that is the mode whose
+        // teardown depends on this. (The stand-in output pointer is spelled out
+        // here rather than shared with the offscreen frame-shape family below:
+        // that helper is declared with those cases, several hundred lines on.)
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth     = 320;
+        shape.canvasHeight    = 200;
+        shape.offscreenOutput = reinterpret_cast<nri::Texture*>(0x0FF5C1EE);
+        Arcane::DeclareGraphFrame(graph, shape, nullptr);
+        CHECK(graph.NodeCount() == 2);
+
+        // Nothing was realized, so there is nothing to release.
+        CHECK(graph.DebugSubmitCount() == 0);
+        CHECK(graph.DebugTransientCount() == 0);
+
+        graph.ReleaseGpuResources();
+        CHECK(device->Graves().Pending() == 1);   // still only the seed
+    }
+    // ...and ~RenderGraph added nothing either: there are no command buffers,
+    // no allocators and no submission fence to bury, because Execute() is what
+    // creates them.
+    CHECK(device->Graves().Pending() == 1);
+    CHECK_FALSE(reaped);
+
+    device->Graves().Drain();
+    CHECK(reaped);
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
 TEST_CASE("rendergraph exec: an RgCompiled from before a Reset is refused", "[nri]")
 {
     const std::uint64_t before = Arcane::RenderErrorCount();

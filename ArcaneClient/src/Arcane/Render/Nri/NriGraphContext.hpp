@@ -125,25 +125,68 @@
 // binds one VkDevice per process and DXGI allows one flip-model swapchain per
 // HWND, so a second device is exactly the topology Task 6 removed.
 //
-// ============ CALLER CONTRACT: TWO CONTEXTS, ONE GRAVEYARD ============
-// READ THIS BEFORE WIRING A SECOND CONTEXT ONTO A LIVE DEVICE (Task 8).
+// ========= TWO PREREQUISITES BEFORE A SECOND CONTEXT GOES LIVE =========
+// READ BOTH BEFORE WIRING AN OFFSCREEN CONTEXT ONTO A LIVE DEVICE (Task 8).
+// Each is a Debug assert or a release-build use-after-free, not a nit, and
+// NEITHER is fixed by this task -- it adds the capability and no caller.
 //
+// ---- (1) TWO CONTEXTS, ONE GRAVEYARD --------------------------------
 // The Graveyard is per-DEVICE (NriDevice::Graves()), not per-context, and
 // every burial is keyed to the burying GRAPH's own submission fence value.
 // Two contexts have two RenderGraphs and therefore two INDEPENDENT fence
-// timelines whose values mean nothing to each other, so with both live:
+// timelines whose values mean nothing to each other:
 //   * Graveyard::Bury's nondecreasing-fenceValue assert can fire in Debug the
 //     moment the two counters interleave out of order; and, worse,
 //   * RenderGraph::Execute reaps with ITS fence's completed value, which can
 //     run the OTHER graph's thunks before that graph's submission retired --
 //     a use-after-free no assert catches.
-// Nothing in the tree hits this today: this task adds the capability and no
-// caller, and a lone offscreen context (one graph, one timeline) is as safe as
-// the host-window one. The fix belongs with the first caller and is a
-// per-context Graveyard lane threaded through RgExecuteDesc + the node
-// Release() calls -- deliberately NOT done here, because changing which
-// graveyard the HOST-WINDOW graph buries into would move the very path desk
-// checkpoint D3b is currently pinning. See the Task 7 report.
+//
+// IT IS NOT SCOPED TO "WHILE BOTH RENDER". Three windows outlive that:
+//   (a) OFFSCREEN-CONTEXT TEARDOWN. ~RenderGraph buries the command buffers,
+//       the allocators and its own fence at its m_submitValue
+//       (RenderGraphExec.cpp, ReleaseGpuResourcesInternal(all=true)) -- and a
+//       MEMBER destructor runs AFTER this class's destructor BODY, i.e. after
+//       its graves.Drain(). Those thunks therefore land in a shared graveyard
+//       that nothing here will drain again: they trip Bury's assert if the
+//       host's graveyard holds an un-reaped entry at a higher value at that
+//       instant, and are afterwards reaped against the HOST's foreign fence
+//       value -- harmless only because this destructor's DeviceWaitIdle
+//       happens to make it so.
+//   (b) A FAILED InitOffscreen, or any offscreen context that never submitted:
+//       `fence` is 0 there, so every burial would go in at 0 behind a shared
+//       graveyard already at N. CLOSED IN THIS FILE (see ~NriGraphContext's
+//       never-submitted branch) -- with a LOCAL graveyard, not by changing any
+//       shared machinery, so it does not depend on the lane fix below.
+//   (c) Any future owner burying into NriDevice::Graves() on its own clock.
+//
+// THE FIX for (a) and (c) is one thing: a PER-CONTEXT Graveyard lane threaded
+// through RgExecuteDesc and the node Release() calls. Every burial in this
+// class is already keyed to its graph's fence, so the lane boundary is drawn
+// -- it just lands in the wrong object today. Deliberately NOT done here,
+// because changing which graveyard the HOST-WINDOW graph buries into is a diff
+// straight through the path desk checkpoint D3b is currently pinning. It is
+// its own dispatched task, ahead of Task 8.
+//
+// ---- (2) ImGuiNri HAS NO INVALIDATION HOOK FOR USER TEXTURES --------
+// ResizeOffscreen destroys the output texture and creates a replacement, and
+// NRI does not ref-count -- so it may hand the replacement the address the
+// destroyed one just vacated. ImGuiNri caches per texture by RAW POINTER
+// (ImGuiNri::EnsureEntry matches `entry.texture == texture`) and its ONLY
+// eviction path matches on `entry.owner`, an ImTextureData a USER texture
+// never has (ImGuiNri::DestroyTexture). So the cache cannot evict the entry
+// for an offscreen output at all, and after a resize a bit-identical
+// ImTextureID reports a cache HIT on an nri::Descriptor + descriptor set that
+// still name the DESTROYED texture: a stale-SRV sample or a GPU fault on every
+// viewport-panel drag.
+//
+// RE-READING OffscreenTextureId() DOES NOT FIX THIS -- the id may legitimately
+// come back identical, and the stale state is inside ImGuiNri, not in the id.
+// ImGuiNri.hpp says so itself and names the remedy: "the fix when the editor
+// path lands is an explicit invalidation hook, not a heuristic." TASK 7 IS
+// THAT EDITOR PATH ARRIVING, so Task 8 owes ImGuiNri that hook (an
+// "invalidate the entry for this nri::Texture*" entry point, called from the
+// viewport's resize handler beside ResizeOffscreen) before it puts an
+// offscreen output through ImGui::Image.
 // =====================================================================
 //
 // Adapted, where marked, from .example/NRISamples (MIT -- see that tree's
@@ -371,8 +414,20 @@ namespace Arcane
         static std::unique_ptr<NriGraphContext> Create(const HostConfig& config, Window& window);
 
         // THE OFFSCREEN FLAVOR (NRI Phase 3, Task 7) -- see OFFSCREEN MODE in
-        // the file header for the full contract, and CALLER CONTRACT: TWO
-        // CONTEXTS, ONE GRAVEYARD for what a second live context owes.
+        // the file header for the full contract.
+        //
+        // ============ BEFORE YOU CALL THIS ALONGSIDE A LIVE HOST-WINDOW
+        // CONTEXT: two known defects bite, and each is a Debug assert or a
+        // release-build use-after-free, not a nit. FIX BOTH FIRST.
+        //   1. the per-device Graveyard is shared across the two contexts'
+        //      independent fence timelines (needs the per-context lane);
+        //   2. ImGuiNri cannot evict its cached descriptor for a USER texture,
+        //      so ResizeOffscreen's destroy/recreate leaves it sampling the
+        //      dead one (needs ImGuiNri's invalidation hook).
+        // Both are stated in full, with the mechanism and the remedy, under
+        // TWO PREREQUISITES BEFORE A SECOND CONTEXT GOES LIVE in the file
+        // header. A LONE offscreen context (no second context, no ImGui
+        // sampling) is unaffected by both. ============
         //
         // No window, no swapchain: builds the ring, the cache, the graph, the
         // nodes and ONE persistent kGraphOffscreenFormat output texture at
@@ -475,11 +530,19 @@ namespace Arcane
         // The persistent output texture -- kGraphOffscreenFormat, owned here,
         // stable until ResizeOffscreen(). Null on a host-window context.
         //
-        // BORROWED BY THE CALLER, and ResizeOffscreen INVALIDATES IT: a caller
-        // that cached this pointer across a resize holds a destroyed texture
-        // (and NRI may hand its address to the replacement, so a pointer
-        // comparison cannot detect it -- the same hazard RenderGraph's imported
-        // views exist to dodge). Re-read it after every resize.
+        // BORROWED BY THE CALLER, and ResizeOffscreen DESTROYS IT: a caller
+        // holding this pointer across a resize holds a destroyed texture. NRI
+        // does not ref-count, so the replacement may land on the freed
+        // address -- a pointer comparison cannot tell you it happened, which is
+        // the same hazard RenderGraph's per-execute imported views exist to
+        // dodge.
+        //
+        // RE-READING IT AFTER A RESIZE IS NECESSARY BUT NOT SUFFICIENT, and
+        // that distinction is the whole of prerequisite (2) in the file header:
+        // any cache DOWNSTREAM keyed on this pointer -- ImGuiNri's is, and it
+        // cannot evict a user texture's entry -- must be invalidated
+        // explicitly, because the new pointer may compare EQUAL to the old one
+        // and the staleness lives in that cache rather than in this value.
         [[nodiscard]] nri::Texture* OffscreenOutput() noexcept { return m_offscreen; }
 
         // OffscreenOutput() as an ImGui texture id, ready for ImGui::Image().
@@ -495,6 +558,12 @@ namespace Arcane
         // backend's RAW TEXTURE HANDLE cast through intptr_t -- here the
         // nri::Texture* itself, not a descriptor. 0 on a host-window context,
         // which is ImTextureID_Invalid.
+        //
+        // HANDING THIS TO ImGui::Image REQUIRES prerequisite (2) in the file
+        // header to be closed first: because the id IS the raw pointer, an id
+        // that is unchanged across a ResizeOffscreen is exactly the case that
+        // makes ImGuiNri's pointer-keyed, never-evicted user-texture entry
+        // serve a descriptor over the destroyed texture. See OffscreenOutput().
         [[nodiscard]] std::uint64_t OffscreenTextureId() const noexcept;
 
         // Destroy + recreate the output at the new size. MUST be called
