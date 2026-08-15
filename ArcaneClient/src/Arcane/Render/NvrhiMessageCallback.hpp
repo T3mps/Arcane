@@ -55,6 +55,19 @@ namespace Arcane
             m_deviceRemovedHook.store(hook, std::memory_order_release);
         }
 
+        // What the slot currently holds, or null. Read-only and side-effect
+        // free -- it never invokes the hook. Exists because the slot is
+        // last-writer-wins and now has TWO writers (the NVRHI device layer
+        // and, after Phase 3, Render/Nri/NriDiagnostics): "did arming
+        // actually install one, and did a second arm leave it alone" is a
+        // property worth pinning, and it is unobservable without a reader.
+        // (Named Current* because a member called `DeviceRemovedHook` would
+        // shadow the type alias above inside this class.)
+        [[nodiscard]] DeviceRemovedHook CurrentDeviceRemovedHook() const noexcept
+        {
+            return m_deviceRemovedHook.load(std::memory_order_acquire);
+        }
+
         // Phase 2, Task 1: the TAGGED error seam, for every producer that is
         // NOT NVRHI (the D3D12 debug layer's InfoQueue1 callback today; the
         // frame graph's `NoteError("nri-graph", ...)` next). It gives such a

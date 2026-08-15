@@ -20,6 +20,7 @@
 #include <Arcane/Render/Device.hpp>                 // Arcane::GraphicsBackend / ToString (BuildHud's HUD text, GoldenArtifact)
 #include <Arcane/Render/FullscreenMaterialChain.hpp>// scene post hook (RenderNvrhi)
 #include <Arcane/Render/GpuInstrumentation.hpp>     // Arcane::GpuPassScope, GpuDeviceLostObserved (RenderNvrhi, PumpAndResize)
+#include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N on the graph arm (RenderGraph)
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
 
 #include <imgui.h>
@@ -509,6 +510,38 @@ void RenderNvrhi(FrameIo& io)
 Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
 {
     Arcane::NriGraphContext::FrameDesc graphFrame;
+
+#if !defined(ARCANE_DIST)
+    // --crash-gpu N ON THE GRAPH ARM (NRI Phase 3, Task 5). The same gate,
+    // the same "fires exactly once", the same fired-FIRST ordering (a failed
+    // build must not retry every frame) and the same ERROR text as the NVRHI
+    // arm above -- so `--crash-gpu 30` means one thing on both paths and the
+    // desk battery's items read the same either way. It was a documented
+    // no-op through Phase 2 (HostConfig.hpp said so); it is live now.
+    //
+    // TWO things differ, both forced by the recording topology and neither
+    // observable in the report:
+    //   * the fault goes out on its OWN one-off command buffer rather than
+    //     nested inside this frame's recording -- the graph's command buffers
+    //     belong to RenderGraph::Execute, which owns their whole open/record/
+    //     close/submit cycle, and a deliberate TDR must not be threaded
+    //     through the very machinery the crash report has to survive to
+    //     describe;
+    //   * it therefore fires BEFORE the frame is declared rather than inside
+    //     it, which keeps `pass:gpu-fault` the last scope the GPU begins --
+    //     exactly what the NVRHI arm achieves by recording it first into a
+    //     list submitted at the end of the frame.
+    // FireFault is stateless, so io.gpuFault (the nvrhi injector this arm
+    // never builds) stays null on this path; only the fired latch is shared.
+    if (io.config.crashGpuFrame != 0 && !io.gpuFaultFired &&
+        io.frameCount >= io.config.crashGpuFrame)
+    {
+        io.gpuFaultFired = true;   // set FIRST: a failed build must not retry every frame
+        nri::Queue* const queue = io.graph->Device().GraphicsQueue();
+        if (!queue || !Arcane::NriDiagnostics::FireFault(io.graph->Device(), *queue))
+            ARC_ERROR("--crash-gpu: fault injector unavailable -- nothing dispatched");
+    }
+#endif
 
     // ============================================================
     // THE HUD (Task 12) -- and this block is THE parity mechanism,

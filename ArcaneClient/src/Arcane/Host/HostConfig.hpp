@@ -101,19 +101,21 @@ namespace Arcane
         // that one host parses and silently ignores is a trap, and scripting the
         // editor's battery items beats clicking them.
         //
-        // KNOWN GAP, NOT REFUSED (NRI Phase 2 ledger, Task 7 minor). The GAP
-        // ITSELF IS STILL OPEN, carried forward to Phase 3 -- what "closed at
-        // Task 13" refers to is the DOCUMENTATION decision below (leave it a
-        // documented no-op rather than wire the injector in), which Task 13
-        // reviewed and finalized. On ArcaneRuntime, the fault injector only
-        // fires inside RuntimeApp::MainLoop's NVRHI record path (`if (!m_graphContext)`);
-        // the `--nri-graph` frame-graph vehicle has no fault-injector node
-        // wired in, so `--crash-gpu N --nri-graph` parses, never fires, and
-        // the run exits 0 having proven nothing. Left as a documented no-op
-        // rather than refused at parse: wiring the injector into the graph
-        // path is a graph-vehicle change, out of scope for a flag this
-        // vehicle does not otherwise touch, and --nri-graph is dev-only
-        // scaffolding a desk user reads this comment before scripting.
+        // HONOURED ON BOTH RENDER PATHS as of NRI Phase 3, Task 5. The NVRHI
+        // arm fires Render/GpuFaultInjector.hpp's nvrhi dispatch;
+        // `--crash-gpu N --nri-graph` fires NriDiagnostics::FireFault -- the
+        // SAME data/shaders/gpu_fault.hlsl TDR loop, as a one-off NRI compute
+        // dispatch -- under the same gate, once, with the same
+        // `pass:gpu-fault` breadcrumb and the same ERROR text when the
+        // injector is unavailable. See RuntimeFrame.cpp's graph arm for the
+        // two topology-forced differences (own command buffer; fired before
+        // the frame is declared rather than inside it), neither of which is
+        // observable in the report.
+        //
+        // HISTORY, because a reader may have the old wording in mind: through
+        // Phase 2 this flag was a DOCUMENTED NO-OP on `--nri-graph` -- it
+        // parsed, never fired, and a run exited 0 having proven nothing. That
+        // gap is closed; the deliberate-no-op ruling it carried is history.
         std::uint64_t   crashGpuFrame = 0;
 
         // DEV ONLY (NRI Phase 2, Task 7): the frame-graph VEHICLE. Renders

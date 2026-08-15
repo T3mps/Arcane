@@ -1359,6 +1359,17 @@ namespace Arcane
         DestroyVulkanNativeDevice(m_creation);
     }
 
+    // The narrow export (DeviceFactories.hpp, NRI Phase 3 Task 5): the SAME
+    // observer above, reachable by address from the Render module's other
+    // installer. One line, no state, no second observation point -- the
+    // once-only `g_deviceRemovedReported` latch, the "gpu-crash: device
+    // removed" wording and the NoteGpuDeviceLost ordering all stay in
+    // ObserveDeviceRemoved, unchanged and file-local.
+    void ObserveDeviceRemovedVulkan()
+    {
+        ObserveDeviceRemoved();
+    }
+
     std::unique_ptr<RenderDevice> CreateDeviceVulkan(const RenderDeviceDesc& desc)
     {
         try

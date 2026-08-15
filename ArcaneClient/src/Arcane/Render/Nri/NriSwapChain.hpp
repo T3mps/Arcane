@@ -176,6 +176,28 @@ namespace Arcane
         [[nodiscard]] uint32_t Height() const { return m_height; }
         [[nodiscard]] uint32_t TextureCount() const { return (uint32_t)m_textures.size(); }
 
+        // THE GPU-PROGRESS COUNTER for this path (NRI Phase 3, Task 5): how
+        // many of this swapchain's pacing signals the device has actually
+        // passed, i.e. GetFenceValue on the timeline fence Present() signals
+        // with `frameCounter + 1`.
+        //
+        // It is `GpuFrameProgress`'s 1:1 replacement, not an approximation of
+        // one. GpuInstrumentation.hpp's GpuFrameProgress exists because nvrhi
+        // exposes no cross-backend completed-instance query and had to stamp
+        // its OWN event-query chain to get one; NRI's timeline fence IS that
+        // query, already stamped once per present by the pacing signal, and
+        // already read non-blockingly by the pacing wait. So the graph path
+        // publishes THIS to Diagnostics::GpuHeartbeat (via
+        // NriDiagnostics::PublishHeartbeat) instead of building a second
+        // chain -- and the counter is honest by the same construction: it
+        // advances only when the device signalled a fence past a point we
+        // submitted, and stops dead when the GPU stops retiring.
+        //
+        // Never blocks. 0 before the first present, and 0 on the NONE backend
+        // (ImplNONE's GetFenceValue returns 0 unconditionally) -- which makes
+        // this, like everything else on the pacing path, a [gpu] observable.
+        [[nodiscard]] std::uint64_t CompletedFrameValue() const;
+
     private:
         NriSwapChain() = default;
 

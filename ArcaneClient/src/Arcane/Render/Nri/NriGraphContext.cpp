@@ -15,6 +15,7 @@
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/Device.hpp>                 // RenderDeviceDesc, RenderErrorCount, ToString(GraphicsBackend)
+#include <Arcane/Render/Nri/NriDiagnostics.hpp>     // the crash chain, armed by whichever device exists
 #include <Arcane/Render/NvrhiMessageCallback.hpp>   // the tagged "nri-graph" error seam
 #include <Arcane/Render/PostChainCache.hpp>         // PostChainDesc -- the frame's post-chain shape
 #include <Arcane/Render/ShaderLibrary.hpp>          // ShaderLibrary::ResolveFlavorDir
@@ -176,6 +177,19 @@ namespace Arcane
             return false;
         }
 
+        // THE CRASH CHAIN, armed by whichever device exists (Task 5). A no-op
+        // TODAY -- the engine's NVRHI device armed it during boot and this
+        // call finds the slot full, which is exactly the two-device
+        // transition topology NriDiagnostics::Arm infers rather than being
+        // told. After Task 6 there IS no NVRHI device and this is the ONLY
+        // arming call in the process. Same call, same site, both ways.
+        //
+        // Immediately after the wrap and BEFORE the swapchain, so a failure
+        // anywhere below is already covered by a live device-removed
+        // observation point and a live GPU-section provider. Disarmed in
+        // ~NriGraphContext, before the device it names goes away.
+        (void)NriDiagnostics::Arm(*m_device);
+
         m_swap = NriSwapChain::Create(*m_device, m_window, m_vsync);
         if (!m_swap)
         {
@@ -336,6 +350,16 @@ namespace Arcane
 
     NriGraphContext::~NriGraphContext()
     {
+        // BEFORE the early-out below and before ANY member is destroyed: the
+        // arming installs process-wide slots that point at a backend built
+        // over m_device, and a slot outliving what it names is the dangling-
+        // registration hazard every other owner in this tree guards against.
+        // Disarm() is conditional-and-idempotent (it clears only what IT
+        // installed, and no-ops when Arm no-oped -- i.e. on every two-device
+        // run), so calling it unconditionally here is correct in both
+        // topologies and after a failed Init.
+        NriDiagnostics::Disarm();
+
         if (!m_device)
             return;   // Init() failed before the device existed; nothing was created on one
 
@@ -953,6 +977,20 @@ namespace Arcane
             return RenderErrorCount() > errorsBefore ? FrameOutcome::Failed : FrameOutcome::Skipped;
 
         ++m_frameIndex;
+
+        // THE GPU-PROGRESS HEARTBEAT (Task 5), after the frame's present and
+        // therefore after its last submit -- the same rule GpuFrameProgress::
+        // EndFrame carries on the NVRHI path ("a stamp placed before the
+        // frame's work would retire early and report progress the GPU had not
+        // made"). Presented frames only: a skipped frame submitted nothing,
+        // so republishing here would say "the GPU is fine" about a frame the
+        // GPU never saw.
+        //
+        // The value is the pacing fence's COMPLETED value, not the frame
+        // index: m_frameIndex is what the CPU has SUBMITTED and advances
+        // happily while the GPU is wedged, which is precisely the state this
+        // heartbeat exists to make visible.
+        NriDiagnostics::PublishHeartbeat(m_swap->CompletedFrameValue());
 
         // ~5s heartbeat, open-ended runs only (header: m_heartbeat). Deliberately
         // AFTER the present, so "alive" means a frame actually reached the

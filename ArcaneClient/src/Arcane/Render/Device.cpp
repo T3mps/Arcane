@@ -26,6 +26,11 @@ namespace Arcane
         NvrhiMessageCallback::Instance().SetDeviceRemovedHook(hook);
     }
 
+    void (*RenderDeviceRemovedHookForTest() noexcept)()
+    {
+        return NvrhiMessageCallback::Instance().CurrentDeviceRemovedHook();
+    }
+
     const char* ToString(GraphicsBackend backend)
     {
         switch (backend)

@@ -63,6 +63,17 @@ namespace Arcane
     // caller lives).
     ARCANE_API void SetRenderDeviceRemovedHookForTest(void (*hook)()) noexcept;
 
+    // Reads the same DLL-side slot back, without ever invoking the hook.
+    // Test support ONLY, and for the same header-only-singleton reason as the
+    // setter above. The slot is last-writer-wins with TWO writers now -- the
+    // NVRHI device layer's Init/dtor, and Render/Nri/NriDiagnostics::Arm/
+    // Disarm after Phase 3's one-device flip -- so "arming installed one" and
+    // "a second arm left it alone" are properties a headless case can only
+    // state if it can read the slot. Production code has no business reading
+    // it: the hook exists to be CALLED by NvrhiMessageCallback, by nobody
+    // else.
+    [[nodiscard]] ARCANE_API void (*RenderDeviceRemovedHookForTest() noexcept)();
+
     struct RenderDeviceDesc
     {
         GraphicsBackend backend = GraphicsBackend::D3D12;

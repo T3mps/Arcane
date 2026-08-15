@@ -814,6 +814,17 @@ namespace Arcane
         creation.factory.Reset();
     }
 
+    // The narrow export (DeviceFactories.hpp, NRI Phase 3 Task 5): the SAME
+    // observer above, reachable by address from the Render module's other
+    // installer. One line, no state, no second observation point -- the
+    // once-only `g_deviceRemovedReported` latch, the "gpu-crash: device
+    // removed" wording and the NoteGpuDeviceLost ordering all stay in
+    // ObserveDeviceRemoved, unchanged and file-local.
+    void ObserveDeviceRemovedD3D12()
+    {
+        ObserveDeviceRemoved();
+    }
+
     std::unique_ptr<RenderDevice> CreateDeviceD3D12(const RenderDeviceDesc& desc)
     {
         auto device = std::make_unique<DeviceD3D12>();

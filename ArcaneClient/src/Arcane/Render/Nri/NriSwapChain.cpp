@@ -413,6 +413,18 @@ namespace Arcane
         ++m_frameCounter;
     }
 
+    std::uint64_t NriSwapChain::CompletedFrameValue() const
+    {
+        // Survives Resize() along with the fence itself, so the counter this
+        // publishes is monotone across a drag-storm -- which is exactly what
+        // Diagnostics::GpuHeartbeat's rule requires of it (a counter that
+        // reset on resize would look like GPU progress that never happened,
+        // and then like a stall that never ended).
+        if (!m_device || !m_frameFence)
+            return 0;
+        return m_device->Core().GetFenceValue(*m_frameFence);
+    }
+
     // -----------------------------------------------------------------
     // Teardown
     // -----------------------------------------------------------------
