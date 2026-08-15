@@ -17,6 +17,7 @@
 // Registry-touching tests bind to Arcane::Test::SharedTypeContext() -- never a
 // bare Arcane::Runtime, which would steal Arcane.dll's TypeContext slot.
 
+#include <Arcane/Assets/Assets.hpp>          // Arcane::Assets (the EvictingAssets fake), PixelData
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Project/Project.hpp>
@@ -29,10 +30,13 @@
 
 #include "Helpers/TestTypeContext.hpp"
 
+#include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <system_error>
+#include <vector>
 
 namespace
 {
@@ -61,6 +65,81 @@ namespace
         REQUIRE(Arcane::SaveSpriteAsset(file, data));
         return data.id;
     }
+
+    // As above but WITH a source texture Guid, so SpriteCache takes the
+    // textured branch (PixelsFor + GetTexture) instead of the untextured one.
+    Arcane::Guid WriteTexturedSprite(const fs::path& file, const Arcane::Guid& texture,
+                                     float ppu)
+    {
+        Arcane::SpriteAssetData data;
+        data.id      = Arcane::Guid::Generate();
+        data.name    = "probe";
+        data.texture = texture;
+        data.ppu     = ppu;
+        REQUIRE(Arcane::SaveSpriteAsset(file, data));
+        return data.id;
+    }
+
+    // An Assets facade whose PIXEL ENTRY IS EVICTED BY GetTexture -- the
+    // production behaviour, modelled deterministically.
+    //
+    // In the real facade PixelsFor hands back a bare pointer INTO its
+    // LRU-budgeted pixel cache and releases its own pin before returning
+    // (Assets.cpp: `m_pixels.Acquire(key); EnforceBudget(); m_pixels.Release(key);`),
+    // and GetTexture ends `m_textures.Put(...); EnforceBudget();` -- a sweep
+    // that evicts the globally least-recently-used entry across ALL FOUR
+    // caches, the pixel cache included. So a caller holding the pointer across
+    // the GetTexture call can be reading freed memory.
+    //
+    // WHY THIS IS A FAKE AND NOT THE REAL FACADE: reaching the real eviction
+    // needs GetTexture to reach `m_textures.Put` (Assets.cpp:273), which needs
+    // a live nvrhi device -- a [gpu] item, and this defect must be catchable in
+    // the ~[gpu] gate. What the fake pins is the ORDER, which is the whole
+    // fix: it hands out a stable pointer, then on GetTexture RESETS the object
+    // it pointed at to a default-constructed PixelData (0x0, no bytes) -- the
+    // deterministic stand-in for "that buffer was freed and its memory reused".
+    // Read before the call, the dimensions are the image's; read after, they
+    // are zeros and ComputeSpriteGeom silently returns its 1x1 m fallback.
+    class EvictingAssets final : public Arcane::Assets
+    {
+    public:
+        EvictingAssets(std::uint32_t w, std::uint32_t h)
+        {
+            m_pixels.width  = w;
+            m_pixels.height = h;
+            m_pixels.rgba.assign(static_cast<std::size_t>(w) * h * 4, 0xFF);
+        }
+
+        void SetDevice(nvrhi::IDevice*) override {}
+        void SetContentRoot(const std::filesystem::path&) override {}
+        void SetAssetResolver(AssetResolver) override {}
+
+        nvrhi::TextureHandle GetTexture(const std::filesystem::path&) override { return nullptr; }
+        nvrhi::TextureHandle GetTexture(const Arcane::AssetId&) override
+        {
+            ++getTextureCalls;
+            m_pixels = Arcane::PixelData{};   // "the LRU sweep took the pixel entry"
+            return nullptr;                   // no device: the facade's own headless answer
+        }
+
+        const Arcane::PixelData* PixelsFor(const Arcane::Guid&) override
+        {
+            ++pixelsForCalls;
+            return &m_pixels;
+        }
+
+        std::shared_ptr<const std::vector<std::uint8_t>> GetBytes(const std::filesystem::path&) override { return nullptr; }
+        std::shared_ptr<const std::vector<std::uint8_t>> GetBytes(const Arcane::AssetId&) override { return nullptr; }
+        std::shared_ptr<const nlohmann::json> GetJson(const std::filesystem::path&) override { return nullptr; }
+        std::shared_ptr<const nlohmann::json> GetJson(const Arcane::AssetId&) override { return nullptr; }
+        Arcane::AssetStats Stats() const override { return {}; }
+
+        int pixelsForCalls  = 0;
+        int getTextureCalls = 0;
+
+    private:
+        Arcane::PixelData m_pixels;
+    };
 }
 
 // ---------------------------------------------------------------- [1] the cache
@@ -172,6 +251,49 @@ TEST_CASE("SpriteCache::Invalidate forces the next Request to re-read the file",
     // project's registry, so nothing may survive the switch.
     cache.Clear();
     CHECK(cache.Table().empty());
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("SpriteCache reads PixelsFor's dimensions BEFORE the GetTexture call that can evict them",
+          "[sprite][pixels]")
+{
+    // THE WHOLE-BRANCH REVIEW'S C1. SpriteCache is the only one of the four
+    // PixelsFor callers that holds the returned pointer across another Assets
+    // call, and Assets.hpp is explicit that it may not: the pointer is owned by
+    // an LRU-budgeted cache and "callers that need it to outlive the current
+    // call must copy it". GetTexture's tail (`m_textures.Put(...);
+    // EnforceBudget();`) is exactly such a call -- the sweep is cross-cache and
+    // the just-unpinned pixel entry is the least recently used of the pair.
+    //
+    // Invisible to every gate before this case: ReferenceProject's marker PNG
+    // is 179 bytes against a 256 MiB budget, so the sweep never fires there.
+    // EvictingAssets makes the eviction unconditional and the READ ORDER the
+    // only thing that decides the answer.
+    const fs::path dir  = MakeTempDir("pixels_order");
+    const fs::path file = dir / "probe.arcsprite";
+    const Arcane::Guid texture = Arcane::Guid::Generate();
+    const Arcane::Guid id = WriteTexturedSprite(file, texture, /*ppu=*/100.0f);
+
+    EvictingAssets assets(/*w=*/8, /*h=*/4);
+
+    Arcane::SpriteCache::Services s;
+    s.assets = &assets;
+    s.resolveAsset = [&](const Arcane::Guid&) -> std::optional<fs::path> { return file; };
+    Arcane::SpriteCache cache(std::move(s));
+
+    cache.Request(id);
+    REQUIRE(assets.pixelsForCalls == 1);
+    REQUIRE(assets.getTextureCalls == 1);
+    REQUIRE(cache.Table().contains(id));
+
+    // 8x4 px at 100 px/m. Read AFTER GetTexture the dimensions are 0x0 and
+    // ComputeSpriteGeom returns its documented 1x1 m / full-UV fallback -- the
+    // silent wrong-size sprite this ordering exists to prevent (and, in
+    // production, a genuine read of freed memory rather than a benign zero).
+    const Arcane::SpriteEntry entry = cache.Table().at(id);
+    CHECK(entry.sizeMeters.x == 0.08f);
+    CHECK(entry.sizeMeters.y == 0.04f);
 
     std::error_code ec; fs::remove_all(dir, ec);
 }

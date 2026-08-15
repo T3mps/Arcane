@@ -81,7 +81,8 @@ namespace Arcane
         entry.textureId = data->texture;
 
         nvrhi::TextureHandle tex;
-        const PixelData* pixels = nullptr;
+        std::uint32_t texWidth = 0, texHeight = 0;
+        bool havePixels = false;
         if (data->texture.IsValid() && m_impl->services.assets)
         {
             // Geometry's dimensions come from PixelsFor -- device-free, so
@@ -89,16 +90,31 @@ namespace Arcane
             // legal). GetTexture routes its own upload through the SAME
             // retained pixels (Assets.cpp), so this is a decode cache hit
             // whichever of the two is called first.
-            pixels = m_impl->services.assets->PixelsFor(data->texture);
+            //
+            // THE DIMENSIONS ARE COPIED OUT BEFORE THE NEXT ASSETS CALL, and
+            // that ordering is the contract, not a style choice (Assets.hpp:
+            // "valid only until evicted -- callers that need it to outlive the
+            // current call must copy it, not hold the pointer"). PixelsFor
+            // returns a BARE pointer into the facade's LRU-budgeted pixel
+            // cache and drops its own pin before returning; GetTexture ends
+            // with `m_textures.Put(...); EnforceBudget();`, and EnforceBudget
+            // evicts the globally least-recently-used entry across ALL FOUR
+            // caches -- the pixel cache included, and this entry is the least
+            // recently used of the pair the moment the texture lands. So the
+            // pointer below may be freed by the very next line; reading
+            // pixels->width after it is a use-after-free. This is the only one
+            // of the four PixelsFor callers that makes a second Assets call at
+            // all, which is why the discipline has to be visible here.
+            const PixelData* pixels = m_impl->services.assets->PixelsFor(data->texture);
+            if (pixels)
+            {
+                havePixels = true;
+                texWidth   = pixels->width;
+                texHeight  = pixels->height;
+            }
             tex = m_impl->services.assets->GetTexture(AssetId::FromGuid(data->texture));
         }
 
-        std::uint32_t texWidth = 0, texHeight = 0;
-        if (pixels)
-        {
-            texWidth = pixels->width;
-            texHeight = pixels->height;
-        }
         if (tex)
         {
             // The live GPU texture's desc describes the SAME decode PixelsFor
@@ -106,8 +122,10 @@ namespace Arcane
             // always agree when both exist. A mismatch here would mean the
             // NVRHI upload path and the device-free pixel supply have drifted
             // apart, which the "identical GPU result" contract forbids.
+            // Asserted against the COPIES taken above, never against a pointer
+            // GetTexture may have invalidated.
             const auto& desc = tex->getDesc();
-            ARC_ASSERT(pixels != nullptr && texWidth == desc.width && texHeight == desc.height,
+            ARC_ASSERT(havePixels && texWidth == desc.width && texHeight == desc.height,
                        "SpriteCache: PixelsFor and GetTexture disagree on texture dimensions");
         }
         const ResolvedSpriteGeom g = ComputeSpriteGeom(*data, texWidth, texHeight);
