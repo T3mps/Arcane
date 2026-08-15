@@ -33,6 +33,19 @@ public:
     // RuntimeApp only reads it during Run()'s boot sequence. Null tolerated.
     explicit RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash = nullptr);
     int Run();   // BootSequence -> MainLoop() -> Shutdown(); process exit code
+
+    // Pushes the scene's ACTIVE Camera entity into the plugin's stored camera,
+    // with the once-only diagnostics for "no usable camera" / "several".
+    // Extracted verbatim from MainLoop's NVRHI block by NRI Phase 2 Task 8 so
+    // the graph path -- which now also drives the plugin's render submission --
+    // gets the same view instead of a second copy of this reasoning.
+    //
+    // Public since NRI Phase 3 Task 4: MainLoop's frame body moved to free
+    // functions in namespace Arcane::RuntimeFrame (RuntimeFrame.hpp/.cpp), and
+    // both render arms (RenderNvrhi/RenderGraph) call this through
+    // FrameIo::app -- a free function cannot reach a private RuntimeApp
+    // member. See RuntimeFrame.hpp's header comment.
+    void PushSceneCamera(float viewportWidth, float viewportHeight);
 private:
     // ---- Boot (RuntimeApp.cpp) -------------------------------------------
     // Run() builds Arcane::HostBoot::RuntimeStages(ctx) -- the SAME shared
@@ -56,13 +69,6 @@ private:
 
     void MainLoop();
     void Shutdown();
-
-    // Pushes the scene's ACTIVE Camera entity into the plugin's stored camera,
-    // with the once-only diagnostics for "no usable camera" / "several".
-    // Extracted verbatim from MainLoop's NVRHI block by NRI Phase 2 Task 8 so
-    // the graph path -- which now also drives the plugin's render submission --
-    // gets the same view instead of a second copy of this reasoning.
-    void PushSceneCamera(float viewportWidth, float viewportHeight);
 
     // --nri-graph (NRI Phase 2, Task 7): destroy the vehicle and fold a grown
     // RenderErrorCount into m_graphExit. Idempotent, and a no-op when the flag
