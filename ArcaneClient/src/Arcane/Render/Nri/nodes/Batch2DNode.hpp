@@ -81,16 +81,33 @@
 // created once and the CPU only memcpys. The ring still carries the vertex and
 // index streams, which have no descriptor and therefore no such constraint.
 //
-// THE TEXTURE GAP (still open, and bounded -- read before debugging a golden).
-// A Batch2DDrawSpan names an `nvrhi::ITexture*`: a texture on the ENGINE's
-// NVRHI device, which this node's NRI device cannot sample. So the SPRITE's own
-// texture (t0) is still the white texel on every span, and a textured sprite
-// renders as its vertex tint alone. What Task 9 closes is the other half: a
-// registered material's DECLARED texture params (t1..) are resolved from their
-// asset Guids and uploaded onto THIS device, so they are genuinely sampled.
-// An unbound, unresolvable or undecodable param falls back to the same white
-// texel the NVRHI path substitutes for a null handle (Batcher2D's
-// GetBindingSet), and says so once.
+// THE TEXTURE GAP IS CLOSED (Phase 3, Task 2 -- read before debugging a
+// golden). It used to be that a Batch2DDrawSpan named only an
+// `nvrhi::ITexture*` -- an object on the ENGINE's device, which this node's NRI
+// device cannot sample -- so the SPRITE's own texture (t0) was the white texel
+// on every span and a textured sprite rendered as its vertex tint alone.
+// A span now ALSO carries the image's asset Guid (Batch2DDrawSpan::textureId),
+// which is device-independent, and this node resolves it through the vehicle's
+// shared NriTextureCache -- the same cache the post chain uses, so an image
+// named by both is uploaded once. Task 9's machinery for a material's DECLARED
+// params (t1..) is unchanged in shape; it now reads that shared cache instead
+// of a private one.
+//
+// A span whose id is NIL keeps the white texel, and that is the ordinary
+// untextured case, not a degradation: Rect/Line/Circle/Triangle and every
+// colored quad record nil. So does a GLYPH -- a font atlas is a runtime
+// texture with no asset Guid, which is the one texture gap this task leaves
+// open and names.
+//
+// THE PER-TEXTURE DESCRIPTOR SETS this needs are the same shape Task 9 built
+// for materials: a set is written ONCE, at declaration time, and never
+// rewritten while a frame is in flight. A built-in span's set is
+// per (texture), because its contents (t0 + s0) carry nothing per-frame; a
+// registered material's is per (material, texture, frame slot), because its
+// constant-buffer views are per-frame-slot. Both are capped
+// (kMaxSpriteTextures) for the reason every cap in this file exists: a
+// descriptor pool's capacity is fixed at creation and NRI cannot free one set,
+// so the alternative to a cap is discovering the limit mid-frame.
 //
 // Include order: NRI headers first, ALWAYS -- see NriCommon.hpp
 // (Extensions/NRIDeviceCreation.h declares nri::Message::ERROR and
@@ -116,7 +133,9 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
     class NriGraphContext;
+    class NriTextureCache;
     struct Batch2DDrained;
+    struct Batch2DDrawSpan;
     struct Material2DDesc;
 
     // =====================================================================
@@ -188,21 +207,28 @@ namespace Arcane
         // node's users submitted on.
         void Release(Graveyard& graveyard, std::uint64_t fence);
 
-        // Resolves every REGISTERED material `batch` names into a pipeline, a
-        // per-frame-slot descriptor set and resident textures. Called at
-        // DECLARATION time -- deliberately, and it is the reason this is a
-        // separate entry point rather than the top of Record():
+        // Resolves everything one drained batch needs before a command buffer
+        // exists: every span's SPRITE TEXTURE (through the shared
+        // NriTextureCache) and its per-texture descriptor set, and every
+        // REGISTERED material's pipeline, per-frame-slot sets and declared
+        // param textures. Called at DECLARATION time -- deliberately, and it
+        // is the reason this is a separate entry point rather than the top of
+        // Record():
         //   * making a texture resident goes through NRI's HelperInterface,
         //     which SUBMITS AND WAITS internally, and that must not happen with
         //     the frame's command buffer open;
+        //   * so does ALLOCATING a descriptor set and writing it: a set the GPU
+        //     may still be reading must never be rewritten, and a set allocated
+        //     mid-recording could exhaust the pool inside a frame that is
+        //     otherwise fine;
         //   * MaterialInstance::PackCB is pure CPU work over the values, so it
         //     belongs outside the recording window too. Record() only memcpys
         //     the packed bytes into this frame's arena region.
-        // Safe to call with a batch that names no registered material (does
-        // nothing) and safe to skip entirely -- Record() then falls back to the
-        // plain sprite pipeline and says so once.
-        void PrepareMaterials(Batcher2D& batcher, const Batch2DDrained& batch,
-                              nri::Format canvasFormat);
+        // Safe to call with an empty batch (does nothing) and safe to skip
+        // entirely -- Record() then binds the white texel and the plain sprite
+        // pipeline, and says so once.
+        void Prepare(Batcher2D& batcher, const Batch2DDrained& batch,
+                     nri::Format canvasFormat);
 
         // Records one frame's 2D content into an ALREADY-OPEN raster pass
         // whose single colour attachment is the canvas. In order: clear the
@@ -231,6 +257,11 @@ namespace Arcane
         // plain sprite pipeline with one ERROR naming the constant to raise.
         static constexpr std::uint32_t kMaxMaterialSlots    = 8;
         static constexpr std::uint32_t kMaxMaterialTextures = 8;
+        // How many DISTINCT sprite textures one run may bind at t0 -- the
+        // third pool-sizing cap, and the one Task 2 added. Past it a span
+        // degrades to the white texel with one ERROR naming this constant,
+        // exactly as the other two caps degrade.
+        static constexpr std::uint32_t kMaxSpriteTextures   = 8;
         // Arena region size BEFORE alignment. A sprite material's cbuffer is a
         // handful of 16-byte registers (the reference material's is 32 bytes);
         // 256 is also D3D12's constant-buffer placement alignment, so on that
@@ -270,6 +301,17 @@ namespace Arcane
             return ((std::uint64_t)frameSlot * kCbRegionsPerFrame + region) * regionStride;
         }
 
+        // How many DISTINCT non-nil texture ids `spans` names -- i.e. how many
+        // per-texture descriptor sets this node must have written before it can
+        // record them, and therefore how much of kMaxSpriteTextures the frame
+        // spends. PURE and public for the same reason the two above are: it
+        // carries an invariant no device can show and no golden can fail on.
+        // Spans repeat ids freely (the sort splits a run whenever the layer or
+        // the material changes), so this is a COUNT OF DISTINCT ids, not of
+        // spans.
+        [[nodiscard]] static std::uint32_t DistinctTextureCount(
+            std::span<const Batch2DDrawSpan> spans);
+
     private:
         Batch2DNode() = default;
 
@@ -297,26 +339,45 @@ namespace Arcane
             // whole PSO's life in the cache.
             std::shared_ptr<const std::vector<std::uint8_t>> vs, ps;
             std::vector<std::uint8_t> packed;                    // PackCB output, refreshed every frame
-            // Resolved by PrepareMaterials for the canvas format of the frame
+            // Resolved by Prepare for the canvas format of the frame
             // being declared, so Record never reaches the pipeline cache from
             // inside an open command buffer -- a MISS there would compile a PSO
             // mid-recording, and a FAILED miss would latch an error on a frame
             // that is otherwise fine. Owned by the cache; borrowed here.
             nri::Pipeline*      pipeline = nullptr;
             nri::Descriptor*    cbView[kSwapchainFramesInFlight]{};
-            nri::DescriptorSet* set[kSwapchainFramesInFlight]{};
             bool ready = false;
-            // Transient PrepareMaterials flag -- Batcher2D::End's
-            // `packedThisBatch`, verbatim in purpose.
+            // Transient Prepare flag -- Batcher2D::End's `packedThisBatch`,
+            // verbatim in purpose.
             bool packedThisBatch = false;
-        };
 
-        // A declared texture param made resident on THIS device. A failed load
-        // is stored with null members so it is attempted once, not every frame.
-        struct ResidentTexture
-        {
-            nri::Texture*    texture = nullptr;
-            nri::Descriptor* view    = nullptr;
+            // ---- the per-SPRITE-TEXTURE variants (Task 2) ---------------
+            // A material's set carries the SPRITE's own texture at t0, and one
+            // material can be drawn with several of them in one frame (the
+            // sort splits a run per texture). t0 is the only thing that
+            // differs, so a variant is one set per frame slot, allocated
+            // lazily on first use of that (material, texture) pair and written
+            // ONCE -- never rewritten, which is what keeps this node free of
+            // ResetDescriptorPool and its fence discipline.
+            //
+            // `variants[0]` is always the NIL-texture variant (the white
+            // texel), which is what an untextured span through a registered
+            // material binds, and what Task 9's single set was.
+            struct TextureVariant
+            {
+                Guid                id{};
+                nri::DescriptorSet* set[kSwapchainFramesInFlight]{};
+            };
+            std::vector<TextureVariant> variants;
+
+            // BuildMaterial's resolved shape, kept so a later variant can be
+            // written without rebuilding the layout or re-resolving the
+            // declared params.
+            std::uint32_t textureCount = 0;
+            // The declared params' views (t1..), in ordinal order. Null means
+            // "the white texel", the same substitution the NVRHI path makes
+            // for an unbound handle.
+            nri::Descriptor* paramViews[kMaxMaterialTextures]{};
         };
 
         // The slot for `material`, building it if needed. Null (already
@@ -324,11 +385,33 @@ namespace Arcane
         // then draws it through the plain sprite pipeline.
         [[nodiscard]] MaterialSlot* EnsureMaterial(Batcher2D& batcher, std::uint16_t material);
         [[nodiscard]] bool BuildMaterial(MaterialSlot& slot, const Material2DDesc& desc);
-        // The SHADER_RESOURCE view for asset `id` on this device, uploading it
-        // once. Null (nil Guid, unresolvable, undecodable, or NRI refused it)
-        // means "use the white texel", which is what the NVRHI path does for a
-        // null handle.
-        [[nodiscard]] nri::Descriptor* EnsureTexture(const Guid& id);
+        // The SHADER_RESOURCE view for asset `id`, through the vehicle's
+        // SHARED cache (which uploads it on first sight). Null -- nil Guid,
+        // unresolvable, undecodable, or NRI refused it -- means "use the white
+        // texel", which is what the NVRHI path does for a null handle.
+        [[nodiscard]] nri::Descriptor* TextureView(const Guid& id);
+
+        // The BUILT-IN descriptor set that binds `id` at t0, allocating and
+        // writing it on first use. Falls back to m_set (the white texel) for a
+        // nil id, an image that is not resident, or a run that has spent
+        // kMaxSpriteTextures. Declaration-time only.
+        [[nodiscard]] nri::DescriptorSet* EnsureSpriteSet(const Guid& id);
+        // The same for a REGISTERED material: the (material, texture) variant's
+        // set for every frame slot, allocated and written on first use. Null
+        // when the variant could not be created, which sends the span to the
+        // nil variant.
+        [[nodiscard]] MaterialSlot::TextureVariant* EnsureMaterialVariant(MaterialSlot& slot,
+                                                                          const Guid& id);
+        // Writes one material descriptor set: CBs, the texture range (t0 =
+        // `spriteView` or the white texel, then the declared params) and the
+        // sampler. Shared by BuildMaterial and the variant path so the two can
+        // never disagree about a set's contents.
+        void WriteMaterialSet(const MaterialSlot& slot, nri::DescriptorSet& set,
+                              std::uint32_t frameSlot, nri::Descriptor* spriteView);
+        // The BUILT-IN set for `id` as a pure LOOKUP -- record-time only, and
+        // deliberately not the Ensure above: nothing inside the recording
+        // window may allocate a set or upload a texture.
+        [[nodiscard]] nri::DescriptorSet* SpriteSetFor(const Guid& id) const;
         // CbRegionOffset against this node's own stride.
         [[nodiscard]] std::uint64_t ArenaOffset(std::uint32_t frameSlot, std::uint32_t region) const
         {
@@ -354,9 +437,13 @@ namespace Arcane
 
         NriDevice* m_device = nullptr;
         NriPipelineCache* m_pipelines = nullptr;
-        // The owning vehicle -- read for its asset resolver only. It outlives
-        // this node by construction (it holds the unique_ptr).
+        // The owning vehicle. It outlives this node by construction (it holds
+        // the unique_ptr).
         NriGraphContext* m_owner = nullptr;
+        // The vehicle's SHARED image residency cache -- borrowed, never owned,
+        // and released by the vehicle AFTER this node (its sets name the
+        // cache's views). See NriTextureCache.hpp.
+        NriTextureCache* m_textureCache = nullptr;
 
         // Bytecode is OWNED BY THE VEHICLE (NriGraphContext's bin cache) and
         // outlives this node -- which the pipeline cache's fill contract
@@ -398,16 +485,19 @@ namespace Arcane
         // Materials this node has already refused, so the refusal is reported
         // once rather than every frame.
         std::unordered_set<std::uint16_t>                m_materialRefused;
-        // Declared texture params made resident here, keyed by asset Guid. A
-        // failed load is kept with null members: attempted once, not per frame.
-        std::unordered_map<Guid, ResidentTexture>        m_textures;
+        // The BUILT-IN per-texture sets, keyed by asset Guid. `m_set` (above)
+        // is the nil-Guid one; these bind a real image at t0 instead. Written
+        // once each, never rewritten -- see the file header.
+        std::unordered_map<Guid, nri::DescriptorSet*>    m_spriteSets;
 
-        // One WARN, not one per span per frame, for the two degradations a
-        // reader must be able to see: a material this node could not build
-        // (drawn through the plain sprite pipeline) and a declared texture it
-        // could not make resident (drawn with the white texel).
+        // One WARN, not one per span per frame, for the degradations a reader
+        // must be able to see: a material this node could not build (drawn
+        // through the plain sprite pipeline) and a run that spent its
+        // per-texture set budget (the rest draw with the white texel). The
+        // "image not resident" warn moved to NriTextureCache, which is where
+        // the miss now happens.
         bool m_warnedRegisteredMaterial = false;
-        bool m_warnedTextureFallback    = false;
+        bool m_warnedTextureBudget      = false;
     };
 
     // Declares the 2D batch node into `graph` and hands back the RGBA16F canvas

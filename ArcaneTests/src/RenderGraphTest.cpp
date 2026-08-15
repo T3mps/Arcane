@@ -31,6 +31,7 @@
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp> // OutlineJfaStepCount / PickNode / OutlineNode
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
+#include <Arcane/Render/Batcher2D.hpp>         // a device-less batcher drains the spans a node counts
 #include <Arcane/Render/PostChainCache.hpp>    // PostChainDesc -- the frame's post-chain wiring
 #include <Arcane/Material/MaterialSource.hpp>  // kSceneInput
 #include <Arcane/Render/Swapchain.hpp>         // kSwapchainFramesInFlight
@@ -4725,4 +4726,98 @@ TEST_CASE("pick geometry: ONE emitter feeds both recorders -- id k+1, back-to-fr
     Arcane::BuildPickIdGeometry(std::span<const Arcane::PickDrawable>{}, vertices, indices);
     CHECK(vertices.empty());
     CHECK(indices.empty());
+}
+
+// ======================================================================
+// TEXTURES ARE NOT GRAPH RESOURCES (NRI Phase 3, Task 2).
+//
+// A sprite's own texture is now REAL on the graph path: a drained span
+// carries the image's asset Guid and Batch2DNode binds the shared
+// NriTextureCache's view at t0. The question that decision raises for the
+// frame graph is whether those textures have to be DECLARED -- and the answer
+// is no, deliberately: they are persistent, uploaded once through
+// HelperInterface::UploadData (which submits and waits, at declaration time),
+// and never written by a node. The graph derives barriers for resources whose
+// state a frame changes; a texture that is SHADER_RESOURCE from its upload
+// until its burial changes none.
+//
+// So the observable contract has two halves, and both are pinned here:
+//   1. the frame's SHAPE is untouched -- same nodes, same transients, same
+//      pool slots, whatever the batch is textured with;
+//   2. what DOES scale with textures is the number of DESCRIPTOR SETS the
+//      batch node must have written before it can record, which is exactly
+//      the number of distinct texture keys the drained spans name. That is a
+//      pure function of the batch and is asserted directly, because it is the
+//      thing a golden cannot show and a device is not needed to compute.
+// ======================================================================
+
+TEST_CASE("nri graph frame: a textured batch adds no graph resource and no node", "[nri]")
+{
+    // The batch stage's census, restated so a future change that made a
+    // texture a graph resource (an import per sprite, say) would land here
+    // rather than in a desk golden.
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.stage        = Arcane::GoldenStage::Batch;
+    shape.canvasWidth  = 320;
+    shape.canvasHeight = 200;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+    CHECK(graph.NodeCount() == 2);                  // batch2d, tonemap
+    CHECK(std::string(graph.NodeName(0)) == "batch2d");
+    CHECK(graph.IsTransient(handles.canvas));
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    // ONE transient (the canvas) in ONE pool slot -- the same census the
+    // untextured frame has, because a sprite texture is neither.
+    CHECK(compiled.transients.size() == 1);
+    CHECK(compiled.poolSlotCount == 1);
+    // The batch node transitions exactly one resource: the canvas it writes.
+    CHECK(compiled.nodes[0].preBarriers.size() == 1);
+}
+
+TEST_CASE("nri graph frame: the batch's descriptor-set count is its distinct texture count",
+          "[nri]")
+{
+    // Driven through a REAL device-less Batcher2D, so what is counted is what
+    // the graph path actually drains rather than a hand-built span list.
+    auto batcher = Arcane::Batcher2D::Create(nullptr, nullptr);
+    REQUIRE(batcher != nullptr);
+
+    const Arcane::Guid a = *Arcane::Guid::FromString("aaaaaaaa-0000-0000-0000-000000000001");
+    const Arcane::Guid b = *Arcane::Guid::FromString("bbbbbbbb-0000-0000-0000-000000000002");
+
+    batcher->Begin(nullptr, nullptr, 64, 64);
+    batcher->Rect(glm::vec2(0.0f), glm::vec2(8.0f), glm::vec4(1.0f));      // nil id
+    batcher->QuadTextured(Arcane::Batcher2D::kMaterialSprite, a,
+                          glm::vec2(0.0f), glm::vec2(8.0f), nullptr,
+                          glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
+    batcher->QuadTextured(Arcane::Batcher2D::kMaterialSprite, b,
+                          glm::vec2(8.0f, 0.0f), glm::vec2(8.0f), nullptr,
+                          glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
+    batcher->QuadTextured(Arcane::Batcher2D::kMaterialSprite, a,   // a REPEAT of `a`
+                          glm::vec2(16.0f, 0.0f), glm::vec2(8.0f), nullptr,
+                          glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
+
+    const Arcane::Batch2DDrained drained = batcher->Drain();
+
+    // THREE spans from four quads: the sort key ends in the texture SLOT, so
+    // the two `a` quads land adjacent and coalesce even though a `b` quad was
+    // submitted between them. And three spans still name only TWO distinct
+    // textures -- the nil-id span binds the node's own white texel and costs
+    // no per-texture descriptor set at all.
+    CHECK(drained.spans.size() == 3);
+    CHECK(Arcane::Batch2DNode::DistinctTextureCount(drained.spans) == 2);
+
+    // An untextured batch needs none.
+    batcher->Begin(nullptr, nullptr, 64, 64);
+    batcher->Rect(glm::vec2(0.0f), glm::vec2(8.0f), glm::vec4(1.0f));
+    batcher->Circle(glm::vec2(32.0f), 4.0f, glm::vec4(1.0f));
+    const Arcane::Batch2DDrained plain = batcher->Drain();
+    CHECK(Arcane::Batch2DNode::DistinctTextureCount(plain.spans) == 0);
+
+    // And the cap that sizes the descriptor pool is a real number, not a
+    // sentinel -- the node degrades to the white texel past it.
+    CHECK(Arcane::Batch2DNode::kMaxSpriteTextures >= 2);
 }

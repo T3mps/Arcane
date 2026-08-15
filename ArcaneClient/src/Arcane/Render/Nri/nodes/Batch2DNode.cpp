@@ -12,9 +12,9 @@
 
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
+#include <Arcane/Render/Nri/NriTextureCache.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 
-#include <Arcane/Assets/ImageIo.hpp>          // LoadPngRgba -- the engine's ONE image decode
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/GlobalParams.hpp>   // kSpriteMaterialCbSlot / kSpriteGlobalCbSlot / kSpriteMaterialTextureBase
 #include <Arcane/Material/MaterialInstance.hpp>
@@ -110,9 +110,10 @@ namespace Arcane
 
     bool Batch2DNode::Init(NriGraphContext& context)
     {
-        m_device    = &context.Device();
-        m_pipelines = &context.Pipelines();
-        m_owner     = &context;
+        m_device       = &context.Device();
+        m_pipelines    = &context.Pipelines();
+        m_owner        = &context;
+        m_textureCache = context.Textures();
 
         for (std::uint32_t i = 0; i < kBuiltInCount; ++i)
         {
@@ -317,12 +318,22 @@ namespace Arcane
         // Capacity is the hard cap kMaxMaterialSlots/kMaxMaterialTextures name:
         // a pool's sizes are fixed at creation and a single set cannot be freed,
         // so the numbers are decided here rather than discovered mid-frame.
-        constexpr std::uint32_t kMaterialSets = kMaxMaterialSlots * kSwapchainFramesInFlight;
+        // Sized for THREE families now (Task 2 added the middle one):
+        //   * the ONE built-in nil-texture set (the white texel);
+        //   * one built-in set per distinct SPRITE TEXTURE, capped at
+        //     kMaxSpriteTextures -- no frame-slot dimension, because a
+        //     built-in set's contents (t0 + s0) carry nothing per-frame;
+        //   * per registered material: one set per (texture variant, frame
+        //     slot), where variant 0 is the nil-texture one Task 9 had.
+        constexpr std::uint32_t kBuiltInSets  = 1 + kMaxSpriteTextures;
+        constexpr std::uint32_t kMaterialSets =
+            kMaxMaterialSlots * kSwapchainFramesInFlight * (1 + kMaxSpriteTextures);
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum  = 1 + kMaterialSets;
-        // Per material set: the sprite's t0 plus its declared t1..N.
-        poolDesc.textureMaxNum        = 1 + (1 + kMaxMaterialTextures) * kMaterialSets;
-        poolDesc.samplerMaxNum        = 1 + kMaterialSets;
+        poolDesc.descriptorSetMaxNum  = kBuiltInSets + kMaterialSets;
+        // Per material set: the sprite's t0 plus its declared t1..N. Per
+        // built-in set: t0 alone.
+        poolDesc.textureMaxNum        = kBuiltInSets + (1 + kMaxMaterialTextures) * kMaterialSets;
+        poolDesc.samplerMaxNum        = kBuiltInSets + kMaterialSets;
         // Per material set: material CB b1 (when the template has numeric
         // params) and globals CB b2.
         poolDesc.constantBufferMaxNum = 2 * kMaterialSets;
@@ -457,7 +468,7 @@ namespace Arcane
         // template's byte count, and the shader simply reads less than it.
         m_arenaStride = CbRegionStride(deviceDesc.memoryAlignment.constantBufferOffset);
 
-        // RESERVED, not merely sized: EnsureMaterial hands PrepareMaterials a
+        // RESERVED, not merely sized: EnsureMaterial hands Prepare a
         // MaterialSlot* out of this vector and then keeps building, so a
         // reallocation mid-frame would dangle it. The cap is the reservation, so
         // the vector never grows past it.
@@ -533,12 +544,10 @@ namespace Arcane
             if (m_arenaCpu) core.UnmapBuffer(*m_arena);
             core.DestroyBuffer(m_arena);
         }
-        for (auto& [id, resident] : m_textures)
-        {
-            if (resident.view)    core.DestroyDescriptor(resident.view);
-            if (resident.texture) core.DestroyTexture(resident.texture);
-        }
-        m_textures.clear();
+        // The sprite-texture sets are owned by the pool destroyed above, and
+        // the TEXTURES they view belong to the vehicle's shared
+        // NriTextureCache, which releases its own -- this node owns neither.
+        m_spriteSets.clear();
         m_materials.clear();
         m_materialSlotOf.clear();
         if (m_sampler)   core.DestroyDescriptor(m_sampler);
@@ -576,12 +585,14 @@ namespace Arcane
                 graveyard.Bury(fence, [core, d = view] { core->DestroyDescriptor(d); });
                 view = nullptr;
             }
-            for (nri::DescriptorSet*& set : slot.set)
-                set = nullptr;   // owned by the pool, buried above
+            slot.variants.clear();   // sets are owned by the pool, buried above
         }
         m_materials.clear();
         m_materialSlotOf.clear();
         m_materialRefused.clear();
+        // Owned by the pool buried above; the images behind them belong to the
+        // vehicle's shared NriTextureCache, which the vehicle releases itself.
+        m_spriteSets.clear();
 
         for (nri::Descriptor*& view : m_globalsView)
         {
@@ -605,15 +616,6 @@ namespace Arcane
             m_arena = nullptr;
         }
 
-        for (auto& [id, resident] : m_textures)
-        {
-            if (resident.view)
-                graveyard.Bury(fence, [core, d = resident.view] { core->DestroyDescriptor(d); });
-            if (resident.texture)
-                graveyard.Bury(fence, [core, t = resident.texture] { core->DestroyTexture(t); });
-        }
-        m_textures.clear();
-
         if (m_sampler)
         {
             graveyard.Bury(fence, [core, d = m_sampler] { core->DestroyDescriptor(d); });
@@ -636,7 +638,7 @@ namespace Arcane
         std::uint32_t builtIn = material;
         if (builtIn >= kBuiltInCount)
         {
-            // A REGISTERED material that PrepareMaterials could not build (or
+            // A REGISTERED material that Prepare could not build (or
             // was never offered -- a caller that skipped Prepare). Falling back
             // to the plain sprite pipeline draws the right geometry with the
             // wrong shader rather than dropping the content, which is the same
@@ -693,127 +695,232 @@ namespace Arcane
     // REGISTERED MATERIALS (Task 9)
     // =====================================================================
 
-    nri::Descriptor* Batch2DNode::EnsureTexture(const Guid& id)
+    std::uint32_t Batch2DNode::DistinctTextureCount(std::span<const Batch2DDrawSpan> spans)
     {
+        // Small by construction (a frame's distinct sprite textures), so a
+        // flat scan beats a set allocation -- and this runs once per frame,
+        // never per span.
+        std::vector<Guid> seen;
+        for (const Batch2DDrawSpan& span : spans)
+        {
+            if (!span.textureId.IsValid())
+                continue;
+            bool known = false;
+            for (const Guid& id : seen)
+                known = known || id == span.textureId;
+            if (!known)
+                seen.push_back(span.textureId);
+        }
+        return (std::uint32_t)seen.size();
+    }
+
+    nri::Descriptor* Batch2DNode::TextureView(const Guid& id)
+    {
+        // The whole of this node's image residency since Task 2: ONE shared
+        // cache on the vehicle, so a sprite's own texture and a material's
+        // declared param naming the same asset are one upload. The miss warn
+        // lives there too -- it is where the miss happens.
+        if (!m_textureCache || !m_textureCache->Resolve(id))
+            return nullptr;
+        return m_textureCache->View(id);
+    }
+
+    nri::DescriptorSet* Batch2DNode::EnsureSpriteSet(const Guid& id)
+    {
+        // A nil id is the untextured case -- Task 8's single white-texel set,
+        // unchanged and still written once at Create.
         if (!id.IsValid())
-            return nullptr;   // unbound param -- the white texel, same as the NVRHI path
+            return m_set;
 
-        const auto cached = m_textures.find(id);
-        if (cached != m_textures.end())
-            return cached->second.view;   // null for a load this node already failed
+        const auto known = m_spriteSets.find(id);
+        if (known != m_spriteSets.end())
+            return known->second ? known->second : m_set;
 
-        // Remembered BEFORE any early return, so a failure is attempted once
-        // rather than re-resolved every frame.
-        ResidentTexture& resident = m_textures[id];
-
-        const auto reportFallback = [&](const std::string& why)
+        nri::Descriptor* view = TextureView(id);
+        if (!view)
         {
-            if (!m_warnedTextureFallback)
+            // Not resident (NriTextureCache said why, once). Remembered as a
+            // null set so this does not re-ask the cache every frame.
+            m_spriteSets[id] = nullptr;
+            return m_set;
+        }
+
+        // Counts LIVE sets, not map entries: a memoized miss holds no
+        // descriptor set, and letting eight unresolvable images spend the
+        // budget would refuse a ninth that actually resolved.
+        std::size_t live = 0;
+        for (const auto& [key, existing] : m_spriteSets)
+            if (existing)
+                ++live;
+        if (live >= kMaxSpriteTextures)
+        {
+            if (!m_warnedTextureBudget)
             {
-                m_warnedTextureFallback = true;
-                ARC_WARN("[nri-graph] Batch2DNode: material texture {} is not resident on the graph "
-                         "device -- {}; the white texel is bound in its place (further occurrences "
-                         "are silent)", id.ToString(), why);
+                m_warnedTextureBudget = true;
+                ARC_ERROR("[nri-graph] Batch2DNode: more than {} distinct sprite textures -- the "
+                          "rest draw with the white texel. Raise kMaxSpriteTextures (it sizes the "
+                          "descriptor pool).", kMaxSpriteTextures);
             }
-        };
-
-        const std::optional<std::filesystem::path> path =
-            m_owner ? m_owner->ResolveAsset(id) : std::nullopt;
-        if (!path)
-        {
-            reportFallback("no asset resolver, or the Guid is not in the project registry");
-            return nullptr;
-        }
-
-        // The ENGINE's decode, not a second one: LoadPngRgba is the device-free
-        // half Assets::GetTexture uses (Assets/ImageIo.hpp), so both devices
-        // read the same file through the same stb call and get the same bytes.
-        std::uint32_t width = 0, height = 0;
-        std::vector<unsigned char> rgba;
-        if (!LoadPngRgba(*path, width, height, rgba) || width == 0 || height == 0 || rgba.empty())
-        {
-            reportFallback("the image at " + path->string() + " could not be decoded");
-            return nullptr;
-        }
-        // nri::Dim_t is 16-bit, and the cast below would silently wrap -- the
-        // same refusal RenderGraph::RealizePool makes for a transient's extent.
-        if (width > 0xFFFFu || height > 0xFFFFu)
-        {
-            reportFallback("the image at " + path->string() + " is "
-                           + std::to_string(width) + "x" + std::to_string(height)
-                           + ", which nri::Dim_t (16-bit) cannot express");
-            return nullptr;
+            m_spriteSets[id] = nullptr;
+            return m_set;
         }
 
         const nri::CoreInterface& core = m_device->Core();
-
-        nri::TextureDesc textureDesc = {};
-        textureDesc.type      = nri::TextureType::TEXTURE_2D;
-        textureDesc.usage     = nri::TextureUsageBits::SHADER_RESOURCE;
-        // SRGB, matching Assets::GetTexture's nvrhi::Format::SRGBA8_UNORM: the
-        // canvas is linear and the hardware does the decode, so a UNORM here
-        // would render the same asset visibly brighter than the NVRHI path.
-        textureDesc.format    = nri::Format::RGBA8_SRGB;
-        textureDesc.width     = (nri::Dim_t)width;
-        textureDesc.height    = (nri::Dim_t)height;
-        textureDesc.depth     = 1;
-        textureDesc.mipNum    = 1;   // the NVRHI path uploads mip 0 only too
-        textureDesc.layerNum  = 1;
-        textureDesc.sampleNum = 1;
-        if (!ARC_NRI_CHECK(core.CreateCommittedTexture(m_device->Device(), nri::MemoryLocation::DEVICE,
-                                                        0.0f, textureDesc, resident.texture))
-            || !resident.texture)
+        nri::PipelineLayout* layout = m_pipelines->Layout(m_layoutId);
+        nri::DescriptorSet* set = nullptr;
+        if (!layout
+            || !ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0, &set, 1, 0))
+            || !set)
         {
-            reportFallback("CreateCommittedTexture failed");
-            resident.texture = nullptr;
-            return nullptr;
-        }
-        core.SetDebugName(resident.texture, path->filename().string().c_str());
-
-        // Through NRI's OWN helper, exactly as the white texel is: UploadData
-        // submits and waits internally, which is why this whole function runs at
-        // DECLARATION time and never from inside Record's open command buffer.
-        nri::HelperInterface helper = {};
-        if (!ARC_NRI_CHECK(nriGetInterface(m_device->Device(), NRI_INTERFACE(nri::HelperInterface), &helper)))
-        {
-            reportFallback("HelperInterface unavailable");
-            return nullptr;
+            ARC_ERROR("[nri-graph] Batch2DNode: descriptor-set allocation failed for sprite "
+                      "texture {} -- it draws with the white texel", id.ToString());
+            m_spriteSets[id] = nullptr;
+            return m_set;
         }
 
-        nri::TextureSubresourceUploadDesc subresource = {};
-        subresource.slices     = rgba.data();
-        subresource.sliceNum   = 1;
-        subresource.rowPitch   = width * 4;
-        subresource.slicePitch = width * height * 4;
+        // Written ONCE, here, and never again -- the same discipline every set
+        // in this node obeys (see the pool comment in CreateBindings), which is
+        // what keeps ResetDescriptorPool and its fence rules out of this file.
+        const nri::Descriptor* texture = view;
+        const nri::Descriptor* sampler = m_sampler;
+        nri::UpdateDescriptorRangeDesc updates[2] = {};
+        updates[0].descriptorSet = set;
+        updates[0].rangeIndex    = 0;
+        updates[0].descriptors   = &texture;
+        updates[0].descriptorNum = 1;
+        updates[1].descriptorSet = set;
+        updates[1].rangeIndex    = 1;
+        updates[1].descriptors   = &sampler;
+        updates[1].descriptorNum = 1;
+        core.UpdateDescriptorRanges(updates, 2);
 
-        nri::TextureUploadDesc upload = {};
-        upload.subresources = &subresource;
-        upload.texture      = resident.texture;
-        upload.after        = { nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE,
-                                nri::StageBits::FRAGMENT_SHADER };
-        upload.planes       = nri::PlaneBits::ALL;
-        if (!ARC_NRI_CHECK(helper.UploadData(*m_device->GraphicsQueue(), &upload, 1, nullptr, 0)))
+        m_spriteSets[id] = set;
+        return set;
+    }
+
+    void Batch2DNode::WriteMaterialSet(const MaterialSlot& slot, nri::DescriptorSet& set,
+                                       std::uint32_t frameSlot, nri::Descriptor* spriteView)
+    {
+        const nri::CoreInterface& core = m_device->Core();
+
+        // Rebuilt rather than carried: SpriteMaterialLayout::Build is pure and
+        // cheap, and deriving the range indices from the SAME (cbSize,
+        // textureCount) the set was allocated against is what makes it
+        // impossible for a variant to write a different shape than the
+        // original set.
+        SpriteMaterialLayout layout2D;
+        layout2D.Build(slot.cbSize, slot.textureCount);
+
+        nri::Descriptor* textures[1 + kMaxMaterialTextures] = {};
+        textures[0] = spriteView ? spriteView : m_whiteView;   // t0: the sprite's own
+        for (std::uint32_t t = 0; t < slot.textureCount; ++t)
+            textures[1 + t] = slot.paramViews[t] ? slot.paramViews[t] : m_whiteView;
+
+        // EVERY `descriptors` SOURCE BELOW MUST OUTLIVE THE
+        // UpdateDescriptorRanges CALL AT THE BOTTOM OF THIS FUNCTION.
+        // UpdateDescriptorRangeDesc::descriptors is a POINTER TO AN ARRAY of
+        // descriptors (NRIDescs.h:1101), dereferenced inside the call -- so a
+        // single descriptor is passed as the address of a variable, and that
+        // variable has to still be alive when the call runs. Hence `cb` is
+        // declared HERE, in the same scope as its siblings, rather than inside
+        // the `cbSize > 0` block that fills it: taking &cb from a narrower
+        // scope leaves updates[] holding a pointer into dead storage, and the
+        // compiler is free to give that slot to `globals` -- which would
+        // silently write the GLOBALS view into range b1 and produce a
+        // well-formed descriptor NRI's validation cannot fault.
+        nri::UpdateDescriptorRangeDesc updates[4] = {};
+        std::uint32_t updateCount = 0;
+        const nri::Descriptor* cb = nullptr;
+        if (slot.cbSize > 0)
         {
-            reportFallback("the texture upload failed");
-            return nullptr;
+            cb = slot.cbView[frameSlot];
+            updates[updateCount].descriptorSet = &set;
+            updates[updateCount].rangeIndex    = layout2D.materialCb;
+            updates[updateCount].descriptors   = &cb;
+            updates[updateCount].descriptorNum = 1;
+            ++updateCount;
+        }
+        const nri::Descriptor* globals = m_globalsView[frameSlot];
+        updates[updateCount].descriptorSet = &set;
+        updates[updateCount].rangeIndex    = layout2D.globalsCb;
+        updates[updateCount].descriptors   = &globals;
+        updates[updateCount].descriptorNum = 1;
+        ++updateCount;
+
+        const nri::Descriptor* const* textureArray = textures;
+        updates[updateCount].descriptorSet = &set;
+        updates[updateCount].rangeIndex    = layout2D.textures;
+        updates[updateCount].descriptors   = textureArray;
+        updates[updateCount].descriptorNum = 1 + slot.textureCount;
+        ++updateCount;
+
+        const nri::Descriptor* sampler = m_sampler;
+        updates[updateCount].descriptorSet = &set;
+        updates[updateCount].rangeIndex    = layout2D.sampler;
+        updates[updateCount].descriptors   = &sampler;
+        updates[updateCount].descriptorNum = 1;
+        ++updateCount;
+
+        core.UpdateDescriptorRanges(updates, updateCount);
+    }
+
+    Batch2DNode::MaterialSlot::TextureVariant*
+    Batch2DNode::EnsureMaterialVariant(MaterialSlot& slot, const Guid& id)
+    {
+        // The NIL variant is always variants[0] (BuildMaterial writes it), and
+        // it is the fallback for everything this function refuses.
+        const auto fallback = [&slot]() -> MaterialSlot::TextureVariant*
+        {
+            return slot.variants.empty() ? nullptr : &slot.variants.front();
+        };
+
+        for (MaterialSlot::TextureVariant& variant : slot.variants)
+            if (variant.id == id)
+                return &variant;
+        if (!id.IsValid())
+            return fallback();
+
+        nri::Descriptor* spriteView = TextureView(id);
+        if (!spriteView)
+            return fallback();
+
+        // variants[0] is the nil one and is not a texture, hence the `>`.
+        if (slot.variants.size() > kMaxSpriteTextures)
+        {
+            if (!m_warnedTextureBudget)
+            {
+                m_warnedTextureBudget = true;
+                ARC_ERROR("[nri-graph] Batch2DNode: a material binds more than {} distinct sprite "
+                          "textures -- the rest draw with the white texel. Raise "
+                          "kMaxSpriteTextures (it sizes the descriptor pool).", kMaxSpriteTextures);
+            }
+            return fallback();
         }
 
-        nri::TextureViewDesc viewDesc = {};
-        viewDesc.texture  = resident.texture;
-        viewDesc.type     = nri::TextureView::TEXTURE;
-        viewDesc.format   = textureDesc.format;
-        viewDesc.mipNum   = 1;
-        viewDesc.layerNum = 1;
-        if (!ARC_NRI_CHECK(core.CreateTextureView(viewDesc, resident.view)) || !resident.view)
+        const nri::CoreInterface& core = m_device->Core();
+        nri::PipelineLayout* layout = m_pipelines->Layout(slot.layoutId);
+        if (!layout)
+            return fallback();
+
+        MaterialSlot::TextureVariant fresh;
+        fresh.id = id;
+        for (std::uint32_t frameSlot = 0; frameSlot < kSwapchainFramesInFlight; ++frameSlot)
         {
-            reportFallback("the shader-resource view could not be created");
-            resident.view = nullptr;
-            return nullptr;
+            if (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0,
+                                                            &fresh.set[frameSlot], 1, 0))
+                || !fresh.set[frameSlot])
+            {
+                ARC_ERROR("[nri-graph] Batch2DNode: descriptor-set allocation failed for a "
+                          "material's sprite-texture variant -- the pool holds {} material sets, "
+                          "sized by kMaxMaterialSlots x kMaxSpriteTextures",
+                          kMaxMaterialSlots * kSwapchainFramesInFlight * (1 + kMaxSpriteTextures));
+                return fallback();
+            }
+            WriteMaterialSet(slot, *fresh.set[frameSlot], frameSlot, spriteView);
         }
 
-        ARC_INFO("[nri-graph] Batch2DNode: material texture {} ({}x{}) is resident on the graph device",
-                 path->filename().string(), width, height);
-        return resident.view;
+        slot.variants.push_back(fresh);
+        return &slot.variants.back();
     }
 
     bool Batch2DNode::BuildMaterial(MaterialSlot& slot, const Material2DDesc& desc)
@@ -867,8 +974,7 @@ namespace Arcane
             ARC_INFO("[nri-graph] Batch2DNode: material '{}' changed binding SHAPE -- its descriptor "
                      "sets are re-allocated (the previous ones are stranded in the pool until "
                      "shutdown)", desc.templ->Name());
-            for (nri::DescriptorSet*& set : slot.set)
-                set = nullptr;
+            slot.variants.clear();   // every variant's sets were the OLD shape
         }
 
         // The PSO key. shaderPairId is the CONTENT hash of the blob pair, which
@@ -893,15 +999,23 @@ namespace Arcane
         // which idles first (EnsureMaterial) -- so nothing here is ever written
         // while a frame in flight reads it.
         // ---------------------------------------------------------------
+        // The DECLARED param views (t1..), resolved through the vehicle's SHARED
+        // NriTextureCache and kept on the slot so every later texture VARIANT
+        // writes the same ones without re-resolving. An unbound, unresolvable
+        // or undecodable param stays null and WriteMaterialSet substitutes the
+        // white texel -- the same fallback the NVRHI path makes for a null
+        // handle (Batcher2D::GetBindingSet).
         const std::vector<Guid> textureIds = desc.instance->ResolveTextures();
-        nri::Descriptor* textures[1 + kMaxMaterialTextures] = {};
-        textures[0] = m_whiteView;   // t0: the sprite's own texture -- THE TEXTURE GAP
+        slot.textureCount = textureCount;
+        for (nri::Descriptor*& view : slot.paramViews)
+            view = nullptr;
         for (std::uint32_t t = 0; t < textureCount; ++t)
-        {
-            nri::Descriptor* view = t < textureIds.size() ? EnsureTexture(textureIds[t]) : nullptr;
-            textures[1 + t] = view ? view : m_whiteView;
-        }
+            slot.paramViews[t] = t < textureIds.size() ? TextureView(textureIds[t]) : nullptr;
 
+        // The per-frame-slot constant-buffer views, allocated ONCE per material
+        // slot and only rewritten on a rebuild, which idles first
+        // (EnsureMaterial) -- so nothing here is ever written while a frame in
+        // flight reads it.
         for (std::uint32_t frameSlot = 0; frameSlot < kSwapchainFramesInFlight; ++frameSlot)
         {
             if (cbSize > 0 && !slot.cbView[frameSlot])
@@ -919,64 +1033,43 @@ namespace Arcane
                     return false;
                 }
             }
+        }
 
-            if (!slot.set[frameSlot]
-                && (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0,
-                                                                &slot.set[frameSlot], 1, 0))
-                    || !slot.set[frameSlot]))
+        // VARIANT 0: the NIL-texture one -- what an untextured span through
+        // this material binds, and exactly the single set Task 9 built. Every
+        // per-sprite-texture variant beside it is allocated lazily by
+        // EnsureMaterialVariant, which writes it through the same
+        // WriteMaterialSet this does.
+        if (slot.variants.empty())
+        {
+            MaterialSlot::TextureVariant nil;
+            for (std::uint32_t frameSlot = 0; frameSlot < kSwapchainFramesInFlight; ++frameSlot)
             {
-                ARC_ERROR("[nri-graph] Batch2DNode: descriptor-set allocation failed for material "
-                          "'{}' -- the pool holds {} sets, sized by kMaxMaterialSlots",
-                          desc.templ->Name(), 1 + kMaxMaterialSlots * kSwapchainFramesInFlight);
-                return false;
+                if (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0,
+                                                                &nil.set[frameSlot], 1, 0))
+                    || !nil.set[frameSlot])
+                {
+                    ARC_ERROR("[nri-graph] Batch2DNode: descriptor-set allocation failed for material "
+                              "'{}' -- the pool holds {} material sets, sized by kMaxMaterialSlots "
+                              "x kMaxSpriteTextures", desc.templ->Name(),
+                              kMaxMaterialSlots * kSwapchainFramesInFlight * (1 + kMaxSpriteTextures));
+                    return false;
+                }
             }
-
-            // EVERY `descriptors` SOURCE BELOW MUST OUTLIVE THE
-            // UpdateDescriptorRanges CALL AT THE BOTTOM OF THIS BLOCK.
-            // UpdateDescriptorRangeDesc::descriptors is a POINTER TO AN ARRAY of
-            // descriptors (NRIDescs.h:1101), dereferenced inside the call -- so
-            // a single descriptor is passed as the address of a variable, and
-            // that variable has to still be alive when the call runs. Hence
-            // `cb` is declared HERE, in the same scope as its siblings, rather
-            // than inside the `cbSize > 0` block that fills it: taking &cb from
-            // a narrower scope leaves updates[] holding a pointer into dead
-            // storage, and the compiler is free to give that slot to `globals`
-            // -- which would silently write the GLOBALS view into range b1 and
-            // produce a well-formed descriptor NRI's validation cannot fault.
-            nri::UpdateDescriptorRangeDesc updates[4] = {};
-            std::uint32_t updateCount = 0;
-            const nri::Descriptor* cb = nullptr;
-            if (cbSize > 0)
-            {
-                cb = slot.cbView[frameSlot];
-                updates[updateCount].descriptorSet = slot.set[frameSlot];
-                updates[updateCount].rangeIndex    = layout2D.materialCb;
-                updates[updateCount].descriptors   = &cb;
-                updates[updateCount].descriptorNum = 1;
-                ++updateCount;
-            }
-            const nri::Descriptor* globals = m_globalsView[frameSlot];
-            updates[updateCount].descriptorSet = slot.set[frameSlot];
-            updates[updateCount].rangeIndex    = layout2D.globalsCb;
-            updates[updateCount].descriptors   = &globals;
-            updates[updateCount].descriptorNum = 1;
-            ++updateCount;
-
-            const nri::Descriptor* const* textureArray = textures;
-            updates[updateCount].descriptorSet = slot.set[frameSlot];
-            updates[updateCount].rangeIndex    = layout2D.textures;
-            updates[updateCount].descriptors   = textureArray;
-            updates[updateCount].descriptorNum = 1 + textureCount;
-            ++updateCount;
-
-            const nri::Descriptor* sampler = m_sampler;
-            updates[updateCount].descriptorSet = slot.set[frameSlot];
-            updates[updateCount].rangeIndex    = layout2D.sampler;
-            updates[updateCount].descriptors   = &sampler;
-            updates[updateCount].descriptorNum = 1;
-            ++updateCount;
-
-            core.UpdateDescriptorRanges(updates, updateCount);
+            slot.variants.push_back(nil);
+        }
+        // EVERY variant is rewritten, not just the nil one. On a REBUILD (a
+        // material re-save) the constant-buffer views above were destroyed and
+        // recreated, so a texture variant's set would otherwise still name a
+        // DESTROYED descriptor -- a live set pointing at freed memory. Safe to
+        // rewrite here because the rebuild path idles the device first
+        // (EnsureMaterial) and a fresh build has only the nil variant anyway.
+        for (MaterialSlot::TextureVariant& variant : slot.variants)
+        {
+            nri::Descriptor* spriteView = variant.id.IsValid() ? TextureView(variant.id) : nullptr;
+            for (std::uint32_t frameSlot = 0; frameSlot < kSwapchainFramesInFlight; ++frameSlot)
+                if (variant.set[frameSlot])
+                    WriteMaterialSet(slot, *variant.set[frameSlot], frameSlot, spriteView);
         }
 
         slot.ready = true;
@@ -1071,9 +1164,25 @@ namespace Arcane
         return &slot;
     }
 
-    void Batch2DNode::PrepareMaterials(Batcher2D& batcher, const Batch2DDrained& batch,
-                                       nri::Format canvasFormat)
+    void Batch2DNode::Prepare(Batcher2D& batcher, const Batch2DDrained& batch,
+                              nri::Format canvasFormat)
     {
+        // ---------------------------------------------------------------
+        // PASS 1: THE SPRITE TEXTURES (Task 2). Every span -- built-in or
+        // material -- names an image asset or nil, and each distinct non-nil
+        // one needs to be resident and to have a built-in descriptor set that
+        // binds it at t0. Both happen HERE and only here: the upload submits
+        // and waits, and a descriptor set must never be allocated or written
+        // inside the frame's open command buffer.
+        //
+        // The result is memoized in m_spriteSets (including the misses), so a
+        // scene that draws the same sprites every frame does this once.
+        // ---------------------------------------------------------------
+        for (const Batch2DDrawSpan& span : batch.spans)
+            (void)EnsureSpriteSet(span.textureId);
+
+        // ---------------------------------------------------------------
+        // PASS 2: THE REGISTERED MATERIALS.
         // PACK-ONCE-PER-BATCH, the same dedup Batcher2D::End applies with its
         // `packedThisBatch` flag: the sort key groups by material but a material
         // can still own several spans (a different texture between them splits
@@ -1145,6 +1254,34 @@ namespace Arcane
                     desc->instance->PackCB(slot->packed.data(), slot->packed.size());
             }
         }
+
+        // ---------------------------------------------------------------
+        // PASS 3: the (material, sprite texture) VARIANTS. Separate from pass
+        // 2 because that one is deduped per MATERIAL (`packedThisBatch`) while
+        // this must see EVERY span: one material drawn with three different
+        // sprite textures needs three variants, and pass 2 visits it once.
+        // ---------------------------------------------------------------
+        for (const Batch2DDrawSpan& span : batch.spans)
+        {
+            if (span.material < kBuiltInCount || !span.textureId.IsValid())
+                continue;
+            const auto known = m_materialSlotOf.find(span.material);
+            if (known == m_materialSlotOf.end() || !m_materials[known->second].ready)
+                continue;   // refused already, and Record draws it built-in
+            (void)EnsureMaterialVariant(m_materials[known->second], span.textureId);
+        }
+    }
+
+    nri::DescriptorSet* Batch2DNode::SpriteSetFor(const Guid& id) const
+    {
+        // RECORD-TIME ONLY: a pure lookup over what Prepare already built. It
+        // must never allocate or upload -- both would happen inside the frame's
+        // open command buffer. A miss is the white texel, which is also what a
+        // caller that skipped Prepare entirely gets.
+        if (!id.IsValid())
+            return m_set;
+        const auto known = m_spriteSets.find(id);
+        return (known != m_spriteSets.end() && known->second) ? known->second : m_set;
     }
 
     void Batch2DNode::Record(RenderGraphNodeContext& context, const Batch2DDrained& batch,
@@ -1216,7 +1353,7 @@ namespace Arcane
         // barrier, no flush, exactly as the ring's streams need none.
         //
         // The globals block is 16 bytes (GlobalParams) and the material blocks
-        // were PACKED on the CPU in PrepareMaterials; all that is left is the
+        // were PACKED on the CPU in Prepare; all that is left is the
         // copy. Nothing here is written when the batch drew no registered
         // material, and the arena is untouched in that case.
         // ---------------------------------------------------------------
@@ -1273,7 +1410,7 @@ namespace Arcane
             nri::DescriptorSet*  set      = nullptr;
 
             // Everything a registered material needs was resolved at
-            // declaration time (PrepareMaterials): `pipeline` and `set` are
+            // declaration time (Prepare): `pipeline` and `set` are
             // direct field reads off the resolved MaterialSlot, and `layout`
             // is an O(1) bounds-checked index into NriPipelineCache's own
             // vector (Layout()), not a hash lookup. None of the three can
@@ -1287,16 +1424,33 @@ namespace Arcane
                 const MaterialSlot& slot = m_materials[known->second];
                 pipeline = slot.pipeline;
                 layout   = m_pipelines->Layout(slot.layoutId);
-                set      = slot.set[frameSlot];
+                // The (material, sprite texture) VARIANT Prepare built for this
+                // span, or the nil one. A LINEAR SCAN and not a map: `variants`
+                // holds at most 1 + kMaxSpriteTextures entries and is almost
+                // always one or two, so this is cheaper than hashing -- and it
+                // allocates nothing, which is the rule inside the recording
+                // window.
+                for (const MaterialSlot::TextureVariant& variant : slot.variants)
+                {
+                    if (variant.id == span.textureId)
+                    {
+                        set = variant.set[frameSlot];
+                        break;
+                    }
+                    if (!variant.id.IsValid())
+                        set = variant.set[frameSlot];   // the nil fallback, kept if nothing matches
+                }
             }
 
             if (!pipeline || !layout || !set)
             {
                 // Built-in, or a registered material that could not be honoured
-                // -- PipelineFor states which and warns once.
+                // -- PipelineFor states which and warns once. The SET is the
+                // one Prepare wrote for this span's texture (m_set, the white
+                // texel, for a nil or non-resident id).
                 pipeline = PipelineFor(span.material, canvasFormat);
                 layout   = builtInLayout;
-                set      = m_set;
+                set      = SpriteSetFor(span.textureId);
             }
             if (!pipeline)
                 continue;   // already logged + latched by the cache
@@ -1350,9 +1504,9 @@ namespace Arcane
                 // too, for the same reason: this is the last point before the
                 // frame's command buffer opens, and making a material's texture
                 // resident goes through a helper that submits and waits. See
-                // PrepareMaterials.
+                // Prepare.
                 if (Batch2DNode* node = context->Batch2D())
-                    node->PrepareMaterials(*batcher, drained, kCanvasFormat);
+                    node->Prepare(*batcher, drained, kCanvasFormat);
             }
         }
 

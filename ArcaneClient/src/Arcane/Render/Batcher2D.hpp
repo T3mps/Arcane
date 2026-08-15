@@ -11,6 +11,7 @@
 // premultiplied is a deliberate future decision.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Guid.hpp>
 
 #include <nvrhi/nvrhi.h>
 
@@ -133,9 +134,26 @@ namespace Arcane
     struct Batch2DDrawSpan
     {
         uint16_t material = 0;
+        // THE NVRHI KEY. Still here, still what End() binds -- the NVRHI
+        // recorder owns real texture objects and must keep naming them.
         nvrhi::ITexture* texture = nullptr;
         uint32_t firstIndex = 0;
         uint32_t indexCount = 0;
+        // THE ASSET KEY (NRI Phase 3, Task 2), APPENDED so nothing above it
+        // moves. The image ASSET this run samples at t0, independent of any
+        // device: the second recorder (Batch2DNode) cannot use `texture` --
+        // that object lives on the engine's NVRHI device -- so it resolves
+        // this Guid through the shared NriTextureCache instead. Nil means
+        // "untextured": Rect/Line/Circle/Triangle, an atlas glyph, and any
+        // texture that is not an asset (a render target, the editor's
+        // checkerboard) all record nil and bind the white texel.
+        //
+        // BOTH KEYS, ONE TRUTH. A device-carrying batcher fills both and they
+        // describe the same image; a DEVICE-LESS one (Batcher2D::Create with a
+        // null device) fills only this one, because there is no texture object
+        // to point at. Runs split on BOTH, so the two recorders always draw
+        // the same number of draws in the same order.
+        Guid textureId{};
     };
 
     // A VIEW over the batcher's own storage -- it owns nothing. The spans stay
@@ -169,8 +187,26 @@ namespace Arcane
     {
     public:
         // Returns null (with ARC_ERROR) when the batch shaders are missing.
+        //
+        // BOTH ARGUMENTS MAY BE NULL (NRI Phase 3, Task 2) -- and null in
+        // EITHER makes a DEVICE-LESS batcher, because the GPU half needs both.
+        // A device-less instance skips every GPU creation in Init (the white
+        // texel, the sampler, the binding layout, the input layout, the
+        // built-in shader probe) and therefore never returns null for a
+        // missing shader either -- there is nothing to build.
+        //
+        // WHAT STILL WORKS device-less, and it is the whole data-supply side:
+        // Begin, SetLayer, every Quad*/Rect/Line/Circle/Triangle/Glyph,
+        // RegisterMaterial/UpdateMaterial (bytes-only, see BuildEntry),
+        // SetGlobals, MaterialDesc, Drain, Stats, RemoveTexture. WHAT DOES
+        // NOT: End(), which IS the NVRHI recorder -- it refuses loudly and
+        // records nothing.
+        //
+        // This is the phase's severance: the frame's data supply stops
+        // depending on an NVRHI device so Task 6 can drop that device without
+        // dropping the batching with it.
         static std::unique_ptr<Batcher2D> Create(nvrhi::IDevice* device,
-                                                 ShaderLibrary& shaders);
+                                                 ShaderLibrary* shaders);
 
         virtual ~Batcher2D() = default;
 
@@ -205,7 +241,10 @@ namespace Arcane
 
         // Sorting: every draw carries the current (layer, orderInLayer).
         // End() stable-sorts draws by a 64-bit key -- layer(16) | order(16)
-        // | materialId(16) | textureSlot(16) -- giving correct transparency
+        // | materialId(16) | textureSlot(16) -- where a texture SLOT is one
+        // (texture object, image-asset Guid) pair in first-use order, so a
+        // device-less batcher (whose texture objects are all null) still
+        // separates distinct assets. Giving correct transparency
         // ordering AND minimal state changes in one pass. Ordering WITHIN one
         // (layer, order) is non-deterministic and can change frame to frame
         // (texture slots are assigned per-Begin in first-use order) --
@@ -319,5 +358,35 @@ namespace Arcane
         // APPENDED, and it stays appended -- see Drain()'s comment above for
         // why every new virtual goes at the end of this class. ABI v12.
         virtual const Material2DDesc* MaterialDesc(uint16_t /*id*/) const { return nullptr; }
+
+        // THE ASSET-IDENTITY SUBMISSION (NRI Phase 3, Task 2). Identical to
+        // QuadMaterial in every respect -- same geometry, same stream, same
+        // material dispatch (pass kMaterialSprite for the plain path) -- with
+        // ONE addition: `textureId` names the image ASSET behind `texture`, and
+        // it travels into the drained span (Batch2DDrawSpan::textureId).
+        //
+        // WHY A PARAMETER AND NOT STATE. A sticky "current texture id" would
+        // have to be cleared by every one of the batcher's many other callers
+        // (physics debug draw, gizmos, the editor's own overlays) or they would
+        // inherit the last sprite's identity and sample the wrong image. There
+        // is no such failure mode when the id rides the call that uses it.
+        //
+        // WHY THE HOST MUST USE IT. In graph mode there is no NVRHI device, so
+        // Assets::GetTexture yields null for every sprite and `texture` is
+        // ALWAYS null -- the pointer can no longer tell "untextured" from
+        // "textured on a device that does not exist". The Guid can.
+        //
+        // Interface DEFAULT (not pure), like QuadMaterial: a geometry-recording
+        // test double records the same quad, minus an identity it has nowhere
+        // to put. APPENDED, ABI v13.
+        virtual void QuadTextured(uint16_t materialId, const Guid& /*textureId*/,
+                                  glm::vec2 dstPos, glm::vec2 dstSize,
+                                  nvrhi::ITexture* texture,
+                                  glm::vec2 uvMin, glm::vec2 uvMax,
+                                  glm::vec4 color, float rotation = 0.0f)
+        {
+            QuadMaterial(materialId, dstPos, dstSize, texture, uvMin, uvMax,
+                         color, rotation);
+        }
     };
 }

@@ -42,6 +42,28 @@ namespace Arcane
             uint32_t firstVertex = 0;
             uint16_t material = 0;   // Batcher2D::kMaterialSprite..
             nvrhi::ITexture* texture = nullptr;
+            // The image ASSET behind `texture`, nil for the untextured
+            // primitives -- Batch2DDrawSpan::textureId's source. See that
+            // member for why both keys exist.
+            Guid textureId{};
+        };
+
+        // The per-Begin() texture-slot key: the pair a run is allowed to
+        // coalesce over. The pointer alone was enough while every batcher had
+        // a device; a DEVICE-LESS one has a null pointer for every sprite, so
+        // the asset id is what separates them there.
+        struct TextureKey
+        {
+            nvrhi::ITexture* texture = nullptr;
+            Guid id{};
+            bool operator==(const TextureKey&) const = default;
+        };
+        struct TextureKeyHash
+        {
+            size_t operator()(const TextureKey& k) const noexcept
+            {
+                return std::hash<void*>{}(k.texture) * 31 + std::hash<Guid>{}(k.id);
+            }
         };
 
         // One contiguous run of sorted records sharing material + texture.
@@ -99,13 +121,35 @@ namespace Arcane
         class Batcher2DImpl final : public Batcher2D
         {
         public:
-            Batcher2DImpl(nvrhi::IDevice* device, ShaderLibrary& shaders)
+            Batcher2DImpl(nvrhi::IDevice* device, ShaderLibrary* shaders)
                 : m_device(device), m_shaders(shaders)
             {
             }
 
+            // The GPU half exists only when BOTH halves were supplied: a
+            // device with no ShaderLibrary could build no pipeline, and a
+            // ShaderLibrary with no device could create no object. Either
+            // missing is therefore ONE state -- device-less -- rather than two
+            // half-built ones (NRI Phase 3, Task 2; see Batcher2D::Create).
+            [[nodiscard]] bool HasDevice() const noexcept
+            {
+                return m_device != nullptr && m_shaders != nullptr;
+            }
+
             bool Init()
             {
+                // THE SEVERANCE. Device-less: skip every GPU creation below and
+                // stand the material table up anyway, so Begin/Quad*/Drain --
+                // the frame's whole DATA SUPPLY -- run exactly as they do with
+                // a device. Nothing here can fail without a device, which is
+                // also why this cannot return null on a missing shader bin: it
+                // never looks for one.
+                if (!HasDevice())
+                {
+                    InitMaterialTable();
+                    return true;
+                }
+
                 // 1x1 white texture: the untextured path.
                 auto whiteDesc = nvrhi::TextureDesc()
                     .setWidth(1).setHeight(1)
@@ -146,7 +190,7 @@ namespace Arcane
                         .setElementStride(sizeof(Vertex)),
                 };
                 nvrhi::ShaderHandle spriteVs =
-                    m_shaders.Get("sprite_vs", nvrhi::ShaderType::Vertex);
+                    m_shaders->Get("sprite_vs", nvrhi::ShaderType::Vertex);
                 if (!spriteVs)
                     return false;
                 m_inputLayout = m_device->createInputLayout(
@@ -154,11 +198,11 @@ namespace Arcane
 
                 if (!m_whiteTexture || !m_sampler || !m_bindingLayout ||
                     !m_inputLayout ||
-                    !m_shaders.Get("sprite_ps", nvrhi::ShaderType::Pixel) ||
-                    !m_shaders.Get("circle_vs", nvrhi::ShaderType::Vertex) ||
-                    !m_shaders.Get("circle_ps", nvrhi::ShaderType::Pixel) ||
-                    !m_shaders.Get("msdf_vs", nvrhi::ShaderType::Vertex) ||
-                    !m_shaders.Get("msdf_ps", nvrhi::ShaderType::Pixel))
+                    !m_shaders->Get("sprite_ps", nvrhi::ShaderType::Pixel) ||
+                    !m_shaders->Get("circle_vs", nvrhi::ShaderType::Vertex) ||
+                    !m_shaders->Get("circle_ps", nvrhi::ShaderType::Pixel) ||
+                    !m_shaders->Get("msdf_vs", nvrhi::ShaderType::Vertex) ||
+                    !m_shaders->Get("msdf_ps", nvrhi::ShaderType::Pixel))
                     return false;
 
                 // Upload the white texel once at creation through a transient
@@ -173,13 +217,21 @@ namespace Arcane
                     m_device->executeCommandList(upload);
                 }
 
-                // Built-in material-table entries 0..2 -- the pre-material
-                // pipelines, so the materialless path is the degenerate case.
+                InitMaterialTable();
+                return true;
+            }
+
+            // Built-in material-table entries 0..2 -- the pre-material
+            // pipelines, so the materialless path is the degenerate case.
+            // They name ShaderLibrary artifacts by STRING and own no GPU
+            // object, which is exactly why a device-less batcher can have
+            // them: a drained span's `material` still means the same thing.
+            void InitMaterialTable()
+            {
                 m_materials.resize(kBuiltInMaterialCount);
                 m_materials[kMaterialSprite] = MaterialEntry{ true, "sprite_vs", "sprite_ps" };
                 m_materials[kMaterialCircle] = MaterialEntry{ true, "circle_vs", "circle_ps" };
                 m_materials[kMaterialText]   = MaterialEntry{ true, "msdf_vs",   "msdf_ps" };
-                return true;
             }
 
             uint16_t RegisterMaterial(Material2DDesc desc) override
@@ -246,7 +298,7 @@ namespace Arcane
                       glm::vec4 color, float rotation) override
             {
                 PushQuad(kMaterialSprite, texture ? texture : m_whiteTexture.Get(),
-                         dstPos, dstSize, uvMin, uvMax, color, rotation);
+                         Guid::Nil(), dstPos, dstSize, uvMin, uvMax, color, rotation);
             }
 
             void QuadMaterial(uint16_t materialId, glm::vec2 dstPos, glm::vec2 dstSize,
@@ -256,21 +308,41 @@ namespace Arcane
                 if (materialId >= m_materials.size())
                     materialId = kMaterialSprite;   // unknown id -> plain sprite
                 PushQuad(materialId, texture ? texture : m_whiteTexture.Get(),
-                         dstPos, dstSize, uvMin, uvMax, color, rotation);
+                         Guid::Nil(), dstPos, dstSize, uvMin, uvMax, color, rotation);
+            }
+
+            void QuadTextured(uint16_t materialId, const Guid& textureId,
+                              glm::vec2 dstPos, glm::vec2 dstSize,
+                              nvrhi::ITexture* texture, glm::vec2 uvMin, glm::vec2 uvMax,
+                              glm::vec4 color, float rotation) override
+            {
+                if (materialId >= m_materials.size())
+                    materialId = kMaterialSprite;   // unknown id -> plain sprite
+                // Byte-for-byte QuadMaterial's push, plus the identity. With a
+                // device this records exactly what QuadMaterial/Quad would have
+                // (same material, same texture object, same vertices) -- the
+                // NVRHI floor cannot see the difference.
+                PushQuad(materialId, texture ? texture : m_whiteTexture.Get(),
+                         textureId, dstPos, dstSize, uvMin, uvMax, color, rotation);
             }
 
             void Glyph(glm::vec2 dstPos, glm::vec2 dstSize,
                        nvrhi::ITexture* atlas, glm::vec2 uvMin,
                        glm::vec2 uvMax, glm::vec4 color) override
             {
+                // A glyph atlas is a RUNTIME texture (SkylinePacker output), not
+                // an asset -- there is no Guid that names it, so the span keeps
+                // a nil id and the graph path binds its white texel. Text on the
+                // graph path is THE remaining texture gap after this task, and
+                // it is a font-atlas residency problem, not a cache one.
                 PushQuad(kMaterialText, atlas ? atlas : m_whiteTexture.Get(),
-                         dstPos, dstSize, uvMin, uvMax, color);
+                         Guid::Nil(), dstPos, dstSize, uvMin, uvMax, color);
             }
 
             void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 color,
                       float rotation) override
             {
-                PushQuad(kMaterialSprite, m_whiteTexture.Get(),
+                PushQuad(kMaterialSprite, m_whiteTexture.Get(), Guid::Nil(),
                          pos, size, glm::vec2(0), glm::vec2(1), color, rotation);
             }
 
@@ -286,7 +358,7 @@ namespace Arcane
                 // Oriented quad through the shared record path; reuses the
                 // sprite pipeline with the white texture (uv constant).
                 const glm::vec2 uv(0.5f);
-                PushQuadVertices(kMaterialSprite, m_whiteTexture.Get(),
+                PushQuadVertices(kMaterialSprite, m_whiteTexture.Get(), Guid::Nil(),
                                  { a - normal, uv, color },
                                  { b - normal, uv, color },
                                  { b + normal, uv, color },
@@ -298,7 +370,7 @@ namespace Arcane
                 if (radius <= 0.0f)
                     return;
                 // SDF quad: uv spans [-1,1]; circle.hlsl keeps the unit disc.
-                PushQuad(kMaterialCircle, m_whiteTexture.Get(),
+                PushQuad(kMaterialCircle, m_whiteTexture.Get(), Guid::Nil(),
                          center - glm::vec2(radius), glm::vec2(radius * 2.0f),
                          glm::vec2(-1.0f), glm::vec2(1.0f), color);
             }
@@ -311,7 +383,7 @@ namespace Arcane
                 // nothing. White texture + constant uv on the sprite pipeline --
                 // the same solid-fill path Line/Rect use.
                 const glm::vec2 uv(0.5f);
-                PushQuadVertices(kMaterialSprite, m_whiteTexture.Get(),
+                PushQuadVertices(kMaterialSprite, m_whiteTexture.Get(), Guid::Nil(),
                                  { a, uv, color },
                                  { b, uv, color },
                                  { c, uv, color },
@@ -321,6 +393,26 @@ namespace Arcane
             void End() override
             {
                 m_stats = {};
+                // THE LOUD REFUSAL (NRI Phase 3, Task 2). End() IS the NVRHI
+                // recorder -- every line below it creates or binds an NVRHI
+                // object -- so a device-less batcher cannot run it. Said ONCE:
+                // a host that got here is calling it every frame, and the
+                // second thousand copies of the message would bury the first.
+                // The batch is left drainable, which is the whole point: the
+                // graph path's recorder reads it through Drain().
+                if (!HasDevice())
+                {
+                    if (!m_warnedDevicelessEnd)
+                    {
+                        m_warnedDevicelessEnd = true;
+                        ARC_ERROR("Batcher2D::End on a DEVICE-LESS batcher -- nothing was recorded. "
+                                  "End() is the NVRHI recorder; a batcher created with a null device "
+                                  "is drained (Drain()) by the graph path instead. Further "
+                                  "occurrences are silent.");
+                    }
+                    m_commandList = nullptr;
+                    return;
+                }
                 if (m_records.empty() || !m_commandList)
                 {
                     m_commandList = nullptr;
@@ -500,12 +592,19 @@ namespace Arcane
                 m_indices.reserve(m_records.size() * 6);
                 for (const DrawRecord& record : m_records)
                 {
+                    // Split on BOTH keys. With a device the id moves in
+                    // lockstep with the pointer (one asset, one texture
+                    // object), so this is the same split it always was;
+                    // device-less the pointer is null everywhere and the id is
+                    // the only thing that separates two sprites' runs.
                     if (m_runs.empty() || m_runs.back().material != record.material ||
-                        m_runs.back().texture != record.texture)
+                        m_runs.back().texture != record.texture ||
+                        m_runs.back().textureId != record.textureId)
                     {
                         BatchRun run;
                         run.material = record.material;
                         run.texture = record.texture;
+                        run.textureId = record.textureId;
                         run.firstIndex = (uint32_t)m_indices.size();
                         m_runs.push_back(run);
                     }
@@ -520,16 +619,25 @@ namespace Arcane
                 }
             }
 
-            uint16_t TextureSlot(nvrhi::ITexture* texture)
+            // Slots are per (texture object, image-asset Guid) PAIR. With a
+            // device the two are 1:1 -- one asset resolves to one cached
+            // texture -- so this partitions exactly as the pointer alone did;
+            // device-less every pointer is null and the id does the work.
+            // (The one case where the pair splits what the pointer would not:
+            // two DISTINCT Guids registered against the same file, which
+            // Assets caches as one texture. That costs one extra draw call and
+            // no pixels; no project in the tree registers a file twice.)
+            uint16_t TextureSlot(nvrhi::ITexture* texture, const Guid& id)
             {
                 auto [it, inserted] = m_textureSlotLookup.try_emplace(
-                    texture, (uint16_t)m_textureSlots.size());
+                    TextureKey{ texture, id }, (uint16_t)m_textureSlots.size());
                 if (inserted)
                     m_textureSlots.push_back(texture);
                 return it->second;
             }
 
             void PushQuadVertices(uint16_t material, nvrhi::ITexture* texture,
+                                  const Guid& textureId,
                                   const Vertex& v0, const Vertex& v1,
                                   const Vertex& v2, const Vertex& v3)
             {
@@ -540,10 +648,11 @@ namespace Arcane
                 record.key = ((uint64_t)m_layer << 48) |
                              ((uint64_t)m_order << 32) |
                              ((uint64_t)material << 16) |
-                             (uint64_t)TextureSlot(texture);
+                             (uint64_t)TextureSlot(texture, textureId);
                 record.firstVertex = (uint32_t)m_vertices.size();
                 record.material = material;
                 record.texture = texture;
+                record.textureId = textureId;
                 m_records.push_back(record);
                 m_vertices.push_back(v0);
                 m_vertices.push_back(v1);
@@ -552,6 +661,7 @@ namespace Arcane
             }
 
             void PushQuad(uint16_t material, nvrhi::ITexture* texture,
+                          const Guid& textureId,
                           glm::vec2 pos, glm::vec2 size,
                           glm::vec2 uvMin, glm::vec2 uvMax, glm::vec4 color,
                           float rotation = 0.0f)
@@ -559,7 +669,7 @@ namespace Arcane
                 // Corners in TL,TR,BR,BL order; rotation 0 is the axis-aligned
                 // (byte-identical) path. UVs map to the corner order unchanged.
                 const std::array<glm::vec2, 4> p = QuadCorners(pos, size, rotation);
-                PushQuadVertices(material, texture,
+                PushQuadVertices(material, texture, textureId,
                     { p[0], uvMin, color },
                     { p[1], { uvMax.x, uvMin.y }, color },
                     { p[2], uvMax, color },
@@ -596,9 +706,21 @@ namespace Arcane
             // locals: a failure leaves the table untouched).
             bool BuildEntry(MaterialEntry& out, Material2DDesc desc)
             {
-                if (!desc.vs || !desc.ps || !desc.templ || !desc.instance)
+                // THE BLOB RELAXATION (NRI Phase 3, Task 2). The compiled
+                // HANDLES are what the NVRHI recorder needs; the retained
+                // BLOBS are what the graph recorder needs -- and a device-less
+                // producer (SpriteMaterialCache with no device) can only make
+                // the second. So a registration is accepted when it carries
+                // EITHER, and the handle-only requirement drops to "handles or
+                // bytes". `templ`/`instance` stay mandatory: they are the
+                // layout and the values, and no recorder can bind without them.
+                const bool haveHandles = desc.vs && desc.ps;
+                const bool haveBytes   = desc.vsBytes && desc.psBytes
+                                      && !desc.vsBytes->empty() && !desc.psBytes->empty();
+                if ((!haveHandles && !haveBytes) || !desc.templ || !desc.instance)
                 {
-                    ARC_WARN("Batcher2D::RegisterMaterial: null shader/template/instance");
+                    ARC_WARN("Batcher2D::RegisterMaterial: null template/instance, or neither "
+                             "compiled shaders nor retained shader bytecode");
                     return false;
                 }
                 if (desc.paramTextures.size() != desc.templ->TextureCount())
@@ -625,32 +747,41 @@ namespace Arcane
 
                 MaterialEntry entry;
                 entry.builtIn = false;
-                entry.layout = m_device->createBindingLayout(layoutDesc);
-                if (desc.templ->CbSize() > 0)
+                // The GPU half, and ONLY when there is a device to build it
+                // on. Device-less these three stay null and are never reached:
+                // GetBindingSet/GetPipeline are called from End() alone, which
+                // refuses outright above. What survives is `desc` -- which is
+                // the product, since MaterialDesc(id) is how the graph path
+                // builds its own pipeline and bindings from the same bytes.
+                if (HasDevice())
                 {
-                    entry.materialCb = m_device->createBuffer(
-                        nvrhi::BufferDesc()
-                            .setByteSize(desc.templ->CbSize())
-                            .setIsConstantBuffer(true)
-                            .setIsVolatile(true)
-                            .setMaxVersions(16)
-                            .setDebugName("Batcher2D.MaterialCB"));
-                }
-                if (!m_globalsCb)
-                {
-                    m_globalsCb = m_device->createBuffer(
-                        nvrhi::BufferDesc()
-                            .setByteSize(sizeof(GlobalParams))
-                            .setIsConstantBuffer(true)
-                            .setIsVolatile(true)
-                            .setMaxVersions(16)
-                            .setDebugName("Batcher2D.GlobalsCB"));
-                }
-                if (!entry.layout || !m_globalsCb ||
-                    (desc.templ->CbSize() > 0 && !entry.materialCb))
-                {
-                    ARC_WARN("Batcher2D::RegisterMaterial: resource creation failed");
-                    return false;
+                    entry.layout = m_device->createBindingLayout(layoutDesc);
+                    if (desc.templ->CbSize() > 0)
+                    {
+                        entry.materialCb = m_device->createBuffer(
+                            nvrhi::BufferDesc()
+                                .setByteSize(desc.templ->CbSize())
+                                .setIsConstantBuffer(true)
+                                .setIsVolatile(true)
+                                .setMaxVersions(16)
+                                .setDebugName("Batcher2D.MaterialCB"));
+                    }
+                    if (!m_globalsCb)
+                    {
+                        m_globalsCb = m_device->createBuffer(
+                            nvrhi::BufferDesc()
+                                .setByteSize(sizeof(GlobalParams))
+                                .setIsConstantBuffer(true)
+                                .setIsVolatile(true)
+                                .setMaxVersions(16)
+                                .setDebugName("Batcher2D.GlobalsCB"));
+                    }
+                    if (!entry.layout || !m_globalsCb ||
+                        (desc.templ->CbSize() > 0 && !entry.materialCb))
+                    {
+                        ARC_WARN("Batcher2D::RegisterMaterial: resource creation failed");
+                        return false;
+                    }
                 }
                 entry.packBuffer.assign(desc.templ->CbSize(), 0);
                 entry.desc = std::move(desc);
@@ -706,12 +837,12 @@ namespace Arcane
 
             nvrhi::IGraphicsPipeline* GetPipeline(uint16_t material)
             {
-                if (m_pipelineGeneration != m_shaders.Generation())
+                if (m_pipelineGeneration != m_shaders->Generation())
                 {
                     // A ShaderLibrary reload only invalidates BUILT-IN shader
                     // handles, but a full clear is cheap and repopulates lazily.
                     m_pipelines.clear();
-                    m_pipelineGeneration = m_shaders.Generation();
+                    m_pipelineGeneration = m_shaders->Generation();
                 }
                 const PipeKey key{
                     std::hash<nvrhi::FramebufferInfo>{}(m_target->getFramebufferInfo()),
@@ -721,10 +852,10 @@ namespace Arcane
                 {
                     const MaterialEntry& e = m_materials[material];
                     nvrhi::ShaderHandle vs = e.builtIn
-                        ? m_shaders.Get(e.vsName, nvrhi::ShaderType::Vertex)
+                        ? m_shaders->Get(e.vsName, nvrhi::ShaderType::Vertex)
                         : e.desc.vs;
                     nvrhi::ShaderHandle ps = e.builtIn
-                        ? m_shaders.Get(e.psName, nvrhi::ShaderType::Pixel)
+                        ? m_shaders->Get(e.psName, nvrhi::ShaderType::Pixel)
                         : e.desc.ps;
                     if (!vs || !ps)
                         return nullptr;
@@ -753,8 +884,9 @@ namespace Arcane
                 return pipeline;
             }
 
+            // Both NULLABLE since NRI Phase 3, Task 2 -- see HasDevice().
             nvrhi::IDevice* m_device;
-            ShaderLibrary& m_shaders;
+            ShaderLibrary* m_shaders;
             nvrhi::TextureHandle m_whiteTexture;
             nvrhi::SamplerHandle m_sampler;
             nvrhi::BindingLayoutHandle m_bindingLayout;
@@ -782,9 +914,11 @@ namespace Arcane
             std::vector<DrawRecord> m_records;
             std::vector<BatchRun> m_runs;
             std::vector<nvrhi::ITexture*> m_textureSlots;
-            std::unordered_map<nvrhi::ITexture*, uint16_t> m_textureSlotLookup;
+            std::unordered_map<TextureKey, uint16_t, TextureKeyHash> m_textureSlotLookup;
             uint16_t m_layer = 0;
             uint16_t m_order = 0;
+            // End()'s device-less refusal, said once for the whole run.
+            bool m_warnedDevicelessEnd = false;
             // DrainInternal's once-per-Begin() guard and its one carried
             // result (End() needs it for the registered-material uploads).
             bool m_drained = false;
@@ -794,7 +928,7 @@ namespace Arcane
     }
 
     std::unique_ptr<Batcher2D> Batcher2D::Create(nvrhi::IDevice* device,
-                                                 ShaderLibrary& shaders)
+                                                 ShaderLibrary* shaders)
     {
         auto batcher = std::make_unique<Batcher2DImpl>(device, shaders);
         if (!batcher->Init())

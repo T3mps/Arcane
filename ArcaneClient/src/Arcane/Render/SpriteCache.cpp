@@ -73,6 +73,12 @@ namespace Arcane
         // untextured case needs no special-case geometry of its own.
         SpriteEntry entry;
         entry.pivot = data->pivot;
+        // The DEVICE-FREE key (NRI Phase 3, Task 2), set whether or not the
+        // GPU texture below resolves: it is the asset the graph path's
+        // NriTextureCache uploads onto its own device, and in graph mode
+        // `entry.texture` is null for every sprite because Assets holds no
+        // NVRHI device at all.
+        entry.textureId = data->texture;
 
         nvrhi::TextureHandle tex;
         const PixelData* pixels = nullptr;

@@ -289,27 +289,36 @@ namespace Arcane
                 std::move(p.jobs[i].psBytes));
             bytes.inputs = p.passInputs[i];
 
-            FullscreenMaterialChain::PassShaders ps;
-            ps.vs = im.services.device->createShader(
-                nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
-                    .setEntryName(kVsEntry)
-                    .setDebugName((stem + "_vs").c_str()),
-                bytes.vsBytes->data(), bytes.vsBytes->size());
-            ps.ps = im.services.device->createShader(
-                nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
-                    .setEntryName(kPsEntry)
-                    .setDebugName((stem + "_ps").c_str()),
-                bytes.psBytes->data(), bytes.psBytes->size());
-            if (!ps.vs || !ps.ps)
+            // THE SEVERANCE (NRI Phase 3, Task 2) -- SpriteMaterialCache::Bind's
+            // twin, for the same reason: createShader is the only device-bound
+            // line here, and its product feeds the NVRHI chain alone. The BYTES
+            // are what the graph's PostChainNode compiles, and they are already
+            // in `bytes` above. Device-less this loop collects `passBytes` only,
+            // `passes` stays empty, and the chain half below is skipped.
+            if (im.services.device)
             {
-                ARC_WARN("PostChainCache: createShader failed for material {}",
-                         p.id.ToString());
-                if (!im.bound.contains(p.id))
-                    im.failed.insert(p.id);
-                return;
+                FullscreenMaterialChain::PassShaders ps;
+                ps.vs = im.services.device->createShader(
+                    nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
+                        .setEntryName(kVsEntry)
+                        .setDebugName((stem + "_vs").c_str()),
+                    bytes.vsBytes->data(), bytes.vsBytes->size());
+                ps.ps = im.services.device->createShader(
+                    nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
+                        .setEntryName(kPsEntry)
+                        .setDebugName((stem + "_ps").c_str()),
+                    bytes.psBytes->data(), bytes.psBytes->size());
+                if (!ps.vs || !ps.ps)
+                {
+                    ARC_WARN("PostChainCache: createShader failed for material {}",
+                             p.id.ToString());
+                    if (!im.bound.contains(p.id))
+                        im.failed.insert(p.id);
+                    return;
+                }
+                ps.inputs = p.passInputs[i];
+                passes.push_back(std::move(ps));
             }
-            ps.inputs = p.passInputs[i];
-            passes.push_back(std::move(ps));
             passBytes.push_back(std::move(bytes));
         }
 
@@ -326,21 +335,34 @@ namespace Arcane
         ApplyMaterialParams(p.data, *inst);
 
         Entry& e = im.bound[p.id];
-        if (!e.chain)
-            e.chain = FullscreenMaterialChain::Create(im.services.device);
-        if (!e.chain || !e.chain->SetChain(p.templ, passes, p.chainInputSlots))
+        // THE CHAIN GATE, now the DEVICE'S half alone. FullscreenMaterialChain
+        // is an NVRHI object; device-less there is no chain to build and no
+        // gate to pass, so the publish below is reached on both paths.
+        //
+        // NOT a literal hoist of the publish above this block, deliberately: a
+        // failed RE-bind must leave the previously published desc/instance
+        // alone (last-good applies to all three together, see below), and
+        // publishing first would clobber exactly that. Gating the chain half on
+        // the device has the effect the severance needs -- a device-less run
+        // publishes -- with no change whatsoever to the device-carrying path.
+        if (im.services.device)
         {
-            ARC_WARN("PostChainCache: SetChain rejected material {}",
-                     p.id.ToString());
-            // A previously-bound chain keeps rendering with its OWN instance
-            // (never mix an old layout with new values); a first bind that
-            // failed leaves nothing exposed.
-            if (!e.chain || !e.chain->Ready())
+            if (!e.chain)
+                e.chain = FullscreenMaterialChain::Create(im.services.device);
+            if (!e.chain || !e.chain->SetChain(p.templ, passes, p.chainInputSlots))
             {
-                im.bound.erase(p.id);
-                im.failed.insert(p.id);
+                ARC_WARN("PostChainCache: SetChain rejected material {}",
+                         p.id.ToString());
+                // A previously-bound chain keeps rendering with its OWN instance
+                // (never mix an old layout with new values); a first bind that
+                // failed leaves nothing exposed.
+                if (!e.chain || !e.chain->Ready())
+                {
+                    im.bound.erase(p.id);
+                    im.failed.insert(p.id);
+                }
+                return;
             }
-            return;
         }
         e.instance = std::move(inst);
 
@@ -357,8 +379,10 @@ namespace Arcane
         // Warm the declared texture params NOW -- the drain site has no open
         // command list, so first-time uploads execute here instead of being
         // lost inside the host's Draw (FullscreenMaterialPass::Render's
-        // pre-load contract).
-        if (im.services.assets)
+        // pre-load contract). Device-gated with the rest of the severance:
+        // the warm-up IS a GPU upload, and the graph recorder makes the same
+        // Guids resident on its own device through NriTextureCache.
+        if (im.services.assets && im.services.device)
             for (const Guid& g : e.instance->ResolveTextures())
                 if (g.IsValid())
                     im.services.assets->GetTexture(AssetId::FromGuid(g));

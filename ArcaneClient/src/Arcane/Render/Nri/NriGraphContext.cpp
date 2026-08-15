@@ -205,6 +205,16 @@ namespace Arcane
         }
 
         m_pipelines.Bind(*m_device);
+
+        // THE SHARED IMAGE CACHE, before the nodes -- they take a pointer to
+        // it at Create. Its pixel SUPPLY is installed later by the frame
+        // driver (SetPixelSupply); until then every Resolve misses, once and
+        // loudly, which is the correct behaviour for a vehicle nobody wired an
+        // Assets facade into.
+        m_textures = NriTextureCache::Create(*m_device);
+        if (!m_textures)
+            return false;   // already logged
+
         m_graph = std::make_unique<RenderGraph>();
 
         // The offline artifacts the nodes below need as RAW BYTECODE (NRI's
@@ -372,6 +382,12 @@ namespace Arcane
             m_post->Release(graves, fence);
         if (m_batch2D)
             m_batch2D->Release(graves, fence);
+
+        // AFTER every node: their descriptor sets name this cache's views, and
+        // burying a view before the set that reads it is destroyed is the same
+        // ordering hazard the node releases above exist to avoid.
+        if (m_textures)
+            m_textures->Release(graves, fence);
 
         // The sanctioned cache release (see NriPipelineCache.hpp): explicit,
         // at a fence the caller knows, rather than the destructor's direct-

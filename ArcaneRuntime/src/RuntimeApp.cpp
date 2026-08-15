@@ -589,6 +589,18 @@ void RuntimeApp::MainLoop()
                 return project ? project->ResolveAsset(Arcane::AssetId::FromGuid(id))
                                : std::nullopt;
             });
+        // ...and the SAME seam extended to PIXELS (NRI Phase 3, Task 2): the
+        // graph device cannot sample a texture on the engine's NVRHI device,
+        // so its NriTextureCache uploads its own from the engine's RETAINED
+        // decode (Assets::PixelsFor, Task 1) -- one decode, two devices. This
+        // is what makes a textured sprite render on the graph path at all, and
+        // it works with no NVRHI device present at all, which is what Task 6
+        // needs.
+        m_graphContext->SetPixelSupply(
+            [rt = &*m_runtime](const Arcane::Guid& id) -> const Arcane::PixelData*
+            {
+                return rt ? rt->AssetsFacade().PixelsFor(id) : nullptr;
+            });
     }
 #endif
 

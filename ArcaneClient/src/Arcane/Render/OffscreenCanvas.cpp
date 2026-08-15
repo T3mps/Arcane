@@ -29,7 +29,7 @@ namespace Arcane
 
             bool Init(ShaderLibrary& shaders, uint32_t width, uint32_t height)
             {
-                m_batcher = Batcher2D::Create(m_device, shaders);
+                m_batcher = Batcher2D::Create(m_device, &shaders);
                 if (!m_batcher)
                 {
                     ARC_ERROR("OffscreenCanvas: Batcher2D creation failed");

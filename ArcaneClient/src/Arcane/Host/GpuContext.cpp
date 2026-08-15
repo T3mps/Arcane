@@ -43,7 +43,7 @@ namespace Arcane
                                      ctx->m_swapchain->Height());
         if (!ctx->m_canvas) { ARC_ERROR("GpuContext: canvas create failed"); return nullptr; }
 
-        ctx->m_batcher = Batcher2D::Create(ctx->m_device->Nvrhi(), *ctx->m_shaders);
+        ctx->m_batcher = Batcher2D::Create(ctx->m_device->Nvrhi(), ctx->m_shaders.get());
         if (!ctx->m_batcher) { ARC_ERROR("GpuContext: batcher create failed"); return nullptr; }
 
         ctx->m_tonemap = TonemapPass::Create(ctx->m_device->Nvrhi(), *ctx->m_shaders);

@@ -25,7 +25,7 @@ namespace
                                                      "data/shaders");
         REQUIRE(shaders != nullptr);
         auto canvas = Arcane::CreateCanvas(device->Nvrhi(), 64, 64);
-        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), *shaders);
+        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), shaders.get());
         auto text = Arcane::TextSystem::Create(device->Nvrhi());
         REQUIRE(text != nullptr);
 
@@ -98,7 +98,7 @@ namespace
                                                      "data/shaders");
         REQUIRE(shaders != nullptr);
         auto canvas = Arcane::CreateCanvas(device->Nvrhi(), 64, 64);
-        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), *shaders);
+        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), shaders.get());
         auto text = Arcane::TextSystem::Create(device->Nvrhi());
         REQUIRE(text != nullptr);
         const Arcane::FontId font =

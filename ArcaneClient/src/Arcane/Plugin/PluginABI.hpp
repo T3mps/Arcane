@@ -113,7 +113,32 @@ namespace Arcane
     //     layouts and a host compiled against these disagree about object size
     //     -- which corrupts the stack rather than merely misdispatching. Same
     //     verdict as v11, with a harder reason.
-    inline constexpr uint32_t kGamePluginABIVersion = 12;
+    // v13 (2026-08-14): THE SEVERANCE (NRI Phase 3, Task 2) -- the frame's
+    //     data-supply side stops depending on an NVRHI device, and three
+    //     plugin-compiled surfaces move with it. ONE bump covers the whole
+    //     phase, deliberately (the phase plan's global constraint):
+    //       * Batcher2D grew a THIRD appended virtual, `QuadTextured(uint16_t,
+    //         const Guid&, ...)` -- QuadMaterial plus the image ASSET's Guid.
+    //         Appended, so no existing slot moves; the v11 entry above (:96-103)
+    //         states why "correct by luck" is still refused.
+    //       * Batch2DDrawSpan gained `Guid textureId` (+16 bytes) and it is
+    //         returned BY VALUE across the vtable inside Batch2DDrained (a span
+    //         over an array of them, whose ELEMENT STRIDE just changed), so a
+    //         v12 module iterating a v13 host's drained spans reads every field
+    //         of every span after the first at the wrong offset. Same failure
+    //         class as v12's Material2DDesc growth, one indirection deeper.
+    //       * SpriteEntry (Scene/SceneResources.hpp) gained `Guid textureId`,
+    //         and the header-only RenderSubmissionSystem the plugin compiles
+    //         ITSELF now reads it and calls QuadTextured. A v12 module's copy
+    //         of that system reads a SpriteEntry one size smaller out of a map
+    //         the host filled -- every entry past the first at a stale offset.
+    //     Why any of this: in graph mode no NVRHI device exists, so
+    //     Assets::GetTexture yields null for every sprite and the
+    //     `nvrhi::ITexture*` in a span can no longer tell "untextured" from
+    //     "textured on a device that is not there". The Guid can, and the NRI
+    //     recorder resolves it through the shared NriTextureCache. Reject the
+    //     pairing.
+    inline constexpr uint32_t kGamePluginABIVersion = 13;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

@@ -89,6 +89,16 @@ namespace Arcane
         glm::vec2 uvMax{1.0f, 1.0f};
         glm::vec2 sizeMeters{1.0f, 1.0f};
         glm::vec2 pivot{0.5f, 0.5f};
+        // The SOURCE TEXTURE's asset Guid (.arcsprite's `texture` field),
+        // APPENDED at ABI v13 so no field above it moves. It is the
+        // DEVICE-FREE half of the pair above: `texture` is an object on the
+        // engine's NVRHI device and is null whenever no such device exists
+        // (graph mode) or the image is still loading, while this names the
+        // asset either way. RenderSubmissionSystem submits both
+        // (Batcher2D::QuadTextured) so the drained span carries both, and the
+        // NRI recorder -- which cannot use `texture` at all -- resolves this
+        // through NriTextureCache. Nil when the sprite declares no texture.
+        Guid textureId{};
     };
 
     // Sprite-asset resolution: SpriteRenderer::sprite (an .arcsprite Guid) ->

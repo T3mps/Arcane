@@ -1,0 +1,241 @@
+// NriTextureCache (NRI Phase 3, Task 2) -- the SHARED Guid -> nri::Texture
+// residency cache, promoted out of Batch2DNode's private one so the batch node
+// and the post chain sample the SAME upload instead of each owning a copy.
+//
+// Everything here runs on the NONE backend through
+// NriDevice::CreateNoneForTests(), which is the sanctioned carve-out from the
+// wrapper-path rule (NriDevice.hpp: NONE has no native device to wrap). What
+// NONE buys is exactly what these cases need -- CreateCommittedTexture,
+// CreateTextureView and HelperInterface::UploadData all answer SUCCESS with
+// dummy-but-non-null objects (ThirdParty/NRI/Source/NONE/ImplNONE.cpp) -- so
+// the cache's POLICY (upload once, memoize misses, warn once, bury on release)
+// is fully observable with no GPU. What it does not buy is pixels, which is
+// why nothing here asserts any.
+//
+// Include order: NRI headers first, ALWAYS -- see NriCommon.hpp.
+#include <NRI.h>
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <Arcane/Assets/ImageIo.hpp>
+#include <Arcane/Guid.hpp>
+#include <Arcane/Render/Nri/Graveyard.hpp>
+#include <Arcane/Render/Nri/NriDevice.hpp>
+#include <Arcane/Render/Nri/NriTextureCache.hpp>
+#include <Arcane/Render/Device.hpp>   // RenderErrorCount -- the shared validation latch
+
+#undef ERROR
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+namespace
+{
+    const Arcane::Guid kIdA = *Arcane::Guid::FromString("aaaaaaaa-1111-2222-3333-444444444444");
+    const Arcane::Guid kIdB = *Arcane::Guid::FromString("bbbbbbbb-5555-6666-7777-888888888888");
+
+    Arcane::PixelData MakePixels(std::uint32_t w, std::uint32_t h)
+    {
+        Arcane::PixelData p;
+        p.width  = w;
+        p.height = h;
+        p.rgba.assign(static_cast<std::size_t>(w) * h * 4, 0xAB);
+        return p;
+    }
+
+    // A pixel supply that COUNTS its calls -- the only way to observe
+    // "decoded/resolved once" and "a miss is memoized, not re-attempted".
+    struct CountingSupply
+    {
+        int calls = 0;
+        const Arcane::PixelData* answer = nullptr;
+
+        Arcane::NriTextureCache::PixelSupplyFn Fn()
+        {
+            return [this](const Arcane::Guid&) -> const Arcane::PixelData*
+            {
+                ++calls;
+                return answer;
+            };
+        }
+    };
+}
+
+TEST_CASE("nri texture cache: a nil Guid resolves to nothing and never asks the supply", "[nri]")
+{
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    auto cache = Arcane::NriTextureCache::Create(*device);
+    REQUIRE(cache != nullptr);
+
+    Arcane::PixelData pixels = MakePixels(2, 2);
+    CountingSupply supply;
+    supply.answer = &pixels;
+    cache->SetPixelSupply(supply.Fn());
+
+    // A nil id is the ORDINARY untextured case -- every Rect, Line, Circle and
+    // colored quad records one. It must cost nothing and say nothing.
+    CHECK(cache->Resolve(Arcane::Guid::Nil()) == nullptr);
+    CHECK(cache->View(Arcane::Guid::Nil()) == nullptr);
+    CHECK(supply.calls == 0);
+    CHECK(cache->ResidentCount() == 0);
+
+    cache->Release(device->Graves(), 1);
+    device->Graves().Reap(1);
+}
+
+TEST_CASE("nri texture cache: an unsupplied Guid misses once and memoizes the miss", "[nri]")
+{
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    auto cache = Arcane::NriTextureCache::Create(*device);
+    REQUIRE(cache != nullptr);
+
+    CountingSupply supply;
+    supply.answer = nullptr;   // no pixels for anything -- THE TEXTURE GAP
+    cache->SetPixelSupply(supply.Fn());
+
+    CHECK(cache->Resolve(kIdA) == nullptr);
+    CHECK(supply.calls == 1);
+
+    // MEMOIZED: a frame that draws this sprite every frame must not re-ask
+    // (and must not re-warn) sixty times a second.
+    CHECK(cache->Resolve(kIdA) == nullptr);
+    CHECK(cache->View(kIdA) == nullptr);
+    CHECK(supply.calls == 1);
+
+    // A DIFFERENT id is a separate question and is asked separately.
+    CHECK(cache->Resolve(kIdB) == nullptr);
+    CHECK(supply.calls == 2);
+
+    cache->Release(device->Graves(), 1);
+    device->Graves().Reap(1);
+}
+
+TEST_CASE("nri texture cache: with no supply installed at all, Resolve misses quietly", "[nri]")
+{
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    auto cache = Arcane::NriTextureCache::Create(*device);
+    REQUIRE(cache != nullptr);
+
+    // The frame driver installs the supply right after Create; a vehicle that
+    // has not yet (or a headless drive) must degrade, not crash.
+    CHECK(cache->Resolve(kIdA) == nullptr);
+    CHECK(cache->View(kIdA) == nullptr);
+    CHECK(cache->ResidentCount() == 0);
+
+    cache->Release(device->Graves(), 1);
+    device->Graves().Reap(1);
+}
+
+TEST_CASE("nri texture cache: a supplied Guid uploads ONCE and serves one texture + one view",
+          "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    auto cache = Arcane::NriTextureCache::Create(*device);
+    REQUIRE(cache != nullptr);
+
+    Arcane::PixelData pixels = MakePixels(4, 2);
+    REQUIRE(pixels.Valid());
+    CountingSupply supply;
+    supply.answer = &pixels;
+    cache->SetPixelSupply(supply.Fn());
+
+    nri::Texture* first = cache->Resolve(kIdA);
+    REQUIRE(first != nullptr);
+    CHECK(supply.calls == 1);
+    CHECK(cache->ResidentCount() == 1);
+
+    nri::Descriptor* view = cache->View(kIdA);
+    REQUIRE(view != nullptr);
+
+    // UPLOAD ONCE. The second Resolve is a map lookup: same object, no second
+    // trip through the supply and no second HelperInterface::UploadData (which
+    // submits and waits, and would be a per-frame stall if it repeated).
+    CHECK(cache->Resolve(kIdA) == first);
+    CHECK(cache->View(kIdA) == view);
+    CHECK(supply.calls == 1);
+    CHECK(cache->ResidentCount() == 1);
+
+    cache->Release(device->Graves(), 1);
+    device->Graves().Reap(1);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("nri texture cache: an image nri::Dim_t cannot express is refused, not truncated",
+          "[nri]")
+{
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    auto cache = Arcane::NriTextureCache::Create(*device);
+    REQUIRE(cache != nullptr);
+
+    // nri::Dim_t is 16-bit. A silent cast would wrap 70000 to 4464 and upload
+    // a texture whose row pitch describes a different image -- the same
+    // refusal RenderGraph::RealizePool makes for a transient's extent.
+    Arcane::PixelData huge = MakePixels(70000, 1);
+    REQUIRE(huge.Valid());
+    CountingSupply supply;
+    supply.answer = &huge;
+    cache->SetPixelSupply(supply.Fn());
+
+    CHECK(cache->Resolve(kIdA) == nullptr);
+    CHECK(cache->ResidentCount() == 0);
+    // ...and the refusal is memoized like any other miss.
+    CHECK(cache->Resolve(kIdA) == nullptr);
+    CHECK(supply.calls == 1);
+
+    cache->Release(device->Graves(), 1);
+    device->Graves().Reap(1);
+}
+
+TEST_CASE("nri texture cache: Release BURIES its objects rather than destroying them", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    auto cache = Arcane::NriTextureCache::Create(*device);
+    REQUIRE(cache != nullptr);
+
+    Arcane::PixelData pixels = MakePixels(2, 2);
+    CountingSupply supply;
+    supply.answer = &pixels;
+    cache->SetPixelSupply(supply.Fn());
+
+    REQUIRE(cache->Resolve(kIdA) != nullptr);
+    REQUIRE(cache->Resolve(kIdB) != nullptr);
+    CHECK(cache->ResidentCount() == 2);
+
+    Arcane::Graveyard& graves = device->Graves();
+    const std::size_t pendingBefore = graves.Pending();
+
+    cache->Release(graves, 7);
+
+    // Two objects per resident texture -- the view and the texture -- and the
+    // view is buried FIRST, so a burial can never destroy a texture a live
+    // descriptor still names (the graveyard runs burials in order).
+    CHECK(graves.Pending() == pendingBefore + 4);
+    CHECK(cache->ResidentCount() == 0);
+
+    graves.Reap(7);
+    CHECK(graves.Pending() == 0);
+
+    // Idempotent: a second Release buries nothing.
+    cache->Release(graves, 8);
+    CHECK(graves.Pending() == 0);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}

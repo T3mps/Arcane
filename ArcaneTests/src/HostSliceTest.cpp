@@ -31,7 +31,7 @@ namespace
 
         auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "data/shaders");
         auto canvas  = Arcane::CreateCanvas(device->Nvrhi(), 1280, 720);
-        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), *shaders);
+        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), shaders.get());
         REQUIRE(shaders != nullptr);
         REQUIRE(canvas  != nullptr);
         REQUIRE(batcher != nullptr);

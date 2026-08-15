@@ -83,6 +83,7 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
     class NriGraphContext;
+    class NriTextureCache;
     struct PostChainDesc;
 
     // A SHADER_RESOURCE view over one graph transient, keyed by the texture it
@@ -223,7 +224,7 @@ namespace Arcane
         // for THIS frame, and returns how many passes may be recorded --
         // 0 meaning "bypass the chain entirely", which the declarator honours
         // by adding no node at all. Called at DECLARATION time, deliberately,
-        // and for the same two reasons PrepareMaterials is: a PSO compile and
+        // and for the same two reasons Prepare is: a PSO compile and
         // MaterialInstance::PackCB must not happen inside the frame's open
         // command buffer.
         //
@@ -335,6 +336,12 @@ namespace Arcane
 
         NriDevice*        m_device    = nullptr;
         NriPipelineCache* m_pipelines = nullptr;
+        // The vehicle's SHARED image residency cache (NRI Phase 3, Task 2) --
+        // borrowed, never owned. This is what closed THE POST TEXTURE GAP: a
+        // declared texture param is now made resident through the same cache
+        // Batch2DNode uses, so a post pass and a sprite naming one image share
+        // one upload.
+        NriTextureCache*  m_textures  = nullptr;
 
         nri::Texture*    m_white     = nullptr;
         nri::Descriptor* m_whiteView = nullptr;
@@ -362,6 +369,15 @@ namespace Arcane
         // than re-derived at record time so the two cannot drift.
         std::uint32_t m_textureRange = FullscreenMaterialLayout::kNoRange;
         nri::Format   m_targetFormat = nri::Format::UNKNOWN;
+        // The DECLARED param textures + views, resolved at PrepareChain time
+        // through m_textures. Null means "the white texel", the same
+        // substitution FullscreenMaterialPass makes for an unbound handle.
+        // Held as BOTH because Record compares TEXTURES for its rebind
+        // decision and binds VIEWS -- and unlike a chain input's view, one of
+        // these is NOT over a graph pool texture, so it must never reach
+        // EnsureView (whose cache is buried on every pool-epoch move).
+        nri::Texture*    m_paramTextures[kMaxTextures]{};
+        nri::Descriptor* m_paramViews[kMaxTextures]{};
 
         std::vector<Pass>                 m_passes;
         std::vector<FullscreenSourceView> m_views;
@@ -374,7 +390,6 @@ namespace Arcane
         GlobalParams              m_globals{}; // this frame's engine-global constants
 
         bool m_warnedViewChurn = false;
-        bool m_warnedTextures  = false;
     };
 
     class ARCANE_API TonemapNode

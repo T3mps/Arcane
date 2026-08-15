@@ -9,6 +9,7 @@
 #include <cstring>
 #include <vector>
 
+#include <Arcane/Guid.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/Canvas.hpp>
 #include <Arcane/Render/Device.hpp>
@@ -38,7 +39,7 @@ namespace
             REQUIRE(shaders != nullptr);
             canvas = Arcane::CreateCanvas(device->Nvrhi(), size, size);
             REQUIRE(canvas != nullptr);
-            batcher = Arcane::Batcher2D::Create(device->Nvrhi(), *shaders);
+            batcher = Arcane::Batcher2D::Create(device->Nvrhi(), shaders.get());
             REQUIRE(batcher != nullptr);
 
             auto stagingDesc = nvrhi::TextureDesc()
@@ -422,5 +423,87 @@ TEST_CASE("d3d12: batcher release->realloc gets a fresh binding set (no stale AB
     CHECK(DrawFullscreenAndReadCenterR(fx, texB) < 0.1f);
 
     fx.batcher->RemoveTexture(texB);
+    CHECK(Arcane::RenderErrorCount() == 0);
+}
+
+TEST_CASE("d3d12: a DEVICE-LESS batcher drains identical spans to a device-carrying one",
+          "[gpu][d3d12]")
+{
+    // THE SEVERANCE'S FLOOR (NRI Phase 3, Task 2). The headless half of this
+    // -- that a device-less instance exists, drains, splits runs on the asset
+    // Guid and refuses End() -- is SeveranceTest.cpp, inside the ~[gpu] gate.
+    // What needs a device, and therefore lives here, is the COMPARISON: the
+    // batching a device-less batcher produces must be the SAME batching the
+    // NVRHI one produces, or the two recorders would disagree about what the
+    // frame contains and the phase's golden floor would move under it.
+    //
+    // Everything is compared except the `texture` POINTERS, which cannot
+    // match by construction: one instance has texture objects and the other
+    // has no device to have made any on.
+    GpuFixture fx(Arcane::GraphicsBackend::D3D12);
+
+    auto deviceless = Arcane::Batcher2D::Create(nullptr, nullptr);
+    REQUIRE(deviceless != nullptr);
+
+    const Arcane::Guid texId =
+        *Arcane::Guid::FromString("0f0f0f0f-1e1e-2d2d-3c3c-4b4b4b4b4b4b");
+
+    // A mixed batch: two layers, a registered-id-less material path, a
+    // textured quad, an untextured rect, a circle (a different built-in) and
+    // a glyph -- i.e. every span-splitting axis the sort key has.
+    const auto submit = [&](Arcane::Batcher2D& b, nvrhi::ITexture* tex)
+    {
+        b.SetLayer(1, 0);
+        b.QuadTextured(Arcane::Batcher2D::kMaterialSprite, texId,
+                       glm::vec2(0.0f), glm::vec2(4.0f), tex,
+                       glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f, 0.5f, 0.25f, 1.0f));
+        b.SetLayer(0, 0);
+        b.Rect(glm::vec2(1.0f), glm::vec2(2.0f), glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+        b.Circle(glm::vec2(4.0f), 2.0f, glm::vec4(0.0f, 0.0f, 1.0f, 1.0f));
+        b.SetLayer(1, 1);
+        b.QuadTextured(Arcane::Batcher2D::kMaterialSprite, texId,
+                       glm::vec2(2.0f), glm::vec2(4.0f), tex,
+                       glm::vec2(0.25f), glm::vec2(0.75f), glm::vec4(1.0f));
+    };
+
+    // The device-carrying instance, driven exactly as the graph path drives it
+    // (Begin with no command list and no framebuffer, then Drain).
+    fx.batcher->Begin(nullptr, nullptr, 8, 8);
+    submit(*fx.batcher, fx.canvas->Texture());
+    const Arcane::Batch2DDrained withDevice = fx.batcher->Drain();
+
+    deviceless->Begin(nullptr, nullptr, 8, 8);
+    submit(*deviceless, nullptr);
+    const Arcane::Batch2DDrained without = deviceless->Drain();
+
+    // The VERTEX STREAM is byte-identical: nothing in it ever depended on a
+    // device (positions, uvs and colors are pure CPU math).
+    REQUIRE(without.vertices.size() == withDevice.vertices.size());
+    CHECK(std::memcmp(without.vertices.data(), withDevice.vertices.data(),
+                      without.vertices.size() * sizeof(Arcane::Batch2DVertex)) == 0);
+
+    // The INDEX stream and the SPAN list agree in size, order and every field
+    // but the texture pointer.
+    REQUIRE(without.indices.size() == withDevice.indices.size());
+    CHECK(std::memcmp(without.indices.data(), withDevice.indices.data(),
+                      without.indices.size() * sizeof(std::uint32_t)) == 0);
+
+    REQUIRE(without.spans.size() == withDevice.spans.size());
+    for (std::size_t i = 0; i < without.spans.size(); ++i)
+    {
+        INFO("span " << i);
+        CHECK(without.spans[i].material   == withDevice.spans[i].material);
+        CHECK(without.spans[i].firstIndex == withDevice.spans[i].firstIndex);
+        CHECK(without.spans[i].indexCount == withDevice.spans[i].indexCount);
+        CHECK(without.spans[i].textureId  == withDevice.spans[i].textureId);
+        // ...and the one field that MUST differ.
+        CHECK(without.spans[i].texture == nullptr);
+        CHECK(withDevice.spans[i].texture != nullptr);
+    }
+
+    CHECK(without.viewport == withDevice.viewport);
+    CHECK(deviceless->Stats().quads     == fx.batcher->Stats().quads);
+    CHECK(deviceless->Stats().drawCalls == fx.batcher->Stats().drawCalls);
+
     CHECK(Arcane::RenderErrorCount() == 0);
 }

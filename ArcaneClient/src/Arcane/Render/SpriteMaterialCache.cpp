@@ -206,23 +206,35 @@ namespace Arcane
     {
         Impl& im = *this;
 
-        nvrhi::ShaderHandle vs = im.services.device->createShader(
-            nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
-                .setEntryName(kVsEntry)
-                .setDebugName((p.data.name + "_sprite_vs").c_str()),
-            p.vsBytes.data(), p.vsBytes.size());
-        nvrhi::ShaderHandle ps = im.services.device->createShader(
-            nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
-                .setEntryName(kPsEntry)
-                .setDebugName((p.data.name + "_sprite_ps").c_str()),
-            p.psBytes.data(), p.psBytes.size());
-        if (!vs || !ps)
+        // THE SEVERANCE (NRI Phase 3, Task 2). createShader is the ONE line in
+        // this whole function that needs a graphics device, and what it
+        // produces -- the two nvrhi handles -- is consumed by the NVRHI
+        // recorder alone. The BLOBS below are what the graph recorder builds
+        // its own pipeline from, and they exist whether or not a device does.
+        // So a device-less run skips this and registers a bytes-only material
+        // (Batcher2D::BuildEntry accepts exactly that); nothing else here
+        // changes, and with a device present the behaviour is unchanged.
+        nvrhi::ShaderHandle vs, ps;
+        if (im.services.device)
         {
-            ARC_WARN("SpriteMaterialCache: createShader failed for material {}",
-                     p.id.ToString());
-            if (!im.table.contains(p.id))
-                im.failed.insert(p.id);
-            return;
+            vs = im.services.device->createShader(
+                nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
+                    .setEntryName(kVsEntry)
+                    .setDebugName((p.data.name + "_sprite_vs").c_str()),
+                p.vsBytes.data(), p.vsBytes.size());
+            ps = im.services.device->createShader(
+                nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
+                    .setEntryName(kPsEntry)
+                    .setDebugName((p.data.name + "_sprite_ps").c_str()),
+                p.psBytes.data(), p.psBytes.size());
+            if (!vs || !ps)
+            {
+                ARC_WARN("SpriteMaterialCache: createShader failed for material {}",
+                         p.id.ToString());
+                if (!im.table.contains(p.id))
+                    im.failed.insert(p.id);
+                return;
+            }
         }
 
         // Layer the SAVED values exactly like the editor's bind: template <-
@@ -253,8 +265,14 @@ namespace Arcane
         desc.vsBytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(p.vsBytes));
         desc.psBytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(p.psBytes));
         const std::vector<Guid> texGuids = inst->ResolveTextures();
+        // SIZED even device-less: the table's WIDTH is the template's texture
+        // count and both recorders bind that many t1.. slots. Only the
+        // CONTENTS need a device -- and the graph recorder never reads them
+        // (it resolves the same Guids through NriTextureCache onto its own
+        // device), so a device-less run leaves them null rather than warming a
+        // per-texture GetTexture failure into the Assets cache.
         desc.paramTextures.resize(texGuids.size());
-        if (im.services.assets)
+        if (im.services.assets && im.services.device)
             for (std::size_t i = 0; i < texGuids.size(); ++i)
                 if (texGuids[i].IsValid())
                     desc.paramTextures[i] =

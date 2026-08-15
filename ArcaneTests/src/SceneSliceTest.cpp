@@ -33,7 +33,7 @@ namespace
         REQUIRE(shaders != nullptr);
         auto canvas = Arcane::CreateCanvas(device->Nvrhi(), 64, 64);
         REQUIRE(canvas != nullptr);
-        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), *shaders);
+        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), shaders.get());
         REQUIRE(batcher != nullptr);
 
         Arcane::JobSystem jobs;

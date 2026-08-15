@@ -25,7 +25,7 @@
 //     (create/update/destroy of the font atlas and any user texture) through
 //     nri::HelperInterface::UploadData, which SUBMITS AND WAITS and therefore
 //     must never be reached from inside the frame's open command buffer. Same
-//     placement, and the same reason, as Batch2DNode::PrepareMaterials and
+//     placement, and the same reason, as Batch2DNode::Prepare and
 //     PostChainNode::PrepareChain.
 //   * RECORD time -- Record() copies this frame's vertex/index data into the
 //     upload ring and issues one CmdDrawIndexed per ImDrawCmd. Nothing

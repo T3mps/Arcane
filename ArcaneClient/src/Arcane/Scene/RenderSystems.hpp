@@ -144,6 +144,11 @@ namespace Arcane
                     // loaded yet: null texture and the full-range UVs a
                     // full-texture sprite would have anyway.
                     nvrhi::ITexture* tex = entry ? entry->texture : nullptr;
+                    // The DEVICE-FREE twin of `tex` (ABI v13). In graph mode
+                    // there is no NVRHI device, so `tex` is null for EVERY
+                    // sprite and can no longer distinguish "untextured" from
+                    // "textured on a device that does not exist" -- this can.
+                    const Guid texId = entry ? entry->textureId : Guid::Nil();
                     const glm::vec2 uvMin = entry ? entry->uvMin : glm::vec2(0.0f, 0.0f);
                     const glm::vec2 uvMax = entry ? entry->uvMax : glm::vec2(1.0f, 1.0f);
                     // Sprite material (Slice 8): a valid Guid resolves to a
@@ -153,14 +158,22 @@ namespace Arcane
                     const uint16_t materialId =
                         materials && sprite.material.IsValid()
                             ? materials->Resolve(sprite.material) : 0;
+                    // QuadTextured IS QuadMaterial plus the identity: with a
+                    // device present it records exactly the quad the two calls
+                    // it replaces recorded (same material, same texture object,
+                    // same vertices), which is what keeps the NVRHI floor
+                    // bit-green. The three-way branch is unchanged except that
+                    // the textured arm now also fires when only the Guid
+                    // survives -- the graph-mode case.
                     if (materialId != 0)
-                        ctx->batcher->QuadMaterial(materialId, dstPos, dstSize, tex,
+                        ctx->batcher->QuadTextured(materialId, texId, dstPos, dstSize, tex,
                                                    uvMin, uvMax,
                                                    sprite.tint, worldRot);
-                    else if (tex)
-                        ctx->batcher->Quad(dstPos, dstSize, tex,
-                                           uvMin, uvMax,
-                                           sprite.tint, worldRot);
+                    else if (tex || texId.IsValid())
+                        ctx->batcher->QuadTextured(Batcher2D::kMaterialSprite, texId,
+                                                   dstPos, dstSize, tex,
+                                                   uvMin, uvMax,
+                                                   sprite.tint, worldRot);
                     else
                         ctx->batcher->Rect(dstPos, dstSize, sprite.tint, worldRot);
                     break;

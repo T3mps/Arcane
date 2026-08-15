@@ -182,7 +182,7 @@ namespace Arcane
 
         // Turns this frame's drawables into the id-pass vertex/index arrays.
         // Called at DECLARATION time, for the same reason
-        // Batch2DNode::PrepareMaterials is: it is pure CPU work (a quad
+        // Batch2DNode::Prepare is: it is pure CPU work (a quad
         // expansion over the scene's pickables) and the recording window must
         // not carry it. `drawables` is borrowed only for this call.
         void PrepareDrawables(std::span<const PickDrawable> drawables);

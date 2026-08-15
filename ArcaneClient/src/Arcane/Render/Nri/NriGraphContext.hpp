@@ -143,6 +143,7 @@
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/NriSwapChain.hpp>
+#include <Arcane/Render/Nri/NriTextureCache.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 // The node types are held BY VALUE-OWNING unique_ptr below, and this class is
@@ -292,6 +293,14 @@ namespace Arcane
         // lambda). Injected rather than derived here because this class owns no
         // Runtime and must not grow one -- it is a RENDER vehicle.
         using AssetResolveFn = std::function<std::optional<std::filesystem::path>(const Guid&)>;
+
+        // THE SAME SEAM, EXTENDED TO PIXELS (NRI Phase 3, Task 2). Guid ->
+        // decoded RGBA8, i.e. `Assets::PixelsFor` -- the engine's retained,
+        // DEVICE-FREE decode cache (Task 1). Injected for exactly the reason
+        // AssetResolveFn is: this class owns no Runtime and no Assets facade
+        // and must not grow either. It feeds NriTextureCache, which is what
+        // turns a drained span's texture Guid into something t0 can bind.
+        using PixelSupplyFn = NriTextureCache::PixelSupplyFn;
 
         // Builds window + native device + NRI wrap + swapchain + ring + cache
         // + graph, in that order, honouring `config.backend` and
@@ -478,6 +487,22 @@ namespace Arcane
             return (m_resolveAsset && id.IsValid()) ? m_resolveAsset(id) : std::nullopt;
         }
 
+        // Installed once by the frame driver beside SetAssetResolver. Without
+        // it every image misses (loudly, once) and every texture slot on this
+        // path binds its node's white texel.
+        void SetPixelSupply(PixelSupplyFn supply)
+        {
+            if (m_textures)
+                m_textures->SetPixelSupply(std::move(supply));
+        }
+
+        // THE SHARED image residency cache -- one per vehicle, consumed by
+        // BOTH the batch node (a span's own t0 texture and a registered
+        // material's declared params) and the post chain (its declared
+        // params), so an image named by two of them is uploaded ONCE. Null
+        // only if Create() failed, which never returns a vehicle.
+        [[nodiscard]] NriTextureCache* Textures() noexcept { return m_textures.get(); }
+
     private:
         NriGraphContext() = default;
 
@@ -507,6 +532,12 @@ namespace Arcane
         std::unique_ptr<NriSwapChain>      m_swap;
         NriUploadRing                      m_ring;
         NriPipelineCache                   m_pipelines;
+        // BEFORE the graph and the nodes in declaration order, so it is
+        // destroyed AFTER them: a node holds descriptor SETS naming this
+        // cache's views, and its Release must run before the views do. It
+        // holds nothing of the graph's (its textures are persistent and are
+        // not pool tenants), so it is deliberately NOT released on Resize.
+        std::unique_ptr<NriTextureCache>   m_textures;
         std::unique_ptr<RenderGraph>       m_graph;
         // The nodes, after everything they borrow (device, cache) and after the
         // graph whose transient pool the tonemap's source view names. Their

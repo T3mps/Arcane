@@ -52,7 +52,7 @@ namespace
         auto canvas = Arcane::CreateCanvas(device->Nvrhi(), 128, 128);
         REQUIRE(canvas != nullptr);
 
-        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), *shaders);
+        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), shaders.get());
         REQUIRE(batcher != nullptr);
 
         // ---- build physics scene -------------------------------------------

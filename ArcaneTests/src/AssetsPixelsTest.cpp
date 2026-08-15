@@ -203,9 +203,25 @@ TEST_CASE("assets: PixelsFor budget evicts least-recently-used pixel entries",
     CHECK(assets->Stats().totalBytes <= 280);
 
     CHECK(assets->PixelsFor(a) == pa);          // A survived (recently used)
-    const Arcane::PixelData* pb2 = assets->PixelsFor(b);   // B was evicted: fresh decode...
+    // ...and B did NOT: exactly two entries are resident, so inserting C
+    // dropped one, and the LRU rule says which. This is the deterministic
+    // statement of "B was evicted".
+    CHECK(assets->Stats().count == 2);
+
+    // B therefore comes back as a FRESH decode. What is asserted is its
+    // CONTENT, not its address: the evicted buffer was freed, and Windows'
+    // low-fragmentation heap is free to hand the identical address straight
+    // back for the replacement -- the same allocator behaviour BatcherTest's
+    // ABA case documents and deliberately retries around. A pointer-identity
+    // check here is therefore a coin flip, and it flipped: it failed in the
+    // ~[gpu] gate under NRI Phase 3 Task 2 with `pb2 != pb` expanding to
+    // `0x21a7cb0ed30 != 0x21a7cb0ed30`. Content is what the cache promises.
+    const Arcane::PixelData* pb2 = assets->PixelsFor(b);
     REQUIRE(pb2 != nullptr);
-    CHECK(pb2 != pb);                           // ...(a new PixelData, not the stale pointer)
+    CHECK(pb2->Valid());
+    CHECK(pb2->width == kCheckerW);
+    CHECK(pb2->height == kCheckerH);
+    CHECK(pb2->rgba == CheckerPixels());
     CHECK(assets->Stats().totalBytes <= 280);   // never settles over budget
 
     std::remove(pngA.string().c_str());

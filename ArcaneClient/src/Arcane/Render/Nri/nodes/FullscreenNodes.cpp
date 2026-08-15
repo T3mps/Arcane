@@ -10,6 +10,7 @@
 
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
+#include <Arcane/Render/Nri/NriTextureCache.hpp>
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
@@ -169,6 +170,7 @@ namespace Arcane
     {
         m_device    = &context.Device();
         m_pipelines = &context.Pipelines();
+        m_textures  = context.Textures();
         return CreateFallbackTexels() && CreateSampler() && CreatePool() && CreateConstantArena();
     }
 
@@ -639,22 +641,31 @@ namespace Arcane
         m_targetFormat = targetFormat;
         m_packed.assign(cbSize, 0);
 
-        // THE POST TEXTURE GAP (bounded, and named so a golden diff is not
-        // debugged as a graph bug). A post material's DECLARED texture params
-        // are bound to the white texel here rather than made resident on this
-        // device -- the residency machinery exists, but it lives in
-        // Batch2DNode::EnsureTexture and extracting it is a cleanup this task
-        // deliberately did not take. The reference scene's chain declares no
-        // texture param at all, so nothing in the tree renders differently;
-        // any project whose post material samples one gets white, once,
-        // loudly. Chain INPUTS are unaffected -- those are graph transients and
-        // are bound for real.
-        if (textureCount > 0 && !m_warnedTextures)
+        // THE POST TEXTURE GAP IS CLOSED (NRI Phase 3, Task 2). A post
+        // material's DECLARED texture params are resolved HERE -- at
+        // declaration time, because the upload submits and waits -- through
+        // the vehicle's SHARED NriTextureCache, which is the very machinery
+        // this used to say lived in Batch2DNode and was not extracted. An
+        // unbound, unresolvable or undecodable param still falls back to the
+        // white texel (the cache says why, once). Chain INPUTS are unaffected:
+        // those are graph transients and were always bound for real.
+        for (nri::Texture*& texture : m_paramTextures)
+            texture = nullptr;
+        for (nri::Descriptor*& view : m_paramViews)
+            view = nullptr;
+        if (textureCount > 0 && desc.instance)
         {
-            m_warnedTextures = true;
-            ARC_WARN("[nri-graph] PostChainNode: the post chain declares {} texture param(s), which "
-                     "are not resident on the graph device yet -- the white texel is bound in their "
-                     "place (further occurrences are silent)", textureCount);
+            const std::vector<Guid> paramIds = desc.instance->ResolveTextures();
+            for (std::uint32_t t = 0; t < textureCount && t < kMaxTextures; ++t)
+            {
+                if (!m_textures || t >= paramIds.size())
+                    continue;
+                nri::Texture* texture = m_textures->Resolve(paramIds[t]);
+                if (!texture)
+                    continue;   // the cache reported the miss, once
+                m_paramTextures[t] = texture;
+                m_paramViews[t]    = m_textures->View(paramIds[t]);
+            }
         }
 
         for (std::uint32_t p = 0; p < passCount; ++p)
@@ -929,7 +940,7 @@ namespace Arcane
         const std::uint32_t textureCount = m_textureCount + m_chainInputs;
         nri::Texture* wanted[kMaxTextures + kMaxInputs] = {};
         for (std::uint32_t t = 0; t < m_textureCount; ++t)
-            wanted[t] = m_white;                  // THE POST TEXTURE GAP
+            wanted[t] = m_paramTextures[t] ? m_paramTextures[t] : m_white;
         for (std::uint32_t i = 0; i < m_chainInputs; ++i)
         {
             nri::Texture* resolved = i < sources.size() ? context.Resolve(sources[i]) : nullptr;
@@ -947,9 +958,20 @@ namespace Arcane
             const nri::Descriptor* views[kMaxTextures + kMaxInputs] = {};
             for (std::uint32_t t = 0; t < textureCount; ++t)
             {
-                nri::Descriptor* view = wanted[t] == m_white ? m_whiteView
-                                      : wanted[t] == m_black ? m_blackView
-                                      : EnsureView(core, wanted[t]);
+                // THE INDEX IS THE DISCRIMINATOR, and it has to be: a DECLARED
+                // param (t < m_textureCount) is an asset texture owned by the
+                // shared cache, whose view is created once and lives as long as
+                // the cache; a CHAIN INPUT is a graph POOL texture, whose view
+                // this node caches and BURIES on every pool-epoch move. Routing
+                // a cache texture through EnsureView would put a view over a
+                // non-pool texture into that epoch-buried cache -- destroyed
+                // out from under a live descriptor set the next time the pool
+                // moved.
+                nri::Descriptor* view =
+                    t < m_textureCount ? (m_paramViews[t] ? m_paramViews[t] : m_whiteView)
+                  : wanted[t] == m_white ? m_whiteView
+                  : wanted[t] == m_black ? m_blackView
+                  : EnsureView(core, wanted[t]);
                 // A view NRI refused still has to bind something -- an empty
                 // range entry is a validation error, not a black pixel.
                 views[t] = view ? view : m_blackView;
