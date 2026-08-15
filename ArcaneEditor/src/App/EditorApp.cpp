@@ -42,6 +42,7 @@
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD); RenderErrorCount (the graph latch fold)
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved (Run()'s exit-code tail)
+#include <Arcane/Render/Nri/NriCommon.hpp>   // ARC_NRI_CHECK (TeardownGraphForSwitch's idle)
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
 #include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
 #include <Arcane/Sprite/SpriteAsset.hpp>  // Save/LoadSpriteAsset (SpriteDocument factory + peek)
@@ -1589,11 +1590,57 @@ namespace Arcane::Editor
                 }
         }
 
-        // THE VIEWPORT. 1280x720 is the size the NVRHI arm's OffscreenCanvas is
-        // created at in StageRenderBridge, for the same reason: the panel's
-        // real extent is not known until it has drawn once, and phase 8's
-        // deferred resize adopts it on the next frame.
+        // THE VIEWPORT, at the boot extent -- 0/0 asks for the default that
+        // function names, which is the same 1280x720 the NVRHI arm's
+        // OffscreenCanvas is created at in StageRenderBridge.
         //
+        // ONE BODY, TWO CALLERS as of Task 12 -- see BuildGraphViewportContext.
+        if (!BuildGraphViewportContext(0, 0))
+            return false;
+#endif
+        return true;
+    }
+
+    // THE VIEWPORT CONTEXT AND EVERY SEAM IT NEEDS, in one body with TWO
+    // callers (NRI Phase 3, Task 12): CreateGraphVehicles above, at boot, and
+    // SwitchProject's "render_bridge" stage, which rebuilds this context from
+    // scratch on every project switch (see TeardownGraphForSwitch for why the
+    // outgoing one cannot be kept).
+    //
+    // IT IS SHARED RATHER THAN COPIED for the reason every other two-caller
+    // body in this host is: a second copy of the wiring is how the switch and
+    // the boot silently drift apart, and three of the four statements below
+    // are exactly the kind that fail SILENTLY when missed -- a missing
+    // AdoptImGuiContext is a blank HUD with no error, a missing resolver or
+    // pixel supply is a white texel on every sprite with one WARN a session.
+    //
+    // NOT #if-guarded even though only a non-Dist path can reach it, for the
+    // reason m_graphChrome's declaration states: a preprocessor-guarded
+    // definition forces a guard at every call site, and SwitchProject compiles
+    // in every configuration. In Dist it is unreachable -- GraphMode() is
+    // false there by construction (StageGpuCore).
+    bool EditorApp::BuildGraphViewportContext(std::uint32_t width, std::uint32_t height)
+    {
+        if (!m_graphChrome)
+        {
+            ARC_ERROR("--nri-graph: no chrome context -- the viewport context has no device to "
+                      "borrow");
+            return false;
+        }
+
+        // THE BOOT EXTENT, named ONCE, here, because both callers can want it:
+        // boot has no measurement to offer and a switch may have had no
+        // outgoing context to measure. 1280x720 is the size the NVRHI arm's
+        // OffscreenCanvas is created at in StageRenderBridge, for the same
+        // reason -- the panel's real extent is not known until it has drawn
+        // once, and phase 8's deferred resize adopts it on the next frame, so
+        // the number decides one frame's worth of picture and nothing else.
+        if (width == 0 || height == 0)
+        {
+            width  = 1280;
+            height = 720;
+        }
+
         // BOTH OPTIONAL NODE SETS (NRI Phase 3, Task 9). This context is the
         // one that stands in for the NVRHI arm's WHOLE viewport trio, so it
         // needs the two nodes that trio's other two members are:
@@ -1612,7 +1659,7 @@ namespace Arcane::Editor
         viewportNodes.pickOutline = true;
         viewportNodes.gameUi      = true;
         m_viewportTargets.graph = Arcane::NriGraphContext::CreateOffscreen(
-            m_config, m_graphChrome->Device(), 1280, 720, viewportNodes);
+            m_config, m_graphChrome->Device(), width, height, viewportNodes);
         if (!m_viewportTargets.graph)
         {
             ARC_ERROR("--nri-graph: the editor's offscreen viewport context could not be created");
@@ -1628,6 +1675,14 @@ namespace Arcane::Editor
         // carry no `Textures` array for the node to upload from, and the HUD
         // would render as nothing at all -- silently, with no error anywhere.
         // See ImGuiNri::AdoptContext.
+        //
+        // AND IT IS OWED AGAIN ON EVERY REBUILD, which is the whole reason this
+        // body is shared: the node above is a BRAND NEW ImGuiNri that adopted
+        // whatever context was current at its Create (the editor's), while
+        // m_gameImgui -- deliberately NOT rebuilt by a switch -- is still the
+        // context whose draw data it will be handed. Miss this on the switch
+        // path and the plugin HUD is blank from the first switch onward, with
+        // nothing in the log. Stated at m_gameImgui's declaration too.
         if (Arcane::ImGuiNriNode* gameNode = m_viewportTargets.graph->ImGuiGame())
             gameNode->AdoptImGuiContext(m_gameImgui ? m_gameImgui->Context() : nullptr);
 
@@ -1639,6 +1694,9 @@ namespace Arcane::Editor
         //
         // Guid -> asset file: the same lambda SceneRenderResolver builds, so it
         // re-reads CurrentProject() per call and survives a project switch.
+        // (It survives one on the OBJECT level too, and that is not what makes
+        // a rebuild unnecessary -- the CACHES behind these seams are what a
+        // switch has to shed. See TeardownGraphForSwitch.)
         m_viewportTargets.graph->SetAssetResolver(
             [rt = &*m_runtime](const Arcane::Guid& id)
                 -> std::optional<std::filesystem::path>
@@ -1655,7 +1713,6 @@ namespace Arcane::Editor
             {
                 return rt ? rt->AssetsFacade().PixelsFor(id) : nullptr;
             });
-#endif
         return true;
     }
 
@@ -1737,6 +1794,183 @@ namespace Arcane::Editor
             vehicle.reset();
         }
         m_retiredDocPreviews.clear();
+    }
+
+    // ===================================================================
+    // THE PROJECT SWITCH'S GRAPH TEARDOWN (NRI Phase 3, Task 12) -- the
+    // graph-mode equivalent of the NVRHI arm's one `waitForIdle` line in
+    // SwitchProject's "switch_teardown" stage, and it is deliberately the
+    // sibling of ShutdownGraphPath below rather than a body inside
+    // EditorAppProject.cpp: the two sequences must be read against each other,
+    // and every clause one of them gets right is a clause the other owes.
+    //
+    // ============ WHAT IS TORN DOWN AND WHAT IS KEPT, AND WHY ============
+    // The rule the split follows: NOTHING PROJECT-SCOPED SURVIVES A SWITCH,
+    // NOTHING WINDOW- OR DEVICE-SCOPED IS DESTROYED BY ONE.
+    //
+    // KEPT -- m_graphChrome, the host-window context. Not one thing it holds
+    // belongs to the outgoing project, and that is checkable rather than
+    // asserted (CreateGraphVehicles is the whole of its wiring):
+    //   * it owns the process's ONE NriDevice and the swapchain bound to the
+    //     host window -- both window/session-scoped, and a switch does not
+    //     touch the window;
+    //   * it ARMED the process-wide crash chain, and NriDiagnostics keeps one
+    //     slot with no owner identity -- tearing this context down mid-session
+    //     would disarm it and rebuild it, for nothing;
+    //   * its ImGuiNri serves the EDITOR ImGui context, which survives;
+    //   * its NriTextureCache has exactly ONE possible tenant: the toolbar
+    //     logo, keyed by a synthetic per-run Guid answered by a pixel supply
+    //     that returns null for every other id. No project asset can enter it.
+    //     (The VIEWPORT context is the one that gets the project's resolver +
+    //     Assets pixel supply -- BuildGraphViewportContext, and only there.)
+    // Destroying it would mean destroying and re-creating a graphics device
+    // and a flip-model swapchain on a live HWND mid-session, taking every
+    // borrower (the viewport context, every document preview) with it, in
+    // exchange for nothing at all.
+    //
+    // TORN DOWN -- m_viewportTargets.graph, the offscreen viewport context.
+    // Its SIZE is panel-scoped (so the replacement is created at the outgoing
+    // one's extent, below, and the panel does not snap back to 1280x720), but
+    // its CONTENT is project-scoped through and through, and -- this is the
+    // part that decides it -- the content lives in caches that HAVE NO
+    // INVALIDATION HOOK BY DESIGN:
+    //   * NriTextureCache holds nri::Textures uploaded from the OUTGOING
+    //     project's asset pixels, keyed by asset Guid. Two projects can carry
+    //     the same Guid (copying a project copies its asset ids), so a kept
+    //     cache does not merely leak VRAM -- it can serve project A's pixels
+    //     for project B's asset. It does have Release(graves, fence)...
+    //   * ...but Batch2DNode::EnsureSpriteSet caches a DESCRIPTOR SET per
+    //     sprite Guid naming that cache's view, written ONCE and never
+    //     rewritten -- the discipline that keeps ResetDescriptorPool and its
+    //     fence rules out of that file. Flushing the texture cache under it
+    //     would leave those sets naming destroyed views, which is a fault
+    //     rather than a stale pixel. Same shape for the material sets and for
+    //     PostChainNode's declared-param views.
+    // So a "flush the content, keep the object" switch would have to re-open a
+    // deliberately-closed discipline in three nodes. Rebuilding the context
+    // achieves the same state by construction -- new pool, new sets, new cache
+    // -- with no new invalidation surface, and it is what this arc's two
+    // contract blocks (NriGraphContext.hpp's TWO CONTEXTS, TWO LANES item (2);
+    // ImGuiNri.hpp's caller list) already named as the switch's shape.
+    //
+    // KEPT, AND IT MUST BE -- m_gameImgui. The viewport context's game
+    // ImGuiNriNode ADOPTED it, and ImGuiNri::Release PINS the adopted context
+    // to walk its platform texture list, which is a DEREFERENCE. At process
+    // exit member order guarantees it; here it has to be written down, because
+    // this function destroys a context while every ImGui context in the
+    // process survives. Nothing below resets it. The other half of that
+    // obligation -- re-adopting it on the REBUILT node -- is discharged in
+    // BuildGraphViewportContext, which is why the switch calls that body
+    // rather than CreateOffscreen directly.
+    //
+    // AND THE SPLIT KEEPS "ONE ImGuiNri PER ImGui CONTEXT" TRUE AT EVERY
+    // INSTANT, which is NodeSet's invariant and not a tidiness claim: a
+    // graph-mode editor holds exactly two backends -- the chrome hub over the
+    // EDITOR context and the viewport's game node over the GAME context
+    // (document previews are built with NodeSet{} and have none). This
+    // function destroys the second, and the rebuild in a LATER stage creates
+    // its replacement, so the game context is never served by two. Rebuilding
+    // the chrome context would have had to make the same argument for the
+    // editor context; keeping it means there is nothing to argue.
+    //
+    // WHAT THE GAME CONTEXT LOSES ACROSS THE GAP, stated because it looks like
+    // damage and is the protocol working: ImGuiNri::Release DISOWNS the
+    // adopted context's RefCount==1 ImTextureData, so the game atlas comes out
+    // of this marked WantCreate with its CPU pixels intact -- and the rebuilt
+    // backend re-uploads it on its first frame through the same 1.92 texture
+    // path that created it originally. That is precisely why Release must run
+    // while the context is ALIVE, i.e. why obligation (a) exists.
+    //
+    // ================= THE ORDER, WHICH IS THE POINT =================
+    //   1. IDLE. Explicit and unconditional -- it stands where the NVRHI arm's
+    //      `waitForIdle` stands and it is owed for the same reason: the stage
+    //      that runs immediately after this one unloads the plugin, and a
+    //      plugin torn down under a GPU still reading resources is the hazard
+    //      that line has always existed to prevent. Not folded into the
+    //      invalidate below: InvalidateUserTextureNow early-outs on a null
+    //      texture BEFORE its own idle, so a session where nothing ever drew
+    //      the output would silently skip it.
+    //   2. INVALIDATE, on the CHROME hub, for every texture about to die --
+    //      the retired document previews (drained here) and the viewport
+    //      output. The chrome backend caches by RAW nri::Texture* and NRI does
+    //      not ref-count, so the replacement may land on the freed address;
+    //      the entry must be evicted while the texture is still alive, and
+    //      through the `Now` variant, because view and texture die through
+    //      DIFFERENT graveyard lanes and nothing orders two lanes.
+    //   3. RELEASE. ~NriGraphContext then runs its own idle -> bury nodes,
+    //      caches, graph -> drain over its OWN lane, which is step 4 as well:
+    //      the lane is emptied inside that destructor, so nothing of the dead
+    //      context is left pending anywhere.
+    //
+    // AND NOTHING RENDERS BETWEEN STEP 2 AND STEP 3 -- the adjacency rule the
+    // resize path states as "(iii) THE PAIR IS ONE OPERATION". A chrome frame
+    // recorded in that window would take ImGuiNri's CREATE path and build a
+    // fresh view + set over a texture about to be destroyed. It holds here for
+    // a stronger reason than adjacency: SwitchProject drives its stages with a
+    // NULL presenter on this arm (see the seq.Run call site), so no frame is
+    // recorded anywhere between this function and the rebuild.
+    //
+    // WHAT THIS FUNCTION DELIBERATELY DOES NOT DO: close documents or clear
+    // caches. ResetPerProjectState owns that list, runs immediately before
+    // this, and is where a new project-scoped member must be registered. This
+    // function consumes the RESULT of its CloseAll (the retire list) and adds
+    // no second reset list -- audit defect A3 was three of those.
+    void EditorApp::TeardownGraphForSwitch(std::uint32_t& keepWidth, std::uint32_t& keepHeight)
+    {
+        keepWidth  = 0;
+        keepHeight = 0;
+        if (!m_graphChrome)
+            return;   // never built a vehicle -- nothing of this arm exists to tear down
+
+        // The panel's CURRENT extent, carried to the rebuild so the replacement
+        // is created at the size the user is looking at rather than at the boot
+        // default. Read BEFORE anything is destroyed, obviously, and 0 when
+        // there is no viewport context (a rebuild that already failed once) --
+        // which the rebuild reads as "use the boot default".
+        if (m_viewportTargets.graph)
+        {
+            keepWidth  = m_viewportTargets.graph->SurfaceWidth();
+            keepHeight = m_viewportTargets.graph->SurfaceHeight();
+        }
+
+        // ---- 1. IDLE ------------------------------------------------------
+        Arcane::NriDevice& device = m_graphChrome->Device();
+        const nri::CoreInterface& core = device.Core();
+        if (core.DeviceWaitIdle)
+            (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&device.Device()));
+
+        // ---- 2. INVALIDATE ------------------------------------------------
+        // The documents ResetPerProjectState just closed handed their preview
+        // vehicles to the retire list rather than destroying them inline
+        // (DocServices::retireGraphPreview). Draining HERE -- while
+        // m_graphChrome, whose node the drain invalidates against, is still
+        // alive and before any frame is recorded -- is the same pairing
+        // ShutdownGraphPath makes, and for the same reason. Without it the
+        // vehicles would sit in the list until the NEXT frame's phase 13
+        // drain, i.e. across a plugin unload and a project open, holding
+        // device memory for a project that no longer exists.
+        DrainRetiredDocPreviews();
+
+        // ...and the viewport output itself, the one descriptor that inherently
+        // spans both contexts. Unconditional and idempotent: a miss (nothing
+        // ever drew the panel) returns false and buries nothing, a null
+        // early-outs.
+        if (m_graphChrome->ImGuiHud() && m_viewportTargets.graph)
+        {
+            m_graphChrome->ImGuiHud()->InvalidateUserTextureNow(
+                m_viewportTargets.graph->OffscreenOutput());
+        }
+
+        // ---- 3. RELEASE (+ its own drain) ---------------------------------
+        // The borrower dies; the owner of the device it borrowed does not.
+        m_viewportTargets.graph.reset();
+
+        // NO LATCH READ HERE, unlike ShutdownGraphPath -- and the omission is
+        // deliberate. m_graphErrorBaseline spans the whole graph session and is
+        // read exactly once, at exit; sampling it mid-session would either have
+        // to re-baseline (losing errors a switch fired) or report a growth the
+        // exit read is about to report again. A validation error raised by this
+        // teardown is still caught, at exit, by that one read.
     }
 
     void EditorApp::ShutdownGraphPath()

@@ -82,11 +82,15 @@ namespace Arcane::Editor
             // runs ~m_documents -> ~m_retiredDocPreviews -> ~m_graphChrome:
             // every borrower dies before the owner of the device it borrowed.
             //
-            // BUT DESTRUCTION ORDER IS NOT WHAT ACTUALLY CLOSES THESE, and the
-            // distinction matters to Task 12. EditorApp::ShutdownGraphPath
-            // destroys both contexts EXPLICITLY, long before any member
-            // destructor runs, so it does its own CloseAll + drain first. A
-            // project switch owes the same sequence at switch_teardown.
+            // BUT DESTRUCTION ORDER IS NOT WHAT ACTUALLY CLOSES THESE.
+            // EditorApp::ShutdownGraphPath destroys both contexts EXPLICITLY,
+            // long before any member destructor runs, so it does its own
+            // CloseAll + drain first -- and a project switch owes the same
+            // sequence, which is what EditorApp::TeardownGraphForSwitch is
+            // (Task 12): ResetPerProjectState's CloseAll retires every open
+            // document's preview vehicle, and that function drains the retire
+            // list inside the same stage, while the chrome context whose node
+            // the drain invalidates against is still alive.
             s.nriDevice  = &m_graphChrome->Device();
             s.hostConfig = &m_config;
             // The backend that will CACHE the preview texture when
@@ -587,6 +591,17 @@ namespace Arcane::Editor
                                         : std::filesystem::path{};
         std::filesystem::path lockedRoot = outgoingRoot;
 
+        // THE OUTGOING VIEWPORT'S EXTENT, carried from "switch_teardown" (which
+        // destroys the graph viewport context) to "render_bridge" (which builds
+        // its replacement) -- NRI Phase 3, Task 12. Locals rather than members
+        // for the same reason lockedRoot above is one: their lifetime is
+        // exactly this call, and both stages capture by reference. 0/0 on the
+        // NVRHI arm, where nothing reads them, and on a graph session whose
+        // viewport context is already gone -- the rebuild reads that as "use
+        // the boot default", so a lost extent costs one deferred resize (phase
+        // 8 re-measures the panel every frame) and never a wrong picture.
+        std::uint32_t keepViewportW = 0, keepViewportH = 0;
+
         // ONE shared stage source (architecture pass sec 5). The ctx and pathStr are
         // NAMED locals -- ctx.projectPath is a c_str view and BootSequence::Run is
         // synchronous inside this scope (Amendment 1's dangling-temporary hazard is
@@ -650,38 +665,55 @@ namespace Arcane::Editor
         // switch_teardown stays switch-LOCAL: boot has no equivalent (nothing to
         // tear down at boot), so there is no shared body to reuse.
         //
-        // ITS waitForIdle IS NVRHI-ONLY, and left that way at NRI Phase 3 Task
-        // 8 for the reason MakeDocServices above states: SwitchProject is
-        // reached only from the File menu / recents / a dialog result, i.e.
-        // only through editor chrome, which a graph-mode session does not
-        // present (or accept input for) until Task 10. TASK 12 owns the graph
-        // equivalent, and the plan already names it: not a gated-out idle but
-        // the ordered idle -> invalidate -> release -> drain, applied to BOTH
-        // contexts (the viewport offscreen one and the chrome one). Skipping
-        // the idle here on the graph flavor would be strictly worse than
-        // leaving it unreachable -- it would tear a plugin down under a GPU
-        // still reading its resources.
+        // ===== BOTH ARMS AS OF TASK 12 ======================================
+        // Its waitForIdle was NVRHI-ONLY through Task 11, for the reason
+        // MakeDocServices above states: SwitchProject is reached only from the
+        // File menu / recents / a dialog result, i.e. only through editor
+        // chrome, which a graph-mode session did not present (or accept input
+        // for) until Task 10. The graph equivalent is NOT a gated-out idle but
+        // the ordered idle -> invalidate -> release (whose own drain closes
+        // the sequence), and it lives in EditorApp::TeardownGraphForSwitch --
+        // beside ShutdownGraphPath, which is the sequence it is the sibling of
+        // and the one it has to be read against. Skipping the idle on this
+        // flavor would be strictly worse than leaving it unreachable: it would
+        // tear a plugin down under a GPU still reading its resources.
         //
-        // ===== TWO OBLIGATIONS TASK 12 INHERITS FROM TASK 9'S GAME-UI HALF,
+        // WHAT THAT FUNCTION DECIDES, stated here because this stage is the
+        // site of the decision: the CHROME context and m_gameImgui are KEPT
+        // (nothing they hold is project-scoped, and one of them owns the
+        // process's only graphics device and the host window's swapchain),
+        // while the VIEWPORT context is DESTROYED here and REBUILT by
+        // "render_bridge" below. Its definition carries the whole argument,
+        // including why "keep the object and flush its content" is not on the
+        // menu -- Batch2DNode's write-once sprite sets name the texture
+        // cache's views, so a cache flush under a live node is a fault rather
+        // than a stale pixel.
+        //
+        // ===== THE TWO OBLIGATIONS INHERITED FROM TASK 9'S GAME-UI HALF,
         // both of which are SILENT when got wrong and neither of which any
-        // headless case can reach:
+        // headless case can reach -- discharged, and where:
         //
         //   (a) ORDER: the viewport context's game ImGuiNriNode ADOPTED
         //       m_gameImgui's ImGui context, and ImGuiNri::Release PINS the
         //       adopted context to walk its platform texture list -- a
-        //       dereference. So a teardown that releases the graph contexts
-        //       must leave m_gameImgui ALIVE across it. At process exit that
-        //       is member declaration order (EditorApp.hpp); here it has to be
-        //       written, because this stage destroys the graph contexts while
+        //       dereference. So a teardown that releases that context must
+        //       leave m_gameImgui ALIVE across it. At process exit that is
+        //       member declaration order (EditorApp.hpp); here it has to be
+        //       written, because this stage destroys a graph context while
         //       every ImGui context in the process SURVIVES the switch.
+        //       TeardownGraphForSwitch touches m_gameImgui NOWHERE -- said in
+        //       its own header block and at that member's declaration.
         //
-        //   (b) RE-ADOPT: a rebuilt viewport context's ImGuiGame() node is a
+        //   (b) RE-ADOPT: the rebuilt viewport context's ImGuiGame() node is a
         //       NEW ImGuiNri that installed its backend flags on whatever
         //       context was current -- not the game one. Without a fresh
         //       ImGuiNriNode::AdoptImGuiContext(m_gameImgui->Context()) after
-        //       the rebuild (the call CreateGraphVehicles makes), the game
-        //       context's draw lists carry no atlas for the node to upload and
-        //       the plugin HUD renders as NOTHING, with no error anywhere.
+        //       the rebuild, the game context's draw lists carry no atlas for
+        //       the node to upload and the plugin HUD renders as NOTHING, with
+        //       no error anywhere. Discharged by the rebuild going through
+        //       EditorApp::BuildGraphViewportContext -- the SAME body boot
+        //       uses, which is what makes the two provably identical rather
+        //       than merely similar.
         //
         // ImGuiNri::AdoptContext and its m_imguiContext member carry the full
         // statement of both.
@@ -694,7 +726,12 @@ namespace Arcane::Editor
             teardown.run = [&]
             {
                 ResetPerProjectState();
-                m_gpu->Device().Nvrhi()->waitForIdle();
+                // The two arms' idles. The NVRHI one is untouched -- one
+                // device, one waitForIdle, exactly where it always stood.
+                if (GraphMode())
+                    TeardownGraphForSwitch(keepViewportW, keepViewportH);
+                else
+                    m_gpu->Device().Nvrhi()->waitForIdle();
                 m_plugin.reset();
                 return true;
             };
@@ -751,9 +788,20 @@ namespace Arcane::Editor
             stages.push_back(std::move(projectOpen));
         }
 
-        // render_bridge: switch-LOCAL body (the boot body builds the viewport
-        // canvas/picker/outline, which already exist). The delta IS the switch:
-        // hand the editor lock over and load the new project's input config.
+        // render_bridge: switch-LOCAL body. On the NVRHI arm the boot body
+        // builds the viewport canvas/picker/outline, which already exist, so
+        // the delta IS the switch: hand the editor lock over and load the new
+        // project's input config.
+        //
+        // ON THE GRAPH ARM IT ALSO REBUILDS THE VIEWPORT TRIO, and that is the
+        // same job under a different shape rather than an extra one: the
+        // offscreen NriGraphContext IS that arm's whole trio (canvas, picker
+        // and outline are NODES inside its frame -- ViewportTargets::graph),
+        // "switch_teardown" above destroyed it because its caches are keyed by
+        // the OUTGOING project's asset Guids, and this is the boot stage whose
+        // job those three objects are. The chrome context and the game ImGui
+        // context are NOT rebuilt: neither is project-scoped, and the chrome
+        // one owns the device this borrows.
         {
             Arcane::BootStage bridge = std::move(*takenRenderBridge);
             bridge.dependsOn = { "project_open" };
@@ -769,6 +817,34 @@ namespace Arcane::Editor
                 }
                 if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
                     ARC_WARN("Open Project: input actions failed to load");
+
+                // THE GRAPH TRIO'S REBUILD, through the SAME body boot uses --
+                // which is what re-wires everything boot wired (the game
+                // context's AdoptImGuiContext, the asset resolver and the
+                // pixel supply) without a second copy of the list. At the
+                // OUTGOING extent, so the panel does not snap back to the boot
+                // default for a frame; 0/0 (nothing was there to measure)
+                // means "the boot extent", which that function names.
+                if (GraphMode())
+                {
+                    if (!BuildGraphViewportContext(keepViewportW, keepViewportH))
+                    {
+                        // Already logged. Fail the stage -- plugin_load is
+                        // skipped and the fallback below converges the session
+                        // on project-less -- AND request the exit, because a
+                        // graph session with no viewport context is not a
+                        // degraded editor, it is one whose phase 10 has
+                        // nothing to render into. Same code and same meaning
+                        // as CreateGraphVehicles failing at boot (exit 1); the
+                        // frame loop reads m_requestExit before any phase
+                        // runs, and this frame's remaining phases already
+                        // tolerate a null viewport context (they must: they
+                        // are reached with one only here).
+                        NoteGraphFrameFailure("the viewport graph context could not be rebuilt "
+                                              "for the project switch");
+                        return false;
+                    }
+                }
                 return true;
             };
             stages.push_back(std::move(bridge));
@@ -815,9 +891,44 @@ namespace Arcane::Editor
         // Overlay, not Fullscreen: the editor window is already up and this
         // must not erase its last frame (BootPresenter.cpp: only the
         // Fullscreen branch clears the backbuffer).
+        //
+        // ===== AND NO PRESENTER AT ALL ON THE GRAPH ARM (Task 12) ===========
+        // Two independent reasons, either of which alone decides it:
+        //
+        //   1. IT CANNOT RUN THERE. BootPresenter::Present is NVRHI to the
+        //      core -- m_gpu.Imgui().Render into m_gpu.Swap().BeginFrame()'s
+        //      backbuffer through m_gpu.Cmd(), executed on
+        //      m_gpu.Device().Nvrhi(). Three of those four are "NVRHI half"
+        //      accessors that ARC_ASSERT and then hand back null in an
+        //      optimized build (GpuContext.hpp), because the graph flavor
+        //      never created a device, a swapchain or a command list. This is
+        //      the object that would have crashed the FIRST graph-mode switch.
+        //
+        //   2. IT MUST NOT RUN THERE. TeardownGraphForSwitch evicts the chrome
+        //      backend's cache entry for the viewport output and then destroys
+        //      that output, and the rule those two lines live under is that
+        //      NOTHING MAY RENDER BETWEEN THEM (NriGraphContext::
+        //      ResizeOffscreen, clause (iii)): a frame recorded in that window
+        //      takes ImGuiNri's CREATE path and builds a fresh view over a
+        //      texture about to die. A per-stage presenter is exactly such a
+        //      frame. Passing null makes the whole switch one uninterrupted
+        //      operation -- the strongest form of that adjacency rule, not a
+        //      weaker one.
+        //
+        // WHAT IS GIVEN UP, stated rather than discovered at a desk: no
+        // progress overlay and NO WINDOW PUMP for the duration of the switch,
+        // so a long content scan can leave the window briefly unresponsive and
+        // `r.quitRequested` can never be set on this arm (the branch below is
+        // simply unreachable here -- it is the presenter that consumes a quit).
+        // Pumping without presenting is NOT a middle ground and was rejected:
+        // Window::PumpEvents CONSUMES the events it reads, so a bare pump
+        // would swallow a resize (leaving the chrome swapchain mismatched
+        // until the next one) and swallow a quit into nothing at all. A
+        // graph-mode overlay -- a real chrome frame per stage tick -- is
+        // possible but must be built against reason 2 above, not around it.
         Arcane::BootPresenter overlay(*m_gpu, Arcane::BootPresenterMode::Overlay);
         Arcane::BootSequence  seq(std::move(stages));
-        const Arcane::BootResult r = seq.Run(&overlay);
+        const Arcane::BootResult r = seq.Run(GraphMode() ? nullptr : &overlay);
         if (!r.ok)
         {
             // Important 1 (2026-07-31 review): a window close mid-switch is
@@ -866,8 +977,8 @@ namespace Arcane::Editor
             // read e.g. "project_open" instead of "switch_project_open" --
             // an accepted, ledgered delta, not a bug): with "plugin_load"
             // still Optional (inherited from EditorStages' own override --
-            // see its own push_back comment above), the ONLY ways `r.ok` can
-            // be false here are "project_open" failing -- genuinely able to
+            // see its own push_back comment above), the ways `r.ok` can be
+            // false here are "project_open" failing -- genuinely able to
             // now, per its own comment above: `.run` is a SWITCH-LOCAL
             // override that calls OpenProject directly and returns its real
             // result, unlike the shared CoreStages body it is built from
@@ -876,8 +987,23 @@ namespace Arcane::Editor
             // fall back to, per the guards above having already validated
             // the project and switch_teardown having already torn the old
             // one down. Or the presenter itself requesting quit
-            // (`r.quitRequested`, e.g. the window closing mid-switch). Either
-            // way, "render_bridge"/"plugin_load" never ran (Fatal failure
+            // (`r.quitRequested`, e.g. the window closing mid-switch), which
+            // the graph arm cannot produce at all -- it runs with no
+            // presenter (see the seq.Run call above).
+            //
+            // AND, SINCE TASK 12, A THIRD -- graph arm only: "render_bridge"
+            // failing because the viewport graph context could not be REBUILT
+            // after switch_teardown destroyed it. That one differs from the
+            // other two in exactly one way worth stating here: it fails AFTER
+            // the editor-lock handover, so `lockedRoot` is the INCOMING root
+            // rather than the outgoing one -- which is precisely why the
+            // fallback releases `lockedRoot` and not `outgoingRoot` (see that
+            // variable's own comment). It also requests the exit before
+            // returning false, so this fallback's project-less convergence is
+            // the last thing that runs before the frame loop leaves.
+            //
+            // Either way, when the failure is project_open's,
+            // "render_bridge"/"plugin_load" never ran (Fatal failure
             // skips dependents), so
             // `m_plugin` is still exactly what switch_teardown left it
             // (nullopt) and the registry is still exactly what that same
@@ -901,12 +1027,15 @@ namespace Arcane::Editor
             //     comment). It also drops the Assets content root/resolver
             //     and the Config project/plugin layers, so nothing about the
             //     torn-down project lingers there either.
-            //   - The outgoing project's editor lock: `lockedRoot` still
-            //     equals `outgoingRoot` here ("render_bridge", the only
-            //     stage that ever advances it, never ran) -- named via
-            //     `lockedRoot` rather than `outgoingRoot` directly so this
-            //     block stays correct even if a future stage is added after
-            //     the handover point.
+            //   - The editor lock WE ACTUALLY HOLD: `lockedRoot` equals
+            //     `outgoingRoot` when project_open failed ("render_bridge",
+            //     the only stage that advances it, never ran) and the
+            //     INCOMING root when render_bridge itself failed after the
+            //     handover (Task 12's graph-arm case above) -- which is
+            //     exactly why this is named via `lockedRoot` rather than
+            //     `outgoingRoot` directly. That foresight is now load-bearing
+            //     rather than defensive: a stage failing after the handover
+            //     stopped being hypothetical.
             //   - EnsureScene(): the boot path's finalize stage calls this
             //     unconditionally, project or not, so the registry has a
             //     SceneRoot the Outliner/save walk can root at instead of
@@ -1058,6 +1187,15 @@ namespace Arcane::Editor
         // engine.abi may finally be restamped -- the one legitimate module-
         // project moment (Project::RestampEngineAbi's own contract). The
         // Hub's compatibility badge heals off this.
+        //
+        // ARM-INDEPENDENT, AND VERIFIED AS SUCH AT TASK 12 rather than
+        // reworked: the seam is Runtime::RestampProjectEngineAbi ->
+        // Project::RestampEngineAbi, which rewrites `engine.abi` in the
+        // .arcproj and mirrors the new value into the in-memory manifest (so
+        // the guard below cannot re-fire on the next build). It touches no
+        // device, no context and no ImGui, so `--nri-graph` changes nothing
+        // about it -- kGamePluginABIVersion is 13 as of this task, and 13 is
+        // what a graph-mode rebuild stamps.
         if (proj->Manifest().engineAbi != static_cast<int>(Arcane::kGamePluginABIVersion))
         {
             const int oldAbi = proj->Manifest().engineAbi;
@@ -1074,6 +1212,21 @@ namespace Arcane::Editor
             // A live host needs nothing from us: PluginHost::Poll (EndFrame)
             // sees the fresh DLL mtime and hot-reloads with state after its
             // own debounce. Forcing a reload here would race that debounce.
+            //
+            // AND IT DOES NOT RACE A RECORDED GRAPH FRAME EITHER -- pinned
+            // here at Task 12 because "the DLL swap must not land mid-frame"
+            // is the question this line hands off, and the answer is
+            // structural rather than lucky. The swap happens in
+            // PluginHost::Poll at PHASE 20 (EditorAppFrame.cpp's EndFrame),
+            // i.e. after phase 10 submitted the viewport frame AND phase 19
+            // submitted+presented the chrome frame; nothing is recorded-but-
+            // unsubmitted at that instant, and the frame's own reload pin at
+            // that site carries the rest of the argument (what the GPU is
+            // still reading is host-owned, never plugin-owned). THIS
+            // function's own effects -- the re-engage and DoOpenScene below --
+            // land at the frame TOP instead (MainLoop calls PollModuleBuild at
+            // the dialog-drain point, before any render phase), which is the
+            // same safe point for the same reason.
             ARC_INFO("Build: the module watcher will hot-reload the fresh DLL");
             return;
         }

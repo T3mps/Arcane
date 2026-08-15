@@ -155,6 +155,16 @@ namespace Arcane::Editor
         // RuntimeApp::StageFinalize does. False = already logged; Main() turns
         // it into exit 1.
         bool       CreateGraphVehicles();
+        // The VIEWPORT context and every seam it needs, with TWO callers (NRI
+        // Phase 3, Task 12): CreateGraphVehicles at boot, and SwitchProject's
+        // "render_bridge" stage on every project switch -- which rebuilds this
+        // context from scratch rather than flushing it (TeardownGraphForSwitch
+        // states the kept-vs-torn decision in full). Shared rather than copied
+        // because three of its four statements fail SILENTLY when missed: a
+        // missing AdoptImGuiContext is a blank plugin HUD, a missing resolver
+        // or pixel supply is a white texel on every sprite. False = already
+        // logged; both callers turn it into a loud stop.
+        bool       BuildGraphViewportContext(std::uint32_t width, std::uint32_t height);
         int        Main();
         void       Shutdown();
         void       Destroy();
@@ -296,6 +306,20 @@ namespace Arcane::Editor
         // that could not be presented (PresentChromeFrame, phase 19) are the
         // same class of failure and neither was visible in an exit code before.
         void NoteGraphFrameFailure(const char* what);
+        // ---- The project switch's graph teardown (NRI Phase 3, Task 12) -----
+        // The graph-mode stand-in for the NVRHI arm's single `waitForIdle` in
+        // SwitchProject's "switch_teardown" stage: an ordered idle ->
+        // invalidate -> release (whose own drain closes the sequence), with
+        // the chrome context and m_gameImgui deliberately KEPT and the
+        // viewport context deliberately DESTROYED. The full kept-vs-torn
+        // decision, the reason a content flush is not an option, and the
+        // adjacency rule that makes the ordering safe are all stated at the
+        // definition -- read it before changing either end of the switch.
+        // Hands back the outgoing viewport extent so the rebuild in
+        // "render_bridge" can recreate at the size the panel is actually
+        // showing; 0/0 means "use the boot default". A no-op on the NVRHI arm
+        // (no chrome context) -- the caller gates on GraphMode() anyway.
+        void TeardownGraphForSwitch(std::uint32_t& keepWidth, std::uint32_t& keepHeight);
         // Destroys BOTH graph contexts, in the one order that is correct, and
         // then reads the latch back -- which is the whole reason it exists as a
         // function rather than as member destruction: a teardown-only
@@ -343,10 +367,23 @@ namespace Arcane::Editor
         // NOT on ResetPerProjectState's list, and neither is the viewport
         // context below -- the same ruling m_gpuFault and the NVRHI viewport
         // trio already carry: these hold DEVICE resources, not project ones,
-        // and the device outlives a project switch. What a switch DOES owe them
-        // is an ordered idle -> invalidate -> release -> drain in place of
-        // switch_teardown's NVRHI waitForIdle, applied to BOTH contexts. That
-        // is Task 12's, and it is named at that call site (EditorAppProject.cpp).
+        // and the device outlives a project switch.
+        //
+        // ===== AND THIS ONE SURVIVES A SWITCH OUTRIGHT (Task 12) =====
+        // The decision, made and recorded rather than left implicit: THIS
+        // context is window/device/session-scoped and a project switch does
+        // not touch it, while the VIEWPORT context below is project-scoped in
+        // its caches and is destroyed and rebuilt by every switch. Nothing
+        // this object holds can name an asset of the outgoing project -- its
+        // NriTextureCache's only possible tenant is the toolbar logo, whose
+        // pixel supply answers exactly one synthetic per-run Guid and null for
+        // everything else (CreateGraphVehicles), and it is handed no asset
+        // resolver at all. What a switch DOES owe it is the ordered idle ->
+        // invalidate -> release, with the invalidate made ON THIS OBJECT'S
+        // ImGuiHud() for every texture the switch is about to destroy: it is
+        // the backend that caches the viewport output and the document
+        // previews by raw pointer. EditorApp::TeardownGraphForSwitch carries
+        // the whole sequence and the argument for the split.
         std::unique_ptr<Arcane::NriGraphContext> m_graphChrome;
 
         // ---- Closed documents' preview vehicles (NRI Phase 3, Task 11) ----
@@ -377,6 +414,11 @@ namespace Arcane::Editor
         // its CloseAll + drain -- so the destructor path is unreachable with a
         // non-empty vector. The declaration order is what keeps it SAFE rather
         // than merely unreached.
+        //
+        // THE PROJECT SWITCH IS THE SECOND CloseAll + drain PAIRING (Task 12):
+        // ResetPerProjectState's CloseAll fills this list mid-switch, and
+        // TeardownGraphForSwitch drains it in the same stage -- not at the next
+        // frame's phase 13, which is across a plugin unload and a project open.
         std::vector<std::unique_ptr<Arcane::NriGraphContext>> m_retiredDocPreviews;
         void RetireDocPreview(std::unique_ptr<Arcane::NriGraphContext> vehicle);
         void DrainRetiredDocPreviews();
@@ -472,12 +514,15 @@ namespace Arcane::Editor
         // runs ~NriGraphContext -- and the Release inside it -- while this is
         // still alive. Do not move either declaration past the other.
         //
-        // TASK 12 OWES THE SAME ORDERING EXPLICITLY: switch_teardown destroys
-        // and rebuilds the graph contexts WITHOUT touching this one, so it must
-        // not reset m_gameImgui first -- and it must re-issue
-        // ImGuiNriNode::AdoptImGuiContext on the rebuilt node, or the HUD goes
-        // silently blank after the first switch. The full obligation is stated
-        // on ImGuiNri's m_imguiContext member.
+        // TASK 12 DISCHARGED THE SAME ORDERING EXPLICITLY, in both halves:
+        // switch_teardown (EditorApp::TeardownGraphForSwitch) destroys the
+        // VIEWPORT context -- and therefore that node's Release, which PINS
+        // this context -- WITHOUT touching this member, which is why nothing
+        // in that function resets it; and the rebuild re-issues
+        // ImGuiNriNode::AdoptImGuiContext on the new node
+        // (BuildGraphViewportContext), without which the HUD goes silently
+        // blank after the first switch. The full obligation is stated on
+        // ImGuiNri's m_imguiContext member.
         std::unique_ptr<Arcane::OffscreenImGuiLayer> m_gameImgui;
 
         Astra::TypeContext*               m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)
@@ -795,6 +840,15 @@ namespace Arcane::Editor
             // outlive it -- guaranteed by declaration order (m_graphChrome is
             // declared near the top of this class, m_viewportTargets far
             // below, and reverse-order destruction runs this one first).
+            //
+            // PROJECT-SCOPED, AND THEREFORE REBUILT BY EVERY PROJECT SWITCH
+            // (NRI Phase 3, Task 12) -- unlike the chrome context, which
+            // survives one. Not because the OBJECT belongs to a project (its
+            // two injected seams re-read CurrentProject per call and would
+            // survive fine) but because its CACHES do: NriTextureCache holds
+            // uploads keyed by the outgoing project's asset Guids, and
+            // Batch2DNode's write-once sprite/material descriptor sets name
+            // that cache's views. See EditorApp::TeardownGraphForSwitch.
             std::unique_ptr<Arcane::NriGraphContext> graph;
 
             std::uint32_t pendingW = 0, pendingH = 0;   // measured last frame, applied at frame top

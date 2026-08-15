@@ -1058,6 +1058,17 @@ namespace Arcane::Editor
             return;
         }
 
+        // A GRAPH SESSION WHOSE VIEWPORT CONTEXT IS GONE reaches here with a
+        // null `canvas` -- the two arms' targets are mutually exclusive, so
+        // "no graph context" does NOT mean "an NVRHI one instead". The one way
+        // in is a project switch whose rebuild failed (SwitchProject's
+        // "render_bridge", NRI Phase 3 Task 12), which has already requested
+        // the exit; this frame still has to finish, and it finishes by doing
+        // nothing here rather than by dereferencing null. Inert on the NVRHI
+        // arm, where StageRenderBridge refuses to boot without all three.
+        if (!canvas)
+            return;
+
         if (pendingW != 0 && pendingH != 0 &&
             (pendingW != canvas->Width() || pendingH != canvas->Height()))
         {
@@ -1272,6 +1283,15 @@ namespace Arcane::Editor
                 NoteGraphFrameFailure("the viewport frame could not be recorded or submitted");
             return;
         }
+
+        // Same guard, same one reachable cause, as ApplyPendingResize's (NRI
+        // Phase 3, Task 12): on the graph arm `canvas` is null by construction,
+        // so a session that lost its viewport context to a failed post-switch
+        // rebuild must render nothing here rather than fall through into the
+        // NVRHI arm's target. The exit is already requested; this frame just
+        // has to end without a fault.
+        if (!m_viewportTargets.canvas)
+            return;
 
         // Scene -> offscreen canvas (the SAME canvas->batcher->tonemap path ArcaneRuntime
         // drives, but into a panel texture). SetRenderContext writes RenderContext2D
@@ -2593,6 +2613,44 @@ namespace Arcane::Editor
     }
 
     // Phase 20: end of frame -- plugin hot-reload poll + the --frames N budget.
+    //
+    // ===== THE DLL SWAP'S POSITION IS THE SAFETY, ON BOTH ARMS ==============
+    // (NRI Phase 3, Task 12 -- pinned rather than reworked, because the shape
+    // was already right and only its guarantee was unwritten.)
+    //
+    // PluginHost::Poll is where a rebuilt module is actually swapped in: it
+    // notices the fresh mtime, waits out its own 250 ms debounce, and then
+    // runs Reload -> plugin Shutdown, registry reset, FreeLibrary, LoadLibrary,
+    // Init. THIS LINE is the only place in the editor that reaches it.
+    //
+    // It sits AFTER every recorder in the frame, which is what makes the swap
+    // unable to race one:
+    //   * phase 10 declared, compiled, recorded and SUBMITTED the viewport
+    //     graph frame (RenderSceneToViewport -> RenderFrameOffscreen);
+    //   * phase 19 did the same for the chrome frame and presented it
+    //     (PresentChromeFrame / PresentFrame).
+    // So at this statement nothing is recorded-but-unsubmitted, on either arm.
+    //
+    // AND WHAT THE GPU MAY STILL BE READING IS NEVER THE PLUGIN'S. Everything
+    // a graph frame reads was copied into HOST-OWNED objects at record time or
+    // earlier: the plugin's sprites go through Batcher2D -> the upload ring,
+    // its HUD through m_gameImgui (a host ImGui context, a host atlas, a host
+    // ImGuiNri) whose vertices ImGuiNriNode::Record copies into that same
+    // ring, and its textures resolve Guid -> Assets pixels -> NriTextureCache.
+    // The plugin owns no nri object, no descriptor and no command buffer, so
+    // unmapping its image cannot invalidate anything in flight. That is a
+    // property of the boundary (PluginABI's C vtable hands across no GPU
+    // handle on this arm), not of this ordering -- but the ordering is what
+    // makes it hold even for the ImDrawData, which lives in the game context
+    // until the next NewFrame and is consumed entirely inside phase 10.
+    //
+    // MOVING THIS CALL EARLIER IN THE FRAME WOULD REOPEN THE QUESTION. Between
+    // phase 10 and phase 19 the chrome frame has not been recorded yet while
+    // the viewport frame is already submitted; a reload there would run the
+    // registry reset between the two recorders, i.e. between a picture and the
+    // ImGui pass that samples it. The other half of the build flow (the
+    // re-engage + scene reload that PollModuleBuild performs when NO host is
+    // watching) is at the frame TOP for the same family of reason.
     void EditorApp::EndFrame(LoopState& ls)
     {
         if (m_plugin) m_plugin->Poll();

@@ -215,9 +215,12 @@
 // output, which the CHROME backend owns, must be destroyed first too. Opposite
 // orders; no declaration order satisfies both, which is why the owner's last
 // living moment is the only place this can close. EditorApp::Shutdown is that
-// site (NRI Phase 3, Task 8); a project switch is the other one (Task 12 --
-// switch_teardown destroys and rebuilds both contexts). Unconditional and
-// idempotent there too: a miss is routine, a null is an early-out.
+// site (NRI Phase 3, Task 8); a project switch is the other one --
+// EditorApp::TeardownGraphForSwitch (Task 12), which destroys and rebuilds the
+// OFFSCREEN context and deliberately KEEPS the host-window one, so the backend
+// holding the view provably outlives the texture's owner and this call is the
+// only thing that can order the two. Unconditional and idempotent there too:
+// a miss is routine, a null is an early-out.
 //
 // AND NOTHING MAY RENDER BETWEEN THE TWO CALLS. The invalidate leaves NO entry
 // for that pointer, so a chrome frame recorded before the resize would take

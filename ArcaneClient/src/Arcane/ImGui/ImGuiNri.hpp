@@ -72,6 +72,14 @@
 //     unconditional and idempotent: a miss is routine and a null is an
 //     early-out, so a host that is not sure whether anything ever drew the
 //     texture should simply make the call.
+//     A PROJECT SWITCH IS THE SAME CALLER KIND (Task 12), and the one that
+//     shows why this is a KIND rather than a synonym for "shutdown":
+//     EditorApp::TeardownGraphForSwitch destroys the viewport context AND
+//     every closed document's preview context mid-session, while the backend
+//     caching their outputs -- the chrome context's -- goes on rendering
+//     afterwards. So the eviction is not tidiness before exit; skipping it
+//     leaves a live cache entry that the very next frame can hit on a
+//     recycled address.
 //
 // A SECOND, PHASE-2-ONLY HAZARD FROM THE SAME CONVENTION, stated because it is
 // a crash rather than a wrong pixel: while `--nri-graph` holds TWO devices
@@ -451,8 +459,11 @@ namespace Arcane
         // context a backend adopted must OUTLIVE that backend's Release. In the
         // editor that is declaration order (m_gameImgui is declared before
         // m_viewportTargets, so it destructs after it -- stated at that member
-        // too); Task 12 owes the same ordering explicitly in its switch
-        // teardown, where it is stated at the site.
+        // too); a PROJECT SWITCH states the same ordering explicitly instead,
+        // because it destroys a backend while every ImGui context in the
+        // process survives -- EditorApp::TeardownGraphForSwitch (Task 12),
+        // which keeps m_gameImgui untouched across the release and re-adopts
+        // it on the rebuilt node.
         void* m_imguiContext = nullptr;
 
         bool m_warnedPoolFull = false;
