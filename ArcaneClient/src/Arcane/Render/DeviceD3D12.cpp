@@ -553,7 +553,19 @@ namespace Arcane
             }
             else if (g_d3d12DeviceCreated.load(std::memory_order_acquire))
             {
-                // THE `--nri-graph` CASE, and the tradeoff stated out loud.
+                // THE SECOND-DEVICE CASE, and the tradeoff stated out loud.
+                //
+                // NRI PHASE 3, TASK 6 UPDATE: this is no longer the
+                // `--nri-graph` case. That path now creates NO NVRHI device at
+                // all (GpuContext::CreateForGraph), so the graph's device is
+                // the FIRST in the process and takes the else-branch below --
+                // it gets the debug layer, which is exactly the "HOW TO GET IT
+                // BACK" note further down, arrived at by removing the other
+                // device rather than by enabling the layer earlier. This
+                // branch stays because the guard is general (any second device
+                // that requests the layer), and it is still reachable while
+                // the editor's own flip is in flight.
+                //
                 // This device gets NO D3D12 debug layer: enabling it now would
                 // remove the engine's live NVRHI device (and, observed at the
                 // desk, makes the D3D12CreateDevice below fail outright), so

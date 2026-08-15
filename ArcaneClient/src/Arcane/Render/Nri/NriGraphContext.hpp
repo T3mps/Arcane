@@ -1,24 +1,22 @@
 #pragma once
 
-// NriGraphContext -- the `--nri-graph` DEV VEHICLE (NRI Phase 2, Task 7).
+// NriGraphContext -- the `--nri-graph` render half (NRI Phase 2, Task 7;
+// LANDED on one device and one window at NRI Phase 3, Task 6).
 //
 // Everything the graph path needs to put a frame on screen, in one object:
-// a window, the wrapper-path native device + its NRI wrap, an NriSwapChain,
-// the Task 5 upload ring, the Task 7 pipeline cache, and ONE RenderGraph that
-// is Reset/declared/compiled/executed every frame. Tasks 8-12 hang their nodes
-// off BuildFrame() below; today the frame is a single Raster node that clears
-// the backbuffer and presents.
+// the HOST's window (borrowed, see below), the wrapper-path native device +
+// its NRI wrap, an NriSwapChain, the Task 5 upload ring, the Task 7 pipeline
+// cache, and ONE RenderGraph that is Reset/declared/compiled/executed every
+// frame. The frame's nodes hang off BuildFrame() below: batch2d -> [post
+// chain] -> tonemap -> [pick/outline] -> [imgui] -> [capture] -> present.
 //
 // NOT SCAFFOLDING in the sense the Phase-1 triangle smoke was. That was a
 // straight-line proof with no reusable abstraction, deleted at Task 13; this
 // class is the shape Phase 3 grows into -- GpuContext's render internals move
-// ONTO it when the hosts flip. What IS temporary is that it stands beside a
-// live NVRHI GpuContext rather than replacing it; see THE TWO-DEVICE WINDOW
-// below.
+// ONTO it as the hosts flip.
 //
 // -------------------------------------------------------------------------
-// DESK COMMANDS (GPU/windowed runs are desk-only on the dev box, so nothing
-// below has ever executed -- D1/D2 are its first real runs):
+// DESK COMMANDS (GPU/windowed runs are desk-only on the dev box):
 //
 //   ArcaneRuntime --nri-graph --project ..\..\..\ReferenceProject --backend dx12 \
 //                 --frames 120 --no-vsync --screenshot nri-graph-dx12.png
@@ -30,99 +28,65 @@
 //
 // The first two are the direct --nri-graph equivalents of the two commands
 // Phase 1's triangle smoke carried on its own header, one per backend --
-// migrated here at Task 13, which deleted that file. UNLIKE the smoke, which
-// owned the whole process and was therefore always the FIRST (and only)
-// D3D12/VK device the process created, --nri-graph boots the real engine
-// FIRST (GpuContext's NVRHI device), so its own device is always the SECOND.
-// That has one dx12 consequence worth stating here rather than leaving a
-// desk user to rediscover it: the D3D12 CPU debug layer / ID3D12InfoQueue1
-// channel the smoke used to exercise as Task 1's validation proof is NOT
-// available to the vehicle's device on an ordinary run -- DeviceD3D12.cpp
-// declines EnableDebugLayer once a device already exists in the process
-// (see "THE `--nri-graph` CASE" there) rather than risk removing the
-// engine's live one. NRI's own validation layer and, on Vulkan, the VK core
-// + SYNCHRONIZATION validation layers stay live and per-device regardless --
-// they are what makes a vehicle run's exit code mean something today -- but
-// closing the InfoQueue1 gap for real means the FIRST device in the process
-// would have to request the debug layer, which is a boot-sequencing change
-// nobody has made (DeviceD3D12.cpp names the tradeoff).
+// migrated here at Task 13, which deleted that file. LIKE the smoke, and
+// unlike this vehicle through the whole of Phase 2, THIS DEVICE IS NOW THE
+// FIRST AND ONLY GRAPHICS DEVICE IN THE PROCESS: GpuContext::CreateForGraph
+// builds no NVRHI device at all. Two consequences a desk user sees:
+//   * dx12 Debug genuinely gets the D3D12 CPU debug layer. EnableDebugLayer is
+//     a before-any-device call, and through Phase 2 it was DECLINED here
+//     because the engine's NVRHI device already existed (DeviceD3D12.cpp's
+//     g_d3d12DeviceCreated). Nothing is declined now, so D3D12 validation
+//     messages reach D3D12DebugLayerCallback and therefore the
+//     RenderErrorCount latch -- for the first time on this path.
+//   * Vulkan's two-VkDevice dispatcher hazard is GONE by construction: there
+//     is one VkDevice, so the Vulkan-Hpp default dispatcher binds the only one
+//     there is.
 //
 // Both boot the REAL engine (project, plugin, scene, material compiles) and
 // swap only the render half. Exit codes follow the host's existing contract:
 // 0 clean, 1 the graph run failed or the device was lost, 2 RenderErrorCount
-// GREW during the run (a validation error fired -- Debug requests the D3D12
-// debug layer and turns VK sync validation ON for exactly this, subject to
-// the dx12 caveat above), 3 a golden/screenshot capture or compare failure.
-// Precedence 1 > 2 > 3.
+// GREW during the run (a validation error fired -- Debug turns the D3D12 debug
+// layer and VK sync validation ON for exactly this), 3 a golden/screenshot
+// capture or compare failure. Precedence 1 > 2 > 3.
 // -------------------------------------------------------------------------
 //
-// THE TWO-DEVICE WINDOW (read before changing where the vehicle renders).
-// On this path the process holds TWO graphics devices at once: the engine's
-// NVRHI RenderDevice (created by GpuContext during boot, because the scene
-// resolver, the batcher and the material compile service are all built on it)
-// and this object's NRI device. That has two consequences, and the second one
-// is why this class owns a window instead of borrowing the host's:
+// THE BORROWED WINDOW (read before changing where the graph renders).
+// This object does NOT own a window. Create() takes the host's -- the same
+// Window GpuContext::CreateForGraph built and the same one the host's
+// ImGuiLayer, InputDevices and event pump use.
 //
-//  1. Vulkan: NriDevice.hpp's "one live Vulkan device per process" rule is
-//     BROKEN on this path by construction -- the Vulkan-Hpp default dispatcher
-//     (Render/VulkanDispatchStorage.cpp) binds ONE VkDevice, and the creation
-//     half re-inits it onto ours (DeviceVulkan.cpp's
-//     VULKAN_HPP_DEFAULT_DISPATCHER.init(out.device)), so the NVRHI device's
-//     device-level entry points are left resolved through THIS device's
-//     dispatch chain. Those pointers coincide only while no layer is active --
-//     and Debug, the configuration this vehicle exists to run in, turns
-//     validation ON. Create() says so at WARN. dx12 is unaffected (two
-//     ID3D12Devices coexist fine). Closing it properly means one device for the
-//     whole process, which is the Phase 3 flip.
+// WHY BORROWED RATHER THAN OWNED, and why the flip had to be one landing:
+// DXGI allows only ONE flip-model swap chain per HWND at a time
+// (IDXGIFactory2::CreateSwapChainForHwnd's own remark), and both this
+// swapchain (NRI SwapChainD3D12 -> DXGI_SWAP_EFFECT_FLIP_DISCARD) and the
+// engine's (Render/DeviceD3D12.cpp, same swap effect) are flip-model. So
+// through Phase 2, while an NVRHI swapchain still existed on the host window,
+// this class had to create its OWN second window and present there. Removing
+// the NVRHI device and binding this swapchain to the host window is therefore
+// a single, indivisible change -- plan reconciliation 1.
 //
-//     IT IS LIVE, NOT LATENT, AND `vulkan + RESIZE` IS THE SHARP EDGE. The
-//     NVRHI device keeps doing device-level work every frame on this path (the
-//     shader poll and the resolver's Refresh sit OUTSIDE RuntimeApp's render
-//     branch), and RuntimeApp still calls GpuContext::OnResize here, which
-//     DESTROYS AND RECREATES the hidden NVRHI swapchain's backbuffers on EVERY
-//     resize -- the heaviest device-level burst in the frame, aimed at the
-//     device whose dispatch chain was rebound. Resize() below closes the
-//     graph's OWN half of the resize hazard (descriptors left naming freed
-//     backbuffers), which does not fix this but does mean a surviving
-//     drag-storm failure has one cause instead of two overlapping ones.
-//     Desk order accordingly: dx12 first, on every item.
-//  2. DXGI allows only ONE flip-model swap chain per HWND at a time
-//     (IDXGIFactory2::CreateSwapChainForHwnd's own remark), and both this
-//     swapchain (NRI SwapChainD3D12 -> DXGI_SWAP_EFFECT_FLIP_DISCARD) and the
-//     engine's (Render/DeviceD3D12.cpp, same swap effect) are flip-model. So
-//     the vehicle CANNOT create its swapchain over the host window that
-//     GpuContext already owns -- it would fail at creation. It therefore
-//     creates its OWN window and presents there, and RuntimeApp leaves the
-//     engine's window hidden for the duration of a --nri-graph run (it is
-//     created hidden and only StageFinalize reveals it). One visible window,
-//     one live swapchain per HWND, no reordering of the boot.
+// WHAT THE CALLER OWES: the borrowed window must OUTLIVE this object. The
+// runtime host guarantees that by declaring m_graphContext AFTER m_gpu, so it
+// is destroyed first (RuntimeApp.hpp's teardown contract). Nothing in this
+// class destroys, resizes or re-titles the window -- it only reads its native
+// handle at swapchain create, and Resize() is driven by the host's pump.
 //
-// Consequences of owning the window, stated because they are observable at the
-// desk: this window is the one to close/drag/resize (the hidden engine window
-// still exists and still holds an idle NVRHI swapchain), and RuntimeApp pumps
-// THIS window's events instead of the host's -- so the ImGui event tap the
-// ImGuiLayer installed on the host window receives nothing on this path.
+// THE HUD IS DRAWN BUT DELIBERATELY NOT INTERACTIVE on a --nri-graph run.
+// Through Phase 2 that was an accident of the two-window topology (the ImGui
+// event tap sat on the host window while the user's events went to the
+// vehicle's). One window makes it a CHOICE, and it is kept until desk
+// checkpoint D3b's compares are done for the load-bearing half of the old
+// reason: an interactive HUD can be DRAGGED, ImGui persists window placement
+// per exe dir in imgui.ini, and the graph path and the NVRHI path share that
+// file -- so one drag on a graph run would move the HUD on the NVRHI path too,
+// i.e. would change the very `full` baseline D3b compares against. The gate is
+// ImGuiLayer::CreateForGraph withholding the event tap; see ImGuiLayer.cpp.
 //
-// THE HUD IS THEREFORE DRAWN BUT NOT INTERACTIVE on a --nri-graph run, and
-// Task 12 left it that way ON PURPOSE rather than re-pointing the tap. Two
-// reasons, and the second is the load-bearing one:
-//   1. ImGui's platform backend is bound to the HOST window
-//      (ImGui_ImplSDL3_InitForOther), so events carrying THIS window's id
-//      would be matched against the wrong window -- mouse coordinates would be
-//      wrong rather than absent.
-//   2. An interactive HUD can be DRAGGED, and window placement persists per
-//      exe dir in imgui.ini. The vehicle and the NVRHI runtime share that
-//      file, so a drag on the vehicle would silently move the HUD on the
-//      NVRHI path too -- i.e. it would change the very baseline D2 compares
-//      against. A HUD that renders identically and cannot be moved is exactly
-//      what a golden comparison wants.
-// Phase 3 retires the whole question: one window, one device, one tap.
-//
-// The HUD's DISPLAY SIZE has the same root cause and is worth knowing at the
-// desk: ImGui_ImplSDL3_NewFrame reads the HOST window's size, so RuntimeApp
-// keeps that window's size in lockstep with this one on resize (it already
-// does the same for the host canvas). Both default to 1280x720, which is the
-// size every golden was captured at.
+// The HUD's DISPLAY SIZE now needs no lockstep at all, which is the other half
+// of the landing: ImGui_ImplSDL3_NewFrame reads the window the platform
+// backend was initialised with, and that is the same window this swapchain
+// binds. One surface, one extent. It defaults to 1280x720, the size every
+// golden was captured at.
 //
 // Adapted, where marked, from .example/NRISamples (MIT -- see that tree's
 // LICENSE.txt): the readback shape (Source/Readback.cpp's COPY_SOURCE ->
@@ -302,28 +266,33 @@ namespace Arcane
         // turns a drained span's texture Guid into something t0 can bind.
         using PixelSupplyFn = NriTextureCache::PixelSupplyFn;
 
-        // Builds window + native device + NRI wrap + swapchain + ring + cache
-        // + graph, in that order, honouring `config.backend` and
+        // Builds native device + NRI wrap + swapchain (over `window`) + ring +
+        // cache + graph, in that order, honouring `config.backend` and
         // `config.vsync`. Null on any failure (already logged + latched).
         //
-        // Debug REQUESTS validation ON -- D3D12 debug layer through
+        // `window` is BORROWED and must outlive the returned object -- see THE
+        // BORROWED WINDOW above. It must already exist and carry a native
+        // handle, and (on Vulkan) have been created with SDL_WINDOW_VULKAN;
+        // GpuContext::CreateForGraph does both.
+        //
+        // Debug turns validation ON -- the D3D12 debug layer through
         // ID3D12InfoQueue1, VK core + SYNCHRONIZATION validation, and NRI's own
         // validation layer -- all three of which end at RenderErrorCount. That
         // is the dev-loop gate for the whole phase (NRI validation alone
-        // cannot catch barrier bugs); see the DESK COMMANDS block above for
-        // the dx12 caveat (the D3D12 debug layer request is declined once the
-        // engine's own device already exists in-process, which is always).
-        static std::unique_ptr<NriGraphContext> Create(const HostConfig& config);
+        // cannot catch barrier bugs). Since Task 6 this device is the FIRST in
+        // the process, so the D3D12 debug-layer request is no longer declined.
+        static std::unique_ptr<NriGraphContext> Create(const HostConfig& config, Window& window);
 
         ~NriGraphContext();
 
         NriGraphContext(const NriGraphContext&)            = delete;
         NriGraphContext& operator=(const NriGraphContext&) = delete;
 
-        // THIS object's window -- the visible one on a --nri-graph run (see
-        // THE TWO-DEVICE WINDOW above). The frame driver pumps it and feeds
-        // resizes back through Resize().
-        [[nodiscard]] Window& Win() noexcept { return m_window; }
+        // The window this swapchain is bound to -- the HOST's, borrowed (see
+        // THE BORROWED WINDOW above). Handed back so a caller that only holds
+        // the graph context can reach it; the frame driver pumps the same
+        // object through its own GpuContext and feeds resizes here.
+        [[nodiscard]] Window& Win() noexcept { return *m_borrowedWindow; }
 
         // Destroy + recreate the swapchain at the new size. MUST be called
         // strictly BETWEEN RenderFrame() calls -- never from inside one --
@@ -506,7 +475,7 @@ namespace Arcane
     private:
         NriGraphContext() = default;
 
-        bool Init(const HostConfig& config);
+        bool Init(const HostConfig& config, Window& window);
 
         // Declares this frame's nodes into m_graph (already Reset()). The one
         // place Tasks 8-12 add to.
@@ -523,10 +492,18 @@ namespace Arcane
         // device's graveyard at its own last submitted fence value), then the
         // cache and the ring, then the swapchain, then the NRI device (whose
         // destructor idles the device and DRAINS that graveyard), then the
-        // native device it wrapped, and the window LAST. Do NOT reorder: this
-        // is contract item 15 (the NRI device is destroyed BEFORE the native
-        // one) plus the graveyard's "everything buried must outlive nothing".
-        Window                             m_window;
+        // native device it wrapped. Do NOT reorder: this is contract item 15
+        // (the NRI device is destroyed BEFORE the native one) plus the
+        // graveyard's "everything buried must outlive nothing".
+        //
+        // THE WINDOW IS NO LONGER PART OF THIS CONTRACT because this object no
+        // longer owns one (Task 6). It is the host's, and the swapchain that
+        // names its HWND/surface must still die before it does -- which the
+        // host guarantees by OUTER ordering instead: RuntimeApp declares
+        // m_graphContext after m_gpu, so this whole object (swapchain
+        // included) is destroyed while that window is still alive. A pointer
+        // rather than a reference so the default ctor + Init() shape survives.
+        Window*                            m_borrowedWindow = nullptr;
         std::unique_ptr<NativeDeviceOwner> m_native;
         std::unique_ptr<NriDevice>         m_device;
         std::unique_ptr<NriSwapChain>      m_swap;

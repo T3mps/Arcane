@@ -1,20 +1,35 @@
 #pragma once
-// RuntimeFrame: RuntimeApp::MainLoop's frame BODY, extracted verbatim (NRI
-// Phase 3, Task 4 -- mechanical, floor-preserving; see
+// RuntimeFrame: RuntimeApp::MainLoop's frame BODY, extracted verbatim at NRI
+// Phase 3 Task 4 (mechanical, floor-preserving; see
 // docs/superpowers/sdd/2026-08-14-nri-phase3-host-integration/task-4-brief.md
-// and this task's own task-4-report.md for the exact line-range mapping).
-// Task 6 (the landing) rewrites the frame flow next and needs MainLoop
-// reviewable first -- this file is that extraction, with ZERO behavior
-// change: every statement below is the old MainLoop body, unchanged, except
-// for the mechanical rename `m_foo` -> `io.foo` (these are FREE functions,
-// not RuntimeApp members, so they cannot reach `this`) and the control-flow
-// substitutions documented on FrameIo::quit / FrameIo::skipFrame (a called
-// function cannot literally `break`/`continue` the caller's while loop).
+// and task-4-report.md for the exact line-range mapping) and UNIFIED at Task 6
+// -- the landing, where `--nri-graph` became one device and one window.
 //
-// MainLoop keeps: the pre-loop setup (locals, the --nri-graph vehicle boot,
-// the golden warm-up), the while/if-else SKELETON that calls these six
-// functions in the original order, and the post-loop ShutdownGraphPath()
+// MainLoop keeps: the pre-loop setup (locals, the --nri-graph render-half
+// boot + window reveal, the golden warm-up), the while/if-else SKELETON that
+// calls the functions below in order, and the post-loop ShutdownGraphPath()
 // call. Everything else lives here.
+//
+// WHAT TASK 6 CHANGED IN THIS FILE, so a reader can see the shape rather than
+// reconstruct it from a diff:
+//   * ONE WINDOW IS PUMPED, always the host's. The graph half no longer owns
+//     one -- it borrows this exact window and presents into it.
+//   * ONE RESIZE. `io.graph->Resize` alone on the graph path; the hidden-
+//     window SetSize lockstep and the GpuContext::OnResize residual that used
+//     to accompany it both described the two-window topology and are gone.
+//   * BuildHud SPLIT IN TWO (it used to also acquire the NVRHI backbuffer,
+//     which its name did not say): BuildHud is now the ImGui frame + the HUD +
+//     DrawUIAll, and PrepareFrame is the NVRHI backbuffer acquisition, the
+//     shader hot-reload poll and the scene resolver's Refresh. Called back to
+//     back, in that order -- the statement order is exactly what it was.
+//   * THE FRAME'S EXTENT comes from whichever surface the run has (see
+//     FrameExtent in the .cpp). On the graph path there is no NVRHI canvas to
+//     ask.
+//   * THE GRAPH ARM'S ImGui CALLS GO THROUGH ImGuiLayer (RenderToDrawData /
+//     EndFrameDiscard) instead of bare ImGui::Render()/EndFrame(), so the
+//     context pin the layer owns covers them too -- the Phase-2 carry.
+// The DEFAULT NVRHI arm (RenderNvrhi) is untouched, statement for statement:
+// it is the regression floor the whole phase is measured against.
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Host/FramePerf.hpp>
@@ -104,10 +119,10 @@ namespace Arcane::RuntimeFrame
         // one quit path PumpAndResize's own bool return does not cover.
         // MainLoop: `AdvanceSim(io); if (io.quit) break;`.
         bool quit = false;
-        // skipFrame: set by PumpAndResize (window minimized) or BuildHud (no
-        // NVRHI backbuffer this frame) -- both were a bare `continue;` back to
-        // the top of the original while loop. MainLoop checks it after each
-        // of those two calls and `continue`s in turn.
+        // skipFrame: set by PumpAndResize (window minimized) or PrepareFrame
+        // (no NVRHI backbuffer this frame) -- both were a bare `continue;`
+        // back to the top of the original while loop. MainLoop checks it after
+        // each of those two calls and `continue`s in turn.
         bool skipFrame = false;
     };
 
@@ -116,6 +131,9 @@ namespace Arcane::RuntimeFrame
     // or the window's close was requested) -- see FrameIo::quit's sibling
     // comment. A minimized window sleeps 1ms, sets io.skipFrame and returns
     // false (MainLoop `continue`s).
+    //
+    // ONE window since Task 6, on both paths: the host's. Its resize goes to
+    // whichever presentation surface this run has and to nothing else.
     bool PumpAndResize(FrameIo& io);
 
     // Per-frame timing (wall dt for input, clamped sim dt), input sampling +
@@ -125,13 +143,21 @@ namespace Arcane::RuntimeFrame
     void AdvanceSim(FrameIo& io);
 
     // ImGui BeginFrame + the host's own "ArcaneRuntime" HUD window + the
-    // plugin's DrawUIAll; then (NVRHI-path only) backbuffer acquisition, the
-    // once-a-second shader hot-reload poll, and the scene asset resolver's
-    // per-frame Refresh -- shared prep BOTH render arms below depend on,
-    // since it is what fills io.frameGlobals. Sets io.skipFrame true (and
-    // balances the ImGui frame with EndFrame) when the NVRHI swapchain had no
-    // backbuffer this frame.
+    // plugin's DrawUIAll. Nothing else -- the backbuffer acquisition this used
+    // to carry (and not say so) is PrepareFrame's, below. Both arms render the
+    // ImGui frame this begins, so every BeginFrame is still paired exactly
+    // once whichever way the frame goes.
     void BuildHud(FrameIo& io);
+
+    // The rest of the shared prep BOTH render arms depend on, in the order it
+    // has always run: (NVRHI-path only) backbuffer acquisition, the
+    // once-a-second shader hot-reload poll -- also NVRHI-only, since the graph
+    // path reads offline artifacts through NriGraphContext::ShaderBytecode and
+    // there is no ShaderLibrary to poll -- and the scene asset resolver's
+    // per-frame Refresh, which is what fills io.frameGlobals. Sets
+    // io.skipFrame true (and balances the ImGui frame BuildHud began with an
+    // EndFrame) when the NVRHI swapchain had no backbuffer this frame.
+    void PrepareFrame(FrameIo& io);
 
     // The NVRHI arm: canvas clear, the dev-only --crash-gpu fault, the
     // batcher recording (PushSceneCamera + SubmitRender + End), the scene
@@ -140,10 +166,12 @@ namespace Arcane::RuntimeFrame
     // only when io.graph is null (MainLoop's `if (!io.graph)`).
     void RenderNvrhi(FrameIo& io);
 
-    // The --nri-graph arm: the HUD draw-data capture (same ImGui frame the
+    // The --nri-graph arm, which since Task 6 is the ONLY recorder in the
+    // process when it runs: the HUD draw-data capture (same ImGui frame the
     // NVRHI arm would have rendered), the CPU-identical 2D submission, the
-    // dev-only --pick-probe collection, the graph FrameDesc, and one
-    // NriGraphContext::RenderFrame call. Returns the outcome so MainLoop --
+    // dev-only --crash-gpu fault and --pick-probe collection, the graph
+    // FrameDesc, and one NriGraphContext::RenderFrame call. Returns the
+    // outcome so MainLoop --
     // the only party that can actually `break`/`continue` its own loop --
     // performs Failed -> break / Skipped -> continue exactly as the original
     // inline arm did.

@@ -1,10 +1,8 @@
-// RuntimeFrame: RuntimeApp::MainLoop's frame body, extracted verbatim (NRI
-// Phase 3, Task 4). See RuntimeFrame.hpp's header comment for the contract;
-// this file's six functions are MainLoop's old body, moved statement-for-
-// statement, with `m_foo` renamed to `io.foo` (free functions, not RuntimeApp
-// members) and the control-flow substitutions FrameIo::quit/skipFrame exist
-// for. Nothing here is a behavior change -- see the task-4 report for the
-// line-range mapping back to the pre-extraction RuntimeApp.cpp.
+// RuntimeFrame: RuntimeApp::MainLoop's frame body, extracted verbatim at NRI
+// Phase 3 Task 4 and unified at Task 6 (the one-device landing). See
+// RuntimeFrame.hpp's header comment for the contract and for the list of what
+// Task 6 changed; RenderNvrhi below is untouched, statement for statement,
+// because it is the regression floor.
 
 #include "RuntimeFrame.hpp"
 #include "RuntimeApp.hpp"   // FrameIo::app.PushSceneCamera -- see that method's comment
@@ -116,6 +114,37 @@ namespace
                                         Arcane::GoldenCompareParams{}.channelTolerance);
         return 3;
     }
+
+    // =============================================================
+    // THE FRAME'S EXTENT (NRI Phase 3, Task 6).
+    // =============================================================
+    // Everything that needs a viewport size this frame -- the resolver's
+    // material globals, the scene camera's fit, the batcher's Begin -- asks
+    // HERE, so the two recorders cannot end up fitted to two different
+    // rectangles. It is one rectangle by construction now: there is ONE
+    // window, and each mode has exactly one presentation surface tracking it.
+    //
+    //   graph path : the NRI swapchain's extent. There is no NVRHI canvas at
+    //                all on this path, and the graph's own canvas is a
+    //                TRANSIENT sized to this swapchain inside BuildFrame --
+    //                so the swapchain is the single source of truth, not a
+    //                proxy for one.
+    //   NVRHI path : the canvas', exactly as before. GpuContext::OnResize
+    //                sizes it from the swapchain's ACTUAL extent, which is
+    //                what every pre-Task-6 caller of Cnv().Width() was
+    //                reading.
+    void FrameExtent(const Arcane::RuntimeFrame::FrameIo& io,
+                     std::uint32_t& width, std::uint32_t& height)
+    {
+        if (io.graph)
+        {
+            width  = io.graph->Swap().Width();
+            height = io.graph->Swap().Height();
+            return;
+        }
+        width  = io.gpu->Cnv().Width();
+        height = io.gpu->Cnv().Height();
+    }
 }
 
 namespace Arcane::RuntimeFrame
@@ -137,47 +166,40 @@ bool PumpAndResize(FrameIo& io)
         return true;
     }
 
-    // EXACTLY ONE pump per frame, and on the --nri-graph path it is the
-    // VEHICLE's window rather than the host's. SDL's event queue is
-    // process-wide and Window::PumpEvents drains all of it (filtering by
-    // its own id for close/resize), so pumping both windows would make
-    // each silently eat the other's events. The vehicle owns the visible
-    // surface on that path -- the host's window stays hidden, because
-    // DXGI allows only one flip-model swapchain per HWND (see
-    // NriGraphContext.hpp, THE TWO-DEVICE WINDOW) -- so the window the
-    // user can actually close and drag is the one that must be pumped.
-    Arcane::Window& eventWindow = io.graph ? io.graph->Win() : io.gpu->Win();
+    // EXACTLY ONE PUMP PER FRAME, OF THE ONE WINDOW THIS PROCESS HAS
+    // (NRI Phase 3, Task 6). Before the landing the graph path owned a
+    // SECOND window and this line chose between them -- forced, because
+    // DXGI allows only one flip-model swapchain per HWND and an NVRHI
+    // swapchain already owned the host's. With no NVRHI device there is
+    // no second swapchain and therefore no second window: the graph's
+    // swapchain binds THIS one. SDL's event queue is process-wide and
+    // Window::PumpEvents drains all of it, so "exactly one pump" was
+    // always the rule; now there is only one window it can name.
+    Arcane::Window& eventWindow = io.gpu->Win();
     const Arcane::WindowEvents events = eventWindow.PumpEvents();
     if (events.quitRequested) return true;
     if (events.resized)
     {
+        // ONE resize, to whichever presentation surface this run has.
+        //
         // Strictly BETWEEN frames -- never between the graph's acquire and
         // its present, which both live inside one Execute() call
         // (RgExecuteDesc::swapChain). A frame driver that resizes at the
         // top of its loop satisfies that structurally, and owes nothing
         // else: the graph rebuilds imported-texture views every Execute.
+        //
+        // TWO RESIDUALS DIED WITH THE SECOND WINDOW. The hidden host
+        // window's SetSize lockstep (kept so ImGui_ImplSDL3_NewFrame
+        // reported the right DisplaySize) is unnecessary now that the
+        // platform backend reads the same window the swapchain binds --
+        // one surface, one extent. And GpuContext::OnResize on the graph
+        // path resized a hidden NVRHI swapchain that no longer exists; it
+        // was the heaviest device-level burst in the frame and it was
+        // aimed at a device this process does not create.
         if (io.graph)
-        {
             io.graph->Resize(events.width, events.height);
-            // ...and the HIDDEN host window's SIZE, which is not cosmetic
-            // on this path: ImGui_ImplSDL3_NewFrame reads its size into
-            // io.DisplaySize, and the HUD's vertices are in that space.
-            // Leaving it pinned at 1280x720 while the visible (vehicle)
-            // surface grew would stretch and mis-clip the HUD, because the
-            // ImGui node's projection maps DisplaySize onto the whole
-            // backbuffer. Same reasoning as the canvas line below -- ONE
-            // source of truth for the frame's extent -- and inert at the
-            // default size every golden was captured at. The host window
-            // is hidden, so resizing it shows nothing and its own resize
-            // event is filtered out by the vehicle window's PumpEvents.
-            io.gpu->Win().SetSize(events.width, events.height);
-        }
-        // The canvas -- and therefore the viewport extent the resolver
-        // reports into the material globals -- tracks the window on BOTH
-        // paths. On the graph path this also resizes the hidden host
-        // swapchain, which is wasted work, but keeping ONE source of truth
-        // for the frame's extent beats a second, divergent one.
-        io.gpu->OnResize(events.width, events.height);
+        else
+            io.gpu->OnResize(events.width, events.height);
     }
     if (eventWindow.IsMinimized())
     {
@@ -246,7 +268,16 @@ void BuildHud(FrameIo& io)
     io.gpu->Imgui().BeginFrame();
     {
         ImGui::Begin("ArcaneRuntime");
-        ImGui::Text("Backend: %s", Arcane::ToString(io.gpu->Device().Backend()));
+        // The graph flavor has no RenderDevice to ask (NRI Phase 3, Task 6),
+        // so it reads the config instead. The two ALWAYS agree --
+        // GpuContext::Create passes exactly this value into
+        // RenderDeviceDesc::backend and each RenderDevice subclass returns the
+        // constant it was selected for -- so this is the same string either
+        // way and the `full` golden's HUD pixels are unchanged. Written as a
+        // gate rather than as "just read the config" so the NVRHI arm's own
+        // statement is literally the one the baselines were captured with.
+        ImGui::Text("Backend: %s", Arcane::ToString(io.graph ? io.config.backend
+                                                            : io.gpu->Device().Backend()));
         ImGui::Text("Plugin gen: %u", io.plugin->Generation());
         const Arcane::Batch2DStats s = io.gpu->Batch().Stats();
         ImGui::Text("Quads: %u  Draws: %u", s.quads, s.drawCalls);
@@ -256,18 +287,30 @@ void BuildHud(FrameIo& io)
     // ABI v2: the game module + any secondary plugins draw their own ImGui between
     // BeginFrame and Render. Each entry point is null-checked inside DrawUIAll.
     io.plugin->DrawUIAll();
+}
 
+void PrepareFrame(FrameIo& io)
+{
     // The NVRHI backbuffer, acquired only on the NVRHI path -- the graph
     // acquires its own inside Execute(), as late as possible, and never
-    // touches this swapchain.
+    // touches this swapchain (which, since Task 6, does not exist on that
+    // path at all).
     io.backbuffer = nullptr;
     if (!io.graph)
     {
         io.backbuffer = io.gpu->Swap().BeginFrame();
         if (!io.backbuffer)
         {
-            // No backbuffer this frame: still balance BeginFrame with EndFrame
-            // so ImGui's assert (double-Begin) doesn't fire next iteration.
+            // No backbuffer this frame: still balance the BeginFrame BuildHud
+            // just made with an EndFrame so ImGui's assert (double-Begin)
+            // doesn't fire next iteration.
+            //
+            // Deliberately the BARE call, not ImGuiLayer::EndFrameDiscard:
+            // this branch is NVRHI-only (it is inside `if (!io.graph)`), and
+            // the NVRHI arm is the frozen regression floor for this whole
+            // phase -- it keeps the exact statement its baselines were
+            // captured with. The pinned variant is the graph arm's, where the
+            // context-theft hazard is the Phase-2 carry Task 6 closes.
             ImGui::EndFrame();
             io.skipFrame = true;
             return;
@@ -275,6 +318,16 @@ void BuildHud(FrameIo& io)
     }
 
     // Hot reload: poll shaders once a second; pipeline caches rebuild lazily.
+    //
+    // NVRHI-ONLY, and by absence rather than by choice: the graph path has no
+    // ShaderLibrary (GpuContext's graph flavor builds none). It reads the same
+    // offline artifacts through NriGraphContext::ShaderBytecode, from the same
+    // ShaderLibrary::ResolveFlavorDir directory -- but caches them for the
+    // vehicle's lifetime, because NriPipelineCache's fill contract holds SPANS
+    // into those bytes. Hot-reloading fixed-function shaders on the graph path
+    // is its own arc; MATERIAL shaders (the ones a designer actually re-saves)
+    // hot-reload on both paths through the resolver's Refresh below.
+    if (!io.graph)
     {
         const auto now0 = std::chrono::steady_clock::now();
         if (std::chrono::duration<double>(now0 - io.lastShaderPoll).count() >= 1.0)
@@ -295,11 +348,14 @@ void BuildHud(FrameIo& io)
     // looks right" was.
     if (io.resolver)
     {
+        std::uint32_t width = 0, height = 0;
+        FrameExtent(io, width, height);
+
         Arcane::SceneRenderResolver::FrameInfo frame;
         frame.now            = io.hostClock;
         frame.dt             = io.lastFrameDt;
-        frame.viewportWidth  = (float)io.gpu->Cnv().Width();
-        frame.viewportHeight = (float)io.gpu->Cnv().Height();
+        frame.viewportWidth  = (float)width;
+        frame.viewportHeight = (float)height;
         io.resolver->Refresh(frame);
         io.frameGlobals = io.resolver->Globals();
     }
@@ -324,8 +380,9 @@ void RenderNvrhi(FrameIo& io)
     // the outer scope is that recording -- everything below nests inside it,
     // and the canvas clear (which has no scope of its own) is covered by it.
     // Held in an optional because the scope must END while the list is still
-    // open, and close() is ~100 lines down at the bottom of this loop body:
-    // a plain block would mean reindenting the entire frame for one marker.
+    // open, and close() is at the bottom of THIS function (the `framePass.
+    // reset()` right before it): a plain block would mean reindenting the
+    // entire frame for one marker.
     std::optional<Arcane::GpuPassScope> framePass;
     framePass.emplace(io.gpu->Cmd(), "pass:frame");
 
@@ -437,9 +494,9 @@ void RenderNvrhi(FrameIo& io)
     //
     // ImGui::EndFrame() rather than simply skipping: ImGuiLayer's contract
     // is that every BeginFrame is paired with exactly one Render, and the
-    // frame HAS begun above (the HUD window and the plugin's DrawUIAll
+    // frame HAS begun (BuildHud's HUD window and the plugin's DrawUIAll
     // already recorded into it). Ending it without drawing is the same
-    // balancing move the no-backbuffer path above makes.
+    // balancing move PrepareFrame's no-backbuffer path makes.
     if (io.config.GoldenMode() &&
         io.config.goldenStage != Arcane::GoldenStage::Full)
     {
@@ -473,13 +530,14 @@ void RenderNvrhi(FrameIo& io)
 }
 
 // =============================================================
-// The GRAPH half (--nri-graph). One RenderGraph frame: Reset,
-// declare, Compile, Execute -- and Execute is what acquires the
-// backbuffer, records every node, submits and presents. Today that is
-// batch2d -> tonemap (+ a capture node on the last frame of a golden /
-// screenshot run); Tasks 10-12 add the post chain, pick/outline and
-// ImGui inside DeclareGraphFrame, gated by the same --golden-stage
-// vocabulary passed here.
+// The GRAPH half (--nri-graph), and since NRI Phase 3 Task 6 the ONLY
+// recorder in the process when it runs -- there is no NVRHI device.
+// One RenderGraph frame: Reset, declare, Compile, Execute -- and
+// Execute is what acquires the backbuffer, records every node, submits
+// and presents. The frame is batch2d -> [post chain] -> tonemap ->
+// [pick/outline] -> [imgui] -> [capture] -> present, declared inside
+// DeclareGraphFrame and gated by the same --golden-stage vocabulary
+// passed here.
 //
 // The plugin's RENDER submission runs on BOTH paths as of Task 8: the
 // batcher is Begin()'d with no command list (nothing is recorded into
@@ -487,7 +545,8 @@ void RenderNvrhi(FrameIo& io)
 // graph's Batch2DNode DRAINS it -- one batcher, one batching algorithm,
 // two recorders. End() is deliberately NOT called on this path: it is
 // the NVRHI recorder, and calling it would need a target this path does
-// not have.
+// not have. Since Task 6 that batcher is DEVICE-LESS by construction
+// (GpuContext::CreateForGraph), so End() would refuse anyway.
 //
 // The scene POST CHAIN runs here too as of Task 10, from the same
 // compiled bytes the NVRHI chain was built from -- one node per pass,
@@ -497,15 +556,15 @@ void RenderNvrhi(FrameIo& io)
 // NVRHI path renders -- see the block below.
 //
 // WHAT THIS PATH STILL DOES NOT DO, named so it stays a known gap:
-// sprite TEXTURES inside the batch node, which live on the engine's
-// NVRHI device and cannot be sampled by the graph's own device
-// (Batch2DNode.hpp, THE TEXTURE GAP); a post material's declared
-// TEXTURE params, which take the same white-texel fallback
-// (FullscreenNodes.cpp, THE POST TEXTURE GAP); and ImGui INPUT, which
-// reaches the host window's event tap rather than this one
-// (NriGraphContext.hpp, THE TWO-DEVICE WINDOW -- the HUD draws but
-// does not respond, deliberately). The SIM half (FixedUpdate/Update)
-// is untouched and runs identically.
+// ImGui INPUT. The HUD draws and does not respond, and since the
+// landing that is a DELIBERATE gate rather than a topology accident --
+// ImGuiLayer::CreateForGraph withholds the SDL event tap so a drag
+// cannot move the HUD and silently rewrite the shared imgui.ini the
+// NVRHI baselines were captured under. Re-enabling it is one argument
+// in ImGuiLayer.cpp, after desk checkpoint D3b's compares.
+// (The Phase-2 texture gaps are CLOSED: NriTextureCache makes a span's
+// and a material's declared images resident on this device -- Task 2.)
+// The SIM half (FixedUpdate/Update) is untouched and runs identically.
 // =============================================================
 Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
 {
@@ -558,9 +617,13 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // The stage split mirrors the NVRHI block's exactly: both non-Full
     // golden stages END the frame without rendering it (host chrome
     // would mask the pixels a stage golden compares), and Full renders
-    // it and hands the draw data to the graph. ImGui::Render() ends
-    // the frame itself, so ImGuiLayer's "every BeginFrame is paired
-    // exactly once" contract holds on both arms.
+    // it and hands the draw data to the graph. Both go THROUGH THE
+    // LAYER rather than calling ImGui::Render()/EndFrame() bare, which
+    // is Task 6 closing the Phase-2 carry: ImGuiLayer pins its own
+    // context in every entry point, and a bare call here would end
+    // whatever context an editor document or a plugin last left
+    // current. Either way the frame IS ended, so ImGuiLayer's "every
+    // BeginFrame is paired exactly once" contract holds on both arms.
     //
     // The draw data lives in the ImGui context until the next
     // NewFrame, i.e. for the whole of the RenderFrame call below --
@@ -569,25 +632,28 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     if (io.config.GoldenMode() &&
         io.config.goldenStage != Arcane::GoldenStage::Full)
     {
-        ImGui::EndFrame();
+        io.gpu->Imgui().EndFrameDiscard();
     }
     else
     {
-        ImGui::Render();
-        graphFrame.imgui = ImGui::GetDrawData();
+        graphFrame.imgui = io.gpu->Imgui().RenderToDrawData();
     }
+
+    // THE FRAME'S EXTENT, from the one surface this run has (see
+    // FrameExtent): the graph swapchain's. Read once and used for the
+    // batcher's viewport AND the scene camera's fit, so those two can
+    // never be fitted to different rectangles -- and it is the same
+    // number PrepareFrame gave the resolver for the material globals.
+    std::uint32_t frameWidth = 0, frameHeight = 0;
+    FrameExtent(io, frameWidth, frameHeight);
 
     // The 2D submission, CPU-identical to the NVRHI block above. The
     // null command list / null framebuffer are what say "record
     // nothing": Batcher2D::Begin only stores them, and every recording
-    // use is inside End(), which this path never calls. The canvas
-    // extent is still the NVRHI canvas's -- it is what the resolver
-    // reports into the material globals, and RuntimeApp resizes both
-    // canvases from the same event.
-    io.gpu->Batch().Begin(nullptr, nullptr,
-                         io.gpu->Cnv().Width(), io.gpu->Cnv().Height());
+    // use is inside End(), which this path never calls.
+    io.gpu->Batch().Begin(nullptr, nullptr, frameWidth, frameHeight);
     io.gpu->Batch().SetGlobals(io.frameGlobals);
-    io.app.PushSceneCamera((float)io.gpu->Cnv().Width(), (float)io.gpu->Cnv().Height());
+    io.app.PushSceneCamera((float)frameWidth, (float)frameHeight);
     {
         const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
         io.runtime->SetRenderContext(&io.gpu->Batch());
@@ -599,16 +665,17 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // --pick-probe (NRI Phase 2, Task 11). THE ONE PLACE the entity ids
     // are produced: CollectPickables is a pure walk of the registry and
     // the k-th drawable it appends IS hit-proxy id k+1, which is what
-    // the graph's pick node rasterises and what PickEntityForId below
-    // inverts. It lives here, not in the vehicle, because this is the
-    // object that owns a registry and a camera -- NriGraphContext is a
-    // render vehicle and must not grow either.
+    // the graph's pick node rasterises and what RuntimeApp::
+    // ShutdownGraphPath inverts through PickEntityForId. It lives here,
+    // not in the vehicle, because this is the object that owns a
+    // registry and a camera -- NriGraphContext is a render vehicle and
+    // must not grow either.
     //
     // The view is the SCENE camera PushSceneCamera just installed, so
     // the id pass rasterises the same silhouettes the batch node drew.
-    // (The camera was fitted to the NVRHI canvas extent, which
-    // RuntimeApp resizes from the same event as the graph swapchain --
-    // the two agree at every size the host actually produces.)
+    // Since Task 6 they cannot even disagree in principle: both were
+    // fitted to frameWidth/frameHeight above, which IS the graph
+    // swapchain's extent.
     if (io.config.pickProbe)
     {
         const Arcane::PickView view{ io.runtime->CameraOffset(), io.runtime->CameraZoom() };
@@ -652,8 +719,8 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     graphFrame.globals = &io.frameGlobals;
     // The capture is taken on the LAST frame, which has to be known
     // BEFORE the frame is declared (the readback is a graph NODE, not
-    // an after-the-fact copy). Hence `+ 1`: m_frameCount is bumped
-    // after a successful frame, below.
+    // an after-the-fact copy). Hence `+ 1`: io.frameCount is bumped in
+    // CaptureTail, i.e. after this arm returns Presented.
     const bool willBeLastFrame =
         io.config.maxFrames != 0 && (io.frameCount + 1) >= io.config.maxFrames;
     graphFrame.capture = willBeLastFrame &&

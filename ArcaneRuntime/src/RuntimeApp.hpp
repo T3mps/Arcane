@@ -80,10 +80,10 @@ private:
     Arcane::HostConfig                  m_config;
     std::unique_ptr<Arcane::GpuContext> m_gpu;          // destructs LAST among engine state
 
-    // --nri-graph's whole render half: its own window, native device, NRI
-    // wrap, swapchain, upload ring, pipeline cache and RenderGraph. Null on
-    // every ordinary run -- the NVRHI path is the default and stays so until
-    // Phase 3 flips the hosts.
+    // --nri-graph's whole render half: the native device, NRI wrap, swapchain
+    // (over the HOST's window, borrowed -- NRI Phase 3, Task 6), upload ring,
+    // pipeline cache and RenderGraph. Null on every ordinary run -- the NVRHI
+    // path is the default and stays so until Phase 5 flips it.
     //
     // NOT #if-guarded even though the FLAG is non-Dist: the type is compiled
     // into the engine DLL in every configuration (it is ordinary Render/Nri
@@ -92,9 +92,10 @@ private:
     // a Dist-only compile break gets introduced. Only the CREATION is guarded,
     // so a Dist build carries a null pointer and one predictable branch.
     //
-    // Declared AFTER m_gpu so it destructs BEFORE it: this object owns an SDL
-    // window, and the host's window (inside m_gpu) is the one that owns the
-    // SDL video subsystem's lifetime.
+    // Declared AFTER m_gpu so it destructs BEFORE it, and since Task 6 that
+    // ordering is LOAD-BEARING rather than merely tidy: this object's
+    // swapchain is bound to the window inside m_gpu (NriGraphContext.hpp, THE
+    // BORROWED WINDOW), so it must be gone before that window is.
     std::unique_ptr<Arcane::NriGraphContext> m_graphContext;
 
     // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.

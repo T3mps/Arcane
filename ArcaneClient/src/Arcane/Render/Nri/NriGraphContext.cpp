@@ -1,6 +1,7 @@
-// NriGraphContext -- see the header for what the vehicle is, the two desk
-// commands, the exit-code contract, and THE TWO-DEVICE WINDOW (why this object
-// owns a window instead of borrowing the host's, and what Vulkan still owes).
+// NriGraphContext -- see the header for what this is, the desk commands, the
+// exit-code contract, and THE BORROWED WINDOW (why this object presents into
+// the host's window rather than one of its own, and what the caller owes for
+// that to be safe).
 //
 // Same include-order rule as every file in this directory (NriCommon.hpp): NRI
 // headers first, because Extensions/NRIDeviceCreation.h declares
@@ -76,42 +77,33 @@ namespace Arcane
         }
     }
 
-    std::unique_ptr<NriGraphContext> NriGraphContext::Create(const HostConfig& config)
+    std::unique_ptr<NriGraphContext> NriGraphContext::Create(const HostConfig& config, Window& window)
     {
         std::unique_ptr<NriGraphContext> context(new NriGraphContext());
-        if (!context->Init(config))
+        if (!context->Init(config, window))
             return nullptr;
         return context;
     }
 
-    bool NriGraphContext::Init(const HostConfig& config)
+    bool NriGraphContext::Init(const HostConfig& config, Window& window)
     {
-        m_vsync = config.vsync;
+        m_vsync          = config.vsync;
+        m_borrowedWindow = &window;
 
-        ARC_INFO("[nri-graph] starting the graph vehicle: backend={} vsync={} frames={}",
+        ARC_INFO("[nri-graph] starting the graph render half: backend={} vsync={} frames={}",
                  ToString(config.backend), config.vsync ? "on" : "off", config.maxFrames);
 
-        // -------------------------------------------------------------
-        // Window. Same WindowDesc defaults GpuContext::Create uses
-        // (1280x720, resizable) -- deliberately, because the golden
-        // baselines were captured at the NVRHI path's backbuffer size and a
-        // different default here would make every stage compare a dimension
-        // mismatch. Two differences: its own title, and NOT hidden (this is
-        // the visible window on a --nri-graph run; see the header's TWO-DEVICE
-        // WINDOW note). SDL_WINDOW_VULKAN must be set for a window a Vulkan
-        // surface will be created against.
-        // -------------------------------------------------------------
+        // NO WINDOW IS CREATED HERE (NRI Phase 3, Task 6). The swapchain below
+        // binds the HOST's window -- the one GpuContext::CreateForGraph built
+        // with the same 1280x720 resizable defaults every golden baseline was
+        // captured at, and (on Vulkan) with SDL_WINDOW_VULKAN set. See the
+        // header's THE BORROWED WINDOW for why the second window could not be
+        // removed before the NVRHI device was.
+        if (!window.NativeHandle())
         {
-            WindowDesc wd;
-            wd.title     = "Arcane NRI Graph";
-            wd.vulkan    = (config.backend == GraphicsBackend::Vulkan);
-            wd.resizable = true;
-            wd.hidden    = false;
-            if (!m_window.Create(wd))
-            {
-                ARC_ERROR("[nri-graph] window create failed");
-                return false;
-            }
+            ARC_ERROR("[nri-graph] the borrowed host window has no native handle -- nothing to "
+                      "bind a swapchain to");
+            return false;
         }
 
         // -------------------------------------------------------------
@@ -124,18 +116,16 @@ namespace Arcane
         // forced here since it defaults FALSE for the Nahimic-OSD fail-fast
         // hazard; NRI's own validation layer -> MakeNriCallbacks).
         //
-        // ONE OF THOSE THREE IS A REQUEST, NOT A GUARANTEE, on THIS path
-        // (D1 shakedown): the D3D12 debug layer is process-global and can only
-        // be turned on before the process's FIRST device, and by the time the
-        // vehicle runs, the engine's own NVRHI device (created earlier in the
-        // same boot, by GpuContext) is already live. So enableD3D12DebugLayer
-        // below is DECLINED here, with a WARN naming the reason -- see
-        // DeviceD3D12.cpp's g_d3d12DeviceCreated ("THE `--nri-graph` CASE")
-        // for the full tradeoff (the alternative was removing the engine's
-        // device, which is what the first desk run actually did). NRI
-        // validation and, on Vulkan, the VK validation layers are per-device
-        // and unaffected: they are what makes a dx12 vehicle run's exit code
-        // mean something today.
+        // ALL THREE ARE LIVE SINCE TASK 6, and that is the change: this is now
+        // the FIRST graphics device the process creates, so
+        // ID3D12Debug::EnableDebugLayer -- a before-any-device call -- is
+        // actually made rather than declined (DeviceD3D12.cpp's
+        // g_d3d12DeviceCreated is still false at this point). dx12 Debug runs
+        // therefore route D3D12 CPU validation into D3D12DebugLayerCallback and
+        // into the error latch for the first time on this path; findings from
+        // it are NEW SIGNAL, not regressions. Whether ID3D12InfoQueue1 is
+        // implemented by the servicing d3d12SDKLayers.dll is a separate
+        // question that same file logs the answer to.
         // -------------------------------------------------------------
         RenderDeviceDesc dd;
         dd.backend = config.backend;
@@ -150,18 +140,13 @@ namespace Arcane
         // fails on any error the NRI callbacks report.
 #endif
 
-        if (config.backend == GraphicsBackend::Vulkan)
-        {
-            // THE HAZARD, said out loud at the one moment it is created. See
-            // the header's TWO-DEVICE WINDOW item 1: the engine's NVRHI Vulkan
-            // device is already live on this path, and the creation half below
-            // re-inits the process-wide Vulkan-Hpp dispatcher onto THIS
-            // device. A desk run that behaves strangely on vulkan-only should
-            // suspect this first, not the graph.
-            ARC_WARN("[nri-graph] vulkan: this process now holds TWO VkDevices (the engine's NVRHI "
-                     "device and the graph's). The Vulkan-Hpp default dispatcher binds one -- see "
-                     "NriDevice.hpp. dx12 is unaffected; one-device-per-process is the Phase 3 flip.");
-        }
+        // NO two-VkDevice WARN here any more, and its absence is the point:
+        // NriDevice.hpp's "one live Vulkan device per process" rule held only
+        // by convention while GpuContext also created one. This is the only
+        // VkDevice now, so the Vulkan-Hpp default dispatcher
+        // (Render/VulkanDispatchStorage.cpp) binds the device that is actually
+        // rendering, and the dispatcher-rebind hazard the Phase-2 vehicle
+        // carried is gone by construction rather than by care.
 
         m_native = NativeDeviceOwner::Create(dd);
         if (!m_native)
@@ -177,12 +162,13 @@ namespace Arcane
             return false;
         }
 
-        // THE CRASH CHAIN, armed by whichever device exists (Task 5). A no-op
-        // TODAY -- the engine's NVRHI device armed it during boot and this
-        // call finds the slot full, which is exactly the two-device
-        // transition topology NriDiagnostics::Arm infers rather than being
-        // told. After Task 6 there IS no NVRHI device and this is the ONLY
-        // arming call in the process. Same call, same site, both ways.
+        // THE CRASH CHAIN, armed by whichever device exists (Task 5). Since
+        // Task 6 this is the ONLY arming call in the process -- there is no
+        // NVRHI device to have filled the slot during boot -- so Arm() takes
+        // its full-arm path: the device-removed hook, the graph GPU-section
+        // provider, the active-backend slot and both latch resets. (It still
+        // infers the topology from the slot rather than being told, which is
+        // what keeps the editor's transition tasks working with the same call.)
         //
         // Immediately after the wrap and BEFORE the swapchain, so a failure
         // anywhere below is already covered by a live device-removed
@@ -190,16 +176,18 @@ namespace Arcane
         // ~NriGraphContext, before the device it names goes away.
         (void)NriDiagnostics::Arm(*m_device);
 
-        m_swap = NriSwapChain::Create(*m_device, m_window, m_vsync);
+        m_swap = NriSwapChain::Create(*m_device, window, m_vsync);
         if (!m_swap)
         {
-            // The most likely cause on dx12, and the one worth naming: DXGI
-            // allows only one flip-model swap chain per HWND at a time. If
-            // this ever fires while the vehicle is presenting into a window
-            // some other swapchain already owns, that is the bug -- see the
-            // header's TWO-DEVICE WINDOW item 2.
-            ARC_ERROR("[nri-graph] swapchain create failed (dx12: is another flip-model swapchain "
-                      "already associated with this HWND?)");
+            // On dx12 the one cause worth naming stays worth naming even
+            // though the topology that made it routine is gone: DXGI allows
+            // only one flip-model swap chain per HWND at a time. Nothing else
+            // in the process owns one on this window now, so if this fires it
+            // is a real defect (a second graph context over the same window,
+            // or an NVRHI swapchain that should not exist) -- see the header's
+            // THE BORROWED WINDOW.
+            ARC_ERROR("[nri-graph] swapchain create failed over the host window (dx12: is another "
+                      "flip-model swapchain already associated with this HWND?)");
             return false;
         }
         m_format = m_swap->Format();
@@ -355,9 +343,11 @@ namespace Arcane
         // over m_device, and a slot outliving what it names is the dangling-
         // registration hazard every other owner in this tree guards against.
         // Disarm() is conditional-and-idempotent (it clears only what IT
-        // installed, and no-ops when Arm no-oped -- i.e. on every two-device
-        // run), so calling it unconditionally here is correct in both
-        // topologies and after a failed Init.
+        // installed, and no-ops when Arm no-oped -- which since Task 6 is only
+        // the case when some other owner armed first), so calling it
+        // unconditionally here is correct in every topology and after a failed
+        // Init. It stays FIRST in this body, before the borrowed window's owner
+        // can possibly run its own teardown, for the same reason.
         NriDiagnostics::Disarm();
 
         if (!m_device)
@@ -454,8 +444,13 @@ namespace Arcane
         std::uint64_t ringPeak = 0;
         for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
             ringPeak = ringPeak < m_ring.HighWater(slot) ? m_ring.HighWater(slot) : ringPeak;
-        ARC_INFO("[nri-graph] vehicle shut down after {} presented frame(s); upload-ring peak "
-                 "{} of {} bytes per slot", m_frameIndex, ringPeak, kUploadRingBytesPerFrame);
+        ARC_INFO("[nri-graph] graph render half shut down after {} presented frame(s); upload-ring "
+                 "peak {} of {} bytes per slot", m_frameIndex, ringPeak, kUploadRingBytesPerFrame);
+        // NOTHING releases the window here, and nothing may start to: it is the
+        // host's (THE BORROWED WINDOW). Every NRI object that named its HWND or
+        // its VkSurfaceKHR -- the swapchain above all -- is destroyed by the
+        // member destructors that run right after this body, which is strictly
+        // before the host destroys the window it borrowed.
     }
 
     void NriGraphContext::Resize(std::uint32_t width, std::uint32_t height)

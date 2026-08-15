@@ -272,7 +272,24 @@ namespace Arcane
         nvrhi::IDevice* device, ShaderLibrary& shaders,
         uint32_t width, uint32_t height)
     {
-        if (!device || width == 0 || height == 0)
+        if (!device)
+        {
+            // THE GRAPH-MODE REFUSAL, named rather than lumped in with a bad
+            // extent (NRI Phase 3, Task 6 -- plan reconciliation 7). A host
+            // running `--nri-graph` creates no NVRHI device and therefore
+            // publishes Runtime::SetRenderResources(nullptr, nullptr), so a
+            // plugin that builds its own offscreen canvas lands here. Loud and
+            // null is the whole contract for this phase: this class IS NVRHI
+            // (canvas + tonemap + command list), and a graph-side equivalent
+            // is the Phase 5 default-path flip's business, not a corner of
+            // this task. ReferenceProject and Aphelyon use none.
+            ARC_ERROR("OffscreenCanvas::Create: no render device ({}x{}). On a graph-mode host "
+                      "(--nri-graph) this process has no NVRHI device -- a plugin-owned offscreen "
+                      "canvas has no graph-side equivalent until the Phase 5 default-path flip.",
+                      width, height);
+            return nullptr;
+        }
+        if (width == 0 || height == 0)
         {
             ARC_ERROR("OffscreenCanvas::Create: bad args ({}x{})", width, height);
             return nullptr;
