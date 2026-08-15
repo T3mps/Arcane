@@ -295,6 +295,14 @@ TEST_CASE("SpriteCache reads PixelsFor's dimensions BEFORE the GetTexture call t
     CHECK(entry.sizeMeters.x == 0.08f);
     CHECK(entry.sizeMeters.y == 0.04f);
 
+    // ...and the fake really did invalidate, so the two orders genuinely
+    // disagree. Without this the case above would still pass if EvictingAssets
+    // silently stopped evicting, and would then be pinning nothing at all.
+    const Arcane::PixelData* after = assets.PixelsFor(texture);
+    REQUIRE(after != nullptr);
+    CHECK(after->width == 0);
+    CHECK(after->height == 0);
+
     std::error_code ec; fs::remove_all(dir, ec);
 }
 
