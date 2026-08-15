@@ -409,6 +409,15 @@ project "ArcaneEditor"
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
+        -- NRI Phase 3, Task 8: EditorApp holds TWO Arcane::NriGraphContexts on
+        -- the `--nri-graph` flavor (the host-window "chrome" one and the
+        -- offscreen one the Viewport panel samples), and that header is
+        -- NRI-typed. HEADERS ONLY, exactly as ArcaneRuntime takes it (see that
+        -- project's matching comment): this exe does not link NRI, and every
+        -- nri:: object it can reach is created and destroyed inside
+        -- ArcaneClient.dll. Linking a second static copy of NRI into the exe
+        -- would be the bug.
+        "%{IncludeDir.NRI}",
     }
     links { "ArcaneCore", "ArcaneClient", "imgui-node-editor" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }

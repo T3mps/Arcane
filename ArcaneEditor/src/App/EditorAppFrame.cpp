@@ -238,7 +238,12 @@ namespace Arcane::Editor
             // parse is not silently inert in one of them. Here rather than at the
             // menu-request site because this is the frame's provably safe point:
             // m_gpu->Cmd() is idle before any render phase has opened it. Fires
-            // exactly once.
+            // exactly once. HONOURED ON BOTH RENDER ARMS as of NRI Phase 3,
+            // Task 8 -- FireDeliberateGpuFault dispatches through
+            // NriDiagnostics::FireFault on the graph flavor, on its own
+            // command buffer, and this same top-of-frame point is safe there
+            // for the stronger reason that no graph frame has been declared
+            // yet either.
             if (m_config.crashGpuFrame != 0 && !m_gpuFaultFired &&
                 m_frameCount >= m_config.crashGpuFrame)
             {
@@ -299,7 +304,21 @@ namespace Arcane::Editor
                 return FramePump::Exit;
             }
         }
-        if (events.resized) m_gpu->OnResize(events.width, events.height);
+        // ONE resize, to whichever presentation surface this run has, and
+        // strictly BETWEEN frames -- which the top of the loop structurally is
+        // (RuntimeFrame::PumpAndResize carries the same pair for the same
+        // reason). GpuContext::OnResize on the graph flavor would resize an
+        // NVRHI swapchain that was never created; the CHROME context's
+        // swapchain is the surface bound to this window there. The VIEWPORT's
+        // offscreen output is NOT resized here at all -- it tracks the panel,
+        // not the window, and phase 8 owns it.
+        if (events.resized)
+        {
+            if (m_graphChrome)
+                m_graphChrome->Resize(events.width, events.height);
+            else
+                m_gpu->OnResize(events.width, events.height);
+        }
         if (m_gpu->Win().IsMinimized())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -500,7 +519,17 @@ namespace Arcane::Editor
         // 1-frame lag matches the one already inherent to inViewport/
         // m_viewportActive (both computed from the previous frame's panel
         // hover/focus).
-        fs.gameUiClaims = Arcane::Editor::GameUiClaimsPointer(InPlayMode(), inViewport, m_gameImgui->WantCaptureMouse());
+        //
+        // NO GAME CONTEXT ON THE GRAPH ARM YET (NRI Phase 3, Task 8):
+        // m_gameImgui is null there because OffscreenImGuiLayer is an
+        // ImGui-NVRHI object, and Task 9 replaces it with an ImGuiNriNode over
+        // a second ImDrawData. `false` is the correct stand-in and not merely a
+        // safe one -- nothing composites a game HUD over that viewport this
+        // phase, so nothing can claim the pointer, which is exactly what
+        // GameUiClaimsPointer would report for a context that drew nothing.
+        fs.gameUiClaims = Arcane::Editor::GameUiClaimsPointer(
+            InPlayMode(), inViewport,
+            m_gameImgui ? m_gameImgui->WantCaptureMouse() : false);
 
         // Snapshot the viewport-local cursor + RAW buttons/wheel + dt for the
         // game ImGui pass, which composites into the viewport AFTER this input
@@ -955,7 +984,7 @@ namespace Arcane::Editor
     // Phase 8: deferred viewport resize. Must stay before the scene render.
     void EditorApp::ApplyPendingViewportResize()
     {
-        m_viewportTargets.ApplyPendingResize();
+        m_viewportTargets.ApplyPendingResize(m_graphChrome.get());
     }
 
     // Deferred resize: the Viewport panel's content-region size measured LAST
@@ -964,9 +993,70 @@ namespace Arcane::Editor
     // it avoids a same-frame use-after-free where OffscreenCanvas::Resize
     // (called right after ImGui::Image bakes the current texture pointer into
     // this frame's draw list) synchronously frees that very texture before
-    // ImGui replays the draw list at Render time.
-    void EditorApp::ViewportTargets::ApplyPendingResize()
+    // ImGui replays the draw list at Render time. The graph arm below inherits
+    // that same one-frame lag, and needs it for the identical reason:
+    // ResizeOffscreen destroys the output texture synchronously.
+    void EditorApp::ViewportTargets::ApplyPendingResize(Arcane::NriGraphContext* chrome)
     {
+        // ================= THE GRAPH ARM (NRI Phase 3, Task 8) =============
+        // THE CODIFIED RESIZE CONTRACT. Its shape is prescribed, clause for
+        // clause, on NriGraphContext::ResizeOffscreen's declaration (and item
+        // (2) of that header's TWO CONTEXTS, TWO LANES block). Read it before
+        // touching these five lines; what follows is why each one is where it
+        // is, not a restatement.
+        //
+        //   (i) THE SIZE GUARD IS OURS. ResizeOffscreen no-ops on an unchanged
+        //       size, but that guard is INSIDE the call -- after
+        //       InvalidateUserTextureNow has already idled the whole device
+        //       unconditionally. Without the test below, a panel that is
+        //       simply sitting there would stall the device EVERY FRAME,
+        //       forever, on a size that never changed. SurfaceWidth/Height are
+        //       exactly what ResizeOffscreen compares against, so the two tests
+        //       cannot disagree.
+        //
+        //  (ii) INVALIDATE **BEFORE**, WITH THE `Now` VARIANT. The chrome
+        //       context's ImGuiNri caches by RAW nri::Texture*, and NRI does
+        //       not ref-count -- the replacement may land on the freed address,
+        //       so a pointer compare cannot detect the swap and re-reading
+        //       OffscreenTextureId() is not a substitute. Invalidating AFTER
+        //       (or with the deferred variant) would bury the CHROME backend's
+        //       view over an ALREADY-DESTROYED texture into the CHROME lane --
+        //       DestroyDescriptor after DestroyTexture, every resize, for the
+        //       one descriptor that inherently spans both contexts, which no
+        //       lane ordering can repair because nothing orders two graveyards.
+        //       `Now` destroys the view inside the call behind its own idle, so
+        //       run first it provably dies while the texture is still alive.
+        //       Unconditional, never gated on the pointer having changed: an
+        //       unchanged pointer is precisely the case a recycled address
+        //       fakes.
+        //
+        // (iii) THE PAIR IS ONE OPERATION. Nothing may render between them --
+        //       after the invalidate there is NO cache entry for `old`, so a
+        //       chrome frame recorded in between would take EnsureEntry's
+        //       CREATE path and build a fresh view + descriptor set over a
+        //       texture about to be destroyed. Hence: same statement block, no
+        //       frame boundary, no early-out, nothing added between these two
+        //       lines. `chrome` is guarded like every in-tree ImGuiHud() caller
+        //       (it is null only if the chrome context failed to create, which
+        //       CreateGraphVehicles refuses to continue past).
+        //
+        // COST, stated because it is visible: two full device idles per
+        // resizing frame during a viewport drag-storm. That is the accepted
+        // price of the ordering; a stall that OUTLIVES the drag would mean (i)
+        // is broken. See the DESK WATCH block on ResizeOffscreen.
+        if (graph)
+        {
+            if (pendingW != 0 && pendingH != 0 &&
+                (pendingW != graph->SurfaceWidth() || pendingH != graph->SurfaceHeight()))
+            {
+                nri::Texture* const old = graph->OffscreenOutput();
+                if (chrome && chrome->ImGuiHud())
+                    chrome->ImGuiHud()->InvalidateUserTextureNow(old);   // BEFORE
+                graph->ResizeOffscreen(pendingW, pendingH);
+            }
+            return;
+        }
+
         if (pendingW != 0 && pendingH != 0 &&
             (pendingW != canvas->Width() || pendingH != canvas->Height()))
         {
@@ -1009,8 +1099,8 @@ namespace Arcane::Editor
             Arcane::SceneRenderResolver::FrameInfo frame;
             frame.now            = m_editorClock;
             frame.dt             = m_gameUi.frameDt;
-            frame.viewportWidth  = (float)m_viewportTargets.canvas->Width();
-            frame.viewportHeight = (float)m_viewportTargets.canvas->Height();
+            frame.viewportWidth  = (float)ViewportWidth();
+            frame.viewportHeight = (float)ViewportHeight();
             m_resolver->Refresh(frame);
 
             // Read AFTER Refresh: a drain may have swapped the bound instance
@@ -1060,14 +1150,27 @@ namespace Arcane::Editor
         }
         else if (const auto sceneCam = Arcane::ActiveSceneCamera(
                      m_runtime->Registry(),
-                     (float)m_viewportTargets.canvas->Width(), (float)m_viewportTargets.canvas->Height()))
+                     (float)ViewportWidth(), (float)ViewportHeight()))
         {
             m_runtime->SetCamera(sceneCam->offset, sceneCam->zoom);
         }
 
-        m_viewportTargets.canvas->SetPostGlobals(postGlobals);
-        m_viewportTargets.canvas->SetPostChain(postChain, postInst,
-                                 &m_runtime->AssetsFacade());
+        // THE POST CHAIN'S HANDOFF, and the two arms hand over different
+        // THINGS rather than the same thing twice. The NVRHI arm installs the
+        // built FullscreenMaterialChain on the canvas, which renders it. The
+        // graph arm has no canvas and no chain to install -- the resolver runs
+        // device-less there (StageSpriteTables), so PostChain()/PostInstance()
+        // are structurally null and PostChainCache publishes BYTES instead;
+        // those travel to the recorder as FrameDesc::post + FrameDesc::globals,
+        // read fresh at the render site in the next phase. Nothing is dropped;
+        // it moves to a different carrier, exactly as it does on the runtime's
+        // graph arm.
+        if (!GraphMode())
+        {
+            m_viewportTargets.canvas->SetPostGlobals(postGlobals);
+            m_viewportTargets.canvas->SetPostChain(postChain, postInst,
+                                     &m_runtime->AssetsFacade());
+        }
     }
 
     // Phase 10: the scene render. Must run BEFORE the ImGui pass builds the
@@ -1075,6 +1178,61 @@ namespace Arcane::Editor
     // submit so it renders on top.
     void EditorApp::RenderSceneToViewport()
     {
+        // ================= THE GRAPH ARM (NRI Phase 3, Task 8) =============
+        // The SAME submission, drained by a different recorder. Built to match
+        // RuntimeFrame::RenderGraph field for field, because the D3c goldens
+        // compare these two frames: the null command list / null framebuffer in
+        // Begin are what say "record nothing" (Batcher2D::Begin only stores
+        // them, and every recording use is inside End(), which this path never
+        // calls -- and could not, the batcher being device-less since
+        // CreateForGraph).
+        //
+        // WHAT THIS FRAME DELIBERATELY DOES NOT CARRY YET, so the gap stays
+        // named rather than discovered:
+        //   * imgui        -- the game HUD. Task 9. Phase 11 is gated off.
+        //   * pickOutline/pickables/selectedIds -- the picker and the selection
+        //                     outline. Task 9. Phases 12 and 17 are gated off.
+        //   * capture      -- the auto-screenshot read. Task 11.
+        //   * stage        -- Full, always: the editor golden harness and its
+        //                     stage semantics are Task 13's. `Full` is what an
+        //                     ordinary (non-golden) run means on both hosts.
+        // UNTIL TASK 9 LANDS, THE EDITOR'S GRAPH VIEWPORT COMPOSITES NOTHING
+        // OVER THE SCENE -- no gameui in Play, no selection/hover outline in
+        // Edit. That is the accepted mid-phase state, not an oversight.
+        if (m_viewportTargets.graph)
+        {
+            const std::uint32_t w = ViewportWidth();
+            const std::uint32_t h = ViewportHeight();
+
+            Arcane::Batcher2D& b = m_gpu->Batch();
+            b.Begin(nullptr, nullptr, w, h);
+            SubmitSceneToBatcher(b);
+
+            // Copied, not borrowed, by FrameDesc -- but the local has to
+            // outlive the call all the same, and it is the SAME GlobalParams
+            // the batcher just got via SubmitSceneToBatcher's SetGlobals, so
+            // the two recorders cannot bind different b1 contents.
+            const Arcane::GlobalParams globals =
+                m_resolver ? m_resolver->Globals() : Arcane::GlobalParams{};
+
+            Arcane::NriGraphContext::FrameDesc vp;
+            vp.batch   = &b;
+            // Re-read every frame, like the runtime's: a drain may swap the
+            // bound instance under an asset re-save. Null (no PostProcess
+            // assignment, or the compile has not landed) simply renders
+            // canvas -> tonemap.
+            vp.post    = m_resolver ? m_resolver->PostDesc() : nullptr;
+            vp.globals = &globals;
+            m_viewportTargets.graph->RenderFrameOffscreen(vp);
+            // The outcome is deliberately not acted on here. Skipped is routine
+            // (a collapsed panel, or a resize whose replacement could not be
+            // created -- OffscreenTextureId() is 0 then and phase 16 draws no
+            // Image, which IS the signal). Failed has already bumped
+            // RenderErrorCount, and folding that latch into the process exit
+            // code is Task 10's item, listed there beside the device-lost fold.
+            return;
+        }
+
         // Scene -> offscreen canvas (the SAME canvas->batcher->tonemap path ArcaneRuntime
         // drives, but into a panel texture). SetRenderContext writes RenderContext2D
         // in Arcane.dll and applies the plugin's stored camera; SubmitRender runs the
@@ -1082,84 +1240,95 @@ namespace Arcane::Editor
         // batcher. Runs BEFORE ImGui builds the Viewport panel's Image so the texture
         // is ready when ImGui samples it at backbuffer-render time.
         m_viewportTargets.canvas->Draw(
-            [&](Arcane::Batcher2D& b)
-            {
-                // Globals for registered sprite materials (Time/Delta/
-                // Viewport); built-in pipelines ignore them. Taken from the
-                // resolver, which built them from the same frame in phase 9 --
-                // this used to be a second hand-rolled copy of the same four
-                // fields, and two copies of one fact is how the editor and the
-                // runtime drifted apart in the first place.
-                b.SetGlobals(m_resolver ? m_resolver->Globals() : Arcane::GlobalParams{});
-
-                m_runtime->SetRenderContext(&b);
-                m_runtime->Loop().SubmitRender();
-
-                // Transform gizmo, drawn AFTER the scene submit so it renders on
-                // top. Frame ordering guarantees the input block above already ran
-                // this frame, so m_gizmoHovered/m_gizmoDrag and the live
-                // Transform read here are current. Edit-mode + has-selection
-                // only (mirrors the interaction gate; no viewport-hover requirement
-                // here -- the gizmo should stay visible while e.g. the mouse is over
-                // the Inspector, just not be interactable there).
-                // Camera rect: what the scene camera will actually capture, drawn
-                // in the EDIT view so framing is authorable without guessing (the
-                // affordance Unity's camera gizmo provides). Edit mode only -- in
-                // Play the view IS the camera, so a rect would just trace the
-                // viewport border.
-                //
-                // Asked for at the camera's OWN aspect (the viewport's), then drawn
-                // through the EDITOR's camera: ActiveSceneCamera reports the authored
-                // worldCenter/halfHeight precisely so a caller can draw the camera
-                // instead of looking through it.
-                if (!InPlayMode())
-                {
-                    const float vw = (float)m_viewportTargets.canvas->Width();
-                    const float vh = (float)m_viewportTargets.canvas->Height();
-                    if (const auto cam = Arcane::ActiveSceneCamera(m_runtime->Registry(), vw, vh))
-                    {
-                        const float aspect = (vh > 0.0f) ? (vw / vh) : 1.0f;
-                        const glm::vec2 halfWorld(cam->halfHeight * aspect, cam->halfHeight);
-                        // screen = world * zoom + offset, the one canonical mapping
-                        // (SceneResources.hpp) -- here with the EDITOR's view, which
-                        // the phase above already pushed for this frame.
-                        const glm::vec2 eo = m_runtime->CameraOffset();
-                        const float     ez = m_runtime->CameraZoom();
-                        const glm::vec2 c  = cam->worldCenter * ez + eo;
-                        const glm::vec2 h  = halfWorld * ez;
-                        const glm::vec2 tl(c.x - h.x, c.y - h.y);
-                        const glm::vec2 br(c.x + h.x, c.y + h.y);
-                        // A thin desaturated line stays legible over both bright and
-                        // dark scene content without competing with the selection
-                        // outline or the gizmo axes. (Dashed would read better still,
-                        // but the batcher has no dash primitive.)
-                        const glm::vec4 col(0.45f, 0.62f, 0.78f, 0.75f);
-                        b.Line(glm::vec2(tl.x, tl.y), glm::vec2(br.x, tl.y), 1.0f, col);
-                        b.Line(glm::vec2(br.x, tl.y), glm::vec2(br.x, br.y), 1.0f, col);
-                        b.Line(glm::vec2(br.x, br.y), glm::vec2(tl.x, br.y), 1.0f, col);
-                        b.Line(glm::vec2(tl.x, br.y), glm::vec2(tl.x, tl.y), 1.0f, col);
-                    }
-                }
-
-                if (!InPlayMode() && m_gizmoEnabled && m_selection.HasSelection())
-                {
-                    Astra::Registry& drawReg = m_runtime->Registry();
-                    Arcane::Transform* lt = drawReg.GetComponent<Arcane::Transform>(
-                        m_selection.Primary());
-                    if (lt)
-                    {
-                        // WORLD pose, matching the interaction block's gt above --
-                        // draws at the same place it hit-tests, including for a
-                        // parented primary.
-                        const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(
-                            Arcane::Edit::WorldMatrix(drawReg, m_selection.Primary()));
-                        const Arcane::GizmoView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
-                        Arcane::Draw(b, m_gizmoMode, m_gizmoSpace, gt, view, m_gizmoHovered,
-                                    m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None);
-                    }
-                }
-            },
+            [&](Arcane::Batcher2D& b) { SubmitSceneToBatcher(b); },
             glm::vec4(0.02f, 0.02f, 0.04f, 1.0f));
+    }
+
+    // The scene submission plus the two Edit-mode overlays, against whichever
+    // batcher the caller hands in. A PURE EXTRACTION of the lambda that used to
+    // sit inside RenderSceneToViewport's OffscreenCanvas::Draw call above --
+    // every statement kept its position relative to every other, and the NVRHI
+    // arm still reaches it from exactly the same place at exactly the same
+    // point in the frame. It exists so the two recorders provably drain the
+    // SAME content: a second copy of the gizmo/camera-rect submission is how
+    // the two paths would silently drift apart, which is the failure mode the
+    // whole phase is built to avoid.
+    void EditorApp::SubmitSceneToBatcher(Arcane::Batcher2D& b)
+    {
+        // Globals for registered sprite materials (Time/Delta/
+        // Viewport); built-in pipelines ignore them. Taken from the
+        // resolver, which built them from the same frame in phase 9 --
+        // this used to be a second hand-rolled copy of the same four
+        // fields, and two copies of one fact is how the editor and the
+        // runtime drifted apart in the first place.
+        b.SetGlobals(m_resolver ? m_resolver->Globals() : Arcane::GlobalParams{});
+
+        m_runtime->SetRenderContext(&b);
+        m_runtime->Loop().SubmitRender();
+
+        // Transform gizmo, drawn AFTER the scene submit so it renders on
+        // top. Frame ordering guarantees the input block above already ran
+        // this frame, so m_gizmoHovered/m_gizmoDrag and the live
+        // Transform read here are current. Edit-mode + has-selection
+        // only (mirrors the interaction gate; no viewport-hover requirement
+        // here -- the gizmo should stay visible while e.g. the mouse is over
+        // the Inspector, just not be interactable there).
+        // Camera rect: what the scene camera will actually capture, drawn
+        // in the EDIT view so framing is authorable without guessing (the
+        // affordance Unity's camera gizmo provides). Edit mode only -- in
+        // Play the view IS the camera, so a rect would just trace the
+        // viewport border.
+        //
+        // Asked for at the camera's OWN aspect (the viewport's), then drawn
+        // through the EDITOR's camera: ActiveSceneCamera reports the authored
+        // worldCenter/halfHeight precisely so a caller can draw the camera
+        // instead of looking through it.
+        if (!InPlayMode())
+        {
+            const float vw = (float)ViewportWidth();
+            const float vh = (float)ViewportHeight();
+            if (const auto cam = Arcane::ActiveSceneCamera(m_runtime->Registry(), vw, vh))
+            {
+                const float aspect = (vh > 0.0f) ? (vw / vh) : 1.0f;
+                const glm::vec2 halfWorld(cam->halfHeight * aspect, cam->halfHeight);
+                // screen = world * zoom + offset, the one canonical mapping
+                // (SceneResources.hpp) -- here with the EDITOR's view, which
+                // the phase above already pushed for this frame.
+                const glm::vec2 eo = m_runtime->CameraOffset();
+                const float     ez = m_runtime->CameraZoom();
+                const glm::vec2 c  = cam->worldCenter * ez + eo;
+                const glm::vec2 h  = halfWorld * ez;
+                const glm::vec2 tl(c.x - h.x, c.y - h.y);
+                const glm::vec2 br(c.x + h.x, c.y + h.y);
+                // A thin desaturated line stays legible over both bright and
+                // dark scene content without competing with the selection
+                // outline or the gizmo axes. (Dashed would read better still,
+                // but the batcher has no dash primitive.)
+                const glm::vec4 col(0.45f, 0.62f, 0.78f, 0.75f);
+                b.Line(glm::vec2(tl.x, tl.y), glm::vec2(br.x, tl.y), 1.0f, col);
+                b.Line(glm::vec2(br.x, tl.y), glm::vec2(br.x, br.y), 1.0f, col);
+                b.Line(glm::vec2(br.x, br.y), glm::vec2(tl.x, br.y), 1.0f, col);
+                b.Line(glm::vec2(tl.x, br.y), glm::vec2(tl.x, tl.y), 1.0f, col);
+            }
+        }
+
+        if (!InPlayMode() && m_gizmoEnabled && m_selection.HasSelection())
+        {
+            Astra::Registry& drawReg = m_runtime->Registry();
+            Arcane::Transform* lt = drawReg.GetComponent<Arcane::Transform>(
+                m_selection.Primary());
+            if (lt)
+            {
+                // WORLD pose, matching the interaction block's gt above --
+                // draws at the same place it hit-tests, including for a
+                // parented primary.
+                const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(
+                    Arcane::Edit::WorldMatrix(drawReg, m_selection.Primary()));
+                const Arcane::GizmoView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
+                Arcane::Draw(b, m_gizmoMode, m_gizmoSpace, gt, view, m_gizmoHovered,
+                            m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None);
+            }
+        }
     }
 
     // Phase 11: the game's own ImGui HUD, composited into the viewport texture.
@@ -1175,13 +1344,26 @@ namespace Arcane::Editor
         // OffscreenImGuiLayer calls (each SetCurrentContext internally), so the
         // editor context is untouched. Edit mode: not run (clean viewport); the
         // input is reset so a stray draw sees no cursor/buttons.
+        //
+        // THE GRAPH ARM DOES NONE OF THIS YET (NRI Phase 3, Task 8), and the
+        // gate is the whole phase rather than its individual NVRHI calls: the
+        // game context itself does not exist there (m_gameImgui is an
+        // ImGui-NVRHI object, left null in StageRenderBridge). Task 9 gives it
+        // a graph answer -- the plugin's DrawUIAll into a second ImDrawData,
+        // drawn by an ImGuiNriNode into the offscreen frame between tonemap and
+        // the outline composite, which is this phase's slot expressed against
+        // the other recorder. UNTIL THEN A GRAPH-MODE PLAY SESSION SHOWS NO
+        // GAME HUD. Named, accepted, mid-phase.
+        if (GraphMode())
+            return;
+
         if (!InPlayMode())
             m_gameImgui->SetInput({});
         const Arcane::PluginVTable* vtGame = m_plugin ? m_plugin->Vtable() : nullptr;
         if (InPlayMode() && vtGame && vtGame->DrawUI)
         {
             Arcane::OffscreenImGuiLayer::Input gi;
-            gi.displaySize  = glm::vec2((float)m_viewportTargets.canvas->Width(), (float)m_viewportTargets.canvas->Height());
+            gi.displaySize  = glm::vec2((float)ViewportWidth(), (float)ViewportHeight());
             gi.deltaTime    = (float)m_gameUi.frameDt;
             gi.hasInput     = m_gameUi.inViewport;
             gi.mousePos     = m_gameUi.viewportMouse;
@@ -1219,6 +1401,17 @@ namespace Arcane::Editor
         // texture (amber selected, cyan hovered). Skipped entirely when there is nothing
         // to outline. Play mode: not run (the game-imgui overlay owns this slot instead,
         // see above -- the two are mutually exclusive by mode).
+        //
+        // THE GRAPH ARM DOES NONE OF THIS YET (NRI Phase 3, Task 8): the
+        // PickBuffer and the SelectionOutline are ImGui-free NVRHI objects that
+        // StageRenderBridge does not build there, and their graph counterparts
+        // are NODES in the viewport context's own frame (PickNode/OutlineNode),
+        // armed through FrameDesc::pickOutline/pickables/selectedIds. Task 9
+        // arms them from m_selection. UNTIL THEN A GRAPH-MODE EDIT SESSION
+        // SHOWS NO SELECTION OR HOVER OUTLINE. Named, accepted, mid-phase.
+        if (GraphMode())
+            return;
+
         if (!InPlayMode() && (m_selection.HasSelection() || m_gameUi.inViewport))
         {
             const Arcane::PickView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
@@ -1772,8 +1965,23 @@ namespace Arcane::Editor
     // input phase and resize phase read (the deliberate one-frame lag).
     void EditorApp::DrawViewportPanelPhase(FrameState& fs)
     {
-        fs.vp = Arcane::Editor::DrawViewportPanel(m_viewportTargets.canvas->TextureId(),
-                                            m_viewportTargets.canvas->Width(), m_viewportTargets.canvas->Height(),
+        // THE TEXTURE, from whichever recorder produced it. Both ids are the
+        // same kind of value by the same convention -- the raw backend texture
+        // pointer through intptr_t (OffscreenCanvas::TextureId is the
+        // nvrhi::ITexture*, NriGraphContext::OffscreenTextureId the
+        // nri::Texture*) -- so the panel needs no mode knowledge at all.
+        //
+        // 0 IS A REAL, EXPECTED VALUE on the graph arm and is the "draw
+        // nothing" signal: a ResizeOffscreen whose replacement could not be
+        // created leaves the output null on purpose. DrawViewportPanel already
+        // skips its ImGui::Image at 0 (EditorPanels.cpp) and still publishes
+        // dockId/desiredW/desiredH, so the panel keeps measuring and the next
+        // non-zero size heals it through phase 8.
+        const std::uint64_t vpTexture = m_viewportTargets.graph
+                                          ? m_viewportTargets.graph->OffscreenTextureId()
+                                          : m_viewportTargets.canvas->TextureId();
+        fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
+                                            ViewportWidth(), ViewportHeight(),
                                             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
                                             /*showToolOverlay=*/!InPlayMode());
         m_viewportDockId = fs.vp.dockId;
@@ -1865,6 +2073,18 @@ namespace Arcane::Editor
         // Also suppressed when the game's viewport debug UI claimed the pointer
         // this frame (gameUiClaims, computed in the input phase above) so a click
         // on a game HUD widget does not also re-pick the editor selection.
+        //
+        // THE GRAPH ARM CANNOT PICK YET (NRI Phase 3, Task 8) -- m_viewportTargets.pick
+        // is the NVRHI PickBuffer, not built there. Task 9 owns this phase's
+        // graph half, and it is not a like-for-like swap: the graph's pick node
+        // reads back with frames-in-flight latency, so the HIT applies on the
+        // frame the readback lands (a deferred Select/Toggle/Clear) rather than
+        // in this same statement. The four guard conditions below are the ones
+        // that carry over verbatim. UNTIL THEN CLICKING THE GRAPH VIEWPORT DOES
+        // NOT CHANGE THE SELECTION -- the Outliner still does. Named, accepted.
+        if (GraphMode())
+            return;
+
         if (fs.vp.clicked && !m_gizmoCapturedClick && !m_gizmoDrag.active && !fs.gameUiClaims)
         {
             const Arcane::PickView view{ m_runtime->CameraOffset(),
@@ -1914,6 +2134,46 @@ namespace Arcane::Editor
     // `continue` did, so the plugin Poll + frame count below are skipped too.
     bool EditorApp::PresentFrame()
     {
+        // ============ THE GRAPH ARM'S MID-PHASE STATE (NRI Phase 3, Task 8)
+        // THE EDITOR'S MAIN WINDOW SHOWS NOTHING ON A --nri-graph RUN UNTIL
+        // TASK 10, and that is a decision rather than an omission. Every line
+        // below is NVRHI: Swap() is the NVRHI swapchain, Cmd() the NVRHI
+        // command list, Imgui().Render the ImGui-NVRHI renderer, FrameProgress
+        // the nvrhi EventQuery chain -- none of which exist on this flavor.
+        // Task 10 owns the replacement (the chrome frame: clear + one ImGui
+        // node over the editor context's draw data -> the chrome context's
+        // backbuffer -> present), and building it here would BE Task 10.
+        //
+        // So this arm does the one thing that is genuinely owed: END THE ImGui
+        // FRAME. DrawEditorUi called BeginFrame unconditionally, and
+        // ImGuiLayer's contract is "every BeginFrame is paired exactly once" --
+        // EndFrameDiscard is that pairing when nothing will render the result.
+        // It is the same discard RuntimeFrame::RenderGraph uses for the two
+        // non-Full golden stages, and it goes THROUGH the layer rather than
+        // calling ImGui::EndFrame() bare so the layer pins its own context
+        // (Task 6's rule: a document or a plugin may have left another current).
+        //
+        // WHAT A DESK OPERATOR SEES: an editor window with no frame ever
+        // presented into it -- undrawn/blank, not garbage-from-our-swapchain,
+        // since the chrome context's swapchain exists but is never acquired.
+        // The editor still boots, opens the project, loads the plugin, runs the
+        // sim and RENDERS THE SCENE into the offscreen viewport every frame;
+        // nothing is on screen to sample it until the chrome frame lands. That
+        // also means the graph-mode editor is not clickable mid-phase (no
+        // chrome to click, and ImGuiLayer::CreateForGraph withholds the SDL
+        // event tap anyway), which is why the desk proof for this task is
+        // checkpoint D3c and not a drive-around.
+        //
+        // Returns TRUE: the frame completed. Returning false is the "swapchain
+        // had no backbuffer" skip, and MainLoop reads it as "skip EndFrame" --
+        // which would stop the plugin hot-reload poll and freeze the --frames N
+        // budget, i.e. hang a scripted run forever.
+        if (GraphMode())
+        {
+            m_gpu->Imgui().EndFrameDiscard();
+            return true;
+        }
+
         nvrhi::ITexture* backbuffer = m_gpu->Swap().BeginFrame();
         if (!backbuffer) { ImGui::EndFrame(); return false; }
 

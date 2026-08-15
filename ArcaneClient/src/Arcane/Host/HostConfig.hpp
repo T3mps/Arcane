@@ -137,8 +137,24 @@ namespace Arcane
         //   - the golden flags ARE honoured here; see Parse. Same
         //     --frames/--screenshot/--golden-*/--golden-stage vocabulary,
         //     same artifact names, same exit codes.
-        //   - ArcaneRuntime-only. The editor host keeps the NVRHI path until
-        //     Phase 3 flips both hosts.
+        //   - BOTH HOSTS HONOUR IT as of NRI Phase 3, Task 8. It used to read
+        //     "ArcaneRuntime-only; the editor keeps the NVRHI path until Phase
+        //     3 flips both hosts" -- that flip has started. What each host
+        //     means by it:
+        //       ArcaneRuntime -- the whole frame, through ONE host-window
+        //         NriGraphContext (Task 6). Complete.
+        //       ArcaneEditor  -- TWO contexts on that one device: a host-window
+        //         "chrome" one and an OFFSCREEN one the Viewport panel samples.
+        //         Task 8 lands the SCENE, in Play and in Edit, through the
+        //         offscreen frame. Landing in order after it: the gameui/
+        //         outline/pick composite (Task 9), the chrome frame -- until
+        //         which the editor's MAIN WINDOW PRESENTS NOTHING on this flag
+        //         (Task 10) -- the documents/preview/logo/auto-screenshot (Task
+        //         11), project switch + module rebuild (Task 12), and the
+        //         editor's own golden harness (Task 13, which is what makes
+        //         --golden-* mean something on this host).
+        //     The editor's NVRHI path remains the DEFAULT and the floor: the
+        //     flag is opt-in on both hosts and changes nothing without it.
         //
         // Non-Dist for the same reason --crash-gpu is: a shipped build has no
         // business carrying a dev render path.

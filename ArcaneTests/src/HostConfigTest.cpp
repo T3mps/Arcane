@@ -174,6 +174,50 @@ TEST_CASE("host config: the golden flags ARE legal with --nri-graph", "[host][nr
     REQUIRE_FALSE(noFrames.config.has_value());
     CHECK(noFrames.exitCode == 2);
 }
+// NRI Phase 3, Task 8 -- THE EDITOR JOINS THE HONOR LIST. HostConfig::Parse is
+// shared by both hosts and needed no change for this, which is exactly why the
+// claim is worth pinning: what changed is that ArcaneEditor now ACTS on
+// --nri-graph (GpuContext::CreateForGraph + a chrome NriGraphContext + an
+// offscreen one for the Viewport panel) instead of ignoring it, and the flag's
+// documentation in HostConfig.hpp says so. The parse-level obligation that
+// follows is that a SCRIPTED EDITOR GRAPH RUN is a legal command line, since
+// the editor's own launch vocabulary (--project / --plugin / --scene) is
+// disjoint from the runtime's usual one and had never been parsed alongside
+// this flag.
+//
+// As with the case above, this is the only headless coverage available: the
+// editor's boot split lives in EditorApp.cpp, which is not compiled into this
+// exe, and everything past the flag needs a window and a real device (desk
+// checkpoint D3c).
+TEST_CASE("host config: --nri-graph composes with the EDITOR's launch vocabulary", "[host][nri]") {
+    const auto editorRun = Run({"--nri-graph", "--project", "ReferenceProject",
+                                "--scene", "a5e0c1de-1111-4222-8333-444455556666",
+                                "--frames", "120", "--backend", "vulkan"});
+    REQUIRE(editorRun.config.has_value());
+    CHECK(editorRun.config->nriGraph);
+    CHECK(editorRun.config->projectPath == "ReferenceProject");
+    CHECK(editorRun.config->sceneOverride == "a5e0c1de-1111-4222-8333-444455556666");
+    CHECK(editorRun.config->maxFrames == 120u);
+    CHECK(editorRun.config->backend == Arcane::GraphicsBackend::Vulkan);
+
+    // The engine-dev path (host a plugin with no project) is equally legal --
+    // the editor tolerates having nothing to host, and the flag changes only
+    // which recorder draws.
+    const auto pluginRun = Run({"--nri-graph", "--plugin", "Game.dll"});
+    REQUIRE(pluginRun.config.has_value());
+    CHECK(pluginRun.config->nriGraph);
+    CHECK(pluginRun.config->pluginPath == "Game.dll");
+    CHECK(pluginRun.config->projectPath.empty());
+
+    // And --crash-gpu, which the editor now honours on BOTH of its render arms
+    // (FireDeliberateGpuFault dispatches through NriDiagnostics::FireFault on
+    // the graph flavor), still pairs with it.
+    const auto faultRun = Run({"--nri-graph", "--project", "ReferenceProject",
+                               "--crash-gpu", "30", "--frames", "60"});
+    REQUIRE(faultRun.config.has_value());
+    CHECK(faultRun.config->nriGraph);
+    CHECK(faultRun.config->crashGpuFrame == 30u);
+}
 // NRI Phase 2, Task 11 -- the pick/outline probe. Guarded like --nri-graph
 // (both are DEV scaffolding registered inside HostConfig.cpp's
 // `#if !defined(ARCANE_DIST)` block), and, like it, the parse round-trip is the

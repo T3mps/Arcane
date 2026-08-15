@@ -23,6 +23,7 @@
 
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Publish/Clear (the Build failure row)
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Render/Nri/NriDiagnostics.hpp>   // NriDiagnostics::FireFault (--crash-gpu on the graph arm)
 
 #include <algorithm>   // std::ranges::find (SwitchProject's take() cherry-pick)
 #include <cstddef>     // std::size_t (project_open's switch-local scan-progress callback)
@@ -35,6 +36,19 @@
 
 namespace Arcane::Editor
 {
+    // NVRHI-ONLY, AND DELIBERATELY LEFT SO AT NRI PHASE 3 TASK 8. Both
+    // Device() reads below are unreachable accessors on the graph flavor
+    // (GpuContext ARC_ASSERTs, then hands back null in an optimized build), and
+    // that is not a live hazard mid-phase: this function is called ONLY from a
+    // document factory, i.e. only when a document is opened, which takes a
+    // click on editor chrome -- and a graph-mode editor presents no chrome
+    // (EditorAppFrame::PresentFrame) and installs no ImGui event tap
+    // (ImGuiLayer::CreateForGraph) until Task 10. Nothing in boot opens a
+    // document. The real answer is TASK 11's, which the plan scopes precisely
+    // here: null-device guards + blob retention on the preview compile sites,
+    // and the preview RENDER onto its own small CreateOffscreen context. A
+    // guard added here now would only convert a loud assert into a silently
+    // half-built document, which is the worse of the two.
     Arcane::Editor::DocServices EditorApp::MakeDocServices()
     {
         Arcane::Editor::DocServices s;
@@ -593,6 +607,18 @@ namespace Arcane::Editor
 
         // switch_teardown stays switch-LOCAL: boot has no equivalent (nothing to
         // tear down at boot), so there is no shared body to reuse.
+        //
+        // ITS waitForIdle IS NVRHI-ONLY, and left that way at NRI Phase 3 Task
+        // 8 for the reason MakeDocServices above states: SwitchProject is
+        // reached only from the File menu / recents / a dialog result, i.e.
+        // only through editor chrome, which a graph-mode session does not
+        // present (or accept input for) until Task 10. TASK 12 owns the graph
+        // equivalent, and the plan already names it: not a gated-out idle but
+        // the ordered idle -> invalidate -> release -> drain, applied to BOTH
+        // contexts (the viewport offscreen one and the chrome one). Skipping
+        // the idle here on the graph flavor would be strictly worse than
+        // leaving it unreachable -- it would tear a plugin down under a GPU
+        // still reading its resources.
         {
             Arcane::BootStage teardown;
             teardown.id = "switch_teardown";
@@ -1100,6 +1126,36 @@ namespace Arcane::Editor
         if (!m_gpu)
         {
             ARC_ERROR("Crash GPU: no GPU context");
+            return;
+        }
+
+        // THE GRAPH ARM (NRI Phase 3, Task 8), and it is RuntimeFrame::
+        // RenderGraph's `--crash-gpu` block verbatim in intent: the SAME
+        // data/shaders/gpu_fault.hlsl TDR loop, dispatched as a one-off NRI
+        // compute submit through NriDiagnostics::FireFault, with the same
+        // "injector unavailable -- nothing dispatched" ERROR text so a battery
+        // item reads identically on either recorder. It goes out on its OWN
+        // command buffer rather than nested in a frame, for the reason stated
+        // there: the graph's command buffers belong to RenderGraph::Execute,
+        // and a deliberate TDR must not be threaded through the very machinery
+        // the crash report has to survive to describe.
+        //
+        // ON THE CHROME CONTEXT'S QUEUE, not the viewport's -- they share one
+        // device and one graphics queue, so the choice is nominal, but the
+        // chrome context is the one that ARMED the crash chain and naming it
+        // keeps "who armed it" and "who faulted it" the same object. Reached
+        // from the menu item AND from the scheduled --crash-gpu N block at the
+        // top of MainLoop, which is how this arm is scriptable at all.
+        if (GraphMode())
+        {
+            if (!m_graphChrome)
+            {
+                ARC_ERROR("Crash GPU: the graph vehicle is not up -- nothing dispatched");
+                return;
+            }
+            nri::Queue* const queue = m_graphChrome->Device().GraphicsQueue();
+            if (!queue || !Arcane::NriDiagnostics::FireFault(m_graphChrome->Device(), *queue))
+                ARC_ERROR("Crash GPU: fault injector unavailable -- nothing dispatched");
             return;
         }
 

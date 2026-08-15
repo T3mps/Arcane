@@ -10,6 +10,11 @@
 //     RenderToDrawData/EndFrameDiscard even when another context was left
 //     current. That pin is the Phase-2 carry this task closes: the graph
 //     render arm used to call ImGui::Render()/EndFrame() BARE.
+//   * (Task 8) The EDITOR's graph-mode frame tail -- BeginFrame then
+//     EndFrameDiscard, repeatedly, through the device-less GpuContext -- is
+//     legal and balanced. That is the mid-phase decision Task 8 made about
+//     what the editor's main window does before Task 10 gives it a chrome
+//     frame, and an unbalanced pair there is a HANG rather than a bad pixel.
 //
 // What is NOT here, and why:
 //   * The gated NVRHI accessors (Device/Swap/Shaders/Cnv/Tone/Cmd/...) cannot
@@ -72,6 +77,68 @@ TEST_CASE("nri landing: GpuContext's graph flavor builds the device-less half an
     (void)gpu->Input();
     (void)gpu->Imgui().WantCaptureMouse();
     (void)gpu->Imgui().WantCaptureKeyboard();
+}
+
+TEST_CASE("nri landing: the editor's graph-mode frame tail -- Begin then discard, repeatable, "
+          "through the device-less GpuContext", "[nri]")
+{
+    // NRI Phase 3, TASK 8, and it pins a DECISION rather than a library
+    // property. The editor's graph mode composites no chrome until Task 10, so
+    // EditorAppFrame::PresentFrame's graph arm does exactly one thing:
+    // Imgui().EndFrameDiscard(), pairing the BeginFrame that DrawEditorUi made
+    // earlier in the same frame. THE HAZARD IT CLOSES IS A HANG, not a wrong
+    // pixel -- an unpaired BeginFrame asserts inside ImGui on the NEXT frame,
+    // and returning "no backbuffer" from that arm instead would make MainLoop
+    // `continue` past EndFrame every frame, freezing the --frames N budget and
+    // the plugin hot-reload poll forever.
+    //
+    // Driven THROUGH GpuContext rather than a bare ImGuiLayer (which the case
+    // below already covers) because that is what the editor holds, and the
+    // whole claim is that this pair is legal with no renderer, no swapchain, no
+    // command list and no GpuFrameProgress anywhere in the object.
+    ImGuiContext* const previous = ImGui::GetCurrentContext();
+
+    Arcane::HostConfig cfg;
+    cfg.backend = Arcane::GraphicsBackend::D3D12;   // never used: no device is created
+
+    auto gpu = Arcane::GpuContext::CreateForGraph(cfg);
+    REQUIRE(gpu != nullptr);
+    REQUIRE(gpu->GraphFlavor());
+
+    // The atlas, eagerly: this flavor installs no renderer backend, so nothing
+    // would otherwise service the 1.92 texture protocol. Same recipe as the
+    // case below and as ImGuiTest's headless smoke.
+    {
+        unsigned char* pixels = nullptr;
+        int aw = 0, ah = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &aw, &ah);
+        REQUIRE(pixels != nullptr);
+    }
+
+    // Three frames of the editor's graph-mode tail, with real submission in
+    // between -- the repeatability is the property: frame N+1's BeginFrame is
+    // what would assert if frame N's discard had left the frame unbalanced.
+    for (int frame = 0; frame < 3; ++frame)
+    {
+        gpu->Imgui().BeginFrame();
+        ImGui::Begin("editor chrome stand-in");
+        ImGui::Text("frame %d", frame);
+        ImGui::End();
+        gpu->Imgui().EndFrameDiscard();
+    }
+
+    // And the arm is interchangeable with the rendering one at any frame
+    // boundary, which is what lets Task 10 replace the discard with a real
+    // chrome frame without touching anything else in the loop.
+    gpu->Imgui().BeginFrame();
+    ImDrawData* const drawData = gpu->Imgui().RenderToDrawData();
+    REQUIRE(drawData != nullptr);
+    CHECK(drawData->Valid);
+    gpu->Imgui().BeginFrame();
+    gpu->Imgui().EndFrameDiscard();
+
+    gpu.reset();
+    ImGui::SetCurrentContext(previous);
 }
 
 TEST_CASE("nri landing: the graph ImGuiLayer installs its platform backend on ITS OWN context",

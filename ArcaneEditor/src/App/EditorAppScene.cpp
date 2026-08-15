@@ -109,10 +109,10 @@ namespace Arcane::Editor
     void EditorApp::FrameSceneIfPending()
     {
         if (!m_frameOnSceneOpen) return;
-        if (m_viewportTargets.canvas->Width() == 0 || m_viewportTargets.canvas->Height() == 0) return;
+        if (ViewportWidth() == 0 || ViewportHeight() == 0) return;
         m_frameOnSceneOpen = false;
 
-        const glm::vec2 panel((float)m_viewportTargets.canvas->Width(), (float)m_viewportTargets.canvas->Height());
+        const glm::vec2 panel((float)ViewportWidth(), (float)ViewportHeight());
         Arcane::TransformPropagationSystem{}(m_runtime->Registry());
         if (Arcane::Editor::SceneFramingBounds(m_runtime->Registry()).Valid())
         {
@@ -393,6 +393,6 @@ namespace Arcane::Editor
             return;   // nothing framable: leave the user's view where it is
 
         m_camera.Frame(bounds.min, bounds.max,
-                       glm::vec2((float)m_viewportTargets.canvas->Width(), (float)m_viewportTargets.canvas->Height()));
+                       glm::vec2((float)ViewportWidth(), (float)ViewportHeight()));
     }
 }
