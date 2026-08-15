@@ -506,7 +506,7 @@ namespace Arcane
         }
 
         // No entry: nothing has drawn this texture yet. ROUTINE -- the caller
-        // contract is to invalidate unconditionally after every destroy, and a
+        // contract is to invalidate unconditionally BEFORE every destroy, and a
         // resize before the first frame legitimately finds nothing.
         return false;
     }
@@ -541,10 +541,26 @@ namespace Arcane
         //
         // The idle is OURS rather than a stated precondition: an unenforceable
         // "the caller has already idled" is exactly the kind of contract this
-        // seam has been burned by. It costs a stall on a resize, which already
-        // idles twice over (ResizeOffscreen does its own), and a resize is a
-        // rare event by construction -- the same trade every drain on this path
-        // makes.
+        // seam has been burned by.
+        //
+        // WHAT IT ACTUALLY COSTS, stated honestly because the desk-watch list
+        // on ResizeOffscreen prescribes the worst case for it: this is a SECOND
+        // full device idle on a resize, not a free ride on an existing one.
+        // ResizeOffscreen issues exactly ONE of its own, and it does so AFTER
+        // this call, so the pair is a doubling -- 1 -> 2 device idles per
+        // resize. A resize is NOT a rare event during the drag-storm that same
+        // list prescribes: a panel dragged by the mouse changes size every
+        // frame, so that is two idles per frame for the duration of the drag,
+        // and it is why "frame time / hitching" is on the watch list at all.
+        //
+        // It is still the right trade. There is no cheaper way to get the view
+        // destroyed while its texture is alive when the two die through
+        // different lanes, the storm is a desk motion rather than a shipping
+        // one, and the alternative -- an unordered cross-graveyard disposal --
+        // is a correctness defect rather than a cost. What the CALLER owes in
+        // exchange is the size guard: these three lines belong under the "did
+        // the size actually change" test, because ResizeOffscreen's own no-op
+        // guard sits INSIDE it, i.e. after this idle has already happened.
         const nri::CoreInterface& core = m_device->Core();
         if (core.DeviceWaitIdle)
             (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));

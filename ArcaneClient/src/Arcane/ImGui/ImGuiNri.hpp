@@ -34,16 +34,30 @@
 // address to a replacement would get a cache HIT on a descriptor naming the
 // old resource.
 //
-// THE CLOSURE IS InvalidateUserTexture (NRI Phase 3, Task 8-pre) -- the
-// explicit hook this header used to owe, and deliberately not a heuristic:
-// there is no observable a heuristic could key on, because the replacement's
-// pointer may compare EQUAL to the destroyed one's. THE CALLER CONTRACT IS
-// UNCONDITIONAL: whoever destroys a texture it has handed to ImGui::Image must
-// call the hook with that pointer, BEFORE the next frame's RenderDrawData and
-// regardless of whether the replacement's address changed. The first real
-// caller is the editor's viewport resize
-// (NriGraphContext::ResizeOffscreen -- see that declaration, which carries the
-// exact call).
+// THE CLOSURE IS THE InvalidateUserTexture PAIR below (NRI Phase 3,
+// Task 8-pre) -- the explicit hook this header used to owe, and deliberately
+// not a heuristic: there is no observable a heuristic could key on, because the
+// replacement's pointer may compare EQUAL to the destroyed one's.
+//
+// THE CALLER CONTRACT, IN FULL, AND IT IS THE PAIR'S DECLARATIONS THAT GOVERN
+// (read them before writing a call -- the two variants are NOT
+// interchangeable):
+//   * WHO owes it: whoever destroys a texture it has handed to ImGui::Image.
+//   * WHEN: **BEFORE the texture is destroyed**, not merely before the next
+//     RenderDrawData. Those are the same instant only when the caller owns the
+//     texture AND buries it in the very lane it passes to the deferred variant;
+//     any other arrangement lets DestroyDescriptor run after DestroyTexture,
+//     because nothing orders two graveyards.
+//   * WHICH VARIANT: InvalidateUserTextureNow whenever the texture belongs to
+//     ANOTHER context -- it destroys the view inside the call, so running it
+//     first makes the ordering unconditional. The deferred
+//     InvalidateUserTexture only for a texture dying in the same lane after it.
+//   * UNCONDITIONALLY, regardless of whether the replacement's address changed
+//     -- an unchanged address is precisely the case a recycled one fakes.
+// The first real caller is the editor's viewport resize, which is the
+// cross-context case and therefore owes the `Now` variant BEFORE its resize:
+// NriGraphContext::ResizeOffscreen carries the exact sequence, the reason the
+// order is load-bearing, and the adjacency rule that goes with it.
 //
 // A SECOND, PHASE-2-ONLY HAZARD FROM THE SAME CONVENTION, stated because it is
 // a crash rather than a wrong pixel: while `--nri-graph` holds TWO devices

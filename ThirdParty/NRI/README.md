@@ -54,8 +54,10 @@ To pick up a newer NRI release:
 4. **Re-apply every row of "Local modifications" below** — step 2 replaces
    `Source/NONE/` (and the rest) wholesale, so each local fix is silently
    dropped. Check them back in individually, then verify with
-   `grep -rn "ARCANE LOCAL FIX" ThirdParty/NRI/` that the count matches the
-   table.
+   `grep -rn "ARCANE LOCAL FIX" ThirdParty/NRI/Source/` that the hit count
+   equals the table's row count. Scoped to `Source/` deliberately: an
+   unscoped grep also matches this README's own two mentions of the marker,
+   which would make a 1-row table read as 3 hits.
 5. Re-run `ThirdParty\premake5\premake5.exe vs2026` from the repo root and
    rebuild both configs.
 

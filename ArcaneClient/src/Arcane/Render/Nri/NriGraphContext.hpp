@@ -188,7 +188,7 @@
 // view must be destroyed before the texture it views), and no ordering exists
 // between two graveyards.
 //
-// ---- (2) INVALIDATE ImGuiNri AFTER EVERY ResizeOffscreen -------------
+// ---- (2) INVALIDATE ImGuiNri *BEFORE* EVERY ResizeOffscreen ----------
 // ResizeOffscreen destroys the output texture and creates a replacement, and
 // NRI does not ref-count -- so it may hand the replacement the address the
 // destroyed one just vacated. ImGuiNri caches per texture by RAW POINTER
@@ -205,7 +205,14 @@
 //
 // THE CALLER CONTRACT, which is Task 8's to honour: CALL
 // InvalidateUserTextureNow WITH THE OLD POINTER, ON THE CHROME CONTEXT'S NODE,
-// **BEFORE** ResizeOffscreen -- unconditionally, every resize.
+// **BEFORE** ResizeOffscreen -- whenever the size actually changed, and then
+// unconditionally (never gated on the pointer having changed).
+//
+// AND NOTHING MAY RENDER BETWEEN THE TWO CALLS. The invalidate leaves NO entry
+// for that pointer, so a chrome frame recorded before the resize would take
+// EnsureEntry's create path and build a fresh view + set over a texture that is
+// about to be destroyed -- the same inversion again, plus a live sample of a
+// dead resource. The two calls are one operation; see ResizeOffscreen.
 //
 // *BEFORE*, AND THAT IS THIS RULE'S OWN INSTANCE OF ITEM (1). The one
 // descriptor here inherently spans BOTH contexts: the chrome backend owns the
@@ -639,9 +646,32 @@ namespace Arcane
         // keyed on the OLD raw pointer, and NRI may hand the replacement that
         // very address. So:
         //
-        //     nri::Texture* old = viewport->OffscreenOutput();
-        //     chrome->ImGuiHud()->InvalidateUserTextureNow(old);   // BEFORE
-        //     viewport->ResizeOffscreen(w, h);
+        //     if (w != viewport->SurfaceWidth() || h != viewport->SurfaceHeight())
+        //     {
+        //         nri::Texture* old = viewport->OffscreenOutput();
+        //         chrome->ImGuiHud()->InvalidateUserTextureNow(old);   // BEFORE
+        //         viewport->ResizeOffscreen(w, h);
+        //     }
+        //
+        // ===== TWO THINGS ABOUT THE SHAPE OF THAT SNIPPET =====
+        //
+        // (i) THE SIZE GUARD IS THE CALLER'S, and it is not decoration. THIS
+        // function no-ops on an unchanged size -- but that guard is INSIDE it,
+        // i.e. after the invalidate has already run. InvalidateUserTextureNow
+        // idles the device unconditionally, so a panel that called these three
+        // lines every frame would stall the whole device every frame, forever,
+        // on a size that never changed. The invalidate must sit UNDER the same
+        // "did the size actually change" test the resize does. (`SurfaceWidth`/
+        // `SurfaceHeight` report the current output's extent, which is exactly
+        // what this function compares against.)
+        //
+        // (ii) NOTHING MAY RENDER BETWEEN THEM. The invalidate leaves NO cache
+        // entry for `old`, so a chrome frame recorded between the two calls
+        // takes EnsureEntry's CREATE path and builds a brand-new view +
+        // descriptor set over a texture that is about to be destroyed -- the
+        // very inversion this ordering exists to prevent, plus a live sample of
+        // a dead resource once the resize lands. Treat the pair as ONE
+        // operation: same handler, no frame boundary, no early-out between them.
         //
         // THE ORDER IS THE POINT, and it is why the `Now` variant exists.
         // Invalidating AFTERWARDS -- with the deferred hook -- would bury the
@@ -678,7 +708,21 @@ namespace Arcane
         //     vehicle's whole exit-code contract;
         //   * ImGuiNri::LiveTextureCount climbing with the drag -- entries
         //     accumulating means eviction is missing its match, and
-        //     kMaxTextures (32) is what it would eventually hit.
+        //     kMaxTextures (32) is what it would eventually hit;
+        //   * FRAME TIME / HITCHING, which is the one cost this ordering NEWLY
+        //     introduces and the storm is the worst case for it: a size change
+        //     per frame means InvalidateUserTextureNow's DeviceWaitIdle plus
+        //     ResizeOffscreen's own, i.e. TWO full device idles per frame for
+        //     the duration of the drag. Expect the panel to be visibly less
+        //     smooth than the host-window drag-storm; what would be a FINDING is
+        //     a stall that persists after the drag ends (the size guard in (i)
+        //     above is missing) or one on a drag that never changes the size.
+        // NOTE WHAT THE HEADLESS GATE CANNOT SEE HERE: NONE's DeviceWaitIdle is
+        // a bare SUCCESS with no effect, so no [nri] case can observe that the
+        // idle was issued at all -- an edit that silently dropped it would stay
+        // green. VK synchronization validation at D3b is what would catch it,
+        // which is another reason this storm is a required desk item rather
+        // than a nice-to-have.
         // The HOST-WINDOW drag-storm (D1/D2's) stays exactly as it was; this is
         // the offscreen twin of it and does not replace it.
         void ResizeOffscreen(std::uint32_t width, std::uint32_t height);
