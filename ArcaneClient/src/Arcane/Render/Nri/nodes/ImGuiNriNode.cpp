@@ -50,6 +50,11 @@ namespace Arcane
         return m_renderer.InvalidateUserTexture(texture, graveyard, fence);
     }
 
+    bool ImGuiNriNode::InvalidateUserTextureNow(nri::Texture* texture)
+    {
+        return m_renderer.InvalidateUserTextureNow(texture);
+    }
+
     void ImGuiNriNode::Record(RenderGraphNodeContext& context, ImDrawData* drawData, RgTexture target)
     {
         m_renderer.RenderDrawData(drawData, context, target);

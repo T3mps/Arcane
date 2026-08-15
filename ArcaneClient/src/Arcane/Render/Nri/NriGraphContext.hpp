@@ -196,20 +196,33 @@
 // ImTextureID would report a cache HIT on an nri::Descriptor + descriptor set
 // that still name the DESTROYED texture.
 //
-// THE HOOK EXISTS NOW: ImGuiNri::InvalidateUserTexture (and its node forward,
-// ImGuiNriNode::InvalidateUserTexture) evicts the pointer-keyed entry, BURIES
-// its view in the lane and RETIRES its descriptor set for age-gated recycling
-// -- the same discipline DestroyTexture applies to an ImTextureData-owned
-// entry. RE-READING OffscreenTextureId() IS STILL NOT A SUBSTITUTE: the id may
-// legitimately come back identical, and the staleness lives in the cache, not
-// in the id.
+// THE HOOK EXISTS NOW: ImGuiNri::InvalidateUserTexture{,Now} (and their node
+// forwards on ImGuiNriNode) evict the pointer-keyed entry, dispose its view
+// and RETIRE its descriptor set for age-gated recycling -- the same discipline
+// DestroyTexture applies to an ImTextureData-owned entry. RE-READING
+// OffscreenTextureId() IS STILL NOT A SUBSTITUTE: the id may legitimately come
+// back identical, and the staleness lives in the cache, not in the id.
 //
-// THE CALLER CONTRACT, which is Task 8's to honour: CALL THE HOOK AFTER EVERY
-// ResizeOffscreen, with the old texture pointer, before the next
-// ImGui::Image over OffscreenTextureId(). The hook cannot be folded INTO
-// ResizeOffscreen -- this class owns no ImGuiNri for the CHROME context, which
-// is the backend that actually caches the viewport's texture (a different
-// context entirely from the one being resized).
+// THE CALLER CONTRACT, which is Task 8's to honour: CALL
+// InvalidateUserTextureNow WITH THE OLD POINTER, ON THE CHROME CONTEXT'S NODE,
+// **BEFORE** ResizeOffscreen -- unconditionally, every resize.
+//
+// *BEFORE*, AND THAT IS THIS RULE'S OWN INSTANCE OF ITEM (1). The one
+// descriptor here inherently spans BOTH contexts: the chrome backend owns the
+// view, the viewport context owns the texture, and they die through different
+// lanes. Nothing orders two graveyards -- so invalidating AFTER the resize
+// (which destroys its output synchronously, draining its own lane inside the
+// call) would leave the chrome lane to run DestroyDescriptor one to two frames
+// after DestroyTexture, every resize. `Now` sidesteps the lanes entirely: it
+// destroys the view inside the call behind its own DeviceWaitIdle, so run
+// first it provably dies while the texture is still alive. The deferred
+// variant remains correct for a texture that dies in the SAME lane after it.
+//
+// The hook cannot be folded INTO ResizeOffscreen -- this class owns no
+// ImGuiNri for the CHROME context, which is the backend that actually caches
+// the viewport's texture (a different context entirely from the one being
+// resized). ResizeOffscreen carries the exact three-line sequence and the desk
+// watch list for it.
 // =====================================================================
 //
 // Adapted, where marked, from .example/NRISamples (MIT -- see that tree's
@@ -447,12 +460,12 @@ namespace Arcane
         //      contexts' independent fence timelines never meet. Nothing to do
         //      -- it is a member, created and drained by this class.
         //   2. ImGuiNri MUST BE TOLD when ResizeOffscreen replaces the output:
-        //      call ImGuiNri::InvalidateUserTexture (through the CHROME
-        //      context's ImGuiHud() node) with the OLD pointer, after the
-        //      resize and before the next ImGui::Image. The hook exists; the
-        //      CALL is the caller's, and this class cannot make it -- the
-        //      backend that caches the viewport texture belongs to the other
-        //      context.
+        //      call ImGuiNri::InvalidateUserTextureNow (through the CHROME
+        //      context's ImGuiHud() node) with the OLD pointer, **BEFORE** the
+        //      resize. The hook exists; the CALL is the caller's, and this
+        //      class cannot make it -- the backend that caches the viewport
+        //      texture belongs to the other context. ResizeOffscreen carries
+        //      the exact sequence and why the order is load-bearing.
         // Both are stated in full -- mechanism, windows, closure -- under TWO
         // CONTEXTS, TWO LANES in the file header. A LONE offscreen context (no
         // second context, no ImGui sampling) needs neither.
@@ -572,9 +585,10 @@ namespace Arcane
         // -- ImGuiNri's is -- must be invalidated EXPLICITLY, because the new
         // pointer may compare EQUAL to the old one and the staleness lives in
         // that cache rather than in this value. The closure is
-        // ImGuiNri::InvalidateUserTexture, called with the OLD pointer after
-        // every ResizeOffscreen. Read the old value BEFORE resizing: this
-        // accessor cannot hand it back afterwards.
+        // ImGuiNri::InvalidateUserTextureNow, called with this pointer BEFORE
+        // every ResizeOffscreen -- so read it first, both because this accessor
+        // cannot hand the old value back afterwards and because the disposal
+        // has to happen while the texture is still alive.
         [[nodiscard]] nri::Texture* OffscreenOutput() noexcept { return m_offscreen; }
 
         // OffscreenOutput() as an ImGui texture id, ready for ImGui::Image().
@@ -595,10 +609,12 @@ namespace Arcane
         // the id IS the raw pointer: an id that is UNCHANGED across a
         // ResizeOffscreen is exactly the case that would make ImGuiNri's
         // pointer-keyed user-texture entry serve a descriptor over the
-        // destroyed texture. CALL ImGuiNri::InvalidateUserTexture WITH THE OLD
-        // POINTER AFTER EVERY ResizeOffscreen -- that is the closure, and it is
-        // the caller's because the caching backend belongs to the CHROME
-        // context, not to this one. See ResizeOffscreen() and OffscreenOutput().
+        // destroyed texture. CALL ImGuiNri::InvalidateUserTextureNow WITH THE
+        // OLD POINTER **BEFORE** EVERY ResizeOffscreen -- that is the closure,
+        // it is the caller's because the caching backend belongs to the CHROME
+        // context rather than to this one, and the BEFORE is load-bearing (the
+        // resize destroys the texture synchronously; a view disposed afterwards
+        // outlives it). See ResizeOffscreen() and OffscreenOutput().
         [[nodiscard]] std::uint64_t OffscreenTextureId() const noexcept;
 
         // Destroy + recreate the output at the new size. MUST be called
@@ -614,17 +630,31 @@ namespace Arcane
         // present path's. A no-op on an unchanged size, and on a zero extent it
         // logs and leaves the current output alone.
         //
-        // ===== WHAT THE CALLER OWES AFTERWARDS, EVERY TIME =====
-        // This destroys the output texture. Any ImGuiNri that has ever drawn it
-        // -- i.e. the CHROME context's, the one whose ImGui::Image names
+        // ===== WHAT THE CALLER OWES, AND IT IS OWED *BEFORE* =====
+        // This destroys the output texture SYNCHRONOUSLY, inside the call --
+        // step 4 drains this context's lane, so the old output is already gone
+        // by the time it returns. Any ImGuiNri that has drawn that texture --
+        // i.e. the CHROME context's, the one whose ImGui::Image names
         // OffscreenTextureId() -- still holds a descriptor + descriptor set
         // keyed on the OLD raw pointer, and NRI may hand the replacement that
         // very address. So:
         //
-        //     nri::Texture* old = viewport->OffscreenOutput();   // BEFORE
+        //     nri::Texture* old = viewport->OffscreenOutput();
+        //     chrome->ImGuiHud()->InvalidateUserTextureNow(old);   // BEFORE
         //     viewport->ResizeOffscreen(w, h);
-        //     chrome->ImGuiHud()->InvalidateUserTexture(
-        //         old, chrome->Graves(), chrome->Graph().DebugSubmitCount());
+        //
+        // THE ORDER IS THE POINT, and it is why the `Now` variant exists.
+        // Invalidating AFTERWARDS -- with the deferred hook -- would bury the
+        // chrome backend's view over an ALREADY-DESTROYED texture into the
+        // CHROME lane, where it waits one to two frames for that context's
+        // fence: DestroyDescriptor after DestroyTexture, on every resize, for
+        // the one descriptor that inherently spans both contexts. No lane
+        // ordering can fix that, because the view and the texture die through
+        // DIFFERENT graveyards and nothing orders two graveyards (file header,
+        // TWO CONTEXTS, TWO LANES). `Now` destroys the view inside the call
+        // behind its own DeviceWaitIdle, so run BEFORE the resize it dies while
+        // `old` is still alive -- the invariant restored rather than an
+        // exception documented.
         //
         // Unconditionally, not "if the pointer changed" -- an unchanged pointer
         // is precisely the case a recycled address fakes. Skipping it is a
@@ -632,6 +662,25 @@ namespace Arcane
         // not folded in here because this class owns no ImGuiNri for the other
         // context; see item (2) under TWO CONTEXTS, TWO LANES in the file
         // header.
+        //
+        // ===== DESK WATCH (Task 8 / checkpoint D3b) =====
+        // THE VIEWPORT DRAG-STORM is the motion that exercises all of this at
+        // once -- resize the panel continuously while the chrome context keeps
+        // presenting -- and it is the only way to see most of it: every part is
+        // either headless-invisible (a real sampler reading real texels) or
+        // once-per-resize. Watch for, in order of what each would prove:
+        //   * VK validation on a destroyed VkImageView/VkImage -- the ordering
+        //     above went wrong, or the invalidate was skipped entirely;
+        //   * the panel sampling the PREVIOUS size's contents or garbage -- the
+        //     cache served a stale entry (ABA), i.e. the invalidate ran but on
+        //     the wrong pointer or the wrong context's backend;
+        //   * RenderErrorCount growing across the storm at all, which is this
+        //     vehicle's whole exit-code contract;
+        //   * ImGuiNri::LiveTextureCount climbing with the drag -- entries
+        //     accumulating means eviction is missing its match, and
+        //     kMaxTextures (32) is what it would eventually hit.
+        // The HOST-WINDOW drag-storm (D1/D2's) stays exactly as it was; this is
+        // the offscreen twin of it and does not replace it.
         void ResizeOffscreen(std::uint32_t width, std::uint32_t height);
 
         // Maps the buffer the last capture frame read the backbuffer into and

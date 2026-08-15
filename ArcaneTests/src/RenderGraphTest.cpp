@@ -2913,8 +2913,8 @@ TEST_CASE("rendergraph exec: a graph whose Execute ENTERED and FAILED buries its
     Arcane::ResetRenderErrorCount();
 }
 
-TEST_CASE("imgui-nri: InvalidateUserTexture evicts the pointer-keyed entry, buries its view in "
-          "the lane and RETIRES its set", "[nri]")
+TEST_CASE("imgui-nri: both invalidation variants evict the pointer-keyed entry and RETIRE its "
+          "set -- deferred buries the view in the lane, Now destroys it in the call", "[nri]")
 {
     // THE ABA CLOSURE (NRI Phase 3, Task 8-pre; NriGraphContext.hpp item (2)).
     //
@@ -3022,6 +3022,42 @@ TEST_CASE("imgui-nri: InvalidateUserTexture evicts the pointer-keyed entry, buri
         // since the retirement, so the gate (kSwapchainFramesInFlight recorded
         // frames) has not opened and a fresh one was allocated instead.
         CHECK(backend.RetiredSetCount() == 1);
+
+        // ---- THE IMMEDIATE VARIANT (fix round 1) --------------------------
+        // THE CROSS-CONTEXT ORDERING PROBLEM the deferred hook cannot solve:
+        // the viewport output's TEXTURE dies through the VIEWPORT context's
+        // lane -- synchronously, inside ResizeOffscreen, which drains that lane
+        // itself -- while a deferred invalidate buries the CHROME backend's
+        // view in the CHROME lane, one to two frames out. Two graveyards, no
+        // ordering between them, and in practice ordered the wrong way round:
+        // DestroyDescriptor after DestroyTexture, every resize.
+        //
+        // InvalidateUserTextureNow destroys the view INSIDE the call (behind
+        // its own DeviceWaitIdle), so a caller that runs it BEFORE the owner's
+        // resize gets view-then-texture with no lane to reason about. THE
+        // OBSERVABLE, and the thing that would go red if the disposal silently
+        // went back to a burial: the entry is gone AND the lane is untouched.
+        //
+        // Driven on the entry the ABA step above just rebuilt, with the lane
+        // provably empty going in.
+        REQUIRE(backend.HasEntryFor(output));
+        REQUIRE(lane.Pending() == 0);
+
+        CHECK(backend.InvalidateUserTextureNow(output));
+        CHECK_FALSE(backend.HasEntryFor(output));
+        CHECK(backend.LiveTextureCount() == 0);
+        // NOTHING DEFERRED. Not "reaped early" -- never buried: there is no
+        // fence in this call at all, which is precisely what lets it run while
+        // the texture is still alive and still be safe.
+        CHECK(lane.Pending() == 0);
+        // The SET still goes through retirement, because retirement is about
+        // REUSE rather than lifetime and NRI cannot free one either way. Second
+        // eviction, so second retired set.
+        CHECK(backend.RetiredSetCount() == 2);
+
+        // A miss stays routine on this variant too, and still buries nothing.
+        CHECK_FALSE(backend.InvalidateUserTextureNow(output));
+        CHECK(lane.Pending() == 0);
 
         // ---- teardown, through the same lane ------------------------------
         // The user TEXTURE is never buried by any of this: it is the caller's,

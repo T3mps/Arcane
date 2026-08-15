@@ -84,19 +84,27 @@ namespace Arcane
         // (NriGraphContext::Graves()) and its graph's own last submitted value.
         void PrepareFrame(ImDrawData* drawData, Graveyard& graveyard, std::uint64_t fence);
 
-        // THE USER-TEXTURE INVALIDATION HOOK, forwarded (NRI Phase 3,
-        // Task 8-pre). Call it after destroying ANY texture this backend may
-        // have drawn -- the editor's offscreen viewport output above all, whose
-        // replacement NRI may hand the address the destroyed one just vacated.
-        // ImGuiNri::InvalidateUserTexture carries the full contract; the exact
-        // call the viewport owes sits on NriGraphContext::ResizeOffscreen.
+        // THE USER-TEXTURE INVALIDATION HOOK, both variants forwarded (NRI
+        // Phase 3, Task 8-pre). Call one whenever a texture this backend may
+        // have drawn is about to be destroyed -- the editor's offscreen
+        // viewport output above all, whose replacement NRI may hand the address
+        // the destroyed one just vacated.
+        //
+        // WHICH ONE: `Now` for a texture ANOTHER context owns. It destroys the
+        // view inside the call, behind its own idle, so calling it BEFORE the
+        // owner's destroy keeps the view ahead of the texture it views -- there
+        // is no ordering between two lanes to lean on instead. The DEFERRED one
+        // is only for a texture that dies in `graveyard` itself, after this
+        // call. ImGuiNri's declarations carry the full contract; the exact call
+        // the viewport owes sits on NriGraphContext::ResizeOffscreen.
         //
         // NOTE WHOSE NODE THIS IS: the one belonging to the context that DRAWS
         // the texture (the editor's chrome/host-window context), not the
         // offscreen context that owns it. They are different objects with
-        // different lanes.
+        // different lanes -- which is the whole reason `Now` exists.
         bool InvalidateUserTexture(nri::Texture* texture, Graveyard& graveyard,
                                    std::uint64_t fence);
+        bool InvalidateUserTextureNow(nri::Texture* texture);
 
         // RECORD-time half: records `drawData` into an ALREADY-OPEN raster
         // pass whose single colour attachment is `target`. Emits no barrier.

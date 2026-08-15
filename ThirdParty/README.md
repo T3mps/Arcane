@@ -35,6 +35,7 @@ Prebuilt **tool binaries** live under `tools/` (shader pipeline, used from M2 on
 | **miniaudio** | 0.11.25 | MIT-0 | Arcane | Audio engine (single header) | https://github.com/mackron/miniaudio |
 | **msdfgen** | v1.12 (1.12.0) | MIT | Arcane | Multi-channel SDF generation for text glyphs; vendored subset: core + ext/import-font (FreeType bridge); ext/import-svg, ext/save-png, ext/resolve-shape-geometry (tinyxml2/libpng/Skia) excluded | https://github.com/Chlumsky/msdfgen |
 | **nlohmann** | — | MIT | Server, Tools, Arcane | JSON for Modern C++ (single header) | https://github.com/nlohmann/json |
+| **NRI** | v180 (`4b48531`) | MIT | Arcane | NVIDIA Render Interface — the RHI substrate underneath/replacing NVRHI (backends: D3D12, VK, NONE, Validation, Creation; D3D11 + WGPU excluded). **CARRIES LOCAL MODIFICATIONS** — see the "Local modifications" table in `ThirdParty/NRI/README.md`, which an update MUST re-apply (a re-copy replaces `Source/` wholesale and drops them silently). `grep -rn "ARCANE LOCAL FIX" ThirdParty/NRI/` lists them | https://github.com/NVIDIA-RTX/NRI |
 | **nvrhi** | ada8a14 | MIT | Arcane | GPU abstraction (DX12 + Vulkan backends, DX11 off) | https://github.com/NVIDIA-RTX/NVRHI |
 | **picosha2** | — | MIT | Server, Arcane | SHA-256 password hashing | https://github.com/okdshin/PicoSHA2 |
 | **premake5** | 5.0-beta8 | BSD 3-Clause | Server, Tools, Arcane | Build-system generator (vendored binary) | https://github.com/premake/premake-core |

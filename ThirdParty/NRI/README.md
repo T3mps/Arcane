@@ -38,7 +38,7 @@ mains and the workspace `premake5.lua` copies both DLLs into each exe's
 
 ## Update procedure
 
-Vendored files are never hand-edited. To pick up a newer NRI release:
+To pick up a newer NRI release:
 
 1. Re-clone (or update) the reference checkout at `.example/NRI` to the
    target tag/commit.
@@ -51,5 +51,19 @@ Vendored files are never hand-edited. To pick up a newer NRI release:
    in already-vendored dirs are picked up automatically; only a *new*
    upstream source directory (e.g. a split-out backend) would need a
    `premake5.lua` edit.
-4. Re-run `ThirdParty\premake5\premake5.exe vs2026` from the repo root and
+4. **Re-apply every row of "Local modifications" below** — step 2 replaces
+   `Source/NONE/` (and the rest) wholesale, so each local fix is silently
+   dropped. Check them back in individually, then verify with
+   `grep -rn "ARCANE LOCAL FIX" ThirdParty/NRI/` that the count matches the
+   table.
+5. Re-run `ThirdParty\premake5\premake5.exe vs2026` from the repo root and
    rebuild both configs.
+
+## Local modifications
+
+Vendored files are otherwise never hand-edited; this table is the complete
+list of exceptions, and each carries an `ARCANE LOCAL FIX` comment in place.
+
+| File | Symbol | What | Why, and the symptom if it is lost |
+|---|---|---|---|
+| `Source/NONE/ImplNONE.cpp` | `AllocateDescriptorSets` | Fills the `descriptorSets` out-param with `DummyObject<DescriptorSet>()` for `instanceNum` entries. Upstream returns `SUCCESS` and writes nothing — the only out-param in that file left unfilled, against the convention every other entry there follows (`CreateDescriptorPool`, `CreateTextureView`, `CreateSampler`, …). | A caller that value-initializes its handle and then checks it — which every careful one does, since `SUCCESS`-with-null is indistinguishable from a driver bug — reads null and reports an allocation failure. Without this fix **every descriptor-set-using object in the engine** (`ImGuiNri`, `Batch2DNode`, the fullscreen nodes) is undrivable on the NONE backend, i.e. undrivable in the headless `[nri]` gate. **Symptom if silently lost: the NONE descriptor-set cases go red with a misleading `"ImGuiNri: descriptor set allocation failed"` / `"the shader-resource view over an ImGui texture could not be created"` shape — an engine-side error message for a backend-side omission, which sends the reader to the wrong file.** Landed with NRI Phase 3, Task 8-pre. |

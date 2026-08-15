@@ -165,27 +165,55 @@ namespace Arcane
         // ============ THE USER-TEXTURE INVALIDATION HOOK ============
         // (NRI Phase 3, Task 8-pre -- the closure named under ONE HAZARD above.)
         //
-        // Drops this backend's cached binding for `texture`: buries its
-        // SHADER_RESOURCE view in `graveyard` at `fence` and RETIRES its
-        // descriptor set for age-gated recycling. Byte for byte the disposal
-        // DestroyTexture applies to an ImTextureData-owned entry, and it must
-        // be -- an in-flight frame may still be reading that set, so neither
-        // may be destroyed here and now.
+        // TWO VARIANTS, AND PICKING THE WRONG ONE INVERTS AN ORDERING. Both
+        // drop this backend's cached binding for `texture` and RETIRE its
+        // descriptor set for age-gated recycling; they differ only in WHEN the
+        // SHADER_RESOURCE view is destroyed, and therefore in what they can
+        // promise about the view-before-texture rule.
         //
-        // The TEXTURE itself is never touched: it is the caller's, which is
-        // what makes it a USER texture. Calling this on an ImTextureData-owned
-        // entry is refused (the 1.92 protocol owns those; DestroyTexture is
-        // their path) and reported, rather than half-disposing a texture this
-        // backend must also bury.
+        // Common to both: the TEXTURE is never touched -- it is the caller's,
+        // which is what makes it a USER texture. An ImTextureData-owned entry
+        // is REFUSED (the 1.92 protocol owns those; DestroyTexture is their
+        // path, and it must also bury the texture and stamp the status) rather
+        // than half-disposed. True means an entry was evicted; FALSE IS ROUTINE
+        // AND NOT AN ERROR -- a texture that was never drawn has no entry, and
+        // a caller invalidating unconditionally (which it should) hits that
+        // before the first frame. Neither is teardown: the next ImGui::Image
+        // over the same pointer re-creates the view and takes a fresh set.
         //
-        // Returns true when an entry was evicted. FALSE IS ROUTINE AND NOT AN
-        // ERROR: a texture that was never drawn has no entry, and a caller that
-        // invalidates unconditionally (which it should -- see the contract
-        // above) will hit that on the first resize before the first frame.
+        // ---- DEFERRED. Buries the view in `graveyard` at `fence`; does not
+        // stall. CORRECT ONLY WHEN THE TEXTURE DIES IN THAT SAME LANE, AT THE
+        // SAME OR A LATER FENCE -- i.e. when the caller owns the texture and
+        // buries it itself, so one lane's burial ORDER is what keeps the view
+        // ahead of the resource it views.
         //
-        // The next ImGui::Image over the same pointer re-creates the view and
-        // takes a fresh set, so this is invalidation, not teardown.
+        // DO NOT USE IT FOR A TEXTURE ANOTHER CONTEXT OWNS: there is no
+        // ordering between two graveyards, and in the editor's resize case the
+        // two are ordered the WRONG way -- NriGraphContext::ResizeOffscreen
+        // destroys its output synchronously (it drains its own lane inside the
+        // call) while a burial here waits one to two frames for the caller's
+        // fence, so DestroyDescriptor would run after DestroyTexture on every
+        // resize. Use InvalidateUserTextureNow for that.
         bool InvalidateUserTexture(nri::Texture* texture, Graveyard& graveyard, std::uint64_t fence);
+
+        // ---- IMMEDIATE. Destroys the view inside this call, behind a
+        // DeviceWaitIdle this function issues ITSELF -- there is no
+        // precondition on the caller, because an unenforceable "you have
+        // already idled" is precisely the kind of contract this seam has been
+        // burned by.
+        //
+        // THE CROSS-CONTEXT VARIANT, and the one the editor's viewport resize
+        // owes. CALL IT BEFORE THE OWNER DESTROYS THE TEXTURE and the view
+        // provably dies first -- no lane, no fence, and no ordering between two
+        // graveyards left to reason about. NriGraphContext::ResizeOffscreen
+        // carries the exact three-line sequence.
+        //
+        // IT STALLS, deliberately. A resize is a rare event that already idles
+        // (ResizeOffscreen does its own), so the cost is one extra
+        // DeviceWaitIdle on a frame that was going to spend one anyway. Do not
+        // reach for it from inside a frame -- that is what the deferred variant
+        // is for.
+        bool InvalidateUserTextureNow(nri::Texture* texture);
 
         // Creates the view + descriptor set for a USER texture up front, if it
         // has none yet -- the SAME call RenderDrawData makes on first sight of
@@ -289,10 +317,16 @@ namespace Arcane
 
         void UpdateTexture(ImTextureData* tex, Graveyard& graveyard, std::uint64_t fence);
         void DestroyTexture(ImTextureData* tex, Graveyard& graveyard, std::uint64_t fence);
-        // Buries `entry`'s view (and its texture when we own it) in
-        // `graveyard` and retires its descriptor set. Clears the entry in
-        // place; the caller erases it from m_textures.
-        void ReleaseEntry(Entry& entry, Graveyard& graveyard, std::uint64_t fence);
+        // Disposes `entry`'s view (and its texture when we own it) and retires
+        // its descriptor set; clears the entry in place, the caller erases it
+        // from m_textures. `graveyard` non-null BURIES at `fence`; NULL
+        // DESTROYS IMMEDIATELY, which only InvalidateUserTextureNow asks for
+        // and only behind the idle it issues. See the .cpp.
+        void ReleaseEntry(Entry& entry, Graveyard* graveyard, std::uint64_t fence);
+        // The shared body of both invalidation variants -- one eviction, two
+        // disposal disciplines. `who` names the caller in the refusal message.
+        bool EvictUserEntry(nri::Texture* texture, Graveyard* graveyard, std::uint64_t fence,
+                            const char* who);
 
         // One shared cache, so every node's opaque shader-pair id space must
         // stay disjoint: Batch2DNode 0x2000+, TonemapNode 0x3000, the outline

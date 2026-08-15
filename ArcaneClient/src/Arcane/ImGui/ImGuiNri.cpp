@@ -374,27 +374,51 @@ namespace Arcane
         return &m_textures.back();
     }
 
-    void ImGuiNri::ReleaseEntry(Entry& entry, Graveyard& graveyard, std::uint64_t fence)
+    void ImGuiNri::ReleaseEntry(Entry& entry, Graveyard* graveyard, std::uint64_t fence)
     {
-        // BURIED, not destroyed: an earlier submitted frame may still be
-        // reading them. The lane comes in as a PARAMETER (Task 8-pre) rather
-        // than being read off the device, so every disposal this backend makes
-        // -- an atlas rebuild mid-run, a user-texture invalidation, teardown --
-        // lands in the OWNING CONTEXT's one lane, in burial order. See
-        // NewFrameTexUpdates in the header for why the device's graveyard is
-        // the wrong answer once one device carries two contexts.
+        // TWO DISPOSAL DISCIPLINES, one eviction. Which one applies is the
+        // CALLER's knowledge, not this function's:
+        //
+        //   graveyard != null -- DEFERRED. An earlier submitted frame may still
+        //     be reading these, so they are BURIED at `fence`. The lane is a
+        //     PARAMETER (Task 8-pre) rather than something read off the device,
+        //     so every deferred disposal this backend makes lands in the OWNING
+        //     CONTEXT's one lane, in burial order. See NewFrameTexUpdates in
+        //     the header for why the device's graveyard is the wrong answer
+        //     once one device carries two contexts.
+        //
+        //   graveyard == null -- IMMEDIATE. The caller has already made the GPU
+        //     idle, so nothing can be reading them and there is nothing to
+        //     defer BEHIND. Used by InvalidateUserTextureNow, whose whole
+        //     purpose is to get the view destroyed while the texture it views
+        //     is still ALIVE -- an ordering no deferred burial can offer when
+        //     the texture's owner is a DIFFERENT context with a different lane.
         const nri::CoreInterface* core = &m_device->Core();
-        Graveyard& graves = graveyard;
         if (entry.view)
         {
             nri::Descriptor* view = entry.view;
-            graves.Bury(fence, [core, view] { core->DestroyDescriptor(view); });
+            if (graveyard)
+                graveyard->Bury(fence, [core, view] { core->DestroyDescriptor(view); });
+            else
+                core->DestroyDescriptor(view);
         }
         if (entry.owned && entry.texture)
         {
             nri::Texture* texture = entry.texture;
-            graves.Bury(fence, [core, texture] { core->DestroyTexture(texture); });
+            if (graveyard)
+                graveyard->Bury(fence, [core, texture] { core->DestroyTexture(texture); });
+            else
+                core->DestroyTexture(texture);
         }
+        // RETIRED EITHER WAY, and deliberately: retirement is about REUSE, not
+        // lifetime. NRI cannot free a single set, so the only thing that can be
+        // done with one is rewrite it -- and AcquireSet's age gate is what makes
+        // that safe. An idle device would make immediate reuse safe too, but the
+        // gate costs nothing and keeping ONE recycling rule is worth more than
+        // recovering one descriptor set a frame earlier. The set names a
+        // destroyed view until it is rewritten, which is exactly the state
+        // DestroyTexture has always left one in: nothing can bind it, because
+        // the entry that pointed at it is gone.
         if (entry.set)
             m_retired.push_back(RetiredSet{ entry.set, m_recordCount });
 
@@ -417,7 +441,7 @@ namespace Arcane
         {
             if (m_textures[i].owner != tex)
                 continue;
-            ReleaseEntry(m_textures[i], graveyard, fence);
+            ReleaseEntry(m_textures[i], &graveyard, fence);
             m_textures.erase(m_textures.begin() + (std::ptrdiff_t)i);
             break;
         }
@@ -449,8 +473,8 @@ namespace Arcane
         return EnsureEntry(m_device->Core(), texture, /*owner=*/nullptr) != nullptr;
     }
 
-    bool ImGuiNri::InvalidateUserTexture(nri::Texture* texture, Graveyard& graveyard,
-                                          std::uint64_t fence)
+    bool ImGuiNri::EvictUserEntry(nri::Texture* texture, Graveyard* graveyard,
+                                   std::uint64_t fence, const char* who)
     {
         if (!m_device || !texture)
             return false;
@@ -467,18 +491,15 @@ namespace Arcane
                 // bury the TEXTURE and stamp the ImTextureData's status, and
                 // this hook deliberately does neither. Refuse rather than
                 // half-dispose it.
-                GraphError("ImGuiNri::InvalidateUserTexture: that texture is owned by an "
+                GraphError(std::string("ImGuiNri::") + who + ": that texture is owned by an "
                            "ImTextureData -- the 1.92 protocol destroys it (WantDestroy), not "
                            "this hook. Nothing was invalidated.");
                 return false;
             }
 
             // EXACTLY DestroyTexture's disposal, minus the texture (it is the
-            // caller's): the view is BURIED -- an earlier submitted frame may
-            // still be sampling it -- and the descriptor set is RETIRED rather
-            // than destroyed, because NRI cannot free a single set and the GPU
-            // may still be reading it. AcquireSet hands it back out only after
-            // kSwapchainFramesInFlight recorded frames.
+            // caller's). ReleaseEntry decides deferred-vs-immediate off
+            // `graveyard`; the descriptor set is RETIRED either way.
             ReleaseEntry(m_textures[i], graveyard, fence);
             m_textures.erase(m_textures.begin() + (std::ptrdiff_t)i);
             return true;
@@ -488,6 +509,48 @@ namespace Arcane
         // contract is to invalidate unconditionally after every destroy, and a
         // resize before the first frame legitimately finds nothing.
         return false;
+    }
+
+    bool ImGuiNri::InvalidateUserTexture(nri::Texture* texture, Graveyard& graveyard,
+                                          std::uint64_t fence)
+    {
+        return EvictUserEntry(texture, &graveyard, fence, "InvalidateUserTexture");
+    }
+
+    bool ImGuiNri::InvalidateUserTextureNow(nri::Texture* texture)
+    {
+        if (!m_device || !texture)
+            return false;
+
+        // ===== WHY THIS IDLES, AND WHY IT IS THE RESIZE PATH'S VARIANT =====
+        // The deferred hook buries the view in the CALLER's lane. When the
+        // texture belongs to a DIFFERENT context -- which is the whole editor
+        // case, a viewport output drawn by the chrome backend -- that lane is
+        // not the one the texture is destroyed through, and there is no
+        // ordering between two graveyards. Called after the owner's resize, the
+        // burial would run one to two frames AFTER the texture was destroyed:
+        // DestroyDescriptor over an already-destroyed resource, every resize,
+        // for the one descriptor that inherently spans both contexts. That is
+        // the exact inversion the graph's own teardown ordering exists to
+        // prevent (NriGraphContext.cpp's offscreen burial block).
+        //
+        // Destroying the view HERE, behind an idle, restores the invariant
+        // instead of documenting an exception -- but only if the caller runs
+        // this BEFORE the owner destroys the texture, which is what
+        // NriGraphContext::ResizeOffscreen's prescribed sequence does.
+        //
+        // The idle is OURS rather than a stated precondition: an unenforceable
+        // "the caller has already idled" is exactly the kind of contract this
+        // seam has been burned by. It costs a stall on a resize, which already
+        // idles twice over (ResizeOffscreen does its own), and a resize is a
+        // rare event by construction -- the same trade every drain on this path
+        // makes.
+        const nri::CoreInterface& core = m_device->Core();
+        if (core.DeviceWaitIdle)
+            (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
+
+        return EvictUserEntry(texture, /*graveyard=*/nullptr, /*fence=*/0,
+                              "InvalidateUserTextureNow");
     }
 
     void ImGuiNri::UpdateTexture(ImTextureData* tex, Graveyard& graveyard, std::uint64_t fence)
@@ -866,7 +929,7 @@ namespace Arcane
         // Anything the walk above did not reach (a USER texture's view + set,
         // which no ImTextureData owns).
         for (Entry& entry : m_textures)
-            ReleaseEntry(entry, graveyard, fence);
+            ReleaseEntry(entry, &graveyard, fence);
         m_textures.clear();
         m_retired.clear();
 
