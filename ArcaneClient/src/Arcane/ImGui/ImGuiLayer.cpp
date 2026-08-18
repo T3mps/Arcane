@@ -116,15 +116,17 @@ namespace Arcane
             bool InitForGraph()
             {
                 // ===========================================================
-                // NO EVENT TAP ON THE GRAPH FLAVOR, ON PURPOSE (NRI Phase 3,
-                // Task 6, step 3).
+                // THE EVENT TAP IS INSTALLED ON BOTH FLAVORS AGAIN (D3 exit,
+                // 2026-08-18). The withholding below was a TIME-BOXED stance
+                // from NRI Phase 3 Task 6 step 3, and its box has closed.
                 // ===========================================================
-                // Before the landing the HUD was non-interactive on the graph
-                // path as a SIDE EFFECT of the two-window topology: the tap sat
-                // on the host window while the user's events went to the
-                // vehicle's. One window makes that accident impossible, so the
-                // stance has to be stated to be kept -- and it must be kept
-                // until desk checkpoint D3b's compares are done:
+                // WHY IT WAS WITHHELD: before the landing the HUD was
+                // non-interactive on the graph path as a SIDE EFFECT of the
+                // two-window topology -- the tap sat on the host window while
+                // the user's events went to the vehicle's. One window makes
+                // that accident impossible, so the stance had to be STATED to
+                // be kept, and it was to be kept "until desk checkpoint D3b's
+                // compares are done", because:
                 //
                 //   an interactive HUD can be DRAGGED, and ImGui persists
                 //   window placement per exe dir in imgui.ini. The graph path
@@ -134,15 +136,26 @@ namespace Arcane
                 //   against. A HUD that renders identically and cannot be moved
                 //   is exactly what a golden comparison wants.
                 //
-                // Withholding the tap is also what keeps the mouse OUT of the
-                // frame entirely: imgui_impl_sdl3's NewFrame only synthesises a
-                // mouse position when the cursor is over NO window of ours
-                // (ImGui_ImplSDL3_UpdateMouseData's global-state fallback), so
-                // with no SDL_EVENT_MOUSE_MOTION arriving, hovering the HUD
-                // cannot light a widget and cannot perturb a golden either.
+                // WHY IT IS OVER: D3b closed green 2026-08-18 (run 5) and D3c
+                // before it; BOTH golden sets are frozen and committed (runtime
+                // main-* @c131692f, editor editor-* @db648b4f). The condition
+                // this stance named has been met, so the argument flips exactly
+                // as the old comment said it would: InitCommon(true).
                 //
-                // Re-enabling it after D3b is one argument: InitCommon(true).
-                return InitCommon(/*installTap=*/false);
+                // WHAT IT COST TO LEAVE IT ONE CHECKPOINT TOO LONG, recorded so
+                // the next time-boxed stance carries an expiry that is CHECKED:
+                // the tap is the ONLY route by which mouse BUTTON events reach
+                // this context (imgui_impl_sdl3 turns SDL_EVENT_MOUSE_BUTTON_*
+                // into AddMouseButtonEvent; nothing polls button state), and
+                // this is the editor's PRIMARY context -- its whole chrome, not
+                // just the HUD. So a --nri-graph editor was completely
+                // unclickable: menus, panels, viewport pick, gizmo, all of it.
+                // No headless gate could see it (ArcaneTests never drives a
+                // real cursor) and no golden could either (a golden run has no
+                // input at all); it took the D3 drive checklist's first human
+                // click to surface. That is precisely what that checklist is
+                // for -- see the Phase 3 milestone record.
+                return InitCommon(/*installTap=*/true);
             }
 
             void BeginFrame() override

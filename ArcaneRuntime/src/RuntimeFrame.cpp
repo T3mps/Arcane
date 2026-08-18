@@ -482,13 +482,13 @@ void RenderNvrhi(FrameIo& io)
 // The HUD runs here too as of Task 12, from the same ImGui frame the
 // NVRHI path renders -- see the block below.
 //
-// WHAT THIS PATH STILL DOES NOT DO, named so it stays a known gap:
-// ImGui INPUT. The HUD draws and does not respond, and since the
-// landing that is a DELIBERATE gate rather than a topology accident --
-// ImGuiLayer::CreateForGraph withholds the SDL event tap so a drag
-// cannot move the HUD and silently rewrite the shared imgui.ini the
-// NVRHI baselines were captured under. Re-enabling it is one argument
-// in ImGuiLayer.cpp, after desk checkpoint D3b's compares.
+// ImGui INPUT WORKS ON THIS PATH AGAIN (D3 exit, 2026-08-18). It was a
+// named gap through the landing: ImGuiLayer::CreateForGraph withheld the
+// SDL event tap so a drag could not move the HUD and silently rewrite
+// the shared imgui.ini the NVRHI baselines were captured under. That
+// stance was time-boxed to desk checkpoint D3b's compares; D3b closed
+// green with both golden sets frozen, so InitForGraph installs the tap
+// again and the HUD responds. See ImGuiLayer.cpp for the full account.
 // (The Phase-2 texture gaps are CLOSED: NriTextureCache makes a span's
 // and a material's declared images resident on this device -- Task 2.)
 // The SIM half (FixedUpdate/Update) is untouched and runs identically.

@@ -2917,14 +2917,18 @@ namespace Arcane::Editor
     // frame away -- which is what lets the node copy the geometry at RECORD
     // time (NriGraphContext::FrameDesc::imgui).
     //
-    // ---- WHAT IS INTERACTIVE, AND WHAT IS NOT ----------------------------
-    // This chrome IS the editor UI, so it is interactive by definition, and
-    // that is not the stance ImGuiLayer::CreateForGraph withholds the SDL event
-    // tap for -- that stance is about the RUNTIME's HUD (an accidental drag
-    // there would move the HUD in the shared imgui.ini and rewrite the very
-    // `full` baseline checkpoint D3b compares against). It costs the graph-mode
-    // editor its input until that tap is restored, which is a known gap of
-    // Task 6's stance rather than of this frame.
+    // ---- WHAT IS INTERACTIVE ---------------------------------------------
+    // This chrome IS the editor UI, so it is interactive by definition -- and
+    // as of D3 exit (2026-08-18) it actually is again. Task 6's stance withheld
+    // the SDL event tap on the graph flavor for the RUNTIME's HUD (an
+    // accidental drag there would move the HUD in the shared imgui.ini and
+    // rewrite the very `full` baseline checkpoint D3b compares against), but
+    // the tap is this context's ONLY source of mouse BUTTON events, so the
+    // collateral was total: the graph-mode editor could not be clicked AT ALL
+    // -- menus, panels, viewport pick, gizmo. It was never a property of this
+    // frame, and the first human click of the D3 drive checklist is what
+    // surfaced it. D3b closed with both golden sets frozen, so InitForGraph
+    // installs the tap again (ImGuiLayer.cpp).
     //
     // ---- THE HEARTBEAT ---------------------------------------------------
     // Published by NriGraphContext::RenderFrame itself, after the present and

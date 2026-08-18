@@ -71,16 +71,18 @@
 // class destroys, resizes or re-titles the window -- it only reads its native
 // handle at swapchain create, and Resize() is driven by the host's pump.
 //
-// THE HUD IS DRAWN BUT DELIBERATELY NOT INTERACTIVE on a --nri-graph run.
-// Through Phase 2 that was an accident of the two-window topology (the ImGui
-// event tap sat on the host window while the user's events went to the
-// vehicle's). One window makes it a CHOICE, and it is kept until desk
-// checkpoint D3b's compares are done for the load-bearing half of the old
+// THE HUD IS INTERACTIVE AGAIN on a --nri-graph run (D3 exit, 2026-08-18).
+// Through Phase 2 its non-interactivity was an accident of the two-window
+// topology (the ImGui event tap sat on the host window while the user's events
+// went to the vehicle's). One window made it a CHOICE, time-boxed to "until
+// desk checkpoint D3b's compares are done" for the load-bearing half of the old
 // reason: an interactive HUD can be DRAGGED, ImGui persists window placement
 // per exe dir in imgui.ini, and the graph path and the NVRHI path share that
 // file -- so one drag on a graph run would move the HUD on the NVRHI path too,
-// i.e. would change the very `full` baseline D3b compares against. The gate is
-// ImGuiLayer::CreateForGraph withholding the event tap; see ImGuiLayer.cpp.
+// i.e. would change the very `full` baseline D3b compares against. D3b closed
+// green and both golden sets are frozen (@c131692f, @db648b4f), so the box
+// closed and ImGuiLayer::InitForGraph installs the tap again -- read the block
+// there for what leaving it one checkpoint too long actually cost.
 //
 // The HUD's DISPLAY SIZE now needs no lockstep at all, which is the other half
 // of the landing: ImGui_ImplSDL3_NewFrame reads the window the platform
