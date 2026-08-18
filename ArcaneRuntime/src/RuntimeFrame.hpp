@@ -1,9 +1,11 @@
 #pragma once
 // RuntimeFrame: RuntimeApp::MainLoop's frame BODY, extracted verbatim at NRI
-// Phase 3 Task 4 (mechanical, floor-preserving; see
-// docs/superpowers/sdd/2026-08-14-nri-phase3-host-integration/task-4-brief.md
-// and task-4-report.md for the exact line-range mapping) and UNIFIED at Task 6
-// -- the landing, where `--nri-graph` became one device and one window.
+// Phase 3 Task 4 (mechanical, floor-preserving) and UNIFIED at Task 6 -- the
+// landing, where `--nri-graph` became one device and one window. The task
+// brief and report that carried the exact line-range mapping were EPHEMERAL
+// SDD artifacts (gitignored, deleted at phase close, 2026-08-18); the phase's
+// surviving account is the milestone record at the tail of
+// docs/plans/2026-08-14-nri-phase3-host-integration.md.
 //
 // MainLoop keeps: the pre-loop setup (locals, the --nri-graph render-half
 // boot + window reveal, the golden warm-up), the while/if-else SKELETON that
