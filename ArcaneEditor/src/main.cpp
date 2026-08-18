@@ -100,8 +100,9 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 // The table above is exhaustive about EXIT CODES; this is the separate,
 // easily-confused question of FLAGS, and it is called out because HostConfig
 // is shared by both hosts, so a flag the editor parses is not automatically a
-// flag the editor DOES anything with. As of the whole-branch review (I4):
-//   --project/--plugin/--scene/--frames/--backend/--vsync/--perf  -- honoured.
+// flag the editor DOES anything with. As of the whole-branch review (I4),
+// corrected at D3 exit (2026-08-18 -- `--perf` was listed honoured and is not):
+//   --project/--plugin/--scene/--frames/--backend/--vsync  -- honoured.
 //   --screenshot        -- honoured (both render arms) since the fix wave; it
 //                          captures the VIEWPORT panel's texture, not the
 //                          editor window, exactly as --golden-* does here.
@@ -116,6 +117,22 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          latch the flag on an offscreen (viewport) context
 //                          for that reason -- passing it here is a no-op, not a
 //                          second pick mechanism.
+//   --perf              -- PARSED AND INERT ON THIS HOST, and always has been.
+//                          EditorApp constructs FramePerf m_perf(m_config.perf)
+//                          and never calls FrameStart/Add/Tick -- the ctor and
+//                          the member declaration are its ONLY references in
+//                          this tree, so no [PERF] line has ever been emitted
+//                          here by any build. The runtime drives the same class
+//                          from RuntimeFrame.cpp (Tick is the sole emitter).
+//                          WAIVED rather than wired at D3 exit: FramePerf's
+//                          seven fixed buckets (sim/rec/end/tone/imgui/present/
+//                          poll) do not map onto this host's 19-phase frame,
+//                          and no pre-port editor baseline exists in any commit
+//                          -- so the number could never have proven
+//                          non-regression, only stated an absolute. Plan item 6
+//                          ("--perf on both hosts' graph modes") is therefore
+//                          runtime-satisfied, editor-waived; it is the FOURTH
+//                          amendment the Phase 3 milestone record carries.
 // =============================================================================
 int main(int argc, char** argv)
 {
