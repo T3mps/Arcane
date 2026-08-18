@@ -36,37 +36,34 @@
 
 namespace Arcane::Editor
 {
-    // BOTH ARMS AS OF NRI PHASE 3 TASK 8 -> 11. Task 8 left this NVRHI-only
-    // and said why it was safe mid-phase (a graph-mode editor presented no
-    // chrome and had no event tap, so nothing could open a document); Task 10
-    // gave it chrome, and this is the task that owes the rest.
+    // NVRHI ARM DELETED (NRI Phase 5a, Task 6). Task 8 (NRI Phase 3) left the
+    // two Device() reads GATED on GraphMode() -- on the graph flavor
+    // GpuContext::Device() ARC_ASSERTed and handed back null in an optimized
+    // build, which would have been a loud crash the moment a user
+    // double-clicked a material -- and Task 10 gave it chrome, filling the
+    // graph seam (nriDevice/hostConfig/chromeHud) instead: the document
+    // builds its own small NriGraphContext::CreateOffscreen over the
+    // process's one device. GpuContext has built no Device()/Shaders() at
+    // all since NRI Phase 5a, Task 6 deleted them, so `device`/`shaders` are
+    // simply always null now (the graph seam below is always what a document
+    // actually uses).
     //
-    // The two Device() reads are now GATED rather than unconditional -- on the
-    // graph flavor GpuContext::Device() ARC_ASSERTs and then hands back null in
-    // an optimized build, which is a loud crash the moment a user
-    // double-clicks a material. In their place the graph seam
-    // (nriDevice/hostConfig/chromeHud) is filled, and the document builds its
-    // own small NriGraphContext::CreateOffscreen over the process's one device.
-    // Neither arm's fields are ever both set: `device`+`shaders` is the NVRHI
-    // supply, the three below are the graph supply, and every consumer gates on
-    // exactly one of them.
-    //
-    // `backend` is filled on BOTH arms and from different sources, the same
-    // substitution UpdateWindowTitle and RuntimeApp::StageSpriteTables make:
-    // the graph flavor has no RenderDevice to ask, and m_config.backend is by
-    // construction the value GpuContext::Create would have passed into it.
+    // `backend` has no RenderDevice to ask either, so it reads the config --
+    // the same substitution UpdateWindowTitle and RuntimeApp::
+    // StageSpriteTables make (m_config.backend is by construction the value
+    // GpuContext::Create would have passed into a RenderDeviceDesc).
     Arcane::Editor::DocServices EditorApp::MakeDocServices()
     {
         Arcane::Editor::DocServices s;
         const bool graph = GraphMode();
-        s.device   = graph ? nullptr : m_gpu->Device().Nvrhi();
-        s.shaders  = graph ? nullptr : &m_gpu->Shaders();
+        s.device   = nullptr;
+        s.shaders  = nullptr;
         s.compiler = m_shaderCompiler.get();
         s.sources  = &m_shaderSources;
         s.runtime  = &*m_runtime;
         s.undo     = m_undo ? &*m_undo : nullptr;
         s.clock    = &m_editorClock;
-        s.backend  = graph ? m_config.backend : m_gpu->Device().Backend();
+        s.backend  = m_config.backend;
         if (graph && m_graphChrome)
         {
             // THE PROCESS'S ONE DEVICE, owned by the chrome context (Task 6):
@@ -726,12 +723,11 @@ namespace Arcane::Editor
             teardown.run = [&]
             {
                 ResetPerProjectState();
-                // The two arms' idles. The NVRHI one is untouched -- one
-                // device, one waitForIdle, exactly where it always stood.
-                if (GraphMode())
-                    TeardownGraphForSwitch(keepViewportW, keepViewportH);
-                else
-                    m_gpu->Device().Nvrhi()->waitForIdle();
+                // The NVRHI idle this used to fall back to on `!GraphMode()`
+                // is deleted (NRI Phase 5a, Task 6: GpuContext::Device() is
+                // gone) -- GpuContext has built no NVRHI device to idle at
+                // all, so that arm was already unreachable.
+                TeardownGraphForSwitch(keepViewportW, keepViewportH);
                 m_plugin.reset();
                 return true;
             };
@@ -895,14 +891,17 @@ namespace Arcane::Editor
         // ===== AND NO PRESENTER AT ALL ON THE GRAPH ARM (Task 12) ===========
         // Two independent reasons, either of which alone decides it:
         //
-        //   1. IT CANNOT RUN THERE. BootPresenter::Present is NVRHI to the
-        //      core -- m_gpu.Imgui().Render into m_gpu.Swap().BeginFrame()'s
-        //      backbuffer through m_gpu.Cmd(), executed on
-        //      m_gpu.Device().Nvrhi(). Three of those four are "NVRHI half"
-        //      accessors that ARC_ASSERT and then hand back null in an
-        //      optimized build (GpuContext.hpp), because the graph flavor
-        //      never created a device, a swapchain or a command list. This is
-        //      the object that would have crashed the FIRST graph-mode switch.
+        //   1. IT CANNOT RUN THERE. BootPresenter::Present was NVRHI to the
+        //      core -- an ImGuiLayer::Render into a Swap().BeginFrame()
+        //      backbuffer through Cmd(), executed on Device().Nvrhi(). Those
+        //      four GpuContext accessors were "NVRHI half" accessors that
+        //      ARC_ASSERTed and handed back null in an optimized build,
+        //      because the graph flavor never created a device, a swapchain
+        //      or a command list; this would have been the object that
+        //      crashed the FIRST graph-mode switch. NRI Phase 5a, Task 6
+        //      deleted the accessors and the members behind them outright --
+        //      BootPresenter::Present is not reachable to assert any more,
+        //      it simply has nothing left to call.
         //
         //   2. IT MUST NOT RUN THERE. TeardownGraphForSwitch evicts the chrome
         //      backend's cache entry for the viewport output and then destroys
@@ -1373,42 +1372,23 @@ namespace Arcane::Editor
         // keeps "who armed it" and "who faulted it" the same object. Reached
         // from the menu item AND from the scheduled --crash-gpu N block at the
         // top of MainLoop, which is how this arm is scriptable at all.
-        if (GraphMode())
+        // NVRHI ARM DELETED, NOT PORTED (NRI Phase 5a, Task 6). This used to
+        // fall through, on `!GraphMode()`, to a lazily-built
+        // Arcane::GpuFaultInjector::Create(m_gpu->Device().Nvrhi(),
+        // m_gpu->Shaders()) fired on m_gpu->Cmd(). GpuContext has built no
+        // NVRHI device, ShaderLibrary or command list at all since this task
+        // deleted Device()/Shaders()/Cmd() along with the rest of its NVRHI
+        // half, so that arm no longer compiles; `GraphMode()` was already
+        // unconditional (the guard below always took it), so there is
+        // nothing left to fall through to and the guard is gone too.
+        if (!m_graphChrome)
         {
-            if (!m_graphChrome)
-            {
-                ARC_ERROR("Crash GPU: the graph vehicle is not up -- nothing dispatched");
-                return;
-            }
-            nri::Queue* const queue = m_graphChrome->Device().GraphicsQueue();
-            if (!queue || !Arcane::NriDiagnostics::FireFault(m_graphChrome->Device(), *queue))
-                ARC_ERROR("Crash GPU: fault injector unavailable -- nothing dispatched");
+            ARC_ERROR("Crash GPU: the graph vehicle is not up -- nothing dispatched");
             return;
         }
-
-        // Lazy build at the first click (see the member's comment). A failure
-        // here is loud and inert: the injector logs the failing step and the
-        // menu item simply does nothing, which is the honest outcome for a
-        // device that cannot run the dispatch.
-        if (!m_gpuFault)
-        {
-            m_gpuFault = Arcane::GpuFaultInjector::Create(m_gpu->Device().Nvrhi(),
-                                                          m_gpu->Shaders());
-            if (!m_gpuFault)
-            {
-                ARC_ERROR("Crash GPU: fault injector unavailable -- nothing dispatched");
-                return;
-            }
-        }
-
-        // The open/close/execute shape phases 11 and 12 use on this same command
-        // list (EditorAppFrame.cpp), minus the pass scope -- GpuFaultInjector
-        // opens its own, because the scope name is the payload here rather than
-        // a label (see GpuFaultInjector.hpp).
-        m_gpu->Cmd()->open();
-        m_gpuFault->Fire(m_gpu->Cmd());
-        m_gpu->Cmd()->close();
-        m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
+        nri::Queue* const queue = m_graphChrome->Device().GraphicsQueue();
+        if (!queue || !Arcane::NriDiagnostics::FireFault(m_graphChrome->Device(), *queue))
+            ARC_ERROR("Crash GPU: fault injector unavailable -- nothing dispatched");
     }
 #endif
 }

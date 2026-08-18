@@ -52,17 +52,21 @@ namespace
     // material globals, the scene camera's fit, the batcher's Begin -- asks
     // HERE, so the two recorders cannot end up fitted to two different
     // rectangles. It is one rectangle by construction now: there is ONE
-    // window, and each mode has exactly one presentation surface tracking it.
+    // window, and the graph swapchain is its one presentation surface. There
+    // is no NVRHI canvas at all on this path, and the graph's own canvas is a
+    // TRANSIENT sized to this swapchain inside BuildFrame -- so the swapchain
+    // is the single source of truth, not a proxy for one.
     //
-    //   graph path : the NRI swapchain's extent. There is no NVRHI canvas at
-    //                all on this path, and the graph's own canvas is a
-    //                TRANSIENT sized to this swapchain inside BuildFrame --
-    //                so the swapchain is the single source of truth, not a
-    //                proxy for one.
-    //   NVRHI path : the canvas', exactly as before. GpuContext::OnResize
-    //                sizes it from the swapchain's ACTUAL extent, which is
-    //                what every pre-Task-6 caller of Cnv().Width() was
-    //                reading.
+    // `if (io.graph)` survives here rather than being collapsed to an
+    // unconditional read: `io.graph` is unconditional as of Phase 5a Task 2b
+    // (the same invariant `if (!io.graph)`/`if (io.graph)` express throughout
+    // this file), and Task 11 owns collapsing that guard repo-wide in one
+    // pass. What NRI Phase 5a, Task 6 forced here is narrower: the dead
+    // NVRHI tail this function used to fall through to (`io.gpu->Cnv()`) no
+    // longer compiles at all, because GpuContext has built no NVRHI canvas
+    // since that task deleted Cnv() along with the rest of its NVRHI half --
+    // so the tail is gone rather than ported to an accessor that cannot
+    // compile.
     void FrameExtent(const Arcane::RuntimeFrame::FrameIo& io,
                      std::uint32_t& width, std::uint32_t& height)
     {
@@ -72,8 +76,6 @@ namespace
             height = io.graph->Swap().Height();
             return;
         }
-        width  = io.gpu->Cnv().Width();
-        height = io.gpu->Cnv().Height();
     }
 }
 
@@ -125,11 +127,12 @@ bool PumpAndResize(FrameIo& io)
         // one surface, one extent. And GpuContext::OnResize on the graph
         // path resized a hidden NVRHI swapchain that no longer exists; it
         // was the heaviest device-level burst in the frame and it was
-        // aimed at a device this process does not create.
+        // aimed at a device this process does not create. The `else` arm
+        // that used to call it is deleted outright now (NRI Phase 5a,
+        // Task 6): GpuContext::OnResize itself is gone, along with the rest
+        // of the NVRHI half.
         if (io.graph)
             io.graph->Resize(events.width, events.height);
-        else
-            io.gpu->OnResize(events.width, events.height);
     }
     if (eventWindow.IsMinimized())
     {
@@ -199,15 +202,17 @@ void BuildHud(FrameIo& io)
     {
         ImGui::Begin("ArcaneRuntime");
         // The graph flavor has no RenderDevice to ask (NRI Phase 3, Task 6),
-        // so it reads the config instead. The two ALWAYS agree --
-        // GpuContext::Create passes exactly this value into
-        // RenderDeviceDesc::backend and each RenderDevice subclass returns the
-        // constant it was selected for -- so this is the same string either
-        // way and the `full` golden's HUD pixels are unchanged. Written as a
-        // gate rather than as "just read the config" so the NVRHI arm's own
-        // statement is literally the one the baselines were captured with.
-        ImGui::Text("Backend: %s", Arcane::ToString(io.graph ? io.config.backend
-                                                            : io.gpu->Device().Backend()));
+        // so it reads the config instead. This used to be a `io.graph ? ... :
+        // io.gpu->Device().Backend()` ternary kept so the NVRHI arm's own
+        // statement was literally the one the `full` golden's baseline HUD
+        // pixels were captured with; GpuContext has built no RenderDevice at
+        // all since NRI Phase 5a, Task 6 deleted Device(), so there is no
+        // NVRHI arm left for that ternary to keep faith with, and the string
+        // is unchanged either way (the two always agreed -- GpuContext::
+        // Create passed exactly this config value into RenderDeviceDesc::
+        // backend, and each RenderDevice subclass returned the constant it
+        // was selected for).
+        ImGui::Text("Backend: %s", Arcane::ToString(io.config.backend));
         ImGui::Text("Plugin gen: %u", io.plugin->Generation());
         const Arcane::Batch2DStats s = io.gpu->Batch().Stats();
         ImGui::Text("Quads: %u  Draws: %u", s.quads, s.drawCalls);
@@ -221,57 +226,19 @@ void BuildHud(FrameIo& io)
 
 void PrepareFrame(FrameIo& io)
 {
-    // The NVRHI backbuffer, acquired only on the NVRHI path -- the graph
-    // acquires its own inside Execute(), as late as possible, and never
-    // touches this swapchain (which, since Task 6, does not exist on that
-    // path at all).
+    // THE NVRHI BACKBUFFER ACQUIRE AND THE SHADERLIBRARY HOT-RELOAD POLL ARE
+    // BOTH DELETED, NOT PORTED (NRI Phase 5a, Task 6). Both used to live
+    // inside an `if (!io.graph)` block -- unreachable since `io.graph` became
+    // unconditional at Phase 5a Task 2b, and left standing through Tasks 2b-5
+    // because nothing yet forced their deletion (Swapchain and ShaderLibrary
+    // both still existed). GpuContext has built neither a Swapchain nor a
+    // ShaderLibrary since this task deleted Swap()/Shaders() along with the
+    // rest of its NVRHI half, so the two blocks no longer compile and are
+    // gone. io.backbuffer simply stays null now (its only remaining reader,
+    // CaptureTail, only ever read it on the NVRHI arm, which is gone too).
+    // Task 11 still owns collapsing the `if (io.graph)` guards themselves,
+    // repo-wide.
     io.backbuffer = nullptr;
-    if (!io.graph)
-    {
-        io.backbuffer = io.gpu->Swap().BeginFrame();
-        if (!io.backbuffer)
-        {
-            // No backbuffer this frame: still balance the BeginFrame BuildHud
-            // just made with an EndFrame so ImGui's assert (double-Begin)
-            // doesn't fire next iteration.
-            //
-            // Deliberately the BARE call, not ImGuiLayer::EndFrameDiscard:
-            // this branch is NVRHI-only (it is inside `if (!io.graph)`,
-            // unreachable since `io.graph` is unconditional as of Phase 5a
-            // Task 2b). It used to be the regression floor RenderNvrhi's
-            // baselines were captured against -- NRI Phase 5a, Task 4 deleted
-            // RenderNvrhi outright (see this file's header comment), so there
-            // is no longer a baseline this statement is keeping faith with;
-            // it is simply unreached, dead code, left as-is because deleting
-            // it is not forced by anything this task removed (Swapchain
-            // survives) and collapsing `if (!io.graph)` guards repo-wide is
-            // Task 11's job. The pinned variant is the graph arm's, where the
-            // context-theft hazard is the Phase-2 carry Task 6 closed.
-            ImGui::EndFrame();
-            io.skipFrame = true;
-            return;
-        }
-    }
-
-    // Hot reload: poll shaders once a second; pipeline caches rebuild lazily.
-    //
-    // NVRHI-ONLY, and by absence rather than by choice: the graph path has no
-    // ShaderLibrary (GpuContext's graph flavor builds none). It reads the same
-    // offline artifacts through NriGraphContext::ShaderBytecode, from the same
-    // ShaderLibrary::ResolveFlavorDir directory -- but caches them for the
-    // vehicle's lifetime, because NriPipelineCache's fill contract holds SPANS
-    // into those bytes. Hot-reloading fixed-function shaders on the graph path
-    // is its own arc; MATERIAL shaders (the ones a designer actually re-saves)
-    // hot-reload on both paths through the resolver's Refresh below.
-    if (!io.graph)
-    {
-        const auto now0 = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(now0 - io.lastShaderPoll).count() >= 1.0)
-        {
-            io.gpu->Shaders().Poll();
-            io.lastShaderPoll = now0;
-        }
-    }
 
     // Scene asset resolution, BEFORE the batcher's Begin and before
     // SubmitRender: the drain inside registers compiled materials with the
@@ -316,7 +283,9 @@ void PrepareFrame(FrameIo& io)
 // two recorders. End() is deliberately NOT called on this path: it is
 // the NVRHI recorder, and calling it would need a target this path does
 // not have. Since Task 6 that batcher is DEVICE-LESS by construction
-// (GpuContext::CreateForGraph), so End() would refuse anyway.
+// (GpuContext::Create, renamed from CreateForGraph at NRI Phase 5a,
+// Task 6, once it became GpuContext's only factory), so End() would
+// refuse anyway.
 //
 // The scene POST CHAIN runs here too as of Task 10, from the same
 // compiled bytes the NVRHI chain was built from -- one node per pass,
@@ -573,16 +542,16 @@ bool CaptureTail(FrameIo& io)
 
         std::uint32_t w = 0, h = 0;
         std::vector<unsigned char> actual;
-        const bool read =
-            io.graph
-                // The graph's readback NODE ran inside this frame's own
-                // command buffer (declared up front, because a graph
-                // capture is a node and not an afterthought) --
-                // ReadCapture maps it and normalizes BGRA -> RGBA, since
-                // NRI resolves the swapchain's channel order rather than
-                // letting us pin it.
-                ? io.graph->ReadCapture(w, h, actual)
-                : Arcane::ReadTexturePixels(io.gpu->Device().Nvrhi(), io.backbuffer, w, h, actual);
+        // The graph's readback NODE ran inside this frame's own command
+        // buffer (declared up front, because a graph capture is a node and
+        // not an afterthought) -- ReadCapture maps it and normalizes
+        // BGRA -> RGBA, since NRI resolves the swapchain's channel order
+        // rather than letting us pin it. This used to be a `io.graph ? ... :
+        // Arcane::ReadTexturePixels(io.gpu->Device().Nvrhi(), ...)` ternary;
+        // GpuContext has built no RenderDevice to read from since NRI Phase
+        // 5a, Task 6 deleted Device(), so there is no NVRHI arm left for the
+        // ternary to choose between.
+        const bool read = io.graph->ReadCapture(w, h, actual);
 
         if (!read)
         {

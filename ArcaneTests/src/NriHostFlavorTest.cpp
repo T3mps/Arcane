@@ -2,10 +2,14 @@
 // one-device flip introduced, exercised with NO graphics device of any kind.
 //
 // What is here:
-//   * GpuContext::CreateForGraph builds the device-less half and ONLY that
-//     half -- window, device-less Batcher2D, graph ImGuiLayer, input -- and
-//     answers GraphFlavor() true. That predicate is what every host branch
-//     gates on, so pinning it is pinning the boot split.
+//   * GpuContext::Create builds the device-less half -- window, device-less
+//     Batcher2D, graph ImGuiLayer, input -- and answers GraphFlavor() true.
+//     That predicate is what every host branch gates on, so pinning it is
+//     pinning the boot split. (NRI Phase 5a, Task 6 renamed this from
+//     CreateForGraph once it became the only factory GpuContext has --
+//     Device/Swap/Shaders/Cnv/Tone/Cmd/EnsurePost/FramebufferFor/OnResize
+//     and the NVRHI members behind them no longer exist at all, so there is
+//     no second half left to distinguish this one from.)
 //   * ImGuiLayer::Create pins its own context in BeginFrame and in
 //     RenderToDrawData/EndFrameDiscard even when another context was left
 //     current. That pin is the Phase-2 carry this task closes: the graph
@@ -17,17 +21,12 @@
 //     frame, and an unbalanced pair there is a HANG rather than a bad pixel.
 //
 // What is NOT here, and why:
-//   * The gated NVRHI accessors (Device/Swap/Shaders/Cnv/Tone/Cmd/...) cannot
-//     be exercised: they ARC_ASSERT, and a failing Mosaic assert calls
-//     std::abort() (Mosaic/Assert.hpp, FailFatal). The tree has no death-test
-//     idiom, so the pinned observable is GraphFlavor() -- the gate every call
-//     site is required to consult -- rather than the abort behind it.
 //   * NriGraphContext's borrowed-window mode needs a real device and a real
 //     swapchain; it is desk checkpoint D3b's, per the phase's no-GPU-in-session
 //     rule.
 //
-// Windows are created HIDDEN throughout (GpuContext::CreateForGraph does so
-// itself), so this runs on an agent without flashing windows.
+// Windows are created HIDDEN throughout (GpuContext::Create does so itself),
+// so this runs on an agent without flashing windows.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -47,7 +46,7 @@ TEST_CASE("nri landing: GpuContext's graph flavor builds the device-less half an
     Arcane::HostConfig cfg;
     cfg.backend = Arcane::GraphicsBackend::D3D12;   // never used: no device is created
 
-    auto gpu = Arcane::GpuContext::CreateForGraph(cfg);
+    auto gpu = Arcane::GpuContext::Create(cfg);
     REQUIRE(gpu != nullptr);
 
     // THE GATE every host call site branches on.
@@ -101,7 +100,7 @@ TEST_CASE("nri landing: the editor's graph-mode frame tail -- Begin then discard
     Arcane::HostConfig cfg;
     cfg.backend = Arcane::GraphicsBackend::D3D12;   // never used: no device is created
 
-    auto gpu = Arcane::GpuContext::CreateForGraph(cfg);
+    auto gpu = Arcane::GpuContext::Create(cfg);
     REQUIRE(gpu != nullptr);
     REQUIRE(gpu->GraphFlavor());
 

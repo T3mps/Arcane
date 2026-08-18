@@ -287,22 +287,23 @@ namespace Arcane::Editor
     {
         // The whole platform/render/input stack, booted in order. Owned by m_gpu and
         // declared BEFORE m_runtime/m_plugin in EditorApp -- so it destructs AFTER
-        // them: the render resources it owns (window/device/swapchain/shaders/canvas/
-        // batcher/tonemap/imgui/input + commandList/framebuffers) must outlive runtime
-        // + plugin.
+        // them: the render resources it owns (window/batcher/imgui/input -- the
+        // NVRHI half of this list, device/swapchain/shaders/canvas/tonemap/
+        // commandList/framebuffers, is gone as of NRI Phase 5a, Task 6) must
+        // outlive runtime + plugin.
         //
         // THE BOOT-PATH SPLIT (NRI Phase 3, Task 8), mirroring
         // RuntimeApp::StageGpuCore line for line. As of Phase 5a (Task 2b) the
         // NRI frame graph is the ONLY render path, unconditionally, in every
         // configuration including Dist: NO NVRHI DEVICE IS EVER CREATED in
-        // this host. The graph flavor builds the window, a device-less
-        // Batcher2D, the graph ImGuiLayer and the input stack, and Main() then
+        // this host. GpuContext::Create builds the window, a device-less
+        // Batcher2D, the ImGuiLayer and the input stack, and Main() then
         // builds the NriGraphContext pair that owns the process's ONLY
         // graphics device -- the chrome one over this same window, the
-        // viewport one offscreen on its device. GpuContext::Create's NVRHI arm
-        // is unreachable from here now; it stays only until Tasks 4-11 delete
-        // NVRHI outright.
-        m_gpu = GpuContext::CreateForGraph(m_config);
+        // viewport one offscreen on its device. GpuContext has had no NVRHI
+        // arm at all since NRI Phase 5a, Task 6 collapsed it (the factory was
+        // called CreateForGraph before that task renamed it).
+        m_gpu = GpuContext::Create(m_config);
         if (!m_gpu)
         {
             ARC_ERROR("Arcane Editor: GPU context create failed");
@@ -399,11 +400,13 @@ namespace Arcane::Editor
         // ~2x (a clean box). A much larger texture would leave ImGui doing a >2x single-tap
         // minify -> the aliased outline the raw 550px source produced.
         //
-        // NVRHI ARM ONLY: LoadDisplayTexture builds an nvrhi::TextureHandle
-        // and there is no NVRHI device on the graph flavor.
+        // NOT SET HERE. This used to be an NVRHI-only LoadDisplayTexture call,
+        // gated `if (!GraphFlavor())`; GpuContext has had no NVRHI device to
+        // build that texture on since NRI Phase 5a, Task 6, so the call is
+        // gone rather than ported to an accessor that no longer exists.
         //
-        // THE GRAPH ARM GETS THE SAME MARK FROM ELSEWHERE (NRI Phase 3, Task
-        // 11) -- CreateGraphVehicles decodes the same PNG at the same maxSize
+        // THE MARK COMES FROM ELSEWHERE INSTEAD (NRI Phase 3, Task 11) --
+        // CreateGraphVehicles decodes the same PNG at the same maxSize
         // through LoadDisplayPixels and uploads it through the chrome
         // context's NriTextureCache. It cannot happen HERE because that
         // context does not exist yet: this stage runs inside boot, and the
@@ -411,8 +414,6 @@ namespace Arcane::Editor
         // The toolbar reads whichever of the two is set (ToolbarLogoTextureId),
         // and 0 -- neither -- is still the degraded-but-never-broken "no mark"
         // path a missing PNG takes.
-        if (!m_gpu->GraphFlavor())
-            m_toolbarLogo = Arcane::LoadDisplayTexture(m_gpu->Device().Nvrhi(), kLogoPath, 64);
 
         // Editor shell: enable ImGui docking (the placeholder single window becomes
         // a dockspace + panels in MainLoop) and route the engine logger into the
@@ -463,10 +464,10 @@ namespace Arcane::Editor
         // still renders. A plugin building against a null device must refuse
         // loudly, the way every engine NVRHI factory used to (OffscreenCanvas::
         // Create among them, before NRI Phase 5a, Task 4 deleted it).
-        if (m_gpu->GraphFlavor())
-            m_runtime->SetRenderResources(nullptr, nullptr);
-        else
-            m_runtime->SetRenderResources(m_gpu->Device().Nvrhi(), &m_gpu->Shaders());
+        // (No NVRHI device to hand over instead: GpuContext has built none at
+        // all since NRI Phase 5a, Task 6 deleted Device()/Shaders() along
+        // with the rest of its NVRHI half.)
+        m_runtime->SetRenderResources(nullptr, nullptr);
 
         // The hosted plugin draws its debug UI into its OWN "game" ImGui context,
         // composited INTO the viewport texture (see MainLoop), instead of the
@@ -764,14 +765,16 @@ namespace Arcane::Editor
             // PostChainCache publishes its PostChainDesc without building an
             // NVRHI chain, and the BACKEND -- which selects the shader flavor
             // the compiles target -- comes from the config because there is
-            // no device to ask. The two values are always equal
-            // (GpuContext::Create passes exactly this config field into
-            // RenderDeviceDesc::backend); written as a gate so the NVRHI
-            // arm's ternaries keep the literal statement they have always had
-            // -- GraphFlavor() collapse is Task 11's job, not this one's.
+            // no device to ask (GpuContext::Create passes exactly this config
+            // field into RenderDeviceDesc::backend, so the two values were
+            // always equal anyway).
             rs.batcher  = &m_gpu->Batch();
-            rs.device   = m_gpu->GraphFlavor() ? nullptr : m_gpu->Device().Nvrhi();
-            rs.backend  = m_gpu->GraphFlavor() ? m_config.backend : m_gpu->Device().Backend();
+            // No NVRHI device to ask for either value any more: GpuContext
+            // has built none since NRI Phase 5a, Task 6 deleted Device(),
+            // so the GraphFlavor() ternaries this used to be are gone --
+            // there is no NVRHI arm left for them to choose between.
+            rs.device   = nullptr;
+            rs.backend  = m_config.backend;
             rs.compiler = m_shaderCompiler.get();
             rs.sources  = &m_shaderSources;
             // Open shader documents get first refusal on every drained result,
@@ -1120,18 +1123,17 @@ namespace Arcane::Editor
         // m_undo is built later in Init than the first title push; a session with no
         // command stack yet has nothing authored, so it reads as clean.
         const bool dirty = m_undo && m_scene.IsDirty(*m_undo);
-        // THE BACKEND NAME, from whichever source this flavor has. The graph
-        // arm has no RenderDevice to ask, so it reads the config -- the two are
-        // always equal (GpuContext::Create passes exactly this field into
-        // RenderDeviceDesc::backend), the same substitution
-        // RuntimeApp::StageSpriteTables makes for the resolver's shader flavor.
-        // Written as a gate so the NVRHI arm keeps the literal statement it has
-        // always had, title text included.
+        // THE BACKEND NAME: there is no RenderDevice to ask -- GpuContext has
+        // built none since NRI Phase 5a, Task 6 deleted Device() -- so this
+        // reads the config, the same substitution RuntimeApp::
+        // StageSpriteTables makes for the resolver's shader flavor. This used
+        // to be a `GraphMode() ? ... : Arcane::ToString(m_gpu->Device().
+        // Backend())` ternary kept so the NVRHI arm's own statement was
+        // literally the one the title text had always had; that arm is gone,
+        // so the ternary is too (the two values were always equal anyway).
         std::string title = EditorTitle(m_runtime ? m_runtime->CurrentProject() : nullptr,
                                         m_scene.DisplayName(), dirty,
-                                        !m_gpu             ? ""
-                                        : GraphMode()      ? Arcane::ToString(m_config.backend)
-                                                           : Arcane::ToString(m_gpu->Device().Backend()));
+                                        !m_gpu ? "" : Arcane::ToString(m_config.backend));
         if (title == m_windowTitle)
             return;
         m_windowTitle = std::move(title);
@@ -2133,19 +2135,14 @@ namespace Arcane::Editor
         // correct. See ShutdownGraphPath. A no-op on the NVRHI arm.
         ShutdownGraphPath();
 
-        // defensive: today Shutdown only runs after a successful Init, so m_gpu is non-null;
-        // the guard covers a future partial-init/destructor path.
-        //
-        // NVRHI ARM ONLY (NRI Phase 3, Task 8) -- the same gate
-        // RuntimeApp::Shutdown carries, for the same reason: the graph flavor
-        // has no NVRHI device to idle, and needs none. ShutdownGraphPath above
-        // has already destroyed both contexts (each idles the shared device and
-        // drains its own lane on the way out), so by this point BOTH arms are
-        // settled and nothing NRI is left for the members to unwind.
-        if (m_gpu && !m_gpu->GraphFlavor())
-        {
-            m_gpu->Device().Nvrhi()->waitForIdle();
-        }
+        // NVRHI ARM DELETED (NRI Phase 5a, Task 6: GpuContext::Device() is
+        // gone). This used to idle the NVRHI device on a defensive
+        // `!m_gpu->GraphFlavor()` guard that was already unconditionally
+        // false (GpuContext builds no NVRHI device at all) -- the same gate
+        // RuntimeApp::Shutdown carried, for the same reason. ShutdownGraphPath
+        // above has already destroyed both contexts (each idles the shared
+        // device and drains its own lane on the way out), so there is nothing
+        // left for this call to do.
         ARC_INFO("Arcane Editor exiting after {} frames", m_frameCount);
 
         // The member destructors then run (after Run returns + ~EditorApp), in
@@ -2153,10 +2150,11 @@ namespace Arcane::Editor
         //   m_plugin  -> ~PluginHost: Unload (TeardownLive -> ClearSystems +
         //                ResetRegistry) while the plugin DLL is STILL mapped.
         //   m_runtime -> ~Runtime: destroys JobSystem + the now-empty Registry.
-        //   m_gpu     -> ~GpuContext: the render stack (command list + framebuffer
-        //                cache release their NVRHI handles before the device), window
-        //                LAST. So gpu outlives runtime + plugin exactly as ArcaneRuntime's did.
-        //                See GpuContext's header.
+        //   m_gpu     -> ~GpuContext: the render/input stack, window LAST (there
+        //                is no command list or framebuffer cache to release any
+        //                more -- NRI Phase 5a, Task 6 deleted GpuContext's NVRHI
+        //                half). So gpu outlives runtime + plugin exactly as
+        //                ArcaneRuntime's did. See GpuContext's header.
         // m_typeContext is intentionally NOT freed (heap-leaked, see Init).
     }
 

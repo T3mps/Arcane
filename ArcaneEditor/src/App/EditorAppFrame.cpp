@@ -294,15 +294,12 @@ namespace Arcane::Editor
             // --crash-gpu N: the same deliberate fault Build -> Diagnostics ->
             // Crash GPU fires, on a schedule, so the desk battery's editor items
             // can be SCRIPTED rather than clicked -- and so a flag both hosts
-            // parse is not silently inert in one of them. Here rather than at the
-            // menu-request site because this is the frame's provably safe point:
-            // m_gpu->Cmd() is idle before any render phase has opened it. Fires
-            // exactly once. HONOURED ON BOTH RENDER ARMS as of NRI Phase 3,
-            // Task 8 -- FireDeliberateGpuFault dispatches through
-            // NriDiagnostics::FireFault on the graph flavor, on its own
-            // command buffer, and this same top-of-frame point is safe there
-            // for the stronger reason that no graph frame has been declared
-            // yet either.
+            // parse is not silently inert in one of them. Here rather than at
+            // the menu-request site because this is the frame's provably safe
+            // point: FireDeliberateGpuFault dispatches through
+            // NriDiagnostics::FireFault on its own command buffer, and this
+            // top-of-frame point is safe because no graph frame has been
+            // declared yet. Fires exactly once.
             if (m_config.crashGpuFrame != 0 && !m_gpuFaultFired &&
                 m_frameCount >= m_config.crashGpuFrame)
             {
@@ -402,17 +399,17 @@ namespace Arcane::Editor
         // ONE resize, to whichever presentation surface this run has, and
         // strictly BETWEEN frames -- which the top of the loop structurally is
         // (RuntimeFrame::PumpAndResize carries the same pair for the same
-        // reason). GpuContext::OnResize on the graph flavor would resize an
-        // NVRHI swapchain that was never created; the CHROME context's
-        // swapchain is the surface bound to this window there. The VIEWPORT's
-        // offscreen output is NOT resized here at all -- it tracks the panel,
-        // not the window, and phase 8 owns it.
+        // reason). The CHROME context's swapchain is the surface bound to
+        // this window. The VIEWPORT's offscreen output is NOT resized here at
+        // all -- it tracks the panel, not the window, and phase 8 owns it.
+        // The `else` arm that used to call GpuContext::OnResize (an NVRHI
+        // swapchain resize -- the graph flavor never created one) is deleted
+        // outright now (NRI Phase 5a, Task 6): OnResize itself is gone, along
+        // with the rest of GpuContext's NVRHI half.
         if (events.resized)
         {
             if (m_graphChrome)
                 m_graphChrome->Resize(events.width, events.height);
-            else
-                m_gpu->OnResize(events.width, events.height);
         }
         if (m_gpu->Win().IsMinimized())
         {
@@ -2082,12 +2079,12 @@ namespace Arcane::Editor
 #if !defined(ARCANE_DIST)
         // Build -> Diagnostics -> Crash GPU: fired RIGHT HERE, mid-ImGui-pass,
         // rather than deferred to a frame boundary the way the scene/project
-        // requests above are. It needs no teardown and no dialog, and the one
-        // resource it touches -- m_gpu->Cmd() -- is idle at this point in the
-        // frame (phases 11/12 opened, closed and executed it already; the ImGui
-        // pass does not reach for it again until PresentFrame). Deferring would
-        // also make the capture LESS representative rather than more: a device
-        // lost while the host is mid-frame is exactly the shape this arc exists
+        // requests above are. It needs no teardown and no dialog, and this
+        // point in the frame is safe for it: no graph frame has been declared
+        // yet, so FireDeliberateGpuFault's own one-off command buffer cannot
+        // collide with anything already recording. Deferring would also make
+        // the capture LESS representative rather than more: a device lost
+        // while the host is mid-frame is exactly the shape this arc exists
         // to survive.
         if (menuReq.crashGpu)
             FireDeliberateGpuFault();
@@ -2786,10 +2783,11 @@ namespace Arcane::Editor
     // ---- THE HEARTBEAT ---------------------------------------------------
     // Published by NriGraphContext::RenderFrame itself, after the present and
     // on Presented frames only (NriDiagnostics::PublishHeartbeat with the
-    // swapchain's COMPLETED fence value -- Task 5). It is the graph path's 1:1
-    // replacement for the NVRHI arm's m_gpu->FrameProgress().EndFrame() below,
-    // and it needs no line here: this call reaches it. Adding a second publish
-    // would report progress twice for one frame.
+    // swapchain's COMPLETED fence value -- Task 5). It used to be the graph
+    // path's 1:1 replacement for the NVRHI arm's m_gpu->FrameProgress().
+    // EndFrame(); that arm (and FrameProgress() itself) is gone as of NRI
+    // Phase 5a, Task 6, so this is simply the only heartbeat left, and it
+    // needs no line here: this call reaches it.
     bool EditorApp::PresentChromeFrame()
     {
         // FIRST, and unconditionally: the ImGui frame DrawEditorUi began owes
@@ -2830,60 +2828,34 @@ namespace Arcane::Editor
         }
         if (outcome == Arcane::NriGraphContext::FrameOutcome::Skipped)
         {
-            // Routine, and exactly what the NVRHI arm's no-backbuffer branch
-            // below is: a zero-sized surface or an OUT_OF_DATE acquire, both
-            // self-healing on the next resize event. FALSE for the same reason
-            // that branch returns false -- no frame was presented, so nothing
-            // downstream should count one. The sleep matches
-            // RuntimeFrame::RenderGraph's: without a presented frame there is
-            // no pacing wait, and a zero-sized window would otherwise spin.
+            // Routine: a zero-sized surface or an OUT_OF_DATE acquire, both
+            // self-healing on the next resize event. FALSE -- no frame was
+            // presented, so nothing downstream should count one. The sleep
+            // matches RuntimeFrame::RenderGraph's: without a presented frame
+            // there is no pacing wait, and a zero-sized window would
+            // otherwise spin.
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             return false;
         }
         return true;
     }
 
-    // Phase 19: present. Returns false when the swapchain had no backbuffer, in
-    // which case MainLoop skips the rest of the frame -- exactly as the original
-    // `continue` did, so the plugin Poll + frame count below are skipped too.
+    // Phase 19: present.
+    //
+    // NVRHI ARM DELETED, NOT PORTED (NRI Phase 5a, Task 6). This function
+    // used to be `if (GraphMode()) return PresentChromeFrame(); <NVRHI
+    // backbuffer acquire, command-list clear, ImGuiLayer::Render (deleted at
+    // Task 5), submit, present, FrameProgress().EndFrame()>` -- already
+    // unreachable (GraphMode() has been unconditional since Phase 5a Task
+    // 2b) and left standing, like CompositeGameUi/RenderSelectionOutline
+    // just above, because Task 11 owns the GraphMode() collapse. GpuContext
+    // has built no Swapchain, command list or GpuFrameProgress since this
+    // task deleted Swap()/Cmd()/FrameProgress() along with the rest of its
+    // NVRHI half, so the tail no longer compiles at all; there is nothing
+    // left to guard, so the guard is gone too.
     bool EditorApp::PresentFrame()
     {
-        if (GraphMode())
-            return PresentChromeFrame();
-
-        nvrhi::ITexture* backbuffer = m_gpu->Swap().BeginFrame();
-        if (!backbuffer) { ImGui::EndFrame(); return false; }
-
-        m_gpu->Cmd()->open();
-        // F-8a phase 19 / F-8e: the one submit that happens in EVERY editor
-        // frame, in either mode.
-        {
-            Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:present");
-            // Clear the backbuffer directly (Arcane Editor's scene will live in a panel,
-            // so there is no scene->tonemap->backbuffer pass as in ArcaneRuntime).
-            m_gpu->Cmd()->clearTextureFloat(backbuffer, nvrhi::AllSubresources,
-                                            nvrhi::Color(0.06f, 0.06f, 0.08f, 1.0f));
-            // NRI Phase 5a, Task 5 deleted ImGuiLayer::Render(cmd, fb) along
-            // with the NVRHI renderer it drove. GraphMode() is unconditional
-            // (the `if (GraphMode()) return PresentChromeFrame();` guard
-            // above always takes it), so this whole tail is already
-            // unreachable -- see CompositeGameUi/RenderSelectionOutline just
-            // above for the same standing-no-op shape, left for Task 11's
-            // GraphMode() collapse rather than deleted piecemeal here.
-        }
-        m_gpu->Cmd()->close();
-        m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
-        m_gpu->Swap().Present();
-
-        // GPU-progress heartbeat (Task 7): after the frame's LAST submit, so a
-        // stamp cannot retire ahead of the work it is meant to follow. Placed
-        // in the success path only -- the early return above is a frame with no
-        // submits at all (a zero-sized window mid-resize), and stamping there
-        // would report progress the GPU was never asked to make. A host that
-        // stays in that state stops publishing entirely, which the watchdog
-        // reads as "not rendering" rather than as a stall.
-        m_gpu->FrameProgress().EndFrame();
-        return true;
+        return PresentChromeFrame();
     }
 
     // Phase 20: end of frame -- plugin hot-reload poll + the --frames N budget.

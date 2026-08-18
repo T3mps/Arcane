@@ -135,10 +135,12 @@ namespace Arcane::RuntimeFrame
         // one quit path PumpAndResize's own bool return does not cover.
         // MainLoop: `AdvanceSim(io); if (io.quit) break;`.
         bool quit = false;
-        // skipFrame: set by PumpAndResize (window minimized) or PrepareFrame
-        // (no NVRHI backbuffer this frame) -- both were a bare `continue;`
-        // back to the top of the original while loop. MainLoop checks it after
-        // each of those two calls and `continue`s in turn.
+        // skipFrame: set true by PumpAndResize on a minimized window (a bare
+        // `continue;` back to the top of the original while loop). It used to
+        // also be set by PrepareFrame on "no NVRHI backbuffer this frame";
+        // that arm is gone (NRI Phase 5a, Task 6 deleted GpuContext::Swap()),
+        // so PrepareFrame now only ever sets this false. MainLoop still
+        // checks it after both calls and `continue`s in turn.
         bool skipFrame = false;
     };
 
@@ -165,14 +167,15 @@ namespace Arcane::RuntimeFrame
     // once whichever way the frame goes.
     void BuildHud(FrameIo& io);
 
-    // The rest of the shared prep BOTH render arms depend on, in the order it
-    // has always run: (NVRHI-path only) backbuffer acquisition, the
-    // once-a-second shader hot-reload poll -- also NVRHI-only, since the graph
-    // path reads offline artifacts through NriGraphContext::ShaderBytecode and
-    // there is no ShaderLibrary to poll -- and the scene asset resolver's
-    // per-frame Refresh, which is what fills io.frameGlobals. Sets
-    // io.skipFrame true (and balances the ImGui frame BuildHud began with an
-    // EndFrame) when the NVRHI swapchain had no backbuffer this frame.
+    // What is left of the shared prep after NRI Phase 5a, Task 6: the scene
+    // asset resolver's per-frame Refresh, which is what fills
+    // io.frameGlobals. Used to also carry an NVRHI-only backbuffer acquire
+    // and an NVRHI-only once-a-second shader hot-reload poll (the graph path
+    // reads offline artifacts through NriGraphContext::ShaderBytecode and has
+    // no ShaderLibrary to poll); both were already unreachable and are gone
+    // now that GpuContext builds no Swapchain or ShaderLibrary at all.
+    // io.backbuffer is unconditionally reset to null; io.skipFrame is
+    // unconditionally cleared.
     void PrepareFrame(FrameIo& io);
 
     // The --nri-graph arm, which since Task 6 is the ONLY recorder in the

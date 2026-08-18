@@ -118,18 +118,21 @@ bool RuntimeApp::StageGpuCore(Arcane::HostBoot::BootContext& ctx)
 {
     // The whole platform/render/input stack, booted in order. Owned by m_gpu and
     // declared BEFORE m_runtime/m_plugin in RuntimeApp -- so it destructs AFTER them:
-    // the render resources it owns (window/device/swapchain/shaders/canvas/batcher/
-    // tonemap/imgui/input + commandList/framebuffers) must outlive runtime + plugin.
+    // the render resources it owns (window/batcher/imgui/input -- the NVRHI
+    // half of this list, device/swapchain/shaders/canvas/tonemap/commandList/
+    // framebuffers, is gone as of NRI Phase 5a, Task 6) must outlive runtime +
+    // plugin.
     //
     // THE BOOT-PATH SPLIT (NRI Phase 3, Task 6). As of Phase 5a (Task 2b) the
     // NRI frame graph is the ONLY render path, unconditionally, in every
-    // configuration including Dist: NO NVRHI DEVICE IS EVER CREATED. The
-    // graph flavor builds the window, a device-less Batcher2D, the graph
+    // configuration including Dist: NO NVRHI DEVICE IS EVER CREATED.
+    // GpuContext::Create builds the window, a device-less Batcher2D, the
     // ImGuiLayer and the input stack, and MainLoop then builds the
     // NriGraphContext that owns the process's ONLY graphics device over that
-    // same window. GpuContext::Create's NVRHI arm is unreachable from here
-    // now; it stays only until Tasks 4-11 delete NVRHI outright.
-    m_gpu = Arcane::GpuContext::CreateForGraph(m_config);
+    // same window. GpuContext has had no NVRHI arm at all since NRI Phase 5a,
+    // Task 6 collapsed it (the factory was called CreateForGraph before that
+    // task renamed it).
+    m_gpu = Arcane::GpuContext::Create(m_config);
     if (!m_gpu)
     {
         ARC_ERROR("ArcaneRuntime: GPU context create failed");
@@ -160,16 +163,15 @@ bool RuntimeApp::StageRenderBridge(Arcane::HostBoot::BootContext&)
     // headless host -> the plugin skips its GPU-resource creation.
     //
     // (nullptr, nullptr) IS THE GRAPH-MODE CONTRACT (NRI Phase 3, Task 6, plan
-    // reconciliation 7). There is no NVRHI device to hand over, and the Assets
-    // facade is deliberately left device-less by it: Assets::PixelsFor (Task 1)
-    // is the retained, device-FREE decode the graph's NriTextureCache uploads
-    // from, so a textured sprite still renders. What a plugin loses is
+    // reconciliation 7). There is no NVRHI device to hand over -- GpuContext
+    // has built none at all since NRI Phase 5a, Task 6 deleted the accessors
+    // (Device()/Shaders()) an NVRHI arm here would have needed -- and the
+    // Assets facade is deliberately left device-less by it: Assets::PixelsFor
+    // (Task 1) is the retained, device-FREE decode the graph's NriTextureCache
+    // uploads from, so a textured sprite still renders. What a plugin loses is
     // OffscreenCanvas::Create, which refuses loudly against a null device and
     // names the Phase-5 arc that gives it a graph-side answer.
-    if (m_gpu->GraphFlavor())
-        m_runtime->SetRenderResources(nullptr, nullptr);
-    else
-        m_runtime->SetRenderResources(m_gpu->Device().Nvrhi(), &m_gpu->Shaders());
+    m_runtime->SetRenderResources(nullptr, nullptr);
 
     // ABI v2: install the host's ImGui context + allocators on the Runtime BEFORE
     // the plugin loads. PluginHost::RefreshContext copies these into the EngineContext
@@ -323,18 +325,18 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
     Arcane::SceneRenderResolver::Services rs;
     rs.runtime  = &*m_runtime;
     rs.batcher  = &m_gpu->Batch();
-    // Device-less on the graph path, and the caches are built for it (NRI
-    // Phase 3, Task 2's severance): SpriteMaterialCache registers BYTES-ONLY
-    // materials with the device-less batcher, and PostChainCache publishes its
-    // PostChainDesc without building the NVRHI FullscreenMaterialChain. The
-    // BACKEND is still needed either way -- it selects the shader flavor the
-    // compiles target -- and on the graph path comes from the config, since
-    // there is no device to ask. The two values are always equal
-    // (GpuContext::Create passes exactly this config field into
-    // RenderDeviceDesc::backend); written as a gate so the NVRHI arm keeps the
-    // literal statement its frozen baselines were captured with.
-    rs.device   = m_gpu->GraphFlavor() ? nullptr : m_gpu->Device().Nvrhi();
-    rs.backend  = m_gpu->GraphFlavor() ? m_config.backend : m_gpu->Device().Backend();
+    // Device-less (NRI Phase 3, Task 2's severance): SpriteMaterialCache
+    // registers BYTES-ONLY materials with the device-less batcher, and
+    // PostChainCache publishes its PostChainDesc without building the NVRHI
+    // FullscreenMaterialChain. The BACKEND -- which selects the shader flavor
+    // the compiles target -- comes from the config, since there is no device
+    // to ask; GpuContext has built none since NRI Phase 5a, Task 6 deleted
+    // Device() along with the rest of its NVRHI half. This used to be a
+    // GraphFlavor() ternary against m_gpu->Device().Backend() so the NVRHI
+    // arm kept the literal statement its frozen baselines were captured
+    // with; that arm is gone, so the ternary is too.
+    rs.device   = nullptr;
+    rs.backend  = m_config.backend;
     rs.compiler = &m_shaderCompiler;
     rs.sources  = &m_shaderSources;
     // No consumeFirst: a standalone host has no open documents to give first
@@ -435,9 +437,10 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
 
 void RuntimeApp::MainLoop()
 {
-    // The reused command list + the lazy backbuffer-framebuffer cache live in
-    // m_gpu (m_gpu->Cmd() / m_gpu->FramebufferFor(bb)) so they release their
-    // NVRHI handles before the device, in m_gpu's teardown.
+    // The reused NVRHI command list and the lazy backbuffer-framebuffer cache
+    // this comment used to describe are gone (NRI Phase 5a, Task 6:
+    // GpuContext::Cmd()/FramebufferFor() no longer exist) -- there is no
+    // NVRHI device left in this process for them to release handles before.
 
     auto simPrev       = std::chrono::steady_clock::now();
     auto lastFrameTime = simPrev;
@@ -549,13 +552,16 @@ void RuntimeApp::MainLoop()
     if (m_config.GoldenMode() && m_resolver)
     {
         Arcane::Diagnostics::SetPhase("golden compile warm-up");
-        // THE FRAME'S EXTENT, from whichever surface this run actually has:
-        // the graph swapchain on the graph path (there is no NVRHI canvas
-        // there), the NVRHI canvas otherwise. Both track the ONE window.
-        const float warmupW = m_graphContext ? (float)m_graphContext->Swap().Width()
-                                             : (float)m_gpu->Cnv().Width();
-        const float warmupH = m_graphContext ? (float)m_graphContext->Swap().Height()
-                                             : (float)m_gpu->Cnv().Height();
+        // THE FRAME'S EXTENT: the graph swapchain's. There is no NVRHI canvas
+        // to fall back to -- GpuContext has built none since NRI Phase 5a,
+        // Task 6 deleted Cnv() along with the rest of its NVRHI half -- and
+        // m_graphContext is unconditionally non-null by this point (the
+        // `if (!m_graphContext)` refusal a few lines above already returned
+        // otherwise), so this is not a GraphFlavor()/GraphMode() branch to
+        // leave for Task 11: it is a plain null check on a local that is
+        // already proven non-null here.
+        const float warmupW = (float)m_graphContext->Swap().Width();
+        const float warmupH = (float)m_graphContext->Swap().Height();
         if (!Arcane::DrainSceneCompiles(*m_resolver, m_shaderCompiler, warmupW, warmupH))
         {
             ARC_ERROR("golden: shader compiles did not settle within {:.0f}s -- refusing to "
@@ -847,12 +853,12 @@ void RuntimeApp::ShutdownGraphPath()
 
 void RuntimeApp::Shutdown()
 {
-    // defensive: today Shutdown only runs after a successful Init, so m_gpu is non-null;
-    // the guard covers a future partial-init/destructor path. The GRAPH flavor
-    // has no NVRHI device to idle, and needs none: ~NriGraphContext already
-    // idled the one device this process had (and drained its graveyard) before
-    // MainLoop returned.
-    if (m_gpu && !m_gpu->GraphFlavor()) m_gpu->Device().Nvrhi()->waitForIdle();
+    // NVRHI ARM DELETED (NRI Phase 5a, Task 6: GpuContext::Device() is gone).
+    // This used to idle the NVRHI device on a defensive `!m_gpu->GraphFlavor()`
+    // guard that was already unconditionally false (GpuContext builds no
+    // NVRHI device at all); ~NriGraphContext already idled the one device
+    // this process had (and drained its graveyard) before MainLoop returned,
+    // so there is nothing left for this call to do.
     ARC_INFO("ArcaneRuntime exiting after {} frames", m_frameCount);
 
     // The member destructors then run (after Run returns + ~RuntimeApp), in reverse
@@ -865,9 +871,10 @@ void RuntimeApp::Shutdown()
     //   m_plugin  -> ~PluginHost: Unload (TeardownLive -> ClearSystems +
     //                ResetRegistry) while the plugin DLL is STILL mapped.
     //   m_runtime -> ~Runtime: destroys JobSystem + the now-empty Registry.
-    //   m_gpu     -> ~GpuContext: the render stack (command list + framebuffer
-    //                cache release their NVRHI handles before the device), window
-    //                LAST. So gpu outlives runtime + plugin exactly as the old
+    //   m_gpu     -> ~GpuContext: the render/input stack, window LAST (there is
+    //                no command list or framebuffer cache to release any more --
+    //                NRI Phase 5a, Task 6 deleted GpuContext's NVRHI half). So
+    //                gpu outlives runtime + plugin exactly as the old
     //                outer/inner main scopes did. See GpuContext's header.
     // m_typeContext is intentionally NOT freed (heap-leaked, see Init).
 }
