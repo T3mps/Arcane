@@ -35,9 +35,9 @@ namespace Arcane
                                      "the crash-diagnostics desk trigger").Type(CliType::Uint);
         cli.Flag  ("nri-graph",      "DEV: render through the NRI frame graph instead of NVRHI "
                                      "(boots the real engine; honours --frames/--screenshot/"
-                                     "--golden-*; BOTH hosts -- in the editor it currently "
-                                     "renders the Viewport panel only, with no editor chrome, "
-                                     "see HostConfig.hpp)");
+                                     "--golden-*; BOTH hosts -- in the editor this is the FULL "
+                                     "application: viewport, chrome, pick, outline, documents "
+                                     "and project switch, see HostConfig.hpp)");
         // Registered beside --nri-graph rather than beside the golden flags,
         // because unlike those it is meaningless without it: the pick and
         // outline nodes exist only on the graph path. Same non-Dist guard for

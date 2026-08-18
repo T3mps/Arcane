@@ -661,3 +661,195 @@ From Release AND Debug exe dirs, dx12 first, both backends per item:
   planning (none is load-bearing for this phase; the final review re-triages).
 - InfoQueue1 dead-channel adjudication: RE-OPENED by Task 6 (the graph
   device becomes first-in-process); D3b decides the new truth.
+
+## Phase 3 milestone record (appended 2026-08-18 at desk D3 GREEN)
+
+**Phase 3 is COMPLETE.** Engine main `9651efc8..f7001ad9` (47 commits): Tasks
+1-13 plus the sanctioned Task-8-pre enabler, executed via SDD — every task
+implemented and reviewed, 12 in-loop fix rounds, one D3a shakedown wave, one
+final whole-branch review (fable; 2 Critical + 4 Important) with its fix wave,
+and three desk-driven fix rounds. Desk milestones D3a, D3b, D3c and D3 all
+green.
+
+**THE EDITOR AND THE RUNTIME BOTH RENDER THROUGH NRI.** `--nri-graph` now
+means: no NVRHI device in the process, NRI wraps the only device, the swapchain
+binds the HOST window. The editor is a full application on that path —
+viewport, click-pick, JFA outline, game HUD, chrome, shader/material documents
+with previews, project switch, module rebuild, and its own golden harness —
+running two `NriGraphContext`s over one device with per-context graveyard
+lanes. Gate at close: **47694 assertions / 1015 cases**, both configs.
+Plugin ABI at close: **13**.
+
+### D3 desk results (2026-08-18, RTX 3070, Win10 19045, 1280x720)
+
+- **Stage compares:** 12/12 `maxDelta 0` across D3a/D3b/D3c against the frozen
+  baselines — runtime `main-*` @c131692f (textured; replaces the Phase-2 set),
+  editor `editor-*` @db648b4f. Debug runs under NRI validation on both backends
+  plus VK sync validation. **NVRHI floor 6/6 `maxDelta 0`: the landing moved
+  zero default-path pixels.**
+- **Pick:** both `--pick-probe` runs HIT; editor click-pick driven by hand.
+- **Crash parity:** `--crash-gpu` PASS on **both hosts x both backends** — exit
+  1, device-removed verdict, `.arcdiag`/`.txt`/`.dmp`/`.gpudump` written.
+  Artifacts land in the PROJECT's `Saved\Diagnostics`, not `<exe>\diagnostics`
+  (the boot line names only where ARMING points).
+- **Drag-storms:** clean on both backends, host window, debug layer live.
+- **Perf:** runtime 4.12-4.19 ms @ ~240 Hz with present 4.04-4.10 = pure vsync
+  wait; sim/rec/end/tone/imgui <=0.01 ms each. Editor perf **waived** — see
+  amendment 4.
+- **Drive checklist:** all 8 items pass — click-pick select/reselect/clear,
+  outline, Play + game HUD, shader-editor preview + node grid, two project
+  switches, one Build -> Rebuild Game Module, drag-resize, no latch growth.
+- **Latch:** `RenderErrorCount B -> N` with `N == B` on every clean run.
+
+### AMENDMENTS — the plan's text is WRONG where it contradicts these
+
+1. **Native GPU markers are NOT at pre-port fidelity.** The crash-diagnostics
+   Global Constraint demands `.gpudump` sections "at pre-port fidelity"
+   (plan:54-58). The NRI marker layer is a declared later arc, so `.gpudump`
+   has zero sections and queue timelines read `<none>`. `NativeDevice` is wired
+   so the executor's cross-device gate opens when that arc lands. **Consciously
+   renegotiated at Task 5, not missed.**
+2. **Pick latency is 3 frames, not 1-2.** Reconciliation 5 says
+   "one-to-two-frame" (plan:108-113); measured 3, and one of those is
+   STRUCTURAL — the click is published in phase 16, after phase 10 has already
+   declared that frame's graph, and no reordering preserves ImGui
+   hover/focus/popup semantics (phase-6 raw clicks would break parity). Within
+   recon 5's spirit (12.5 ms @ 240 Hz), outside its number (50 ms @ 60 Hz).
+   **USER RATIFIED at the D3 drive, 2026-08-18: not perceptible, accepted.**
+3. **InfoQueue1 is a DEAD CHANNEL** (the re-adjudication the plan assigned to
+   D3b) — now for a concrete reason: the servicing `D3D12SDKLayers.dll` returns
+   `E_NOINTERFACE` (0x80004002). Enabling the debug layer bought ENFORCEMENT,
+   not OBSERVABILITY. NRI's own message callback is what carries dx12
+   validation signal today — and it is what caught the 256 B CBV bug below.
+4. **Editor `--perf` is WAIVED.** Plan item 6 ("`--perf` on both hosts' graph
+   modes", plan:629) is **runtime-satisfied, editor-waived**. `--perf` has never
+   done anything on the editor host in any commit: `EditorApp` constructs
+   `FramePerf m_perf(m_config.perf)` and never calls `FrameStart`/`Add`/`Tick`.
+   Not an NRI regression. Decisive: **no pre-port editor baseline exists**, so
+   the number could never have proven non-regression, only stated an absolute —
+   while `EditorAppFrame.cpp` is 3157 lines across 19+ declared phases onto
+   which FramePerf's seven fixed buckets do not map. The item's real risk is
+   already covered by D3c's editor compares. Fixed alongside: the flags table
+   in `ArcaneEditor/src/main.cpp` wrongly listed `--perf` as *honoured*
+   (@f50f3029).
+
+### Engine defects only DESK verification could reach — four, all fixed
+
+Every one of these sat behind a fully green gate and green golden compares.
+
+1. **`FireFault` sized its CB/CBV to 16 B** where D3D12 requires a 256 B
+   multiple -> `E_INVALIDARG` -> and that *recoverable* error killed the process
+   because `MakeNriCallbacks` left `AbortExecution` null, which NRI silently
+   fills with its own `DebugBreak()`. Two bugs in one. (@21759d73)
+2. **`NRI_TIMEOUT_FENCE` is 5000 ms**, so `FenceD3D12::Wait` returned
+   WAIT_TIMEOUT and `GetDeviceRemovedReason()` correctly answered `S_OK` — **the
+   device was HUNG, not removed**. The probe read false, nothing disarmed, and
+   teardown freed a descriptor pool the GPU was still executing against -> debug
+   layer fail-fast (0x87D). (@1cd0d3f9)
+3. **A VMA "unfreed dedicated allocations" abort on vulkan** that the
+   intervening fix had itself introduced. (@1cd0d3f9)
+4. **The `--nri-graph` editor could not be clicked AT ALL.**
+   `ImGuiLayer::InitForGraph` withheld the SDL event tap — the ONLY route by
+   which mouse BUTTON events reach ImGui — and that is the editor's PRIMARY
+   context, so the whole chrome was dead: menus, panels, viewport pick, gizmo.
+   The stance was correct when written and explicitly time-boxed ("until desk
+   checkpoint D3b's compares are done"), and its comment even named the fix
+   (`InitCommon(true)`); D3b closed and **the flip was missed**, while three
+   other files had meanwhile hardened it into prose describing current fact.
+   (@f7001ad9)
+
+**THE LESSON, and it is this phase's most important output:** a green gate
+proves nothing about either host — but this phase proved something sharper.
+ArcaneTests never drives a real cursor, and **every scripted host run takes no
+input at all** (`--frames`, `--screenshot`, `--golden-*`, `--perf`,
+`--crash-gpu`). So no automated signal this phase could produce — not 1015
+green cases, not 12 stage compares at maxDelta 0, not the NVRHI floor — was
+capable of observing that the editor was unusable. It took one human click.
+Desk verification is not ceremony.
+
+### Phase 4/5 carry list (consolidated; the SDD ledger is DELETED — this is the surviving copy)
+
+**Correctness carries**
+
+- **`PluginHost::Reload` swaps the registry without bumping `m_sceneEpoch` or
+  resetting `m_deferredPick`** — a pick armed before a hot reload can apply to
+  the post-reload registry (wrong selection, never a fault). Pre-existing;
+  correctly triaged and reported rather than widened at Task 12.
+- **Buffer same-state WAW handovers emit no barrier** (frozen rule; texture
+  handovers are exempt via the always-barrier override) — revisit at the first
+  compute-heavy phase; do not rely on pooled-buffer same-state handovers.
+- **ShaderRead stage-mask narrowed to VERTEX|FRAGMENT|COMPUTE** — widen
+  tripwire pinned in code + tests; revisit at the first non-graphics consumer.
+- **`PoolResource::carry` is updated during recording** — stale after a failed
+  `EndCommandBuffer`/`QueueSubmit`; unreachable today (hosts stop on Failed),
+  real if a host ever continues past a failed frame.
+- **`kMaxSpriteTextures` is 64** (raised from 8); one linear scan is 65 entries.
+  Real content pressure is untested.
+
+**Named gaps / declared later arcs**
+
+- **The native NRI marker layer** (amendment 1) — its own arc; `.gpudump`
+  sections and queue timelines return when it lands.
+- **The glyph-atlas texture gap**: atlases have no asset Guid, so
+  `NriTextureCache` cannot key them.
+- **Real aliasing needs BOTH an allocator swap AND an initializing-barrier
+  story** (the Phase-2 handover fix removed the DISCARD hint).
+- **Graph-mode project switch has no progress overlay and no window pump** —
+  the window is frozen for the switch duration; the heartbeat still fires, so
+  no false hang report. A real graph overlay is Task-13-sized: it must render
+  before or after, never between.
+- **Editor `full` golden exercises NO outline nodes.** C2 of the final review
+  removed the live-mouse dependency (`HoverLive()`); whether editor `full`
+  should script a selection the way the runtime scripts `--pick-probe` was
+  left open at the site and is still the user's call.
+- **Editor golden captures are viewport-only and LAYOUT-SIZED** (docked panel
+  size, persisted per project GUID). Capture-vs-compare layout drift fails
+  LOUD (exit 3 + dims MISMATCH). The imgui.ini-vetoes-authored-UI lesson
+  applies to the golden layout itself.
+- **Exit-code namespace collision**: Hub `launch.rs` maps `Some(2)`/`Some(3)`
+  to pre-boot meanings inside its 2 s boot watchdog; golden exit 3 and latch
+  exit 2 collide if a Hub-launched run exits fast. Guarded, not resolved.
+- **Graph chrome background renders ~2x brighter/bluer** than the NVRHI arm
+  (linear 0.02,0.02,0.04 through ACES vs direct 0.06,0.06,0.08) — cosmetic
+  only; chrome is never captured. EXPECTED, not a finding.
+
+**Cleanups worth one pass**
+
+- `GraphError` helper duplicated in six TUs; the arena helper
+  (`CbRegionStride`) duplicated in three — all-three-or-none.
+- `Batcher2D` material-id drain order: two materials sharing
+  (layer, orderInLayer) could reorder run-to-run.
+- Remaining `[nvrhi]`-labelled producers to retag when NVRHI's callback dies.
+
+**THE FOUR PHASE-2 PLAN-INPUT CORRECTIONS STILL BIND EVERY LATER PLAN** —
+`CAN_ALIAS` does not exist in v180; root descriptors are unbuildable with
+all-space0 shaders; descriptor-set CB views take no dynamic offsets (hence
+per-frame-slot HOST_UPLOAD arenas); pool-handover barriers must carry the
+previous tenant's REAL before-layout. Full text at the tail of
+`docs/plans/2026-08-13-nri-phase2-framegraph-2d-cutover.md`.
+
+**Operational**
+
+- **Out-of-tree projects need restamp + rebuild at ABI 13.**
+  `Gacha\Game\Aphelyon.arcproj` was restamped 12->13 and its Debug module
+  rebuilt; a Release host session needs its own `/t:Rebuild` (single-slot
+  `Binaries\`). Auto-restamp does NOT heal a stale stamp — it is a refusal.
+- Desk batteries live on the Desktop (`D3a-`, `D3b-`, `D3b-Debug-Auto`, `D3c-`,
+  `D3-Exit-Battery.ps1`). They are NOT in the repo.
+- No GPU or windowed runs in an agent session (machine hazard: windowed d3d12
+  SIGSEGVs under remote/locked sessions). The `~[gpu]` gate runs FROM the exe
+  directory.
+
+### What Phase 4 is (per the ladder, unchanged)
+
+The foundational 3D slice: perspective camera, programmatic StaticMesh, one
+forward-lit bindless pass — with these same frozen baselines as the 2D floor.
+**Phase 5** then deletes NVRHI (GpuContext's NVRHI members, PickBuffer,
+SelectionOutline, OffscreenCanvas internals, ImGuiNvrhi, the injector's nvrhi
+half), flips the default path, rewrites and re-ratifies the boundary doc, and
+re-runs the batteries.
+
+**ULTIMATE GOAL unchanged:** unify 2D and 3D on ONE frame-graph path as the
+foundation for the next game (an open-world multi-planet space game). Aphelyon
+inherits via pixel-parity and never blocks. The renderer target is the Deadlock
+contract (`docs/research/2026-08-12-deadlock-render-target.md`, tiers T1-T7).
