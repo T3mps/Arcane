@@ -646,6 +646,10 @@ From Release AND Debug exe dirs, dx12 first, both backends per item:
 5. Desk D3 (Task 14): the full 2D-parity gate — both hosts, both backends,
    desk-drive + diagnostics + storms + perf. THEN Phase 4 (the 3D slice)
    gets planned.
+   **[SUPERSEDED 2026-08-18 — the ladder is resequenced. Phase 5a (the
+   default-path flip + NVRHI deletion) is planned next, THEN Phase 4, THEN
+   Phase 5b (the boundary doc). See "WHAT COMES NEXT" in the milestone
+   record at the tail of this file for the reasoning.]**
 
 ## Plan inputs resolved here / carried
 
@@ -840,14 +844,55 @@ previous tenant's REAL before-layout. Full text at the tail of
   SIGSEGVs under remote/locked sessions). The `~[gpu]` gate runs FROM the exe
   directory.
 
-### What Phase 4 is (per the ladder, unchanged)
+### WHAT COMES NEXT — THE LADDER IS RESEQUENCED (user decision, 2026-08-18)
 
-The foundational 3D slice: perspective camera, programmatic StaticMesh, one
-forward-lit bindless pass — with these same frozen baselines as the 2D floor.
-**Phase 5** then deletes NVRHI (GpuContext's NVRHI members, PickBuffer,
-SelectionOutline, OffscreenCanvas internals, ImGuiNvrhi, the injector's nvrhi
-half), flips the default path, rewrites and re-ratifies the boundary doc, and
-re-runs the batteries.
+**PHASE 5 NOW RUNS BEFORE PHASE 4.** The numbers are kept as historical
+labels — every "deletion point: Phase 5" comment in the tree and in the Phase
+1/2 plans stays accurate — but **"Phase 5" no longer means "later".** Read the
+numbers as names, not as sequence.
+
+**Running order from here:**
+
+1. **Phase 5a — the flip and the deletion.** Make `--nri-graph` the only path,
+   then delete the NVRHI surface: `GpuContext`'s NVRHI members, `PickBuffer`,
+   `SelectionOutline`, `OffscreenCanvas` internals, `ImGuiNvrhi`, the
+   injector's nvrhi half, the `ThirdParty/nvrhi` build, and the `GraphMode()`
+   / `Create()`-vs-`CreateForGraph()` flavor splits.
+2. **Phase 4 — the foundational 3D slice.** Perspective camera, programmatic
+   StaticMesh, one forward-lit bindless pass — on a single-path engine.
+3. **Phase 5b — the boundary doc.** Rewrite and re-ratify AFTER 3D exists,
+   since bindless and mesh resources exercise parts of the RHI boundary that
+   2D never touches. Writing it before Phase 4 would document code that does
+   not exist yet.
+
+**WHY THE SWAP.** The original order kept NVRHI through Phase 4 as a reference
+to compare against. That reasoning does not survive contact:
+
+- **The floor is the frozen PNGs, not the NVRHI code.** All 12 baselines are
+  committed (`ReferenceProject/Goldens/`); `--golden-compare` matches rendered
+  output against an image and needs no second implementation. 2D regression
+  cover survives the deletion intact.
+- **There is no 3D on NVRHI**, so it could never have validated Phase 4's
+  actual work — only the 2D floor, which the PNGs already cover.
+- **The dual-path split is itself a defect generator, and it cost this phase a
+  full checkpoint.** The unclickable-editor bug (defect 4 above) existed
+  *because* `Init()` and `InitForGraph()` are separate flavors and a stance
+  rotted in one of them. Every `GraphMode()` branch is a place the two paths
+  can silently diverge — and Phase 4 edits exactly those files. Deleting first
+  removes the whole class before 3D multiplies the surface.
+
+**THE ONE REAL COST, and why it does not gate.** NVRHI is currently the only
+path with working native GPU crash markers — `GpuCrashD3D12.cpp:433` and
+`GpuCrashVulkan.cpp:442` implement `WriteMarkerNative`, while the NRI path
+installs a stub that returns false (`NriDiagnostics.cpp:82`), which is
+amendment 1 above. Note the loss actually lands at the **default flip**, not at
+the deletion: once `--nri-graph` is the only path, markers are degraded whether
+or not the dead code still sits in the tree. **It is not a gate, on this
+phase's own evidence: all four GPU-class defects above were diagnosed with
+`.gpudump` carrying ZERO sections** — from DRED, exit codes, stack frames and
+reasoning. DRED is already live on the NRI path (`DRED enabled: dred:full`),
+and `--crash-gpu` passes on both hosts x both backends. The native marker arc
+stays queued and unblocked; it simply does not need to precede the flip.
 
 **ULTIMATE GOAL unchanged:** unify 2D and 3D on ONE frame-graph path as the
 foundation for the next game (an open-world multi-planet space game). Aphelyon
