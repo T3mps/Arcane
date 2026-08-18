@@ -294,21 +294,17 @@ namespace Arcane::Editor
         // + plugin.
         //
         // THE BOOT-PATH SPLIT (NRI Phase 3, Task 8), mirroring
-        // RuntimeApp::StageGpuCore line for line. `--nri-graph` now means NO
-        // NVRHI DEVICE IS EVER CREATED in this host either: the graph flavor
-        // builds the window, a device-less Batcher2D, the graph ImGuiLayer and
-        // the input stack, and Main() then builds the NriGraphContext pair that
-        // owns the process's ONLY graphics device -- the chrome one over this
-        // same window, the viewport one offscreen on its device. There is no
-        // intermediate: DXGI permits one flip-model swapchain per HWND, so
-        // "render into the host window" and "remove NVRHI" are the same change.
-        // The NVRHI arm is the default and the floor; nothing on it changed.
-#if !defined(ARCANE_DIST)
-        if (m_config.nriGraph)
-            m_gpu = GpuContext::CreateForGraph(m_config);
-        else
-#endif
-            m_gpu = GpuContext::Create(m_config);
+        // RuntimeApp::StageGpuCore line for line. As of Phase 5a (Task 2b) the
+        // NRI frame graph is the ONLY render path, unconditionally, in every
+        // configuration including Dist: NO NVRHI DEVICE IS EVER CREATED in
+        // this host. The graph flavor builds the window, a device-less
+        // Batcher2D, the graph ImGuiLayer and the input stack, and Main() then
+        // builds the NriGraphContext pair that owns the process's ONLY
+        // graphics device -- the chrome one over this same window, the
+        // viewport one offscreen on its device. GpuContext::Create's NVRHI arm
+        // is unreachable from here now; it stays only until Tasks 4-11 delete
+        // NVRHI outright.
+        m_gpu = GpuContext::CreateForGraph(m_config);
         if (!m_gpu)
         {
             ARC_ERROR("Arcane Editor: GPU context create failed");

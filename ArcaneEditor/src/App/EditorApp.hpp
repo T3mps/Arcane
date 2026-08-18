@@ -655,10 +655,12 @@ namespace Arcane::Editor
         // ---- THE graph/NVRHI predicate (--nri-graph, NRI Phase 3, Task 8) ---
         // The editor's counterpart of RuntimeApp's `m_gpu->GraphFlavor()`
         // branches, and the ONE name every mode gate in this host reads --
-        // never HostConfig::nriGraph, for GpuContext.hpp's stated reason: what
+        // never a HostConfig flag, for GpuContext.hpp's stated reason: what
         // matters at a call site is whether the NVRHI members EXIST, not which
-        // flag caused that. Always false in a Dist build (CreateForGraph is
-        // never reached there), so every gate below folds to the NVRHI arm.
+        // flag caused that. TRUE EVERYWHERE, Dist included, as of Phase 5a
+        // (Task 2b): StageGpuCore now takes GpuContext::CreateForGraph
+        // unconditionally, so every gate below folds to the graph arm, in
+        // every configuration.
         [[nodiscard]] bool GraphMode() const noexcept
         { return m_gpu && m_gpu->GraphFlavor(); }
 
@@ -1365,8 +1367,10 @@ namespace Arcane::Editor
         //
         // NOT #if-guarded, for the same reason m_graphChrome is not (see its
         // declaration): a preprocessor-guarded member forces a guard at every
-        // use site. In Dist it is simply unreachable -- CreateGraphVehicles'
-        // whole body is guarded, so m_viewportTargets.graph is always null.
+        // use site. Reachable in EVERY configuration, Dist included, as of
+        // Phase 5a (Task 2b): GraphMode() is unconditional now, so
+        // CreateGraphVehicles' body runs and m_viewportTargets.graph is
+        // populated everywhere -- see GraphMode()'s own comment above.
         bool CaptureGraphViewportPng(const std::filesystem::path& file);
 
         // Window title, recomposed from project + scene + dirty state each frame

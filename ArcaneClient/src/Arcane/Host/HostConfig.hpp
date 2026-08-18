@@ -135,52 +135,6 @@ namespace Arcane
         // gap is closed; the deliberate-no-op ruling it carried is history.
         std::uint64_t   crashGpuFrame = 0;
 
-        // DEV ONLY (NRI Phase 2, Task 7): the frame-graph VEHICLE. Renders
-        // the frame through Arcane::NriGraphContext (NRI device + swapchain +
-        // upload ring + pipeline cache + RenderGraph) instead of the NVRHI
-        // record/submit/present half.
-        //
-        // NOT the shape Phase 1's triangle smoke was: that path owned the
-        // whole process and returned from RuntimeApp::Run BEFORE the boot
-        // started; it was deleted at Task 13, once this vehicle covered real
-        // content. --nri-graph boots the REAL engine -- project, plugin,
-        // scene resolve, sim, the material compile service -- and swaps only
-        // the RENDER half inside MainLoop. So everything the normal boot
-        // brings (a scene, bound materials, the golden warm-up and its
-        // material census) is live on this path, which is what makes
-        // stage-golden comparison against the NVRHI baselines meaningful.
-        //
-        // Consequences, stated because they are observable:
-        //   - the golden flags ARE honoured here; see Parse. Same
-        //     --frames/--screenshot/--golden-*/--golden-stage vocabulary,
-        //     same artifact names, same exit codes.
-        //   - BOTH HOSTS HONOUR IT as of NRI Phase 3, Task 8. It used to read
-        //     "ArcaneRuntime-only; the editor keeps the NVRHI path until Phase
-        //     3 flips both hosts" -- that flip has started. What each host
-        //     means by it:
-        //       ArcaneRuntime -- the whole frame, through ONE host-window
-        //         NriGraphContext (Task 6). Complete.
-        //       ArcaneEditor  -- TWO contexts on that one device: a host-window
-        //         "chrome" one and an OFFSCREEN one the Viewport panel samples.
-        //         Task 8 lands the SCENE, in Play and in Edit, through the
-        //         offscreen frame; Task 9 lands everything else that belongs
-        //         INSIDE that frame -- the game/plugin HUD in Play, the
-        //         selection + hover outline in Edit, and viewport click-pick
-        //         (deferred: the hit applies on the frame its readback lands,
-        //         about three frames after the click). Landing in order after
-        //         them: the chrome frame -- until which the editor's MAIN
-        //         WINDOW PRESENTS NOTHING on this flag (Task 10) -- the
-        //         documents/preview/logo/auto-screenshot (Task 11), project
-        //         switch + module rebuild (Task 12), and the editor's own
-        //         golden harness (Task 13, which is what makes --golden-* mean
-        //         something on this host).
-        //     The editor's NVRHI path remains the DEFAULT and the floor: the
-        //     flag is opt-in on both hosts and changes nothing without it.
-        //
-        // Non-Dist for the same reason --crash-gpu is: a shipped build has no
-        // business carrying a dev render path.
-        bool            nriGraph = false;
-
         // DEV ONLY (NRI Phase 2, Task 11): `--pick-probe x,y` -- the SCRIPTED
         // desk check for the graph path's pick + JFA outline nodes.
         //
@@ -197,11 +151,12 @@ namespace Arcane
         //      (a non-zero id) or 1 on a MISS, so a desk battery item is one
         //      scriptable line instead of an eyeball.
         //
-        // Refused at parse time without --nri-graph (the nodes exist only on
-        // that path, so it would be a silent no-op -- the same reasoning
-        // --golden-stage outside golden mode carries) and without --frames N
-        // (the readback lands with frames-in-flight latency, so an open-ended
-        // run would never report and would exit on a window close instead).
+        // Refused at parse time without --frames N (the readback lands with
+        // frames-in-flight latency, so an open-ended run would never report
+        // and would exit on a window close instead). Used to also be refused
+        // without --nri-graph -- that guard is gone as of Phase 5a (the NRI
+        // frame graph is the only render path, so the pick/outline nodes are
+        // always present; the flag itself is retired to a no-op, see below).
         bool            pickProbe  = false;
         std::int32_t    pickProbeX = 0;   // canvas px, y-down; only read when pickProbe
         std::int32_t    pickProbeY = 0;

@@ -77,8 +77,11 @@ TEST_CASE("host config: golden mode without --frames is refused at parse time", 
     CHECK(o.exitCode == 2);
 }
 // NRI Phase 2, Task 2 -- the stage-golden flag. Registered beside the other
-// golden flags (NOT Dist-guarded, unlike --nri-graph below), so this case is
-// unconditional too.
+// golden flags, NOT Dist-guarded, so this case is unconditional too. (As of
+// NRI Phase 5a, --nri-graph itself is registered unconditionally now too --
+// see HostConfig.cpp -- but several of the cases exercising it below still
+// pair it with --pick-probe/--crash-gpu, which stay Dist-only, so those
+// cases keep their guard.)
 TEST_CASE("host config: --golden-stage round-trips all three values", "[host][golden]") {
     // Default: Full == the pre-Phase-2 frame, and it needs no golden run to be
     // legal (it asks for nothing that does not already happen).
@@ -167,31 +170,23 @@ TEST_CASE("host config: the golden flags compose with the EDITOR's launch vocabu
     const auto graphGolden = Run({"--nri-graph", "--project", "ReferenceProject",
                                   "--golden-capture", "goldens/editor", "--frames", "120"});
     REQUIRE(graphGolden.config.has_value());
-    CHECK(graphGolden.config->nriGraph);
     CHECK(graphGolden.config->GoldenMode());
 #endif
 }
 #if !defined(ARCANE_DIST)
-// NRI Phase 2, Task 7 -- the graph vehicle's flag. DEV scaffolding registered
-// inside HostConfig.cpp's `#if !defined(ARCANE_DIST)` block, so in a Dist
-// build it is an unknown argument (exit 2) and HostConfig has no nriGraph
-// member at all. This is the ONLY headless coverage the vehicle can have:
-// everything past the flag needs a window and a real device (desk-only on
-// this machine), so the parse round-trip is what the ~[gpu] gate can
-// actually prove.
-TEST_CASE("host config: --nri-graph round-trips and defaults off", "[host][nri]") {
-    const auto o = Run({"--nri-graph"});
-    REQUIRE(o.config.has_value());
-    CHECK(o.config->nriGraph);
-    // Absent flag = the normal NVRHI render half (today's behavior, unchanged).
-    const auto def = Run({});
-    REQUIRE(def.config.has_value());
-    CHECK_FALSE(def.config->nriGraph);
-    // Shares the whole run vocabulary with the normal boot -- deliberately.
+// NRI Phase 5a, Task 2b -- HostConfig::nriGraph is retired (the NRI frame
+// graph is the only render path now, unconditionally, in every
+// configuration), and --nri-graph is registered UNCONDITIONALLY too (see
+// HostConfig.cpp) rather than inside this Dist guard -- so this case has no
+// Dist-only subject left to cover; the case below proves the unconditional
+// registration instead. What survives here, still guarded (no reason to
+// relocate it), is the one thing that was never Dist-specific: that a
+// command line pairing --nri-graph with the rest of the run vocabulary still
+// parses cleanly, exactly as it always did.
+TEST_CASE("host config: --nri-graph still composes with the run vocabulary", "[host][nri]") {
     const auto paired = Run({"--nri-graph", "--frames", "120", "--screenshot", "nri-graph.png",
                              "--backend", "vulkan", "--no-vsync"});
     REQUIRE(paired.config.has_value());
-    CHECK(paired.config->nriGraph);
     CHECK(paired.config->maxFrames == 120u);
     CHECK(paired.config->screenshotPath == "nri-graph.png");
     CHECK(paired.config->backend == Arcane::GraphicsBackend::Vulkan);
@@ -204,7 +199,6 @@ TEST_CASE("host config: the golden flags ARE legal with --nri-graph", "[host][nr
     // meaningful and must survive parse.
     const auto capture = Run({"--nri-graph", "--golden-capture", "goldens/out", "--frames", "60"});
     REQUIRE(capture.config.has_value());
-    CHECK(capture.config->nriGraph);
     CHECK(capture.config->GoldenMode());
     CHECK(capture.config->goldenCapturePath == "goldens/out");
 
@@ -212,7 +206,6 @@ TEST_CASE("host config: the golden flags ARE legal with --nri-graph", "[host][nr
                               "--golden-name", "main-dx12", "--golden-stage", "batch",
                               "--frames", "60"});
     REQUIRE(compare.config.has_value());
-    CHECK(compare.config->nriGraph);
     CHECK(compare.config->goldenComparePath == "goldens/out");
     CHECK(compare.config->goldenName == "main-dx12");
     CHECK(compare.config->goldenStage == Arcane::GoldenStage::Batch);
@@ -243,7 +236,6 @@ TEST_CASE("host config: --nri-graph composes with the EDITOR's launch vocabulary
                                 "--scene", "a5e0c1de-1111-4222-8333-444455556666",
                                 "--frames", "120", "--backend", "vulkan"});
     REQUIRE(editorRun.config.has_value());
-    CHECK(editorRun.config->nriGraph);
     CHECK(editorRun.config->projectPath == "ReferenceProject");
     CHECK(editorRun.config->sceneOverride == "a5e0c1de-1111-4222-8333-444455556666");
     CHECK(editorRun.config->maxFrames == 120u);
@@ -254,7 +246,6 @@ TEST_CASE("host config: --nri-graph composes with the EDITOR's launch vocabulary
     // which recorder draws.
     const auto pluginRun = Run({"--nri-graph", "--plugin", "Game.dll"});
     REQUIRE(pluginRun.config.has_value());
-    CHECK(pluginRun.config->nriGraph);
     CHECK(pluginRun.config->pluginPath == "Game.dll");
     CHECK(pluginRun.config->projectPath.empty());
 
@@ -264,7 +255,6 @@ TEST_CASE("host config: --nri-graph composes with the EDITOR's launch vocabulary
     const auto faultRun = Run({"--nri-graph", "--project", "ReferenceProject",
                                "--crash-gpu", "30", "--frames", "60"});
     REQUIRE(faultRun.config.has_value());
-    CHECK(faultRun.config->nriGraph);
     CHECK(faultRun.config->crashGpuFrame == 30u);
 }
 // NRI Phase 2, Task 11 -- the pick/outline probe. Guarded like --nri-graph
@@ -330,17 +320,22 @@ TEST_CASE("host config: --pick-probe refuses bad syntax at parse time", "[host][
         CHECK(o.exitCode == 2);
     }
 }
-TEST_CASE("host config: --pick-probe refuses the two silent-no-op combinations", "[host][nri]") {
-    // The pick/outline nodes live ONLY in NriGraphContext's frame, so a probe
-    // on the NVRHI path would render nothing extra and exit 0 -- the same
-    // silent-no-op class --golden-stage outside golden mode is refused for.
+// NRI Phase 5a, Task 2b -- RETITLED, and the noGraph sub-case INVERTED. The
+// pick/outline nodes used to live ONLY in NriGraphContext's frame, so a probe
+// on the NVRHI path was refused as a silent no-op (--pick-probe without
+// --nri-graph, exit 2). The NRI frame graph is now the only render path,
+// unconditionally, so those nodes are always present and that exact command
+// line is legal -- pinned below rather than deleted, so the behaviour change
+// is on record. The noFrames refusal is untouched: the readback still lands
+// a couple of frames after the pass that wrote it, so an open-ended run
+// would still exit on a window close having reported nothing at all.
+TEST_CASE("host config: --pick-probe still requires --frames, no longer requires --nri-graph", "[host][nri]") {
     const auto noGraph = Run({"--frames", "60", "--pick-probe", "640,360"});
-    REQUIRE_FALSE(noGraph.config.has_value());
-    CHECK(noGraph.exitCode == 2);
+    REQUIRE(noGraph.config.has_value());
+    CHECK(noGraph.config->pickProbe);
+    CHECK(noGraph.config->pickProbeX == 640);
+    CHECK(noGraph.config->pickProbeY == 360);
 
-    // And the readback lands a couple of frames after the pass that wrote it,
-    // so an open-ended run would exit on a window close having reported
-    // nothing at all.
     const auto noFrames = Run({"--nri-graph", "--pick-probe", "640,360"});
     REQUIRE_FALSE(noFrames.config.has_value());
     CHECK(noFrames.exitCode == 2);
@@ -351,3 +346,22 @@ TEST_CASE("host config: --pick-probe refuses the two silent-no-op combinations",
     CHECK_FALSE(plain.config->pickProbe);
 }
 #endif
+// NRI Phase 5a, Task 2b -- UNGUARDED, deliberately: every case above this
+// point that touches --nri-graph is still Dist-excluded (several pair it
+// with --pick-probe/--crash-gpu, which stay Dist-only; the rest stayed
+// guarded too, simply because there was no reason to relocate them -- see
+// their own comments), so none of it can show that --nri-graph itself now
+// parses in a Dist build. This case is the one that does: the flag is
+// retired to a no-op rather than rejected -- scripts, the Hub's saved launch
+// args and the desk batteries all still pass it, and a hard "unknown
+// argument" refusal would turn a harmless no-op into a boot failure at the
+// worst moment (a shipped Dist build, launched from a saved arg list nobody
+// is watching). Proving it composes with real vocabulary (not just alone) is
+// why --frames rides along rather than a bare flag.
+TEST_CASE("host config: --nri-graph is accepted and ignored in every configuration", "[host][nri]") {
+    const auto with    = Run({"--nri-graph", "--frames", "1"});
+    const auto without = Run({"--frames", "1"});
+    REQUIRE(with.config.has_value());
+    REQUIRE(without.config.has_value());
+    CHECK(with.exitCode == without.exitCode);
+}

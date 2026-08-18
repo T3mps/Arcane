@@ -119,19 +119,15 @@ bool RuntimeApp::StageGpuCore(Arcane::HostBoot::BootContext& ctx)
     // the render resources it owns (window/device/swapchain/shaders/canvas/batcher/
     // tonemap/imgui/input + commandList/framebuffers) must outlive runtime + plugin.
     //
-    // THE BOOT-PATH SPLIT (NRI Phase 3, Task 6). `--nri-graph` now means NO
-    // NVRHI DEVICE IS EVER CREATED: the graph flavor builds the window, a
-    // device-less Batcher2D, the graph ImGuiLayer and the input stack, and
-    // MainLoop then builds the NriGraphContext that owns the process's ONLY
-    // graphics device over that same window. There is no intermediate --
-    // DXGI permits one flip-model swapchain per HWND, so "render into the host
-    // window" and "remove NVRHI" are the same change (plan reconciliation 1).
-#if !defined(ARCANE_DIST)
-    if (m_config.nriGraph)
-        m_gpu = Arcane::GpuContext::CreateForGraph(m_config);
-    else
-#endif
-        m_gpu = Arcane::GpuContext::Create(m_config);
+    // THE BOOT-PATH SPLIT (NRI Phase 3, Task 6). As of Phase 5a (Task 2b) the
+    // NRI frame graph is the ONLY render path, unconditionally, in every
+    // configuration including Dist: NO NVRHI DEVICE IS EVER CREATED. The
+    // graph flavor builds the window, a device-less Batcher2D, the graph
+    // ImGuiLayer and the input stack, and MainLoop then builds the
+    // NriGraphContext that owns the process's ONLY graphics device over that
+    // same window. GpuContext::Create's NVRHI arm is unreachable from here
+    // now; it stays only until Tasks 4-11 delete NVRHI outright.
+    m_gpu = Arcane::GpuContext::CreateForGraph(m_config);
     if (!m_gpu)
     {
         ARC_ERROR("ArcaneRuntime: GPU context create failed");
@@ -477,61 +473,60 @@ void RuntimeApp::MainLoop()
     // the last NRI object is gone -- a teardown-only validation error must
     // still fail the run.
     m_graphErrorBaseline = Arcane::RenderErrorCount();
-#if !defined(ARCANE_DIST)
-    if (m_config.nriGraph)
+    // As of Phase 5a (Task 2b) this vehicle boot is unconditional -- the NRI
+    // frame graph is the only render path, in every configuration including
+    // Dist, so there is no longer a plain-NVRHI arm for this to be skipped in
+    // favour of.
+    Arcane::Diagnostics::SetPhase("nri graph vehicle boot");
+
+    // THE REVEAL, which StageFinalize could not do on this path (its
+    // BootPresenter draws through an NVRHI swapchain + ImGui renderer, and
+    // neither exists here). It happens BEFORE the create below, which is
+    // the ORDER the Phase-2 vehicle proved at three desk checkpoints: its
+    // own window was created VISIBLE and its swapchain built over an
+    // already-shown window. Keeping that order rather than showing
+    // afterwards is deliberate -- a surface created against a window the
+    // compositor has never mapped is exactly the kind of backend-specific
+    // corner a desk-only machine cannot pre-clear. The window is undrawn
+    // for the handful of milliseconds until the first graph frame, the
+    // same gap the vehicle always had. Show() also RAISES, which is the
+    // launch reveal this host owes exactly once.
+    m_gpu->Win().Show();
+
+    m_graphContext = Arcane::NriGraphContext::Create(m_config, m_gpu->Win());
+    if (!m_graphContext)
     {
-        Arcane::Diagnostics::SetPhase("nri graph vehicle boot");
-
-        // THE REVEAL, which StageFinalize could not do on this path (its
-        // BootPresenter draws through an NVRHI swapchain + ImGui renderer, and
-        // neither exists here). It happens BEFORE the create below, which is
-        // the ORDER the Phase-2 vehicle proved at three desk checkpoints: its
-        // own window was created VISIBLE and its swapchain built over an
-        // already-shown window. Keeping that order rather than showing
-        // afterwards is deliberate -- a surface created against a window the
-        // compositor has never mapped is exactly the kind of backend-specific
-        // corner a desk-only machine cannot pre-clear. The window is undrawn
-        // for the handful of milliseconds until the first graph frame, the
-        // same gap the vehicle always had. Show() also RAISES, which is the
-        // launch reveal this host owes exactly once.
-        m_gpu->Win().Show();
-
-        m_graphContext = Arcane::NriGraphContext::Create(m_config, m_gpu->Win());
-        if (!m_graphContext)
-        {
-            ARC_ERROR("--nri-graph: the graph render half could not be created");
-            m_graphExit = 1;
-            ShutdownGraphPath();
-            return;
-        }
-        // Guid -> asset file, so the graph path can make a REGISTERED sprite
-        // material's declared TEXTURES resident on its own device (Task 9).
-        // Deliberately the same lambda SceneRenderResolver builds
-        // (SceneRenderResolver.cpp's constructor): re-reads CurrentProject()
-        // per call, so it survives a project switch, and resolves through the
-        // one registry both render paths already agree on.
-        m_graphContext->SetAssetResolver(
-            [rt = &*m_runtime](const Arcane::Guid& id)
-                -> std::optional<std::filesystem::path>
-            {
-                const Arcane::Project* project = rt ? rt->CurrentProject() : nullptr;
-                return project ? project->ResolveAsset(Arcane::AssetId::FromGuid(id))
-                               : std::nullopt;
-            });
-        // ...and the SAME seam extended to PIXELS (NRI Phase 3, Task 2): the
-        // graph device cannot sample a texture on the engine's NVRHI device,
-        // so its NriTextureCache uploads its own from the engine's RETAINED
-        // decode (Assets::PixelsFor, Task 1) -- one decode, two devices. This
-        // is what makes a textured sprite render on the graph path at all, and
-        // it works with no NVRHI device present at all, which is what Task 6
-        // needs.
-        m_graphContext->SetPixelSupply(
-            [rt = &*m_runtime](const Arcane::Guid& id) -> const Arcane::PixelData*
-            {
-                return rt ? rt->AssetsFacade().PixelsFor(id) : nullptr;
-            });
+        ARC_ERROR("--nri-graph: the graph render half could not be created");
+        m_graphExit = 1;
+        ShutdownGraphPath();
+        return;
     }
-#endif
+    // Guid -> asset file, so the graph path can make a REGISTERED sprite
+    // material's declared TEXTURES resident on its own device (Task 9).
+    // Deliberately the same lambda SceneRenderResolver builds
+    // (SceneRenderResolver.cpp's constructor): re-reads CurrentProject()
+    // per call, so it survives a project switch, and resolves through the
+    // one registry both render paths already agree on.
+    m_graphContext->SetAssetResolver(
+        [rt = &*m_runtime](const Arcane::Guid& id)
+            -> std::optional<std::filesystem::path>
+        {
+            const Arcane::Project* project = rt ? rt->CurrentProject() : nullptr;
+            return project ? project->ResolveAsset(Arcane::AssetId::FromGuid(id))
+                           : std::nullopt;
+        });
+    // ...and the SAME seam extended to PIXELS (NRI Phase 3, Task 2): the
+    // graph device cannot sample a texture on the engine's NVRHI device,
+    // so its NriTextureCache uploads its own from the engine's RETAINED
+    // decode (Assets::PixelsFor, Task 1) -- one decode, two devices. This
+    // is what makes a textured sprite render on the graph path at all, and
+    // it works with no NVRHI device present at all, which is what Task 6
+    // needs.
+    m_graphContext->SetPixelSupply(
+        [rt = &*m_runtime](const Arcane::Guid& id) -> const Arcane::PixelData*
+        {
+            return rt ? rt->AssetsFacade().PixelsFor(id) : nullptr;
+        });
 
     // Golden warm-up (NRI Phase 2): settle the scene's material compiles BEFORE
     // the frame counter starts, so what the captured/compared frame contains is

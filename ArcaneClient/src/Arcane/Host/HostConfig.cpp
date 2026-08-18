@@ -21,28 +21,34 @@ namespace Arcane
         // Dist-guarded: --golden-capture/--golden-compare/--golden-name all
         // exist in every configuration, and a vocabulary where a Dist build
         // accepts --golden-capture but rejects --golden-stage would be a worse
-        // trap than the shipped flag itself. (--crash-gpu is Dist-guarded
-        // because it is DEV scaffolding with no golden peer; --nri-graph is
-        // Dist-guarded too, but unlike --crash-gpu it DOES reach the golden
-        // harness -- see the refusal rules below.)
+        // trap than the shipped flag itself. (--crash-gpu stays Dist-guarded
+        // because it is DEV scaffolding with no golden peer; --nri-graph USED
+        // TO be Dist-guarded for the same reason, but as of Phase 5a the NRI
+        // frame graph is the only render path, so it is registered here,
+        // unconditionally, as a deprecated no-op -- see below.)
         cli.Option("golden-stage", "full",
                    "which slice of the frame the golden covers: full|batch|post "
                    "(batch = no post chain and no ImGui, post = no ImGui)")
             .Choices({ "full", "batch", "post" });
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
+        // NOT Dist-guarded (Phase 5a, Task 2b): the NRI frame graph is the
+        // ONLY render path in every configuration now, so the flag that used
+        // to select it has nothing left to select. Kept registered and
+        // parsed-and-ignored rather than deleted or refused outright --
+        // scripts, the Hub's saved launch args, and the desk batteries all
+        // still pass it, and a hard "unknown argument" refusal would turn a
+        // harmless no-op into a boot failure at the worst moment (a shipped
+        // Dist build, launched from a saved arg list nobody is watching).
+        cli.Flag  ("nri-graph",      "DEPRECATED, accepted and ignored: the NRI frame graph is "
+                                     "the only render path as of Phase 5a. Kept so existing "
+                                     "scripts and saved launch args do not fail to boot.");
 #if !defined(ARCANE_DIST)
         cli.Option("crash-gpu", "0", "DEV: deliberately fault the GPU on frame N (0 = off) -- "
                                      "the crash-diagnostics desk trigger").Type(CliType::Uint);
-        cli.Flag  ("nri-graph",      "DEV: render through the NRI frame graph instead of NVRHI "
-                                     "(boots the real engine; honours --frames/--screenshot/"
-                                     "--golden-*; BOTH hosts -- in the editor this is the FULL "
-                                     "application: viewport, chrome, pick, outline, documents "
-                                     "and project switch, see HostConfig.hpp)");
-        // Registered beside --nri-graph rather than beside the golden flags,
-        // because unlike those it is meaningless without it: the pick and
-        // outline nodes exist only on the graph path. Same non-Dist guard for
-        // the same reason.
-        cli.Option("pick-probe", "",  "DEV (--nri-graph): add the pick + JFA outline nodes, scripted "
+        // Registered beside the other Dist-guarded dev flags. --nri-graph is
+        // no longer this flag's prerequisite (Phase 5a: the graph path is
+        // unconditional), so the help text no longer names it.
+        cli.Option("pick-probe", "",  "DEV: add the pick + JFA outline nodes, scripted "
                                       "onto the scene's first pickable entity, and print the entity id "
                                       "read back at canvas pixel x,y -- exit 0 on a hit, 1 on a miss");
 #endif
@@ -72,9 +78,12 @@ namespace Arcane
                                                : GoldenStage::Full;
         }
         cfg.printEngineInfo = r.Flag("print-engine-info");
+        // "nri-graph" is intentionally never read here: it is registered
+        // above (unconditionally) purely so a command line that still passes
+        // it does not fail to parse. There is nothing left to store -- the
+        // graph path it used to opt into is now the only one.
 #if !defined(ARCANE_DIST)
         cfg.crashGpuFrame = r.GetAs<std::uint64_t>("crash-gpu");
-        cfg.nriGraph      = r.Flag("nri-graph");
 #endif
 
         // Golden capture/compare only ever runs at the last frame (RuntimeApp
@@ -148,16 +157,13 @@ namespace Arcane
                     return { std::nullopt, 2 };
                 }
 
-                // Silent-no-op refusals, the same class as --golden-stage
-                // outside golden mode: the pick/outline nodes live only in
-                // NriGraphContext's frame, and the readback lands with
-                // frames-in-flight latency so an open-ended run never reports.
-                if (!cfg.nriGraph)
-                {
-                    std::fprintf(stderr, "error: --pick-probe only applies to the NRI graph path; "
-                                         "pass --nri-graph\n");
-                    return { std::nullopt, 2 };
-                }
+                // Silent-no-op refusal, the same class as --golden-stage
+                // outside golden mode: the readback lands with frames-in-flight
+                // latency so an open-ended run never reports. Used to also
+                // refuse without --nri-graph (the pick/outline nodes lived
+                // only on that path) -- that guard is gone as of Phase 5a:
+                // the NRI frame graph is the only render path, so the nodes
+                // are always present.
                 if (cfg.maxFrames == 0)
                 {
                     std::fprintf(stderr, "error: --pick-probe requires --frames N (the readback "
