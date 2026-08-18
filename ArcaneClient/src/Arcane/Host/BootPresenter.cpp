@@ -99,8 +99,16 @@ namespace Arcane
                 cmd->clearTextureFloat(backbuffer, nvrhi::AllSubresources,
                                        nvrhi::Color(0.06f, 0.06f, 0.08f, 1.0f));
             }
-            nvrhi::FramebufferHandle& fb = m_gpu.FramebufferFor(backbuffer);
-            m_gpu.Imgui().Render(cmd, fb);
+            // NRI Phase 5a, Task 5 deleted ImGuiLayer::Render(cmd, fb) along
+            // with the NVRHI renderer it drove (RenderToDrawData() is the
+            // only entry point left, and only the frame graph's ImGuiNriNode
+            // draws its output). This whole function is dead code today --
+            // every caller gates construction of the BootPresenter instance
+            // behind `!GraphFlavor()`/`!GraphMode()` (RuntimeApp::
+            // StageFinalize, EditorApp's matching stage, EditorAppProject's
+            // switch overlay), which is unconditionally false since the
+            // Movement 1 flip -- so there is nothing left to compose the
+            // progress-bar frame into here; it is simply not called.
         }
         cmd->close();
         m_gpu.Device().Nvrhi()->executeCommandList(cmd);

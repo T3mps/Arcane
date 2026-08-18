@@ -6,7 +6,7 @@
 //     half -- window, device-less Batcher2D, graph ImGuiLayer, input -- and
 //     answers GraphFlavor() true. That predicate is what every host branch
 //     gates on, so pinning it is pinning the boot split.
-//   * ImGuiLayer::CreateForGraph pins its own context in BeginFrame and in
+//   * ImGuiLayer::Create pins its own context in BeginFrame and in
 //     RenderToDrawData/EndFrameDiscard even when another context was left
 //     current. That pin is the Phase-2 carry this task closes: the graph
 //     render arm used to call ImGui::Render()/EndFrame() BARE.
@@ -167,7 +167,7 @@ TEST_CASE("nri landing: the graph ImGuiLayer installs its platform backend on IT
     REQUIRE(decoy != nullptr);
     ImGui::SetCurrentContext(decoy);
 
-    auto layer = Arcane::ImGuiLayer::CreateForGraph(window);
+    auto layer = Arcane::ImGuiLayer::Create(window);
     REQUIRE(layer != nullptr);
 
     // The PRIMARY layer leaves its OWN context current (deliberately unlike
@@ -204,7 +204,7 @@ TEST_CASE("nri landing: the graph ImGuiLayer pins its own context across Begin/R
     wd.hidden = true;
     REQUIRE(window.Create(wd));
 
-    auto layer = Arcane::ImGuiLayer::CreateForGraph(window);
+    auto layer = Arcane::ImGuiLayer::Create(window);
     REQUIRE(layer != nullptr);
 
     // The layer's own context: ImGui::CreateContext left it current, and it is
@@ -255,5 +255,25 @@ TEST_CASE("nri landing: the graph ImGuiLayer pins its own context across Begin/R
 
     ImGui::DestroyContext(foreign);
     layer.reset();
+    window.Destroy();
+}
+
+TEST_CASE("the ImGui layer has exactly one flavor and it installs the event tap", "[nri]")
+{
+    // Phase 3's unclickable-editor defect (@f7001ad9) was a stance applied to
+    // one of two flavors. One factory makes that class of bug inexpressible.
+    // The tap is what carries mouse BUTTON events (imgui_impl_sdl3 turns
+    // SDL_EVENT_MOUSE_BUTTON_* into AddMouseButtonEvent; nothing polls them),
+    // so a layer without it is a layer nothing can be clicked in.
+    Arcane::Window window;
+    Arcane::WindowDesc wd; wd.title = "ArcaneTests imgui"; wd.width = 320; wd.height = 200; wd.hidden = true;
+    REQUIRE(window.Create(wd));
+
+    auto layer = Arcane::ImGuiLayer::Create(window);
+    REQUIRE(layer != nullptr);
+    CHECK(window.HasNativeEventTap());
+
+    layer.reset();
+    CHECK_FALSE(window.HasNativeEventTap());   // teardown uninstalls
     window.Destroy();
 }

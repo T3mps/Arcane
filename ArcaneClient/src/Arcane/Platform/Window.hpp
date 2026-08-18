@@ -74,6 +74,11 @@ namespace Arcane
         using NativeEventTap = void (*)(const void* event, void* user);
         void SetNativeEventTap(NativeEventTap tap, void* user);
 
+        // Observability for the one-flavor invariant: the tap is the only route
+        // by which mouse BUTTON events reach ImGui, so "is it installed" is a
+        // property worth asserting rather than trusting.
+        [[nodiscard]] bool HasNativeEventTap() const noexcept { return m_tap != nullptr; }
+
         void GetPixelSize(uint32_t& width, uint32_t& height) const;
         bool IsMinimized() const;
 

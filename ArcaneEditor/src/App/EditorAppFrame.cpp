@@ -2778,8 +2778,10 @@ namespace Arcane::Editor
     // collateral was total: the graph-mode editor could not be clicked AT ALL
     // -- menus, panels, viewport pick, gizmo. It was never a property of this
     // frame, and the first human click of the D3 drive checklist is what
-    // surfaced it. D3b closed with both golden sets frozen, so InitForGraph
-    // installs the tap again (ImGuiLayer.cpp).
+    // surfaced it. D3b closed with both golden sets frozen, so the tap install
+    // became unconditional (ImGuiLayer.cpp); NRI Phase 5a, Task 5 later folded
+    // the whole withheld-tap flavor away entirely, so there is only one Init()
+    // left and it always installs the tap.
     //
     // ---- THE HEARTBEAT ---------------------------------------------------
     // Published by NriGraphContext::RenderFrame itself, after the present and
@@ -2861,8 +2863,13 @@ namespace Arcane::Editor
             // so there is no scene->tonemap->backbuffer pass as in ArcaneRuntime).
             m_gpu->Cmd()->clearTextureFloat(backbuffer, nvrhi::AllSubresources,
                                             nvrhi::Color(0.06f, 0.06f, 0.08f, 1.0f));
-            nvrhi::FramebufferHandle& fb = m_gpu->FramebufferFor(backbuffer);
-            m_gpu->Imgui().Render(m_gpu->Cmd(), fb);
+            // NRI Phase 5a, Task 5 deleted ImGuiLayer::Render(cmd, fb) along
+            // with the NVRHI renderer it drove. GraphMode() is unconditional
+            // (the `if (GraphMode()) return PresentChromeFrame();` guard
+            // above always takes it), so this whole tail is already
+            // unreachable -- see CompositeGameUi/RenderSelectionOutline just
+            // above for the same standing-no-op shape, left for Task 11's
+            // GraphMode() collapse rather than deleted piecemeal here.
         }
         m_gpu->Cmd()->close();
         m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());

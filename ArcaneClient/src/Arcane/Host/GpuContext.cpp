@@ -77,7 +77,7 @@ namespace Arcane
 
         // ImGuiLayer taps window events -> must outlive nothing but be destroyed
         // before the window; member order (after window) guarantees that.
-        ctx->m_imgui = ImGuiLayer::Create(ctx->m_window, *ctx->m_device, *ctx->m_shaders);
+        ctx->m_imgui = ImGuiLayer::Create(ctx->m_window);
         if (!ctx->m_imgui) { ARC_ERROR("GpuContext: imgui create failed"); return nullptr; }
 
         ctx->m_inputDevices = InputDevices::Create();
@@ -131,10 +131,10 @@ namespace Arcane
         ctx->m_batcher = Batcher2D::Create(nullptr, nullptr);
         if (!ctx->m_batcher) { ARC_ERROR("GpuContext: batcher create failed (graph flavor)"); return nullptr; }
 
-        // The graph flavor of the ImGui facade: context + SDL3 platform
-        // backend, no renderer (the graph's ImGuiNriNode is the renderer) and
-        // -- until desk checkpoint D3b -- no event tap. See ImGuiLayer.cpp.
-        ctx->m_imgui = ImGuiLayer::CreateForGraph(ctx->m_window);
+        // ImGuiLayer has one flavor since NRI Phase 5a, Task 5: context + SDL3
+        // platform backend + event tap, no renderer (the graph's ImGuiNriNode
+        // is the renderer). Same factory the NVRHI arm above calls.
+        ctx->m_imgui = ImGuiLayer::Create(ctx->m_window);
         if (!ctx->m_imgui) { ARC_ERROR("GpuContext: imgui create failed (graph flavor)"); return nullptr; }
 
         ctx->m_inputDevices = InputDevices::Create();

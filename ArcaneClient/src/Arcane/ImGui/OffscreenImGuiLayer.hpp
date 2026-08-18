@@ -4,34 +4,32 @@
 // framebuffer with MANUALLY INJECTED input (no OS window / SDL3 backend). For
 // hosting a SECOND ImGui layer inside an offscreen render target -- e.g. a
 // game/plugin's debug UI composited into an editor viewport, separate from the
-// editor's own ImGui. Owns its ImGuiContext + ImGuiNvrhiRenderer + font atlas;
-// editor- and game-agnostic. Sibling of ImGuiLayer (which owns the OS-window,
-// SDL3-backed context).
+// editor's own ImGui. Owns its ImGuiContext + font atlas; editor- and
+// game-agnostic. Sibling of ImGuiLayer (which owns the OS-window, SDL3-backed
+// context).
 //
-// TWO FLAVORS SINCE NRI PHASE 3, TASK 9, and they differ ONLY in who renders
-// the draw data -- the split ImGuiLayer already carries, for the same reason
-// and with the same shape:
+// ONE FLAVOR (NRI Phase 5a, Task 5 -- the two-flavor split that used to live
+// here, mirroring ImGuiLayer's, is gone). Context and NO renderer at all --
+// the frame graph's ImGuiNriNode is the renderer, and it consumes the
+// ImDrawData RenderToDrawData() hands back. The prior NVRHI flavor's own
+// renderer (ImGuiNvrhiRenderer) is deleted along with it.
 //
-//   Create()          the NVRHI flavor. Context + ImGuiNvrhiRenderer.
-//                     Render(cmd, fb) draws into an offscreen framebuffer.
-//   CreateForGraph()  the GRAPH flavor. Context and NO renderer at all -- the
-//                     frame graph's ImGuiNriNode is the renderer, and it
-//                     consumes the ImDrawData RenderToDrawData() hands back.
-//                     Render(cmd, fb) is unreachable there and says so.
+// THE CONTEXT DISCIPLINE is the point, not an implementation detail:
+// io.IniFilename is null (a game/plugin HUD must never persist into the
+// host's layout file -- in the editor that file is the PER-PROJECT layout,
+// and per-id ini state silently overrides authored UI on every later boot),
+// the atlas is this context's own, and every entry point pins m_context with
+// ImGui::SetCurrentContext before touching ImGui state.
 //
-// WHAT THE FLAVORS SHARE IS THE POINT, not an implementation detail: the
-// CONTEXT DISCIPLINE. io.IniFilename is null on both (a game/plugin HUD must
-// never persist into the host's layout file -- in the editor that file is the
-// PER-PROJECT layout, and per-id ini state silently overrides authored UI on
-// every later boot), the atlas is this context's own, and every entry point
-// pins m_context with ImGui::SetCurrentContext before touching ImGui state.
-// The graph flavor exists so that discipline survives on a host with no NVRHI
-// device; dropping the layer there would hand the plugin the HOST's context
-// and with it the host's ini file.
+// ONE OBLIGATION THIS CLASS DOES NOT DISCHARGE ITSELF: whichever ImGuiNri
+// will be handed this context's draw data must ADOPT it
+// (ImGuiNriNode::AdoptImGuiContext) before the first frame. That backend
+// installs ImGuiBackendFlags_RendererHasTextures on whatever context is
+// current when IT is created, which is the HOST's, not this one's -- and a
+// draw list built without that flag carries no atlas for the node to upload.
+// See ImGuiNri::AdoptContext.
 
 #include <Arcane/Base/Api.hpp>
-
-#include <nvrhi/nvrhi.h>
 
 #include <glm/glm.hpp>
 
@@ -41,27 +39,10 @@ struct ImDrawData;
 
 namespace Arcane
 {
-    class RenderDevice;
-    class ShaderLibrary;
-
     class ARCANE_API OffscreenImGuiLayer
     {
     public:
-        static std::unique_ptr<OffscreenImGuiLayer> Create(RenderDevice& device,
-                                                           ShaderLibrary& shaders);
-
-        // The GRAPH flavor: no device, no ShaderLibrary, no NVRHI renderer --
-        // just the context, its own atlas and the same injected-input surface.
-        // The graph's ImGuiNriNode draws RenderToDrawData()'s output instead.
-        //
-        // ONE OBLIGATION THE NVRHI FLAVOR DOES NOT CARRY: whichever ImGuiNri
-        // will be handed this context's draw data must ADOPT it
-        // (ImGuiNriNode::AdoptImGuiContext) before the first frame. That
-        // backend installs ImGuiBackendFlags_RendererHasTextures on whatever
-        // context is current when IT is created, which is the HOST's, not this
-        // one's -- and a draw list built without that flag carries no atlas for
-        // the node to upload. See ImGuiNri::AdoptContext.
-        static std::unique_ptr<OffscreenImGuiLayer> CreateForGraph();
+        static std::unique_ptr<OffscreenImGuiLayer> Create();
 
         virtual ~OffscreenImGuiLayer() = default;
 
@@ -83,15 +64,10 @@ namespace Arcane
 
         // SetCurrentContext(this) + inject IO + ImGui::NewFrame(). Caller then
         // issues ImGui draw calls (or a plugin's DrawUI). Caches WantCapture* for
-        // this frame. Pair every BeginFrame with EXACTLY ONE of Render /
-        // RenderToDrawData / EndFrameDiscard -- a double-Begin trips ImGui's own
-        // asserts, and an unpaired one asserts on the NEXT frame.
+        // this frame. Pair every BeginFrame with EXACTLY ONE of RenderToDrawData /
+        // EndFrameDiscard -- a double-Begin trips ImGui's own asserts, and an
+        // unpaired one asserts on the NEXT frame.
         virtual void BeginFrame() = 0;
-
-        // SetCurrentContext(this) + ImGui::Render() + RenderDrawData into `target`
-        // on the OPEN command list (display-referred target; ImGui blends over it).
-        // NVRHI flavor only: the graph flavor built no renderer and refuses.
-        virtual void Render(nvrhi::ICommandList*, nvrhi::IFramebuffer* target) = 0;
 
         // Ends this frame and hands back ITS draw data, recording nothing --
         // for a renderer that is not this layer's (the graph path's

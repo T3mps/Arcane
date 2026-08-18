@@ -551,19 +551,20 @@ namespace Arcane::Editor
         // restores the editor context, so ~GpuContext's ImGuiLayer teardown stays
         // valid. See CompositeGameUi.
         //
-        // NON-NULL ON BOTH ARMS AGAIN AS OF NRI PHASE 3, TASK 9, and that is
-        // the point of the whole game-UI half of that task rather than a detail
-        // of it. Task 8 left this null on the graph arm (OffscreenImGuiLayer was
-        // an ImGui-NVRHI object) and the plugin was handed the EDITOR's context
-        // instead -- whose io.IniFilename is the PER-PROJECT LAYOUT FILE, where
-        // this one's is deliberately null. A plugin window submitted through
-        // that fallback would have been persisted into the user's layout,
-        // permanently, and per-id ini state silently overrides authored UI on
-        // every later boot. The graph arm now builds the SAME class through
-        // OffscreenImGuiLayer::CreateForGraph -- same context, same io, same
-        // pinning discipline, no NVRHI renderer -- and the graph's ImGuiNriNode
-        // draws its RenderToDrawData() output. The isolation is structural
-        // again on both arms; nothing is holding it by control flow.
+        // NON-NULL UNCONDITIONALLY (NRI Phase 3, Task 9; NRI Phase 5a, Task 5
+        // removed OffscreenImGuiLayer's own flavor split, so the single
+        // Create() call at StageRenderBridge is the only path there ever
+        // was to reach here now). Task 8 left this null on the graph arm
+        // (OffscreenImGuiLayer was an ImGui-NVRHI object then) and the plugin
+        // was handed the EDITOR's context instead -- whose io.IniFilename is
+        // the PER-PROJECT LAYOUT FILE, where this one's is deliberately null.
+        // A plugin window submitted through that fallback would have been
+        // persisted into the user's layout, permanently, and per-id ini state
+        // silently overrides authored UI on every later boot. Every arm builds
+        // the SAME class through OffscreenImGuiLayer::Create -- own context,
+        // own io, own pinning discipline, no NVRHI renderer -- and the graph's
+        // ImGuiNriNode draws its RenderToDrawData() output. The isolation is
+        // structural; nothing is holding it by control flow.
         //
         // ===== AND ITS POSITION IN THIS LIST IS LOAD-BEARING ON THE GRAPH ARM
         // (Task 9 fix round 1). The viewport context's game ImGuiNriNode ADOPTS

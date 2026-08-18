@@ -477,22 +477,19 @@ namespace Arcane::Editor
         // leaves the current ImGui context null; harmless -- the editor's
         // ImGuiLayer re-pins its own context on every BeginFrame/WantCapture*.)
         //
-        // BOTH ARMS BUILD ONE (NRI Phase 3, Task 9), and only the RENDERER half
-        // differs -- which is the whole shape of that task's game-UI work.
-        // OffscreenImGuiLayer::Create builds an ImGui-NVRHI renderer over
-        // m_gpu->Device(); CreateForGraph builds the identical CONTEXT (own
-        // atlas, io.IniFilename = nullptr, the same pinning discipline in every
-        // entry point) with no renderer at all, because on that arm the
-        // renderer is a node inside the viewport's frame graph
-        // (ImGuiNriNode over FrameDesc::gameUi) and there is no NVRHI device to
-        // build one from.
+        // ONE FACTORY (NRI Phase 5a, Task 5): OffscreenImGuiLayer's own
+        // NVRHI/graph flavor split -- which used to make this an
+        // m_gpu->GraphFlavor() ternary between an ImGui-NVRHI renderer over
+        // m_gpu->Device() and a bare CONTEXT (own atlas, io.IniFilename =
+        // nullptr, the same pinning discipline in every entry point) -- is
+        // gone. OffscreenImGuiLayer::Create() always builds the bare context;
+        // the renderer is always a node inside the viewport's frame graph
+        // (ImGuiNriNode over FrameDesc::gameUi).
         //
         // Task 8 left this NULL on the graph arm and the plugin took the
         // editor's context as a fallback; see the SetImGui block below for what
         // that cost and why restoring this is not optional.
-        m_gameImgui = m_gpu->GraphFlavor()
-                        ? Arcane::OffscreenImGuiLayer::CreateForGraph()
-                        : Arcane::OffscreenImGuiLayer::Create(m_gpu->Device(), m_gpu->Shaders());
+        m_gameImgui = Arcane::OffscreenImGuiLayer::Create();
         if (!m_gameImgui)
         {
             ARC_ERROR("Arcane Editor: OffscreenImGuiLayer creation failed");
