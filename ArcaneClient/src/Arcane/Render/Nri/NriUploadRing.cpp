@@ -11,6 +11,7 @@
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>   // GpuDeviceLostObserved -- the device-lost teardown gate
 
 #include <algorithm>
 #include <cstdint>
@@ -202,7 +203,15 @@ namespace Arcane
         // teardown, Task 6+) has already buried there -- a fixed low
         // sentinel could violate that invariant and fatally assert in debug.
         // Idle-then-destroy sidesteps the question entirely.
-        if (core.DeviceWaitIdle)
+        //
+        // SKIPPED ON A LOST DEVICE (NRI Phase 3, D3b teardown). Same rule as
+        // NriGraphContext's and ~NriDevice's: once the loss is observed this
+        // call can only fail, and the destroys below happen anyway -- on VK
+        // they are REQUIRED (vkDestroyDevice's valid usage, and VMA asserts on
+        // survivors), and on D3D12 these staging buffers are upload-heap
+        // memory the hung GPU is not reading. The healthy path is unchanged:
+        // GpuDeviceLostObserved() is false for every ordinary shutdown.
+        if (core.DeviceWaitIdle && !GpuDeviceLostObserved())
             (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
 
         for (Slot& slot : m_slots)

@@ -20,6 +20,7 @@
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>     // the crash chain, armed by whichever device exists
 #include <Arcane/Render/NvrhiMessageCallback.hpp>   // the tagged "nri-graph" error seam
 #include <Arcane/Render/PostChainCache.hpp>         // PostChainDesc -- the frame's post-chain shape
+#include <Arcane/Render/GpuInstrumentation.hpp>       // GpuDeviceLostObserved -- the device-lost teardown gate
 #include <Arcane/Render/ShaderLibrary.hpp>          // ShaderLibrary::ResolveFlavorDir
 #include <Arcane/Render/Swapchain.hpp>              // kSwapchainFramesInFlight
 
@@ -659,7 +660,16 @@ namespace Arcane
         // The last submit may still be in flight. Idle before releasing
         // anything it referenced -- ~NriDevice idles again before draining,
         // which is harmless.
-        if (core.DeviceWaitIdle)
+        //
+        // SKIPPED ON A LOST DEVICE (NRI Phase 3, D3b teardown). Once the loss
+        // has been observed this call cannot idle anything that is not already
+        // stopped; all it can do is fail. On VK it returns DEVICE_LOST
+        // immediately; on D3D12 it burns NRI_TIMEOUT_FENCE (5 s, SharedExternal
+        // .h:53) inside its scratch fence and then reports SUCCESS anyway. Both
+        // outcomes cost the crash teardown time and one more entry on the error
+        // latch and buy nothing. The healthy path is unchanged -- every
+        // ordinary shutdown has GpuDeviceLostObserved() == false.
+        if (core.DeviceWaitIdle && !GpuDeviceLostObserved())
             (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
 
         // ONE fence value for every burial below, and it is the graph's own

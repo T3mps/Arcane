@@ -27,12 +27,14 @@
 
 #undef ERROR
 
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace Arcane
@@ -436,14 +438,37 @@ namespace Arcane
             // with exit 0x87D (2173) instead of the device-loss exit 1, and
             // burns the report on "crash (unhandled exception)" instead of the
             // truth. Vulkan's validation layer merely logs the same condition,
-            // which is why only dx12 died of it -- but the RULE is the same on
-            // both, so the disarm is not backend-gated.
+            // which is why only dx12 died of it.
             //
-            // Leaking is the correct trade and it is bounded: the device is
-            // gone, the host is already latched to quit (NoteGpuDeviceLost),
-            // and the D3D12/VK runtimes reclaim every one of these at process
-            // exit. NRI asserts nothing about outstanding objects at device
-            // destruction, so nothing downstream notices.
+            // D3D12 ONLY, and the backend gate is load-bearing -- the first
+            // cut of this disarm was not gated and that is what turned the
+            // vulkan arm from a clean exit 1 into an abort (exit 3):
+            //
+            //   Assertion failed: false && "Unfreed dedicated allocations
+            //   found!", ThirdParty/VMA/include/vk_mem_alloc.h:6842
+            //
+            // The two APIs want OPPOSITE things after a device loss, and both
+            // enforce their want:
+            //
+            //   VULKAN -- destroying child objects is REQUIRED, not merely
+            //     permitted: vkDestroyDevice's valid-usage says every object
+            //     created from the device must be destroyed first, and NRI's
+            //     VMA allocator asserts (above) when they are not. The
+            //     "VkCommandBuffer ... is in use" messages that VVL emits on
+            //     this path are ERROR-severity log lines, nothing more; they
+            //     were already present in the recorded exit-1 PASS run. So on
+            //     VK the fault objects are freed normally.
+            //   D3D12 -- Release of an object the GPU still owns is a
+            //     RaiseFailFastException (0x87D) out of D3D12SDKLayers, which
+            //     is non-continuable and kills the host at exit 2173 with the
+            //     report burned on "crash (unhandled exception)". So on D3D12
+            //     the fault objects are NOT freed.
+            //
+            // The D3D12 leak is bounded and paid for at exactly one place:
+            // ~NriDevice skips nriDestroyDevice on a lost D3D12 device, so
+            // D3D12MA never runs its own "Unfreed committed allocations
+            // found!" assert (D3D12MemAlloc.cpp:8271) over what we kept. The
+            // process is already latched to quit; Windows reclaims the rest.
             void Disarm() noexcept { core = nullptr; }
 
             ~FaultObjects()
@@ -775,46 +800,90 @@ namespace Arcane
             // wait is what makes the teardown legal.
             (void)ARC_NRI_CHECK(core.QueueWaitIdle(&queue));
 
-            // ...on VULKAN. On D3D12 that sentence is a wish: QueueD3D12::
-            // WaitIdle returns SUCCESS even when its fence wait failed,
-            // because FenceD3D12::Wait is `void` (DeviceFactories.hpp carries
-            // the full citation). So ARC_NRI_CHECK above sees SUCCESS, the
-            // typed DEVICE_LOST branch in NriCheckImpl never runs, nothing
-            // observes the removal -- and the run proceeds to free objects the
-            // GPU still owns. That is the D3b dx12 failure end to end.
+            // ...on VULKAN, where vkQueueWaitIdle genuinely blocks until the
+            // driver has finished losing the device and then returns
+            // VK_ERROR_DEVICE_LOST, which ARC_NRI_CHECK routes into
+            // NriCheckImpl's typed branch.
             //
-            // Ask the device directly, then hand the answer to the SAME
-            // NoteDeviceLost the typed branch uses, so dx12 arrives at the
-            // identical chain vulkan already walks: device-removed hook ->
-            // ObserveDeviceRemoved -> "gpu-crash: device removed" report +
-            // `.gpudump` -> NoteGpuDeviceLost -> the host's exit 1.
+            // On D3D12 that sentence is a wish TWICE OVER, and the second half
+            // is what D3b's first attempt at this missed:
             //
-            // Gated three ways, all load-bearing: D3D12 only (the probe casts
-            // to ID3D12Device*), only when nothing has ALREADY observed the
-            // loss (vulkan's path, and dx12 if some earlier call happened to
-            // catch it -- ObserveDeviceRemoved is once-only anyway, this just
-            // keeps the log honest), and only when the device really is gone
-            // (a `--crash-gpu` that somehow did NOT kill the device must still
-            // tear down normally rather than leak).
+            //  (i)  QueueD3D12::WaitIdle returns SUCCESS even when its fence
+            //       wait failed, because FenceD3D12::Wait is `void`
+            //       (DeviceFactories.hpp carries the full citation). So
+            //       ARC_NRI_CHECK above can never see DEVICE_LOST here.
+            //  (ii) That fence wait does not even wait for the TDR. It is
+            //       WaitForSingleObjectEx(m_Event, NRI_TIMEOUT_FENCE, TRUE)
+            //       with NRI_TIMEOUT_FENCE == 5000u (SharedExternal.h:53), and
+            //       on this path it comes back WAIT_TIMEOUT with the GPU still
+            //       hung and the device still PRESENT. The desk transcript is
+            //       unambiguous: fault dispatched 02:14:16.157, "nri::
+            //       FenceD3D12::Wait: WaitForSingleObjectEx() failed!" at
+            //       02:14:21.158 -- 5.001 s, i.e. exactly the timeout -- while
+            //       the SAME fault on the SAME GPU took vkQueueWaitIdle
+            //       15.9 s (02:14:59.626 -> 02:15:15.528) to come back
+            //       DEVICE_LOST.
+            //
+            // (ii) is why asking GetDeviceRemovedReason() immediately after
+            // the wait answered S_OK and observed nothing: at T+5 s the device
+            // is HUNG, not yet REMOVED. So do the waiting NRI's fence gave up
+            // on, then hand the answer to the SAME NoteDeviceLost the typed
+            // branch uses -- dx12 then walks the identical chain vulkan walks:
+            // device-removed hook -> ObserveDeviceRemoved -> "gpu-crash:
+            // device removed" report + `.gpudump` -> NoteGpuDeviceLost -> the
+            // host's exit 1.
+            //
+            // The budget is generous on purpose (observed 15.9 s here; TdrDelay
+            // is machine-configurable) and bounded on purpose (a `--crash-gpu`
+            // that somehow did NOT kill the device must not wedge the host).
+            // This whole function is `#if !defined(ARCANE_DIST)` and only runs
+            // under an explicit `--crash-gpu`, so a multi-second poll costs
+            // nothing anyone ships. The hang watchdog WILL file a report while
+            // we sit here -- vulkan's arm already does exactly that at ~12 s
+            // and the battery already expects it.
             if (device.Backend() == GraphicsBackend::D3D12 && !GpuDeviceLostObserved())
             {
+                constexpr auto kRemovalBudget = std::chrono::seconds(45);
+                constexpr auto kRemovalPoll   = std::chrono::milliseconds(50);
+
                 void* const nativeDev = core.GetDeviceNativeObject
                                             ? core.GetDeviceNativeObject(&device.Device())
                                             : nullptr;
-                if (D3D12NativeDeviceRemoved(nativeDev))
+
+                const auto deadline = std::chrono::steady_clock::now() + kRemovalBudget;
+                bool       removed  = D3D12NativeDeviceRemoved(nativeDev);
+                while (!removed && std::chrono::steady_clock::now() < deadline)
+                {
+                    std::this_thread::sleep_for(kRemovalPoll);
+                    removed = D3D12NativeDeviceRemoved(nativeDev);
+                }
+
+                if (removed)
                 {
                     NvrhiMessageCallback::Instance().NoteDeviceLost(
                         "nri",
-                        "[nri] --crash-gpu: QueueWaitIdle reported SUCCESS but "
-                        "ID3D12Device::GetDeviceRemovedReason says the device is gone -- "
-                        "DEVICE_LOST (QueueD3D12::WaitIdle cannot return it: FenceD3D12::Wait "
-                        "is void)");
+                        "[nri] --crash-gpu: ID3D12Device::GetDeviceRemovedReason says the device "
+                        "is gone -- DEVICE_LOST (QueueD3D12::WaitIdle could not report it: it "
+                        "returns the result of CREATING its scratch fence, FenceD3D12::Wait is "
+                        "void, and that wait only ever waits NRI_TIMEOUT_FENCE = 5s)");
+                }
+                else
+                {
+                    ARC_ERROR("[nri] --crash-gpu: the D3D12 device was still present after "
+                              "waiting {}s for the removal -- no device-loss observation was "
+                              "made; the report will describe whatever happens next",
+                              kRemovalBudget.count());
                 }
             }
 
-            // The wait did not protect the teardown -> there is no legal
-            // teardown. See FaultObjects::Disarm.
-            if (GpuDeviceLostObserved())
+            // The wait never made the teardown legal -- see FaultObjects::
+            // Disarm for why that is unconditional on D3D12 and must NOT be
+            // done on Vulkan. Not gated on GpuDeviceLostObserved(): the whole
+            // purpose of this function is to hang the GPU, so there is no
+            // D3D12 outcome in which the fault objects are provably free to
+            // release -- including the branch above where we could not even
+            // confirm the removal, which is the LEAST safe case of all.
+            if (device.Backend() == GraphicsBackend::D3D12)
                 objects.Disarm();
 
             return true;

@@ -12,6 +12,7 @@
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>   // GpuDeviceLostObserved -- the device-lost teardown gate
 #include <Arcane/Platform/Window.hpp>
 
 #include <SDL3/SDL_timer.h>
@@ -200,7 +201,17 @@ namespace Arcane
         // Mirrors NRISamples' ResizeSwapChain() (Source/Resize.cpp) and the
         // NVRHI swapchains' ReleaseBackbufferHandles(), which call
         // waitForIdle() for the identical reason.
-        if (m_device && m_device->GraphicsQueue())
+        //
+        // SKIPPED ON A LOST DEVICE (NRI Phase 3, D3b teardown). Same rule as
+        // NriGraphContext's and ~NriDevice's: after an observed loss the idle
+        // cannot make anything idle that is not already stopped -- it returns
+        // DEVICE_LOST on VK and burns NRI_TIMEOUT_FENCE (5 s, SharedExternal.h
+        // :53) on D3D12 before reporting SUCCESS regardless. NOTE this
+        // function is also the RESIZE path, and resize runs on a healthy
+        // device, where GpuDeviceLostObserved() is false and the idle happens
+        // exactly as before -- the two-VkDevice resize hazard D2 closed is
+        // untouched.
+        if (m_device && m_device->GraphicsQueue() && !GpuDeviceLostObserved())
             (void)ARC_NRI_CHECK(m_device->Core().QueueWaitIdle(m_device->GraphicsQueue()));
 
         for (TextureSlot& slot : m_textures)

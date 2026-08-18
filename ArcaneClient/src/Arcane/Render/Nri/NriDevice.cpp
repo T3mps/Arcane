@@ -13,6 +13,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/DeviceCreationD3D12.hpp>
 #include <Arcane/Render/DeviceCreationVulkan.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>   // GpuDeviceLostObserved -- the ONE device-lost latch (~NriDevice's teardown gate)
 #include <Arcane/Render/ShaderConventions.hpp>
 
 // wingdi.h (via spdlog -> windows.h, and via vulkan.hpp's WIN32 platform
@@ -399,15 +400,55 @@ namespace Arcane
         if (!m_device)
             return;
 
+        // ==============================================================
+        // LOST D3D12 DEVICE: STOP HERE AND LEAK. (NRI Phase 3, D3b teardown.)
+        // ==============================================================
+        // Only when the loss has actually been OBSERVED, and only on D3D12.
+        // The healthy path below is untouched and stays the only path any
+        // ordinary shutdown -- host, editor, offscreen, resize -- can reach,
+        // because GpuDeviceLostObserved() is false for all of them.
+        //
+        // Why stop: after a TDR the D3D12 fault path deliberately keeps the
+        // objects the GPU still owns (NriDiagnostics.cpp, FaultObjects::
+        // Disarm -- releasing them is a non-continuable 0x87D fail-fast out of
+        // D3D12SDKLayers). Something has to absorb that leak, and this is the
+        // one place that can: nriDestroyDevice tears down NRI's D3D12MA
+        // allocator, which asserts `"Unfreed committed allocations found!"`
+        // (D3D12MemAlloc.cpp:8271) over exactly what we kept. Skipping it
+        // trades a bounded leak on a process that is already latched to quit
+        // for an abort -- which is the same trade Disarm makes, paid at the
+        // matching end.
+        //
+        // Vulkan does NOT take this branch and must not: over there the fault
+        // objects are freed normally (vkDestroyDevice REQUIRES its children
+        // gone, and VMA asserts otherwise), so VK's teardown is the ordinary
+        // one and is proven clean by the recorded exit-1 run.
+        const bool lostD3D12 = (m_backend == GraphicsBackend::D3D12) && GpuDeviceLostObserved();
+
         // Graveyard's contract is "the caller has already made the GPU idle";
         // on the teardown path this is the caller. Draining BEFORE
         // nriDestroyDevice matters: the thunks call NRI Destroy* entries
         // against this device.
+        //
+        // On a lost device the idle is a five-second fence timeout on D3D12
+        // and a guaranteed DEVICE_LOST on VK -- it cannot make anything idle
+        // that is not already stopped, so it is skipped for both. What it can
+        // still do is burn wall-clock inside a crash teardown and feed the
+        // error latch, neither of which is worth anything here.
+        const bool deviceLost = GpuDeviceLostObserved();
         if (m_graveyard.Pending() != 0)
         {
-            if (m_core.DeviceWaitIdle)
+            if (m_core.DeviceWaitIdle && !deviceLost)
                 (void)ARC_NRI_CHECK(m_core.DeviceWaitIdle(m_device));
-            m_graveyard.Drain();
+            if (!lostD3D12)
+                m_graveyard.Drain();
+        }
+
+        if (lostD3D12)
+        {
+            m_device        = nullptr;
+            m_graphicsQueue = nullptr;
+            return;
         }
 
         // Contract item 15: this destroys NRI's own objects (VMA allocator,
