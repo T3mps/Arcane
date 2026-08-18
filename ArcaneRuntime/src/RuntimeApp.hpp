@@ -82,15 +82,19 @@ private:
 
     // --nri-graph's whole render half: the native device, NRI wrap, swapchain
     // (over the HOST's window, borrowed -- NRI Phase 3, Task 6), upload ring,
-    // pipeline cache and RenderGraph. Null on every ordinary run -- the NVRHI
-    // path is the default and stays so until Phase 5 flips it.
+    // pipeline cache and RenderGraph. LIVE ON EVERY RUN as of Phase 5a
+    // (Task 2b): the NRI frame graph is the only render path now,
+    // unconditionally, in every configuration including Dist -- this is null
+    // only on a failed boot (MainLoop's `if (!m_graphContext)` returns before
+    // the loop starts).
     //
-    // NOT #if-guarded even though the FLAG is non-Dist: the type is compiled
-    // into the engine DLL in every configuration (it is ordinary Render/Nri
-    // source), and a preprocessor-guarded MEMBER would force every use site in
-    // MainLoop's frame body to grow a guard of its own -- which is exactly how
-    // a Dist-only compile break gets introduced. Only the CREATION is guarded,
-    // so a Dist build carries a null pointer and one predictable branch.
+    // NOT #if-guarded (never was): the type is compiled into the engine DLL
+    // in every configuration (it is ordinary Render/Nri source), and a
+    // preprocessor-guarded MEMBER would force every use site in MainLoop's
+    // frame body to grow a guard of its own -- which is exactly how a
+    // Dist-only compile break gets introduced. The CREATION is unconditional
+    // too now (Phase 5a, Task 2b); there is no configuration left where this
+    // carries a null pointer on an ordinary run.
     //
     // Declared AFTER m_gpu so it destructs BEFORE it, and since Task 6 that
     // ordering is LOAD-BEARING rather than merely tidy: this object's

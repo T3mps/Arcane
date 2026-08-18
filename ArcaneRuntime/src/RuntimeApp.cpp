@@ -25,9 +25,9 @@
 // Phase 3 Task 4: every symbol they were here for (GoldenArtifact, the audio
 // voice reap, input sampling, Batch2DStats, the post-chain hook) moved with
 // MainLoop's frame body -- see that file.
-// NriGraphContext (--nri-graph) is NOT Dist-guarded here: RuntimeApp.hpp holds
-// the member unconditionally -- see its comment for why only the CREATION is
-// Dist-guarded.
+// NriGraphContext (the graph vehicle) is NOT Dist-guarded here: RuntimeApp.hpp
+// holds the member unconditionally, and as of Phase 5a (Task 2b) the CREATION
+// is unconditional too, in every configuration -- see that header's comment.
 
 #include <Astra/Core/TypeContext.hpp>
 
@@ -471,12 +471,11 @@ void RuntimeApp::MainLoop()
     // belong to the boot, and everything from this point until the vehicle is
     // destroyed belongs to the graph. ShutdownGraphPath() reads it back after
     // the last NRI object is gone -- a teardown-only validation error must
-    // still fail the run.
+    // still fail the run. This whole vehicle boot is unconditional as of
+    // Phase 5a (Task 2b): the NRI frame graph is the only render path, in
+    // every configuration including Dist, so there is no longer a plain-NVRHI
+    // arm for it to be skipped in favour of.
     m_graphErrorBaseline = Arcane::RenderErrorCount();
-    // As of Phase 5a (Task 2b) this vehicle boot is unconditional -- the NRI
-    // frame graph is the only render path, in every configuration including
-    // Dist, so there is no longer a plain-NVRHI arm for this to be skipped in
-    // favour of.
     Arcane::Diagnostics::SetPhase("nri graph vehicle boot");
 
     // THE REVEAL, which StageFinalize could not do on this path (its
@@ -496,7 +495,7 @@ void RuntimeApp::MainLoop()
     m_graphContext = Arcane::NriGraphContext::Create(m_config, m_gpu->Win());
     if (!m_graphContext)
     {
-        ARC_ERROR("--nri-graph: the graph render half could not be created");
+        ARC_ERROR("the graph render half could not be created");
         m_graphExit = 1;
         ShutdownGraphPath();
         return;

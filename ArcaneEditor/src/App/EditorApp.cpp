@@ -1546,13 +1546,18 @@ namespace Arcane::Editor
 
         // Formerly `#if !defined(ARCANE_DIST)` here (NRI Phase 5a, Task 2a):
         // that guard existed only because the graph path was opt-in dev
-        // scaffolding, and GraphMode() was structurally false in Dist so the
-        // body was dead code there. GraphMode() is unaffected by this task
-        // (still false in Dist -- see EditorApp.cpp:306's own guard, Task
-        // 2b's job) so removing the redundant preprocessor guard here changes
-        // no behaviour; it only stops a SECOND, independent reason Dist could
-        // never reach this body from outliving the first once Task 2b flips
-        // EditorApp.cpp:306 and GraphMode() starts reporting true there too.
+        // scaffolding, and at the time GraphMode() was structurally false in
+        // Dist (EditorApp.cpp:306 still chose the NVRHI arm there), so this
+        // body was dead code in Dist either way -- removing the redundant
+        // preprocessor guard changed no behaviour yet. Phase 5a Task 2b (this
+        // commit) removed that structural guarantee: EditorApp.cpp:306 now
+        // takes CreateForGraph unconditionally, so GraphMode() reports TRUE in
+        // Dist too, and this body runs there for the first time ever. Had
+        // Task 2a not already removed the preprocessor guard here, Task 2b's
+        // flip would have reproduced exactly the silent Dist-only
+        // null-dereference class Task 2a's own commit message exists to
+        // describe -- GraphMode() true, m_graphChrome and
+        // m_viewportTargets.graph never built.
         Arcane::Diagnostics::SetPhase("nri graph vehicle boot");
 
         // THE REVEAL, which StageSplashReady could not do on this flavor (its
@@ -1579,7 +1584,7 @@ namespace Arcane::Editor
         m_graphChrome = Arcane::NriGraphContext::Create(m_config, m_gpu->Win());
         if (!m_graphChrome)
         {
-            ARC_ERROR("--nri-graph: the editor's chrome graph context could not be created");
+            ARC_ERROR("the editor's chrome graph context could not be created");
             return false;
         }
 

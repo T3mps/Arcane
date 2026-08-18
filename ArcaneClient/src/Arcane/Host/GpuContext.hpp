@@ -34,7 +34,7 @@
 // members die for real.
 //
 // GraphFlavor() is the ONE predicate every host branch keys off. Prefer it to
-// re-reading HostConfig::nriGraph: what matters at a call site is whether the
+// re-reading a HostConfig flag: what matters at a call site is whether the
 // members exist, not which flag caused that.
 
 #include <Arcane/Base/Api.hpp>

@@ -363,9 +363,11 @@ namespace Arcane::Editor
         // THE CHROME CONTEXT: the host-window NriGraphContext. It owns the
         // process's ONLY graphics device (GpuContext::CreateForGraph builds no
         // NVRHI device at all), arms the crash chain, and its swapchain binds
-        // m_gpu's window -- exactly what RuntimeApp::m_graphContext is. Null on
-        // every ordinary run: the editor's NVRHI path is the default and the
-        // floor.
+        // m_gpu's window -- exactly what RuntimeApp::m_graphContext is. LIVE
+        // ON EVERY RUN as of Phase 5a (Task 2b): the graph path is the only
+        // one left, in every configuration including Dist -- this is null
+        // only on a failed boot (CreateGraphVehicles' `if (!m_graphChrome)`
+        // returns false before its caller proceeds).
         //
         // MID-PHASE, IT RENDERS NOTHING. Task 10 owns the editor's chrome
         // frame (clear + one ImGui node over the editor context's draw data ->
@@ -378,13 +380,14 @@ namespace Arcane::Editor
         //     InvalidateUserTextureNow must be called on -- see
         //     ViewportTargets::ApplyPendingResize.
         //
-        // NOT #if-guarded even though the flag is non-Dist, for exactly the
-        // reason RuntimeApp.hpp states for its own member: the type is compiled
-        // into the engine DLL in every configuration, and a preprocessor-guarded
-        // MEMBER would force every use site in the frame body to grow a guard of
-        // its own -- which is how a Dist-only compile break gets introduced.
-        // Only the CREATION is guarded, so a Dist build carries a null pointer
-        // and one predictable branch.
+        // NOT #if-guarded (never was), for exactly the reason RuntimeApp.hpp
+        // states for its own member: the type is compiled into the engine DLL
+        // in every configuration, and a preprocessor-guarded MEMBER would
+        // force every use site in the frame body to grow a guard of its own --
+        // which is how a Dist-only compile break gets introduced. The
+        // CREATION is unconditional too now (Phase 5a, Task 2b); there is no
+        // configuration left where this carries a null pointer on an ordinary
+        // run.
         //
         // Declared AFTER m_gpu so it destructs BEFORE it, and that ordering is
         // LOAD-BEARING: this object's swapchain is bound to the window inside
