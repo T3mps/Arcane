@@ -291,14 +291,16 @@ void PrepareFrame(FrameIo& io)
 }
 
 // =============================================================
-// THE RENDER HALF. Exactly one of these two blocks runs per frame.
-//
-// NVRHI (default, and the regression floor this whole phase is
-// measured against): record the whole frame into one command list --
-// canvas clear, batcher, post chain, tonemap, ImGui -- then submit and
-// present. NOT ONE LINE of it changed for Phase 2 beyond this brace
-// and the indent it forced; the graph path is built BESIDE it, never
-// through it.
+// THE RENDER HALF. Exactly one of these two blocks runs per frame. As of
+// Phase 5a (Task 2b) this one (RenderNvrhi) is UNREACHABLE in practice --
+// MainLoop's `if (!m_graphContext)` never fires, since m_graphContext is
+// created unconditionally -- but it remains the REGRESSION FLOOR
+// stage-golden comparisons are measured against, which is why it stays
+// untouched rather than deleted (Tasks 4-11's job): record the whole frame
+// into one command list -- canvas clear, batcher, post chain, tonemap,
+// ImGui -- then submit and present. NOT ONE LINE of it changed for Phase 2
+// beyond this brace and the indent it forced; the graph path is built
+// BESIDE it, never through it.
 // =============================================================
 void RenderNvrhi(FrameIo& io)
 {
@@ -672,7 +674,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         // Already reported through the "nri-graph" seam (so the latch
         // grew and the exit code would be nonzero anyway) -- stop
         // rather than spin on a broken device.
-        ARC_ERROR("--nri-graph: the frame could not be recorded or submitted; stopping");
+        ARC_ERROR("the frame could not be recorded or submitted; stopping");
         io.graphExit = 1;
         return outcome;
     }

@@ -49,7 +49,7 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only Build -> Diagnostics -> Crash GPU
-#include <Arcane/Render/Nri/NriGraphContext.hpp>   // dev-only --nri-graph vehicle (chrome + viewport)
+#include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle (chrome + viewport); unconditional as of Phase 5a
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/PickEmit.hpp>   // PickDrawable -- the graph arm's per-frame pickables
 #include <Arcane/Render/PickBuffer.hpp>
@@ -144,16 +144,17 @@ namespace Arcane::Editor
         bool       Create();
         InitResult Init();
         // THE GRAPH VEHICLES' CREATE, run by Main() between boot and the frame
-        // loop (--nri-graph only; a no-op returning true on the NVRHI arm).
-        // It sits HERE rather than in a boot stage for the ordering
-        // RuntimeApp::MainLoop proved at three desk checkpoints: the window is
-        // Show()n FIRST and the swapchain built over an already-mapped window,
-        // because a surface created against a window the compositor has never
-        // seen is a backend-specific corner a desk-only machine cannot
-        // pre-clear. The editor's own reveal (StageSplashReady) is
-        // NVRHI-backed and skips itself on this flavor for the same reason
-        // RuntimeApp::StageFinalize does. False = already logged; Main() turns
-        // it into exit 1.
+        // loop. Its `!GraphMode()` early return never fires in practice as of
+        // Phase 5a (Task 2b) -- GraphMode() is unconditional -- so this always
+        // builds the vehicles. It sits HERE rather than in a boot stage for
+        // the ordering RuntimeApp::MainLoop proved at three desk checkpoints:
+        // the window is Show()n FIRST and the swapchain built over an
+        // already-mapped window, because a surface created against a window
+        // the compositor has never seen is a backend-specific corner a
+        // desk-only machine cannot pre-clear. The editor's own reveal
+        // (StageSplashReady) is NVRHI-backed and skips itself on this flavor
+        // for the same reason RuntimeApp::StageFinalize does. False = already
+        // logged; Main() turns it into exit 1.
         bool       CreateGraphVehicles();
         // The VIEWPORT context and every seam it needs, with TWO callers (NRI
         // Phase 3, Task 12): CreateGraphVehicles at boot, and SwitchProject's

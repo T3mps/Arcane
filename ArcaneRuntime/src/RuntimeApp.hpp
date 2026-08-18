@@ -20,7 +20,7 @@
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only --crash-gpu N
-#include <Arcane/Render/Nri/NriGraphContext.hpp>   // dev-only --nri-graph vehicle
+#include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle; unconditional as of Phase 5a
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 namespace Astra { class TypeContext; }
@@ -70,11 +70,13 @@ private:
     void MainLoop();
     void Shutdown();
 
-    // --nri-graph (NRI Phase 2, Task 7): destroy the vehicle and fold a grown
-    // RenderErrorCount into m_graphExit. Idempotent, and a no-op when the flag
-    // was not given -- MainLoop calls it on EVERY exit path (including the
-    // golden warm-up's early returns), because the latch must be read after
-    // the last NRI object is gone.
+    // The graph path (NRI Phase 2, Task 7): destroy the vehicle and fold a
+    // grown RenderErrorCount into m_graphExit. Idempotent, and a no-op only if
+    // m_graphContext was never created (a boot failure before it) -- as of
+    // Phase 5a (Task 2b) that is the sole reason, not whether --nri-graph was
+    // given. MainLoop calls it on EVERY exit path (including the golden
+    // warm-up's early returns), because the latch must be read after the
+    // last NRI object is gone.
     void ShutdownGraphPath();
 
     Arcane::HostConfig                  m_config;
@@ -149,11 +151,13 @@ private:
     // its own, more specific error.
     bool                                 m_goldenCaptured = false;
 
-    // --nri-graph's exit code, which OUTRANKS m_goldenExit (Run()'s tail):
-    // 1 = the graph run failed, 2 = RenderErrorCount grew during it. 0 on
-    // every run that did not pass the flag. The latch baseline it is measured
-    // against is taken at the top of MainLoop -- boot-time errors belong to
-    // the boot, not to the vehicle.
+    // The graph path's exit code, which OUTRANKS m_goldenExit (Run()'s tail):
+    // 1 = the graph run failed, 2 = RenderErrorCount grew during it. As of
+    // Phase 5a (Task 2b) this can be set on ANY run -- the graph path is
+    // unconditional, not gated on --nri-graph anymore -- so 0 means no graph
+    // failure occurred, not "the flag was not given". The latch baseline it
+    // is measured against is taken at the top of MainLoop -- boot-time errors
+    // belong to the boot, not to the vehicle.
     int                                  m_graphExit  = 0;
     std::uint64_t                        m_graphErrorBaseline = 0;
 

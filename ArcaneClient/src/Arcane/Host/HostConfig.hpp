@@ -118,16 +118,19 @@ namespace Arcane
         // that one host parses and silently ignores is a trap, and scripting the
         // editor's battery items beats clicking them.
         //
-        // HONOURED ON BOTH RENDER PATHS as of NRI Phase 3, Task 5. The NVRHI
-        // arm fires Render/GpuFaultInjector.hpp's nvrhi dispatch;
-        // `--crash-gpu N --nri-graph` fires NriDiagnostics::FireFault -- the
-        // SAME data/shaders/gpu_fault.hlsl TDR loop, as a one-off NRI compute
-        // dispatch -- under the same gate, once, with the same
-        // `pass:gpu-fault` breadcrumb and the same ERROR text when the
-        // injector is unavailable. See RuntimeFrame.cpp's graph arm for the
-        // two topology-forced differences (own command buffer; fired before
-        // the frame is declared rather than inside it), neither of which is
-        // observable in the report.
+        // HONOURED ON BOTH RENDER PATHS as of NRI Phase 3, Task 5, and as of
+        // Phase 5a (Task 2b) `--crash-gpu N` ALONE reaches the graph dispatch
+        // -- the NRI frame graph is the only render path now, so it no longer
+        // takes a second flag to select it. `--crash-gpu N` fires
+        // NriDiagnostics::FireFault -- the SAME data/shaders/gpu_fault.hlsl
+        // TDR loop, as a one-off NRI compute dispatch -- under the same gate,
+        // once, with the same `pass:gpu-fault` breadcrumb and the same ERROR
+        // text when the injector is unavailable. See RuntimeFrame.cpp's graph
+        // arm for the two topology-forced differences (own command buffer;
+        // fired before the frame is declared rather than inside it), neither
+        // of which is observable in the report. (RenderNvrhi's own
+        // --crash-gpu block -- the OTHER arm this paragraph used to describe
+        // -- is unreachable now: see RuntimeFrame.cpp's RenderNvrhi.)
         //
         // HISTORY, because a reader may have the old wording in mind: through
         // Phase 2 this flag was a DOCUMENTED NO-OP on `--nri-graph` -- it

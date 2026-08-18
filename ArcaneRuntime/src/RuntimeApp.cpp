@@ -665,12 +665,17 @@ void RuntimeApp::MainLoop()
         if (io.skipFrame) continue;
 
         // =============================================================
-        // THE RENDER HALF. Exactly one of these two arms runs per frame --
-        // NVRHI (default, and the regression floor this whole phase is
-        // measured against) or the --nri-graph vehicle. Both bodies moved to
-        // RuntimeFrame.cpp verbatim at NRI Phase 3 Task 4 (RenderNvrhi /
-        // RenderGraph); this if/else is the one piece of the split that has
-        // to stay here, since only MainLoop's own loop can break/continue.
+        // THE RENDER HALF. Exactly one of these two arms runs per frame. As
+        // of Phase 5a (Task 2b) `if (!m_graphContext)` never fires in
+        // practice -- MainLoop's vehicle boot (above) creates m_graphContext
+        // unconditionally, or returns before reaching this loop if it could
+        // not -- so RenderNvrhi is unreachable here; RenderGraph (the graph
+        // vehicle) runs every frame. RenderNvrhi remains the REGRESSION FLOOR
+        // stage-golden comparisons are measured against; it is not the
+        // default anymore. Both bodies moved to RuntimeFrame.cpp verbatim at
+        // NRI Phase 3 Task 4 (RenderNvrhi / RenderGraph); this if/else is the
+        // one piece of the split that has to stay here, since only MainLoop's
+        // own loop can break/continue.
         // =============================================================
         if (!m_graphContext)
         {
@@ -940,11 +945,13 @@ int RuntimeApp::Run()
     // A device-loss exit is an abnormal end even though it was orderly: the
     // report exists, but the session did not do what it was asked to.
     if (Arcane::GpuDeviceLostObserved()) return 1;
-    // --nri-graph's own codes, ahead of the golden one: 1 = the graph run
+    // The graph path's own codes, ahead of the golden one: 1 = the graph run
     // FAILED (it says WHERE the run died), 2 = RenderErrorCount GREW (a
     // validation error fired, which explains a bad capture rather than the
     // reverse). Precedence 1 > 2 > 3, the smoke's -- see ShutdownGraphPath.
-    // Always 0 when --nri-graph was not given.
+    // As of Phase 5a (Task 2b) these can fire on ANY run -- the graph path is
+    // unconditional, not gated on --nri-graph anymore -- so 0 here means no
+    // graph failure occurred, not "the flag was not given".
     if (m_graphExit != 0) return m_graphExit;
     return m_goldenExit;   // 0 ordinarily; 3 = golden capture/compare failure
 }

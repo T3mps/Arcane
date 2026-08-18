@@ -50,15 +50,18 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //
 //   0  -- clean exit (including a user quit / closed splash mid-boot).
 //   1  -- a boot/init failure (EditorApp::InitResult::Failed), OR a graph
-//         frame FAILED (--nri-graph only), OR GPU device loss.
+//         frame FAILED, OR GPU device loss. As of Phase 5a (Task 2b) the
+//         graph frame FAILED case can fire on ANY run -- the NRI frame
+//         graph is the only render path now, not gated behind --nri-graph.
 //   2  -- PRE-BOOT, from THIS function: no project and no plugin with
 //         --frames (a scripted run with nothing to open and nobody to
 //         answer a dialog). Also HostConfig::Parse's own refusals (bad
 //         flag, golden mode without --frames, a non-Full --golden-stage
 //         outside golden mode, etc.) -- those return before main() even
 //         reaches this point.
-//   2  -- (--nri-graph only) RenderErrorCount GREW across the run, teardown
-//         included.
+//   2  -- RenderErrorCount GREW across the run, teardown included. Same
+//         Phase 5a correction as code 1: not gated behind --nri-graph
+//         anymore, so this can fire on any run.
 //   3  -- PRE-BOOT, from THIS function: this project is already open in
 //         another live editor (the direct-launch double-open guard below;
 //         the rival is focused before returning).
@@ -76,15 +79,30 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 // from here on 2/3 mean the LATER things above -- but the Hub cannot tell
 // the difference from the outside, and would misreport a fast one.
 //
-// IN PRACTICE THIS DOES NOT FIRE, because the golden/`--nri-graph` flags are
-// DEV/DESK VOCABULARY: the Hub's own `open_project` launch never passes
-// them (launch.rs only ever adds `--project` plus a project's saved "extra
-// launch args", which default empty). THE ONE PATH THAT COULD REACH IT is a
-// power user deliberately saving `--golden-capture ... --frames N` (or
-// `--nri-graph --crash-gpu N`) into a project's extra-args setting AND that
-// scripted run finishing inside 2 seconds -- plausible for a short --frames
-// count on a fast machine. That is a real, if narrow and opt-in, collision
-// path, not merely a theoretical one.
+// FOR THE GOLDEN COLLISION (code 3), THIS STILL DOES NOT FIRE IN PRACTICE:
+// the golden flags remain DEV/DESK VOCABULARY the Hub's own `open_project`
+// launch never passes (launch.rs only ever adds `--project` plus a
+// project's saved "extra launch args", which default empty). THE ONE PATH
+// THAT COULD REACH IT is a power user deliberately saving
+// `--golden-capture ... --frames N` into a project's extra-args setting AND
+// that scripted run finishing inside 2 seconds -- plausible for a short
+// --frames count on a fast machine. That is a real, if narrow and opt-in,
+// collision path, not merely a theoretical one.
+//
+// FOR THE GRAPH COLLISION (code 2, RenderErrorCount grew), THIS REASONING NO
+// LONGER HOLDS as of Phase 5a (Task 2b). It used to require a power user
+// saving `--nri-graph --crash-gpu N` into extra-args, same as the golden
+// case above -- that was true only while the flag gated the graph path. The
+// NRI frame graph is now the only render path, unconditionally, so code 2
+// can fire on ANY ordinary Hub launch that happens to exit inside the 2s
+// watchdog with a validation error, not only a deliberately scripted one.
+// launch.rs's `scripted` guard (below) still keys off the LITERAL token
+// `--nri-graph` in the saved extra args, which no run has to carry anymore
+// for the graph path (and its exit codes) to be live -- an ordinary run
+// that hits this window can be misreported as "refused (engine/abi gate)"
+// instead of a render-path failure. NOT FIXED HERE: this is a gap in
+// launch.rs's guard that this flip exposed, not something an editor-side
+// comment fix can close; needs its own triage.
 //
 // NOT FIXED WITH A DISTINCT CODE HERE: this task's own contract requires the
 // editor's golden exit to be "identical to GoldenArtifact" -- i.e. the SAME
@@ -108,7 +126,12 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          editor window, exactly as --golden-* does here.
 //   --golden-*          -- honoured (Task 13); artifacts carry the `editor-`
 //                          stem prefix, not the runtime's `main-`.
-//   --nri-graph         -- honoured (Tasks 8-13).
+//   --nri-graph         -- RETIRED to a parsed-and-ignored no-op as of Phase
+//                          5a (Task 2b): the NRI frame graph is the only
+//                          render path now, unconditionally, so there is
+//                          nothing left for this flag to select. (Was
+//                          "honoured (Tasks 8-13)" through Phase 3, when it
+//                          still chose between two arms.)
 //   --crash-gpu N       -- honoured (also reachable from the Debug menu).
 //   --pick-probe x,y    -- PARSED AND INERT ON THIS HOST. It is a RUNTIME desk
 //                          item: one fixed canvas pixel reported as an exit

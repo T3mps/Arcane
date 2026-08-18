@@ -41,7 +41,7 @@
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>       // dev-only --crash-gpu N (RenderNvrhi)
-#include <Arcane/Render/Nri/NriGraphContext.hpp>    // dev-only --nri-graph vehicle (RenderGraph)
+#include <Arcane/Render/Nri/NriGraphContext.hpp>    // the graph vehicle (RenderGraph); unconditional as of Phase 5a
 #include <Arcane/Render/PickEmit.hpp>                // PickDrawable (--pick-probe)
 
 #include <nvrhi/nvrhi.h>

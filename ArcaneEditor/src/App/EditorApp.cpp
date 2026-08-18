@@ -1670,17 +1670,17 @@ namespace Arcane::Editor
     // AdoptImGuiContext is a blank HUD with no error, a missing resolver or
     // pixel supply is a white texel on every sprite with one WARN a session.
     //
-    // NOT #if-guarded even though only a non-Dist path can reach it, for the
-    // reason m_graphChrome's declaration states: a preprocessor-guarded
-    // definition forces a guard at every call site, and SwitchProject compiles
-    // in every configuration. In Dist it is unreachable -- GraphMode() is
-    // false there by construction (StageGpuCore).
+    // NOT #if-guarded, for the reason m_graphChrome's declaration states: a
+    // preprocessor-guarded definition forces a guard at every call site, and
+    // SwitchProject compiles in every configuration. Reachable in EVERY
+    // configuration, Dist included, as of Phase 5a (Task 2b): GraphMode() is
+    // unconditional now (StageGpuCore), so both callers (CreateGraphVehicles
+    // and SwitchProject's render_bridge stage) reach this body everywhere.
     bool EditorApp::BuildGraphViewportContext(std::uint32_t width, std::uint32_t height)
     {
         if (!m_graphChrome)
         {
-            ARC_ERROR("--nri-graph: no chrome context -- the viewport context has no device to "
-                      "borrow");
+            ARC_ERROR("no chrome context -- the viewport context has no device to borrow");
             return false;
         }
 
@@ -1718,7 +1718,7 @@ namespace Arcane::Editor
             m_config, m_graphChrome->Device(), width, height, viewportNodes);
         if (!m_viewportTargets.graph)
         {
-            ARC_ERROR("--nri-graph: the editor's offscreen viewport context could not be created");
+            ARC_ERROR("the editor's offscreen viewport context could not be created");
             return false;
         }
 
@@ -1774,8 +1774,9 @@ namespace Arcane::Editor
 
     int EditorApp::Main()
     {
-        // --nri-graph only; a no-op returning true on the NVRHI arm, so this
-        // line changes nothing about the default path.
+        // Unconditional as of Phase 5a (Task 2b): CreateGraphVehicles' early
+        // return on `!GraphMode()` never fires in practice now (GraphMode()
+        // is unconditional too), so this line always builds the vehicles.
         if (!CreateGraphVehicles())
             return 1;
         MainLoop();
@@ -1804,7 +1805,7 @@ namespace Arcane::Editor
         // it is what RuntimeFrame::RenderGraph sets in the same situation, so
         // the two hosts report one vocabulary. Precedence 1 > 2: FIRST failure
         // wins and a later latch growth cannot demote it.
-        ARC_ERROR("--nri-graph: {}; stopping", what);
+        ARC_ERROR("{}; stopping", what);
         if (m_graphExit == 0)
             m_graphExit = 1;
         // The frame loop's own exit channel (see PumpFrameEvents, which reads
@@ -2262,11 +2263,14 @@ namespace Arcane::Editor
         // the same reason: it says where the run died, and it died earlier.
         if (exitCode != 0)
             return exitCode;
-        // --nri-graph's own codes: 1 = a graph frame FAILED (either context --
-        // the viewport's, phase 10, or the chrome's, phase 19), 2 =
+        // The graph path's own codes: 1 = a graph frame FAILED (either context
+        // -- the viewport's, phase 10, or the chrome's, phase 19), 2 =
         // RenderErrorCount GREW across the run, teardown included. Precedence
         // 1 > 2, set at the two sites that produce them (NoteGraphFrameFailure
-        // and ShutdownGraphPath). Always 0 when --nri-graph was not given.
+        // and ShutdownGraphPath). As of Phase 5a (Task 2b) these can fire on
+        // ANY run -- the graph path is unconditional, not gated on
+        // --nri-graph anymore -- so 0 here means no graph failure occurred,
+        // not "the flag was not given".
         if (m_graphExit != 0)
             return m_graphExit;
         // The golden harness's own code (NRI Phase 3, Task 13), OUTRANKED by
