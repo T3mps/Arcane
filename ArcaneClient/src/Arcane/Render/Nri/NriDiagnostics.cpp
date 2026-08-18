@@ -422,6 +422,30 @@ namespace Arcane
             nri::Pipeline*         pipeline  = nullptr;
             nri::PipelineLayout*   layout    = nullptr;
 
+            // "THE GPU NEVER FINISHED WITH THESE -- DO NOT FREE THEM."
+            // (NRI Phase 3, D3b 0x87D closeout.)
+            //
+            // FireFault's tail says it plainly: the objects below "may not be
+            // freed while the GPU is still reading them", and the QueueWaitIdle
+            // is "what makes the teardown legal". When that wait does not
+            // complete -- which is the NORMAL outcome of the deliberate TDR
+            // this whole file exists to cause -- the teardown is NOT legal, and
+            // the D3D12 debug layer says so the only way it can: it fail-fasts
+            // (RaiseFailFastException, code 0x87D) from inside the Release of a
+            // descriptor heap the GPU is still holding. That kills the host
+            // with exit 0x87D (2173) instead of the device-loss exit 1, and
+            // burns the report on "crash (unhandled exception)" instead of the
+            // truth. Vulkan's validation layer merely logs the same condition,
+            // which is why only dx12 died of it -- but the RULE is the same on
+            // both, so the disarm is not backend-gated.
+            //
+            // Leaking is the correct trade and it is bounded: the device is
+            // gone, the host is already latched to quit (NoteGpuDeviceLost),
+            // and the D3D12/VK runtimes reclaim every one of these at process
+            // exit. NRI asserts nothing about outstanding objects at device
+            // destruction, so nothing downstream notices.
+            void Disarm() noexcept { core = nullptr; }
+
             ~FaultObjects()
             {
                 if (!core)
@@ -750,6 +774,49 @@ namespace Arcane
             // into the very observation chain Arm() installed. Either way the
             // wait is what makes the teardown legal.
             (void)ARC_NRI_CHECK(core.QueueWaitIdle(&queue));
+
+            // ...on VULKAN. On D3D12 that sentence is a wish: QueueD3D12::
+            // WaitIdle returns SUCCESS even when its fence wait failed,
+            // because FenceD3D12::Wait is `void` (DeviceFactories.hpp carries
+            // the full citation). So ARC_NRI_CHECK above sees SUCCESS, the
+            // typed DEVICE_LOST branch in NriCheckImpl never runs, nothing
+            // observes the removal -- and the run proceeds to free objects the
+            // GPU still owns. That is the D3b dx12 failure end to end.
+            //
+            // Ask the device directly, then hand the answer to the SAME
+            // NoteDeviceLost the typed branch uses, so dx12 arrives at the
+            // identical chain vulkan already walks: device-removed hook ->
+            // ObserveDeviceRemoved -> "gpu-crash: device removed" report +
+            // `.gpudump` -> NoteGpuDeviceLost -> the host's exit 1.
+            //
+            // Gated three ways, all load-bearing: D3D12 only (the probe casts
+            // to ID3D12Device*), only when nothing has ALREADY observed the
+            // loss (vulkan's path, and dx12 if some earlier call happened to
+            // catch it -- ObserveDeviceRemoved is once-only anyway, this just
+            // keeps the log honest), and only when the device really is gone
+            // (a `--crash-gpu` that somehow did NOT kill the device must still
+            // tear down normally rather than leak).
+            if (device.Backend() == GraphicsBackend::D3D12 && !GpuDeviceLostObserved())
+            {
+                void* const nativeDev = core.GetDeviceNativeObject
+                                            ? core.GetDeviceNativeObject(&device.Device())
+                                            : nullptr;
+                if (D3D12NativeDeviceRemoved(nativeDev))
+                {
+                    NvrhiMessageCallback::Instance().NoteDeviceLost(
+                        "nri",
+                        "[nri] --crash-gpu: QueueWaitIdle reported SUCCESS but "
+                        "ID3D12Device::GetDeviceRemovedReason says the device is gone -- "
+                        "DEVICE_LOST (QueueD3D12::WaitIdle cannot return it: FenceD3D12::Wait "
+                        "is void)");
+                }
+            }
+
+            // The wait did not protect the teardown -> there is no legal
+            // teardown. See FaultObjects::Disarm.
+            if (GpuDeviceLostObserved())
+                objects.Disarm();
+
             return true;
         }
     }

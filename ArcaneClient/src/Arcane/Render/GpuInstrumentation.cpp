@@ -63,6 +63,19 @@ namespace Arcane
     void NoteGpuDeviceLost() noexcept
     {
         g_deviceLost.store(true, std::memory_order_release);
+
+        // Push the same fact down to Base, whose top-level exception filter
+        // needs it to tell a D3D12 debug-layer fail-fast raised BY this loss
+        // apart from an unrelated crash (Base/Diagnostics.hpp,
+        // Diagnostics::NoteGpuDeviceLost). This is that flag's only writer, so
+        // the two cannot disagree.
+        //
+        // NOT undone by ResetGpuDeviceLost below: that one re-arms THIS
+        // module's observation for a rebuilt device, while the Base flag is a
+        // crash-classification fact about a process that has seen a loss --
+        // and a fail-fast raised while tearing the OLD device down still wants
+        // the device-loss verdict.
+        Diagnostics::NoteGpuDeviceLost();
     }
 
     bool GpuDeviceLostObserved() noexcept

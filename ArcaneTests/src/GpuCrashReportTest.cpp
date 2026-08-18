@@ -13,6 +13,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/DiagEnvelope.hpp>
+#include <Arcane/Base/Diagnostics.hpp>            // the latch's Base-side twin
 #include <Arcane/Render/GpuBreadcrumbs.hpp>
 #include <Arcane/Render/GpuCrashReport.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // the device-lost latch
@@ -347,4 +348,21 @@ TEST_CASE("device-lost latch: set-after-report semantics, host-visible, re-armab
 
     Arcane::ResetGpuDeviceLost();
     CHECK_FALSE(Arcane::GpuDeviceLostObserved());
+
+    // ...and it FORWARDS to Base (NRI Phase 3, D3b 0x87D closeout). The
+    // top-level exception filter classifies a D3D12 debug-layer fail-fast
+    // (code 0x87D) as the already-known device loss rather than as a fresh
+    // crash, and Base cannot include Render to ask, so Render tells it.
+    //
+    // The two halves of that contract, both asserted here because both can
+    // break silently: the forward happens at ALL, and the Base flag does NOT
+    // follow ResetGpuDeviceLost -- a fail-fast raised while tearing the dead
+    // device down still deserves the device-loss verdict, even though a
+    // replacement device has re-armed this module's own latch.
+    Arcane::NoteGpuDeviceLost();
+    CHECK(Arcane::Diagnostics::GpuDeviceLostNoted());
+
+    Arcane::ResetGpuDeviceLost();
+    CHECK_FALSE(Arcane::GpuDeviceLostObserved());
+    CHECK(Arcane::Diagnostics::GpuDeviceLostNoted());
 }

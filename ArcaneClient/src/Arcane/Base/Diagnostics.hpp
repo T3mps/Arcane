@@ -137,6 +137,28 @@ namespace Arcane::Diagnostics
     // Reports written this process. The observable the watchdog test asserts on.
     [[nodiscard]] ARCANE_API std::uint32_t ReportCount() noexcept;
 
+    // "The GPU device is confirmed gone." Told to this module by the render
+    // layer's own latch -- Arcane::NoteGpuDeviceLost (Render/
+    // GpuInstrumentation.hpp) calls this, so the two never disagree and the
+    // render layer stays the single place that DECIDES a device is lost.
+    //
+    // Base cannot include Render, and this is the whole reason the fact has
+    // to be pushed down rather than pulled up. Its one consumer is the
+    // top-level exception filter: a D3D12 debug-layer fail-fast (code 0x87D)
+    // raised AFTER a confirmed loss is that loss being re-narrated by the
+    // debug layer, and must be reported and exited as a device loss rather
+    // than as an unrelated crash. Without this flag the filter would have to
+    // classify on the exception code alone, which would mislabel the
+    // window-hook fail-fast Device.hpp records (a live device, no loss).
+    //
+    // Idempotent, never cleared, safe from any thread and from inside a
+    // crash handler.
+    ARCANE_API void NoteGpuDeviceLost() noexcept;
+
+    // What NoteGpuDeviceLost last stored. Exists so the classification rule
+    // above is testable without a GPU, a device, or an exception.
+    [[nodiscard]] ARCANE_API bool GpuDeviceLostNoted() noexcept;
+
     // -------------------------------------------------------------------
     // GPU-progress watchdog (GPU crash diagnostics arc, Task 7)
     // -------------------------------------------------------------------

@@ -66,4 +66,33 @@ namespace Arcane
     // Vulkan's reporting and vice versa.
     void ResetDeviceRemovedLatchD3D12();
     void ResetDeviceRemovedLatchVulkan();
+
+    // -------------------------------------------------------------------
+    // "IS THIS D3D12 DEVICE GONE?" (NRI Phase 3, D3b 0x87D closeout)
+    // -------------------------------------------------------------------
+    // NRI's D3D12 `QueueWaitIdle` CANNOT report device loss, and that is
+    // structural rather than a bug we can wait out: QueueD3D12::WaitIdle
+    // (ThirdParty/NRI/Source/D3D12/QueueD3D12.hpp:84) returns the result of
+    // CREATING its scratch fence, then calls FenceD3D12::Wait -- which is
+    // `void` and can only shout "WaitForSingleObjectEx() failed!" down the
+    // message callback (FenceD3D12.hpp:53). So a TDR'd D3D12 device answers
+    // `Result::SUCCESS`. Its Vulkan twin (QueueVK::WaitIdle) forwards
+    // vkQueueWaitIdle's VK_ERROR_DEVICE_LOST and therefore reaches
+    // NriCheckImpl's typed DEVICE_LOST branch -- which is the entire reason
+    // the vulkan `--crash-gpu` arm produced a device-removed verdict and the
+    // dx12 one did not.
+    //
+    // This asks the device itself, which always knows. Narrow export for the
+    // same reason as the observers above: `Render/Nri/` must not grow a
+    // <d3d12.h> include or a per-backend #if -- NriDiagnostics.cpp says so in
+    // its own words ("reaching for it would mean this file growing a D3D12 and
+    // a [Vulkan] half"). No state and no second observation point: the CALLER
+    // routes the answer through NoteDeviceLost, so the once-only latch and the
+    // "gpu-crash: device removed" wording stay exactly where they live.
+    //
+    // `nativeDevice` is what nri::CoreInterface::GetDeviceNativeObject returns
+    // for a D3D12 device (an ID3D12Device*). CALLERS MUST GATE ON THE BACKEND:
+    // handing this a VkDevice would reinterpret it as a COM vtable. Null is
+    // answered `false` -- "no device, no removal" -- never a guess.
+    [[nodiscard]] bool D3D12NativeDeviceRemoved(void* nativeDevice) noexcept;
 }

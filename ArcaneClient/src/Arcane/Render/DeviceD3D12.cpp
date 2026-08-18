@@ -846,6 +846,24 @@ namespace Arcane
         g_deviceRemovedReported.store(false, std::memory_order_release);
     }
 
+    // The device-loss QUESTION, as opposed to the observers above which are
+    // the ANSWER's delivery. See DeviceFactories.hpp for why NRI's D3D12
+    // QueueWaitIdle cannot be asked instead.
+    //
+    // GetDeviceRemovedReason is the one D3D12 call that is defined ON a
+    // removed device -- it is how DeviceD3D12::CaptureGpuSection above already
+    // reads the removal reason into the report. S_OK means "not removed";
+    // every other HRESULT (DXGI_ERROR_DEVICE_REMOVED / _HUNG / _RESET,
+    // DXGI_ERROR_DRIVER_INTERNAL_ERROR) means it is gone. Deliberately not
+    // once-only and deliberately silent: it observes nothing and reports
+    // nothing, so it stays safe to call from a bail-out path.
+    bool D3D12NativeDeviceRemoved(void* nativeDevice) noexcept
+    {
+        if (!nativeDevice)
+            return false;
+        return FAILED(static_cast<ID3D12Device*>(nativeDevice)->GetDeviceRemovedReason());
+    }
+
     std::unique_ptr<RenderDevice> CreateDeviceD3D12(const RenderDeviceDesc& desc)
     {
         auto device = std::make_unique<DeviceD3D12>();

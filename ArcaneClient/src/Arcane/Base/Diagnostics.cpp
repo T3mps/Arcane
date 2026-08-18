@@ -119,6 +119,14 @@ namespace
     std::thread       g_watchdog;
     std::atomic<bool> g_watchdogStop{false};
 
+    // "The render layer has already CONFIRMED the GPU device is gone."
+    // Set once by Render's NoteGpuDeviceLost (GpuInstrumentation.cpp); the
+    // only reader is OnUnhandledException's fail-fast branch below. Never
+    // cleared, on purpose: after a confirmed loss, everything the process
+    // does with that device is post-mortem, and a re-armed device gets a
+    // fresh process on the paths that matter (the hosts quit on the latch).
+    std::atomic<bool> g_gpuDeviceLost{false};
+
 #if defined(_WIN32)
     DWORD  g_mainThreadId = 0;
     LPTOP_LEVEL_EXCEPTION_FILTER g_prevFilter = nullptr;
@@ -624,10 +632,55 @@ namespace
     }
 
 #if defined(_WIN32)
+    // The D3D12 debug layer's fail-fast (NRI Phase 3, D3b).
+    //
+    // D3D12SDKLayers.dll reports conditions it considers unrecoverable with
+    // RaiseFailFastException, code 0x87D -- the same signature Device.hpp
+    // already records for the Nahimic-OSD window-hook hazard at device
+    // creation. A fail-fast bypasses every frame-based __except and every
+    // vectored handler and is NONCONTINUABLE, so THIS FILTER IS THE ONLY
+    // PLACE IN THE PROCESS THAT CAN SEE IT, and it can only decide how to
+    // die -- never whether to.
+    constexpr DWORD kD3D12DebugLayerFailFast = 0x0000087dul;
+
     LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS* ep)
     {
         if (g_inCrashHandler.exchange(true, std::memory_order_acq_rel))
             return EXCEPTION_EXECUTE_HANDLER;   // faulted inside ourselves; do not loop
+
+        // A 0x87D fail-fast AFTER the render layer has already confirmed the
+        // device is gone is not a new incident -- it is the debug layer's
+        // account of the loss we are already reporting, raised from whatever
+        // post-mortem Release happened to touch the dead device first. Say
+        // that, and die the way a device loss is supposed to die.
+        //
+        // WHY BOTH CONJUNCTS. 0x87D on its own is NOT a device-removal signal
+        // (Device.hpp's Nahimic case is a startup window-hook incompatibility
+        // with a live device), so mapping the code alone would relabel a real
+        // crash. And a device loss on its own is already handled by the
+        // ordinary chain. Only the pair is unambiguous, and the pair cannot
+        // occur before a confirmed loss -- which is exactly the Nahimic case's
+        // exemption.
+        if (ep && ep->ExceptionRecord &&
+            ep->ExceptionRecord->ExceptionCode == kD3D12DebugLayerFailFast &&
+            g_gpuDeviceLost.load(std::memory_order_acquire))
+        {
+            // "gpu" in the reason is load-bearing: DeriveKind classifies on it
+            // and it is what gets the `.gpudump` sibling written. Same wording
+            // rule as ObserveDeviceRemoved (Render/DeviceD3D12.cpp).
+            WriteReportImpl("gpu-crash: device removed "
+                            "(D3D12 debug-layer fail-fast 0x87d after the loss)", ep);
+
+            // Exit the way the hosts exit on a device loss, and exit NOW.
+            // Falling through would hand the fail-fast to WER, which takes
+            // long enough for the hang watchdog to file a SECOND, misleading
+            // report about a main thread that is not hung but dying -- and
+            // would end the process with 0x87D (2173) rather than 1. The
+            // report above is already on disk; nothing after this point can
+            // add to it. TerminateProcess rather than exit(): every remaining
+            // destructor in this process would run against the dead device.
+            TerminateProcess(GetCurrentProcess(), 1);
+        }
 
         WriteReportImpl("crash (unhandled exception)", ep);
 
@@ -931,6 +984,16 @@ std::string WriteReport(const char* reason)
 std::uint32_t ReportCount() noexcept
 {
     return g_reportCount.load(std::memory_order_acquire);
+}
+
+void NoteGpuDeviceLost() noexcept
+{
+    g_gpuDeviceLost.store(true, std::memory_order_release);
+}
+
+bool GpuDeviceLostNoted() noexcept
+{
+    return g_gpuDeviceLost.load(std::memory_order_acquire);
 }
 
 void SetGpuSectionProvider(GpuSectionProvider provider, void* user) noexcept
