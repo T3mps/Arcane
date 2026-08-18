@@ -588,8 +588,14 @@ TEST_CASE("assets: RepackStagingToRgba swizzles BGRA, skips row padding, forces 
 {
     // A 2x2 BGRA source with a PADDED row pitch (12 bytes for 8 of pixels) --
     // the shape a mapped staging texture actually has. Per-texel byte order
-    // is [B,G,R,A]; OffscreenCanvasTest pins the same fact GPU-side. This is
-    // the CPU half of SaveTexturePng, exported exactly so this contract is
+    // is [B,G,R,A]; TonemapTest.cpp's CheckTonemapGolden pins the same fact
+    // GPU-side (its own BGRA8_UNORM readback asserts pixels[0..3] ==
+    // B,G,R,A in that order). NRI Phase 5a, Task 4 deleted
+    // OffscreenCanvasTest.cpp, which used to be the citation here -- that
+    // task did not delete Canvas or TonemapPass (both remain live
+    // dependencies of Host/GpuContext.hpp, outside this task's scope), so
+    // TonemapTest.cpp's case still stands as the GPU-side pin. This is the
+    // CPU half of SaveTexturePng, exported exactly so this contract is
     // testable without a device.
     const unsigned char src[2 * 12] = {
         // row 0: pure blue, pure green | 4 padding bytes of garbage

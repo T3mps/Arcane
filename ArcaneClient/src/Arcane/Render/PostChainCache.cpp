@@ -7,7 +7,6 @@
 #include <Arcane/Material/MaterialSource.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Project/AssetId.hpp>
-#include <Arcane/Render/FullscreenMaterialChain.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
@@ -56,7 +55,6 @@ namespace Arcane
 
         struct Entry
         {
-            std::unique_ptr<FullscreenMaterialChain> chain;
             std::shared_ptr<MaterialInstance> instance;
             // The SAME bind, as bytes (NRI Phase 2, Task 10). Filled beside
             // `instance` so the two can never disagree about which compile is
@@ -81,12 +79,6 @@ namespace Arcane
 
     PostChainCache::~PostChainCache() { delete m_impl; }
 
-    FullscreenMaterialChain* PostChainCache::Chain(const Guid& id) const
-    {
-        const auto it = m_impl->bound.find(id);
-        return it != m_impl->bound.end() ? it->second.chain.get() : nullptr;
-    }
-
     const MaterialInstance* PostChainCache::Instance(const Guid& id) const
     {
         const auto it = m_impl->bound.find(id);
@@ -104,7 +96,10 @@ namespace Arcane
     void PostChainCache::Invalidate(const Guid& id)
     {
         // Keep the bound entry: it stays rendering (last-good) until the
-        // fresh compile lands and SetChain swaps the passes atomically.
+        // fresh compile lands and Bind() overwrites e.desc.passes wholesale.
+        // (Before NRI Phase 5a, Task 4 deleted FullscreenMaterialChain, an
+        // NVRHI SetChain call did the equivalent atomic swap on the device
+        // side too; Bind()'s publish is the only swap left.)
         m_impl->pending.erase(id);
         m_impl->failed.erase(id);
         if (m_impl->bound.contains(id))
@@ -181,7 +176,7 @@ namespace Arcane
 
         // POST mode, always as a chain: a plain single-pass material is a
         // one-desc chain, so every post material renders through the ONE
-        // FullscreenMaterialChain path (and kSceneInput wires are valid).
+        // chain path (and kSceneInput wires are valid).
         std::vector<MaterialChainPassDesc> descs;
         descs.reserve(1 + base.passes.size());
         descs.push_back({ base.snippet, base.baseInputs });
@@ -271,54 +266,26 @@ namespace Arcane
     {
         Impl& im = *this;
 
-        std::vector<FullscreenMaterialChain::PassShaders> passes;
-        // The same blobs, RETAINED for the second recorder (NRI Phase 2, Task
-        // 10 -- PostChainDesc). MOVED out of the pending jobs rather than
-        // copied, so nothing is duplicated and nothing is compiled twice; the
-        // createShader calls below then read them through the shared_ptr.
+        // The compiled blobs for the graph recorder's PostChainNode (NRI Phase
+        // 2, Task 10 -- PostChainDesc). MOVED out of the pending jobs rather
+        // than copied, so nothing is duplicated and nothing is compiled twice.
+        //
+        // NRI Phase 5a, Task 4: this used to ALSO build an NVRHI
+        // FullscreenMaterialChain here, device-gated (the severance from NRI
+        // Phase 3, Task 2 -- SpriteMaterialCache::Bind's twin). Both that
+        // chain's only callers (OffscreenCanvas::SetPostChain, RenderNvrhi)
+        // are deleted, so the gated half is deleted with them; `passBytes` is
+        // all this loop collects now.
         std::vector<PostChainPassDesc> passBytes;
-        passes.reserve(p.jobs.size());
         passBytes.reserve(p.jobs.size());
         for (std::size_t i = 0; i < p.jobs.size(); ++i)
         {
-            const std::string stem = p.data.name + "_post_p" + std::to_string(i);
             PostChainPassDesc bytes;
             bytes.vsBytes = std::make_shared<const std::vector<std::uint8_t>>(
                 std::move(p.jobs[i].vsBytes));
             bytes.psBytes = std::make_shared<const std::vector<std::uint8_t>>(
                 std::move(p.jobs[i].psBytes));
             bytes.inputs = p.passInputs[i];
-
-            // THE SEVERANCE (NRI Phase 3, Task 2) -- SpriteMaterialCache::Bind's
-            // twin, for the same reason: createShader is the only device-bound
-            // line here, and its product feeds the NVRHI chain alone. The BYTES
-            // are what the graph's PostChainNode compiles, and they are already
-            // in `bytes` above. Device-less this loop collects `passBytes` only,
-            // `passes` stays empty, and the chain half below is skipped.
-            if (im.services.device)
-            {
-                FullscreenMaterialChain::PassShaders ps;
-                ps.vs = im.services.device->createShader(
-                    nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
-                        .setEntryName(kVsEntry)
-                        .setDebugName((stem + "_vs").c_str()),
-                    bytes.vsBytes->data(), bytes.vsBytes->size());
-                ps.ps = im.services.device->createShader(
-                    nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
-                        .setEntryName(kPsEntry)
-                        .setDebugName((stem + "_ps").c_str()),
-                    bytes.psBytes->data(), bytes.psBytes->size());
-                if (!ps.vs || !ps.ps)
-                {
-                    ARC_WARN("PostChainCache: createShader failed for material {}",
-                             p.id.ToString());
-                    if (!im.bound.contains(p.id))
-                        im.failed.insert(p.id);
-                    return;
-                }
-                ps.inputs = p.passInputs[i];
-                passes.push_back(std::move(ps));
-            }
             passBytes.push_back(std::move(bytes));
         }
 
@@ -334,54 +301,29 @@ namespace Arcane
         }
         ApplyMaterialParams(p.data, *inst);
 
+        // NRI Phase 5a, Task 4: this used to gate an NVRHI chain rebuild
+        // (FullscreenMaterialChain::Create + SetChain) on `im.services.device`
+        // before reaching the publish below, so a device-less run (the graph
+        // arm) skipped straight to it. With that chain deleted there is
+        // nothing left to gate -- the publish below is unconditional now,
+        // which is exactly the device-less run's old behaviour.
         Entry& e = im.bound[p.id];
-        // THE CHAIN GATE, now the DEVICE'S half alone. FullscreenMaterialChain
-        // is an NVRHI object; device-less there is no chain to build and no
-        // gate to pass, so the publish below is reached on both paths.
-        //
-        // NOT a literal hoist of the publish above this block, deliberately: a
-        // failed RE-bind must leave the previously published desc/instance
-        // alone (last-good applies to all three together, see below), and
-        // publishing first would clobber exactly that. Gating the chain half on
-        // the device has the effect the severance needs -- a device-less run
-        // publishes -- with no change whatsoever to the device-carrying path.
-        if (im.services.device)
-        {
-            if (!e.chain)
-                e.chain = FullscreenMaterialChain::Create(im.services.device);
-            if (!e.chain || !e.chain->SetChain(p.templ, passes, p.chainInputSlots))
-            {
-                ARC_WARN("PostChainCache: SetChain rejected material {}",
-                         p.id.ToString());
-                // A previously-bound chain keeps rendering with its OWN instance
-                // (never mix an old layout with new values); a first bind that
-                // failed leaves nothing exposed.
-                if (!e.chain || !e.chain->Ready())
-                {
-                    im.bound.erase(p.id);
-                    im.failed.insert(p.id);
-                }
-                return;
-            }
-        }
         e.instance = std::move(inst);
 
         // The byte-level twin of what was just bound, published in the same
-        // breath so Chain()/Instance()/Desc() can never name different
-        // compiles (PostChainCache::Desc). Overwritten wholesale on a
-        // successful REBIND, and left untouched by a failed one -- last-good
-        // applies to all three together.
+        // breath so Instance()/Desc() can never name different compiles
+        // (PostChainCache::Desc). Overwritten wholesale on a successful
+        // REBIND, and left untouched by a failed one -- last-good applies to
+        // both together.
         e.desc.templ           = p.templ;
         e.desc.instance        = e.instance;
         e.desc.chainInputSlots = p.chainInputSlots;
         e.desc.passes          = std::move(passBytes);
 
-        // Warm the declared texture params NOW -- the drain site has no open
-        // command list, so first-time uploads execute here instead of being
-        // lost inside the host's Draw (FullscreenMaterialPass::Render's
-        // pre-load contract). Device-gated with the rest of the severance:
-        // the warm-up IS a GPU upload, and the graph recorder makes the same
-        // Guids resident on its own device through NriTextureCache.
+        // Warm the declared texture params NOW -- always device-gated (see
+        // Services::device), so this never runs today; the graph recorder
+        // makes the same Guids resident on its own device through
+        // NriTextureCache instead.
         if (im.services.assets && im.services.device)
             for (const Guid& g : e.instance->ResolveTextures())
                 if (g.IsValid())

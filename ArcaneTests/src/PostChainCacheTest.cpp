@@ -1,8 +1,14 @@
 // PostChainCache headless coverage (post arc, slice 2): every refusal happens
 // BEFORE a compile is submitted, so these run without a device or an
-// initialized compiler -- the request simply never exposes a chain. The
-// successful end-to-end path (async compile, bind, last-good) is
-// PostChainGpuTest's job.
+// initialized compiler -- the request simply never exposes a bound chain.
+//
+// NRI Phase 5a, Task 4: these cases read Desc() (was Chain()) -- this
+// Fixture was already device-less (no Services::device set), so Chain()
+// (the deleted NVRHI accessor) was always null here regardless; Desc() is
+// the exact same "nothing bound" signal on the one path this cache has left.
+// PostChainGpuTest.cpp, which pinned the successful end-to-end path (async
+// compile, bind, last-good) via the NVRHI OffscreenCanvas/FullscreenMaterialChain
+// harness, is deleted along with them -- see the commit body for that gap.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -64,10 +70,10 @@ TEST_CASE("PostChainCache refuses pre-submit failure shapes", "[material]")
     {
         const Guid ghost = Guid::Generate();
         cache.Request(ghost, 0.0);
-        CHECK(cache.Chain(ghost) == nullptr);
+        CHECK(cache.Desc(ghost) == nullptr);
         CHECK(cache.Instance(ghost) == nullptr);
         cache.Request(ghost, 1.0);   // failed is sticky until Invalidate
-        CHECK(cache.Chain(ghost) == nullptr);
+        CHECK(cache.Desc(ghost) == nullptr);
     }
 
     SECTION("a sprite material is refused -- the post slot is fullscreen only")
@@ -82,7 +88,7 @@ TEST_CASE("PostChainCache refuses pre-submit failure shapes", "[material]")
         fx.files[data.id] = dir / "sprite.arcmat";
 
         cache.Request(data.id, 0.0);
-        CHECK(cache.Chain(data.id) == nullptr);
+        CHECK(cache.Desc(data.id) == nullptr);
     }
 
     SECTION("a parent cycle is refused")
@@ -101,7 +107,7 @@ TEST_CASE("PostChainCache refuses pre-submit failure shapes", "[material]")
         fx.files[b.id] = dir / "b.arcmat";
 
         cache.Request(a.id, 0.0);
-        CHECK(cache.Chain(a.id) == nullptr);
+        CHECK(cache.Desc(a.id) == nullptr);
     }
 
     SECTION("a DAG violation is a build error, refused before any compile")
@@ -118,7 +124,7 @@ TEST_CASE("PostChainCache refuses pre-submit failure shapes", "[material]")
         fx.files[data.id] = dir / "bad.arcmat";
 
         cache.Request(data.id, 0.0);
-        CHECK(cache.Chain(data.id) == nullptr);
+        CHECK(cache.Desc(data.id) == nullptr);
     }
 
     SECTION("a foreign compile result is not consumed")
@@ -132,6 +138,6 @@ TEST_CASE("PostChainCache refuses pre-submit failure shapes", "[material]")
     {
         cache.Invalidate(Guid::Generate());
         cache.Clear();
-        CHECK(cache.Chain(Guid::Generate()) == nullptr);
+        CHECK(cache.Desc(Guid::Generate()) == nullptr);
     }
 }

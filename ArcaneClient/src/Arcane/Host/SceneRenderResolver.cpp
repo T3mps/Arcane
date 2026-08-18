@@ -5,7 +5,6 @@
 #include <Arcane/Project/AssetId.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
-#include <Arcane/Render/FullscreenMaterialChain.hpp>   // Chain()->Ready() in Materials()
 #include <Arcane/Render/PostChainCache.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/SpriteCache.hpp>
@@ -31,10 +30,9 @@ namespace Arcane
         GlobalParams globals{};
 
         // The post assignment this frame + what it resolved to. Latched (rather
-        // than re-queried by the host) so a host cannot read Chain() for a
+        // than re-queried by the host) so a host cannot read Instance() for a
         // DIFFERENT Guid than the one the sweep found.
         Guid                     postId{};
-        FullscreenMaterialChain* postChain    = nullptr;
         const MaterialInstance*  postInstance = nullptr;
         // The same bind as bytes, for the `--nri-graph` vehicle (Task 10).
         const PostChainDesc*     postDesc     = nullptr;
@@ -124,7 +122,6 @@ namespace Arcane
 
     const GlobalParams& SceneRenderResolver::Globals() const { return m_impl->globals; }
 
-    FullscreenMaterialChain* SceneRenderResolver::PostChain()    const { return m_impl->postChain; }
     const MaterialInstance*  SceneRenderResolver::PostInstance() const { return m_impl->postInstance; }
     const PostChainDesc*     SceneRenderResolver::PostDesc()     const { return m_impl->postDesc; }
 
@@ -167,11 +164,14 @@ namespace Arcane
                 postId = pp.material;
         });
         census.postReferenced = postId.IsValid();
-        // Ready(), not merely non-null: PostChainCache keeps a previously-bound
-        // chain object alive across a failed RE-compile (last-good), and the
-        // host's own hook tests Ready() before routing a frame through it.
-        FullscreenMaterialChain* chain = postId.IsValid() ? im.post->Chain(postId) : nullptr;
-        census.postBound = chain != nullptr && chain->Ready();
+        // A non-null Desc() IS "bound and ready": PostChainCache only ever
+        // publishes one once ConsumeResult's compile succeeded (Bind), and it
+        // keeps a previously-bound one alive across a failed RE-compile
+        // (last-good) rather than clearing it. NRI Phase 5a, Task 4: this used
+        // to test an NVRHI FullscreenMaterialChain's Ready() instead -- that
+        // chain, and every consumer that read it, is deleted, so Desc() is now
+        // the only "is the post chain bound" signal there is.
+        census.postBound = postId.IsValid() && im.post->Desc(postId) != nullptr;
         return census;
     }
 
@@ -199,7 +199,6 @@ namespace Arcane
         m_impl->materials->Clear();
         m_impl->post->Clear();
         m_impl->postId       = Guid{};
-        m_impl->postChain    = nullptr;
         m_impl->postInstance = nullptr;
         m_impl->postDesc     = nullptr;
     }
@@ -327,7 +326,6 @@ namespace Arcane
         // compiling THIS frame is bound for this frame's render rather than the
         // next one.
         im.postId       = postId;
-        im.postChain    = postId.IsValid() ? im.post->Chain(postId)    : nullptr;
         im.postInstance = postId.IsValid() ? im.post->Instance(postId) : nullptr;
         im.postDesc     = postId.IsValid() ? im.post->Desc(postId)     : nullptr;
 

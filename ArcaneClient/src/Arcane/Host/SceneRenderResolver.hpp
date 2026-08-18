@@ -21,8 +21,9 @@
 // WHAT IT OWNS. The three caches that turn a Guid into something bindable --
 // SpriteCache (.arcsprite -> texture/UVs/size/pivot), SpriteMaterialCache
 // (.arcmat -> a registered Batcher2D material id) and PostChainCache (.arcmat ->
-// a bound FullscreenMaterialChain). They share one compile drain site, which is
-// why they belong to one owner: splitting them would mean a second Drain(), and
+// a bound post chain, published as PostChainDesc bytes for the graph
+// recorder). They share one compile drain site, which is why they belong to
+// one owner: splitting them would mean a second Drain(), and
 // ShaderCompiler::Drain is the ONE place a compile result may become an NVRHI
 // shader (ShaderCompiler.hpp:9-13).
 //
@@ -39,7 +40,6 @@
 namespace Arcane
 {
     class Batcher2D;
-    class FullscreenMaterialChain;
     class MaterialInstance;
     class Runtime;
     class ShaderCompiler;
@@ -119,19 +119,23 @@ namespace Arcane
         // materials read zeros otherwise (built-ins ignore it).
         const GlobalParams& Globals() const;
 
-        // The scene's bound post chain, or null for "no chain" (the plain
-        // canvas->tonemap path). Re-read every frame AFTER Refresh: a drain may
-        // swap the bound instance under an asset re-save.
-        FullscreenMaterialChain* PostChain() const;
+        // The scene's bound post material instance, or null for "no chain".
+        // Re-read every frame AFTER Refresh: a drain may swap the bound
+        // instance under an asset re-save.
         const MaterialInstance*  PostInstance() const;
 
-        // The SAME bound chain as bytecode + layout + values, for a recorder
-        // that is not on this resolver's nvrhi device -- the `--nri-graph`
+        // The bound chain as bytecode + layout + values, for the `--nri-graph`
         // vehicle's post nodes (NRI Phase 2, Task 10; see PostChainDesc in
         // Render/PostChainCache.hpp). Null for "no chain", and latched beside
-        // PostChain()/PostInstance() in the same Refresh step, so all three
-        // describe one compile. Re-read every frame AFTER Refresh, for the
-        // same reason the other two are.
+        // PostInstance() in the same Refresh step, so both describe one
+        // compile. Re-read every frame AFTER Refresh, for the same reason
+        // PostInstance() is.
+        //
+        // NRI Phase 5a, Task 4: this used to have an NVRHI sibling, PostChain()
+        // (an nvrhi FullscreenMaterialChain*), consumed by the editor's NVRHI
+        // arm and ArcaneRuntime's RenderNvrhi. Both are deleted -- the graph
+        // recorder is the only render path left -- so PostChain() is gone;
+        // this is the only bound-chain accessor now.
         const PostChainDesc* PostDesc() const;
 
         // What the scene REFERENCES versus what is bound right now (NRI Phase 2).
@@ -164,7 +168,18 @@ namespace Arcane
             int  spriteReferenced = 0;       // SpriteRenderers with a valid material Guid
             int  spriteBound      = 0;       // ...whose material is registered with the batcher
             bool postReferenced   = false;   // a PostProcess assignment was found
-            bool postBound        = false;   // ...and its chain is bound AND ready
+            // ...and its chain is bound and ready -- computed from Desc()
+            // != nullptr (see Materials()'s own comment). NRI Phase 5a, Task
+            // 4 deleted FullscreenMaterialChain and the Ready() this used to
+            // read; the SEMANTICS moved too, not just the accessor name: the
+            // old check was device-gated and therefore constant-false on
+            // every device-less (graph-arm) run, while Desc() is not
+            // device-gated at all. Benign in practice -- every caller of this
+            // field overrides it on the graph arm anyway (both RuntimeApp.cpp
+            // and EditorAppFrame.cpp read PostDesc() directly instead, since
+            // m_graphContext/GraphMode() is unconditional) -- but it is a
+            // changed computation, not a renamed one.
+            bool postBound        = false;
         };
         MaterialCensus Materials() const;
 

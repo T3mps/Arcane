@@ -42,9 +42,10 @@ public:
     //
     // Public since NRI Phase 3 Task 4: MainLoop's frame body moved to free
     // functions in namespace Arcane::RuntimeFrame (RuntimeFrame.hpp/.cpp), and
-    // both render arms (RenderNvrhi/RenderGraph) call this through
-    // FrameIo::app -- a free function cannot reach a private RuntimeApp
-    // member. See RuntimeFrame.hpp's header comment.
+    // RenderGraph calls this through FrameIo::app -- a free function cannot
+    // reach a private RuntimeApp member. See RuntimeFrame.hpp's header
+    // comment. (RenderNvrhi called it too until NRI Phase 5a, Task 4 deleted
+    // that arm; RenderGraph is the only caller left.)
     void PushSceneCamera(float viewportWidth, float viewportHeight);
 private:
     // ---- Boot (RuntimeApp.cpp) -------------------------------------------

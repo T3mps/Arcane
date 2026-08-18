@@ -19,12 +19,14 @@
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (StageGpuCore's boot banner)
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved (Run()'s exit-code tail)
 #include <Arcane/Render/PickEmit.hpp>    // PickEntityForId (ShutdownGraphPath's --pick-probe report)
-#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (PushSceneCamera; both render arms call it via FrameIo::app)
+#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (PushSceneCamera; RenderGraph calls it via FrameIo::app -- the only arm left, NRI Phase 5a Task 4)
 // Assets.hpp/GoldenImage.hpp/AudioDevice.hpp/InputActions.hpp/InputSnapshot.hpp/
-// Batcher2D.hpp/FullscreenMaterialChain.hpp moved to RuntimeFrame.cpp at NRI
-// Phase 3 Task 4: every symbol they were here for (GoldenArtifact, the audio
-// voice reap, input sampling, Batch2DStats, the post-chain hook) moved with
-// MainLoop's frame body -- see that file.
+// Batcher2D.hpp moved to RuntimeFrame.cpp at NRI Phase 3 Task 4: every symbol
+// they were here for (GoldenArtifact, the audio voice reap, input sampling,
+// Batch2DStats) moved with MainLoop's frame body -- see that file.
+// FullscreenMaterialChain.hpp moved there too at the same time, for the
+// post-chain hook; NRI Phase 5a, Task 4 later deleted the class outright
+// along with RenderNvrhi, its only caller in this codebase.
 // NriGraphContext (the graph vehicle) is NOT Dist-guarded here: RuntimeApp.hpp
 // holds the member unconditionally, and as of Phase 5a (Task 2b) the CREATION
 // is unconditional too, in every configuration -- see that header's comment.
@@ -440,11 +442,13 @@ void RuntimeApp::MainLoop()
     auto simPrev       = std::chrono::steady_clock::now();
     auto lastFrameTime = simPrev;
     auto lastShaderPoll = simPrev;
-    // Hoisted out of the loop body (NRI Phase 3, Task 4): BuildHud acquires
-    // it, RenderNvrhi and CaptureTail both read it -- three of the six
-    // extracted RuntimeFrame functions need it to survive one iteration.
-    // BuildHud resets it to nullptr at the same source spot the old inline
-    // `nvrhi::ITexture* backbuffer = nullptr;` declaration sat, every frame.
+    // Hoisted out of the loop body (NRI Phase 3, Task 4): PrepareFrame
+    // resets and (NVRHI-path only) acquires it, CaptureTail reads it -- two
+    // of the six extracted RuntimeFrame functions need it to survive one
+    // iteration. PrepareFrame resets it to nullptr at the same source spot
+    // the old inline `nvrhi::ITexture* backbuffer = nullptr;` declaration
+    // sat, every frame. NRI Phase 5a, Task 4 deleted RenderNvrhi, the third
+    // function that used to read it.
     nvrhi::ITexture* backbuffer = nullptr;
     bool running = true;
 
@@ -568,18 +572,24 @@ void RuntimeApp::MainLoop()
         // scene -- and a golden is the one place where "it rendered something"
         // is not good enough.
         const Arcane::SceneRenderResolver::MaterialCensus census = m_resolver->Materials();
-        // WHAT "the post chain bound" MEANS depends on which recorder this run
-        // has, and getting that wrong would refuse every graph golden (NRI
-        // Phase 3, Task 6). MaterialCensus::postBound asks whether a
-        // FullscreenMaterialChain -- an NVRHI object -- is Ready(), which is
-        // structurally false with no device. The graph recorder does not
-        // consume that chain at all: it builds its own pipelines from the
-        // PostChainDesc BYTES the same cache publishes device-lessly (Task 2's
-        // severance), and PostDesc() is exactly the pointer RenderGraph hands
-        // the post nodes every frame. So ask the question each recorder
-        // actually answers. Sprite materials need no such split -- their
-        // census reads the batcher's registration table, which the bytes-only
-        // path fills either way.
+        // WHAT "the post chain bound" MEANS used to depend on which recorder
+        // this run had, and getting that wrong would refuse every graph
+        // golden (NRI Phase 3, Task 6). Originally, MaterialCensus::postBound
+        // asked whether a FullscreenMaterialChain -- an NVRHI object -- was
+        // Ready(), which was structurally false with no device; the graph
+        // recorder never consumed that chain at all, building its own
+        // pipelines from the PostChainDesc BYTES the same cache publishes
+        // device-lessly instead (Task 2's severance), so this ternary read
+        // PostDesc() on that arm to ask the question the graph recorder
+        // actually answers. NRI Phase 5a, Task 4 deleted FullscreenMaterialChain
+        // and rebuilt postBound's own computation on Desc() -- see
+        // SceneRenderResolver.cpp's Materials() -- so both sides of this
+        // ternary now agree, and m_graphContext being unconditional (Task 2b)
+        // means only the PostDesc() arm is ever actually taken. The ternary is
+        // left standing rather than collapsed, since that collapse is Task
+        // 11's GraphMode()-style predicate sweep, not this one's. Sprite
+        // materials need no such split -- their census reads the batcher's
+        // registration table, which the bytes-only path fills either way.
         const bool postBound = m_graphContext ? (m_resolver->PostDesc() != nullptr)
                                               : census.postBound;
         if (census.spriteBound != census.spriteReferenced ||
@@ -656,37 +666,33 @@ void RuntimeApp::MainLoop()
 
         // ImGui BeginFrame + the host HUD + DrawUIAll...
         Arcane::RuntimeFrame::BuildHud(io);
-        // ...then (NVRHI path) backbuffer acquisition + the shader hot-reload
-        // poll, and the scene resolver's Refresh -- the rest of the shared
-        // prep both render arms below need. Split out of BuildHud at NRI
-        // Phase 3 Task 6 (its name never covered the acquisition); the
-        // statement order across the two calls is exactly what it was.
+        // ...then (NVRHI path only, unreachable since NRI Phase 5a Task 2b)
+        // backbuffer acquisition + the shader hot-reload poll, and the scene
+        // resolver's Refresh -- the prep the render half below needs. Split
+        // out of BuildHud at NRI Phase 3 Task 6 (its name never covered the
+        // acquisition); the statement order across the two calls is exactly
+        // what it was. Called "both render arms" needed this prep until NRI
+        // Phase 5a, Task 4 deleted RenderNvrhi -- RenderGraph is the only
+        // arm left to need it now.
         Arcane::RuntimeFrame::PrepareFrame(io);
         if (io.skipFrame) continue;
 
         // =============================================================
-        // THE RENDER HALF. Exactly one of these two arms runs per frame. As
-        // of Phase 5a (Task 2b) `if (!m_graphContext)` never fires in
-        // practice -- MainLoop's vehicle boot (above) creates m_graphContext
-        // unconditionally, or returns before reaching this loop if it could
-        // not -- so RenderNvrhi is unreachable here; RenderGraph (the graph
-        // vehicle) runs every frame. RenderNvrhi remains the REGRESSION FLOOR
-        // stage-golden comparisons are measured against; it is not the
-        // default anymore. Both bodies moved to RuntimeFrame.cpp verbatim at
-        // NRI Phase 3 Task 4 (RenderNvrhi / RenderGraph); this if/else is the
-        // one piece of the split that has to stay here, since only MainLoop's
-        // own loop can break/continue.
+        // THE RENDER HALF. RenderGraph's body moved to RuntimeFrame.cpp
+        // verbatim at NRI Phase 3 Task 4; the call stays here because only
+        // MainLoop's own loop can break/continue.
+        //
+        // NRI Phase 5a, Task 4: this used to be an if/else against
+        // `m_graphContext`, with RenderNvrhi as the NVRHI arm -- unreachable
+        // since Phase 5a Task 2b's vehicle boot made m_graphContext
+        // unconditional, but kept as the REGRESSION FLOOR stage-golden
+        // comparisons were measured against. RenderNvrhi is deleted (its
+        // FullscreenMaterialChain dependency no longer exists), so there is
+        // no arm left to branch on; this call is unconditional now.
         // =============================================================
-        if (!m_graphContext)
-        {
-            Arcane::RuntimeFrame::RenderNvrhi(io);
-        }
-        else
-        {
-            const Arcane::NriGraphContext::FrameOutcome outcome = Arcane::RuntimeFrame::RenderGraph(io);
-            if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)  break;
-            if (outcome == Arcane::NriGraphContext::FrameOutcome::Skipped) continue;
-        }
+        const Arcane::NriGraphContext::FrameOutcome outcome = Arcane::RuntimeFrame::RenderGraph(io);
+        if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)  break;
+        if (outcome == Arcane::NriGraphContext::FrameOutcome::Skipped) continue;
 
         // The shared tail: the plugin's hot-reload poll, the perf tick, the
         // frame counter, and the capture/screenshot/golden bookkeeping on the

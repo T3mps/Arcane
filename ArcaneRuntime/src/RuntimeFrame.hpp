@@ -30,8 +30,12 @@
 //   * THE GRAPH ARM'S ImGui CALLS GO THROUGH ImGuiLayer (RenderToDrawData /
 //     EndFrameDiscard) instead of bare ImGui::Render()/EndFrame(), so the
 //     context pin the layer owns covers them too -- the Phase-2 carry.
-// The DEFAULT NVRHI arm (RenderNvrhi) is untouched, statement for statement:
-// it is the regression floor the whole phase is measured against.
+//
+// NRI Phase 5a, Task 4: the DEFAULT NVRHI arm (RenderNvrhi), kept until now as
+// the regression floor the whole phase was measured against, is DELETED --
+// the frame graph is the only render path left, so there is nothing left to
+// float a floor under. RenderGraph is the only per-frame render function in
+// this file now.
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Host/FramePerf.hpp>
@@ -40,7 +44,7 @@
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
-#include <Arcane/Render/GpuFaultInjector.hpp>       // dev-only --crash-gpu N (RenderNvrhi)
+#include <Arcane/Render/GpuFaultInjector.hpp>       // dev-only --crash-gpu N (RenderGraph's fired latch; the injector object itself is unused since RenderNvrhi's deletion)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>    // the graph vehicle (RenderGraph); unconditional as of Phase 5a
 #include <Arcane/Render/PickEmit.hpp>                // PickDrawable (--pick-probe)
 
@@ -51,8 +55,9 @@
 #include <vector>
 
 // Forward declaration only: FrameIo just needs a reference to call the one
-// private-turned-public RuntimeApp method (PushSceneCamera) both render arms
-// share. Full definition lives in RuntimeApp.hpp, included by
+// private-turned-public RuntimeApp method (PushSceneCamera) RenderGraph calls
+// (both render arms shared it, before NRI Phase 5a, Task 4 deleted
+// RenderNvrhi). Full definition lives in RuntimeApp.hpp, included by
 // RuntimeFrame.cpp (and by RuntimeApp.cpp, which already needed it).
 class RuntimeApp;
 
@@ -99,8 +104,12 @@ namespace Arcane::RuntimeFrame
         std::vector<std::uint32_t>&        pickSelectedIds;
 
 #if !defined(ARCANE_DIST)
-        // --crash-gpu N (RenderNvrhi only). Same Dist guard as the RuntimeApp
-        // members these are bound to -- see RuntimeApp.hpp.
+        // --crash-gpu N. Same Dist guard as the RuntimeApp members these are
+        // bound to -- see RuntimeApp.hpp. `gpuFault` itself is unused since
+        // RenderNvrhi's deletion (NRI Phase 5a, Task 4) -- it was the nvrhi
+        // fault injector object RenderNvrhi built lazily; RenderGraph's
+        // FireFault is stateless and never built one. `gpuFaultFired` stays
+        // live: both arms shared the ONE fired-once latch.
         std::unique_ptr<Arcane::GpuFaultInjector>& gpuFault;
         bool&                                      gpuFaultFired;
 #endif
@@ -166,13 +175,6 @@ namespace Arcane::RuntimeFrame
     // EndFrame) when the NVRHI swapchain had no backbuffer this frame.
     void PrepareFrame(FrameIo& io);
 
-    // The NVRHI arm: canvas clear, the dev-only --crash-gpu fault, the
-    // batcher recording (PushSceneCamera + SubmitRender + End), the scene
-    // post chain + tonemap, the HUD render (or EndFrame on a non-Full golden
-    // stage), close + execute + present, the GPU-progress heartbeat. Runs
-    // only when io.graph is null (MainLoop's `if (!io.graph)`).
-    void RenderNvrhi(FrameIo& io);
-
     // The --nri-graph arm, which since Task 6 is the ONLY recorder in the
     // process when it runs: the HUD draw-data capture (same ImGui frame the
     // NVRHI arm would have rendered), the CPU-identical 2D submission, the
@@ -184,9 +186,10 @@ namespace Arcane::RuntimeFrame
     // inline arm did.
     Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io);
 
-    // The shared tail, reached by both arms: the plugin's debounced
-    // hot-reload Poll(), the perf Tick(), the frame counter, and the
-    // capture/screenshot/golden bookkeeping on the final frame only. Returns
+    // The shared tail (both arms reached it before NRI Phase 5a, Task 4
+    // deleted RenderNvrhi; RenderGraph is the only caller left): the plugin's
+    // debounced hot-reload Poll(), the perf Tick(), the frame counter, and
+    // the capture/screenshot/golden bookkeeping on the final frame only. Returns
     // true (`stop`) on the final frame -- MainLoop does
     // `if (CaptureTail(io)) running = false;`, mirroring the original
     // `if (lastFrame) running = false;` exactly (the while condition, not an

@@ -4,7 +4,9 @@
 // EditorDocument. One window, three panels over one .arcmat asset:
 //   snippet text (InputTextMultiline; the line-jump seam is dormant -- the
 //                 errors panel was its only driver, see m_jumpToLine)
-//   live preview (own OffscreenCanvas + FullscreenMaterialPass, animating Time)
+//   live preview (the graph arm's own offscreen NriGraphContext, animating
+//                 Time -- NRI Phase 5a, Task 4 deleted the NVRHI arm's
+//                 OffscreenCanvas + FullscreenMaterialPass twin)
 //   params (auto-widgets from the //@param decls; edits write the CB LIVE, no
 //           recompile, and land on the shared CommandStack as undo steps)
 // Diagnostics have NO panel of their own: canvas node badges still mark the
@@ -32,9 +34,6 @@
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Render/Device.hpp>
-#include <Arcane/Render/FullscreenMaterialChain.hpp>
-#include <Arcane/Render/FullscreenMaterialPass.hpp>
-#include <Arcane/Render/OffscreenCanvas.hpp>
 // PostChainDesc -- the DEVICE-FREE description of a compiled fullscreen
 // material (bytecode + merged template + instance + input wiring). Held BY
 // VALUE below because it is what the graph arm's preview renders from and what
@@ -108,8 +107,13 @@ namespace Arcane::Editor
     // document list -- see EditorApp member ordering).
     struct DocServices
     {
+        // Always null (both hosts render through the graph, never the NVRHI
+        // arm -- NRI Phase 5a, Task 4 deleted the NVRHI preview these two used
+        // to feed, OffscreenCanvas + FullscreenMaterialPass/Chain). Kept
+        // rather than deleted: GraphGridPass still reads `device` for its own
+        // NVRHI-backed grid backdrop, gated the same way.
         nvrhi::IDevice*               device = nullptr;
-        Arcane::ShaderLibrary*        shaders = nullptr;    // OffscreenCanvas tonemap
+        Arcane::ShaderLibrary*        shaders = nullptr;
         Arcane::ShaderCompiler*       compiler = nullptr;   // app-shared service
         Arcane::ShaderSourceProvider* sources = nullptr;    // template text
         Arcane::Runtime*              runtime = nullptr;    // Assets facade + open project (picker)
@@ -128,9 +132,10 @@ namespace Arcane::Editor
 
         // ===== THE GRAPH ARM'S PREVIEW SEAM (NRI Phase 3, Task 11) ==========
         // On `--nri-graph` there is no `device` above (StageRenderBridge hands
-        // the runtime (nullptr, nullptr)), so OffscreenCanvas /
-        // FullscreenMaterialPass / FullscreenMaterialChain / GraphGridPass all
-        // refuse to create and the document's preview would simply be absent.
+        // the runtime (nullptr, nullptr)), so GraphGridPass refuses to create
+        // and -- before NRI Phase 5a, Task 4 deleted them -- so did
+        // OffscreenCanvas / FullscreenMaterialPass / FullscreenMaterialChain;
+        // without this seam the document's preview would simply be absent.
         // These three are what let it render instead, and all three are
         // BORROWED from EditorApp (which outlives the document list):
         //
@@ -151,8 +156,10 @@ namespace Arcane::Editor
         //                 which is exactly the cross-context case that rule
         //                 exists for. ~ShaderEditorDocument is the site.
         //
-        // All three null on the NVRHI arm and in the headless tests, which is
-        // what keeps every gate below a single `if`.
+        // All three null in the headless tests (no EditorApp at all) and
+        // before EditorApp's own chrome context exists -- there is no NVRHI
+        // arm left for them to be null on -- which is what keeps every gate
+        // below a single `if`.
         Arcane::NriDevice*             nriDevice = nullptr;
         const Arcane::HostConfig*      hostConfig = nullptr;
         Arcane::ImGuiNriNode*          chromeHud = nullptr;
@@ -351,15 +358,17 @@ namespace Arcane::Editor
         // ===== THE DEVICE-FREE PREVIEW DESCRIPTION (NRI Phase 3, Task 11) ===
         // The compiled preview AS BYTES + merged template + instance, exactly
         // the shape PostChainCache publishes for a scene post material and
-        // exactly what the graph's PostChainNode consumes. It is produced on
-        // BOTH arms -- a device-carrying run builds it beside the nvrhi
-        // pipelines rather than instead of them -- which is what makes it
+        // exactly what the graph's PostChainNode consumes. It used to be
+        // produced on BOTH arms -- a device-carrying run built it beside the
+        // nvrhi pipelines rather than instead of them, which is what made it
         // testable with no device at all, the same severance idiom Task 2's
-        // caches took.
+        // caches took -- and NRI Phase 5a, Task 4 deleted that device-carrying
+        // half; this publish is now the only one.
         //
         // Null (`passes` empty / `templ` null) until a full set of stages has
-        // landed; a FAILED re-compile leaves the previous one published, the
-        // same last-good rule SetChain/SetMaterial carry.
+        // landed; a FAILED re-compile leaves the previous one published --
+        // the same last-good rule the deleted NVRHI SetChain/SetMaterial used
+        // to carry, now upheld by this publish alone.
         //
         // FULLSCREEN SURFACES ONLY. A sprite material's preview is a quad
         // through a Batcher2D, not a fullscreen chain -- SpritePreviewBlobs()
@@ -403,10 +412,12 @@ namespace Arcane::Editor
 
         // ---- The graph arm's preview (NRI Phase 3, Task 11) ----
         // Republish m_graphPost / m_graphSpriteBlobs from the blobs and the
-        // freshly promoted template+instance. Called from the two bind sites,
-        // on BOTH arms, immediately after PromotePendingInstance -- the desc
-        // names the instance the pipelines were just built against, so the two
-        // can never describe different compiles.
+        // freshly promoted template+instance. Called from the two bind sites
+        // (BindIfComplete, BindChainIfComplete) immediately after
+        // PromotePendingInstance -- the desc names the instance the pipelines
+        // were just built against, so the two can never describe different
+        // compiles. (Called on both arms before NRI Phase 5a, Task 4 deleted
+        // the NVRHI one.)
         void   PublishGraphPreview();
         // Build (once) this document's own offscreen vehicle. No-op without
         // the DocServices graph seam, i.e. everywhere but a --nri-graph editor.
@@ -414,17 +425,18 @@ namespace Arcane::Editor
         // One preview frame into that vehicle -- Tick's graph arm.
         void   RenderGraphPreview(double dt);
         // Re-register the sprite preview material on the OWN device-less
-        // batcher (the graph twin of RefreshSpritePreviewBinding).
+        // batcher. NRI Phase 5a, Task 4 deleted its NVRHI twin,
+        // RefreshSpritePreviewBinding -- this is the only sprite-preview
+        // registration path left.
         void   RefreshGraphSpriteBinding();
         // Invalidate-then-destroy, in the one order that is correct across two
         // contexts. Called from the destructor; idempotent.
         void   DestroyGraphPreview();
 
-        // THE ONE ANSWER TO "what do I draw for this document's preview", for
-        // whichever arm is live. `id` is 0 when there is nothing to draw --
-        // every ImGui::Image site gates on that instead of on `m_preview`, so
-        // neither arm can acquire a site the other one has.
-        // Both previews are square (512), so one extent describes the image.
+        // THE ONE ANSWER TO "what do I draw for this document's preview".
+        // `id` is 0 when there is nothing to draw (no vehicle, or nothing
+        // bound yet) -- every ImGui::Image site gates on that.
+        // The image is square (512), so one extent describes it.
         struct PreviewImage
         {
             ImTextureID id = 0;
@@ -602,9 +614,6 @@ namespace Arcane::Editor
         void DrawParamsPanel();
         // True when the ACTIVE surface has something bound to show.
         bool PreviewReady() const;
-        // Sprite surface: re-register the preview material's binding data
-        // (texture params resolved fresh) without a recompile.
-        void RefreshSpritePreviewBinding();
         void DrawTextureParam(const Arcane::ParamDecl& decl,
                               const Arcane::MatParamValue& current);
         void SetParamWithUndo(const Arcane::ParamDecl& decl,
@@ -642,10 +651,6 @@ namespace Arcane::Editor
         std::vector<Arcane::ParamMeta>             m_boundMetas; // parallel to bound->Params()
         std::vector<std::string>                   m_parseErrors;
         std::vector<Arcane::ShaderDiag>            m_diags;      // last compile (active backend)
-
-        std::unique_ptr<Arcane::OffscreenCanvas>         m_preview;
-        std::unique_ptr<Arcane::FullscreenMaterialPass>  m_pass;
-        std::unique_ptr<Arcane::FullscreenMaterialChain> m_chain;   // chain mode (lazy)
 
         // Chain mode in-flight compile state, parallel to [m_snippet, passes...].
         struct PassJobs
@@ -720,27 +725,28 @@ namespace Arcane::Editor
         std::vector<Arcane::MaterialAssetData> m_parentChain;
         bool m_showOnlyOverridden = false;   // instance params filter
 
-        // Preview surface (Slice 8): 0 = fullscreen (FullscreenMaterialPass),
-        // 1 = sprite (a QuadMaterial on a checkerboard through the preview
-        // canvas's own Batcher2D). Initialized from the material's kind;
-        // switching it on a base material re-kinds the asset (structural edit).
+        // Preview surface (Slice 8): 0 = fullscreen, 1 = sprite (a
+        // QuadMaterial on a checkerboard through the preview canvas's own
+        // Batcher2D). Initialized from the material's kind; switching it on a
+        // base material re-kinds the asset (structural edit).
         int m_surface = 0;
-        std::uint16_t       m_previewSpriteMaterial = 0xFFFF;   // Batcher2D id
-        nvrhi::ShaderHandle m_previewVs, m_previewPs;           // for binding refresh
 
         std::uint64_t m_vsJob = 0, m_psJob = 0;      // in-flight ids (0 = none)
         std::vector<std::uint8_t> m_vsBytes, m_psBytes;
 
-        // ===== THE GRAPH ARM'S PREVIEW (NRI Phase 3, Task 11) ==============
-        // The device-free description, published on BOTH arms (see
-        // GraphPreviewDesc), and the vehicle that renders it, built only when
-        // DocServices carried the graph seam.
+        // ===== THE GRAPH ARM'S PREVIEW ======================================
+        // The device-free description (see GraphPreviewDesc), and the vehicle
+        // that renders it, built only when DocServices carried the graph seam.
+        // NRI Phase 5a, Task 4: this used to be published on BOTH arms, with
+        // an NVRHI twin (m_preview/m_pass/m_chain, m_previewSpriteMaterial,
+        // m_previewVs/m_previewPs) feeding OffscreenCanvas +
+        // FullscreenMaterialPass/Chain -- all deleted, so this is the only
+        // preview left.
         Arcane::PostChainDesc m_graphPost;
         SpriteBlobs           m_graphSpriteBlobs;
-        // 512x512 and FIXED, matching the NVRHI arm's OffscreenCanvas exactly
-        // -- and that is load-bearing rather than cosmetic: a preview that
-        // never resizes has no ResizeOffscreen seam at all, so the ONLY
-        // InvalidateUserTextureNow this document owes is the one at
+        // 512x512 and FIXED -- and that is load-bearing rather than cosmetic:
+        // a preview that never resizes has no ResizeOffscreen seam at all, so
+        // the ONLY InvalidateUserTextureNow this document owes is the one at
         // destruction (NriGraphContext.hpp, item (2)).
         static constexpr std::uint32_t kGraphPreviewSize = 512;
         std::unique_ptr<Arcane::NriGraphContext> m_graphPreview;
@@ -917,7 +923,18 @@ namespace Arcane::Editor
             std::uint32_t pendingInputs = 0; // slot count the source stitched
             std::vector<std::uint32_t> pendingSources;   // wired chain indices
             // Bound state (last-good: a failed recompile leaves these showing).
-            std::unique_ptr<Arcane::FullscreenMaterialPass> pass;
+            // NRI Phase 5a, Task 4 deleted `pass` (a per-node NVRHI
+            // FullscreenMaterialPass) and BindNodePreview, its only writer --
+            // `tex`/`fb`/`ready` below are now STRUCTURALLY DEAD: `ready`
+            // can never become true again (nothing sets it), so
+            // DrawNodePreviewImage's `!it->second.ready` guard always takes
+            // the early return for every non-Output node, and `tex`/`fb`
+            // stay perpetually null/invalid. Left in place rather than
+            // stripped out of the struct: they are still read (the eviction
+            // sweeps in RefreshNodePreviews, and the guard itself), and
+            // removing them would mean touching those call sites too, which
+            // is a redesign of the (already-dead) per-node-thumbnail feature
+            // rather than a consequence of this task's deletions.
             std::shared_ptr<Arcane::MaterialInstance> inst;
             std::uint32_t boundInputs = 0;
             std::vector<std::uint32_t> boundSources;
@@ -930,7 +947,6 @@ namespace Arcane::Editor
         bool m_showNodePreviews = true; // toolbar toggle
         std::uint64_t       m_nodePreviewVsJob = 0;
         nvrhi::ShaderHandle m_nodePreviewVs;    // shared passthrough VS
-        nvrhi::CommandListHandle m_nodePreviewCl;
         // The Scene stand-in (post materials): a checkerboard bound wherever
         // kSceneInput slots appear in the PREVIEW -- the real scene color
         // only exists at runtime. Lazy; null device-less.
@@ -940,7 +956,6 @@ namespace Arcane::Editor
         // submitted earlier in the SAME frame still holds the raw pointer
         // until the backend records it, so release happens next Tick.
         std::vector<nvrhi::TextureHandle> m_nodePreviewRetired;
-        void BindNodePreview(NodePreview& np, nvrhi::ShaderHandle ps);
 
         friend struct SnippetCallbackForwarder;
     };

@@ -16,7 +16,7 @@
 #include "Scene/SelectionOps.hpp"
 #include "Viewport/ViewportImGuiInput.hpp"
 
-#include <Arcane/Assets/Assets.hpp>      // Arcane::ReadTexturePixels (CaptureEditorGolden)
+#include <Arcane/Assets/Assets.hpp>      // Arcane::WritePngRgba (RenderSceneToViewport's graph-arm capture); ReadTexturePixels was CaptureEditorGolden's, deleted with the NVRHI arm at NRI Phase 5a, Task 4
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
 #include <Arcane/Base/Log.hpp>
@@ -26,8 +26,6 @@
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuPassScope -- the F-8 pass seams
-#include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
-#include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect)
 #include <Arcane/Scene/TransformSystems.hpp>   // Edit-mode derived-transform refresh
@@ -217,9 +215,14 @@ namespace Arcane::Editor
 
             // Quiescent is not the same as complete: a compile that FAILED
             // also leaves the service idle. Same census RuntimeApp::MainLoop
-            // reads, same postBound split between the two recorders (the
-            // graph arm's post chain is bytes with no NVRHI object to ask
-            // Ready() of).
+            // reads. `postBound` used to split between the NVRHI and graph
+            // recorders (the graph arm's post chain is bytes with no NVRHI
+            // object to ask Ready() of); NRI Phase 5a, Task 4 deleted that
+            // NVRHI object and rebuilt census.postBound's own computation on
+            // the same bytes this ternary's graph arm already read (see
+            // SceneRenderResolver.cpp's Materials()), so both sides of this
+            // ternary agree now -- kept standing rather than collapsed, since
+            // that is Task 11's GraphMode() sweep, not this one's.
             const Arcane::SceneRenderResolver::MaterialCensus census = m_resolver->Materials();
             const bool postBound = GraphMode() ? (m_resolver->PostDesc() != nullptr) : census.postBound;
             if (census.spriteBound != census.spriteReferenced ||
@@ -316,13 +319,15 @@ namespace Arcane::Editor
             RenderSceneToViewport();
             CompositeGameUi();
             RenderSelectionOutline();
-            // NRI Phase 3, Task 13: the NVRHI arm's golden capture -- the
-            // canvas output texture has its final content for this frame by
-            // here (CompositeGameUi/RenderSelectionOutline were its last
-            // writers), and PumpEditorDocuments/DrawEditorUi below touch only
-            // the editor's OWN ImGui frame, never the viewport texture. A
-            // no-op on every ordinary run and on the graph arm (see
-            // CaptureEditorGolden's own comment).
+            // NRI Phase 3, Task 13: used to be the NVRHI arm's golden capture,
+            // sited here because the canvas output texture had its final
+            // content for this frame by this point (CompositeGameUi/
+            // RenderSelectionOutline were its last writers) and
+            // PumpEditorDocuments/DrawEditorUi below touch only the editor's
+            // OWN ImGui frame, never the viewport texture. NRI Phase 5a, Task
+            // 4 deleted that arm along with the canvas it read -- see
+            // CaptureEditorGolden's own comment for why the call stays here
+            // as a standing no-op rather than being removed.
             CaptureEditorGolden();
             PumpEditorDocuments();
             DrawEditorUi(ls, fs);
@@ -1105,14 +1110,15 @@ namespace Arcane::Editor
     }
 
     // Deferred resize: the Viewport panel's content-region size measured LAST
-    // frame, applied at the START of THIS frame (before canvas->Draw). This
-    // mirrors the m_viewportRect/m_viewportActive one-frame lag on EditorApp --
-    // it avoids a same-frame use-after-free where OffscreenCanvas::Resize
+    // frame, applied at the START of THIS frame (before this frame records).
+    // This mirrors the m_viewportRect/m_viewportActive one-frame lag on
+    // EditorApp -- it avoids a same-frame use-after-free where a resize
     // (called right after ImGui::Image bakes the current texture pointer into
     // this frame's draw list) synchronously frees that very texture before
-    // ImGui replays the draw list at Render time. The graph arm below inherits
-    // that same one-frame lag, and needs it for the identical reason:
-    // ResizeOffscreen destroys the output texture synchronously.
+    // ImGui replays the draw list at Render time: ResizeOffscreen destroys the
+    // output texture synchronously. (NRI Phase 5a, Task 4: this used to also
+    // guard the NVRHI arm's OffscreenCanvas::Resize for the identical reason;
+    // that arm is deleted.)
     void EditorApp::ViewportTargets::ApplyPendingResize(Arcane::NriGraphContext* chrome)
     {
         // ================= THE GRAPH ARM (NRI Phase 3, Task 8) =============
@@ -1161,36 +1167,24 @@ namespace Arcane::Editor
         // resizing frame during a viewport drag-storm. That is the accepted
         // price of the ordering; a stall that OUTLIVES the drag would mean (i)
         // is broken. See the DESK WATCH block on ResizeOffscreen.
-        if (graph)
-        {
-            if (pendingW != 0 && pendingH != 0 &&
-                (pendingW != graph->SurfaceWidth() || pendingH != graph->SurfaceHeight()))
-            {
-                nri::Texture* const old = graph->OffscreenOutput();
-                if (chrome && chrome->ImGuiHud())
-                    chrome->ImGuiHud()->InvalidateUserTextureNow(old);   // BEFORE
-                graph->ResizeOffscreen(pendingW, pendingH);
-            }
-            return;
-        }
-
-        // A GRAPH SESSION WHOSE VIEWPORT CONTEXT IS GONE reaches here with a
-        // null `canvas` -- the two arms' targets are mutually exclusive, so
-        // "no graph context" does NOT mean "an NVRHI one instead". The one way
-        // in is a project switch whose rebuild failed (SwitchProject's
-        // "render_bridge", NRI Phase 3 Task 12), which has already requested
-        // the exit; this frame still has to finish, and it finishes by doing
-        // nothing here rather than by dereferencing null. Inert on the NVRHI
-        // arm, where StageRenderBridge refuses to boot without all three.
-        if (!canvas)
+        // NRI Phase 5a, Task 4: the NVRHI arm this used to fall through to
+        // below (a null `graph` used to mean "an NVRHI viewport instead" --
+        // resizing `canvas`/`pick`/`outline` in lockstep) is deleted along
+        // with those three members. A null `graph` here now means only what
+        // the graph-session comment already named: a project switch whose
+        // rebuild failed (SwitchProject's "render_bridge", NRI Phase 3 Task
+        // 12), already exiting -- this frame still has to finish, and it
+        // finishes by doing nothing here.
+        if (!graph)
             return;
 
         if (pendingW != 0 && pendingH != 0 &&
-            (pendingW != canvas->Width() || pendingH != canvas->Height()))
+            (pendingW != graph->SurfaceWidth() || pendingH != graph->SurfaceHeight()))
         {
-            canvas->Resize(pendingW, pendingH);
-            pick->Resize(pendingW, pendingH);
-            outline->Resize(pendingW, pendingH);
+            nri::Texture* const old = graph->OffscreenOutput();
+            if (chrome && chrome->ImGuiHud())
+                chrome->ImGuiHud()->InvalidateUserTextureNow(old);   // BEFORE
+            graph->ResizeOffscreen(pendingW, pendingH);
         }
     }
 
@@ -1219,9 +1213,6 @@ namespace Arcane::Editor
         // Submits -- reads it, and it must advance exactly ONCE per frame.
         m_editorClock += m_gameUi.frameDt;
 
-        Arcane::FullscreenMaterialChain* postChain = nullptr;
-        const Arcane::MaterialInstance* postInst = nullptr;
-        Arcane::GlobalParams postGlobals;
         if (m_resolver)
         {
             Arcane::SceneRenderResolver::FrameInfo frame;
@@ -1230,13 +1221,6 @@ namespace Arcane::Editor
             frame.viewportWidth  = (float)ViewportWidth();
             frame.viewportHeight = (float)ViewportHeight();
             m_resolver->Refresh(frame);
-
-            // Read AFTER Refresh: a drain may have swapped the bound instance
-            // under an asset re-save, and the sweep decides which Guid is the
-            // scene's post assignment at all.
-            postChain  = m_resolver->PostChain();
-            postInst   = m_resolver->PostInstance();
-            postGlobals = m_resolver->Globals();
         }
         // Derived transforms, refreshed for THIS frame before anything reads
         // them.
@@ -1296,36 +1280,17 @@ namespace Arcane::Editor
             m_runtime->SetCamera(sceneCam->offset, sceneCam->zoom);
         }
 
-        // THE POST CHAIN'S HANDOFF, and the two arms hand over different
-        // THINGS rather than the same thing twice. The NVRHI arm installs the
-        // built FullscreenMaterialChain on the canvas, which renders it. The
-        // graph arm has no canvas and no chain to install -- the resolver runs
-        // device-less there (StageSpriteTables), so PostChain()/PostInstance()
-        // are structurally null and PostChainCache publishes BYTES instead;
-        // those travel to the recorder as FrameDesc::post + FrameDesc::globals,
-        // read fresh at the render site in the next phase. Nothing is dropped;
-        // it moves to a different carrier, exactly as it does on the runtime's
-        // graph arm.
-        if (!GraphMode())
-        {
-            // NRI Phase 3, Task 13: `batch` drops the post chain even when
-            // the scene binds one -- the SAME bypass RuntimeFrame::RenderNvrhi
-            // applies (io.config.goldenStage == Batch) and the graph arm's
-            // own frame gets for free from DeclareGraphFrame's stage gate
-            // (RenderSceneToViewport sets vp.stage; the engine does the rest).
-            // This is the NVRHI arm's half of the identical rule, spelled out
-            // here because the canvas's post binding is set-then-forget
-            // (SetPostChain), not re-read per draw the way the graph frame's
-            // vp.post is. Honoured only in golden mode: an ordinary run's
-            // stage is always Full (HostConfig::Parse refuses otherwise), so
-            // this is inert there.
-            const bool goldenSkipsPost = m_config.GoldenMode() &&
-                                        m_config.goldenStage == Arcane::GoldenStage::Batch;
-            m_viewportTargets.canvas->SetPostGlobals(postGlobals);
-            m_viewportTargets.canvas->SetPostChain(goldenSkipsPost ? nullptr : postChain,
-                                     goldenSkipsPost ? nullptr : postInst,
-                                     &m_runtime->AssetsFacade());
-        }
+        // NRI Phase 5a, Task 4: THE POST CHAIN'S HANDOFF used to fork here --
+        // the NVRHI arm installed the built FullscreenMaterialChain on the
+        // canvas (SetPostChain/SetPostGlobals, reading the postChain/postInst
+        // /postGlobals locals this function used to compute above), reading
+        // SceneRenderResolver::PostChain()/PostInstance(). Both that chain and
+        // its only caller are deleted. The graph arm's half of the handoff was
+        // always the resolver running device-less (StageSpriteTables) and
+        // PostChainCache publishing BYTES instead -- those travel to the
+        // recorder as FrameDesc::post + FrameDesc::globals, read fresh at the
+        // render site in the next phase (RenderSceneToViewport). That is the
+        // only handoff left; there is nothing further to do here.
     }
 
     // Phase 10: the scene render. Must run BEFORE the ImGui pass builds the
@@ -1541,35 +1506,23 @@ namespace Arcane::Editor
             return;
         }
 
-        // Same guard, same one reachable cause, as ApplyPendingResize's (NRI
-        // Phase 3, Task 12): on the graph arm `canvas` is null by construction,
-        // so a session that lost its viewport context to a failed post-switch
-        // rebuild must render nothing here rather than fall through into the
-        // NVRHI arm's target. The exit is already requested; this frame just
-        // has to end without a fault.
-        if (!m_viewportTargets.canvas)
-            return;
-
-        // Scene -> offscreen canvas (the SAME canvas->batcher->tonemap path ArcaneRuntime
-        // drives, but into a panel texture). SetRenderContext writes RenderContext2D
-        // in Arcane.dll and applies the plugin's stored camera; SubmitRender runs the
-        // render scheduler (sprite submission + physics debug overlay) into this
-        // batcher. Runs BEFORE ImGui builds the Viewport panel's Image so the texture
-        // is ready when ImGui samples it at backbuffer-render time.
-        m_viewportTargets.canvas->Draw(
-            [&](Arcane::Batcher2D& b) { SubmitSceneToBatcher(b); },
-            glm::vec4(0.02f, 0.02f, 0.04f, 1.0f));
+        // NRI Phase 5a, Task 4: a session that lost its viewport context to a
+        // failed post-switch rebuild used to fall through here into the NVRHI
+        // arm's target (`m_viewportTargets.canvas`, guarded the same way
+        // ApplyPendingResize's `graph` null check is -- NRI Phase 3, Task 12).
+        // That arm is deleted along with `canvas`, so there is nothing left to
+        // fall through to: the exit is already requested, and this frame just
+        // ends here without a fault.
     }
 
     // The scene submission plus the two Edit-mode overlays, against whichever
     // batcher the caller hands in. A PURE EXTRACTION of the lambda that used to
-    // sit inside RenderSceneToViewport's OffscreenCanvas::Draw call above --
-    // every statement kept its position relative to every other, and the NVRHI
-    // arm still reaches it from exactly the same place at exactly the same
-    // point in the frame. It exists so the two recorders provably drain the
-    // SAME content: a second copy of the gizmo/camera-rect submission is how
-    // the two paths would silently drift apart, which is the failure mode the
-    // whole phase is built to avoid.
+    // sit inside RenderSceneToViewport's (NVRHI-arm, now deleted)
+    // OffscreenCanvas::Draw call -- every statement kept its position relative
+    // to every other. It existed so the NVRHI and graph recorders provably
+    // drained the SAME content, which is now historical: the graph arm is the
+    // only caller left, but the extraction stays, since re-inlining it would
+    // serve no purpose and the ordering guarantee it documents is still real.
     void EditorApp::SubmitSceneToBatcher(Arcane::Batcher2D& b)
     {
         // Globals for registered sprite materials (Time/Delta/
@@ -1655,12 +1608,15 @@ namespace Arcane::Editor
         }
     }
 
-    // Phase 11's CPU HALF, shared by both arms (NRI Phase 3, Task 9) -- see the
-    // declaration. Every statement here was inside CompositeGameUi below and
-    // kept its position relative to every other; what moved out is only the
-    // GPU composite, which is the one thing the two arms genuinely do
-    // differently (an NVRHI blit into the canvas' output framebuffer, versus a
-    // node inside the graph frame).
+    // Phase 11's CPU HALF (NRI Phase 3, Task 9) -- see the declaration. Every
+    // statement here was inside CompositeGameUi below and kept its position
+    // relative to every other; what moved out is only the GPU composite,
+    // which is the one thing the NVRHI and graph arms genuinely did
+    // differently (an NVRHI blit into the canvas' output framebuffer, versus
+    // a node inside the graph frame) -- back when both arms existed. NRI
+    // Phase 5a, Task 4 deleted the NVRHI arm's composite (CompositeGameUi is
+    // now a standing no-op), so ArmGraphViewportFrame is this function's only
+    // caller left.
     bool EditorApp::BeginGameUiFrame()
     {
         // Edit mode: not run (clean viewport); the input is reset so a stray
@@ -1826,20 +1782,22 @@ namespace Arcane::Editor
             return;
         }
 
-        // THE ONE EMITTER (PickEmit.hpp) -- the same pure registry walk
-        // PickBuffer::RenderIdPass drives on the NVRHI arm, through the same
-        // world->canvas transform the scene render just used, so the id
+        // THE ONE EMITTER (PickEmit.hpp) -- a pure registry walk through the
+        // same world->canvas transform the scene render just used, so the id
         // silhouettes register pixel-for-pixel with what was drawn. The k-th
-        // entry IS hit-proxy id k+1.
+        // entry IS hit-proxy id k+1. (Before NRI Phase 5a, Task 4 deleted
+        // PickBuffer, PickBuffer::RenderIdPass drove the identical walk on
+        // the NVRHI arm, through the same emitter.)
         const Arcane::PickView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
         m_pickDrawables.clear();
         Arcane::CollectPickables(m_runtime->Registry(), view, m_pickDrawables);
 
-        // Every selected entity that made it into THIS frame's id pass -- the
-        // replacement for the NVRHI arm's pick->PassIdOf(e) loop, over the same
-        // drawables that were just handed to the pick node rather than over a
-        // table a previous RenderIdPass left behind. Empty in Play, which is
-        // how "phase 12 does not run in Play" is expressed here: the seed finds
+        // Every selected entity that made it into THIS frame's id pass, over
+        // the same drawables that were just handed to the pick node rather
+        // than over a table a previous RenderIdPass left behind (the NVRHI
+        // arm's pick->PassIdOf(e) loop did the equivalent lookup before NRI
+        // Phase 5a, Task 4 deleted PickBuffer). Empty in Play, which is how
+        // "phase 12 does not run in Play" is expressed here: the seed finds
         // no selected silhouette and the composite discards every pixel.
         m_pickSelectedIds.clear();
         if (wantOutline)
@@ -1856,10 +1814,11 @@ namespace Arcane::Editor
         vp.pickOutline = true;
         vp.pickables   = m_pickDrawables;
         vp.selectedIds = m_pickSelectedIds;
-        // The HOVER cursor, exactly phase 12's SelectionOutline::Params::cursorPx:
-        // the viewport-local pointer when it is over the viewport, and the
-        // (-1,-1) "no hover" sentinel otherwise -- including in Play, where the
-        // outline must not light anything.
+        // The HOVER cursor: the viewport-local pointer when it is over the
+        // viewport, and the (-1,-1) "no hover" sentinel otherwise -- including
+        // in Play, where the outline must not light anything. (The same
+        // sentinel the NVRHI arm's SelectionOutline::Params::cursorPx used,
+        // before NRI Phase 5a, Task 4 deleted it.)
         vp.hoverPixel  = (wantOutline && hoverLive)
                        ? glm::ivec2((int)m_gameUi.viewportMouse.x, (int)m_gameUi.viewportMouse.y)
                        : glm::ivec2(-1, -1);
@@ -1886,156 +1845,74 @@ namespace Arcane::Editor
 
     // Phase 11: the game's own ImGui HUD, composited into the viewport texture.
     // Runs AFTER the scene render above and BEFORE the editor's BeginFrame below.
+    // Game debug UI -> the plugin's OWN ImGui context, composited into the
+    // viewport's output texture (Play only). Edit mode: not run (clean
+    // viewport).
+    //
+    // ===== THE GRAPH ARM DOES THIS PHASE'S WORK IN PHASE 10 =====
+    // (NRI Phase 3, Task 9. Read this before concluding the gate is a
+    // leftover -- what it means CHANGED completely in that task.)
+    //
+    // Until Task 9 this gate was the only thing standing between a plugin
+    // window and the editor's PER-PROJECT LAYOUT FILE: the graph arm had no
+    // game ImGui context at all, so StageRenderBridge handed the plugin the
+    // EDITOR's, whose io.IniFilename is that file. A DrawUIAll reached from
+    // here would have persisted plugin windows into the user's layout
+    // permanently -- the imgui.ini veto class. Task 8's rule was therefore
+    // "this gate may come out only TOGETHER WITH a separate game-UI
+    // context", and that is what happened: the graph arm now builds the
+    // same OffscreenImGuiLayer (device-less flavor, same io.IniFilename =
+    // nullptr, same pinning), StageRenderBridge's SetImGui is
+    // unconditional again, FrameInput's fs.gameUiClaims is unconditional
+    // again, and DrawUIAll runs on both arms. ONE CHANGE, as required.
+    //
+    // The gate SURVIVES it, for an unrelated and purely structural reason:
+    // on the graph recorder the HUD is a NODE inside the viewport frame,
+    // and that frame is declared, compiled and executed by phase 10's
+    // single RenderFrameOffscreen call -- which has already happened by the
+    // time control reaches here. ArmGraphViewportFrame (above) is where
+    // this phase's content is produced on that arm, through the SAME
+    // BeginGameUiFrame helper, at the same point relative to the scene
+    // submission.
+    //
+    // NRI Phase 5a, Task 4 deleted the NVRHI arm this function used to carry
+    // below the `if (GraphMode())` early return (the GPU composite of the
+    // game HUD into m_viewportTargets.canvas's output texture, a direct
+    // nvrhi call) -- GraphMode() is unconditional, so that arm was already
+    // unreachable. This function is now a no-op; it is left standing, rather
+    // than deleted along with its one caller, because Task 11 owns the
+    // GraphMode() collapse this would otherwise pre-empt.
     void EditorApp::CompositeGameUi()
     {
-        // Game debug UI -> the plugin's OWN ImGui context, composited into the
-        // viewport's output texture (Play only). Runs the plugin's DrawUI in the
-        // GAME context and blends it OVER the tonemapped scene -- so the HUD lives
-        // inside the Viewport panel, never over the editor chrome. Runs AFTER
-        // m_viewportTargets.canvas->Draw (scene -> tonemap -> output texture) and BEFORE the
-        // editor's BeginFrame below. The game context is fully bracketed by the
-        // OffscreenImGuiLayer calls (each SetCurrentContext internally), so the
-        // editor context is untouched. Edit mode: not run (clean viewport); the
-        // input is reset so a stray draw sees no cursor/buttons.
-        //
-        // ===== THE GRAPH ARM DOES THIS PHASE'S WORK IN PHASE 10 =====
-        // (NRI Phase 3, Task 9. Read this before concluding the gate is a
-        // leftover -- what it means CHANGED completely in that task.)
-        //
-        // Until Task 9 this gate was the only thing standing between a plugin
-        // window and the editor's PER-PROJECT LAYOUT FILE: the graph arm had no
-        // game ImGui context at all, so StageRenderBridge handed the plugin the
-        // EDITOR's, whose io.IniFilename is that file. A DrawUIAll reached from
-        // here would have persisted plugin windows into the user's layout
-        // permanently -- the imgui.ini veto class. Task 8's rule was therefore
-        // "this gate may come out only TOGETHER WITH a separate game-UI
-        // context", and that is what happened: the graph arm now builds the
-        // same OffscreenImGuiLayer (device-less flavor, same io.IniFilename =
-        // nullptr, same pinning), StageRenderBridge's SetImGui is
-        // unconditional again, FrameInput's fs.gameUiClaims is unconditional
-        // again, and DrawUIAll runs on both arms. ONE CHANGE, as required.
-        //
-        // The gate SURVIVES it, for an unrelated and purely structural reason:
-        // on the graph recorder the HUD is a NODE inside the viewport frame,
-        // and that frame is declared, compiled and executed by phase 10's
-        // single RenderFrameOffscreen call -- which has already happened by the
-        // time control reaches here. ArmGraphViewportFrame (above) is where
-        // this phase's content is produced on that arm, through the SAME
-        // BeginGameUiFrame helper, at the same point relative to the scene
-        // submission. What follows is the NVRHI arm's GPU composite and only
-        // that.
         if (GraphMode())
             return;
-
-        if (!BeginGameUiFrame())
-            return;
-
-        // NRI Phase 3, Task 13: `full` is the only editor golden stage that
-        // carries the game HUD -- same reasoning as RuntimeFrame::RenderNvrhi's
-        // ImGui stage gate (the HUD would sit on top of every stage golden and
-        // mask exactly the pixels a node-by-node comparison needs), and the
-        // same rule ArmGraphViewportFrame applies on the graph arm. The frame
-        // was still BEGUN above (BeginGameUiFrame's input-reset discipline is
-        // NOT conditional on stage, see its own comment), so it is discharged
-        // with EndFrameDiscard rather than left unbalanced -- "exactly one of
-        // Render/RenderToDrawData/EndFrameDiscard" holds either way. Honoured
-        // only in golden mode: an ordinary run's stage is always Full
-        // (HostConfig::Parse refuses otherwise), so this is inert there.
-        if (m_config.GoldenMode() && m_config.goldenStage != Arcane::GoldenStage::Full)
-        {
-            m_gameImgui->EndFrameDiscard();
-            return;
-        }
-
-        // Composite the game HUD into the viewport output texture on a one-off
-        // command list (mirrors the backbuffer pass below). The OffscreenCanvas
-        // owns a SEPARATE command list for its scene pass, so m_gpu->Cmd() is
-        // idle here; NVRHI auto-transitions the output texture (RenderTarget for
-        // this pass, back to ShaderResource for the editor's ImGui::Image).
-        m_gpu->Cmd()->open();
-        // F-8a phase 11 / F-8e: one of the editor's per-frame submits, and
-        // Play-mode only -- mutually exclusive with pass:outline below.
-        {
-            Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:gameui");
-            m_gameImgui->Render(m_gpu->Cmd(), m_viewportTargets.canvas->OutputFramebuffer());
-        }
-        m_gpu->Cmd()->close();
-        m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
     }
 
     // Phase 12: Edit-mode selection/hover outline. Occupies the same slot as the
     // Play-only game-imgui composite above -- the two are mutually exclusive by
     // mode -- and must stay after the scene render, before the editor ImGui pass.
+    //
+    // THE GRAPH ARM DOES THIS PHASE'S WORK IN PHASE 10 (NRI Phase 3, Task 9),
+    // and always has: the picker and the selection outline are NODES in the
+    // viewport context's own frame (PickNode/OutlineNode), armed through
+    // FrameDesc::pickOutline/pickables/selectedIds/hoverPixel -- and that
+    // frame is declared, compiled and executed by phase 10's single
+    // RenderFrameOffscreen call, which has already happened by the time
+    // control reaches here. ArmGraphViewportFrame carries this phase's gate
+    // VERBATIM (Edit mode, and a selection or a cursor in the viewport) and
+    // maps m_selection through the same k+1 id assignment PickBuffer used to.
+    //
+    // NRI Phase 5a, Task 4 deleted the NVRHI arm this function used to carry
+    // below the `if (GraphMode())` early return (PickBuffer::RenderIdPass +
+    // SelectionOutline::Render, direct nvrhi calls) -- GraphMode() is
+    // unconditional, so that arm was already unreachable. This function is
+    // now a no-op; it is left standing, rather than deleted along with its
+    // one caller, because Task 11 owns the GraphMode() collapse this would
+    // otherwise pre-empt.
     void EditorApp::RenderSelectionOutline()
     {
-        // Selection + hover outline -> the viewport's own layer (Edit only). Refreshes
-        // the hit-proxy id buffer, then edge-detects it into the post-tonemap output
-        // texture (amber selected, cyan hovered). Skipped entirely when there is nothing
-        // to outline. Play mode: not run (the game-imgui overlay owns this slot instead,
-        // see above -- the two are mutually exclusive by mode).
-        //
-        // THE GRAPH ARM DOES THIS PHASE'S WORK IN PHASE 10 (NRI Phase 3, Task
-        // 9). The PickBuffer and the SelectionOutline are NVRHI objects that
-        // StageRenderBridge does not build there; their counterparts are NODES
-        // in the viewport context's own frame (PickNode/OutlineNode), armed
-        // through FrameDesc::pickOutline/pickables/selectedIds/hoverPixel --
-        // and that frame is declared, compiled and executed by phase 10's
-        // single RenderFrameOffscreen call, which has already happened by the
-        // time control reaches here. ArmGraphViewportFrame carries this phase's
-        // gate VERBATIM (Edit mode, and a selection or a cursor in the
-        // viewport) and maps m_selection through the same k+1 id assignment the
-        // loop below reads out of the PickBuffer.
         if (GraphMode())
             return;
-
-        // NRI Phase 3, Task 13: `full` only -- same reasoning as
-        // CompositeGameUi's stage gate immediately above it in the frame (the
-        // two are mutually exclusive by mode, never both live in one frame).
-        // No BeginFrame/EndFrame obligation to discharge here -- unlike the
-        // game HUD, this phase never begins an ImGui frame of its own; it
-        // draws a GPU pass directly into the canvas output. Honoured only in
-        // golden mode.
-        if (m_config.GoldenMode() && m_config.goldenStage != Arcane::GoldenStage::Full)
-            return;
-
-        // The graph arm's hover pin, on this arm too (whole-branch review, C2)
-        // -- and it matters MORE here: this is the arm that captures D3c's
-        // baselines. See HoverLive().
-        const bool hoverLive = HoverLive();
-        if (!InPlayMode() && (m_selection.HasSelection() || hoverLive))
-        {
-            const Arcane::PickView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
-            m_viewportTargets.pick->RenderIdPass(m_runtime->Registry(), view);
-
-            // Every selected entity that made it into this frame's id pass.
-            // SelectionOutline caps and warns; no clamping needed here.
-            std::vector<uint32_t> selectedIds;
-            selectedIds.reserve(m_selection.Count());
-            for (Astra::Entity e : m_selection.Entities())
-            {
-                const uint32_t id = m_viewportTargets.pick->PassIdOf(e);
-                if (id != 0u)
-                    selectedIds.push_back(id);
-            }
-
-            Arcane::SelectionOutline::Params op;
-            op.selectedIds = selectedIds;
-            op.cursorPx   = hoverLive
-                          ? glm::ivec2((int)m_gameUi.viewportMouse.x, (int)m_gameUi.viewportMouse.y)
-                          : glm::ivec2(-1, -1);
-
-            m_gpu->Cmd()->open();
-            // F-8a phase 12 / F-8e: the SECOND of this phase's two submits. The
-            // first is m_viewportTargets.pick->RenderIdPass above, which carries
-            // its own pass:pick scope on the PickBuffer's private command list.
-            {
-                Arcane::GpuPassScope pass(m_gpu->Cmd(), "pass:outline");
-                m_viewportTargets.outline->Render(m_gpu->Cmd(), m_viewportTargets.pick->IdTarget(),
-                                  m_viewportTargets.canvas->OutputFramebuffer(), op);
-            }
-            m_gpu->Cmd()->close();
-            m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
-        }
     }
 
     // Phase 13: the editor's own document upkeep. The compile pump that used to
@@ -2045,8 +1922,8 @@ namespace Arcane::Editor
     // documents still get first refusal on every drained result through the
     // consumeFirst hook installed in EditorApp::Init, so the process still has
     // exactly ONE drain site. What stays is what only an editor has: the
-    // external-edit watcher and the per-document tick (each document renders its
-    // preview on its own OffscreenCanvas).
+    // external-edit watcher and the per-document tick (each document renders
+    // its own preview into its own offscreen NriGraphContext).
     void EditorApp::PumpEditorDocuments()
     {
         // FIRST, and before anything can close another document: destroy the
@@ -2055,7 +1932,7 @@ namespace Arcane::Editor
         // been recorded AND submitted, which is the whole condition the
         // deferral exists to satisfy. Same idiom, one level up, as
         // ShaderEditorDocument's own m_nodePreviewRetired.clear() at the top of
-        // Tick. A no-op on the NVRHI arm (nothing ever retires).
+        // Tick.
         DrainRetiredDocPreviews();
         PollMaterialWatch();   // external .arcmat edits (~1 Hz mtime sweep)
         m_documents.TickAll(m_gameUi.frameDt);
@@ -2573,36 +2450,24 @@ namespace Arcane::Editor
     // input phase and resize phase read (the deliberate one-frame lag).
     void EditorApp::DrawViewportPanelPhase(FrameState& fs)
     {
-        // THE TEXTURE, from whichever recorder produced it. Both ids are the
-        // same kind of value by the same convention -- the raw backend texture
-        // pointer through intptr_t (OffscreenCanvas::TextureId is the
-        // nvrhi::ITexture*, NriGraphContext::OffscreenTextureId the
-        // nri::Texture*) -- so the panel needs no mode knowledge at all.
-        //
-        // 0 IS A REAL, EXPECTED VALUE on the graph arm and is the "draw
-        // nothing" signal: a ResizeOffscreen whose replacement could not be
-        // created leaves the output null on purpose. DrawViewportPanel already
-        // skips its ImGui::Image at 0 (EditorPanels.cpp) and still publishes
+        // THE TEXTURE. 0 IS A REAL, EXPECTED VALUE and is the "draw nothing"
+        // signal: a ResizeOffscreen whose replacement could not be created
+        // leaves the output null on purpose. DrawViewportPanel already skips
+        // its ImGui::Image at 0 (EditorPanels.cpp) and still publishes
         // dockId/desiredW/desiredH, so the panel keeps measuring and the next
         // non-zero size heals it through phase 8.
         //
-        // ...AND THAT IS WHY THE THIRD ARM IS 0 RATHER THAN A GraphMode()
-        // GATE (NRI Phase 3, Task 12 fix round 1). Unlike phases 11 and 12,
-        // this panel draws on BOTH arms, so it cannot early-out on the mode --
-        // it has to name a texture. `canvas` is null by construction on the
-        // graph arm (StageRenderBridge returns before creating it), so the old
-        // two-arm ternary dereferenced null the moment `graph` was null there:
-        // reachable exactly once, when a project switch's rebuild fails
-        // (SwitchProject's "render_bridge"), which sets m_requestExit -- read
-        // at the TOP of the next frame, so THIS frame still runs phase 16.
-        // That would have turned a designed clean exit 1 into an access
-        // violation inside the ImGui pass. The third arm hands the panel the
-        // value it already understands.
+        // NRI Phase 5a, Task 4 deleted the NVRHI fallback this ternary used to
+        // carry (`m_viewportTargets.canvas ? canvas->TextureId() : 0`),
+        // reachable when `graph` was null -- a project switch whose rebuild
+        // fails (SwitchProject's "render_bridge"), which sets m_requestExit,
+        // read at the TOP of the next frame so THIS frame still runs phase 16.
+        // 0 is exactly the value that fallback produced on the graph arm (no
+        // `canvas` ever existed there), so this is unchanged behaviour, not a
+        // narrower answer.
         const std::uint64_t vpTexture = m_viewportTargets.graph
                                           ? m_viewportTargets.graph->OffscreenTextureId()
-                                          : m_viewportTargets.canvas
-                                              ? m_viewportTargets.canvas->TextureId()
-                                              : 0;
+                                          : 0;
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
                                             ViewportWidth(), ViewportHeight(),
                                             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
@@ -2684,11 +2549,10 @@ namespace Arcane::Editor
     // and gameUiClaims from it).
     void EditorApp::HandleViewportPick(const FrameState& fs)
     {
-        // Viewport click-pick: GPU hit-proxy. Render every pickable entity's
-        // silhouette into the id buffer and read back the pixel under the
-        // viewport-local click. `view` is the SAME world->canvas transform the
-        // scene render uses (m_runtime's camera == RenderContext2D), so the id
-        // silhouettes register pixel-for-pixel with what is drawn. An invalid
+        // Viewport click-pick: GPU hit-proxy. `view` is the SAME world->canvas
+        // transform the scene render uses (m_runtime's camera ==
+        // RenderContext2D), so the id silhouettes the graph's PickNode
+        // rasterizes register pixel-for-pixel with what is drawn. An invalid
         // result (background / outside the viewport) clears the selection.
         // Suppressed when this frame's click was already consumed by the gizmo
         // (pressed/released a handle) or a drag is still in progress -- otherwise
@@ -2698,24 +2562,28 @@ namespace Arcane::Editor
         // on a game HUD widget does not also re-pick the editor selection.
         //
         // ============ THE GRAPH ARM'S HALF (NRI Phase 3, Task 9) ============
-        // NOT a like-for-like swap, and this is the one phase where that shows
-        // in the editor's BEHAVIOUR rather than only in its plumbing. The graph
-        // has no PickBuffer::Pick -- no id pass on demand, no waitForIdle, no
-        // answer in this statement. Its readback is a graph COPY node whose
-        // value lands kSwapchainFramesInFlight frames later, so the click is
-        // ARMED here and the resulting Select/Toggle/Clear is APPLIED here on a
-        // later frame. The plan's reconciliation 5 accepts that latency.
+        // NOT a like-for-like swap with the NVRHI arm's synchronous
+        // PickBuffer::Pick (render the id pass on demand, waitForIdle, read
+        // one texel, answer in this statement) -- that arm is deleted (NRI
+        // Phase 5a, Task 4), and this was the one phase where the difference
+        // showed in the editor's BEHAVIOUR rather than only in its plumbing.
+        // The graph's readback is a graph COPY node whose value lands
+        // kSwapchainFramesInFlight frames later, so the click is ARMED here
+        // and the resulting Select/Toggle/Clear is APPLIED here on a later
+        // frame. The plan's reconciliation 5 accepted that latency, and this
+        // deferred shape is the only pick path left.
         //
         // TWO STEPS, AND THE ORDER IS DELIBERATE: apply what has landed FIRST,
         // then arm this frame's click. The other order would let a fresh click
         // discard an answer that had already arrived.
         //
-        // THE FOUR GUARD CONDITIONS ARE THE NVRHI ARM'S, VERBATIM -- same
-        // expression, same order, same meaning (fs.vp.clicked, not a gizmo
-        // click, not mid-drag, and the game HUD did not claim the pointer). The
-        // last of those is only honest again because Task 9 restored the game
-        // context; while it read `false` unconditionally this arm could not
-        // have had a faithful pick at all.
+        // THE FOUR GUARD CONDITIONS BELOW MATCHED THE NVRHI ARM'S, VERBATIM,
+        // for as long as that arm existed -- same expression, same order, same
+        // meaning (fs.vp.clicked, not a gizmo click, not mid-drag, and the
+        // game HUD did not claim the pointer). The last of those became
+        // honest again only because Task 9 restored the game context; while
+        // it read `false` unconditionally neither arm could have had a
+        // faithful pick.
         if (GraphMode())
         {
             // ---- STEP 1: a landed readback -----------------------------
@@ -2788,27 +2656,10 @@ namespace Arcane::Editor
             return;
         }
 
-        if (fs.vp.clicked && !m_gizmoCapturedClick && !m_gizmoDrag.active && !fs.gameUiClaims)
-        {
-            const Arcane::PickView view{ m_runtime->CameraOffset(),
-                                         m_runtime->CameraZoom() };
-            const Astra::Entity picked = m_viewportTargets.pick->Pick(
-                m_runtime->Registry(), view,
-                glm::vec2(fs.vp.clickLocalX, fs.vp.clickLocalY));
-            if (picked.IsValid())
-            {
-                if (fs.vp.ctrlHeld)
-                    m_selection.Toggle(picked);
-                else
-                    m_selection.Select(picked);
-            }
-            else if (!fs.vp.ctrlHeld)
-            {
-                // Ctrl+click on empty space is a miss, not a deselect-all --
-                // otherwise one stray click discards a built-up selection.
-                m_selection.Clear();
-            }
-        }
+        // NRI Phase 5a, Task 4 deleted the NVRHI arm this used to fall through
+        // to (a synchronous PickBuffer::Pick against the SAME four guard
+        // conditions, verbatim -- see the comment above). GraphMode() is
+        // unconditional, so that arm was already unreachable.
     }
 
     // Phase 18: the selection-driven panels. Runs after the click-pick above so
@@ -3067,88 +2918,29 @@ namespace Arcane::Editor
     // ImGui pass that samples it. The other half of the build flow (the
     // re-engage + scene reload that PollModuleBuild performs when NO host is
     // watching) is at the frame TOP for the same family of reason.
-    // NRI Phase 3, Task 13: the NVRHI arm's golden capture. Called from
-    // MainLoop right after RenderSelectionOutline (the canvas output
-    // texture's last writer for this frame, on whichever of it and
-    // CompositeGameUi the current mode actually runs) and before
-    // PumpEditorDocuments/DrawEditorUi, neither of which touches the
-    // viewport texture. Mirrors RuntimeFrame::CaptureTail's NVRHI half
-    // (ReadTexturePixels off the presented target -> Arcane::GoldenArtifact)
-    // -- the ONE difference is WHERE the pixels come from: the runtime reads
-    // the swapchain backbuffer after Present, this reads the OffscreenCanvas
-    // output after its last composite, because the editor's viewport is a
-    // panel texture rather than the window's own backbuffer.
+    // NRI Phase 3, Task 13: the NVRHI arm's golden capture, called from
+    // MainLoop right after RenderSelectionOutline and before
+    // PumpEditorDocuments/DrawEditorUi. Mirrored RuntimeFrame::CaptureTail's
+    // NVRHI half (ReadTexturePixels off the presented target ->
+    // Arcane::GoldenArtifact), reading the OffscreenCanvas output after its
+    // last composite -- the editor's viewport is a panel texture rather than
+    // the window's own backbuffer.
     //
-    // A no-op on the graph arm: that capture is armed as a NODE inside
-    // RenderSceneToViewport's own FrameDesc instead (vp.capture), and read
-    // back synchronously right there -- there is no separate "read this
-    // texture" entry point on that recorder for a later phase to use, which
-    // is exactly the reasoning CaptureGraphViewportPng's own comment gives
-    // for why an auto-screenshot re-renders rather than reads the last
-    // frame.
+    // NRI Phase 5a, Task 4 deleted that whole arm (OffscreenCanvas is gone),
+    // leaving only the `if (GraphMode())` no-op this function already
+    // reduced to on every real run: the graph arm's capture is armed as a
+    // NODE inside RenderSceneToViewport's own FrameDesc instead (vp.capture),
+    // and read back synchronously right there -- there is no separate "read
+    // this texture" entry point on that recorder for a later phase to use,
+    // which is exactly the reasoning CaptureGraphViewportPng's own comment
+    // gives for why an auto-screenshot re-renders rather than reads the last
+    // frame. This function is left standing, rather than deleted along with
+    // its one caller, because Task 11 owns the GraphMode() collapse this
+    // would otherwise pre-empt.
     void EditorApp::CaptureEditorGolden()
     {
         if (GraphMode())
             return;
-        // GOLDEN **OR** --screenshot (whole-branch review, I4). Both are shared
-        // HostConfig members this host parses, and --screenshot did nothing at
-        // all here until now: `ArcaneEditor --screenshot out.png --frames 60`
-        // exited 0 having written no file. Same predicate the runtime's
-        // CaptureTail has always used, and the same asymmetry below -- a golden
-        // failure is an exit code, a screenshot failure is a WARN.
-        if (!m_config.GoldenMode() && m_config.screenshotPath.empty())
-            return;
-        // The SAME "+1" test RenderSceneToViewport's graph arm uses: this
-        // frame has not been counted yet (EndFrame's ++m_frameCount runs
-        // after this phase, at phase 20), so m_frameCount + 1 is the frame
-        // INDEX this iteration represents.
-        if (m_config.maxFrames == 0 || (m_frameCount + 1) < m_config.maxFrames)
-            return;
-        if (!m_viewportTargets.canvas)
-            return;
-
-        // NRI Phase 3, Task 13 fix round 1 (IMPORTANT, review finding 2):
-        // latch that a genuine attempt is underway BEFORE the read, not
-        // after -- this is the "did the run ever have a real target" signal
-        // MainLoop's post-loop check reads, and it must be true even if the
-        // readback itself then fails (that failure already sets m_goldenExit
-        // = 3 directly, below; the two are independent facts: "did we try"
-        // vs "did it succeed").
-        if (m_config.GoldenMode())
-            m_goldenCaptured = true;
-
-        // TextureId() round-trips the output texture pointer -- the same seam
-        // ImGui::Image and WriteAutoScreenshot's NVRHI half consume.
-        auto* tex = reinterpret_cast<nvrhi::ITexture*>(
-            static_cast<uintptr_t>(m_viewportTargets.canvas->TextureId()));
-        std::uint32_t w = 0, h = 0;
-        std::vector<unsigned char> actual;
-        if (!tex || !Arcane::ReadTexturePixels(m_gpu->Device().Nvrhi(), tex, w, h, actual))
-        {
-            if (m_config.GoldenMode())
-            {
-                ARC_ERROR("golden: viewport backbuffer readback failed");
-                m_goldenExit = 3;
-            }
-            else
-            {
-                ARC_WARN("screenshot FAILED: {} (viewport backbuffer readback)",
-                         m_config.screenshotPath);
-            }
-            return;
-        }
-        if (!m_config.screenshotPath.empty())
-        {
-            if (Arcane::WritePngRgba(m_config.screenshotPath, w, h, actual.data()))
-                ARC_INFO("screenshot written: {}", m_config.screenshotPath);
-            else
-                ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
-        }
-        if (m_config.GoldenMode()
-            && Arcane::GoldenArtifact(m_config, w, h, actual, Arcane::kEditorGoldenNamePrefix) != 0)
-        {
-            m_goldenExit = 3;
-        }
     }
 
     void EditorApp::EndFrame(LoopState& ls)

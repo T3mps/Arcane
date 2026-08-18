@@ -1,10 +1,10 @@
 // EditorApp: Init -> MainLoop -> Shutdown. Consumes the engine's host-boot
 // helpers (Arcane::GpuContext/FramePerf/HostConfig, exported from Arcane.dll)
 // and hosts Sandbox.dll via the lifted Arcane::PluginHost. The frame loop
-// advances the sim through the RunLoop, renders the scene into an
-// OffscreenCanvas (the same canvas->batcher->
-// tonemap path ArcaneRuntime drives, into a panel texture instead of the backbuffer), and
-// draws an editor shell -- a full-viewport dockspace (Arcane::Editor::BeginDockSpace)
+// advances the sim through the RunLoop, renders the scene through the
+// offscreen NriGraphContext viewport vehicle into a panel texture instead of
+// the window's own backbuffer, and draws an editor shell -- a full-viewport
+// dockspace (Arcane::Editor::BeginDockSpace)
 // hosting a Sim toolbar (play/pause/step + time-scale), a Console panel fed by a
 // callback sink on Arcane::Log::Engine(), and a dockable Viewport panel showing
 // the scene texture. Scene input (camera pan/zoom, click-pick) is gated on the
@@ -43,8 +43,6 @@
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD); RenderErrorCount (the graph latch fold)
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved (Run()'s exit-code tail)
 #include <Arcane/Render/Nri/NriCommon.hpp>   // ARC_NRI_CHECK (TeardownGraphForSwitch's idle)
-#include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
-#include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
 #include <Arcane/Sprite/SpriteAsset.hpp>  // Save/LoadSpriteAsset (SpriteDocument factory + peek)
 
 #include <Astra/Core/TypeContext.hpp>
@@ -452,18 +450,19 @@ namespace Arcane::Editor
     bool EditorApp::StageRenderBridge(Arcane::HostBoot::BootContext&)
     {
         // Render-resources bridge: hand the host-owned device + ShaderLibrary to the
-        // Runtime so a plugin can build its own engine render objects (e.g. the
-        // narrowphase inspector's OffscreenCanvas). Non-owning; the host outlives the
-        // plugin (m_gpu is declared before the runtime/plugin in EditorApp). Null in
-        // a headless host -> the plugin skips its GPU-resource creation.
+        // Runtime so a plugin can build its own NVRHI render objects directly.
+        // Non-owning; the host outlives the plugin (m_gpu is declared before the
+        // runtime/plugin in EditorApp). Null in a headless host -> the plugin
+        // skips its GPU-resource creation.
         //
         // (nullptr, nullptr) IS THE GRAPH-MODE CONTRACT (NRI Phase 3, Task 8),
         // the same one RuntimeApp::StageRenderBridge states: there is no NVRHI
         // device to hand over, and the Assets facade is deliberately left
         // device-less by it -- Assets::PixelsFor is the retained, device-FREE
         // decode the graph's NriTextureCache uploads from, so a textured sprite
-        // still renders. What a plugin loses is OffscreenCanvas::Create, which
-        // refuses loudly against a null device.
+        // still renders. A plugin building against a null device must refuse
+        // loudly, the way every engine NVRHI factory used to (OffscreenCanvas::
+        // Create among them, before NRI Phase 5a, Task 4 deleted it).
         if (m_gpu->GraphFlavor())
             m_runtime->SetRenderResources(nullptr, nullptr);
         else
@@ -543,69 +542,31 @@ namespace Arcane::Editor
                                 ud);
         }
 
-        // Scene-in-a-panel viewport: an OffscreenCanvas running the SAME
-        // canvas->batcher->tonemap path ArcaneRuntime drives, into a panel texture instead
-        // of the backbuffer. The device is up by here in both the interactive host
-        // and a headless `--frames N` run (which only differs in the audio backend).
+        // Scene-in-a-panel viewport vehicle. The device is up by here in both
+        // the interactive host and a headless `--frames N` run (which only
+        // differs in the audio backend).
         //
-        // DEVIATION from the brief's literal Init-block mapping: moved here from
-        // its original, later position in Init() (it used to run right after
-        // the plugin loaded) because StageSpriteTables's SceneRenderResolver
-        // needs m_viewportTargets.canvas->Batch() to already exist, and
-        // sprite_tables's DAG dependency is on render_bridge (not on
-        // plugin_load or a separate "viewport" stage that does not exist).
-        // Pure reordering -- no field gains or loses a dependency it did not
-        // already have; the canvas only ever needed m_gpu.
+        // THE GRAPH ARM CREATES NOTHING HERE (NRI Phase 3, Task 8). The
+        // offscreen NriGraphContext that is the viewport vehicle
+        // (ViewportTargets::graph) borrows the NriDevice the CHROME context
+        // owns, and that context cannot exist yet: its swapchain must be
+        // built over an already-Show()n window, which is strictly after boot.
+        // Main() -> CreateGraphVehicles() builds both, in that order, before
+        // the first frame. Nothing between here and there renders, so the gap
+        // is not observable.
         //
-        // THE GRAPH ARM CREATES NONE OF THE THREE (NRI Phase 3, Task 8), and
-        // does not create its own replacement HERE either. The offscreen
-        // NriGraphContext that stands in for all three (ViewportTargets::graph
-        // -- see its comment for why one object covers a trio) borrows the
-        // NriDevice the CHROME context owns, and that context cannot exist yet:
-        // its swapchain must be built over an already-Show()n window, which is
-        // strictly after boot. Main() -> CreateGraphVehicles() builds both, in
-        // that order, before the first frame. Nothing between here and there
-        // renders, so the gap is not observable.
+        // sprite_tables (the one stage that used to depend on an NVRHI canvas
+        // existing by now) is unaffected: its batcher is m_gpu->Batch() -- the
+        // device-less Batcher2D CreateForGraph built -- exactly as
+        // RuntimeApp::StageSpriteTables does it.
         //
-        // sprite_tables (below, the one stage that depended on the canvas
-        // existing by now) is unaffected: on the graph arm its batcher is
-        // m_gpu->Batch() -- the device-less Batcher2D CreateForGraph built --
-        // exactly as RuntimeApp::StageSpriteTables does it.
-        if (m_gpu->GraphFlavor())
-            return true;
-
-        m_viewportTargets.canvas = Arcane::OffscreenCanvas::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(), 1280, 720);
-        if (!m_viewportTargets.canvas)
-        {
-            ARC_ERROR("Arcane Editor: OffscreenCanvas create failed");
-            return false;
-        }
-
-        // GPU hit-proxy picker, sized to match the viewport (resized together).
-        // Supersampled: the id target feeds the JFA outline below, which needs
-        // sub-pixel silhouette coverage to seed a smooth distance field. The
-        // factor is Arcane::kPickSupersample (PickEmit.hpp) rather than a
-        // literal, because the GRAPH arm's PickNode has to size its own id
-        // target by the same number -- see that constant's comment.
-        m_viewportTargets.pick = Arcane::PickBuffer::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(),
-                                            1280, 720, Arcane::kPickSupersample);
-        if (!m_viewportTargets.pick)
-        {
-            ARC_ERROR("Arcane Editor: PickBuffer create failed");
-            return false;
-        }
-
-        // Selection + hover outline (Edit-mode viewport pass), a sibling of
-        // the picker: created and resized at the same viewport size (its own
-        // targets are 1x -- it derives the id buffer's supersample factor
-        // internally).
-        m_viewportTargets.outline = Arcane::SelectionOutline::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(),
-                                                     1280, 720);
-        if (!m_viewportTargets.outline)
-        {
-            ARC_ERROR("Arcane Editor: SelectionOutline creation failed");
-            return false;
-        }
+        // NRI Phase 5a, Task 4 deleted the NVRHI trio this stage used to build
+        // behind an `if (!m_gpu->GraphFlavor())` guard (OffscreenCanvas +
+        // PickBuffer + SelectionOutline, in that dependency order) --
+        // GraphFlavor() is unconditional, so that construction was already
+        // unreachable. This stage does nothing at all now; it is left
+        // installed as a boot stage rather than removed, since deleting a
+        // stage outright is Task 11's GraphMode() collapse, not this task's.
         return true;
     }
 
@@ -789,27 +750,29 @@ namespace Arcane::Editor
         // service resolves everything a scene references into what the
         // submission path can bind -- sprites (.arcsprite -> texture/UVs/size/
         // pivot), sprite materials and the post chain (.arcmat -> a registered
-        // batcher material / a bound FullscreenMaterialChain). It owns the three
-        // caches, the asset resolver, and the compile drain site; the editor
-        // keeps only the compile SERVICE (documents submit through it) and hands
-        // the resolver the document routing below.
+        // batcher material / a bound post chain, published as PostChainDesc
+        // bytes for the graph recorder). It owns the three caches, the asset
+        // resolver, and the compile drain site; the editor keeps only the
+        // compile SERVICE (documents submit through it) and hands the resolver
+        // the document routing below.
         {
             Arcane::SceneRenderResolver::Services rs;
             rs.runtime  = &*m_runtime;
-            // THE SCENE BATCHER (material binds + texture eviction), from
-            // whichever recorder this run has -- the canvas' on the NVRHI arm,
-            // the device-less GpuContext one on the graph arm. The three lines
-            // below are RuntimeApp::StageSpriteTables' gates verbatim, and for
-            // its stated reasons: SpriteMaterialCache registers BYTES-ONLY
-            // materials with a device-less batcher, PostChainCache publishes its
-            // PostChainDesc without building the NVRHI chain, and the BACKEND --
-            // which selects the shader flavor the compiles target -- comes from
-            // the config because there is no device to ask. The two values are
-            // always equal (GpuContext::Create passes exactly this config field
-            // into RenderDeviceDesc::backend); written as a gate so the NVRHI
-            // arm keeps the literal statement it has always had.
-            rs.batcher  = m_gpu->GraphFlavor() ? &m_gpu->Batch()
-                                               : &m_viewportTargets.canvas->Batch();
+            // THE SCENE BATCHER (material binds + texture eviction): the
+            // device-less GpuContext one, the only one left since NRI Phase
+            // 5a, Task 4 deleted the NVRHI arm's canvas-owned alternative.
+            // The lines below are RuntimeApp::StageSpriteTables' gates
+            // verbatim, and for its stated reasons: SpriteMaterialCache
+            // registers BYTES-ONLY materials with a device-less batcher,
+            // PostChainCache publishes its PostChainDesc without building an
+            // NVRHI chain, and the BACKEND -- which selects the shader flavor
+            // the compiles target -- comes from the config because there is
+            // no device to ask. The two values are always equal
+            // (GpuContext::Create passes exactly this config field into
+            // RenderDeviceDesc::backend); written as a gate so the NVRHI
+            // arm's ternaries keep the literal statement they have always had
+            // -- GraphFlavor() collapse is Task 11's job, not this one's.
+            rs.batcher  = &m_gpu->Batch();
             rs.device   = m_gpu->GraphFlavor() ? nullptr : m_gpu->Device().Nvrhi();
             rs.backend  = m_gpu->GraphFlavor() ? m_config.backend : m_gpu->Device().Backend();
             rs.compiler = m_shaderCompiler.get();
@@ -1285,31 +1248,15 @@ namespace Arcane::Editor
         // picture of the SCENE, and a capture node on the chrome frame would
         // copy a CHROMED backbuffer and silently redefine what an editor
         // golden contains (PresentChromeFrame's four absences; Task 10 §8).
-        if (m_viewportTargets.graph)
-        {
-            if (CaptureGraphViewportPng(file))
-                ARC_INFO("Auto-screenshot {}", file.generic_string());
-            return;
-        }
-
-        // The `!m_viewportTargets.canvas` clause is ALSO the graph arm's gate
-        // for a run whose vehicle failed to build: that member is null there
-        // by construction, so such a session simply writes no cover, and the
-        // Hub keeps the previous one -- the same degradation a failed PNG
-        // encode already takes.
-        if (!m_viewportTargets.canvas) return;
-
-        // TextureId() round-trips the output texture pointer -- the same seam
-        // ImGui::Image consumes (precedent: OffscreenCanvasTest.cpp).
-        auto* tex = reinterpret_cast<nvrhi::ITexture*>(
-            static_cast<uintptr_t>(m_viewportTargets.canvas->TextureId()));
-        if (!tex) return;
-
-        // 512 wide: the Hub tile draws ~230px, so ~2x for clean minification
-        // (LoadDisplayTexture's own sizing rule), far under the Hub's 2 MB
-        // cover cap. Failure is already WARN-logged inside; a screenshot that
-        // cannot be written must not turn a save or a shutdown into an error.
-        if (Arcane::SaveTexturePng(m_gpu->Device().Nvrhi(), tex, file, 512))
+        // NRI Phase 5a, Task 4 deleted the NVRHI arm this used to fall through
+        // to when `m_viewportTargets.graph` was null NOT because of a vehicle
+        // failure but because the run was on the NVRHI arm in the first place
+        // (TextureId() off m_viewportTargets.canvas, SaveTexturePng). A null
+        // `graph` now means only a vehicle that failed to build (a project
+        // switch's rebuild failure): such a session simply writes no cover,
+        // and the Hub keeps the previous one -- the same degradation a failed
+        // PNG encode already takes.
+        if (m_viewportTargets.graph && CaptureGraphViewportPng(file))
             ARC_INFO("Auto-screenshot {}", file.generic_string());
     }
 
@@ -1541,8 +1488,15 @@ namespace Arcane::Editor
     // BORROWS the device the chrome context creates.
     bool EditorApp::CreateGraphVehicles()
     {
+        // Unreachable in practice (GraphMode() is unconditional as of Phase
+        // 5a, Task 2b) -- kept standing rather than collapsed, since that
+        // collapse is Task 11's job. NRI Phase 5a, Task 4: this used to read
+        // "the NVRHI arm builds its trio in StageRenderBridge" -- that trio
+        // (OffscreenCanvas/PickBuffer/SelectionOutline) and StageRenderBridge's
+        // construction of it are both deleted; StageRenderBridge does nothing
+        // at all now (see its own comment).
         if (!GraphMode())
-            return true;   // the NVRHI arm builds its trio in StageRenderBridge
+            return true;
 
         // Formerly `#if !defined(ARCANE_DIST)` here (NRI Phase 5a, Task 2a):
         // that guard existed only because the graph path was opt-in dev
@@ -1648,8 +1602,8 @@ namespace Arcane::Editor
         }
 
         // THE VIEWPORT, at the boot extent -- 0/0 asks for the default that
-        // function names, which is the same 1280x720 the NVRHI arm's
-        // OffscreenCanvas is created at in StageRenderBridge.
+        // function names (1280x720; see BuildGraphViewportContext's own
+        // comment for why that number).
         //
         // ONE BODY, TWO CALLERS as of Task 12 -- see BuildGraphViewportContext.
         if (!BuildGraphViewportContext(0, 0))
@@ -1686,11 +1640,12 @@ namespace Arcane::Editor
 
         // THE BOOT EXTENT, named ONCE, here, because both callers can want it:
         // boot has no measurement to offer and a switch may have had no
-        // outgoing context to measure. 1280x720 is the size the NVRHI arm's
-        // OffscreenCanvas is created at in StageRenderBridge, for the same
-        // reason -- the panel's real extent is not known until it has drawn
-        // once, and phase 8's deferred resize adopts it on the next frame, so
-        // the number decides one frame's worth of picture and nothing else.
+        // outgoing context to measure. 1280x720 was also the NVRHI arm's
+        // OffscreenCanvas size (StageRenderBridge, before NRI Phase 5a, Task 4
+        // deleted it), for the identical reason -- the panel's real extent is
+        // not known until it has drawn once, and phase 8's deferred resize
+        // adopts it on the next frame, so the number decides one frame's
+        // worth of picture and nothing else.
         if (width == 0 || height == 0)
         {
             width  = 1280;
@@ -1785,16 +1740,17 @@ namespace Arcane::Editor
 
     std::uint32_t EditorApp::ViewportWidth() const noexcept
     {
-        if (m_viewportTargets.graph)
-            return m_viewportTargets.graph->SurfaceWidth();
-        return m_viewportTargets.canvas ? m_viewportTargets.canvas->Width() : 0u;
+        // NRI Phase 5a, Task 4 deleted the NVRHI fallback this used to carry
+        // (`m_viewportTargets.canvas ? canvas->Width() : 0u`) -- 0 is exactly
+        // the value that produced on the graph arm (no `canvas` ever existed
+        // there), so a null `graph` (a failed vehicle) still answers 0.
+        return m_viewportTargets.graph ? m_viewportTargets.graph->SurfaceWidth() : 0u;
     }
 
     std::uint32_t EditorApp::ViewportHeight() const noexcept
     {
-        if (m_viewportTargets.graph)
-            return m_viewportTargets.graph->SurfaceHeight();
-        return m_viewportTargets.canvas ? m_viewportTargets.canvas->Height() : 0u;
+        // See ViewportWidth().
+        return m_viewportTargets.graph ? m_viewportTargets.graph->SurfaceHeight() : 0u;
     }
 
     void EditorApp::NoteGraphFrameFailure(const char* what)

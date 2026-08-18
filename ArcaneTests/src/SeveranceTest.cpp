@@ -11,7 +11,11 @@
 //     device-less batcher: the registration carries the retained BLOBS, which
 //     is what the graph recorder builds its own pipeline from.
 //   * PostChainCache -- the same, and its PostChainDesc is published even
-//     though no FullscreenMaterialChain (an NVRHI object) could be built.
+//     though no chain object could be built without a device. (At the time
+//     this comment was written, that object was FullscreenMaterialChain, an
+//     NVRHI class; NRI Phase 5a, Task 4 deleted it outright -- the point
+//     below stands regardless: PostChainCache never gated the desc publish
+//     on it being possible.)
 //
 // Why headless is the right home for this: everything above is CPU work over
 // bytes. The half that genuinely needs a device -- that a device-CARRYING
@@ -352,13 +356,14 @@ TEST_CASE("severance: PostChainCache publishes a PostChainDesc with a NULL devic
     for (const ShaderCompileResult& r : DrainBlocking(compiler))
         cache.ConsumeResult(r);
 
-    // NO CHAIN -- FullscreenMaterialChain is an NVRHI object and there is no
-    // device to build one on. That is expected, and it is exactly why the
-    // desc publish cannot sit behind the chain's success gate.
-    CHECK(cache.Chain(data.id) == nullptr);
-
+    // NRI Phase 5a, Task 4 deleted FullscreenMaterialChain (the NVRHI object
+    // this cache used to ALSO build, gated on the device that was never
+    // there anyway) along with Chain(), the accessor that used to prove its
+    // absence here. There is no chain gate left to sit behind.
+    //
     // THE DESC IS PUBLISHED ANYWAY: bytes, layout and values, which is the
-    // whole of what the graph's PostChainNode consumes.
+    // whole of what the graph's PostChainNode consumes -- and, as of this
+    // task, the whole of what this cache produces on its only remaining path.
     const PostChainDesc* desc = cache.Desc(data.id);
     REQUIRE(desc != nullptr);
     REQUIRE(desc->templ != nullptr);

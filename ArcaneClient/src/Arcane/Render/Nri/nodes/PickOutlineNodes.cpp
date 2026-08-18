@@ -112,13 +112,16 @@ namespace Arcane
 
     std::uint32_t OutlineJfaStepCount(std::uint32_t maxThicknessPx) noexcept
     {
-        // SelectionOutline.cpp's JfaPassCount, character for character -- the
-        // halving schedule's length -- and then the +1 for the trailing jump==1
-        // pass its Render loop runs (`for (i = 0; i <= passes; ++i)`). Copied
-        // rather than called because SelectionOutline.hpp pulls nvrhi into a
-        // file whose whole point is the NRI recorder; RenderGraphTest's
-        // "outline jfa" case asserts the two agree, which is the seam that
-        // makes the copy safe.
+        // Originally SelectionOutline.cpp's JfaPassCount, character for
+        // character -- the halving schedule's length -- and then the +1 for
+        // the trailing jump==1 pass its Render loop ran (`for (i = 0; i <=
+        // passes; ++i)`). Copied rather than called because SelectionOutline
+        // was an NVRHI type and this file's whole point is the NRI recorder;
+        // RenderGraphTest's "outline jfa" case used to assert the two agreed,
+        // which was the seam that made the copy safe. NRI Phase 5a, Task 4
+        // deleted SelectionOutline.{hpp,cpp} -- this is the only
+        // implementation left, and the test now pins its output directly
+        // against the literal schedule instead of cross-checking a twin.
         std::uint32_t passes = 1;
         if (maxThicknessPx > 1u)
         {

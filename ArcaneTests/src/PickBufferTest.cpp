@@ -3,7 +3,37 @@
 // CPU-only ([pick]), no GPU: exercises CollectPickables (sprite + collider
 // emitters) and the id<->entity table (PickEntityForId).
 
-#include <cstring>
+// NRI Phase 5a, Task 4 deleted Arcane::PickBuffer (the NVRHI id-pass +
+// readback object) along with its only callers -- the graph's PickNode
+// (Render/Nri/nodes/PickOutlineNodes.*) is the only pick implementation left,
+// and its structural GPU-free coverage lives in RenderGraphTest.cpp. This
+// file's own former "GPU tests ([gpu][pick])" section (CheckR32UintClearReadback,
+// CheckPickBufferSkeleton, CheckIdPass, CheckPick) is deleted with it, and
+// ALL FOUR are COVERAGE GAPS, named here for the Phase 5b carry list rather
+// than silently dropped:
+//   - CheckIdPass + CheckPick pinned GPU-executed pixel behaviour --
+//     front-most-wins id rasterization, 1-based id encoding, background/
+//     out-of-range handling.
+//   - CheckPickBufferSkeleton pinned PickBuffer's own create/resize
+//     lifecycle. The CONCEPT does not map to the graph (a transient
+//     re-declared every frame has no persistent-object Resize() to test),
+//     so this specific case is not a gap by itself.
+//   - CheckR32UintClearReadback is NOT mere NVRHI groundwork with no graph
+//     relevance, corrected after review: R32_UINT is the graph's pick format
+//     too (PickOutlineNodes.hpp), the integer clear's "0 is background, not
+//     a float zero" semantics are explicitly load-bearing there
+//     (PickOutlineNodes.cpp), and the 1x1 sub-region readback is the same
+//     shape the graph's own readback copy uses, including hand-rolled
+//     alignment math (PickOutlineNodes.cpp). Nothing now tests any of that
+//     against a real device: integer-clear correctness, the 1x1 readback
+//     landing at byte 0, the readback row/stride alignment math, and
+//     PickNode::Create/Release's own validation-clean lifecycle (the
+//     CHECK(RenderErrorCount() == 0) the deleted skeleton case carried) are
+//     all untested GPU-side today.
+// RenderGraphTest.cpp's PickNode/OutlineNode coverage is entirely structural
+// (barriers, pool slots, frame composition against a null context), never a
+// real render + readback.
+
 #include <memory>
 #include <vector>
 
@@ -12,8 +42,6 @@
 
 #include <glm/glm.hpp>
 
-#include <nvrhi/nvrhi.h>
-
 #include <Manifold2D/Physics/PhysicsTypes.hpp>
 #include <Manifold2D/Physics/PhysicsWorld.hpp>
 #include <Manifold2D/Physics/Shapes.hpp>
@@ -21,10 +49,7 @@
 #include <Astra/Registry/Registry.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
-#include <Arcane/Render/Device.hpp>
-#include <Arcane/Render/PickBuffer.hpp>
 #include <Arcane/Render/PickEmit.hpp>
-#include <Arcane/Render/ShaderLibrary.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
@@ -243,280 +268,4 @@ TEST_CASE("CollectPickables orders sprites before colliders, deterministically",
     CHECK(out2[0].entity.GetValue() == out[0].entity.GetValue());
     CHECK(out2[1].entity.GetValue() == out[1].entity.GetValue());
     CHECK(out2[2].entity.GetValue() == out[2].entity.GetValue());
-}
-
-// ===========================================================================
-// GPU tests ([gpu][pick]) -- DESK-DRIVEN. These need a real device (per-backend,
-// like OffscreenCanvasTest) and hit the Parsec GPU-driver hazard headless, so
-// the ~[gpu] dev-loop excludes them. Run at the desk:
-//   ArcaneTests.exe "[pick][gpu]"
-// ===========================================================================
-
-namespace
-{
-    // Task 1 (impl-time verification point SS8.1): prove R32_UINT render targets
-    // + clearTextureUInt + a 1x1 sub-region readback work on this backend with
-    // validation SILENT -- the exact primitives the id pass + Pick() readback
-    // rely on. Mirrors GpuTestHelpers::CheckOffscreenClear, but integer-format
-    // and with a 1x1 TextureSlice copy at a known pixel (the Pick() readback).
-    void CheckR32UintClearReadback(Arcane::GraphicsBackend backend)
-    {
-        Arcane::RenderDeviceDesc desc;
-        desc.backend = backend;
-        auto device = Arcane::RenderDevice::Create(desc);
-        REQUIRE(device != nullptr);
-        nvrhi::IDevice* nv = device->Nvrhi();
-
-        auto targetDesc = nvrhi::TextureDesc()
-            .setWidth(8).setHeight(8)
-            .setFormat(nvrhi::Format::R32_UINT)
-            .setIsRenderTarget(true)
-            .setInitialState(nvrhi::ResourceStates::RenderTarget)
-            .setKeepInitialState(true)
-            .setDebugName("R32UintTarget");
-        nvrhi::TextureHandle target = nv->createTexture(targetDesc);
-        REQUIRE(target != nullptr);
-
-        auto stagingDesc = nvrhi::TextureDesc()
-            .setWidth(1).setHeight(1)
-            .setFormat(nvrhi::Format::R32_UINT)
-            .setDebugName("R32UintReadback");
-        nvrhi::StagingTextureHandle staging =
-            nv->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
-        REQUIRE(staging != nullptr);
-
-        nvrhi::CommandListHandle cl = nv->createCommandList();
-        cl->open();
-        cl->clearTextureUInt(target, nvrhi::AllSubresources, 7u);
-        // 1x1 copy of the pixel at (3,5) -- the Pick() readback shape.
-        cl->copyTexture(staging, nvrhi::TextureSlice(),
-                        target, nvrhi::TextureSlice().setOrigin(3, 5)
-                                    .setWidth(1).setHeight(1));
-        cl->close();
-        nv->executeCommandList(cl);
-        nv->waitForIdle();
-
-        size_t rowPitch = 0;
-        const auto* px = static_cast<const uint32_t*>(nv->mapStagingTexture(
-            staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
-        REQUIRE(px != nullptr);
-        CHECK(px[0] == 7u);
-        nv->unmapStagingTexture(staging);
-        nv->runGarbageCollection();
-
-        CHECK(Arcane::RenderErrorCount() == 0);
-    }
-
-    // Task 1: the PickBuffer skeleton builds its id target + staging and resizes
-    // cleanly, with zero NVRHI validation errors.
-    void CheckPickBufferSkeleton(Arcane::GraphicsBackend backend)
-    {
-        Arcane::RenderDeviceDesc desc;
-        desc.backend = backend;
-        auto device = Arcane::RenderDevice::Create(desc);
-        REQUIRE(device != nullptr);
-
-        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend,
-                                                     "data/shaders");
-        REQUIRE(shaders != nullptr);
-
-        auto pick = Arcane::PickBuffer::Create(device->Nvrhi(), *shaders, 64, 64);
-        REQUIRE(pick != nullptr);
-        CHECK(pick->Width() == 64);
-        CHECK(pick->Height() == 64);
-
-        pick->Resize(128, 72);
-        CHECK(pick->Width() == 128);
-        CHECK(pick->Height() == 72);
-
-        // Idempotent no-ops: unchanged size and a zero dimension both leave the
-        // target untouched.
-        pick->Resize(128, 72);
-        pick->Resize(0, 0);
-        CHECK(pick->Width() == 128);
-        CHECK(pick->Height() == 72);
-
-        device->Nvrhi()->runGarbageCollection();
-        CHECK(Arcane::RenderErrorCount() == 0);
-    }
-}
-
-TEST_CASE("d3d12: R32_UINT clear + 1x1 readback is validation-clean",
-          "[gpu][pick][d3d12]")
-{
-    CheckR32UintClearReadback(Arcane::GraphicsBackend::D3D12);
-}
-
-TEST_CASE("vulkan: R32_UINT clear + 1x1 readback is validation-clean",
-          "[gpu][pick][vulkan]")
-{
-    CheckR32UintClearReadback(Arcane::GraphicsBackend::Vulkan);
-}
-
-TEST_CASE("d3d12: PickBuffer builds and resizes its id target",
-          "[gpu][pick][d3d12]")
-{
-    CheckPickBufferSkeleton(Arcane::GraphicsBackend::D3D12);
-}
-
-TEST_CASE("vulkan: PickBuffer builds and resizes its id target",
-          "[gpu][pick][vulkan]")
-{
-    CheckPickBufferSkeleton(Arcane::GraphicsBackend::Vulkan);
-}
-
-namespace
-{
-    // Copy the full R32_UINT id target into a row-major vector<uint32_t>,
-    // handling the staging row pitch.
-    std::vector<uint32_t> ReadIdTarget(nvrhi::IDevice* nv, nvrhi::ITexture* target,
-                                       uint32_t size)
-    {
-        auto stagingDesc = nvrhi::TextureDesc()
-            .setWidth(size).setHeight(size)
-            .setFormat(nvrhi::Format::R32_UINT)
-            .setDebugName("IdReadback");
-        nvrhi::StagingTextureHandle staging =
-            nv->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
-        REQUIRE(staging != nullptr);
-
-        nvrhi::CommandListHandle cl = nv->createCommandList();
-        cl->open();
-        cl->copyTexture(staging, nvrhi::TextureSlice(), target, nvrhi::TextureSlice());
-        cl->close();
-        nv->executeCommandList(cl);
-        nv->waitForIdle();
-
-        size_t rowPitch = 0;
-        const auto* bytes = static_cast<const uint8_t*>(nv->mapStagingTexture(
-            staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
-        REQUIRE(bytes != nullptr);
-        std::vector<uint32_t> out(static_cast<size_t>(size) * size);
-        for (uint32_t y = 0; y < size; ++y)
-            std::memcpy(&out[static_cast<size_t>(y) * size],
-                        bytes + static_cast<size_t>(y) * rowPitch,
-                        static_cast<size_t>(size) * sizeof(uint32_t));
-        nv->unmapStagingTexture(staging);
-        return out;
-    }
-
-    // Task 3: the entity_id pass rasterizes each pickable silhouette tagged with
-    // its 1-based id, background stays 0, and overlaps resolve front-most. Reads
-    // back the FULL target and samples known pixels. nvrhi normalizes the render-
-    // target Y orientation across backends, so target[y][x] == canvas pixel (x,y).
-    void CheckIdPass(Arcane::GraphicsBackend backend)
-    {
-        constexpr uint32_t kSize = 128;
-        Arcane::RenderDeviceDesc desc;
-        desc.backend = backend;
-        auto device = Arcane::RenderDevice::Create(desc);
-        REQUIRE(device != nullptr);
-        nvrhi::IDevice* nv = device->Nvrhi();
-
-        auto shaders = Arcane::ShaderLibrary::Create(nv, backend, "data/shaders");
-        REQUIRE(shaders != nullptr);
-        auto pick = Arcane::PickBuffer::Create(nv, *shaders, kSize, kSize);
-        REQUIRE(pick != nullptr);
-
-        // 10 px per world-meter, no offset.
-        const Arcane::PickView view{ {0.0f, 0.0f}, 10.0f };
-
-        // --- non-overlapping: two Aabb colliders at distinct canvas pixels -----
-        {
-            auto reg = MakePickRegistry();
-            const Astra::Entity a = SpawnAabbBody(*reg, {3.0f, 4.0f}, 0.5f, 0.5f); // ->(30,40)
-            const Astra::Entity b = SpawnAabbBody(*reg, {9.0f, 9.0f}, 0.5f, 0.5f); // ->(90,90)
-            (void)a; (void)b;
-
-            pick->RenderIdPass(*reg, view);
-            const std::vector<uint32_t> px = ReadIdTarget(nv, pick->IdTarget(), kSize);
-            auto At = [&](uint32_t x, uint32_t y) { return px[static_cast<size_t>(y) * kSize + x]; };
-
-            // No sprites; two colliders in creation order -> ids 1 and 2.
-            CHECK(At(30, 40) == 1u);   // body A center
-            CHECK(At(90, 90) == 2u);   // body B center
-            CHECK(At(60, 60) == 0u);   // gap between them -> background
-        }
-
-        // --- overlapping: front-most (later-drawn) id wins the pixel -----------
-        {
-            auto reg = MakePickRegistry();
-            const Astra::Entity back  = SpawnAabbBody(*reg, {6.0f, 6.0f}, 1.0f, 1.0f);
-            const Astra::Entity front = SpawnAabbBody(*reg, {6.0f, 6.0f}, 1.0f, 1.0f);
-            (void)back; (void)front;
-
-            pick->RenderIdPass(*reg, view);
-            const std::vector<uint32_t> px = ReadIdTarget(nv, pick->IdTarget(), kSize);
-            // `front` is collected second -> id 2 -> drawn last -> wins (60,60).
-            CHECK(px[static_cast<size_t>(60) * kSize + 60] == 2u);
-        }
-
-        nv->runGarbageCollection();
-        CHECK(Arcane::RenderErrorCount() == 0);
-    }
-}
-
-TEST_CASE("d3d12: entity_id pass writes front-most ids to covered pixels",
-          "[gpu][pick][d3d12]")
-{
-    CheckIdPass(Arcane::GraphicsBackend::D3D12);
-}
-
-TEST_CASE("vulkan: entity_id pass writes front-most ids to covered pixels",
-          "[gpu][pick][vulkan]")
-{
-    CheckIdPass(Arcane::GraphicsBackend::Vulkan);
-}
-
-namespace
-{
-    // Task 4: the public Pick() API -- render the id pass + read back the 1x1
-    // pixel under the cursor + map the id to its entity. Background and
-    // out-of-range clicks return an invalid entity; overlaps pick the front-most.
-    void CheckPick(Arcane::GraphicsBackend backend)
-    {
-        constexpr uint32_t kSize = 128;
-        Arcane::RenderDeviceDesc desc;
-        desc.backend = backend;
-        auto device = Arcane::RenderDevice::Create(desc);
-        REQUIRE(device != nullptr);
-        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "data/shaders");
-        REQUIRE(shaders != nullptr);
-        auto pick = Arcane::PickBuffer::Create(device->Nvrhi(), *shaders, kSize, kSize);
-        REQUIRE(pick != nullptr);
-
-        const Arcane::PickView view{ {0.0f, 0.0f}, 10.0f };
-
-        // Two Aabb colliders at distinct canvas pixels.
-        auto reg = MakePickRegistry();
-        const Astra::Entity a = SpawnAabbBody(*reg, {3.0f, 4.0f}, 0.5f, 0.5f); // ->(30,40)
-        const Astra::Entity b = SpawnAabbBody(*reg, {9.0f, 9.0f}, 0.5f, 0.5f); // ->(90,90)
-
-        CHECK(pick->Pick(*reg, view, {30.0f, 40.0f}).GetValue() == a.GetValue());
-        CHECK(pick->Pick(*reg, view, {90.0f, 90.0f}).GetValue() == b.GetValue());
-        CHECK_FALSE(pick->Pick(*reg, view, {60.0f, 60.0f}).IsValid());     // background
-        CHECK_FALSE(pick->Pick(*reg, view, {999.0f, 999.0f}).IsValid());   // out of range
-
-        // Overlap: the front-most (later-drawn) entity is returned.
-        auto reg2 = MakePickRegistry();
-        const Astra::Entity back  = SpawnAabbBody(*reg2, {6.0f, 6.0f}, 1.0f, 1.0f);
-        const Astra::Entity front = SpawnAabbBody(*reg2, {6.0f, 6.0f}, 1.0f, 1.0f);
-        (void)back;
-        CHECK(pick->Pick(*reg2, view, {60.0f, 60.0f}).GetValue() == front.GetValue());
-
-        device->Nvrhi()->runGarbageCollection();
-        CHECK(Arcane::RenderErrorCount() == 0);
-    }
-}
-
-TEST_CASE("d3d12: Pick returns the entity under a pixel, invalid on background",
-          "[gpu][pick][d3d12]")
-{
-    CheckPick(Arcane::GraphicsBackend::D3D12);
-}
-
-TEST_CASE("vulkan: Pick returns the entity under a pixel, invalid on background",
-          "[gpu][pick][vulkan]")
-{
-    CheckPick(Arcane::GraphicsBackend::Vulkan);
 }

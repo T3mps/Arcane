@@ -180,7 +180,7 @@ namespace Arcane::Editor
         // ImGui::IsWindowAppearing cite at the assignment site). Drives the
         // center-tab -> side-panel focus follow, NOT input routing.
         bool         appearing = false;
-        uint32_t     desiredW = 0;  // content-region size (for OffscreenCanvas::Resize)
+        uint32_t     desiredW = 0;  // content-region size (feeds the viewport vehicle's deferred resize)
         uint32_t     desiredH = 0;
         bool         clicked = false;       // left-click landed inside the image this frame
         bool         altHeld  = false;      // alt modifier at click time (cycle stack)

@@ -371,9 +371,11 @@ TEST_CASE("SceneRenderResolver publishes the scene's SpriteTable into the regist
     CHECK(resolver.Globals().viewportHeight == 720.0f);
 
     // No PostProcess entity in the scene -> no chain, which is the plain
-    // canvas->tonemap path rather than a broken one.
-    CHECK(resolver.PostChain() == nullptr);
+    // canvas->tonemap path rather than a broken one. NRI Phase 5a, Task 4
+    // deleted PostChain() (the NVRHI accessor) along with FullscreenMaterialChain;
+    // PostDesc() is the bytes-only equivalent the graph recorder reads.
     CHECK(resolver.PostInstance() == nullptr);
+    CHECK(resolver.PostDesc() == nullptr);
 
     std::error_code ec; fs::remove_all(dir, ec);
 }

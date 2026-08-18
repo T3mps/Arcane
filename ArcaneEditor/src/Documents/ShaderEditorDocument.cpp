@@ -984,17 +984,6 @@ namespace Arcane::Editor
         m_navHistory.push_back(ViewEntry{ m_inChainView, m_activePass });
         m_navIndex = 0;
 
-        // Device-less services (headless tests) skip the preview cleanly; the
-        // document still parses, compiles, and saves.
-        if (m_services.device && m_services.shaders)
-        {
-            m_preview = Arcane::OffscreenCanvas::Create(m_services.device,
-                                                        *m_services.shaders, 512, 512);
-            m_pass = Arcane::FullscreenMaterialPass::Create(m_services.device);
-            if (!m_preview || !m_pass)
-                ARC_WARN("ShaderEditorDocument '{}': preview resources failed", m_title);
-        }
-
         if (!IsInstance() || ResolveParentChain())
         {
             // Preview surface follows the asset's kind (instances inherit the
@@ -1244,56 +1233,23 @@ namespace Arcane::Editor
         // Node-preview jobs: diag-less (the MAIN compile owns every badge --
         // a preview clone can only fail where the real snippet also fails);
         // a failure simply leaves that node's last-good thumbnail showing.
+        // NRI Phase 5a, Task 4: both blocks below used to createShader + bind
+        // a per-node NVRHI preview pass (BindNodePreview, deleted -- see its
+        // note). `target.succeeded && m_services.device` was already
+        // unreachable (device always null since Phase 5a Task 2b's flip); the
+        // job is still consumed here (returning true) so a node-preview
+        // compile does not fall through and get mis-claimed by a later branch.
         if (result.jobId == m_nodePreviewVsJob && m_nodePreviewVsJob != 0)
         {
             m_nodePreviewVsJob = 0;
-            const auto& target = m_services.backend == Arcane::GraphicsBackend::Vulkan
-                                     ? result.spirv : result.dxil;
-            if (target.succeeded && m_services.device)
-            {
-                m_nodePreviewVs = m_services.device->createShader(
-                    nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
-                        .setEntryName(Arcane::kVsEntry)
-                        .setDebugName((m_title + "_thumbvs").c_str()),
-                    target.bytecode.data(), target.bytecode.size());
-                // Bind every thumbnail that landed before the shared VS did.
-                if (m_nodePreviewVs)
-                    for (auto& [id, np] : m_nodePreviews)
-                        if (!np.psBytes.empty())
-                        {
-                            nvrhi::ShaderHandle ps = m_services.device->createShader(
-                                nvrhi::ShaderDesc()
-                                    .setShaderType(nvrhi::ShaderType::Pixel)
-                                    .setEntryName(Arcane::kPsEntry)
-                                    .setDebugName("NodePreview_ps"),
-                                np.psBytes.data(), np.psBytes.size());
-                            np.psBytes.clear();
-                            BindNodePreview(np, ps);
-                        }
-            }
             return true;
         }
         for (auto& [id, np] : m_nodePreviews)
         {
+            (void)id;
             if (result.jobId != np.psJob || np.psJob == 0)
                 continue;
             np.psJob = 0;
-            const auto& target = m_services.backend == Arcane::GraphicsBackend::Vulkan
-                                     ? result.spirv : result.dxil;
-            if (target.succeeded && m_services.device)
-            {
-                if (!m_nodePreviewVs)
-                    np.psBytes = target.bytecode;   // bind when the VS lands
-                else
-                {
-                    nvrhi::ShaderHandle ps = m_services.device->createShader(
-                        nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
-                            .setEntryName(Arcane::kPsEntry)
-                            .setDebugName("NodePreview_ps"),
-                        target.bytecode.data(), target.bytecode.size());
-                    BindNodePreview(np, ps);
-                }
-            }
             return true;
         }
 
@@ -1357,27 +1313,21 @@ namespace Arcane::Editor
             return;
         }
         const bool sprite = m_surface == 1;
-        // THE READINESS TEST IS THE BLOBS + THE TEMPLATE (NRI Phase 3, Task
-        // 11). The `m_preview`/`m_pass` half of it moved down beside the
-        // createShader pair it actually guards, because on the graph arm both
-        // are null BY CONSTRUCTION (StageRenderBridge hands the runtime a null
-        // device, so the ctor creates neither) and the bytes below are the
-        // whole product of this function there. On the NVRHI arm the two are
-        // created in the ctor and non-null for the life of the document, so
-        // the move is unreachable except on the already-WARNed
-        // "preview resources failed" path.
+        // THE READINESS TEST IS THE BLOBS + THE TEMPLATE. NRI Phase 5a, Task 4
+        // deleted the NVRHI half of this function outright (OffscreenCanvas /
+        // FullscreenMaterialPass and the createShader pair that fed them) --
+        // DocServices::device is always null now (both hosts render through
+        // the graph, never the NVRHI arm), so that half was dead code kept
+        // only as the pre-flip regression floor. The bytes below are the
+        // whole product of this function now, on the only arm left.
         if (m_vsBytes.empty() || m_psBytes.empty() || !m_pendingTemplate)
-            return;
-        if (m_services.device && (sprite ? !m_preview : !m_pass))
             return;
 
         // ---- THE SEVERANCE, same shape as Task 2's caches ----
         // The stitched blobs are RETAINED rather than consumed: a SECOND
         // graphics device in this process cannot use an nvrhi::ShaderHandle,
         // only the bytecode behind it, and the graph arm's preview builds its
-        // own NRI pipeline from exactly these bytes. The NVRHI createShader
-        // pair below reads the SAME buffers -- one compile, two recorders,
-        // which is the whole reason this is a severance and not a second path.
+        // own NRI pipeline from exactly these bytes.
         auto vsBlob = std::make_shared<const std::vector<std::uint8_t>>(std::move(m_vsBytes));
         auto psBlob = std::make_shared<const std::vector<std::uint8_t>>(std::move(m_psBytes));
         // The members are the IN-FLIGHT accumulators, not storage: the moves
@@ -1387,32 +1337,14 @@ namespace Arcane::Editor
         m_vsBytes.clear();
         m_psBytes.clear();
 
-        nvrhi::ShaderHandle vs, ps;
-        if (m_services.device)
-        {
-            vs = m_services.device->createShader(
-                nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
-                    .setEntryName(Arcane::kVsEntry).setDebugName((m_title + "_vs").c_str()),
-                vsBlob->data(), vsBlob->size());
-            ps = m_services.device->createShader(
-                nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
-                    .setEntryName(Arcane::kPsEntry).setDebugName((m_title + "_ps").c_str()),
-                psBlob->data(), psBlob->size());
-            if (!vs || !ps)
-                return;
-            // Fullscreen surface binds the pass here (a failure keeps last-good
-            // AND the previous instance). Sprite surface registers with the
-            // preview canvas's batcher AFTER the fresh instance exists below.
-            if (!sprite && !m_pass->SetMaterial(m_pendingTemplate, vs, ps))
-                return;
-        }
-
         PromotePendingInstance();
 
-        // The device-free publication, AFTER the promote and on BOTH arms: the
-        // desc has to name the instance the pipelines were just built against,
-        // or a live param edit would be written into one and read from the
-        // other. A non-chain fullscreen material declares NO InputTexture
+        // The device-free publication, AFTER the promote: the desc has to
+        // name the instance the pipelines were just built against, or a live
+        // param edit would be written into one and read from the other.
+        // (Both arms shared this ordering requirement before NRI Phase 5a,
+        // Task 4 deleted the NVRHI one; the graph arm's publish is the only
+        // one left.) A non-chain fullscreen material declares NO InputTexture
         // (BuildMaterialShaderSource's chainInputs defaults to 0), so its
         // graph description is a one-pass chain with zero input slots -- which
         // is layout-identical, because both the source generator and
@@ -1432,13 +1364,6 @@ namespace Arcane::Editor
             m_graphPost.passes.assign(1, Arcane::PostChainPassDesc{ vsBlob, psBlob, {} });
         }
         PublishGraphPreview();
-
-        if (sprite && m_services.device)
-        {
-            m_previewVs = vs;
-            m_previewPs = ps;
-            RefreshSpritePreviewBinding();
-        }
     }
 
     void ShaderEditorDocument::PromotePendingInstance()
@@ -1479,44 +1404,19 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::BindChainIfComplete()
     {
-        // THE DEVICE GATE MOVED OFF THIS LINE (NRI Phase 3, Task 11). It used
-        // to refuse the whole function without a device, which dropped the
-        // compiled chain on the floor on the graph arm -- the exact defect
-        // Task 2 fixed in PostChainCache, and this is the editor's copy of it.
-        // The device now gates only the nvrhi half below; the DESCRIPTION is
-        // published either way.
+        // NRI Phase 5a, Task 4: the NVRHI half of this function (a
+        // FullscreenMaterialChain, its createShader pair, and SetChain) is
+        // deleted -- DocServices::device is always null now, so it was dead
+        // code kept only as the pre-flip regression floor. The DESCRIPTION
+        // below is the whole product of this function now.
         if (!m_pendingTemplate || m_passJobs.empty())
             return;
         for (const PassJobs& pj : m_passJobs)
             if (pj.vsBytes.empty() || pj.psBytes.empty())
                 return;   // a stage is still in flight (or failed -- last-good stays)
 
-        // THE CHAIN OBJECT FIRST, ahead of the retention loop that CONSUMES
-        // this compile (whole-branch review, I3). The base order was
-        // create-then-consume; Task 11 moved the device gate down past the
-        // loop, and the loop std::move()s every pass's bytes out of m_passJobs
-        // and clears them -- so a FullscreenMaterialChain::Create failure now
-        // spent the compile on the way to giving up. That is unrecoverable
-        // rather than merely a lost frame: the readiness guard above returns
-        // while ANY pass is empty, so every stage would have to recompile
-        // before this function could ever be reached again, and until then the
-        // chain can never bind. Creating first restores "a failure here costs
-        // this attempt, not the bytes".
-        //
-        // Only the CREATE moves. The createShader/SetChain failures further
-        // down consume the compile exactly as they always did -- they are
-        // per-attempt failures of THIS bytecode, so re-offering the same bytes
-        // would only fail again.
-        if (m_services.device && !m_chain)
-        {
-            m_chain = Arcane::FullscreenMaterialChain::Create(m_services.device);
-            if (!m_chain)
-                return;
-        }
-
-        // Retained first, and for every pass, so the two arms read ONE compile
-        // (see BindIfComplete's severance note). Built before the device gate
-        // because a device-less run's whole product is this vector.
+        // Retained for every pass, so the graph recorder reads the ONE compile
+        // (see BindIfComplete's severance note).
         std::vector<Arcane::PostChainPassDesc> graphPasses;
         graphPasses.reserve(m_passJobs.size());
         for (std::size_t p = 0; p < m_passJobs.size(); ++p)
@@ -1527,51 +1427,17 @@ namespace Arcane::Editor
             gp.psBytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(pj.psBytes));
             if (p < m_passInputs.size())
                 gp.inputs = m_passInputs[p];
-            // Same statements, same meaning, same place relative to the
-            // createShader pair below: this compile is spent.
+            // Same statements, same meaning: this compile is spent.
             pj.vsBytes.clear();
             pj.psBytes.clear();
             graphPasses.push_back(std::move(gp));
         }
 
-        if (m_services.device)
-        {
-            // m_chain is non-null here by construction: the block above either
-            // created it or returned. Kept as a defensive read rather than an
-            // assert because nothing downstream tolerates a null chain.
-            if (!m_chain)
-                return;
-
-            std::vector<Arcane::FullscreenMaterialChain::PassShaders> shaders;
-            shaders.reserve(m_passJobs.size());
-            for (std::size_t p = 0; p < m_passJobs.size(); ++p)
-            {
-                const Arcane::PostChainPassDesc& gp = graphPasses[p];
-                const std::string stem = m_title + "_p" + std::to_string(p);
-                Arcane::FullscreenMaterialChain::PassShaders ps;
-                ps.vs = m_services.device->createShader(
-                    nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
-                        .setEntryName(Arcane::kVsEntry).setDebugName((stem + "_vs").c_str()),
-                    gp.vsBytes->data(), gp.vsBytes->size());
-                ps.ps = m_services.device->createShader(
-                    nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
-                        .setEntryName(Arcane::kPsEntry).setDebugName((stem + "_ps").c_str()),
-                    gp.psBytes->data(), gp.psBytes->size());
-                ps.inputs = gp.inputs;
-                if (!ps.vs || !ps.ps)
-                    return;
-                shaders.push_back(std::move(ps));
-            }
-            // Atomic: a rejected chain keeps the previous one bound AND the
-            // previous instance (same last-good shape as SetMaterial).
-            if (!m_chain->SetChain(m_pendingTemplate, shaders, m_chainInputSlots))
-                return;
-        }
-
         PromotePendingInstance();
 
-        // ...and the device-free twin, published on both arms after the
-        // promote for the reason BindIfComplete states.
+        // ...and the device-free twin, published after the promote for the
+        // reason BindIfComplete states (both arms shared that requirement
+        // before NRI Phase 5a, Task 4 deleted the NVRHI one).
         m_graphSpriteBlobs = SpriteBlobs{};
         m_graphPost.templ           = m_boundTemplate;
         m_graphPost.instance        = m_instance;
@@ -1580,45 +1446,16 @@ namespace Arcane::Editor
         PublishGraphPreview();
     }
 
-    void ShaderEditorDocument::RefreshSpritePreviewBinding()
-    {
-        // (Re)register the preview material on the canvas's OWN batcher: the
-        // shared instance pointer keeps live param edits flowing (PackCB reads
-        // it at End()); texture params resolve fresh HERE, so a pick lands by
-        // calling this again -- no recompile.
-        if (!m_preview || !m_previewVs || !m_previewPs || !m_instance || !m_boundTemplate)
-            return;
-        Arcane::Material2DDesc desc;
-        desc.vs = m_previewVs;
-        desc.ps = m_previewPs;
-        desc.templ = m_boundTemplate;
-        desc.instance = m_instance;
-        const std::vector<Arcane::Guid> texGuids = m_instance->ResolveTextures();
-        desc.paramTextures.resize(texGuids.size());
-        if (m_services.runtime)
-            for (std::size_t i = 0; i < texGuids.size(); ++i)
-                if (texGuids[i].IsValid())
-                    desc.paramTextures[i] = m_services.runtime->AssetsFacade().GetTexture(
-                        Arcane::AssetId::FromGuid(texGuids[i]));
-
-        Arcane::Batcher2D& batcher = m_preview->Batch();
-        if (m_previewSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId)
-        {
-            if (!batcher.UpdateMaterial(m_previewSpriteMaterial, std::move(desc)))
-                ARC_WARN("ShaderEditorDocument '{}': sprite preview update failed", m_title);
-            return;
-        }
-        m_previewSpriteMaterial = batcher.RegisterMaterial(std::move(desc));
-    }
-
     // =====================================================================
-    // THE GRAPH ARM'S PREVIEW (NRI Phase 3, Task 11)
+    // THE GRAPH ARM'S PREVIEW
     // =====================================================================
-    // The NVRHI arm's preview is an OffscreenCanvas plus a
-    // FullscreenMaterialPass/Chain, and none of those three can exist without
-    // an nvrhi::IDevice -- which the graph flavor does not have. The graph
-    // twin is the SAME content declared against the SAME machinery the runtime
-    // already renders a scene with:
+    // NRI Phase 5a, Task 4: this used to be titled "THE GRAPH ARM'S PREVIEW
+    // (NRI Phase 3, Task 11)" and open with a paragraph contrasting it against
+    // the NVRHI arm's preview (an OffscreenCanvas plus a FullscreenMaterialPass
+    // /Chain) -- that arm, and RefreshSpritePreviewBinding (its sprite-material
+    // registration function, which used to sit just above this banner), are
+    // deleted; this is the only preview implementation left. It is declared
+    // against the SAME machinery the runtime already renders a scene with:
     //
     //   * the checkerboard backdrop and the sprite quad -> a DEVICE-LESS
     //     Batcher2D (Task 2's severance) drained by Batch2DNode;
@@ -1640,8 +1477,9 @@ namespace Arcane::Editor
     // reason stated at RenderNodePreviews, and ledgered in the task report.
     void ShaderEditorDocument::EnsureGraphPreviewContext()
     {
-        // The seam is null on the NVRHI arm and in every headless test, which
-        // is the whole gate: this function is a no-op there.
+        // The seam is null in every headless test (no EditorApp at all),
+        // which is the whole gate: this function is a no-op there. (Also
+        // null on the since-deleted NVRHI arm, before NRI Phase 5a, Task 4.)
         if (m_graphPreview || !m_services.nriDevice || !m_services.hostConfig)
             return;
 
@@ -1697,9 +1535,11 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::PublishGraphPreview()
     {
-        // Called from both bind sites on BOTH arms. On the NVRHI arm every
-        // call below is a no-op (the seam is null), which is what keeps this
-        // one line at each bind site rather than a mode branch there.
+        // Called from both bind sites (BindIfComplete, BindChainIfComplete).
+        // Before NRI Phase 5a, Task 4 deleted the NVRHI arm, every call below
+        // was a no-op there too (the seam was null), which is what kept this
+        // one line at each bind site rather than a mode branch -- still true
+        // now, just with one fewer arm to be a no-op on.
         EnsureGraphPreviewContext();
         RefreshGraphSpriteBinding();
     }
@@ -1763,8 +1603,9 @@ namespace Arcane::Editor
         // NOTHING COMPILED YET IS NOT A FRAME. Declaring one would clear the
         // output to the checkerboard and then show it as "the preview", which
         // is the blank-but-labeled failure this phase refuses; the panel draws
-        // no image instead (DrawPreviewPanel gates on the same predicate that
-        // gates the NVRHI arm, PreviewReady()).
+        // no image instead (DrawPreviewPanel gates on the same predicate,
+        // PreviewReady() -- the one gate left since NRI Phase 5a, Task 4
+        // deleted the NVRHI arm PreviewReady() used to also cover).
         if (!haveSprite && !haveFullscreen)
             return;
 
@@ -1780,14 +1621,16 @@ namespace Arcane::Editor
         // pair for a device-less batcher (every recording use is inside End(),
         // which the NODE drains rather than this code calling).
         b.Begin(nullptr, nullptr, kGraphPreviewSize, kGraphPreviewSize);
-        // AFTER Begin, matching both existing submitters (the NVRHI Tick path's
-        // OffscreenCanvas::Draw lambda, and SubmitSceneToBatcher) -- so a
-        // future change to what Begin resets cannot silently drop these.
+        // AFTER Begin, matching SubmitSceneToBatcher's own SetGlobals call --
+        // so a future change to what Begin resets cannot silently drop this.
+        // (Before NRI Phase 5a, Task 4 deleted it, Tick's NVRHI arm matched
+        // the identical placement in its own OffscreenCanvas::Draw lambda.)
         b.SetGlobals(globals);
 
-        // The checkerboard, cell for cell and colour for colour the NVRHI
-        // arm's (Tick's sprite branch above). On the fullscreen arm it is ALSO
-        // what kSceneInput samples, which is what makes it the stand-in.
+        // The checkerboard, cell for cell and colour for colour the deleted
+        // NVRHI arm's own sprite-surface checkerboard was (Tick's sprite
+        // branch, before NRI Phase 5a, Task 4). On the fullscreen arm it is
+        // ALSO what kSceneInput samples, which is what makes it the stand-in.
         constexpr float kCell = 32.0f;
         const float extent = static_cast<float>(kGraphPreviewSize);
         const glm::vec4 light(0.16f, 0.16f, 0.19f, 1.0f);
@@ -1994,31 +1837,27 @@ namespace Arcane::Editor
             m_instance->Set(nameHash, value);
         else
             m_instance->ClearOverride(nameHash);
-        // Undo/redo of a TEXTURE param must re-bind the sprite preview too.
-        if (m_surface == 1 && m_boundTemplate)
-            if (const Arcane::ParamDecl* d = m_boundTemplate->Find(nameHash);
-                d && d->type == Arcane::MatParamType::Texture)
-                RefreshSpritePreviewBinding();
+        // NRI Phase 5a, Task 4: this used to re-bind the NVRHI sprite preview
+        // on a TEXTURE param undo/redo (Material2DDesc resolves its texture
+        // handles once, at registration). The graph arm's RefreshGraphSpriteBinding
+        // has no equivalent need -- its texture params resolve by Guid, fresh,
+        // every frame through NriTextureCache -- so there is nothing left to
+        // trigger here.
     }
 
     bool ShaderEditorDocument::PreviewReady() const
     {
-        // THE GRAPH ARM'S ANSWER FIRST (NRI Phase 3, Task 11), and it is a
-        // separate question rather than an extra clause: on that arm none of
-        // the three NVRHI objects below exists, so every branch would say
-        // "not ready" forever and the panel would draw nothing while a
-        // perfectly good preview rendered into a texture nobody sampled.
-        // Gated on the VEHICLE, so an NVRHI run never reaches it.
-        if (m_graphPreview)
-            return m_surface == 1
-                       ? m_graphSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId
-                       : (m_graphPost.templ && m_graphPost.instance &&
-                          !m_graphPost.passes.empty());
-        if (m_surface == 1)
-            return m_previewSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId;
-        if (ChainMode())
-            return m_chain && m_chain->Ready();
-        return m_pass && m_pass->Ready();
+        // Gated on the VEHICLE: without one (no seam, or the graph context
+        // failed to create) there is nothing to be ready. NRI Phase 5a, Task 4
+        // deleted the NVRHI fallback this used to fall through to (three
+        // now-nonexistent NVRHI objects, none of which could ever be reached
+        // once DocServices::nriDevice is always set).
+        if (!m_graphPreview)
+            return false;
+        return m_surface == 1
+                   ? m_graphSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId
+                   : (m_graphPost.templ && m_graphPost.instance &&
+                      !m_graphPost.passes.empty());
     }
 
     std::string& ShaderEditorDocument::ActiveSnippet()
@@ -2056,85 +1895,14 @@ namespace Arcane::Editor
         m_nodePreviewRetired.clear();
         RenderNodePreviews(dt);
 
-        // THE GRAPH ARM'S WHOLE RENDER PHASE (NRI Phase 3, Task 11), and it
-        // returns rather than falling through: everything below this point
-        // dereferences m_preview / m_pass / m_chain, none of which exist
-        // without an nvrhi device. RenderGraphPreview carries the same
-        // readiness and texture-residency rules against the other recorder.
+        // THE GRAPH ARM'S WHOLE RENDER PHASE. NRI Phase 5a, Task 4 deleted the
+        // NVRHI fallback this used to fall through to when the vehicle was
+        // null (a document opened before an nvrhi device existed) -- there is
+        // no device left to fall back to, so a missing vehicle now simply
+        // means no preview this Tick, same as any other degraded-not-fatal
+        // vehicle failure (see EnsureGraphPreviewContext).
         if (m_graphPreview)
-        {
             RenderGraphPreview(dt);
-            return;
-        }
-
-        if (!PreviewReady() || !m_instance || !m_preview)
-            return;
-
-        // Texture params must be GPU-resident BEFORE the canvas list records:
-        // the Assets facade uploads through its own transient command list, and
-        // an executeCommandList issued while ANOTHER list is open loses the
-        // upload -- the texture stays empty (the [gpu] texparam test pins this
-        // contract). Memoized, so steady-state cost is a hash lookup per param.
-        if (m_services.runtime)
-            for (const Arcane::Guid& g : m_instance->ResolveTextures())
-                if (g.IsValid())
-                    (void)m_services.runtime->AssetsFacade().GetTexture(
-                        Arcane::AssetId::FromGuid(g));
-
-        Arcane::GlobalParams globals;
-        globals.time = static_cast<float>(m_animTime);
-        globals.deltaTime = static_cast<float>(dt);
-        globals.viewportWidth = static_cast<float>(m_preview->Width());
-        globals.viewportHeight = static_cast<float>(m_preview->Height());
-
-        if (m_surface == 1)
-        {
-            // Sprite surface: the material on a centered quad over a
-            // checkerboard, through the canvas's own Batcher2D -- the SAME
-            // pipeline family scene sprites use.
-            m_preview->Draw(
-                [&](Arcane::Batcher2D& b)
-                {
-                    b.SetGlobals(globals);
-                    const float w = (float)m_preview->Width();
-                    const float h = (float)m_preview->Height();
-                    const float cell = 32.0f;
-                    const glm::vec4 light(0.16f, 0.16f, 0.19f, 1.0f);
-                    for (int y = 0; y * cell < h; ++y)
-                        for (int x = 0; x * cell < w; ++x)
-                            if ((x + y) & 1)
-                                b.Rect(glm::vec2(x * cell, y * cell),
-                                       glm::vec2(cell, cell), light);
-                    const float s = 0.8f * (std::min)(w, h);
-                    b.QuadMaterial(m_previewSpriteMaterial,
-                                   glm::vec2((w - s) * 0.5f, (h - s) * 0.5f),
-                                   glm::vec2(s, s), nullptr,
-                                   glm::vec2(0.0f), glm::vec2(1.0f),
-                                   glm::vec4(1.0f));
-                },
-                glm::vec4(0.09f, 0.09f, 0.11f, 1.0f));
-            return;
-        }
-
-        m_preview->DrawPass(
-            [&](nvrhi::ICommandList* cl, nvrhi::IFramebuffer* fb)
-            {
-                Arcane::Assets* assets =
-                    m_services.runtime ? &m_services.runtime->AssetsFacade() : nullptr;
-                if (ChainMode())
-                {
-                    // View-any-intermediate: the chain truncates at the viewed
-                    // pass, which renders into the preview canvas itself.
-                    const std::size_t view =
-                        m_viewPass < 0 ? static_cast<std::size_t>(-1)
-                                       : static_cast<std::size_t>(m_viewPass);
-                    m_chain->Render(cl, fb, *m_instance, globals, assets, view,
-                                    SceneStandIn());
-                }
-                else
-                    m_pass->Render(cl, fb, *m_instance, globals, assets);
-            },
-            glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
     }
 
     ShaderEditorDocument::LayoutPrefs& ShaderEditorDocument::Layout()
@@ -2438,9 +2206,6 @@ namespace Arcane::Editor
         if (surfacePicked && surface != m_surface)
         {
             m_surface = surface;
-            m_previewSpriteMaterial = Arcane::Batcher2D::kInvalidMaterialId;
-            m_previewVs = nullptr;
-            m_previewPs = nullptr;
             if (!IsInstance())
             {
                 m_data.kind = m_surface == 1 ? "sprite" : "fullscreen";
@@ -2836,7 +2601,6 @@ namespace Arcane::Editor
         }
 
         // ---- nodes
-        Arcane::FullscreenMaterialChain* chain = ChainMode() ? m_chain.get() : nullptr;
         for (std::size_t c = 0; c < total; ++c)
         {
             const std::uint32_t nodeId = nodeOf(c);
@@ -2968,15 +2732,15 @@ namespace Arcane::Editor
                 ed::EndPin();
             }
 
-            // Live thumbnail: the pass's own intermediate (chain mode; LINEAR,
-            // so HDR clamps -- fine for a thumbnail). Single-pass materials
-            // show the tonemapped preview on the base node instead.
-            nvrhi::ITexture* thumb = chain ? chain->PassOutput(c) : nullptr;
-            ImTextureID thumbId = 0;
-            if (thumb)
-                thumbId = static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(thumb));
-            else if (c == 0)
-                thumbId = PreviewImageOf().id;   // whichever arm made it (Task 11)
+            // Live thumbnail: pass 0 (the base) shows the tonemapped preview
+            // (Task 11). NRI Phase 5a, Task 4 deleted
+            // the NVRHI chain that used to supply a live per-pass intermediate
+            // for passes 1+ (FullscreenMaterialChain::PassOutput) -- the graph
+            // arm never grew an equivalent (NriGraphContext has no per-pass
+            // intermediate readback), so this was already always null in
+            // practice since Phase 5a Task 2b's flip; a multi-pass chain's
+            // non-base passes show no live thumbnail on either arm today.
+            ImTextureID thumbId = c == 0 ? PreviewImageOf().id : 0;
             if (thumbId)
                 ImGui::Image(thumbId, ImVec2(72.0f, 72.0f));
 
@@ -3063,9 +2827,16 @@ namespace Arcane::Editor
         ImGui::SameLine();
         ImGui::TextUnformatted("final");
         ed::EndPin();
-        if (nvrhi::ITexture* finalTex = chain ? chain->PassOutput(total - 1) : nullptr)
-            ImGui::Image(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(finalTex)),
-                         ImVec2(72.0f, 72.0f));
+        // NRI Phase 5a, Task 4 deleted FullscreenMaterialChain -- this used to
+        // read the bound NVRHI chain's last pass output directly
+        // (`chain ? chain->PassOutput(total - 1) : nullptr`), but `chain` was
+        // already unconditionally null in practice since Phase 5a Task 2b's
+        // flip (it was only ever built device-carrying, and DocServices::device
+        // has been null on every real run since that flip), so this node
+        // already drew no thumbnail before this task touched it. Preserved as
+        // a no-op rather than wired to PreviewImageOf() -- that would be a
+        // behavior change riding along inside a deletion task, unverified at
+        // the desk, which is out of scope here.
         ed::EndNode();
         DrawNodeTitleBand(kPassOutputNodeId, outHeaderY);
 
@@ -3570,23 +3341,16 @@ namespace Arcane::Editor
         return "material:" + m_data.id.ToString();
     }
 
-    // The preview image, whichever arm made it (NRI Phase 3, Task 11). One
-    // function so a draw site cannot bind to one arm's object by accident --
-    // the NVRHI arm's OffscreenCanvas texture, or the graph arm's offscreen
-    // output, and 0 for "nothing to draw" on either.
+    // The preview image: the graph arm's offscreen output, and 0 for "nothing
+    // to draw" (no vehicle, or PreviewReady() says there is nothing bound
+    // yet). NRI Phase 5a, Task 4 deleted the NVRHI arm's OffscreenCanvas
+    // fallback this used to carry -- this is the only preview left.
     ShaderEditorDocument::PreviewImage ShaderEditorDocument::PreviewImageOf() const
     {
-        if (!PreviewReady())
+        if (!PreviewReady() || !m_graphPreview)
             return {};
-        if (m_graphPreview)
-            return { static_cast<ImTextureID>(GraphPreviewTextureId()),
-                     static_cast<float>(kGraphPreviewSize) };
-        if (!m_preview)
-            return {};
-        // Both dimensions are equal (the canvas is created square) -- taking
-        // the width keeps this one number rather than two that cannot differ.
-        return { static_cast<ImTextureID>(m_preview->TextureId()),
-                 static_cast<float>(m_preview->Width()) };
+        return { static_cast<ImTextureID>(GraphPreviewTextureId()),
+                 static_cast<float>(kGraphPreviewSize) };
     }
 
     void ShaderEditorDocument::DrawPreviewPanel(float height)
@@ -3734,11 +3498,6 @@ namespace Arcane::Editor
                                                        : m_data.kind;
             m_surface = Arcane::MaterialSurfaceForKind(kind) ==
                                 Arcane::MaterialSurface::Sprite ? 1 : 0;
-            // Sprite preview re-registers fresh at the next bind (the surface-
-            // switch pattern).
-            m_previewSpriteMaterial = Arcane::Batcher2D::kInvalidMaterialId;
-            m_previewVs = nullptr;
-            m_previewPs = nullptr;
             RegenerateFromGraph();
         }
     }
@@ -4086,116 +3845,30 @@ namespace Arcane::Editor
         }
     }
 
-    void ShaderEditorDocument::BindNodePreview(NodePreview& np, nvrhi::ShaderHandle ps)
-    {
-        if (!np.pendingTempl || !m_nodePreviewVs || !ps)
-            return;
-        if (!np.pass)
-            np.pass = Arcane::FullscreenMaterialPass::Create(m_services.device);
-        if (!np.pass)
-            return;
-        if (!np.pass->SetMaterial(np.pendingTempl, m_nodePreviewVs, ps,
-                                  np.pendingInputs))
-            return;
-        np.inst = std::make_shared<Arcane::MaterialInstance>(
-            std::shared_ptr<const Arcane::MaterialTemplate>(np.pendingTempl));
-        np.boundInputs = np.pendingInputs;
-        np.boundSources = np.pendingSources;
-        if (!np.tex)
-        {
-            constexpr std::uint32_t kThumbSize = 128;
-            auto desc = nvrhi::TextureDesc()
-                .setWidth(kThumbSize).setHeight(kThumbSize)
-                .setFormat(nvrhi::Format::RGBA16_FLOAT)
-                .setIsRenderTarget(true)
-                .setInitialState(nvrhi::ResourceStates::ShaderResource)
-                .setKeepInitialState(true)
-                .setDebugName("NodePreview");
-            np.tex = m_services.device->createTexture(desc);
-            np.fb = np.tex ? m_services.device->createFramebuffer(
-                                 nvrhi::FramebufferDesc().addColorAttachment(np.tex))
-                           : nullptr;
-        }
-        np.ready = np.tex && np.fb;
-    }
+    // NRI Phase 5a, Task 4: BindNodePreview (built a per-node NVRHI
+    // FullscreenMaterialPass + thumbnail texture from a compiled node-preview
+    // clone) is deleted. It was ALREADY unreachable in practice -- both call
+    // sites in ConsumeResult gated on `m_services.device`, always null since
+    // Phase 5a Task 2b's flip -- and the graph arm never grew a replacement:
+    // per-node thumbnails need one render target and one pass PER GRAPH NODE,
+    // and a graph frame declares exactly one canvas and one output, a
+    // pre-existing, documented gap (see the banner above EnsureGraphPreviewContext).
+    // RenderNodePreviews below is left as the no-op its guard already made it.
 
     void ShaderEditorDocument::RenderNodePreviews(double dt)
     {
+        (void)dt;
         // Thumbnails record only while the graph canvas is the visible editing
-        // surface; params sync from the doc instance first (redundant Sets
-        // don't bump serials, so the steady state is hash lookups).
-        //
-        // m_inChainView is in the list because the chain overview does not draw
-        // graph nodes at all -- rendering their thumbnails while the user is
-        // looking at the pass map would be pure waste.
+        // surface AND a device is present to build the per-node NVRHI pass
+        // from. NRI Phase 5a, Task 4: `m_services.device` is always null now
+        // (both hosts render through the graph, never the NVRHI arm) and the
+        // graph arm has no per-node preview mechanism (see BindNodePreview's
+        // note above), so this guard always returns -- kept rather than
+        // collapsed to an unconditional return so the OTHER conditions stay
+        // legible for whoever eventually builds a graph-side replacement.
         if (!m_showNodePreviews || m_inChainView || !m_services.device ||
             IsInstance() || !ActiveGraphOwned() || m_showGeneratedText || m_editVertex)
             return;
-        bool any = false;
-        for (auto& [id, np] : m_nodePreviews)
-            any = any || np.ready;
-        if (!any)
-            return;
-
-        for (auto& [id, np] : m_nodePreviews)
-        {
-            if (!np.ready || !np.inst)
-                continue;
-            if (m_instance)
-                for (const Arcane::ParamDecl& d : np.inst->Template().Params())
-                {
-                    Arcane::MatParamValue v;
-                    if (m_instance->GetParam(d.nameHash, v))
-                        np.inst->Set(d.nameHash, v);
-                }
-            // Texture params must be resident BEFORE the list opens (the same
-            // upload-loss contract as the main preview).
-            if (m_services.runtime)
-                for (const Arcane::Guid& tg : np.inst->ResolveTextures())
-                    if (tg.IsValid())
-                        (void)m_services.runtime->AssetsFacade().GetTexture(
-                            Arcane::AssetId::FromGuid(tg));
-        }
-
-        if (!m_nodePreviewCl)
-            m_nodePreviewCl = m_services.device->createCommandList();
-        if (!m_nodePreviewCl)
-            return;
-
-        Arcane::GlobalParams globals;
-        globals.time = static_cast<float>(m_animTime);
-        globals.deltaTime = static_cast<float>(dt);
-        globals.viewportWidth = 128.0f;
-        globals.viewportHeight = 128.0f;
-        Arcane::Assets* assets =
-            m_services.runtime ? &m_services.runtime->AssetsFacade() : nullptr;
-
-        m_nodePreviewCl->open();
-        for (auto& [id, np] : m_nodePreviews)
-        {
-            if (!np.ready || !np.inst)
-                continue;
-            // THE GPU BOUND, now that zoom no longer gates previews: a node
-            // that was culled off-screen last frame pays nothing, which is
-            // exactly what UE gets from an unpainted widget submitting no draw
-            // element (SGraphNodeMaterialBase.cpp:186-191). One frame late by
-            // construction -- Tick runs before Draw -- so a node scrolling into
-            // view resumes on the following frame.
-            if (m_culledGraphNodes.contains(id))
-                continue;
-            // Pass-graph thumbnails read the chain's LIVE intermediates (one
-            // frame stale -- invisible at thumbnail scale); missing entries
-            // fall back to the pass's 1x1 black.
-            std::vector<nvrhi::ITexture*> ins;
-            ins.reserve(np.boundSources.size());
-            for (std::uint32_t src : np.boundSources)
-                ins.push_back(src == Arcane::kSceneInput
-                                  ? SceneStandIn()
-                                  : m_chain ? m_chain->PassOutput(src) : nullptr);
-            np.pass->Render(m_nodePreviewCl, np.fb, *np.inst, globals, assets, ins);
-        }
-        m_nodePreviewCl->close();
-        m_services.device->executeCommandList(m_nodePreviewCl);
     }
 
     nvrhi::ITexture* ShaderEditorDocument::SceneStandIn()
@@ -4249,6 +3922,12 @@ namespace Arcane::Editor
                 ImGui::Image(id, ImVec2(kThumbDraw, kThumbDraw));
             return;
         }
+        // NRI Phase 5a, Task 4: `ready` can never be true again (see
+        // NodePreview's own comment) -- this always returns here now for
+        // every non-Output node. Kept as a live guard rather than an
+        // unconditional return: the struct's bound state is dead, not this
+        // function's shape, and a future graph-side thumbnail implementation
+        // would set `ready` and light this back up unchanged.
         const auto it = m_nodePreviews.find(n.id);
         if (it == m_nodePreviews.end() || !it->second.ready || !it->second.tex)
             return;
@@ -6342,10 +6021,11 @@ namespace Arcane::Editor
             m_services.undo->Push(std::make_unique<ParamEditCommand>(
                 m_anchor, d.nameHash, "Edit " + d.name,
                 hadBefore, before, /*hasAfter=*/true, value));
-        // Sprite surface binds texture params at registration -- a pick needs
-        // a binding refresh (numeric params flow live through the CB).
-        if (m_surface == 1 && d.type == Arcane::MatParamType::Texture)
-            RefreshSpritePreviewBinding();
+        // NRI Phase 5a, Task 4: this used to force a sprite-preview binding
+        // refresh on a texture pick (the NVRHI arm's Material2DDesc resolves
+        // its texture handles once, at registration -- see ApplyParamEdit's
+        // note). The graph arm's texture params resolve by Guid, fresh, every
+        // frame through NriTextureCache, so there is nothing left to trigger.
     }
 
     void ShaderEditorDocument::DrawParamsPanel()

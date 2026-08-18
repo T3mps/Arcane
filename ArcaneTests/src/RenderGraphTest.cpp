@@ -34,7 +34,6 @@
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/Batcher2D.hpp>         // a device-less batcher drains the spans a node counts
 #include <Arcane/Render/PostChainCache.hpp>    // PostChainDesc -- the frame's post-chain wiring
-#include <Arcane/Render/SelectionOutline.hpp>  // JfaPassCount -- the NVRHI twin's own schedule length
 #include <Arcane/Material/MaterialSource.hpp>  // kSceneInput
 #include <Arcane/Render/Swapchain.hpp>         // kSwapchainFramesInFlight
 
@@ -5225,33 +5224,31 @@ TEST_CASE("nri post chain arena: every (frame slot, region) pair owns a distinct
 // a null context makes inert.
 // ======================================================================
 
-TEST_CASE("outline jfa: the graph's jump schedule IS SelectionOutline's, step for step", "[nri]")
+TEST_CASE("outline jfa: the graph's jump schedule matches the pinned expected sequence, step for step", "[nri]")
 {
-    // THE CROSS-ARM CONTRACT (NRI Phase 3, D3c), and the only place it can be
-    // stated without a GPU. JFA is an APPROXIMATION: the nearest seed it settles
-    // on a few px from a silhouette depends on the jump SEQUENCE, and a few px
-    // from a silhouette is exactly where outline_composite's 1-px AA ramp lives.
-    // So "both schedules flood the whole field" is NOT enough for the editor's
-    // `full` golden to compare equal across the arms -- the sequences have to be
-    // the same one. This case is what keeps them the same one.
+    // THE CROSS-ARM CONTRACT (NRI Phase 3, D3c), historically -- and the only
+    // place it could be stated without a GPU. JFA is an APPROXIMATION: the
+    // nearest seed it settles on a few px from a silhouette depends on the
+    // jump SEQUENCE, and a few px from a silhouette is exactly where
+    // outline_composite's 1-px AA ramp lives. So "both schedules flood the
+    // whole field" was not enough for the editor's `full` golden to compare
+    // equal across the arms -- the sequences had to be the same one.
     //
-    // The NVRHI twin's schedule, read straight out of SelectionOutline::Render:
-    //   passes = JfaPassCount(kMaxThicknessPx);
-    //   for (i = 0; i <= passes; ++i) jump = (i < passes) ? 1 << (passes-1-i) : 1;
-    // i.e. passes + 1 draws, the last of them a REPEAT of jump == 1.
-    const std::uint32_t passes = Arcane::JfaPassCount(Arcane::kOutlineMaxThicknessPx);
-    const std::uint32_t steps  = Arcane::OutlineJfaStepCount(Arcane::kOutlineMaxThicknessPx);
-    REQUIRE(steps == passes + 1u);
+    // NRI Phase 5a, Task 4 deleted SelectionOutline.{hpp,cpp} (the NVRHI twin)
+    // along with JfaPassCount, its schedule-length formula and this case's
+    // former cross-check partner -- OutlineJfaStepCount/OutlineJfaJump are the
+    // only implementation left, so there is no second opinion to compare
+    // against anymore. What remains is a literal pin of the exact sequence
+    // the twin used to be checked against, which is just as effective a
+    // regression guard on a pure function: any future change to the formula
+    // still trips here.
+    const std::uint32_t steps = Arcane::OutlineJfaStepCount(Arcane::kOutlineMaxThicknessPx);
     REQUIRE(steps <= Arcane::OutlineNode::kMaxJfaSteps);   // never clamped away
 
-    std::vector<std::int32_t> graphJumps, nvrhiJumps;
+    std::vector<std::int32_t> graphJumps;
     for (std::uint32_t step = 0; step < steps; ++step)
         graphJumps.push_back(Arcane::OutlineJfaJump(step, steps));
-    for (std::uint32_t i = 0; i <= passes; ++i)
-        nvrhiJumps.push_back(i < passes ? (std::int32_t)(1u << (passes - 1u - i)) : 1);
-    CHECK(graphJumps == nvrhiJumps);
 
-    // ...and spelled out, so a change to BOTH sides at once still trips here:
     // 32 px of thickness -> 32,16,8,4,2,1 and then 1 again.
     const std::vector<std::int32_t> expected = { 32, 16, 8, 4, 2, 1, 1 };
     CHECK(graphJumps == expected);
@@ -5277,18 +5274,22 @@ TEST_CASE("outline jfa: the graph's jump schedule IS SelectionOutline's, step fo
     CHECK(Arcane::OutlineJfaJump(0, Arcane::OutlineJfaStepCount(1)) == 1);
 }
 
-TEST_CASE("outline jfa: both arms' id pass supersamples by the SAME factor", "[nri]")
+TEST_CASE("outline jfa: the graph's id pass supersamples by the pinned constant", "[nri]")
 {
     // The other half of D3c's divergence, and the one no schedule assertion
     // could see. outline_seed.hlsl averages the ss*ss subsamples of each 1x
     // pixel into a SUB-PIXEL centroid and stores THAT as the seed position; the
     // composite then measures its distance to it. At ss=1 every seed sits at its
-    // pixel centre. So an arm that supersamples and an arm that does not do not
-    // merely differ in quality -- they place the outline differently, by up to a
-    // quarter pixel, against a 1-px AA ramp.
+    // pixel centre. So an arm that supersamples and an arm that does not would
+    // not merely differ in quality -- they would place the outline differently,
+    // by up to a quarter pixel, against a 1-px AA ramp. (This case used to be
+    // titled "both arms' id pass supersamples by the SAME factor" and pin that
+    // property across the NVRHI and graph arms; NRI Phase 5a, Task 4 deleted
+    // the NVRHI arm, so there is only one id pass left to pin the constant on.)
     //
-    // ONE constant, both recorders: PickNode sizes its graph transient by it and
-    // EditorApp hands the same number to PickBuffer::Create.
+    // ONE constant: PickNode sizes its graph transient by it. (Before NRI
+    // Phase 5a, Task 4 deleted PickBuffer, EditorApp handed the same number
+    // to PickBuffer::Create -- the NVRHI twin's identical id-target sizing.)
     CHECK(Arcane::kPickSupersample >= 1);
     CHECK(Arcane::PickNode::kSuperSample == Arcane::kPickSupersample);
 }
@@ -5334,7 +5335,8 @@ TEST_CASE("nri graph frame: the pick + outline chain lands between the tonemap a
 
     // 32 px of outline thickness -> 6 halvings plus the trailing jump==1 pass.
     // NOT a function of the 320x200 canvas: see the "the graph's jump schedule
-    // IS SelectionOutline's" case for why the count is thickness-derived.
+    // matches the pinned expected sequence" case for why the count is
+    // thickness-derived.
     const std::uint32_t steps = Arcane::OutlineJfaStepCount(Arcane::kOutlineMaxThicknessPx);
     REQUIRE(steps == 7);
     CHECK(handles.jfaStepCount == steps);

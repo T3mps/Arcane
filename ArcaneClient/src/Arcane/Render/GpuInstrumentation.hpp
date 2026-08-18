@@ -26,11 +26,14 @@
 //      it is what feeds Diagnostics::GpuHeartbeat.
 //
 // The active backend is reached through a process-wide slot rather than
-// plumbed: F-8e's three command-list owners (GpuContext, OffscreenCanvas,
-// PickBuffer) are reached from different layers, and two of them hold only an
-// nvrhi::IDevice*. The slot mirrors Diagnostics::SetGpuSectionProvider exactly
-// -- same owner (the device layer), same lifetime, same install/clear sites --
-// so there is one rule to get right, not two.
+// plumbed: F-8e's command-list owners are reached from different layers and
+// do not all hold the same handle to plumb one through. GpuContext's own
+// (NVRHI) command list is the one left today -- OffscreenCanvas and
+// PickBuffer, the other two F-8e named, were deleted at NRI Phase 5a, Task 4
+// along with every caller of their private command lists. The slot mirrors
+// Diagnostics::SetGpuSectionProvider exactly -- same owner (the device
+// layer), same lifetime, same install/clear sites -- so there is one rule to
+// get right, not two.
 //
 // THREADING: GpuPassScope/GpuDrawScope are for the thread that records the
 // command list (the main/render thread in both hosts). GpuBreadcrumbs is not

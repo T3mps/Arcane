@@ -1,21 +1,28 @@
 #pragma once
 
 // PostChainCache (post arc, slice 2): resolves SAVED .arcmat material assets
-// into bound FullscreenMaterialChains for the scene post-processing hook
-// (OffscreenCanvas::SetPostChain; the ArcaneRuntime host's inline site). It is
-// SpriteMaterialCache's twin -- same Services, same Request / Invalidate /
-// ConsumeResult / Clear lifecycle, same SAVED-asset + parent-chain resolution
-// -- but the build is BuildMaterialChainSource in POST mode (kSceneInput
-// entries are valid: the material may read the scene color), every pass's
-// stages compile through the app-shared ShaderCompiler, and a completed set
-// binds through the chain's atomic SetChain, so a failed RE-compile keeps the
-// previous chain rendering (last-good). Unresolved / failed materials simply
-// never expose a chain (the host's no-chain path is byte-identical to today).
+// into a bound scene post chain, published as PostChainDesc bytes for the
+// `--nri-graph` recorder's PostChainNode (Render/Nri/nodes/FullscreenNodes.*).
+// It is SpriteMaterialCache's twin -- same Services, same Request / Invalidate
+// / ConsumeResult / Clear lifecycle, same SAVED-asset + parent-chain
+// resolution -- but the build is BuildMaterialChainSource in POST mode
+// (kSceneInput entries are valid: the material may read the scene color),
+// every pass's stages compile through the app-shared ShaderCompiler, and a
+// completed set binds atomically, so a failed RE-compile keeps the previous
+// bytes published (last-good). Unresolved / failed materials simply never
+// expose a chain.
+//
+// NRI Phase 5a, Task 4: this cache used to ALSO build an NVRHI
+// FullscreenMaterialChain (Chain()/Instance() fed OffscreenCanvas::SetPostChain
+// on the editor's NVRHI arm and ArcaneRuntime's RenderNvrhi). Both callers are
+// gone -- the graph recorder is the only render path left -- so that half was
+// deleted; Desc()/Instance() below are what remains, and what every caller
+// already used on the graph arm.
 //
 // The host sweep (slice 3) Request()s the assigned material every frame and
-// hands Chain()/Instance() to the canvas hook AFTER the drain site runs --
-// a consumed result may swap the bound instance, so the pointers must be
-// re-fetched each frame, never cached across a drain.
+// reads Desc()/Instance() AFTER the drain site runs -- a consumed result may
+// swap the bound instance, so the pointers must be re-fetched each frame,
+// never cached across a drain.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
@@ -31,7 +38,6 @@
 namespace Arcane
 {
     class Assets;
-    class FullscreenMaterialChain;
     class MaterialInstance;
     class MaterialTemplate;
     class ShaderCompiler;
@@ -51,8 +57,9 @@ namespace Arcane
     // process's GraphicsBackend and the graph vehicle runs on that same
     // backend (RuntimeApp builds both from one HostConfig).
     //
-    // Purely additive -- the NVRHI path (FullscreenMaterialChain) neither
-    // reads nor is affected by any of it.
+    // NRI Phase 5a, Task 4: this is now the ONLY compiled form PostChainCache
+    // publishes -- the NVRHI FullscreenMaterialChain it used to build BESIDE
+    // these bytes is gone, along with both its callers.
     // =====================================================================
     struct PostChainPassDesc
     {
@@ -94,7 +101,17 @@ namespace Arcane
             ShaderCompiler*       compiler = nullptr;
             ShaderSourceProvider* sources = nullptr;   // fullscreen template text
             Assets*               assets = nullptr;    // texture warm-up at bind
-            nvrhi::IDevice*       device = nullptr;    // createShader (drain site)
+            // Gates the texture warm-up below (Assets::GetTexture at bind
+            // time). Always null since NRI Phase 5a, Task 2b's flip -- both
+            // hosts have passed nullptr since the graph recorder became the
+            // only render path, and the graph makes its own textures resident
+            // through NriTextureCache instead. NRI Phase 5a, Task 4 deleted
+            // the NVRHI chain this field used to also gate (see Bind()'s own
+            // history note); the field itself is kept rather than deleted:
+            // it mirrors SpriteMaterialCache::Services::device, and
+            // collapsing device-gated plumbing repo-wide is Task 11's job,
+            // not this one's.
+            nvrhi::IDevice*       device = nullptr;
             GraphicsBackend       backend{};
             ResolveAssetFn        resolveAsset;        // Guid -> path (project registry)
         };
@@ -110,28 +127,25 @@ namespace Arcane
         void Request(const Guid& id, double now);
 
         // Asset re-saved: re-resolve on the next Request. The bound chain
-        // stays rendering (last-good) until the fresh compile lands through
-        // SetChain.
+        // stays rendering (last-good) until the fresh compile lands.
         void Invalidate(const Guid& id);
 
         // Offer a drained compile result; true when it belonged to this cache.
         bool ConsumeResult(const ShaderCompileResult& result);
 
-        // The bound chain / merged instance for `id` -- null until the first
-        // successful bind. Valid until the next mutating call (a drain may
-        // swap the instance); re-fetch every frame before handing them to the
-        // canvas hook. Bind time also warms the instance's texture params
-        // through Assets, honoring FullscreenMaterialPass::Render's pre-load
-        // contract for hosts that Draw() right after the drain.
-        FullscreenMaterialChain* Chain(const Guid& id) const;
+        // The merged instance for `id` -- null until the first successful
+        // bind. Valid until the next mutating call (a drain may swap the
+        // instance); re-fetch every frame before handing it to a caller. Bind
+        // time also warms the instance's texture params through Assets when
+        // `Services::device` is set (see its own comment -- always null today).
         const MaterialInstance*  Instance(const Guid& id) const;
 
-        // The same bound chain expressed as BYTECODE + layout + values, for a
-        // recorder that is not on this cache's nvrhi device (the `--nri-graph`
-        // vehicle -- see PostChainDesc above). Null until the first successful
-        // bind, and it tracks Chain()/Instance() exactly: both are set in the
-        // same breath and a failed RE-compile leaves BOTH at last-good.
-        // Same validity window as Chain(): until the next mutating call.
+        // The bound chain expressed as BYTECODE + layout + values, for the
+        // `--nri-graph` recorder (see PostChainDesc above). Null until the
+        // first successful bind, and it tracks Instance() exactly: both are
+        // set in the same breath and a failed RE-compile leaves both at
+        // last-good. Same validity window as Instance(): until the next
+        // mutating call.
         const PostChainDesc* Desc(const Guid& id) const;
 
         // Forget everything (project switch).

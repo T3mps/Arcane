@@ -1,8 +1,12 @@
 // RuntimeFrame: RuntimeApp::MainLoop's frame body, extracted verbatim at NRI
 // Phase 3 Task 4 and unified at Task 6 (the one-device landing). See
-// RuntimeFrame.hpp's header comment for the contract and for the list of what
-// Task 6 changed; RenderNvrhi below is untouched, statement for statement,
-// because it is the regression floor.
+// RuntimeFrame.hpp's header comment for the contract.
+//
+// RenderNvrhi -- the NVRHI arm this file used to carry beside RenderGraph,
+// kept through Phase 5a as the regression floor stage-golden comparisons
+// were measured against -- was deleted at NRI Phase 5a, Task 4: the frame
+// graph is the only render path left, so there was no floor left to protect.
+// RenderGraph below is now the ONLY per-frame render function in this file.
 
 #include "RuntimeFrame.hpp"
 #include "RuntimeApp.hpp"   // FrameIo::app.PushSceneCamera -- see that method's comment
@@ -16,8 +20,7 @@
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Render/Batcher2D.hpp>              // Arcane::Batch2DStats (BuildHud's HUD text, CaptureTail's perf tick)
 #include <Arcane/Render/Device.hpp>                 // Arcane::GraphicsBackend / ToString (BuildHud's HUD text)
-#include <Arcane/Render/FullscreenMaterialChain.hpp>// scene post hook (RenderNvrhi)
-#include <Arcane/Render/GpuInstrumentation.hpp>     // Arcane::GpuPassScope, GpuDeviceLostObserved (RenderNvrhi, PumpAndResize)
+#include <Arcane/Render/GpuInstrumentation.hpp>     // Arcane::GpuDeviceLostObserved (PumpAndResize)
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N on the graph arm (RenderGraph)
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
 
@@ -233,11 +236,17 @@ void PrepareFrame(FrameIo& io)
             // doesn't fire next iteration.
             //
             // Deliberately the BARE call, not ImGuiLayer::EndFrameDiscard:
-            // this branch is NVRHI-only (it is inside `if (!io.graph)`), and
-            // the NVRHI arm is the frozen regression floor for this whole
-            // phase -- it keeps the exact statement its baselines were
-            // captured with. The pinned variant is the graph arm's, where the
-            // context-theft hazard is the Phase-2 carry Task 6 closes.
+            // this branch is NVRHI-only (it is inside `if (!io.graph)`,
+            // unreachable since `io.graph` is unconditional as of Phase 5a
+            // Task 2b). It used to be the regression floor RenderNvrhi's
+            // baselines were captured against -- NRI Phase 5a, Task 4 deleted
+            // RenderNvrhi outright (see this file's header comment), so there
+            // is no longer a baseline this statement is keeping faith with;
+            // it is simply unreached, dead code, left as-is because deleting
+            // it is not forced by anything this task removed (Swapchain
+            // survives) and collapsing `if (!io.graph)` guards repo-wide is
+            // Task 11's job. The pinned variant is the graph arm's, where the
+            // context-theft hazard is the Phase-2 carry Task 6 closed.
             ImGui::EndFrame();
             io.skipFrame = true;
             return;
@@ -288,174 +297,6 @@ void PrepareFrame(FrameIo& io)
     }
 
     io.skipFrame = false;
-}
-
-// =============================================================
-// THE RENDER HALF. Exactly one of these two blocks runs per frame. As of
-// Phase 5a (Task 2b) this one (RenderNvrhi) is UNREACHABLE in practice --
-// MainLoop's `if (!m_graphContext)` never fires, since m_graphContext is
-// created unconditionally -- but it remains the REGRESSION FLOOR
-// stage-golden comparisons are measured against, which is why it stays
-// untouched rather than deleted (Tasks 4-11's job): record the whole frame
-// into one command list -- canvas clear, batcher, post chain, tonemap,
-// ImGui -- then submit and present. NOT ONE LINE of it changed for Phase 2
-// beyond this brace and the indent it forced; the graph path is built
-// BESIDE it, never through it.
-// =============================================================
-void RenderNvrhi(FrameIo& io)
-{
-    io.gpu->Cmd()->open();
-    // F-8b: the runtime records its WHOLE frame into one command list, so
-    // the outer scope is that recording -- everything below nests inside it,
-    // and the canvas clear (which has no scope of its own) is covered by it.
-    // Held in an optional because the scope must END while the list is still
-    // open, and close() is at the bottom of THIS function (the `framePass.
-    // reset()` right before it): a plain block would mean reindenting the
-    // entire frame for one marker.
-    std::optional<Arcane::GpuPassScope> framePass;
-    framePass.emplace(io.gpu->Cmd(), "pass:frame");
-
-    io.gpu->Cmd()->clearTextureFloat(io.gpu->Cnv().Texture(), nvrhi::AllSubresources,
-                                    nvrhi::Color(0.02f, 0.02f, 0.04f, 1.0f));
-
-#if !defined(ARCANE_DIST)
-    // --crash-gpu N: the deliberate fault, nested inside pass:frame so the
-    // breadcrumb ring shows the real timeline this host records rather than
-    // a lone synthetic scope. INSIDE the frame's own command list, not on a
-    // private one, for the same reason -- the capture should see the host's
-    // ordinary recording shape, with pass:gpu-fault as the last scope the
-    // GPU ever begins. Fires exactly once.
-    if (io.config.crashGpuFrame != 0 && !io.gpuFaultFired &&
-        io.frameCount >= io.config.crashGpuFrame)
-    {
-        io.gpuFaultFired = true;   // set FIRST: a failed build must not retry every frame
-        if (!io.gpuFault)
-            io.gpuFault = Arcane::GpuFaultInjector::Create(io.gpu->Device().Nvrhi(),
-                                                          io.gpu->Shaders());
-        if (io.gpuFault)
-            io.gpuFault->Fire(io.gpu->Cmd());
-        else
-            ARC_ERROR("--crash-gpu: fault injector unavailable -- nothing dispatched");
-    }
-#endif
-
-    io.gpu->Batch().Begin(io.gpu->Cmd(), io.gpu->Cnv().Framebuffer(),
-                         io.gpu->Cnv().Width(), io.gpu->Cnv().Height());
-    // Engine-global material constants (Time/Delta/Viewport) for registered
-    // sprite materials; sticky, so once per frame after Begin. Built-in
-    // pipelines ignore them -- but before this arc an animated material read
-    // zeros here, because the host never called SetGlobals at all.
-    io.gpu->Batch().SetGlobals(io.frameGlobals);
-
-    // Set the render context IN Arcane.dll so TypeID<RenderContext2D> resolves
-    // in the correct module; then drive the plugin's RenderSubmissionSystem.
-    // ArcaneRuntime stays camera-agnostic: SetRenderContext writes the STORED camera the
-    // plugin drives via Runtime::SetCamera (default identity if it never does).
-    io.app.PushSceneCamera((float)io.gpu->Cnv().Width(), (float)io.gpu->Cnv().Height());
-
-    {
-        // Scope names deliberately mirror FramePerf's acc* accumulators
-        // (F-8b): a CPU timeline and a GPU timeline that use two vocabularies
-        // for the same phases cannot be read side by side.
-        Arcane::GpuPassScope pass(io.gpu->Cmd(), "pass:rec");
-        const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
-        io.runtime->SetRenderContext(&io.gpu->Batch());
-        io.runtime->Loop().SubmitRender();
-        io.perf.Add(io.perf.accRec, t0, io.perf.Now());
-    }
-
-    {
-        // Where the batcher's draws actually get recorded -- Begin() above
-        // only sets state, End() is the flush.
-        Arcane::GpuPassScope pass(io.gpu->Cmd(), "pass:end");
-        const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
-        io.gpu->Batch().End();
-        io.perf.Add(io.perf.accEnd, t0, io.perf.Now());
-    }
-
-    nvrhi::FramebufferHandle& fb = io.gpu->FramebufferFor(io.backbuffer);
-    {
-        Arcane::GpuPassScope pass(io.gpu->Cmd(), "pass:tone");
-        const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
-        // Scene post hook (post arc): with a bound chain the linear canvas
-        // feeds it as the external Scene input and the tonemap samples the
-        // chain's output -- without one this is exactly the old line
-        // (byte-identical). The chain comes from the resolver's PostProcess
-        // sweep, re-read every frame because a drain may swap the bound
-        // instance under an asset re-save.
-        Arcane::FullscreenMaterialChain* postChain =
-            io.resolver ? io.resolver->PostChain() : nullptr;
-        const Arcane::MaterialInstance* postInstance =
-            io.resolver ? io.resolver->PostInstance() : nullptr;
-        // --golden-stage batch: the BATCH golden is "batcher + tonemap and
-        // nothing else", so the post chain is bypassed even when the scene
-        // binds one -- that is the whole point of a stage golden (a batch
-        // node regression and a post node regression must not look the
-        // same). Gated on GoldenMode() so an ordinary run is untouched:
-        // outside a golden run goldenStage is not even read (and Parse
-        // refuses a non-Full stage without golden mode anyway).
-        const bool stageSkipsPost =
-            io.config.GoldenMode() &&
-            io.config.goldenStage == Arcane::GoldenStage::Batch;
-        Arcane::Canvas* post =
-            (!stageSkipsPost && postChain && postChain->Ready() && postInstance)
-                ? io.gpu->EnsurePost() : nullptr;
-        if (post)
-        {
-            postChain->Render(io.gpu->Cmd(), post->Framebuffer(),
-                              *postInstance, io.frameGlobals,
-                              &io.runtime->AssetsFacade(),
-                              static_cast<std::size_t>(-1),
-                              io.gpu->Cnv().Texture());
-            io.gpu->Tone().Run(io.gpu->Cmd(), post->Texture(), fb);
-        }
-        else
-        {
-            io.gpu->Tone().Run(io.gpu->Cmd(), io.gpu->Cnv().Texture(), fb);
-        }
-        io.perf.Add(io.perf.accTone, t0, io.perf.Now());
-    }
-    // --golden-stage batch|post: the HUD is host chrome, not scene content
-    // -- it would sit on top of every stage golden and mask exactly the
-    // pixels a node-by-node cutover needs to compare. Both non-Full stages
-    // drop it; Full keeps it (the Phase 0 goldens include it, and their
-    // filenames are unchanged).
-    //
-    // ImGui::EndFrame() rather than simply skipping: ImGuiLayer's contract
-    // is that every BeginFrame is paired with exactly one Render, and the
-    // frame HAS begun (BuildHud's HUD window and the plugin's DrawUIAll
-    // already recorded into it). Ending it without drawing is the same
-    // balancing move PrepareFrame's no-backbuffer path makes.
-    if (io.config.GoldenMode() &&
-        io.config.goldenStage != Arcane::GoldenStage::Full)
-    {
-        ImGui::EndFrame();
-    }
-    else
-    {
-        Arcane::GpuPassScope pass(io.gpu->Cmd(), "pass:imgui");
-        const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
-        io.gpu->Imgui().Render(io.gpu->Cmd(), fb);
-        io.perf.Add(io.perf.accImgui, t0, io.perf.Now());
-    }
-
-    // Ends the frame scope BEFORE close(): a marker recorded into a closed
-    // list latches the D3D12 marker layer off for the rest of the process
-    // and is an access violation on Vulkan.
-    framePass.reset();
-    io.gpu->Cmd()->close();
-    {
-        // No pass scope here: submit + present happen with the list already
-        // closed, so there is nothing left to record markers into. F-8b's
-        // "close + submit + present" row is a CPU seam only.
-        const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
-        io.gpu->Device().Nvrhi()->executeCommandList(io.gpu->Cmd());
-        io.gpu->Swap().Present();
-        io.perf.Add(io.perf.accPresent, t0, io.perf.Now());
-    }
-
-    // GPU-progress heartbeat (Task 7): after the frame's last submit.
-    io.gpu->FrameProgress().EndFrame();
 }
 
 // =============================================================
@@ -543,16 +384,17 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // text difference is a golden diff, and nothing on the NVRHI side
     // changed either.
     //
-    // The stage split mirrors the NVRHI block's exactly: both non-Full
-    // golden stages END the frame without rendering it (host chrome
-    // would mask the pixels a stage golden compares), and Full renders
-    // it and hands the draw data to the graph. Both go THROUGH THE
-    // LAYER rather than calling ImGui::Render()/EndFrame() bare, which
-    // is Task 6 closing the Phase-2 carry: ImGuiLayer pins its own
-    // context in every entry point, and a bare call here would end
-    // whatever context an editor document or a plugin last left
-    // current. Either way the frame IS ended, so ImGuiLayer's "every
-    // BeginFrame is paired exactly once" contract holds on both arms.
+    // The stage split mirrored the NVRHI block's exactly, back when that
+    // block existed (NRI Phase 5a, Task 4 deleted RenderNvrhi outright): both
+    // non-Full golden stages END the frame without rendering it (host chrome
+    // would mask the pixels a stage golden compares), and Full renders it and
+    // hands the draw data to the graph. Both go THROUGH THE LAYER rather than
+    // calling ImGui::Render()/EndFrame() bare, which is Task 6 closing the
+    // Phase-2 carry: ImGuiLayer pins its own context in every entry point,
+    // and a bare call here would end whatever context an editor document or
+    // a plugin last left current. Either way the frame IS ended, so
+    // ImGuiLayer's "every BeginFrame is paired exactly once" contract holds
+    // here regardless.
     //
     // The draw data lives in the ImGui context until the next
     // NewFrame, i.e. for the whole of the RenderFrame call below --
