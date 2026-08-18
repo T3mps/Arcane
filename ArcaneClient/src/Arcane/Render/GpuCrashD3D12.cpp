@@ -659,6 +659,13 @@ namespace Arcane
     // Public entry points
     // -------------------------------------------------------------------------
 
+    // Exposed for DiagnosticsTest: the tier is otherwise only observable in a
+    // log line, and F-2c-bis makes the Dist choice load-bearing enough to pin.
+    const char* DredTier()
+    {
+        return g_dredTier.load(std::memory_order_acquire);
+    }
+
     void EnableD3D12Dred()
     {
         std::call_once(g_dredOnce, []() {
@@ -709,31 +716,25 @@ namespace Arcane
             }
 
 #if defined(ARCANE_DIST)
-            // Dist = the lightweight tier (F-2c): breadcrumbs only at
-            // SetMarker/BeginEvent/EndEvent, page-fault reporting off (it is
-            // separately documented as costing system memory plus object
-            // create/destroy time).
+            // F-2c (lightweight tier) is SUSPENDED as of Phase 5a. Its
+            // markers-only auto-breadcrumbs are only worth anything if pass
+            // scopes also emit nvrhi::ICommandList::beginMarker/endMarker
+            // (F-2c-bis, GpuInstrumentation.hpp) -- and after the NVRHI
+            // deletion there is no nvrhi command list to emit them on, while
+            // the NRI path's WriteMarkerNative is still the stub at
+            // NriDiagnostics.cpp:82. Selecting markers-only here would produce
+            // an EMPTY breadcrumb list, which the header calls strictly worse
+            // than no DRED at all -- and it would do it silently, in the one
+            // config nobody runs interactively.
             //
-            // F-2c-bis: this tier is only worth anything if pass-scope
-            // instrumentation ALSO emits nvrhi::ICommandList::beginMarker /
-            // endMarker -- markers-only DRED with no markers yields an EMPTY
-            // breadcrumb list, which is strictly worse than no DRED. That
-            // obligation is Task 7's; this backend's own WriteBufferImmediate
-            // markers do not satisfy it.
+            // So Dist takes full auto-breadcrumbs: heavier than F-2c intended,
+            // but it actually records something. RESTORE the lighter tier when
+            // the native NRI marker layer lands and GpuPassScope emits through
+            // it -- that arc is what re-earns this branch.
             settings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_OFF);
-            if (hasSettings2)
-            {
-                settings2->UseMarkersOnlyAutoBreadcrumbs(TRUE);
-                g_dredTier.store(hasSettings1 ? "dred:markers-only" : "dred:markers-only-nocontext",
-                                 std::memory_order_release);
-            }
-            else
-            {
-                ARC_WARN("DRED Settings2 unavailable (no UseMarkersOnlyAutoBreadcrumbs); "
-                         "Dist falls back to full auto-breadcrumbs (F-2d)");
-                g_dredTier.store(hasSettings1 ? "dred:breadcrumbs" : "dred:breadcrumbs-nocontext",
-                                 std::memory_order_release);
-            }
+            g_dredTier.store(hasSettings1 ? "dred:breadcrumbs" : "dred:breadcrumbs-nocontext",
+                             std::memory_order_release);
+            (void)hasSettings2;
 #else
             settings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
             g_dredTier.store(hasSettings1 ? "dred:full" : "dred:full-nocontext",

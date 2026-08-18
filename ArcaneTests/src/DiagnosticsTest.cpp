@@ -670,6 +670,26 @@ TEST_CASE("Diagnostics GPU watchdog writes a gpu-stall report when the fence sto
     REQUIRE(pumpUntilCount(43, afterFirstStall + 1, std::chrono::seconds(20)));
 }
 
+#if defined(_WIN32)
+TEST_CASE("dred tier never selects markers-only while WriteMarkerNative is a stub", "[diag]")
+{
+    // F-2c-bis: markers-only auto-breadcrumbs with no marker producer yields an
+    // EMPTY breadcrumb list -- strictly worse than no DRED. The NRI path is the
+    // only path as of Phase 5a and its WriteMarkerNative returns false, so this
+    // tier must not be selected in ANY config until the native marker arc lands.
+    //
+    // EnableD3D12Dred() must run first: g_dredTier starts at "dred:off", and
+    // reading the accessor without arming it would pass in every config for
+    // the wrong reason. The call is std::call_once, process-global, and
+    // creates no device/window (only D3D12GetDebugInterface for the DRED
+    // settings object), so it is safe here and order-independent under
+    // ArcaneTests' random ordering.
+    Arcane::EnableD3D12Dred();
+    const std::string tier = Arcane::DredTier();
+    CHECK(tier.find("markers-only") == std::string::npos);
+}
+#endif
+
 TEST_CASE("GpuFrameSlot never claims a stamp that did not go out", "[diag]")
 {
     // The invariant the whole poll/wait split rests on. nvrhi's pollEventQuery

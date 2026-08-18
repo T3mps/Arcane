@@ -332,6 +332,13 @@ namespace Arcane
     // every failure is one WARN plus a degraded tier, never fatal.
     ARCANE_API void EnableD3D12Dred();
 
+    // The DRED tier EnableD3D12Dred() actually selected (e.g. "dred:full",
+    // "dred:markers-only", "dred:off", or a "-nocontext" variant of any of
+    // those) -- otherwise only observable in a log line. Exposed so tests
+    // can pin the build-config policy tier (F-2c-bis) rather than trusting
+    // it by inspection. "dred:off" before EnableD3D12Dred() has run.
+    ARCANE_API const char* DredTier();
+
     // The D3D12 crash backend over an nvrhi D3D12 device (the native
     // ID3D12Device comes from getNativeObject, F-4). Null only if `device`
     // is null: a backend whose marker buffer or DRED tier failed to arm is
