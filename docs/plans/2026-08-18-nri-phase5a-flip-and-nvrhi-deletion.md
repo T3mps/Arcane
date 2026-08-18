@@ -238,6 +238,22 @@ git commit -m "feat(nri)!: the frame graph is the only render path -- --nri-grap
 
 - [ ] **Step 1: Write the battery**
 
+> **AMENDED 2026-08-18 (user-approved): the battery covers THREE configs, and
+> Dist is the point.** This plan never mentions Dist. It should have: until the
+> Task 2b flip, `HostConfig::nriGraph` and all three call sites sat inside
+> `#if !defined(ARCANE_DIST)`, so a Dist build ALWAYS took the NVRHI arm and
+> `--nri-graph` was not even a registered flag there (exit 2). **The flip makes
+> Dist render through the NRI graph for the first time ever** — unexercised code
+> in the shipped configuration. Without a Dist pass here it stays unexercised
+> until Task 12, the last task in the phase. Written and parse-checked:
+> `Desktop\D5a-1-Battery.ps1` — goldens in Debug + Dist (12 each), Release gets
+> clean latch-asserted runs, crash battery Debug-only (see the Task 12
+> amendment), plus a drive item 9 that boots both Dist hosts.
+>
+> **The battery deliberately passes NO `--nri-graph`.** The flag is a no-op as
+> of `e4ff6fed`; the default path IS the graph path, and the default path is
+> what this checkpoint must exercise.
+
 `Desktop\D5a-1-Battery.ps1`, modelled on `D3-Exit-Battery.ps1`. PREP both configs, then per backend per host:
 
 ```
@@ -650,7 +666,31 @@ git commit -m "refactor!: one render path -- GraphMode() and the last two-path p
 
 ## Task 12: DESK CHECKPOINT D5a-2 (USER) + milestone record
 
-- [ ] **Step 1:** `Desktop\D5a-2-Battery.ps1` — the D5a-1 battery, re-run whole: 12 golden compares at `maxDelta 0`, `--crash-gpu` both hosts both backends, latch invariant, drag-storms, plus a **Dist** `--crash-gpu` to prove Task 1's tier change produces a non-empty breadcrumb list.
+- [ ] **Step 1:** `Desktop\D5a-2-Battery.ps1` — the D5a-1 battery, re-run whole: 12 golden compares at `maxDelta 0`, `--crash-gpu` both hosts both backends, latch invariant, drag-storms, ~~plus a **Dist** `--crash-gpu` to prove Task 1's tier change produces a non-empty breadcrumb list~~.
+
+> **AMENDED 2026-08-18: the Dist `--crash-gpu` step is DROPPED — it is
+> impossible as written.** `--crash-gpu` is registered inside `HostConfig.cpp`'s
+> `#if !defined(ARCANE_DIST)` block, so **the flag does not exist in a Dist
+> build**. Un-guarding it would put a deliberate GPU-fault trigger in the
+> shipped binary, which is not worth the one-time proof. The step is replaced by
+> this equivalence argument, which the user delegated and the controller ruled:
+>
+> 1. **What Task 1 changed is the tier SELECTION**, and that is already proven
+>    in Dist by the automated gate — the `[diag]` case *"dred tier never selects
+>    markers-only while WriteMarkerNative is a stub"* compiles and runs in the
+>    Dist build and asserts `DredTier()` is not markers-only.
+> 2. **What produces breadcrumb CONTENT** is D3D12's auto-breadcrumb recording,
+>    driven by `SetAutoBreadcrumbsEnablement(FORCED_ON)` at
+>    `GpuCrashD3D12.cpp:680` — **unconditional, above the `#if`, byte-identical
+>    in all three configs**. It is runtime-generated, not app-marker-generated;
+>    that independence is the entire premise of Task 1's fix.
+> 3. **The only Dist-unique delta left** is `SetPageFaultEnablement(FORCED_OFF)`,
+>    which Task 1 did not touch.
+>
+> So the Debug `--crash-gpu` runs, which exercise full auto-breadcrumb capture
+> end to end, carry the evidence across. If the direct proof is wanted instead,
+> un-guarding `--crash-gpu` becomes a small task of its own — a deliberate
+> change to the shipped CLI surface, not a silent one.
 - [ ] **Step 2:** The eight-item drive checklist, both backends.
 - [ ] **Step 3:** Append the Phase 5a milestone record to the tail of this plan: final commit range, gate count, ABI 14, what the deletion removed (file and line counts), the carry list for Phase 4, and any amendment this plan's text owes. Delete the SDD workspace **only after** the record is written and pushed — it is gitignored and unrecoverable.
 
