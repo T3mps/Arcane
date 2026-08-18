@@ -1548,7 +1548,15 @@ namespace Arcane::Editor
         if (!GraphMode())
             return true;   // the NVRHI arm builds its trio in StageRenderBridge
 
-#if !defined(ARCANE_DIST)
+        // Formerly `#if !defined(ARCANE_DIST)` here (NRI Phase 5a, Task 2a):
+        // that guard existed only because the graph path was opt-in dev
+        // scaffolding, and GraphMode() was structurally false in Dist so the
+        // body was dead code there. GraphMode() is unaffected by this task
+        // (still false in Dist -- see EditorApp.cpp:306's own guard, Task
+        // 2b's job) so removing the redundant preprocessor guard here changes
+        // no behaviour; it only stops a SECOND, independent reason Dist could
+        // never reach this body from outliving the first once Task 2b flips
+        // EditorApp.cpp:306 and GraphMode() starts reporting true there too.
         Arcane::Diagnostics::SetPhase("nri graph vehicle boot");
 
         // THE REVEAL, which StageSplashReady could not do on this flavor (its
@@ -1645,7 +1653,6 @@ namespace Arcane::Editor
         // ONE BODY, TWO CALLERS as of Task 12 -- see BuildGraphViewportContext.
         if (!BuildGraphViewportContext(0, 0))
             return false;
-#endif
         return true;
     }
 
