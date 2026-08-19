@@ -71,9 +71,14 @@ namespace Arcane::Diag
 
     void FreezeBreadcrumbsOnDeviceLoss(GpuBreadcrumbs& breadcrumbs, const Envelope& envelope)
     {
-        // "device-alive" is the one healthy verdict both backends share
-        // (GpuCrashD3D12's RemovedReasonKind, GpuCrashVulkan's lost-probe);
-        // an EMPTY type means no backend classified anything -- also not a
+        // "device-alive" is the one healthy verdict the two GPU-API backends
+        // shared (GpuCrashD3D12's RemovedReasonKind, GpuCrashVulkan's
+        // lost-probe). BOTH WERE DELETED at NRI Phase 5a, Task 9.5a, so no
+        // producer emits that string today and this branch is currently
+        // reached only through the EMPTY case below -- it is kept because the
+        // string is the envelope's published contract (DiagEnvelopeTest pins
+        // the shape) and Phase 4's native marker layer re-supplies it. An
+        // EMPTY type means no backend classified anything -- also not a
         // loss. Everything else (device-removed/-hung/-reset, page-fault
         // kinds, driver-internal-error) means the device is gone and the
         // frames the host keeps pumping must not recycle the crash-time ring.

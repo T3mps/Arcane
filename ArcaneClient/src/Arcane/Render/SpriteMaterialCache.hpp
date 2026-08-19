@@ -49,13 +49,15 @@ namespace Arcane
         {
             ShaderCompiler*       compiler = nullptr;
             ShaderSourceProvider* sources = nullptr;   // sprite template text
-            // BOTH UNUSED since NRI Phase 5a, Task 7. `assets` resolved the
-            // declared texture params to GPU objects and `device` compiled the
-            // shader pair; Material2DDesc carries neither any more, so Bind()
-            // touches no device and no image. Kept rather than deleted because
-            // PostChainCache::Services documents its own `device` as this
-            // member's mirror (PostChainCache.hpp) and still uses it -- these
-            // two retire together with the NVRHI recorder.
+            // UNUSED since NRI Phase 5a, Task 7: `assets` resolved the
+            // declared texture params to GPU objects, and an
+            // `nvrhi::IDevice* device` beside it compiled the shader pair.
+            // Material2DDesc carries neither any more, so Bind() touches no
+            // device and no image. `device` was deleted at Task 9.5a, together
+            // with its mirror in PostChainCache::Services -- the reciprocal
+            // "kept because the other one keeps it" pact those two comments
+            // held each other to turned out to be circular, and neither field
+            // had a reader. `assets` survives it, still unread.
             Assets*               assets = nullptr;    // (unused)
             GraphicsBackend       backend{};
             ResolveAssetFn        resolveAsset;        // Guid -> path (project registry)

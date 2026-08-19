@@ -64,9 +64,12 @@ namespace Arcane
             // when SpriteEntry stopped naming a device object (SpriteCache.cpp).
             Batcher2D* batcher = nullptr;
 
-            // Forwarded to PostChainCache, which still builds device objects
-            // from it. SpriteMaterialCache takes a copy too, but stopped using
-            // it at NRI Phase 5a, Task 7 -- see its Services.
+            // Forwarded to both sub-caches as the shader-compile target
+            // profile. SpriteMaterialCache stopped using it at NRI Phase 5a,
+            // Task 7 -- see its Services. An `nvrhi::IDevice* device` was
+            // forwarded to both alongside it until Task 9.5a; neither builds
+            // device objects any more, so the field and both forwards are
+            // gone (SceneRenderResolver.cpp).
             GraphicsBackend backend{};
 
             // The app-shared compile service. Null, or an unavailable one (no

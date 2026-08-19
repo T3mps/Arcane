@@ -743,7 +743,9 @@ namespace
         //     below disarms rather than inventing a stall;
         //   - a wedged GPU that has parked the render path in the swapchain's
         //     frame-slot wait IS this rule's primary case, and the reason the
-        //     wait polls instead of blocking (GpuFrameSlot::WaitAndReset): the
+        //     wait polls instead of blocking (NriSwapChain.cpp's
+        //     PollingWaitForTimelineFence; GpuFrameSlot::WaitAndReset until
+        //     NRI Phase 5a, Task 9.5a deleted it): the
         //     loop republishes both beats, so the counter stays visibly frozen
         //     under a visibly live render path for as long as the poll window
         //     lasts. Past that window the wait parks for real and publishing

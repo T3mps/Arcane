@@ -116,7 +116,7 @@ namespace Arcane
             // (F-2c-bis, GpuInstrumentation.hpp) -- and after the NVRHI
             // deletion there is no nvrhi command list to emit them on, while
             // the NRI path's WriteMarkerNative is still the stub at
-            // NriDiagnostics.cpp:82. Selecting markers-only here would produce
+            // NriDiagnostics.cpp:76. Selecting markers-only here would produce
             // an EMPTY breadcrumb list, which the header calls strictly worse
             // than no DRED at all -- and it would do it silently, in the one
             // config nobody runs interactively.

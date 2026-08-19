@@ -59,13 +59,15 @@
 // discards its VkResult; FenceD3D12::Wait either busy-waits or blocks on
 // WaitForSingleObjectEx for the same 5s. Calling either directly from the
 // pacing wait would park the render thread for up to 5s publishing nothing,
-// which is exactly the trap GpuFrameSlot's header comment describes for
+// which is exactly the trap GpuFrameSlot's header comment described for
 // nvrhi's waitEventQuery -- a hung GPU must not look like a hung process.
-// So the wait here is our own poll loop -- GetFenceValue(fence) >= value,
-// SDL_DelayNS(1ms), Diagnostics::Heartbeat() + Diagnostics::
-// GpuHeartbeatRefresh() every iteration, same 15s window as GpuInstrumentation
-// .cpp's PollingWaitForStampedQuery -- falling back to the blocking
-// Core().Wait() only once that window has elapsed (see the .cpp).
+// (That class and its PollingWaitForStampedQuery were deleted at NRI Phase
+// 5a, Task 9.5a with the NVRHI swapchains they served; the RULE outlived them
+// and is enforced here.) So the wait here is our own poll loop --
+// GetFenceValue(fence) >= value, SDL_DelayNS(1ms), Diagnostics::Heartbeat() +
+// Diagnostics::GpuHeartbeatRefresh() every iteration, over a 15s window --
+// falling back to the blocking Core().Wait() only once that window has
+// elapsed (see the .cpp).
 //
 // -------------------------------------------------------------------------
 // What this exposes, and what it deliberately does not
@@ -181,11 +183,12 @@ namespace Arcane
         // passed, i.e. GetFenceValue on the timeline fence Present() signals
         // with `frameCounter + 1`.
         //
-        // It is `GpuFrameProgress`'s 1:1 replacement, not an approximation of
-        // one. GpuInstrumentation.hpp's GpuFrameProgress exists because nvrhi
-        // exposes no cross-backend completed-instance query and had to stamp
-        // its OWN event-query chain to get one; NRI's timeline fence IS that
-        // query, already stamped once per present by the pacing signal, and
+        // It was `GpuFrameProgress`'s 1:1 replacement, not an approximation
+        // of one, and since NRI Phase 5a Task 9.5a deleted that class it is
+        // simply THE GPU-progress source. GpuFrameProgress existed because
+        // nvrhi exposed no cross-backend completed-instance query and had to
+        // stamp its OWN event-query chain to get one; NRI's timeline fence IS
+        // that query, already stamped once per present by the pacing signal, and
         // already read non-blockingly by the pacing wait. So the graph path
         // publishes THIS to Diagnostics::GpuHeartbeat (via
         // NriDiagnostics::PublishHeartbeat) instead of building a second

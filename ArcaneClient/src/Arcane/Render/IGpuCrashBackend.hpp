@@ -1,10 +1,14 @@
 #pragma once
 
-// GPU crash diagnostics arc (Task 3): the seam a GPU backend implements
-// (Task 5 = D3D12 via WriteBufferImmediate + DRED, Task 6 = Vulkan via the
-// AMD buffer-marker / device-fault extensions). Pure interface -- no GPU
-// calls live in THIS header, only shape. WriteMarkerNative passes the raw
-// native command-list pointer straight through to the backend, nothing more.
+// GPU crash diagnostics arc (Task 3): the seam a GPU backend implements.
+// It was implemented twice -- Task 5 = D3D12 via WriteBufferImmediate + DRED,
+// Task 6 = Vulkan via the AMD buffer-marker / device-fault extensions -- and
+// BOTH of those implementations are DELETED as of NRI Phase 5a, Task 9.5a
+// (see the block below EnableD3D12Dred/DredTier for what that cost). The one
+// live implementation today is NriGraphCrashBackend, in
+// Nri/NriDiagnostics.cpp. Pure interface -- no GPU calls live in THIS header,
+// only shape. WriteMarkerNative passes the raw native command-list pointer
+// straight through to the backend, nothing more.
 //
 // Task 5 also parks the `.gpudump` container here (Diag::GpuDumpWriter +
 // ParseGpuDump/ReadGpuDump): it is the RAW-capture sibling every backend
@@ -301,7 +305,8 @@ namespace Arcane
         // owned by the backend, per GpuBreadcrumbs.hpp ("a backend calls
         // BeginScope/EndScope around each render pass"). A pass-scope
         // helper takes its token from BeginScope here and hands the same
-        // token to WriteMarker; CollectFault turns observed marker values
+        // token to WriteMarkerNative (it was WriteMarker until Task 9.5a
+        // deleted that overload); CollectFault turns observed marker values
         // back into NAMED queue timelines through it.
         virtual GpuBreadcrumbs& Breadcrumbs() = 0;
 
@@ -311,14 +316,33 @@ namespace Arcane
     };
 
     // ---------------------------------------------------------------------
-    // D3D12 backend (Task 5) -- implemented in GpuCrashD3D12.cpp
+    // The D3D12 DRED tier -- all that is left of GpuCrashD3D12.cpp
     // ---------------------------------------------------------------------
+    // Named for what it is rather than "the D3D12 backend (Task 5)", which is
+    // what this banner said until NRI Phase 5a, Task 9.5a: the backend it
+    // headed is deleted, and these two free functions are the survivors. They
+    // never went through a backend object -- DRED settings are process-global
+    // and are armed before any device exists.
 
-    // Applies the build-config DRED policy tier (F-2: full in Debug/Release,
-    // markers-only in Dist) down the F-2d QueryInterface ladder. MUST be
-    // called BEFORE D3D12CreateDevice -- DRED settings are process-global
-    // and only affect devices created afterwards. Idempotent per process;
-    // every failure is one WARN plus a degraded tier, never fatal.
+    // Applies the build-config DRED policy tier down the F-2d QueryInterface
+    // ladder. MUST be called BEFORE D3D12CreateDevice -- DRED settings are
+    // process-global and only affect devices created afterwards. Idempotent
+    // per process; every failure is one WARN plus a degraded tier, never
+    // fatal.
+    //
+    // THE TIER, CURRENT AS OF NRI PHASE 5a, TASK 1: full auto-breadcrumbs in
+    // ALL THREE configs. F-2's original split -- full in Debug/Release,
+    // markers-only in Dist -- is SUSPENDED, and this comment asserted the old
+    // split until Task 9.5a corrected it. Markers-only auto-breadcrumbs are
+    // worth something only if pass scopes also emit GPU markers, and no marker
+    // producer exists while WriteMarkerNative is a stub on the graph backend;
+    // selecting markers-only would therefore yield an EMPTY breadcrumb list,
+    // silently, in the one config nobody runs interactively. DiagnosticsTest's
+    // "dred tier never selects markers-only while WriteMarkerNative is a stub"
+    // case now FORBIDS the old behaviour in every config. The lighter tier is
+    // re-earnable when the native NRI marker layer lands (F-2c-bis) -- in that
+    // order, and only in that order. The Dist arm still differs in one respect
+    // Task 1 did not touch: SetPageFaultEnablement(FORCED_OFF).
     ARCANE_API void EnableD3D12Dred();
 
     // The DRED tier EnableD3D12Dred() actually selected (e.g. "dred:full",

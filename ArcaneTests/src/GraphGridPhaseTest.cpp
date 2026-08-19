@@ -147,11 +147,13 @@ TEST_CASE("graph grid phase: a long pan stays bounded, and the wrap is invisible
 // refuses without EITHER of its two inputs"). Arcane::Editor::GraphGridPass
 // is gone -- its Create(nvrhi::IDevice*, ShaderLibrary*) could never be
 // satisfied once DocServices::device went unconditionally null at Task 2b,
-// and its ImGui-primitive twin (DrawGraphGridFallback, below) is now the
-// only canvas backdrop there is.
+// and its ImGui-primitive twin -- DrawGraphGridFallback, which moved with
+// the deletion and now lives at Widgets/GraphGridPhase.hpp, not in this file
+// -- is the only canvas backdrop there is.
 //
 // NOT A COVERAGE GAP. Everything that case pinned was the refusal of a
 // constructor that no longer exists; the lattice itself was always the
-// PURE half tested throughout this file, and DrawCanvasBackdrop now calls
-// DrawGraphGridFallback unconditionally rather than behind a `!grid` test,
-// so there is strictly less branch to get wrong than the case guarded.
+// PURE half tested throughout this file, and
+// ShaderEditorDocument::DrawCanvasBackdrop now calls DrawGraphGridFallback
+// unconditionally rather than behind a `!grid` test, so there is strictly
+// less branch to get wrong than the case guarded.

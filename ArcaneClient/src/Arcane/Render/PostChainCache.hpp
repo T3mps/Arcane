@@ -101,17 +101,19 @@ namespace Arcane
         {
             ShaderCompiler*       compiler = nullptr;
             ShaderSourceProvider* sources = nullptr;   // fullscreen template text
-            Assets*               assets = nullptr;    // texture warm-up at bind
-            // Gates the texture warm-up below (Assets::GetTexture at bind
-            // time). Always null since NRI Phase 5a, Task 2b's flip -- both
-            // hosts have passed nullptr since the graph recorder became the
-            // only render path, and the graph makes its own textures resident
-            // through NriTextureCache instead. NRI Phase 5a, Task 4 deleted
-            // the NVRHI chain this field used to also gate (see Bind()'s own
-            // history note); the field itself is kept rather than deleted:
-            // it mirrors SpriteMaterialCache::Services::device, and
-            // collapsing device-gated plumbing repo-wide is Task 11's job,
-            // not this one's.
+            // `assets` is itself vestigial now: an `nvrhi::IDevice* device`
+            // sat below it and GATED the texture warm-up this comment used to
+            // name (Assets::GetTexture at bind time). That field was always
+            // null after NRI Phase 5a, Task 2b's flip -- both hosts passed
+            // nullptr once the graph recorder became the only render path --
+            // so the warm-up never ran, and Task 4 had already deleted the
+            // NVRHI chain the same field also gated. Task 9.5a deleted the
+            // field AND the unreachable warm-up with it (see Bind()); the
+            // graph makes the same Guids resident on its own device through
+            // NriTextureCache, which is where residency has actually lived
+            // throughout. `assets` is left in place because Bind() may yet
+            // want a device-free asset read; nothing reads it today.
+            Assets*               assets = nullptr;    // (unused)
             GraphicsBackend       backend{};
             ResolveAssetFn        resolveAsset;        // Guid -> path (project registry)
         };

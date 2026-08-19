@@ -30,17 +30,19 @@ namespace Arcane
     namespace
     {
         // ---------------------------------------------------------------
-        // The pacing wait: nri::Fence's analogue of GpuInstrumentation.cpp's
-        // PollingWaitForStampedQuery. Same shape, same constants, same
-        // reasoning -- see NriSwapChain.hpp's header comment for why a bare
-        // Core().Wait() cannot be used here. File-local for the same reason
-        // PollingWaitForStampedQuery is file-local to GpuInstrumentation.cpp:
+        // The pacing wait. It was written as nri::Fence's analogue of
+        // GpuInstrumentation.cpp's PollingWaitForStampedQuery -- same shape,
+        // same constants, same reasoning -- and it is now the ONLY one: that
+        // function and the GpuFrameSlot it served were deleted at NRI Phase
+        // 5a, Task 9.5a, along with the two NVRHI swapchains that drove them.
+        // See NriSwapChain.hpp's header comment for why a bare Core().Wait()
+        // cannot be used here. File-local for the reason its predecessor was:
         // it is a leaf detail of the pacing wait, not a general-purpose fence
         // helper.
         // ---------------------------------------------------------------
 
-        constexpr Uint64 kFencePollSleepNs = 1'000'000;         // 1ms -- matches GpuInstrumentation.cpp's kSlotPollSleepNs exactly (SDL's high-resolution waitable timer, not std::this_thread::sleep_for's ~15.6ms Windows quantum)
-        constexpr std::chrono::seconds kFencePollWindow{ 15 };  // matches GpuInstrumentation.cpp's kSlotPollWindow: comfortably above Config::gpuStallSeconds' 8s default
+        constexpr Uint64 kFencePollSleepNs = 1'000'000;         // 1ms -- was matched to GpuInstrumentation.cpp's kSlotPollSleepNs before Task 9.5a deleted it (SDL's high-resolution waitable timer, not std::this_thread::sleep_for's ~15.6ms Windows quantum)
+        constexpr std::chrono::seconds kFencePollWindow{ 15 };  // was matched to GpuInstrumentation.cpp's kSlotPollWindow: comfortably above Config::gpuStallSeconds' 8s default
 
         void PollingWaitForTimelineFence(const nri::CoreInterface& core, nri::Fence* fence, uint64_t value)
         {
@@ -52,7 +54,7 @@ namespace Arcane
             const auto start = std::chrono::steady_clock::now();
             while (std::chrono::steady_clock::now() - start < kFencePollWindow)
             {
-                // Same two beats, same order, same reasoning as
+                // Same two beats, same order, same reasoning as the deleted
                 // PollingWaitForStampedQuery: Heartbeat() says the render
                 // thread is alive and deliberately waiting (not wedged);
                 // GpuHeartbeatRefresh() republishes freshness on the SAME

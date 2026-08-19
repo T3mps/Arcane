@@ -25,7 +25,7 @@
 #include <Arcane/Host/GoldenHarness.hpp>   // Arcane::DrainSceneCompiles/GoldenArtifact/kEditorGoldenNamePrefix (NRI Phase 3, Task 13)
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Project/Project.hpp>
-#include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuPassScope -- the F-8 pass seams
+#include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect)
 #include <Arcane/Scene/TransformSystems.hpp>   // Edit-mode derived-transform refresh

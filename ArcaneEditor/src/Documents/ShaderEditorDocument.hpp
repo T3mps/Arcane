@@ -109,7 +109,8 @@ namespace Arcane::Editor
         // unreachable precisely because this is null -- see
         // RefreshNodePreviews. The `shaders` (Arcane::ShaderLibrary*) field
         // that sat beside it went at Task 9.5a with GraphGridPass, its only
-        // reader; nothing ever assigned it.
+        // READER; the one assignment it had (EditorAppProject.cpp's
+        // MakeDocServices, `s.shaders = nullptr`) went with it.
         nvrhi::IDevice*               device = nullptr;
         Arcane::ShaderCompiler*       compiler = nullptr;   // app-shared service
         Arcane::ShaderSourceProvider* sources = nullptr;    // template text

@@ -23,14 +23,20 @@
 // -------------------------------------------------------------------------
 // WHAT IT DOES NOT DO, said plainly
 // -------------------------------------------------------------------------
-// It does NOT reimplement the crash BACKENDS. The D3D12 marker buffer
+// It does NOT reimplement the crash BACKENDS -- and as of NRI Phase 5a,
+// Task 9.5a there are none left to reimplement. The D3D12 marker buffer
 // (WriteBufferImmediate over an OpenExistingHeapFromAddress placed resource)
-// and the Vulkan one (VK_AMD_buffer_marker + VK_EXT_device_fault) are native,
-// nvrhi-device-shaped objects that stay exactly where they are
-// (GpuCrashD3D12.cpp / GpuCrashVulkan.cpp -- both files survive Task 8b, and
-// both are unreachable until an NRI-shaped marker layer lands, because the
-// only thing that ever called MakeD3D12CrashBackend / MakeVulkanCrashBackend
-// was the deleted device layer). What Arm() installs is the
+// and the Vulkan one (VK_AMD_buffer_marker + VK_EXT_device_fault) were
+// native, nvrhi-device-shaped objects; because the deleted device layer was
+// the only thing that ever called MakeD3D12CrashBackend /
+// MakeVulkanCrashBackend, both had been unreachable since Task 8b and both
+// are now DELETED. GpuCrashVulkan.cpp is gone entirely; GpuCrashD3D12.cpp
+// survives as EnableD3D12Dred/DredTier only -- the process-global DRED tier,
+// which never went through a backend object. The consequence, named in
+// IGpuCrashBackend.hpp: nothing in the tree reads DRED breadcrumbs or Vulkan
+// device-fault info back any more, and restoring that readback belongs to the
+// same NRI-shaped marker layer this header keeps deferring to. What Arm()
+// installs is the
 // GRAPH-FLAVORED backend: the CPU-side breadcrumb ring the graph's NodeScope
 // already writes into (RenderGraphExec.cpp), plus a device identity so the
 // cross-device native-marker gate there can OPEN once the flip makes both
@@ -123,8 +129,9 @@ namespace Arcane
         //
         // Called after EVERY PRESENTED FRAME from NriGraphContext::RenderFrame
         // with NriSwapChain::CompletedFrameValue() -- the pacing timeline
-        // fence's completed value, which is GpuFrameSlot/GpuFrameProgress's
-        // 1:1 replacement (see that accessor's comment for why it is not an
+        // fence's completed value. It replaced GpuFrameSlot/GpuFrameProgress
+        // 1:1 -- and outlived them, since NRI Phase 5a Task 9.5a deleted both
+        // (see that accessor's comment for why it was never an
         // approximation). A monotone count of sync points the device has
         // actually passed is exactly what Diagnostics::GpuHeartbeat's rule
         // wants; publishing it from the presented-frames path (not the

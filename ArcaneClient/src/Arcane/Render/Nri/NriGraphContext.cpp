@@ -1607,9 +1607,10 @@ namespace Arcane
 
         // THE GPU-PROGRESS HEARTBEAT (Task 5), after the frame's present and
         // therefore after its last submit -- the same rule GpuFrameProgress::
-        // EndFrame carries on the NVRHI path ("a stamp placed before the
-        // frame's work would retire early and report progress the GPU had not
-        // made"). Presented frames only: a skipped frame submitted nothing,
+        // EndFrame carried on the NVRHI path before Task 9.5a deleted it ("a
+        // stamp placed before the frame's work would retire early and report
+        // progress the GPU had not made"). Presented frames only: a skipped
+        // frame submitted nothing,
         // so republishing here would say "the GPU is fine" about a frame the
         // GPU never saw.
         //

@@ -63,7 +63,9 @@ namespace Arcane::Diagnostics
         // is a host that is not rendering (minimized), not a stalled GPU. The
         // case that makes it reachable is the swapchain's frame-slot wait,
         // which polls and republishes rather than blocking (see
-        // Render/GpuInstrumentation.hpp, GpuFrameSlot) precisely so a wedged
+        // Render/Nri/NriSwapChain.cpp's PollingWaitForTimelineFence -- it was
+        // GpuInstrumentation.hpp's GpuFrameSlot until NRI Phase 5a, Task 9.5a
+        // deleted that class with the NVRHI swapchains) precisely so a wedged
         // GPU is visible as "still waiting, still not retiring".
         //
         // TIGHTER than hangSeconds on purpose, and this is the whole reason
@@ -165,8 +167,12 @@ namespace Arcane::Diagnostics
 
     // "The GPU is still retiring work." One relaxed atomic store, called once
     // per frame by the render path with a MONOTONE count of GPU-side sync
-    // points the device has actually passed (Arcane::GpuFrameProgress derives
-    // it from an nvrhi event-query chain -- see Render/GpuInstrumentation.hpp).
+    // points the device has actually passed. The graph path publishes
+    // NriSwapChain::CompletedFrameValue() -- its pacing timeline fence's
+    // completed value -- from NriGraphContext::RenderFrame. (Arcane::
+    // GpuFrameProgress derived the same count from an nvrhi event-query chain
+    // until NRI Phase 5a, Task 9.5a deleted it; NriSwapChain.hpp explains why
+    // the fence is a 1:1 replacement and not an approximation.)
     //
     // Deliberately NOT folded into Heartbeat(): that one says only that the
     // main thread is alive, which is exactly what a GPU hang can leave true.
