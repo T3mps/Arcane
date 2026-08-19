@@ -195,14 +195,24 @@ namespace Arcane
     //         ITSELF reads them out of a map the host filled. Same reasoning
     //         as the v13 entry's third bullet (:130-134), inverted.
     //       * THE BATCHER2D VTABLE CHANGED SHAPE, NOT JUST ITS SIGNATURES.
-    //         Five virtuals lost NVRHI parameters (Begin, Quad, QuadMaterial,
-    //         Glyph, QuadTextured), plus Create's static factory beside them,
+    //         Six virtuals lost NVRHI parameters (Begin, Quad, QuadMaterial,
+    //         Glyph, QuadTextured, and Create's static factory beside them),
     //         and `RemoveTexture(nvrhi::ITexture*)` was REMOVED FROM THE
     //         MIDDLE of the class -- which slides Stats/Drain/MaterialDesc/
     //         QuadTextured up one slot each. That is the exact hazard the v11
     //         entry (:96-103) explains and Drain()'s "declared last" comment
     //         guards against; it is done here deliberately, and it is safe
     //         ONLY because this gate refuses every pre-v15 module outright.
+    //         (CORRECTION, NRI Phase 5a Task 11b fix round 1: "Six virtuals"
+    //         is a same-sentence arithmetic error, not stale prose -- Create
+    //         is named as a STATIC factory in this very sentence, so it is
+    //         not itself one of the virtuals it is counted among. FIVE
+    //         virtuals lost NVRHI parameters -- Begin, Quad, QuadMaterial,
+    //         Glyph, QuadTextured -- plus Create's static factory beside
+    //         them, whose signature changed too but as a free/static
+    //         function, never a vtable slot. The verdict this bullet reaches
+    //         -- a real vtable-shape change, correctly gated by v15 -- is
+    //         unaffected by the correction.)
     //     Assets also lost SetDevice, both GetTexture overloads and the three
     //     NVRHI free functions (LoadDisplayTexture/ReadTexturePixels/
     //     SaveTexturePng), and ShaderLibrary was deleted outright -- all

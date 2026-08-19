@@ -865,10 +865,11 @@ void RuntimeApp::Shutdown()
     // The member destructors then run (after Run returns + ~RuntimeApp), in reverse
     // declaration order -- the load-bearing TEARDOWN CONTRACT:
     //   m_resolver -> ~SceneRenderResolver: un-publishes the registry's sprite
-    //                tables (whose pointers are non-owning) and drops its nvrhi
-    //                keep-alive texture handles. Declared LAST so it runs FIRST,
-    //                while the runtime it publishes through and the device those
-    //                handles belong to are both still alive.
+    //                tables (whose pointers are non-owning). Declared LAST so
+    //                it runs FIRST, while the runtime it publishes through is
+    //                still alive. (It no longer drops any nvrhi keep-alive
+    //                texture handle -- that map died at NRI Phase 5a, Task 7;
+    //                see SceneRenderResolver.hpp's own destructor contract.)
     //   m_plugin  -> ~PluginHost: Unload (TeardownLive -> ClearSystems +
     //                ResetRegistry) while the plugin DLL is STILL mapped.
     //   m_runtime -> ~Runtime: destroys JobSystem + the now-empty Registry.

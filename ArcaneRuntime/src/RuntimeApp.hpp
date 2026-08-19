@@ -200,9 +200,12 @@ private:
     // vehicle, and this is that convergence).
     //
     // DECLARED LAST = DESTRUCTS FIRST, which the resolver's header requires: the
-    // registry inside m_runtime holds non-owning pointers to its tables, and it
-    // holds nvrhi keep-alive texture handles that must release before m_gpu's
-    // device. The compile service + template source roots feed it and are
+    // registry inside m_runtime holds non-owning pointers to its tables, so
+    // the resolver must un-publish them before ~Runtime runs. (The matching
+    // "before the render device" half of this rule died with the nvrhi
+    // keep-alive texture map it referred to -- NRI Phase 5a, Task 7, see
+    // SpriteCache.cpp's own note -- the resolver holds no device-bound handle
+    // any more.) The compile service + template source roots feed it and are
     // declared before it for the same reason.
     Arcane::ShaderCompiler       m_shaderCompiler;
     Arcane::ShaderSourceProvider m_shaderSources;
