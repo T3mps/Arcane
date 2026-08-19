@@ -118,6 +118,26 @@ TEST_CASE("ComposeRebuildCommands is one premake-first cmd chain with folded std
     CHECK(cmd.find("\"C:/Program Files/Microsoft Visual Studio/18/MSBuild.exe\"") !=
           std::string::npos);
 
+    // THE LINK IS FORCED, ALWAYS -- and this is the assertion, not a detail.
+    //
+    // A game project's Binaries\ is a SINGLE SHARED SLOT: Debug and Release
+    // write the same <Project>.dll there, while their object trees live apart
+    // under Intermediate\<Config>\. So when a Release DLL is sitting in
+    // Binaries\ and the editor (a Debug build) asks for a Debug module, MSBuild
+    // compares the Debug objects against the Debug link stamp, finds both
+    // current, relinks NOTHING, and reports success in a fraction of a second --
+    // leaving the WRONG-CONFIG DLL in place for the host to load and refuse.
+    // Observed live at NRI Phase 5a, desk checkpoint D5a-1: a 0.24s "All
+    // outputs are up-to-date" immediately followed by "the rebuilt module still
+    // failed to load".
+    //
+    // An incremental build therefore CANNOT be trusted to heal a cross-config
+    // module -- the state it reasons about is per-config, the artifact it
+    // guards is not. The worker must force the link every time; a few seconds
+    // per rebuild is the whole cost, and Rebuild Game Module is a deliberate
+    // user action, not a hot loop.
+    CHECK(cmd.find("/t:Rebuild") != std::string::npos);
+
     // Parenthesized so the trailing 2>&1 folds EVERY member's stderr into the
     // captured stdout -- unparenthesized it would bind to msbuild alone.
     CHECK(cmd.front() == '(');

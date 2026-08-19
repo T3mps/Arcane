@@ -102,6 +102,14 @@ namespace Arcane::Editor::ModuleBuild
         Quote(cmd, in.solution);
         cmd += " /p:Configuration=";
         cmd += in.configuration;
+        // /t:Rebuild -- FORCE THE LINK. A game project's Binaries\ is a single
+        // shared slot (one <Project>.dll for every configuration) while the
+        // object trees are per-config under Intermediate\<Config>\. An
+        // incremental build reasons about the per-config state and concludes
+        // "up to date" without ever looking at which flavor is actually sitting
+        // in Binaries\, so a cross-config module survives a "successful" build.
+        // See ModuleBuildTest.cpp for the observed failure this closes.
+        cmd += " /t:Rebuild";
         cmd += " /m /nologo ) 2>&1";
         return cmd;
     }

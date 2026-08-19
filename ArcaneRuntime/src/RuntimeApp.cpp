@@ -157,22 +157,17 @@ bool RuntimeApp::StageGpuCore(Arcane::HostBoot::BootContext& ctx)
 
 bool RuntimeApp::StageRenderBridge(Arcane::HostBoot::BootContext&)
 {
-    // Render-resources bridge: hand the host-owned device + ShaderLibrary to the
-    // Runtime so a plugin can build its own engine render objects (e.g. the
-    // narrowphase inspector's OffscreenCanvas). Non-owning; the host outlives the
-    // plugin (m_gpu is declared before the runtime/plugin in RuntimeApp). Null in a
-    // headless host -> the plugin skips its GPU-resource creation.
+    // THERE IS NO RENDER-RESOURCES BRIDGE ANY MORE. This stage used to hand the
+    // Runtime a host-owned nvrhi::IDevice + ShaderLibrary so a plugin could build
+    // its own engine render objects; since NRI Phase 3, Task 6 it passed
+    // (nullptr, nullptr), because GpuContext builds no NVRHI device at all. NRI
+    // Phase 5a, Task 9 deleted Runtime::SetRenderResources/Device()/Shaders()
+    // outright -- that is one of the two things ABI 14 gates.
     //
-    // (nullptr, nullptr) IS THE GRAPH-MODE CONTRACT (NRI Phase 3, Task 6, plan
-    // reconciliation 7). There is no NVRHI device to hand over -- GpuContext
-    // has built none at all since NRI Phase 5a, Task 6 deleted the accessors
-    // (Device()/Shaders()) an NVRHI arm here would have needed -- and the
-    // Assets facade is deliberately left device-less by it: Assets::PixelsFor
-    // (Task 1) is the retained, device-FREE decode the graph's NriTextureCache
-    // uploads from, so a textured sprite still renders. What a plugin loses is
-    // OffscreenCanvas::Create, which refuses loudly against a null device and
-    // names the Phase-5 arc that gives it a graph-side answer.
-    m_runtime->SetRenderResources(nullptr, nullptr);
+    // What survives the removal is the part that actually mattered: the Assets
+    // facade stays device-less, and Assets::PixelsFor (Task 1) is the retained,
+    // device-FREE decode the graph's NriTextureCache uploads from, so a textured
+    // sprite still renders. The stage itself is kept for the ImGui handoff below.
 
     // ABI v2: install the host's ImGui context + allocators on the Runtime BEFORE
     // the plugin loads. PluginHost::RefreshContext copies these into the EngineContext

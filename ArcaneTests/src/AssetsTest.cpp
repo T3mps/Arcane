@@ -217,7 +217,10 @@ TEST_CASE("assets: byteBudget 0 opts out of eviction; default is 256 MiB", "[ass
 
 TEST_CASE("assets: GetTexture before a render device is set returns null (no crash)", "[assets]")
 {
-    // Facade built device-less (the headless / before-SetRenderResources path).
+    // Facade built device-less -- which since NRI Phase 5a, Task 9 is the only
+    // way a HOST ever builds it: deleting Runtime::SetRenderResources removed
+    // Assets::SetDevice's last production caller. This case stopped being the
+    // "before" state and became the steady state.
     // GetTexture must degrade to null instead of dereferencing a null device.
     auto assets = Arcane::Assets::Create(nullptr);
     REQUIRE(assets != nullptr);

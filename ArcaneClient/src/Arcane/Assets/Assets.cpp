@@ -227,10 +227,13 @@ namespace Arcane
                     return nullptr;
                 }
 
-                // No render device yet (headless, or GetTexture raced ahead of
-                // SetDevice/SetRenderResources): degrade to null instead of
-                // dereferencing a null m_device. Memoize the miss so a per-frame
-                // caller does not restart a warn storm; SetDevice clears it later.
+                // No render device -- and since NRI Phase 5a, Task 9 that is the
+                // ONLY case: deleting Runtime::SetRenderResources removed
+                // SetDevice's last production caller, so this facade is
+                // device-less for its whole life outside tests. Degrade to null
+                // instead of dereferencing a null m_device. Memoize the miss so a
+                // per-frame caller does not restart a warn storm; SetDevice
+                // clears it later (tests still exercise that path).
                 if (!m_device)
                 {
                     ARC_WARN("Assets: GetTexture before render device set");

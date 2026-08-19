@@ -138,7 +138,42 @@ namespace Arcane
     //     "textured on a device that is not there". The Guid can, and the NRI
     //     recorder resolves it through the shared NriTextureCache. Reject the
     //     pairing.
-    inline constexpr uint32_t kGamePluginABIVersion = 13;
+    // v14 (2026-08-19): NRI Phase 5a, Task 9. TWO independent reasons, and the
+    //     SECOND is the stronger one -- it gates a layout change that has been
+    //     sitting in the tree UNGATED since Task 7.
+    //       * THE RENDER SURFACE NO LONGER EXPOSES NVRHI TYPES. Runtime lost
+    //         SetRenderResources(nvrhi::IDevice*, ShaderLibrary*), Device() and
+    //         Shaders() outright (Base/Runtime.hpp). Both hosts had passed
+    //         (nullptr, nullptr) since Task 6 and both accessors could only
+    //         return null, so nothing observable changes -- but Runtime is a
+    //         concrete class a plugin links against, and removing three exported
+    //         members changes what a module built against v13 resolves at load.
+    //       * MATERIAL2DDESC SHRANK AT ABI 13 AND WAS NEVER GATED. Task 7
+    //         (f148ea9d) deleted `vs`, `ps` and `paramTextures` from
+    //         Material2DDesc. That struct crosses the plugin boundary BY VALUE:
+    //         Runtime::SetRenderContext(Batcher2D*) hands the plugin a batcher,
+    //         plugins compile their OWN copy of Batcher2D.hpp (:92 above), and
+    //         RegisterMaterial(Material2DDesc)/UpdateMaterial are by-value
+    //         vtable slots. This is EXACTLY the class of change v12 was bumped
+    //         for ("Material2DDesc gained the retained shader BLOBS", :105-111)
+    //         and v13 ("same class as v12's growth, one indirection deeper",
+    //         :125-129) -- a host and a module that disagree about the size of a
+    //         by-value argument corrupt the stack rather than merely
+    //         misdispatching. Between f148ea9d and this bump a pre-Task-7 module
+    //         loaded into the current engine with NO gate at all: the v12/v13
+    //         failure class with its safety catch disarmed. Closed here.
+    //     WHAT v14 DOES NOT COVER -- read this before assuming Batcher2D is
+    //     clean: Batcher2D.hpp still carries NVRHI in nine places, including
+    //     `Batch2DDrawSpan::texture` (an nvrhi::ITexture* returned BY VALUE
+    //     inside Batch2DDrained) and the Begin/End/Quad/Glyph/RemoveTexture
+    //     recorder virtuals. That whole half is dead (every production
+    //     Batcher2D::Create passes (nullptr, nullptr); End() has no caller
+    //     outside SeveranceTest), but it cannot be removed here: the internal
+    //     run list IS Batch2DDrawSpan (`using BatchRun = Batch2DDrawSpan`), so
+    //     the field and the recorder go together, and the recorder's signatures
+    //     reach into Text/TextSystem and ShaderLibrary -- files Task 9.5 owns.
+    //     It goes there, and it will need its own bump. Reject the pairing.
+    inline constexpr uint32_t kGamePluginABIVersion = 14;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

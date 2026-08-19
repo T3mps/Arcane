@@ -68,7 +68,10 @@ namespace Arcane::Editor::ModuleBuild
 
     // The ONE command line the Runner executes:
     //   ( cd /d "<root>" && "<premake>" vs2026 && "<msbuild>" "<sln>"
-    //     /p:Configuration=<cfg> /m /nologo ) 2>&1
+    //     /p:Configuration=<cfg> /t:Rebuild /m /nologo ) 2>&1
+    // /t:Rebuild is NOT optional: Binaries\ is ONE shared slot across configs,
+    // so an incremental build can report success while leaving another config's
+    // DLL sitting there (see ModuleBuild.cpp and ModuleBuildTest.cpp).
     // Parenthesized so the trailing 2>&1 folds EVERY member's stderr into the
     // captured stdout (unparenthesized it would bind to msbuild alone, and
     // premake's errors are exactly the ones worth seeing). All paths are

@@ -26,7 +26,6 @@
 #include <unordered_map>
 #include <vector>
 
-namespace nvrhi { class IDevice; }
 namespace Astra { class Registry; class ComponentRegistry; class TypeContext; }
 namespace Mosaic { struct IWorkScheduler; }   // the shared data-parallel seam (Astra aliases this)
 
@@ -36,7 +35,6 @@ namespace Arcane
     struct ITaskExecutor;
     struct SpriteEntry;   // Scene/SceneResources.hpp -- only named here (pointer-to-map param)
     class Batcher2D;
-    class ShaderLibrary;
     class Project;
     class Config;
     namespace Audio { class AudioDevice; }
@@ -168,17 +166,18 @@ namespace Arcane
         // falls back to the untextured 1x1 m quad.
         void SetSpriteTable(const std::unordered_map<Guid, SpriteEntry>* sprites);
 
-        // --- render-resources bridge: device + shader library the host owns ---------
-        // The plugin reaches the engine ONLY through this Runtime, but the nvrhi device
-        // and the ShaderLibrary are created + owned by the host (ArcaneRuntime's main). A plugin
-        // that needs to build its OWN engine render objects (e.g. an OffscreenCanvas for
-        // a Minkowski-inset inspector) gets them here. The host calls SetRenderResources
-        // ONCE after creating the device + shaders (before the plugin loads); both stay
-        // null in a headless host (no device) so a plugin must null-check Device() before
-        // creating GPU resources. Same homogenized contract as SetImGui / SetRenderContext.
-        void            SetRenderResources(nvrhi::IDevice* device, ShaderLibrary* shaders) noexcept;
-        nvrhi::IDevice* Device()  const noexcept;   // null in a headless host
-        ShaderLibrary*  Shaders() const noexcept;   // null in a headless host
+        // NO render-resources bridge lives here any more. SetRenderResources /
+        // Device() / Shaders() handed a plugin the host's raw nvrhi::IDevice and
+        // ShaderLibrary so it could build its OWN engine render objects (the
+        // documented example was an OffscreenCanvas for a Minkowski-inset
+        // inspector). NRI Phase 5a deleted both of those classes along with the
+        // whole NVRHI device layer (Task 8b), and both hosts had already been
+        // passing (nullptr, nullptr) since Task 6 -- so the accessors could only
+        // ever return null. Removed at Task 9; that is what ABI 14 gates.
+        //
+        // If a plugin ever needs graph-side GPU resources again, that is a new,
+        // deliberate API over the render graph -- not a resurrected backend
+        // pointer handed across the plugin boundary.
 
         // --- camera bridge: the plugin drives the 2D camera; the render bridge reads it ---
         // CANONICAL transform (matches Sandbox::Camera::WorldToScreen): screen = world * zoom + offset.

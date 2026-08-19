@@ -105,12 +105,9 @@ namespace Arcane
         void* imguiFree     = nullptr;
         void* imguiUserData = nullptr;
 
-        // Render-resources bridge: the host-owned nvrhi device + ShaderLibrary a plugin
-        // may need to build its own engine render objects (e.g. an inspector's
-        // OffscreenCanvas). Null until the host calls SetRenderResources (and in headless
-        // hosts that never create a device). Non-owning: the host owns their lifetime.
-        nvrhi::IDevice* device  = nullptr;
-        ShaderLibrary*  shaders = nullptr;
+        // The render-resources bridge (a non-owning nvrhi::IDevice* + ShaderLibrary*)
+        // used to sit here. Deleted at NRI Phase 5a, Task 9 with the three Runtime
+        // accessors that read it -- see Runtime.hpp for why.
 
         explicit Impl(Astra::TypeContext* external, bool enableAudioDevice) : jobs(), sched(jobs.WorkScheduler())
         {
@@ -180,8 +177,8 @@ namespace Arcane
             loop       = std::make_unique<RunLoop>(*registry, *schedulers, loopCfg);
 
             // Headless gating for the real OS audio device. There is no headless signal
-            // reachable here: the host-owned render device is wired via SetRenderResources
-            // AFTER construction (always null now), and neither this ctor nor HostConfig
+            // reachable here: Runtime holds no render device at all since Task 9
+            // deleted the bridge, and neither this ctor nor HostConfig
             // carried a headless flag. So the host states its intent through a ctor flag --
             // enableAudioDevice (default false). Tests, servers, tools, and the scripted
             // "ArcaneRuntime --frames N" GPU-verify leave it false and get the noDevice null backend;
@@ -272,19 +269,11 @@ namespace Arcane
     glm::vec2 Runtime::CameraOffset() const noexcept { return m_impl->cameraOffset; }
     float     Runtime::CameraZoom()   const noexcept { return m_impl->cameraZoom; }
 
-    void Runtime::SetRenderResources(nvrhi::IDevice* device, ShaderLibrary* shaders) noexcept
-    {
-        m_impl->device  = device;
-        m_impl->shaders = shaders;
-        // Bind the device into the Assets facade too: the facade is created
-        // device-less in the ctor (the host-owned device does not exist yet),
-        // so without this GetTexture would forever see a null device. SetDevice
-        // is a no-op when the device is unchanged.
-        if (m_impl->assets)
-            m_impl->assets->SetDevice(device);
-    }
-    nvrhi::IDevice* Runtime::Device()  const noexcept { return m_impl->device; }
-    ShaderLibrary*  Runtime::Shaders() const noexcept { return m_impl->shaders; }
+    // SetRenderResources / Device() / Shaders() stood here. The setter also bound
+    // the device into the Assets facade (Assets::SetDevice) so GetTexture could
+    // resolve a texture; both hosts have passed nullptr since Task 6, so that
+    // bind has been a no-op and the facade stays device-less for its whole life.
+    // Deleted at Task 9 -- ABI 14.
 
     void Runtime::SetRenderContext(Batcher2D* batcher)
     {

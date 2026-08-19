@@ -451,24 +451,18 @@ namespace Arcane::Editor
 
     bool EditorApp::StageRenderBridge(Arcane::HostBoot::BootContext&)
     {
-        // Render-resources bridge: hand the host-owned device + ShaderLibrary to the
-        // Runtime so a plugin can build its own NVRHI render objects directly.
-        // Non-owning; the host outlives the plugin (m_gpu is declared before the
-        // runtime/plugin in EditorApp). Null in a headless host -> the plugin
-        // skips its GPU-resource creation.
+        // THERE IS NO RENDER-RESOURCES BRIDGE ANY MORE -- same removal as
+        // RuntimeApp::StageRenderBridge states. This stage used to hand the
+        // Runtime a host-owned nvrhi::IDevice + ShaderLibrary; since NRI Phase 3,
+        // Task 8 it passed (nullptr, nullptr), because GpuContext builds no NVRHI
+        // device at all. NRI Phase 5a, Task 9 deleted
+        // Runtime::SetRenderResources/Device()/Shaders() outright -- one of the
+        // two things ABI 14 gates.
         //
-        // (nullptr, nullptr) IS THE GRAPH-MODE CONTRACT (NRI Phase 3, Task 8),
-        // the same one RuntimeApp::StageRenderBridge states: there is no NVRHI
-        // device to hand over, and the Assets facade is deliberately left
-        // device-less by it -- Assets::PixelsFor is the retained, device-FREE
-        // decode the graph's NriTextureCache uploads from, so a textured sprite
-        // still renders. A plugin building against a null device must refuse
-        // loudly, the way every engine NVRHI factory used to (OffscreenCanvas::
-        // Create among them, before NRI Phase 5a, Task 4 deleted it).
-        // (No NVRHI device to hand over instead: GpuContext has built none at
-        // all since NRI Phase 5a, Task 6 deleted Device()/Shaders() along
-        // with the rest of its NVRHI half.)
-        m_runtime->SetRenderResources(nullptr, nullptr);
+        // The Assets facade stays device-less either way, and Assets::PixelsFor
+        // is the retained, device-FREE decode the graph's NriTextureCache uploads
+        // from, so a textured sprite still renders. The stage is kept for the
+        // game-context ImGui handoff below.
 
         // The hosted plugin draws its debug UI into its OWN "game" ImGui context,
         // composited INTO the viewport texture (see MainLoop), instead of the
