@@ -1201,7 +1201,7 @@ namespace Arcane::Editor
         // pre-lift editor swept and published in phase 13, AFTER the scene
         // render, so every table update was one frame late -- a newly referenced
         // sprite drew the 1x1 placeholder for a frame first. It also must stay
-        // outside the frame batcher's Begin/End, since the drain REGISTERS
+        // outside the frame batcher's Begin..Drain, since the drain REGISTERS
         // materials with it.
         //
         // The compile clock advances here (phase 13 advanced it pre-lift) because

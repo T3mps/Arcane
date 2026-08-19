@@ -122,7 +122,7 @@ namespace Arcane
         // Call it BEFORE the frame's Batcher2D::Begin and before
         // RunLoop::SubmitRender: the drain REGISTERS materials with the batcher
         // (pipeline + binding-set table mutation), which does not belong inside
-        // a Begin/End recording, and the tables it publishes are what that
+        // a Begin..Drain recording, and the tables it publishes are what that
         // frame's submission reads.
         void Refresh(const FrameInfo& frame);
 

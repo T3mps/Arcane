@@ -28,8 +28,9 @@ namespace Arcane
         constexpr uint16_t kBuiltInMaterialCount = 3;   // sprite / circle / text
 
         // One recorded draw (a quad: 4 vertices already in m_vertices).
-        // End() stable-sorts records by key, then builds index data and
-        // batch runs in sorted order. This is the v1 "compile" -- batcher
+        // DrainInternal stable-sorts records by key, then builds index data
+        // and batch runs in sorted order (End() did this before Task 9.5b
+        // gutted it). This is the v1 "compile" -- batcher
         // v2 compiles the same records into per-instance data instead.
         struct DrawRecord
         {

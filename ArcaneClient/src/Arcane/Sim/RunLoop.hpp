@@ -7,7 +7,8 @@
 // Advance() runs >=0 FixedUpdate steps then Update once, through the parallel
 // executor. SubmitRender() runs the Render scheduler SEQUENTIALLY on the calling
 // thread (Batcher2D is not thread-safe and must be recorded where Begin was
-// called). The host brackets SubmitRender() between Batcher2D::Begin/End.
+// called). The host brackets SubmitRender() between Batcher2D::Begin and
+// Batcher2D::Drain.
 //
 // Sim-time control (Epic 04): pause / single-step / time-scale gate the FIXED
 // phase only; Update + Render keep running so an editor's camera/UI/input stay

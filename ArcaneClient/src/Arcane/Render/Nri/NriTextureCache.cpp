@@ -178,7 +178,7 @@ namespace Arcane
         //   Srgb    -> Assets::GetTexture's nvrhi::Format::SRGBA8_UNORM. The
         //              canvas is linear and the hardware does the decode, so a
         //              UNORM here would render the same asset visibly brighter
-        //              than the NVRHI path.
+        //              than the NVRHI path did.
         //   Display -> LoadDisplayTexture's nvrhi::Format::RGBA8_UNORM. The
         //              sampled texel composites directly into a
         //              display-referred target (ImGui draws post-tonemap), and

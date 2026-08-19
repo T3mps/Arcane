@@ -145,9 +145,11 @@ namespace Arcane
 
     // Submit physics debug geometry to `batcher`.
     //
-    // The caller is responsible for bracketing batcher.Begin() / batcher.End()
-    // around this call.  DrawPhysicsDebug() only calls the primitive submission
-    // methods (Line, Circle, Rect); it does not call Begin/End itself.
+    // The caller is responsible for bracketing batcher.Begin() ..
+    // batcher.Drain() around this call.  DrawPhysicsDebug() only calls the
+    // primitive submission methods (Line, Circle, Rect); it opens and closes
+    // no bracket itself. (This said Begin()/End() until ABI v15; End() records
+    // nothing and no caller invokes it -- see Batcher2D::End's declaration.)
     //
     // For each alive body the shape outline is drawn colored by body type /
     // island:
@@ -191,7 +193,7 @@ namespace Arcane
     // (screen = world * zoom + offset), so the overlay registers with the sprites.
     // `stepIndex` selects the per-iteration snapshot to emphasize for stepped kinds
     // (Epa/Mpr/SatPolygon); pass -1 (or for analytic kinds) to draw no per-step
-    // emphasis. The caller brackets batcher.Begin()/End() (this only submits primitives).
+    // emphasis. The caller brackets batcher.Begin()..Drain() (this only submits primitives).
     ARCANE_API void DrawNarrowphaseWorldOverlay(
         const Manifold2D::Physics::NarrowphaseTrace& trace,
         int stepIndex,

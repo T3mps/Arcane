@@ -171,10 +171,11 @@ namespace Arcane
     //     outside SeveranceTest), but it cannot be removed here: the internal
     //     run list IS Batch2DDrawSpan (`using BatchRun = Batch2DDrawSpan`), so
     //     the field and the recorder go together, and the recorder's signatures
-    //     reach into ShaderLibrary -- a file Task 9.5 owns. (This entry also
-    //     named Text/TextSystem; those files no longer existed when it was
-    //     written -- b2e85adb had already deleted them. v15 closed the rest.)
+    //     reach into Text/TextSystem and ShaderLibrary -- files Task 9.5 owns.
     //     It goes there, and it will need its own bump. Reject the pairing.
+    //     (Both named files are gone as of v15: Text/TextSystem was deleted at
+    //     b2e85adb, 55 minutes AFTER this entry was written, and ShaderLibrary
+    //     at v15 itself. The entry was accurate when authored.)
     // v15 (2026-08-19): NRI Phase 5a, Task 9.5b-ii -- exactly the bump v14's
     //     closing paragraph above owed. NVRHI LEAVES THE PLUGIN SURFACE
     //     ENTIRELY: no header a game module compiles includes <nvrhi/...> any

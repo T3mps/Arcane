@@ -185,7 +185,7 @@ namespace Arcane
         // (an empty drain still gets a non-null pointer). The only null case
         // is the interface's default Drain() override, which returns a
         // default-constructed Batch2DDrained -- e.g. a test double that never
-        // overrides it. Built-in spans ignore it, exactly as End() does.
+        // overrides it. Built-in spans ignore it.
         const GlobalParams* globals = nullptr;
 
         [[nodiscard]] bool Empty() const noexcept { return spans.empty(); }
@@ -230,16 +230,20 @@ namespace Arcane
         virtual bool UpdateMaterial(uint16_t, Material2DDesc) { return false; }
 
         // Engine-global shader constants (Time/DeltaTime/ViewportSize) for
-        // registered materials, uploaded once per End(). Sticky -- the host
-        // sets them once per frame before recording. Built-ins ignore them.
+        // registered materials. Sticky -- the host sets them once per frame
+        // before recording, and they leave through Drain() as
+        // Batch2DDrained::globals for the recorder to bind. (End() used to
+        // upload them into an NVRHI constant buffer; it uploads nothing now.)
+        // Built-ins ignore them.
         virtual void SetGlobals(const GlobalParams&) {}
 
         // Opens one batch against a canvas of the given extent: clears the
         // recorded streams and resets (layer, order). The batch is read back
         // with Drain(). Took a leading (nvrhi::ICommandList*,
         // nvrhi::IFramebuffer*) pair until ABI v15 -- every caller passed
-        // (nullptr, nullptr), and End(), the only thing that read them, is
-        // gone.
+        // (nullptr, nullptr), and the only thing that read them was End()'s
+        // recording body, deleted at Task 9.5b. (End() itself is still a
+        // vtable slot -- see its declaration below -- it just does nothing.)
         virtual void Begin(uint32_t viewportWidth,
                            uint32_t viewportHeight) = 0;
 
@@ -311,17 +315,27 @@ namespace Arcane
         virtual void Triangle(glm::vec2 a, glm::vec2 b, glm::vec2 c,
                               glm::vec4 color) = 0;
 
-        // CLOSES THE BRACKET AND RECORDS NOTHING -- a vestige, named as one
-        // rather than left to look load-bearing. It WAS the NVRHI recorder;
-        // NRI Phase 5a, Task 9.5b deleted its recording body once every
-        // Batcher2D in the process proved device-less, and ABI v15 (Task
-        // 9.5b-ii) took the NVRHI types out of the class around it. The
-        // implementation now refuses once, loudly, and clears the bracket.
-        // Draws reach a GPU through Drain(), never through here.
+        // ===== THE SINGLE SOURCE OF TRUTH ON End(). Anything elsewhere in the
+        // tree that disagrees with this paragraph is stale; fix it here first.
         //
-        // Kept, not deleted, only because it is not itself an NVRHI signature
-        // and removing a live vtable slot is a separate decision from this
-        // task's. A future task may delete it outright.
+        // End() IS A LIVE VTABLE SLOT THAT DOES NOTHING. It was the NVRHI
+        // recorder. NRI Phase 5a, Task 9.5b deleted its recording body once
+        // every Batcher2D in the process proved device-less, and ABI v15 (Task
+        // 9.5b-ii) took the NVRHI types out of the class around it. What is
+        // left refuses once, loudly, and returns.
+        //
+        // NOTHING CALLS IT, and nothing should: no host, no node, no system
+        // brackets a batch with it. THE BRACKET IS Begin() .. Drain() --
+        // Drain() is what sorts, builds the index stream, publishes Stats()
+        // and hands the batch to the graph's Batch2DNode. A comment that tells
+        // a caller to "bracket Begin()/End()" is describing a bracket that no
+        // longer closes anything; the only End() call in the tree is the one
+        // SeveranceTest makes to prove it records nothing.
+        //
+        // KEPT DELIBERATELY, and it is an ABI-relevant keep: it is not itself
+        // an NVRHI signature, so the exit condition did not force it, and
+        // removing a live vtable slot is a second ABI-visible decision on top
+        // of v15's. A future task may delete it; that task owns the bump.
         virtual void End() = 0;
 
         // RemoveTexture(nvrhi::ITexture*) is GONE at ABI v15. It evicted a

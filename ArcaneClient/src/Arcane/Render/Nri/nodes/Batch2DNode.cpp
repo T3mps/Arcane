@@ -1402,7 +1402,7 @@ namespace Arcane
         }
 
         // Projection: canvas pixels (y down) -> clip space, exactly the
-        // PushConstants the NVRHI End() sets. The SAME block for every pipeline
+        // PushConstants the NVRHI End() set. The SAME block for every pipeline
         // here -- sprite.hlsl and sprite_material.hlsl declare an identical b0.
         BatchRootConstants push;
         push.invHalfViewportX = batch.viewport.x > 0.0f ? 2.0f / batch.viewport.x : 0.0f;
@@ -1419,7 +1419,7 @@ namespace Arcane
                                 nri::IndexType::UINT32);
 
         // One draw per drained span, in the batcher's sorted order -- the same
-        // loop End() runs, with the pipeline coming from the shared cache
+        // loop End() ran, with the pipeline coming from the shared cache
         // instead of the batcher's own table.
         //
         // The LAYOUT and the SET are now per-span, not per-frame: a registered

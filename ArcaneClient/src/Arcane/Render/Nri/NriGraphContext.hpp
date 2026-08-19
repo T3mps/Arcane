@@ -420,7 +420,7 @@ namespace Arcane
 
             // This frame's 2D content, ALREADY SUBMITTED into the batcher by
             // the frame driver (Runtime::SetRenderContext + SubmitRender) and
-            // not yet End()ed -- the graph path drains it instead. Borrowed for
+            // not yet drained -- this path drains it. Borrowed for
             // the duration of the RenderFrame call and never stored; null
             // renders a cleared canvas.
             Batcher2D* batch = nullptr;

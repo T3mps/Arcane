@@ -6,10 +6,12 @@
 // all of it -- Quad/Rect/Line/Circle/Glyph accumulation, the (layer, order,
 // material, texture) sort key, the index stream and the draw spans -- and
 // this node consumes the result through `Batcher2D::Drain()`
-// (Batch2DDrained, Batcher2D.hpp). One batcher, one batching algorithm, two
-// recorders: NVRHI's `End()` and this. That is the homogenized-submission
-// mandate applied to the second backend, and it is why the phase's NVRHI
-// golden floor can stay bit-green while this lands.
+// (Batch2DDrained, Batcher2D.hpp). One batcher, one batching algorithm, and
+// since ABI v15 ONE recorder: this node. It landed beside a second one
+// (NVRHI's `Batcher2D::End()`), which is what let the phase's NVRHI golden
+// floor stay bit-green while this was proven; that floor did its job and
+// End() now records nothing. The homogenized-submission mandate is why both
+// ever shared the one batching algorithm.
 //
 // WHAT THIS NODE OWNS (all persistent, all created once at Create()):
 //   * the 1x1 white texel + its SHADER_RESOURCE view -- the untextured path,

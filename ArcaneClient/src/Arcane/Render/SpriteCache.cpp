@@ -95,9 +95,11 @@ namespace Arcane
             // into the facade's LRU-budgeted pixel cache and drops its own pin
             // before returning, so ANY later Assets call may free it and read
             // it back as garbage. This function used to make exactly such a
-            // call -- a GetTexture whose trailing EnforceBudget() can evict the
-            // globally least-recently-used entry across all four caches, the
-            // pixel cache included -- and reading pixels->width after it was a
+            // call -- a GetTexture whose trailing EnforceBudget() could evict
+            // the globally least-recently-used entry across every cache in the
+            // facade, the pixel cache included (there were four then; the
+            // texture cache went with GetTexture at ABI v15, leaving three) --
+            // and reading pixels->width after it was a
             // real use-after-free, fixed by copying first. That second call is
             // gone (NRI Phase 5a, Task 7), so the hazard is now structurally
             // absent rather than merely avoided; the copy stays anyway, because

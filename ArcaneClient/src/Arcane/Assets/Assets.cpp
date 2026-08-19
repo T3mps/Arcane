@@ -103,8 +103,10 @@ namespace Arcane
                 Diagnostics::Clear("assets.unresolved");
             }
 
-            // THE ANCHORING CONVENTION, for all four id-shaped overloads below:
-            // a path that came OUT of the installed AssetResolver is already
+            // THE ANCHORING CONVENTION, for all three id-shaped overloads below
+            // -- PixelsFor(Guid), GetBytes(AssetId), GetJson(AssetId). There
+            // were FOUR until ABI v15 deleted GetTexture(AssetId).
+            // A path that came OUT of the installed AssetResolver is already
             // LOAD-READY and must go straight to the resolved-path workers --
             // never back through ResolveAssetPath. The registry turned the Guid
             // into a mount path and the MountTable joined it onto THAT MOUNT's
@@ -249,11 +251,15 @@ namespace Arcane
                 return ptr;
             }
 
-            // Decode-once pixel supply shared by PixelsFor(Guid) and
-            // GetTexture (both overloads): `resolved`/`key` are the SAME
-            // already-resolved path + CacheKey the texture cache uses, so a
-            // Guid's pixels and its eventual GPU upload -- however either is
-            // reached -- share ONE decode and ONE cache entry.
+            // Decode-once pixel supply behind PixelsFor(Guid). `resolved`/
+            // `key` are the already-resolved path + CacheKey every route
+            // through this facade canonicalises to, so a Guid and the loose
+            // path naming the same file share ONE decode and ONE cache entry.
+            //
+            // It was shared with GetTexture (both overloads), whose upload
+            // keyed off the same pair; GetTexture and the texture cache were
+            // deleted at ABI v15 (see the tombstone above), leaving this the
+            // single consumer.
             const PixelData* PixelsForResolved(const std::filesystem::path& resolved,
                                                const std::string& key)
             {

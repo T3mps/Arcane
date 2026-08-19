@@ -48,12 +48,18 @@ namespace Arcane
     //   Create(nvrhi::IDevice*, ...) -- every call site tree-wide passed
     //     nullptr, so the parameter is gone rather than retyped.
     //   SetDevice(nvrhi::IDevice*)   -- zero callers anywhere, production or
-    //     test. Its last production caller (SpriteDocument's texture preview)
-    //     went at Task 7.
+    //     test. Its last production caller was Runtime.cpp's
+    //     `m_impl->assets->SetDevice(device)` inside SetRenderResources,
+    //     removed with that method at Task 9 (5960e980).
     //   GetTexture(path)/GetTexture(AssetId) -> nvrhi::TextureHandle -- zero
-    //     PRODUCTION callers; it returned null unconditionally, because the
-    //     guard it opened with (`if (!m_device) return nullptr;`) could never
-    //     fail to fire once no device was ever set.
+    //     PRODUCTION callers, and null unconditionally for every call once
+    //     nothing set a device. NOT because of an opening guard: the body
+    //     began with a texture-cache lookup, then ran the full decode through
+    //     PixelsForResolved, and only THEN reached `if (!m_device)`, which
+    //     WARNed, memoized a cache FAILURE for the key, and returned null. The
+    //     decode preceding the device check is the ordering a prior task
+    //     corrected explicitly; it is restated here so the correction survives
+    //     the deletion of the case that carried it.
     // WHAT REPLACES THE UPLOAD PATH: nothing here. PixelsFor(Guid) below is
     // the device-free supply, and the graph path's NriTextureCache is what
     // puts those pixels on a device.
