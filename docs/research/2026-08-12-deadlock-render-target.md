@@ -161,3 +161,48 @@ T3's SDF, T5's exposure). T7 items slot in where the space game demands.
 Each tier gets its own spec arc; this document is their shared target
 contract. The pattern to copy from Valve's ops: ship relights as content,
 treat readability features as renderer work.
+
+## OWED AT T1 — reorganize `Nri/nodes/` by render domain
+
+Recorded 2026-08-19 (user-requested), deliberately deferred with a checkable
+trigger rather than a vibe. It lives here because the standing rule is to read
+this contract before ANY renderer-arc spec, so T1's author meets it at the
+moment the decision goes live.
+
+**State when deferred** (measured at NRI Phase 5a, Task 9.5b-i) — six pass types
+in four translation units:
+
+| File | hpp / cpp | Pass types |
+|---|---|---|
+| `nodes/Batch2DNode` | 551 / 1571 | `Batch2DNode` |
+| `nodes/FullscreenNodes` | 545 / 1514 | `PostChainNode`, `TonemapNode` |
+| `nodes/PickOutlineNodes` | 602 / 1289 | `PickNode`, `OutlineNode` |
+| `nodes/ImGuiNriNode` | 175 / 116 | `ImGuiNriNode` |
+
+It is **not** one-file-per-pass. The grouping axis is **coupling**, which is
+correct: `OutlineNode` consumes `PickNode`'s id buffer and they share
+`RgPickHandles`; `PostChainNode` and `TonemapNode` share `FullscreenSourceView`
+and `FullscreenMaterialLayout`; `Batch2DNode` and `ImGuiNriNode` are independent
+and correctly alone. The framework/passes split (`RenderGraph.{hpp,cpp}` +
+`RenderGraphExec.cpp` vs `nodes/`) mirrors UE's RDG-vs-Renderer, Frostbite's
+FrameGraph, and Unity SRP — that axis is not in question.
+
+**Why deferred:** restructuring six passes is cheap, and picking a taxonomy
+before the real pass graph exists is guessing. T1 is what changes the
+arithmetic — it is "the substrate everything shares", so it is the first point
+where the pass graph's shape is known rather than assumed.
+
+**TRIGGER — reorganize when ANY of these holds:**
+1. `nodes/` reaches ~10+ pass types, or
+2. any single `nodes/*.cpp` exceeds ~2000 lines, or
+3. **T1 lands** (cluster light grid + material system + the forward/deferred
+   decision).
+
+**Target shape:** group by domain — `nodes/geometry/`, `nodes/lighting/`,
+`nodes/post/`, or whatever the actual pass graph implies. Keep the coupling rule
+*inside* each domain: split independent passes, group ones sharing machinery.
+
+**Related, and probably first:** the real cost today is framework HEADER size,
+not file count. `NriGraphContext.hpp` (1435 lines) and `RenderGraph.hpp` (1103)
+are included by everything under `Nri/`, so every node pays their compile-time
+and coupling cost. Worth addressing independently of the reorg.
