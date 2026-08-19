@@ -61,8 +61,13 @@ namespace
     // `if (io.graph)` survives here rather than being collapsed to an
     // unconditional read: `io.graph` is unconditional as of Phase 5a Task 2b
     // (the same invariant `if (!io.graph)`/`if (io.graph)` express throughout
-    // this file), and Task 11 owns collapsing that guard repo-wide in one
-    // pass. What NRI Phase 5a, Task 6 forced here is narrower: the dead
+    // this file). Collapsing it belongs to a FOLLOW-ON task, not to Task 11 as
+    // this used to say -- 11a collapsed EditorApp::GraphMode() only (`io.graph`
+    // is a different predicate, a FrameIo field rather than that accessor) and
+    // 11b is prose-only, so the repo-wide pass this names has been and gone
+    // without reaching here. It is the same follow-on that owns
+    // GpuContext::GraphFlavor(); see that accessor's comment for why the two
+    // travel together. What NRI Phase 5a, Task 6 forced here is narrower: the dead
     // NVRHI tail this function used to fall through to (`io.gpu->Cnv()`) no
     // longer compiles at all, because GpuContext has built no NVRHI canvas
     // since that task deleted Cnv() along with the rest of its NVRHI half --
