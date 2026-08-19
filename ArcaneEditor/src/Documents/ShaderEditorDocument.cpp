@@ -2135,16 +2135,21 @@ namespace Arcane::Editor
                 // tier; freeform HLSL lives in Custom nodes.
                 ImGui::SameLine();
                 ImGui::Checkbox("HLSL", &m_showGeneratedText);
-                // The "Thumbs" checkbox is DELETED (NRI Phase 5a, Task 9.5b,
-                // VISIBLE UI CHANGE -- see task report / D5a-2 desk checklist).
-                // It toggled m_showNodePreviews, which gated two things: the
-                // per-node compile/record machinery (unreachable dead code,
-                // deleted with it) AND DrawNodePreviewImage's Output-node
-                // branch, the ONE live thumbnail on this canvas (the material's
-                // real preview, drawn on the Output node). That branch is now
-                // unconditional -- the Output node's thumbnail always shows,
-                // matching its own call site's existing "on-screen nodes show
-                // their thumbnail" comment; there is no longer a way to hide it.
+                ImGui::SameLine();
+                // RESTORED (NRI Phase 5a, Task 9.5b, fix round 1): this task's
+                // first pass deleted the checkbox on the premise that it only
+                // toggled a guaranteed early-return; that premise was wrong --
+                // m_showNodePreviews also gates DrawNodePreviewImage's
+                // Output-node branch, the ONE live thumbnail on this canvas
+                // (the material's real preview, drawn on the Output node).
+                // The checkbox is honest about that one job, so it stays. What
+                // it no longer does: the per-node compile/record machinery
+                // (RefreshNodePreviews and everything it fed) is deleted
+                // outright, not toggled -- there is nothing left to resubmit
+                // on a flip, so this is a plain Checkbox with no on-change
+                // action, unlike the pre-Task-9.5b version that called
+                // RefreshNodePreviews().
+                ImGui::Checkbox("Thumbs", &m_showNodePreviews);
             }
             // The vertex stage (%{VERTEX_BODY}): graph-owned materials author
             // it with the Vertex Output NODE and view it inside the HLSL
@@ -3702,7 +3707,7 @@ namespace Arcane::Editor
     }
 
     // ---------------------------------- node preview thumbnails: DELETED ----
-    // NRI Phase 5a, Task 9.5b deletes the whole per-node-thumbnail feature:
+    // NRI Phase 5a, Task 9.5b deletes the per-node COMPILE/RECORD machinery:
     // RefreshNodePreviews (per-node compile submission, gated on
     // `m_services.device` and therefore ALWAYS early-returning through the
     // `!eligible` branch -- device was unconditionally null since Phase 5a
@@ -3726,10 +3731,17 @@ namespace Arcane::Editor
     // through the document's offscreen graph context (see THE GRAPH ARM'S
     // PREVIEW above) and are UNCHANGED by this deletion.
     //
-    // DrawNodePreviewImage survives below, trimmed to its one live branch.
+    // WHAT SURVIVES, UNCHANGED FROM BEFORE THIS TASK (fix round 1 restored
+    // the toggle a first pass wrongly deleted): DrawNodePreviewImage below,
+    // gated by m_showNodePreviews exactly as it was at 2ab107dd. That flag is
+    // NOT dead -- it also gates this function's one live branch, the Output
+    // node's real material preview, which is why the checkbox that sets it
+    // stays on the toolbar.
 
     void ShaderEditorDocument::DrawNodePreviewImage(const Arcane::GraphNode& n, float width)
     {
+        if (!m_showNodePreviews)
+            return;
         // SG parity: the thumbnail is square and spans the node, sitting below
         // the port rows. `width` is last frame's measured content width -- a
         // node drawing for the first time has none and gets the floor, which is
@@ -3737,14 +3749,11 @@ namespace Arcane::Editor
         constexpr float kThumbMin = 96.0f;
         const float kThumbDraw = width > kThumbMin ? width : kThumbMin;
         // The Output node shows the material's own preview (the pass canvas's
-        // base-node convention) -- from whichever arm made it. This is now the
-        // ONLY branch: the per-node compile/record machinery that used to
-        // serve non-Output nodes is deleted (NRI Phase 5a, Task 9.5b) rather
-        // than ported, and was already unreachable dead code before that (see
-        // the banner above). UNCONDITIONAL now -- there is no more
-        // "m_showNodePreviews" toggle gating it (the toolbar's "Thumbs"
-        // checkbox is deleted with it, VISIBLE UI CHANGE, see task report):
-        // this thumbnail was previously hideable and is now always shown.
+        // base-node convention) -- from whichever arm made it. This is the
+        // ONLY branch left: the per-node compile/record machinery that used
+        // to serve non-Output nodes is deleted (NRI Phase 5a, Task 9.5b)
+        // rather than ported, and was already unreachable dead code before
+        // that (see the banner above).
         if (n.type == Arcane::GraphNodeType::Output)
         {
             if (const ImTextureID id = PreviewImageOf().id)

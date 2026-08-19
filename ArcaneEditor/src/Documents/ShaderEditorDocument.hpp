@@ -904,16 +904,27 @@ namespace Arcane::Editor
         // ---- Node preview thumbnails: DELETED (NRI Phase 5a, Task 9.5b) ----
         // The NodePreview struct (psJob/snippetHash/psBytes/pendingTempl/
         // pendingInputs/pendingSources/inst/boundInputs/boundSources/tex/fb/
-        // ready), m_nodePreviews, m_nodePreviewsPass, m_showNodePreviews
-        // (the toolbar "Thumbs" toggle), m_nodePreviewVsJob/m_nodePreviewVs
-        // (the shared passthrough VS) and m_sceneStandIn/SceneStandIn() (the
-        // pass-canvas Scene node's checkerboard) are all gone: every reader
-        // was inside RefreshNodePreviews/RenderNodePreviews/ConsumeResult's
-        // node-preview branch/DrawNodePreviewImage's non-Output branch, all
-        // deleted with this task -- the last comment on this struct (Task 4)
-        // already named this exact deletion as deferred, not accidental.
-        // m_nodePreviewRetired (the one-frame-displaced-texture park) is gone
-        // too; its only writer was RefreshNodePreviews.
+        // ready), m_nodePreviews, m_nodePreviewsPass, m_nodePreviewVsJob/
+        // m_nodePreviewVs (the shared passthrough VS) and m_sceneStandIn/
+        // SceneStandIn() (the pass-canvas Scene node's checkerboard) are all
+        // gone: every reader was inside RefreshNodePreviews/RenderNodePreviews/
+        // ConsumeResult's node-preview branch/DrawNodePreviewImage's
+        // non-Output branch, all deleted with this task -- the last comment
+        // on this struct (Task 4) already named this exact deletion as
+        // deferred, not accidental. m_nodePreviewRetired (the
+        // one-frame-displaced-texture park) is gone too; its only writer was
+        // RefreshNodePreviews.
+        //
+        // m_showNodePreviews (the toolbar "Thumbs" toggle) is NOT gone --
+        // fix round 1 restored it. It used to gate two things: the dead
+        // per-node machinery above (rightly deleted, stays deleted) and
+        // DrawNodePreviewImage's Output-node branch, which is a real, live
+        // preview (the material's own image, drawn on the Output node -- see
+        // PreviewImageOf's 3 call sites). Deleting the checkbox removed a
+        // working user capability, which "delete NVRHI" does not license.
+        // Default `true`, unchanged from before this task
+        // (git cat-file -p 2ab107dd:<this path>).
+        bool m_showNodePreviews = true; // toolbar toggle; gates the Output-node preview only
 
         friend struct SnippetCallbackForwarder;
     };
