@@ -28,9 +28,10 @@
 // shader (ShaderCompiler.hpp:9-13).
 //
 // WHAT IT DOES NOT OWN. The camera (a pure sweep -- Scene/SceneCamera.hpp), the
-// batcher, and the compile service: all injected. It never renders. (A
-// GraphicsBackend-forwarding `device` field lived in Services too, until NRI
-// Phase 5a, Task 9.5a deleted it -- see Services::backend's own comment.)
+// batcher, and the compile service: all injected. It never renders. (An
+// `nvrhi::IDevice* device` field lived in Services too, forwarded alongside
+// `backend` to both sub-caches, until NRI Phase 5a, Task 9.5a deleted it --
+// see Services::backend's own comment.)
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
@@ -109,8 +110,12 @@ namespace Arcane
         // NON-OWNING pointers to this object's maps (SceneResources.hpp:96-99).
         // CONTRACT for every host: declare the resolver so it destructs BEFORE
         // the Runtime (whose registry would otherwise be left pointing at freed
-        // maps) and before the render device (this holds nvrhi keep-alive
-        // texture handles).
+        // maps). The matching "before the render device" half of this
+        // contract died with the nvrhi keep-alive texture map it referred to
+        // (NRI Phase 5a, Task 7 -- see SpriteCache.cpp's own note): none of
+        // the three caches this class owns holds a device-bound handle any
+        // more, so the Runtime-registry ordering above is the whole contract
+        // today.
         ~SceneRenderResolver();
 
         SceneRenderResolver(const SceneRenderResolver&) = delete;

@@ -195,8 +195,8 @@ namespace Arcane
     //         ITSELF reads them out of a map the host filled. Same reasoning
     //         as the v13 entry's third bullet (:130-134), inverted.
     //       * THE BATCHER2D VTABLE CHANGED SHAPE, NOT JUST ITS SIGNATURES.
-    //         Six virtuals lost NVRHI parameters (Begin, Quad, QuadMaterial,
-    //         Glyph, QuadTextured, and Create's static factory beside them),
+    //         Five virtuals lost NVRHI parameters (Begin, Quad, QuadMaterial,
+    //         Glyph, QuadTextured), plus Create's static factory beside them,
     //         and `RemoveTexture(nvrhi::ITexture*)` was REMOVED FROM THE
     //         MIDDLE of the class -- which slides Stats/Drain/MaterialDesc/
     //         QuadTextured up one slot each. That is the exact hazard the v11

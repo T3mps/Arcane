@@ -346,10 +346,12 @@ namespace Arcane
     ARCANE_API void EnableD3D12Dred();
 
     // The DRED tier EnableD3D12Dred() actually selected (e.g. "dred:full",
-    // "dred:markers-only", "dred:off", or a "-nocontext" variant of any of
-    // those) -- otherwise only observable in a log line. Exposed so tests
-    // can pin the build-config policy tier (F-2c-bis) rather than trusting
-    // it by inspection. "dred:off" before EnableD3D12Dred() has run.
+    // "dred:markers-only" -- reserved, unreachable in all three configs as
+    // of NRI Phase 5a Task 1, see EnableD3D12Dred()'s comment above --,
+    // "dred:off", or a "-nocontext" variant of any of those) -- otherwise
+    // only observable in a log line. Exposed so tests can pin the
+    // build-config policy tier (F-2c-bis) rather than trusting it by
+    // inspection. "dred:off" before EnableD3D12Dred() has run.
     ARCANE_API const char* DredTier();
 
     // BOTH GPU-API CRASH BACKENDS ARE GONE (NRI Phase 5a, Task 9.5a).

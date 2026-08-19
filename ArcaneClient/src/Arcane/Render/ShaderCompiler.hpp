@@ -6,9 +6,11 @@
 // cost zero new dependencies. One request compiles DXIL and SPIR-V as two
 // independent Compile() calls over the same in-memory source (per-target
 // results; a backend publishes only on ITS target's success). Work runs on a
-// dedicated worker thread; Submit/Poll/Drain are MAIN-THREAD-ONLY, and only the
-// Drain() site may touch NVRHI (createShader + Generation bump live with the
-// caller -- NVRHI is not free-threaded). Debounce: Submit coalesces by
+// dedicated worker thread; Submit/Poll/Drain are MAIN-THREAD-ONLY. Drain()
+// used to be the one site allowed to touch NVRHI (createShader + a generation
+// bump lived with the caller, since NVRHI was not free-threaded); NRI Phase
+// 5a deleted that consumer, so today Drain() only hands callers raw
+// DXIL/SPIR-V bytecode (see ShaderEditorDocument::ConsumeResult). Debounce: Submit coalesces by
 // coalesceKey; Poll dispatches a job once its quiet window elapses; a result
 // superseded by a newer Submit for the same key is dropped at Drain. Diags are
 // parsed ONCE at the boundary (Clang grammar `file:line:col: sev: msg` -- DXC's

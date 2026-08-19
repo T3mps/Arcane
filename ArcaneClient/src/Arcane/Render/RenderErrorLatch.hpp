@@ -207,9 +207,12 @@ namespace Arcane
     private:
         void NotifyIfDeviceRemoved(const char* messageText)
         {
-            // Substring, not equality: NVRHI's own text is exactly
-            // "Device Removed!", but the validation layer wraps messages and a
-            // future NVRHI could add context around it.
+            // Substring, not equality: NVRHI (fully removed from the tree
+            // now) used to report exactly "Device Removed!"; today's NRI
+            // callback interface, the D3D12 debug layer and the Vulkan
+            // validation messenger all wrap that same phrase with their own
+            // prefixes and context, so an exact-equality match would miss
+            // every producer left standing.
             if (!messageText || std::strstr(messageText, "Device Removed") == nullptr)
                 return;
             if (const DeviceRemovedHook hook = m_deviceRemovedHook.load(std::memory_order_acquire))

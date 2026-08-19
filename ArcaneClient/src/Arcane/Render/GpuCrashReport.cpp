@@ -85,8 +85,10 @@ namespace Arcane::Diag
         // the ring freeze on every gpu-stall, destroying the crash-time
         // breadcrumb ring on a device that never actually died. The string is
         // also the envelope's published contract (DiagEnvelopeTest pins
-        // fault.type's round-trip shape) and Phase 4's native marker layer
-        // re-supplies the readback the two deleted backends used to provide.
+        // fault.type's round-trip shape). Restoring the readback the two
+        // deleted backends used to provide belongs to Phase 4's native
+        // marker layer (see IGpuCrashBackend.hpp's matching note) -- that
+        // layer has not landed, so nothing re-supplies it yet.
         // An EMPTY type means no backend classified anything -- also not a
         // loss. Everything else (device-removed/-hung/-reset, page-fault
         // kinds, driver-internal-error) means the device is gone and the

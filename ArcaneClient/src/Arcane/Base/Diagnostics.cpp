@@ -635,12 +635,12 @@ namespace
     // The D3D12 debug layer's fail-fast (NRI Phase 3, D3b).
     //
     // D3D12SDKLayers.dll reports conditions it considers unrecoverable with
-    // RaiseFailFastException, code 0x87D -- the same signature Device.hpp
-    // already records for the Nahimic-OSD window-hook hazard at device
-    // creation. A fail-fast bypasses every frame-based __except and every
-    // vectored handler and is NONCONTINUABLE, so THIS FILTER IS THE ONLY
-    // PLACE IN THE PROCESS THAT CAN SEE IT, and it can only decide how to
-    // die -- never whether to.
+    // RaiseFailFastException, code 0x87D -- the same signature
+    // RenderDeviceDesc.hpp already records for the Nahimic-OSD window-hook
+    // hazard at device creation. A fail-fast bypasses every frame-based
+    // __except and every vectored handler and is NONCONTINUABLE, so THIS
+    // FILTER IS THE ONLY PLACE IN THE PROCESS THAT CAN SEE IT, and it can
+    // only decide how to die -- never whether to.
     constexpr DWORD kD3D12DebugLayerFailFast = 0x0000087dul;
 
     LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS* ep)
@@ -655,7 +655,7 @@ namespace
         // that, and die the way a device loss is supposed to die.
         //
         // WHY BOTH CONJUNCTS. 0x87D on its own is NOT a device-removal signal
-        // (Device.hpp's Nahimic case is a startup window-hook incompatibility
+        // (RenderDeviceDesc.hpp's Nahimic case is a startup window-hook incompatibility
         // with a live device), so mapping the code alone would relabel a real
         // crash. And a device loss on its own is already handled by the
         // ordinary chain. Only the pair is unambiguous, and the pair cannot
