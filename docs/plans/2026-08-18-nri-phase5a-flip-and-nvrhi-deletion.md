@@ -613,6 +613,20 @@ git commit -m "refactor(diag)!: DRED and the fault injector move to the NRI devi
 - Modify: `ReferenceProject/ReferenceProject.arcproj`, `D:\dev\starworks\Gacha\Game\Aphelyon.arcproj`
 - Test: the ABI constant is pinned across **eight** files — `ProjectManifestTest.cpp` (the abi-refusal path), `RuntimeModulePluginTest.cpp`, `PluginLoadDiagnosticsTest.cpp`, `HostBootTest.cpp`, `HostSliceTest.cpp`, `ProjectTest.cpp`, `RuntimeProjectTest.cpp`, `BootStageParityTest.cpp`. Any that hardcode `13` must move to `14`; prefer referencing `kGamePluginABIVersion` so the next bump is free.
 
+> **AMENDED 2026-08-19 (final-review fix wave) — the count is SEVEN, not eight.
+> `HostSliceTest.cpp` carries ZERO ABI references** and never did; it was listed
+> in error. Re-derived at `2ad26cc8` by grepping each named file:
+>
+> ```
+> $ grep -inc abi ArcaneTests/src/HostSliceTest.cpp
+> 0
+> ```
+>
+> (`grep -in abi` on that file prints nothing at all — its only NVRHI-adjacent
+> line is a comment at `:9` about the absent `nvrhi::IDevice`.) The other seven
+> all match. The instruction itself is unaffected — nothing in `HostSliceTest.cpp`
+> needed moving, which is why the error was invisible at execution time.
+
 **Interfaces:**
 - Consumes: Tasks 4-8.
 - Produces: ABI 14. `Runtime` exposes no render-backend types.
@@ -818,6 +832,27 @@ git commit -m "refactor!: one render path -- GraphMode() and the last two-path p
 - [ ] **Step 2:** The eight-item drive checklist, both backends.
 - [ ] **Step 3:** Append the Phase 5a milestone record to the tail of this plan: final commit range, gate count, ABI 14, what the deletion removed (file and line counts), the carry list for Phase 4, and any amendment this plan's text owes. Delete the SDD workspace **only after** the record is written and pushed — it is gitignored and unrecoverable.
 
+> **AMENDED 2026-08-19 (final-review fix wave) — STEP 3 MUST RECORD ABI 15,
+> NOT 14.** Step 3 was written when Task 9 was the last ABI move in the phase.
+> It was not: Task 9 shipped **v14** (`5960e980`), and **Task 9.5b-ii shipped
+> v15** (`919aa0ad`) when `Batch2DDrawSpan::texture` / `SpriteEntry`'s leading
+> `nvrhi::ITexture*` / `RemoveTexture` left the plugin surface — the CARRY that
+> Task 9's own amendment left undecided. **The phase's shipped ABI is 15.**
+> Verified at `2ad26cc8`:
+>
+> ```
+> $ grep -n "kGamePluginABIVersion" ArcaneClient/src/Arcane/Plugin/PluginABI.hpp
+> 222:    inline constexpr uint32_t kGamePluginABIVersion = 15;
+> $ grep -n abi ReferenceProject/ReferenceProject.arcproj
+> 6:    "abi": 15
+> $ grep -n abi D:\dev\starworks\Gacha\Game\Aphelyon.arcproj
+> 6:    "abi": 15
+> ```
+>
+> Task 9's own text (`:618`, `:675`, `:680`) still says 14 and is **correct as
+> written** — it records what that task produced. Only this step and exit
+> criterion 4 describe the phase's END STATE, and both are corrected here.
+
 ---
 
 ## Verification ladder (Phase 5a exit criteria)
@@ -827,6 +862,70 @@ git commit -m "refactor!: one render path -- GraphMode() and the last two-path p
 3. Desk D5a-2: 12/12 goldens `maxDelta 0` with NVRHI deleted, plus crash battery on both hosts, both backends, **and Dist**.
 4. Both hosts boot and load an ABI-14 module.
 5. `git grep -in nvrhi -- '*.cpp' '*.hpp' '*.lua'` returns only historical prose.
+
+> **AMENDED 2026-08-19 (final-review fix wave) — CRITERIA 3, 4 AND 5 AS
+> WRITTEN ARE STALE. The ladder was never updated when Task 12's steps were
+> amended ~100 lines above, and D5a-2 is driven off THIS ladder** — so the user
+> was being handed one criterion the plan elsewhere declares impossible and one
+> that names the wrong ABI. All three are corrected here by addition; the
+> original lines stay as the record of what was first asked for.
+>
+> **3 — the "and Dist" crash battery is STRUCK.** Task 12 Step 1's amendment
+> (`291113b2`) already struck it as **impossible as written**: `--crash-gpu` is
+> registered inside `HostConfig.cpp`'s `#if !defined(ARCANE_DIST)` block, so the
+> flag does not exist in a Dist build. Re-verified at `2ad26cc8`:
+>
+> ```
+> $ grep -n "crash-gpu\|ARCANE_DIST" ArcaneClient/src/Arcane/Host/HostConfig.cpp
+> 45:#if !defined(ARCANE_DIST)
+> 46:        cli.Option("crash-gpu", "0", "DEV: deliberately fault the GPU on frame N ...
+> ```
+>
+> The criterion is therefore: *crash battery on both hosts, both backends, in
+> the configs where the flag EXISTS* — the Dist half is carried by the
+> **three-part equivalence argument at Step 1**, not by a run. **Read that
+> argument; it is the criterion.** Note further that **D5a-1 made its step (1)
+> EMPIRICAL and thereby stronger than the unit test the argument leaned on**:
+> in the D5a-1 transcript `dred:breadcrumbs` was observed **exactly 6 times in
+> the Dist block, matching the 6 Dist dx12 runs** (vulkan never calls
+> `EnableD3D12Dred`), with `dred:full` x10 accounting for the remaining dx12
+> runs. Task 1's tier change is confirmed live in Dist.
+>
+> **4 — an ABI-15 module, not ABI-14.** See the Step 3 amendment above for the
+> evidence; the phase shipped **15**, via Task 9 (v14) then Task 9.5b-ii (v15).
+>
+> **5 — recorded MET, but state what was actually achieved.** The operative
+> greps are genuinely clean; the criterion's WRITTEN form ("only historical
+> prose") is not literally satisfied, and its instrument is narrower than the
+> tree. Measured at `2ad26cc8`, the commit the whole-branch review assessed:
+>
+> | check | result |
+> |---|---|
+> | `git grep -n "#include <nvrhi/" -- '*.cpp' '*.hpp'` | **0** — no first-party include |
+> | `git grep -n "nvrhi::" -- '*.cpp' '*.hpp'` | 81 hits, **every one inside a `//` comment; 0 in code** |
+> | `git ls-files ThirdParty/ \| grep -i nvrhi` | **0** — vendored tree deleted, absent on disk |
+> | `git grep -in nvrhi -- '*.lua'` | **1** — `ThirdParty/NRI/premake5.lua:3`, historical prose |
+> | `git grep -in nvrhi -- '*.cpp' '*.hpp' '*.lua'` | **757 lines / 129 files, all comment or prose** |
+>
+> So: **NVRHI is gone from the build and from the code. What remains is
+> commentary** — and of it, roughly 135 lines still use PRESENT-TENSE two-path
+> vocabulary ("the NVRHI path does X") rather than historical framing. That
+> residue is **deliberately carried**, not overlooked: rewriting it is prose
+> churn across 129 files with no behavioural content. Criterion 5 should be
+> read as *"no NVRHI in code or build inputs"*, which is met and is the part
+> that matters.
+>
+> **KNOWN LIMITATION OF THE INSTRUMENT — inherit this, do not inherit the blind
+> spot.** The pathspec `'*.cpp' '*.hpp' '*.lua'` is **blind to `.hlsl`, `.bat`,
+> `.arcmat`, `.rs`, `.ts`, `.svelte`, `.ps1`** — all of which carry NVRHI
+> mentions in this tree, and one of which (`data/shaders/compile-shaders.bat`)
+> is a **build input**. A sweep keyed to a pathspec cannot certify a claim about
+> "the tree". **A second, sharper gap the review found the hard way:** every
+> sweep this phase ran was keyed to NVRHI VOCABULARY or to DELETED SYMBOLS,
+> which cannot see a citation that names a **deleted FILE** in otherwise
+> innocent prose (three `SelectionOutline.hpp:47-48` authority links survived
+> every sweep and were found only by reading). **Sweep for the CLAIM, not the
+> symbol.**
 
 ## Carried into Phase 4 / 5b
 
