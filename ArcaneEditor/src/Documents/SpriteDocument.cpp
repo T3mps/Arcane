@@ -1,10 +1,7 @@
 #include "Documents/SpriteDocument.hpp"
 
-#include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Edit/Command.hpp>
-#include <Arcane/Project/AssetId.hpp>
 
-#include <nvrhi/nvrhi.h>
 #include <imgui.h>
 
 #include <cfloat>
@@ -287,66 +284,22 @@ namespace Arcane::Editor
                                        : "(none)");
 
         ImGui::Separator();
-        nvrhi::TextureHandle tex;
-        if (m_services.assets && m_data.texture.IsValid())
-            tex = m_services.assets->GetTexture(Arcane::AssetId::FromGuid(m_data.texture));
-        if (tex)
-        {
-            const auto& desc = tex->getDesc();
-            if (desc.width > 0 && desc.height > 0)
-            {
-                // Scale to fit the available width, preserving aspect.
-                const float availW = ImGui::GetContentRegionAvail().x;
-                const float drawW = availW;
-                const float drawH = availW * (static_cast<float>(desc.height) /
-                                              static_cast<float>(desc.width));
-                const ImVec2 imgPos = ImGui::GetCursorScreenPos();
-                // ImTextureID convention: the raw ITexture* cast to uintptr_t
-                // (ShaderEditorDocument.cpp:2523,2570; the backend keys its
-                // per-frame SRV binding-set cache on that same pointer,
-                // ImGuiNvrhi.cpp:246-252) -- any live ITexture* works, no
-                // per-document binding setup needed.
-                ImGui::Image(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(tex.Get())),
-                            ImVec2(drawW, drawH));
-
-                // Outline the resolved sub-rect. Reuses ComputeSpriteGeom
-                // (SpriteAsset.cpp:101-117) -- the SAME function
-                // SpriteCache::Request calls at Render/SpriteCache.cpp:88 to build
-                // what actually renders -- rather than re-deriving the
-                // fullRect/pos/size branch here, so this outline can never
-                // drift out of sync with the real geometry (including its
-                // fullRect rule, sourceSize.x<=0.0f || sourceSize.y<=0.0f at
-                // SpriteAsset.cpp:109, which is slightly wider than the
-                // doc's literal "(0,0) = whole texture" -- e.g. a negative
-                // sourceSize also reads as full-rect, and this outline will
-                // draw it that way too since it shares the same call).
-                // uvMin/uvMax are normalized [0,1] texture-space fractions,
-                // so multiplying them by the DRAWN width/height (not the
-                // texture's pixel size) maps them straight into the image's
-                // on-screen rect at whatever scale it was fit to.
-                const Arcane::ResolvedSpriteGeom geom =
-                    Arcane::ComputeSpriteGeom(m_data, desc.width, desc.height);
-                const ImVec2 rectMin(imgPos.x + geom.uvMin.x * drawW,
-                                     imgPos.y + geom.uvMin.y * drawH);
-                const ImVec2 rectMax(imgPos.x + geom.uvMax.x * drawW,
-                                     imgPos.y + geom.uvMax.y * drawH);
-                // Positional order is (p_min, p_max, col, rounding, thickness,
-                // flags) -- imgui.h:3467. 1.92.8 SWAPPED thickness and flags
-                // from the older signature -- the obsolete forwarding overload
-                // at imgui.h:3556 (live in this build; IMGUI_DISABLE_OBSOLETE_
-                // FUNCTIONS is unset) documents the swap and correctly
-                // re-forwards a full 6-arg old-order call; a partial-arg
-                // old-order call (e.g. a bare 0 for rounding then a bare
-                // thickness value) still silently binds to the wrong
-                // parameter under this vendored version.
-                ImGui::GetWindowDrawList()->AddRect(rectMin, rectMax,
-                    IM_COL32(255, 210, 60, 255), 0.0f, 2.0f);
-            }
-        }
-        else
-        {
-            ImGui::TextDisabled("(no texture)");
-        }
+        // The texture-preview block that used to sit here (fetch through
+        // Arcane::Assets::GetTexture, draw an ImGui::Image, outline the
+        // resolved sub-rect via ComputeSpriteGeom) is DELETED -- NRI Phase 5a,
+        // Task 9.5b. It was unreachable in every build, not just "both
+        // hosts": NRI Phase 5a, Task 9 deleted Runtime::SetRenderResources,
+        // Assets::SetDevice's last production caller, so GetTexture's own
+        // device guard (Assets.cpp's TextureForResolved, "since NRI Phase 5a,
+        // Task 9 that is the ONLY case: ... device-less for its whole life
+        // outside tests") always returned null -- and AssetsTest.cpp's own
+        // banner confirms even a test executable cannot obtain an
+        // nvrhi::IDevice at all anymore ("the NVRHI device layer is gone").
+        // `tex` was therefore always null, so this always took the else
+        // branch; the TextDisabled call below reproduces that observable
+        // behavior exactly -- not a behavior change, just the dead branch
+        // ahead of it removed.
+        ImGui::TextDisabled("(no texture)");
 
         ImGui::End();
         requestClose = !open;

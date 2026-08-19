@@ -35,7 +35,6 @@
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>
-#include <nvrhi/nvrhi.h>   // nvrhi::IDevice* in Deps -- reached through Render/Device.hpp until Task 8b deleted it
 // PostChainDesc -- the DEVICE-FREE description of a compiled fullscreen
 // material (bytecode + merged template + instance + input wiring). Held BY
 // VALUE below because it is what the graph arm's preview renders from and what
@@ -102,16 +101,15 @@ namespace Arcane::Editor
     // document list -- see EditorApp member ordering).
     struct DocServices
     {
-        // Always null (both hosts render through the graph, never the NVRHI
-        // arm -- NRI Phase 5a, Task 4 deleted the NVRHI preview it used to
-        // feed, OffscreenCanvas + FullscreenMaterialPass/Chain). It survives
-        // as the gate on the node-preview thumbnail path below, which is
-        // unreachable precisely because this is null -- see
-        // RefreshNodePreviews. The `shaders` (Arcane::ShaderLibrary*) field
-        // that sat beside it went at Task 9.5a with GraphGridPass, its only
-        // READER; the one assignment it had (EditorAppProject.cpp's
-        // MakeDocServices, `s.shaders = nullptr`) went with it.
-        nvrhi::IDevice*               device = nullptr;
+        // `device` (nvrhi::IDevice*) is GONE (NRI Phase 5a, Task 9.5b): it was
+        // always null (both hosts render through the graph, never the NVRHI
+        // arm -- Task 4 deleted the NVRHI preview it used to feed,
+        // OffscreenCanvas + FullscreenMaterialPass/Chain) and its only reader,
+        // the node-preview thumbnail path, is deleted with it. The `shaders`
+        // (Arcane::ShaderLibrary*) field that sat beside it went at Task 9.5a
+        // with GraphGridPass, its only READER; the one assignment it had
+        // (EditorAppProject.cpp's MakeDocServices, `s.shaders = nullptr`)
+        // went with it.
         Arcane::ShaderCompiler*       compiler = nullptr;   // app-shared service
         Arcane::ShaderSourceProvider* sources = nullptr;    // template text
         Arcane::Runtime*              runtime = nullptr;    // Assets facade + open project (picker)
@@ -182,9 +180,10 @@ namespace Arcane::Editor
         // that named it has been recorded AND submitted. The invalidate rides
         // with the destroy at that point (the pair is one operation) and
         // InvalidateUserTextureNow's own DeviceWaitIdle is what covers the
-        // in-flight submission. Exactly the deferral
-        // ShaderEditorDocument::m_nodePreviewRetired already makes one level
-        // down, for exactly the same reason.
+        // in-flight submission. (This used to cite an analogous one-frame
+        // deferral one level down, ShaderEditorDocument::m_nodePreviewRetired
+        // -- that per-node-thumbnail retirement machinery is deleted, NRI
+        // Phase 5a, Task 9.5b; this seam's own reasoning above stands alone.)
         //
         // Null in the headless tests and on the NVRHI arm; a document with no
         // sink destroys its vehicle inline, which is correct at shutdown (no
@@ -595,16 +594,13 @@ namespace Arcane::Editor
         bool NodeBadged(std::uint32_t nodeId) const;
         void RebuildDiagBadges();            // compile diags -> line map -> node ids
         void DrawPreviewPanel(float height);
-        // ---- Per-node preview thumbnails (SG parity) ----
-        // Each previewable node of the ACTIVE graph compiles a truncated clone
-        // (GenerateNodePreviewSnippet) through the NORMAL build path into its
-        // own tiny RGBA16F target, hash-gated so only nodes whose upstream
-        // actually changed recompile. One passthrough VS (fullscreen template,
-        // empty snippet) serves every thumbnail; params sync from the doc's
-        // instance every frame (redundant Sets don't bump serials); pass-graph
-        // thumbnails bind the chain's live intermediates as InputTexture(N).
-        void RefreshNodePreviews();          // (re)submit stale per-node compiles
-        void RenderNodePreviews(double dt);  // record all ready thumbnails (own CL)
+        // ---- Per-node preview thumbnails: DELETED (NRI Phase 5a, Task 9.5b) ----
+        // RefreshNodePreviews (per-node compile submission) and RenderNodePreviews
+        // (per-node NVRHI record) are gone -- both were unreachable dead code,
+        // gated on DocServices::device, which no longer exists (see DocServices
+        // above). What remains of DrawNodePreviewImage below is the ONE live
+        // thumbnail left on the graph canvas: the Output node's own image, the
+        // material's real preview (PreviewImageOf), not a per-node compile.
         // `width` is the node's measured content width (SG parity: the preview
         // spans the node). Zero on a node's first frame -- no width has been
         // measured yet -- which falls back to the minimum thumbnail size.
@@ -816,11 +812,13 @@ namespace Arcane::Editor
         // node submission. Invalid = cull nothing.
         ImVec2 m_cullMin{}, m_cullMax{};
         bool   m_cullRectValid = false;
-        // Nodes culled on the LAST graph-canvas submission. RenderNodePreviews
-        // runs from Tick, before Draw, so it reads this one frame late -- the
-        // same lag the tier gate it replaces already carried, and equally
-        // invisible: a node scrolling into view costs one extra frame before
-        // its thumbnail resumes.
+        // Nodes culled on the LAST graph-canvas submission. This used to be
+        // read one frame late by RenderNodePreviews, so a culled node cost no
+        // preview GPU; that reader is deleted (NRI Phase 5a, Task 9.5b) and
+        // this set is currently write-only (cleared and inserted into, never
+        // read). Left in place -- it is not itself NVRHI-typed and pruning a
+        // write-only accumulator that predates this task is outside its
+        // scope; flagged in the task report rather than folded in here.
         std::unordered_set<std::uint32_t> m_culledGraphNodes;
         // Each node's measured width from the LAST frame it drew, keyed by node
         // id. Right-aligned output rows and full-width previews both need a
@@ -903,49 +901,19 @@ namespace Arcane::Editor
         std::string m_renameOld, m_renameNew;
         bool m_renameRequest = false;   // open the modal (Suspend space)
 
-        // ---- Node preview thumbnails ----
-        struct NodePreview
-        {
-            std::uint64_t psJob = 0;         // in-flight compile (0 = none)
-            std::uint64_t snippetHash = 0;   // last generated preview source
-            std::vector<std::uint8_t> psBytes;   // landed before the shared VS
-            std::shared_ptr<Arcane::MaterialTemplate> pendingTempl;
-            std::uint32_t pendingInputs = 0; // slot count the source stitched
-            std::vector<std::uint32_t> pendingSources;   // wired chain indices
-            // Bound state (last-good: a failed recompile leaves these showing).
-            // NRI Phase 5a, Task 4 deleted `pass` (a per-node NVRHI
-            // FullscreenMaterialPass) and BindNodePreview, its only writer --
-            // `tex`/`fb`/`ready` below are now STRUCTURALLY DEAD: `ready`
-            // can never become true again (nothing sets it), so
-            // DrawNodePreviewImage's `!it->second.ready` guard always takes
-            // the early return for every non-Output node, and `tex`/`fb`
-            // stay perpetually null/invalid. Left in place rather than
-            // stripped out of the struct: they are still read (the eviction
-            // sweeps in RefreshNodePreviews, and the guard itself), and
-            // removing them would mean touching those call sites too, which
-            // is a redesign of the (already-dead) per-node-thumbnail feature
-            // rather than a consequence of this task's deletions.
-            std::shared_ptr<Arcane::MaterialInstance> inst;
-            std::uint32_t boundInputs = 0;
-            std::vector<std::uint32_t> boundSources;
-            nvrhi::TextureHandle tex;
-            nvrhi::FramebufferHandle fb;
-            bool ready = false;
-        };
-        std::unordered_map<std::uint32_t, NodePreview> m_nodePreviews;   // ACTIVE graph
-        int  m_nodePreviewsPass = -1;   // which pass the map belongs to
-        bool m_showNodePreviews = true; // toolbar toggle
-        std::uint64_t       m_nodePreviewVsJob = 0;
-        nvrhi::ShaderHandle m_nodePreviewVs;    // shared passthrough VS
-        // The Scene stand-in (post materials): a checkerboard bound wherever
-        // kSceneInput slots appear in the PREVIEW -- the real scene color
-        // only exists at runtime. Lazy; null device-less.
-        nvrhi::TextureHandle m_sceneStandIn;
-        nvrhi::ITexture* SceneStandIn();
-        // Displaced thumbnail textures parked one frame: an ImGui::Image
-        // submitted earlier in the SAME frame still holds the raw pointer
-        // until the backend records it, so release happens next Tick.
-        std::vector<nvrhi::TextureHandle> m_nodePreviewRetired;
+        // ---- Node preview thumbnails: DELETED (NRI Phase 5a, Task 9.5b) ----
+        // The NodePreview struct (psJob/snippetHash/psBytes/pendingTempl/
+        // pendingInputs/pendingSources/inst/boundInputs/boundSources/tex/fb/
+        // ready), m_nodePreviews, m_nodePreviewsPass, m_showNodePreviews
+        // (the toolbar "Thumbs" toggle), m_nodePreviewVsJob/m_nodePreviewVs
+        // (the shared passthrough VS) and m_sceneStandIn/SceneStandIn() (the
+        // pass-canvas Scene node's checkerboard) are all gone: every reader
+        // was inside RefreshNodePreviews/RenderNodePreviews/ConsumeResult's
+        // node-preview branch/DrawNodePreviewImage's non-Output branch, all
+        // deleted with this task -- the last comment on this struct (Task 4)
+        // already named this exact deletion as deferred, not accidental.
+        // m_nodePreviewRetired (the one-frame-displaced-texture park) is gone
+        // too; its only writer was RefreshNodePreviews.
 
         friend struct SnippetCallbackForwarder;
     };

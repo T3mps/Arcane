@@ -110,17 +110,9 @@ namespace Arcane::Editor
                    (static_cast<std::uint64_t>(pass) << 8);
         }
 
-        // Node-preview compiles coalesce per (document, pass, node), in a key
-        // band the StageKey space never reaches (salt in the top bits).
-        std::uint64_t NodePreviewKey(const Arcane::Guid& id, std::size_t pass,
-                                     std::uint32_t node)
-        {
-            std::uint64_t h = (id.hi ^ (id.lo * 1099511628211ull)) ^
-                              0x9E3779B97F4A7C15ull;
-            h = (h ^ (static_cast<std::uint64_t>(pass) << 32) ^ node) *
-                1099511628211ull;
-            return h;
-        }
+        // NodePreviewKey (coalesce key for per-node thumbnail compiles) is
+        // deleted with its only callers, RefreshNodePreviews (NRI Phase 5a,
+        // Task 9.5b).
 
         // ---- Graph canvas plumbing (Slice 9) ----
         namespace ed = ax::NodeEditor;
@@ -1229,29 +1221,11 @@ namespace Arcane::Editor
 
     bool ShaderEditorDocument::ConsumeResult(const Arcane::ShaderCompileResult& result)
     {
-        // Node-preview jobs: diag-less (the MAIN compile owns every badge --
-        // a preview clone can only fail where the real snippet also fails);
-        // a failure simply leaves that node's last-good thumbnail showing.
-        // NRI Phase 5a, Task 4: both blocks below used to createShader + bind
-        // a per-node NVRHI preview pass (BindNodePreview, deleted -- see its
-        // note). `target.succeeded && m_services.device` was already
-        // unreachable (device always null since Phase 5a Task 2b's flip); the
-        // job is still consumed here (returning true) so a node-preview
-        // compile does not fall through and get mis-claimed by a later branch.
-        if (result.jobId == m_nodePreviewVsJob && m_nodePreviewVsJob != 0)
-        {
-            m_nodePreviewVsJob = 0;
-            return true;
-        }
-        for (auto& [id, np] : m_nodePreviews)
-        {
-            (void)id;
-            if (result.jobId != np.psJob || np.psJob == 0)
-                continue;
-            np.psJob = 0;
-            return true;
-        }
-
+        // Node-preview job routing (m_nodePreviewVsJob / per-node m_nodePreviews
+        // psJob) is deleted along with the whole per-node-thumbnail feature
+        // (NRI Phase 5a, Task 9.5b) -- neither job kind is submitted anywhere
+        // anymore, so there is nothing left for this function to claim on
+        // their behalf.
         // Chain-mode jobs first (mutually exclusive with the single-path ids --
         // Rebuild clears whichever set is not in play).
         for (std::size_t p = 0; p < m_passJobs.size(); ++p)
@@ -1315,10 +1289,11 @@ namespace Arcane::Editor
         // THE READINESS TEST IS THE BLOBS + THE TEMPLATE. NRI Phase 5a, Task 4
         // deleted the NVRHI half of this function outright (OffscreenCanvas /
         // FullscreenMaterialPass and the createShader pair that fed them) --
-        // DocServices::device is always null now (both hosts render through
-        // the graph, never the NVRHI arm), so that half was dead code kept
-        // only as the pre-flip regression floor. The bytes below are the
-        // whole product of this function now, on the only arm left.
+        // DocServices::device was always null (both hosts render through the
+        // graph, never the NVRHI arm), so that half was dead code kept only as
+        // the pre-flip regression floor; Task 9.5b deleted the field itself.
+        // The bytes below are the whole product of this function now, on the
+        // only arm left.
         if (m_vsBytes.empty() || m_psBytes.empty() || !m_pendingTemplate)
             return;
 
@@ -1405,9 +1380,10 @@ namespace Arcane::Editor
     {
         // NRI Phase 5a, Task 4: the NVRHI half of this function (a
         // FullscreenMaterialChain, its createShader pair, and SetChain) is
-        // deleted -- DocServices::device is always null now, so it was dead
-        // code kept only as the pre-flip regression floor. The DESCRIPTION
-        // below is the whole product of this function now.
+        // deleted -- DocServices::device was always null, so it was dead code
+        // kept only as the pre-flip regression floor; Task 9.5b deleted the
+        // field itself. The DESCRIPTION below is the whole product of this
+        // function now.
         if (!m_pendingTemplate || m_passJobs.empty())
             return;
         for (const PassJobs& pj : m_passJobs)
@@ -1463,17 +1439,21 @@ namespace Arcane::Editor
     //     byte-identical bytecode to what the NVRHI arm's createShader pair
     //     consumed;
     //   * kSceneInput -> the batch node's CANVAS, which is where the
-    //     checkerboard lands. That is the graph twin of SceneStandIn(): the
-    //     NVRHI arm samples a 64x64 checker texture stretched over the pass,
-    //     this one samples the canvas the same checker was drawn into. Same
-    //     picture, one fewer texture.
+    //     checkerboard lands. That was the graph twin of SceneStandIn(): the
+    //     NVRHI arm used to sample a 64x64 checker texture stretched over the
+    //     pass, this one samples the canvas the same checker was drawn into.
+    //     Same picture, one fewer texture. (SceneStandIn() itself, and the
+    //     per-node thumbnail machinery below, are deleted -- NRI Phase 5a,
+    //     Task 9.5b.)
     //
-    // WHAT IS DELIBERATELY NOT HERE, so the gap stays named rather than
-    // discovered: the per-node THUMBNAILS (RenderNodePreviews). Those need one
-    // render target and one pass PER GRAPH NODE, and a graph frame declares
-    // exactly one canvas and one output -- N thumbnails is N frames or N
-    // contexts, neither of which is a preview. It is mode-gated off with the
-    // reason stated at RenderNodePreviews, and ledgered in the task report.
+    // WHAT REMAINS DELIBERATELY ABSENT, so the gap stays named rather than
+    // discovered: per-node THUMBNAILS on the graph canvas. That would need
+    // one render target and one pass PER GRAPH NODE, and a graph frame
+    // declares exactly one canvas and one output -- N thumbnails is N frames
+    // or N contexts, neither of which is a preview. The per-node compile/
+    // record machinery that used to sit mode-gated off (RefreshNodePreviews,
+    // RenderNodePreviews, and the NodePreview struct) is deleted outright
+    // rather than left as a dead stub -- NRI Phase 5a, Task 9.5b.
     void ShaderEditorDocument::EnsureGraphPreviewContext()
     {
         // The seam is null in every headless test (no EditorApp at all),
@@ -1889,10 +1869,9 @@ namespace Arcane::Editor
         // is exactly the case that has something to say).
         PublishDiagnostics();
         m_animTime += dt;
-        // Thumbnails displaced LAST frame are safe to release now (their
-        // ImGui draws have been recorded); this frame's displacements queue up.
-        m_nodePreviewRetired.clear();
-        RenderNodePreviews(dt);
+        // Per-node thumbnail retirement + record (m_nodePreviewRetired.clear(),
+        // RenderNodePreviews) is deleted along with the whole per-node-thumbnail
+        // feature -- NRI Phase 5a, Task 9.5b.
 
         // THE GRAPH ARM'S WHOLE RENDER PHASE. NRI Phase 5a, Task 4 deleted the
         // NVRHI fallback this used to fall through to when the vehicle was
@@ -2156,9 +2135,16 @@ namespace Arcane::Editor
                 // tier; freeform HLSL lives in Custom nodes.
                 ImGui::SameLine();
                 ImGui::Checkbox("HLSL", &m_showGeneratedText);
-                ImGui::SameLine();
-                if (ImGui::Checkbox("Thumbs", &m_showNodePreviews))
-                    RefreshNodePreviews();   // off clears; on resubmits
+                // The "Thumbs" checkbox is DELETED (NRI Phase 5a, Task 9.5b,
+                // VISIBLE UI CHANGE -- see task report / D5a-2 desk checklist).
+                // It toggled m_showNodePreviews, which gated two things: the
+                // per-node compile/record machinery (unreachable dead code,
+                // deleted with it) AND DrawNodePreviewImage's Output-node
+                // branch, the ONE live thumbnail on this canvas (the material's
+                // real preview, drawn on the Output node). That branch is now
+                // unconditional -- the Output node's thumbnail always shows,
+                // matching its own call site's existing "on-screen nodes show
+                // their thumbnail" comment; there is no longer a way to hide it.
             }
             // The vertex stage (%{VERTEX_BODY}): graph-owned materials author
             // it with the Vertex Output NODE and view it inside the HLSL
@@ -2783,9 +2769,14 @@ namespace Arcane::Editor
             if (fill > 0.0f)
                 ImGui::Dummy(ImVec2(0.0f, fill));
         }
-        if (nvrhi::ITexture* standIn = SceneStandIn())
-            ImGui::Image(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(standIn)),
-                         ImVec2(72.0f, 72.0f));
+        // SceneStandIn() (the 64x64 NVRHI checkerboard this used to sample) is
+        // deleted -- NRI Phase 5a, Task 9.5b. It was already unreachable in
+        // practice: its own guard returned null unconditionally, gated on
+        // DocServices::device, always null since Phase 5a Task 2b's flip. So
+        // this node already drew no checkerboard before this task touched it;
+        // preserved as a no-op rather than wired to anything live, the same
+        // treatment the pass-canvas Output node below already carries for the
+        // same reason.
         ed::BeginPin(OutPin(kPassSceneNodeId, 0), ed::PinKind::Output);
         ImGui::TextUnformatted("scene");
         ImGui::SameLine();
@@ -2831,8 +2822,9 @@ namespace Arcane::Editor
         // (`chain ? chain->PassOutput(total - 1) : nullptr`), but `chain` was
         // already unconditionally null in practice since Phase 5a Task 2b's
         // flip (it was only ever built device-carrying, and DocServices::device
-        // has been null on every real run since that flip), so this node
-        // already drew no thumbnail before this task touched it. Preserved as
+        // was null on every real run since that flip -- Task 9.5b deleted the
+        // field itself), so this node already drew no thumbnail before this
+        // task touched it. Preserved as
         // a no-op rather than wired to PreviewImageOf() -- that would be a
         // behavior change riding along inside a deletion task, unverified at
         // the desk, which is out of scope here.
@@ -3420,9 +3412,10 @@ namespace Arcane::Editor
         }
         if (!anyError)
             Rebuild();   // any codegen error keeps last-good bound; badges show why
-        // Per-node thumbnails ride every regeneration; the hash gate keeps
-        // untouched subgraphs from recompiling.
-        RefreshNodePreviews();
+        // The RefreshNodePreviews() call that used to ride every regeneration
+        // is deleted with the per-node-thumbnail feature (NRI Phase 5a, Task
+        // 9.5b) -- it was always a no-op (see the banner above
+        // DrawNodePreviewImage).
     }
 
     void ShaderEditorDocument::ApplyGraphState(std::size_t pass,
@@ -3708,231 +3701,55 @@ namespace Arcane::Editor
         }
     }
 
-    // ------------------------------------------------- node preview thumbnails
+    // ---------------------------------- node preview thumbnails: DELETED ----
+    // NRI Phase 5a, Task 9.5b deletes the whole per-node-thumbnail feature:
+    // RefreshNodePreviews (per-node compile submission, gated on
+    // `m_services.device` and therefore ALWAYS early-returning through the
+    // `!eligible` branch -- device was unconditionally null since Phase 5a
+    // Task 2b's flip), the already-deleted BindNodePreview (Task 4) and its
+    // caller sites, RenderNodePreviews (a guard whose every condition already
+    // included `!m_services.device`, so it always returned before doing
+    // anything), SceneStandIn (the pass-canvas Scene node's 64x64 NVRHI
+    // checkerboard, same always-null guard), and the NodePreview struct.
+    // Confirmed dead by grep, not inference: NodePreviewKey, m_nodePreviews,
+    // m_nodePreviewsPass, m_nodePreviewVs(Job), m_sceneStandIn and
+    // m_nodePreviewRetired had zero readers/writers left tree-wide once these
+    // functions and ConsumeResult's node-preview branch were removed (see the
+    // task report's per-file grep).
     //
-    // ===== MODE-GATED OFF ON THE GRAPH ARM (NRI Phase 3, Task 11) =========
-    // `m_services.device` is null there, so every function in this section
-    // early-outs and no thumbnail is compiled, bound or rendered. That is a
-    // DECISION, not an oversight, and the reason is structural rather than
-    // budgetary: a thumbnail is one render target and one fullscreen pass PER
-    // GRAPH NODE, and a graph frame declares exactly one canvas and one
-    // output. N thumbnails is N frames or N contexts -- N whole RenderGraphs,
-    // command-buffer sets, descriptor pools and graveyard lanes, for images
-    // 128 px on a side. Neither is a preview; both would be a different
-    // feature (a node that draws INTO a shared atlas, which is what the
-    // engine would need for this to be one frame).
+    // WHAT THE USER LOSES, stated so the gap is named rather than silently
+    // closed: per-node thumbnails on the shader graph canvas (they were
+    // already permanently absent on both hosts, since Phase 5a Task 2b -- this
+    // deletion removes the dead machinery, not a working feature). The
+    // MATERIAL's own preview -- the Material panel image, the pass-canvas base
+    // thumbnail, and the Output node's own image below -- all render for real
+    // through the document's offscreen graph context (see THE GRAPH ARM'S
+    // PREVIEW above) and are UNCHANGED by this deletion.
     //
-    // WHAT THE USER LOSES on --nri-graph, stated so the gap is named: per-node
-    // thumbnails on the shader graph canvas. The MATERIAL's own preview -- the
-    // Material panel image, the pass-canvas base thumbnail and the Output
-    // node's image -- all render for real through the document's offscreen
-    // context (see THE GRAPH ARM'S PREVIEW above), so the canvas is not blank,
-    // it is the intermediate-node images that are absent.
-    //
-    // The two createShader sites below stay device-gated and deliberately do
-    // NOT retain their blobs: retention exists to feed a second recorder, and
-    // there is no second recorder for a thumbnail. Bytes kept for nobody would
-    // be exactly the half-built thing this phase refuses.
-    //
-    // Ledgered as a follow-up in the Task 11 report.
-    void ShaderEditorDocument::RefreshNodePreviews()
-    {
-        const bool eligible = m_services.device && m_services.compiler &&
-                              m_services.sources && !IsInstance() &&
-                              m_showNodePreviews && ActiveGraphOwned();
-        if (!eligible)
-        {
-            for (auto& [id, np] : m_nodePreviews)
-                if (np.tex)
-                    m_nodePreviewRetired.push_back(np.tex);
-            m_nodePreviews.clear();
-            m_nodePreviewsPass = -1;
-            return;
-        }
-        std::size_t pass = static_cast<std::size_t>(std::max(0, m_activePass));
-        if (pass > m_data.passes.size())
-            pass = 0;   // stale selection after an outside reload
-        if (m_nodePreviewsPass != static_cast<int>(pass))
-        {
-            for (auto& [id, np] : m_nodePreviews)
-                if (np.tex)
-                    m_nodePreviewRetired.push_back(np.tex);
-            m_nodePreviews.clear();
-            m_nodePreviewsPass = static_cast<int>(pass);
-        }
-
-        // Thumbnails always render the FULLSCREEN surface (see
-        // GenerateNodePreviewSnippet) -- sprite-gated subgraphs simply refuse.
-        const auto templateText = m_services.sources->Get(
-            Arcane::MaterialTemplateFile(Arcane::MaterialSurface::Fullscreen));
-        if (!templateText)
-            return;
-
-        // The ONE passthrough VS every thumbnail shares (register assignments
-        // are explicit in the generated source, so a VS compiled without a
-        // preview's texture declarations still matches its layout).
-        if (!m_nodePreviewVs && m_nodePreviewVsJob == 0)
-        {
-            Arcane::MaterialBuildResult vsBuild = Arcane::BuildMaterialShaderSource(
-                *templateText, "float4 shade(Varyings v) { return float4(0,0,0,1); }\n",
-                m_title + "_thumbvs");
-            Arcane::ShaderCompileRequest req;
-            req.debugName = m_title + "_thumbvs.hlsl";
-            req.sourceUtf8 = std::move(vsBuild.hlsl);
-            req.entry = Arcane::kVsEntry;
-            req.profile = Arcane::kVsProfile;
-            req.coalesceKey = NodePreviewKey(m_data.id, 0xFFFF, 0);
-            m_nodePreviewVsJob = m_services.compiler->Submit(std::move(req), Now());
-        }
-
-        const Arcane::MaterialGraph& g = *ActiveGraphOpt();
-        const std::vector<std::uint32_t> wired =
-            pass == 0 ? m_data.baseInputs : m_data.passes[pass - 1].inputs;
-        const std::uint32_t avail = static_cast<std::uint32_t>(wired.size());
-
-        std::unordered_set<std::uint32_t> live;
-        for (const Arcane::GraphNode& n : g.nodes)
-        {
-            if (Arcane::GraphNodeOutputCount(n) == 0)
-                continue;   // Output / Vertex Output show no thumbnail
-            live.insert(n.id);
-            NodePreview& np = m_nodePreviews[n.id];
-
-            Arcane::GraphCodegenResult r =
-                Arcane::GenerateNodePreviewSnippet(g, n.id, avail);
-            const std::uint64_t hash =
-                r.Ok() ? std::hash<std::string>{}(r.snippet) | 1ull : 0ull;
-            if (hash == np.snippetHash)
-                continue;   // upstream unchanged -- keep whatever is bound
-            np.snippetHash = hash;
-            np.psJob = 0;   // orphan any in-flight compile of the older source
-            np.psBytes.clear();
-            np.pendingTempl.reset();
-            if (!r.Ok())
-                continue;   // no preview for this node (last-good keeps showing)
-
-            Arcane::MaterialBuildResult build = Arcane::BuildMaterialShaderSource(
-                *templateText, r.snippet, m_title + "_n" + std::to_string(n.id),
-                Arcane::MaterialSurface::Fullscreen, {}, avail);
-            if (!build.errors.empty())
-                continue;
-            np.pendingTempl =
-                std::make_shared<Arcane::MaterialTemplate>(std::move(build.templ));
-            np.pendingInputs = avail;
-            np.pendingSources = wired;
-
-            Arcane::ShaderCompileRequest req;
-            req.debugName = m_title + "_n" + std::to_string(n.id) + ".hlsl";
-            req.sourceUtf8 = std::move(build.hlsl);
-            req.entry = Arcane::kPsEntry;
-            req.profile = Arcane::kPsProfile;
-            req.coalesceKey = NodePreviewKey(m_data.id, pass, n.id);
-            np.psJob = m_services.compiler->Submit(std::move(req), Now());
-        }
-
-        // Nodes deleted since the last refresh.
-        for (auto it = m_nodePreviews.begin(); it != m_nodePreviews.end();)
-        {
-            if (!live.contains(it->first))
-            {
-                if (it->second.tex)
-                    m_nodePreviewRetired.push_back(it->second.tex);
-                it = m_nodePreviews.erase(it);
-            }
-            else
-                ++it;
-        }
-    }
-
-    // NRI Phase 5a, Task 4: BindNodePreview (built a per-node NVRHI
-    // FullscreenMaterialPass + thumbnail texture from a compiled node-preview
-    // clone) is deleted. It was ALREADY unreachable in practice -- both call
-    // sites in ConsumeResult gated on `m_services.device`, always null since
-    // Phase 5a Task 2b's flip -- and the graph arm never grew a replacement:
-    // per-node thumbnails need one render target and one pass PER GRAPH NODE,
-    // and a graph frame declares exactly one canvas and one output, a
-    // pre-existing, documented gap (see the banner above EnsureGraphPreviewContext).
-    // RenderNodePreviews below is left as the no-op its guard already made it.
-
-    void ShaderEditorDocument::RenderNodePreviews(double dt)
-    {
-        (void)dt;
-        // Thumbnails record only while the graph canvas is the visible editing
-        // surface AND a device is present to build the per-node NVRHI pass
-        // from. NRI Phase 5a, Task 4: `m_services.device` is always null now
-        // (both hosts render through the graph, never the NVRHI arm) and the
-        // graph arm has no per-node preview mechanism (see BindNodePreview's
-        // note above), so this guard always returns -- kept rather than
-        // collapsed to an unconditional return so the OTHER conditions stay
-        // legible for whoever eventually builds a graph-side replacement.
-        if (!m_showNodePreviews || m_inChainView || !m_services.device ||
-            IsInstance() || !ActiveGraphOwned() || m_showGeneratedText || m_editVertex)
-            return;
-    }
-
-    nvrhi::ITexture* ShaderEditorDocument::SceneStandIn()
-    {
-        if (m_sceneStandIn || !m_services.device)
-            return m_sceneStandIn.Get();
-        constexpr std::uint32_t kSize = 64;
-        auto desc = nvrhi::TextureDesc()
-            .setWidth(kSize).setHeight(kSize)
-            .setFormat(nvrhi::Format::RGBA8_UNORM)
-            .setInitialState(nvrhi::ResourceStates::ShaderResource)
-            .setKeepInitialState(true)
-            .setDebugName("SceneStandIn");
-        m_sceneStandIn = m_services.device->createTexture(desc);
-        if (!m_sceneStandIn)
-            return nullptr;
-        std::vector<std::uint32_t> px(kSize * kSize);
-        for (std::uint32_t y = 0; y < kSize; ++y)
-            for (std::uint32_t x = 0; x < kSize; ++x)
-                px[y * kSize + x] =
-                    (((x >> 3) + (y >> 3)) & 1) ? 0xFF4A4A52u : 0xFF26262Cu;
-        nvrhi::CommandListHandle cl = m_services.device->createCommandList();
-        if (!cl)
-        {
-            m_sceneStandIn = nullptr;
-            return nullptr;
-        }
-        cl->open();
-        cl->writeTexture(m_sceneStandIn, 0, 0, px.data(),
-                         kSize * sizeof(std::uint32_t));
-        cl->close();
-        m_services.device->executeCommandList(cl);
-        return m_sceneStandIn.Get();
-    }
+    // DrawNodePreviewImage survives below, trimmed to its one live branch.
 
     void ShaderEditorDocument::DrawNodePreviewImage(const Arcane::GraphNode& n, float width)
     {
-        if (!m_showNodePreviews)
-            return;
         // SG parity: the thumbnail is square and spans the node, sitting below
         // the port rows. `width` is last frame's measured content width -- a
         // node drawing for the first time has none and gets the floor, which is
         // also what keeps a narrow node from collapsing the thumbnail.
         constexpr float kThumbMin = 96.0f;
         const float kThumbDraw = width > kThumbMin ? width : kThumbMin;
+        // The Output node shows the material's own preview (the pass canvas's
+        // base-node convention) -- from whichever arm made it. This is now the
+        // ONLY branch: the per-node compile/record machinery that used to
+        // serve non-Output nodes is deleted (NRI Phase 5a, Task 9.5b) rather
+        // than ported, and was already unreachable dead code before that (see
+        // the banner above). UNCONDITIONAL now -- there is no more
+        // "m_showNodePreviews" toggle gating it (the toolbar's "Thumbs"
+        // checkbox is deleted with it, VISIBLE UI CHANGE, see task report):
+        // this thumbnail was previously hideable and is now always shown.
         if (n.type == Arcane::GraphNodeType::Output)
         {
-            // The Output node shows the material's own preview (the pass
-            // canvas's base-node convention) -- from whichever arm made it.
             if (const ImTextureID id = PreviewImageOf().id)
                 ImGui::Image(id, ImVec2(kThumbDraw, kThumbDraw));
-            return;
         }
-        // NRI Phase 5a, Task 4: `ready` can never be true again (see
-        // NodePreview's own comment) -- this always returns here now for
-        // every non-Output node. Kept as a live guard rather than an
-        // unconditional return: the struct's bound state is dead, not this
-        // function's shape, and a future graph-side thumbnail implementation
-        // would set `ready` and light this back up unchanged.
-        const auto it = m_nodePreviews.find(n.id);
-        if (it == m_nodePreviews.end() || !it->second.ready || !it->second.tex)
-            return;
-        ImGui::Image(static_cast<ImTextureID>(
-                         reinterpret_cast<uintptr_t>(it->second.tex.Get())),
-                     ImVec2(kThumbDraw, kThumbDraw));
     }
 
     void ShaderEditorDocument::DrawGraphPanel()
@@ -3967,7 +3784,9 @@ namespace Arcane::Editor
             m_graphPositionsApplied = false;
             m_nodeWidths.clear();   // ids are only unique per graph
             RebuildDiagBadges();
-            RefreshNodePreviews();   // thumbnails belong to the shown graph
+            // The RefreshNodePreviews() call that used to run here on a pass
+            // switch is deleted with the per-node-thumbnail feature (NRI
+            // Phase 5a, Task 9.5b) -- it was always a no-op.
         }
         Arcane::MaterialGraph& g = *ActiveGraphOpt();
 
@@ -4000,10 +3819,12 @@ namespace Arcane::Editor
         // the view during End -- but it is taken before Begin because
         // ScreenToCanvas has to be, so the two calls stay separate.
         const NodeLOD lod = NodeLODForScale(ViewScale());
-        // Culled-node set for THIS submission: refilled below, read one frame
-        // later by RenderNodePreviews so a culled node costs no preview GPU.
-        // This is what bounds thumbnail cost now that the zoom gate is gone --
-        // UE's arrangement exactly (no paint, no draw element).
+        // Culled-node set for THIS submission: refilled below. This used to be
+        // read one frame later by RenderNodePreviews so a culled node cost no
+        // preview GPU; that reader is deleted (NRI Phase 5a, Task 9.5b) and
+        // the set is currently write-only (see its declaration's comment in
+        // the header) -- left in place as outside this task's scope, flagged
+        // in the task report.
         m_culledGraphNodes.clear();
 
         // Wire anchors are per-frame: nodes move, the view moves, and a pin

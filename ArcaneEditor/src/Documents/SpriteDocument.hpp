@@ -50,7 +50,14 @@ namespace Arcane::Editor
         // walks back through it exactly like an Inspector or graph edit.
         struct Services
         {
-            Arcane::Assets* assets = nullptr;   // GetTexture(AssetId) for the preview
+            // Its only reader, the texture-preview GetTexture(AssetId) call in
+            // Draw(), is deleted -- NRI Phase 5a, Task 9.5b (it was
+            // unreachable: GetTexture has returned null unconditionally in
+            // every build since Task 9 deleted Assets::SetDevice's last
+            // production caller). The field itself is left wired (out of this
+            // task's one-site scope for SpriteDocument.cpp) -- flagged in the
+            // task report as now-unread.
+            Arcane::Assets* assets = nullptr;
             // Null = no undo coverage (the EditGesture bracket then no-ops
             // whole, EditGesture.hpp:145-146) -- the document still edits and
             // saves, so an unwired stack degrades to "no history", never to a

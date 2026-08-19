@@ -18,8 +18,12 @@ namespace Arcane
         // impossible for a pointer-width atomic.
         std::atomic<IGpuCrashBackend*> g_activeBackend{ nullptr };
 
-        // Read once per DRAW when enabled; relaxed because a toggle observed one
-        // frame late is meaningless and this must not fence the render path.
+        // Set from ProjectBoot.hpp's config load every boot. Used to be read
+        // once per DRAW by GpuDrawScope's constructor; that reader is deleted
+        // (NRI Phase 5a, Task 9.5b -- see GpuInstrumentation.hpp's banner),
+        // so this is currently write-only. Relaxed ordering, kept as-is: a
+        // toggle observed one frame late was never meaningful and this must
+        // not fence the render path if a future reader arrives.
         std::atomic<bool> g_drawMarkers{ false };
 
         // The device-lost latch (see the header). Written by the device layer
@@ -145,23 +149,6 @@ namespace Arcane
         }
     }
 
-    // ---------------------------------------------------------------------
-    // GpuDrawScope
-    // ---------------------------------------------------------------------
-
-#if !defined(ARCANE_DIST)
-    GpuDrawScope::GpuDrawScope(nvrhi::ICommandList* commandList, const char* name) noexcept
-    {
-        if (!commandList || !name || !GpuDrawMarkersEnabled())
-            return;
-        m_commandList = commandList;
-        m_commandList->beginMarker(name);
-    }
-
-    GpuDrawScope::~GpuDrawScope()
-    {
-        if (m_commandList)
-            m_commandList->endMarker();
-    }
-#endif
+    // GpuDrawScope's implementation is deleted -- NRI Phase 5a, Task 9.5b.
+    // See GpuInstrumentation.hpp's file banner for the full account.
 }

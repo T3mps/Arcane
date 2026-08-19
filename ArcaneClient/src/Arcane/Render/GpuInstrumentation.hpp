@@ -1,9 +1,8 @@
 #pragma once
 
 // GPU crash diagnostics arc (Task 7): the RENDER-SIDE instrumentation both
-// hosts drive. TWO pieces now (three until NRI Phase 5a, Task 9.5a), one
-// header because they share exactly one job -- making a GPU hang legible
-// after the fact:
+// hosts drive. ONE piece now (two until NRI Phase 5a, Task 9.5b deleted
+// GpuDrawScope below; three until Task 9.5a):
 //
 //   1. GpuPassScope    -- an RAII pass marker. On entry it opens a
 //      GpuBreadcrumbs scope and writes the backend's GPU begin marker; on exit
@@ -34,19 +33,24 @@
 //      markers-only DRED tier becomes re-earnable -- in that order, and only
 //      in that order.
 //
-//   2. GpuDrawScope    -- the finer, draw-granular marker. nvrhi markers ONLY,
-//      opt-in via the `diagnostics.drawMarkers` EngineConfig key, and compiled
-//      out of Dist entirely (ARC_GPU_DRAW_SCOPE). It writes NO breadcrumb ring
-//      entry on purpose: the ring holds GpuBreadcrumbs::kRingCapacity scopes
-//      total, and per-draw entries would evict the pass scopes the report is
-//      actually built from -- trading the answer for the detail.
-//      DEAD SINCE NRI Phase 5a: it is the LAST nvrhi surface in this header,
-//      its one call site is Batcher2D.cpp's NVRHI recorder, and nothing
-//      reaches that recorder any more (there is no nvrhi device to build it
-//      against). STILL STANDING, and now with an owner: severing it means
-//      editing Batcher2D's GPU half, which Task 9.5b owns together with the
-//      recorder and the ABI bump that removing Batcher2D's NVRHI surface
-//      needs. It is the sole reason <nvrhi/nvrhi.h> is still included below.
+//   WHAT WENT AT TASK 9.5b: GpuDrawScope -- the finer, draw-granular marker.
+//   nvrhi markers ONLY, opt-in via the `diagnostics.drawMarkers` EngineConfig
+//   key, compiled out of Dist entirely (ARC_GPU_DRAW_SCOPE). It was the LAST
+//   nvrhi surface in this header, and its ctor took an nvrhi::ICommandList*
+//   -- the sole reason <nvrhi/nvrhi.h> used to be included below. DELETED,
+//   not ported: its one call site tree-wide, Batcher2D.cpp's NVRHI recorder
+//   (End(), inside its now-deleted per-run draw loop), was ALREADY
+//   unreachable before this task touched it (Batcher2D::Create's device
+//   parameter is always null, so End() always took its device-less early
+//   return, never reaching the draw loop the marker sat in) and is deleted
+//   outright by this same task. Confirmed zero callers tree-wide by grep
+//   (`ARC_GPU_DRAW_SCOPE\|GpuDrawScope`), not inferred from this comment --
+//   see the task report. GpuDrawMarkersEnabled()/SetGpuDrawMarkersEnabled()
+//   (the `diagnostics.drawMarkers` config toggle GpuDrawScope's ctor used to
+//   read) are UNTOUCHED: SetGpuDrawMarkersEnabled is still called live from
+//   ProjectBoot.hpp's ApplyDiagnosticsConfig, and pruning the now-readerless
+//   getter would mean editing that config-loading path, outside this task's
+//   scope -- flagged in the task report.
 //
 //   WHAT WENT AT TASK 9.5a, so the numbering above is not read as a gap:
 //   GpuFrameProgress (the GPU-side heartbeat source that fed
@@ -73,17 +77,13 @@
 // NVRHI device layer that used to share it), same lifetime, same install/clear
 // sites -- so there is one rule to get right, not two.
 //
-// THREADING: GpuPassScope/GpuDrawScope are for the thread that records the
-// command list (the main/render thread in both hosts). GpuBreadcrumbs is not
-// thread-safe and neither are these.
+// THREADING: GpuPassScope is for the thread that records the command list
+// (the main/render thread in both hosts). GpuBreadcrumbs is not thread-safe
+// and neither is this.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/GpuBreadcrumbs.hpp>
 #include <Arcane/Render/IGpuCrashBackend.hpp>
-
-// GpuDrawScope ONLY -- see piece 2 above. Task 9.5b takes this line out with
-// Batcher2D's recorder; nothing else in this header names an nvrhi type.
-#include <nvrhi/nvrhi.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -109,9 +109,18 @@ namespace Arcane
     // live, unrelated one. Prefer this in any owner's teardown path.
     [[nodiscard]] ARCANE_API bool ClearActiveGpuCrashBackendIfCurrent(IGpuCrashBackend* backend) noexcept;
 
-    // Draw-level marker toggle (`diagnostics.drawMarkers`, default false). Read
-    // per draw, so it is one relaxed atomic load; hosts set it from the layered
-    // config. Pass scopes ignore it -- those are always on, in every config.
+    // Draw-level marker toggle (`diagnostics.drawMarkers`, default false).
+    // Pass scopes ignore it -- those are always on, in every config.
+    //
+    // GpuDrawMarkersEnabled() (the getter) has ZERO remaining callers -- NRI
+    // Phase 5a, Task 9.5b deleted GpuDrawScope, its one reader (see the
+    // banner above). SetGpuDrawMarkersEnabled (the setter) is UNTOUCHED and
+    // still genuinely live: ProjectBoot.hpp's ApplyDiagnosticsConfig calls it
+    // every boot from the `diagnostics.drawMarkers` config key, so the flag
+    // is still read from JSON and stored -- just not read back by anything
+    // right now. Left asymmetric rather than pruned: removing the setter's
+    // call means editing ProjectBoot.hpp's config-loading path, outside this
+    // task's scope (flagged in the task report).
     ARCANE_API void SetGpuDrawMarkersEnabled(bool enabled) noexcept;
     [[nodiscard]] ARCANE_API bool GpuDrawMarkersEnabled() noexcept;
 
@@ -194,32 +203,12 @@ namespace Arcane
     };
 
     // -----------------------------------------------------------------
-    // GpuDrawScope -- draw-granular, opt-in, never in Dist
+    // GpuDrawScope + ARC_GPU_DRAW_SCOPE: DELETED (NRI Phase 5a, Task 9.5b)
     // -----------------------------------------------------------------
-
-#if !defined(ARCANE_DIST)
-    class ARCANE_API GpuDrawScope
-    {
-    public:
-        GpuDrawScope(nvrhi::ICommandList* commandList, const char* name) noexcept;
-        ~GpuDrawScope();
-
-        GpuDrawScope(const GpuDrawScope&)            = delete;
-        GpuDrawScope& operator=(const GpuDrawScope&) = delete;
-
-    private:
-        nvrhi::ICommandList* m_commandList = nullptr;   // null when the toggle is off
-    };
-#endif
-
-    // Use this rather than naming GpuDrawScope directly: in Dist the class does
-    // not exist at all, so the site must vanish with it.
-#if defined(ARCANE_DIST)
-    #define ARC_GPU_DRAW_SCOPE(commandList, name) ((void)0)
-#else
-    #define ARC_GPU_DRAW_SCOPE_CAT2(a, b) a##b
-    #define ARC_GPU_DRAW_SCOPE_CAT(a, b)  ARC_GPU_DRAW_SCOPE_CAT2(a, b)
-    #define ARC_GPU_DRAW_SCOPE(commandList, name) \
-        ::Arcane::GpuDrawScope ARC_GPU_DRAW_SCOPE_CAT(arcGpuDrawScope_, __LINE__)((commandList), (name))
-#endif
+    // See the file banner above for the full account. Summary: the class
+    // (draw-granular, opt-in, never in Dist) and its ARC_GPU_DRAW_SCOPE /
+    // ARC_GPU_DRAW_SCOPE_CAT / ARC_GPU_DRAW_SCOPE_CAT2 macro trio are gone
+    // outright, not ported -- their one call site tree-wide (Batcher2D.cpp's
+    // NVRHI End()) was already unreachable, and is itself deleted by this
+    // same task.
 }

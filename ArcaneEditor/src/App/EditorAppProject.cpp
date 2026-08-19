@@ -44,9 +44,11 @@ namespace Arcane::Editor
     // graph seam (nriDevice/hostConfig/chromeHud) instead: the document
     // builds its own small NriGraphContext::CreateOffscreen over the
     // process's one device. GpuContext has built no Device()/Shaders() at
-    // all since NRI Phase 5a, Task 6 deleted them, so `device`/`shaders` are
-    // simply always null now (the graph seam below is always what a document
-    // actually uses).
+    // all since NRI Phase 5a, Task 6 deleted them, so `device`/`shaders` were
+    // simply always null (the graph seam below is always what a document
+    // actually uses) -- Task 9.5b deleted DocServices::device itself (its
+    // only reader, the node-preview thumbnail path, is deleted with it);
+    // `shaders` went the same way at Task 9.5a.
     //
     // `backend` has no RenderDevice to ask either, so it reads the config --
     // the same substitution UpdateWindowTitle and RuntimeApp::
@@ -56,7 +58,6 @@ namespace Arcane::Editor
     {
         Arcane::Editor::DocServices s;
         const bool graph = GraphMode();
-        s.device   = nullptr;
         s.compiler = m_shaderCompiler.get();
         s.sources  = &m_shaderSources;
         s.runtime  = &*m_runtime;
