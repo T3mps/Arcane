@@ -62,8 +62,9 @@
 // which is exactly the trap GpuFrameSlot's header comment described for
 // nvrhi's waitEventQuery -- a hung GPU must not look like a hung process.
 // (That class and its PollingWaitForStampedQuery were deleted at NRI Phase
-// 5a, Task 9.5a with the NVRHI swapchains they served; the RULE outlived them
-// and is enforced here.) So the wait here is our own poll loop --
+// 5a, Task 9.5a. The NVRHI swapchains they served were already gone by then --
+// deleted one task earlier, at Task 8b; the RULE outlived both and is
+// enforced here.) So the wait here is our own poll loop --
 // GetFenceValue(fence) >= value, SDL_DelayNS(1ms), Diagnostics::Heartbeat() +
 // Diagnostics::GpuHeartbeatRefresh() every iteration, over a 15s window --
 // falling back to the blocking Core().Wait() only once that window has

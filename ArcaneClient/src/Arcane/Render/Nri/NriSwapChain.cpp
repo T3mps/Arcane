@@ -34,7 +34,8 @@ namespace Arcane
         // GpuInstrumentation.cpp's PollingWaitForStampedQuery -- same shape,
         // same constants, same reasoning -- and it is now the ONLY one: that
         // function and the GpuFrameSlot it served were deleted at NRI Phase
-        // 5a, Task 9.5a, along with the two NVRHI swapchains that drove them.
+        // 5a, Task 9.5a. The two NVRHI swapchains that drove them were
+        // already gone by then -- deleted one task earlier, at Task 8b.
         // See NriSwapChain.hpp's header comment for why a bare Core().Wait()
         // cannot be used here. File-local for the reason its predecessor was:
         // it is a leaf detail of the pacing wait, not a general-purpose fence

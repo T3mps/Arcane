@@ -28,7 +28,9 @@
 // shader (ShaderCompiler.hpp:9-13).
 //
 // WHAT IT DOES NOT OWN. The camera (a pure sweep -- Scene/SceneCamera.hpp), the
-// batcher, the device, and the compile service: all injected. It never renders.
+// batcher, and the compile service: all injected. It never renders. (A
+// GraphicsBackend-forwarding `device` field lived in Services too, until NRI
+// Phase 5a, Task 9.5a deleted it -- see Services::backend's own comment.)
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>

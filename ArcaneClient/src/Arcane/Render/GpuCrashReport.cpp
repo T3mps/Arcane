@@ -71,14 +71,23 @@ namespace Arcane::Diag
 
     void FreezeBreadcrumbsOnDeviceLoss(GpuBreadcrumbs& breadcrumbs, const Envelope& envelope)
     {
-        // "device-alive" is the one healthy verdict the two GPU-API backends
-        // shared (GpuCrashD3D12's RemovedReasonKind, GpuCrashVulkan's
-        // lost-probe). BOTH WERE DELETED at NRI Phase 5a, Task 9.5a, so no
-        // producer emits that string today and this branch is currently
-        // reached only through the EMPTY case below -- it is kept because the
-        // string is the envelope's published contract (DiagEnvelopeTest pins
-        // the shape) and Phase 4's native marker layer re-supplies it. An
-        // EMPTY type means no backend classified anything -- also not a
+        // "device-alive" is the one healthy verdict a crash backend can
+        // report. The two GPU-API backends that historically produced it
+        // (GpuCrashD3D12's RemovedReasonKind, GpuCrashVulkan's lost-probe)
+        // were BOTH DELETED at NRI Phase 5a, Task 9.5a -- but the branch is
+        // NOT dead: NriGraphCrashBackend::CollectFault (Nri/NriDiagnostics.cpp)
+        // is the one live crash backend today, and it sets fault.type to
+        // "device-alive" for every gpu-stall report (the watchdog's verdict on
+        // a device that is merely slow, not lost). So this branch is reached
+        // through that non-empty, `!= "device-alive"` path on every gpu-stall
+        // report, not only through the EMPTY case below -- it is load-bearing,
+        // not vestigial: treating the guard as dead and deleting it would make
+        // the ring freeze on every gpu-stall, destroying the crash-time
+        // breadcrumb ring on a device that never actually died. The string is
+        // also the envelope's published contract (DiagEnvelopeTest pins
+        // fault.type's round-trip shape) and Phase 4's native marker layer
+        // re-supplies the readback the two deleted backends used to provide.
+        // An EMPTY type means no backend classified anything -- also not a
         // loss. Everything else (device-removed/-hung/-reset, page-fault
         // kinds, driver-internal-error) means the device is gone and the
         // frames the host keeps pumping must not recycle the crash-time ring.

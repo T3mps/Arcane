@@ -138,8 +138,12 @@ namespace Arcane
         // The merged instance for `id` -- null until the first successful
         // bind. Valid until the next mutating call (a drain may swap the
         // instance); re-fetch every frame before handing it to a caller. Bind
-        // time also warms the instance's texture params through Assets when
-        // `Services::device` is set (see its own comment -- always null today).
+        // time no longer warms the instance's texture params through Assets:
+        // that warm-up was gated on `Services::device`, and NRI Phase 5a,
+        // Task 9.5a deleted both the field and the (already unreachable) warm
+        // loop with it -- see Impl::Bind's own comment, in the .cpp. Texture
+        // residency for the chain is the graph recorder's job now, on its own
+        // device, through NriTextureCache.
         const MaterialInstance*  Instance(const Guid& id) const;
 
         // The bound chain expressed as BYTECODE + layout + values, for the

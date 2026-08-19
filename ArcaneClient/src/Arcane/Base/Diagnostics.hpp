@@ -65,8 +65,10 @@ namespace Arcane::Diagnostics
         // which polls and republishes rather than blocking (see
         // Render/Nri/NriSwapChain.cpp's PollingWaitForTimelineFence -- it was
         // GpuInstrumentation.hpp's GpuFrameSlot until NRI Phase 5a, Task 9.5a
-        // deleted that class with the NVRHI swapchains) precisely so a wedged
-        // GPU is visible as "still waiting, still not retiring".
+        // deleted that class; the two NVRHI swapchains that were GpuFrameSlot's
+        // only users were already gone by then, deleted one task earlier at
+        // Task 8b) precisely so a wedged GPU is visible as "still waiting,
+        // still not retiring".
         //
         // TIGHTER than hangSeconds on purpose, and this is the whole reason
         // both numbers exist -- though NOT as a race between two live rules.
