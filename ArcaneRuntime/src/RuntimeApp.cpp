@@ -465,8 +465,9 @@ void RuntimeApp::MainLoop()
     // anything: both paths render THE SAME booted scene.
     //
     // SINCE NRI PHASE 3 TASK 6 THIS IS ALSO THE PROCESS'S ONLY DEVICE: the
-    // boot above ran GpuContext::CreateForGraph, which built no NVRHI device
-    // at all, so the vehicle below wraps the first and only one -- over the
+    // boot above ran GpuContext::Create (CreateForGraph, before NRI Phase 5a,
+    // Task 6 renamed it), which built no NVRHI device at all, so the vehicle
+    // below wraps the first and only one -- over the
     // HOST's window, which it borrows and must not outlive (m_graphContext is
     // declared after m_gpu, so it is destroyed first).
     //

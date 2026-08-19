@@ -555,7 +555,7 @@ namespace Arcane::Editor
         //
         // sprite_tables (the one stage that used to depend on an NVRHI canvas
         // existing by now) is unaffected: its batcher is m_gpu->Batch() -- the
-        // device-less Batcher2D CreateForGraph built -- exactly as
+        // device-less Batcher2D GpuContext::Create built -- exactly as
         // RuntimeApp::StageSpriteTables does it.
         //
         // NRI Phase 5a, Task 4 deleted the NVRHI trio this stage used to build
@@ -1502,9 +1502,10 @@ namespace Arcane::Editor
         // scaffolding, and at the time GraphMode() was structurally false in
         // Dist (EditorApp.cpp:306 still chose the NVRHI arm there), so this
         // body was dead code in Dist either way -- removing the redundant
-        // preprocessor guard changed no behaviour yet. Phase 5a Task 2b (this
-        // commit) removed that structural guarantee: EditorApp.cpp:306 now
-        // takes CreateForGraph unconditionally, so GraphMode() reports TRUE in
+        // preprocessor guard changed no behaviour yet. Phase 5a Task 2b
+        // removed that structural guarantee: EditorApp.cpp:306 took the graph
+        // factory (GpuContext::CreateForGraph then; renamed to Create by NRI
+        // Phase 5a, Task 6) unconditionally, so GraphMode() reports TRUE in
         // Dist too, and this body runs there for the first time ever. Had
         // Task 2a not already removed the preprocessor guard here, Task 2b's
         // flip would have reproduced exactly the silent Dist-only

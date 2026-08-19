@@ -53,6 +53,15 @@ namespace Arcane
         // with the rest of the GraphMode() collapse; until then it is kept
         // as an intact, if inert, IBootPresenter implementation rather than
         // an ImGui frame that gets Begin()'d and never Rendered.
+        //
+        // m_hasPresentedFrame is now WRITE-DEAD: the deleted tail was its
+        // only assignment site (the real draw+present path used to set it
+        // true), so HasPresentedFrame() permanently returns false. Left
+        // that way deliberately rather than hand-set true here -- a caller
+        // that somehow still reached this class and asked "did you actually
+        // draw something" should get an honest no, not a lie that nothing
+        // was ever drawn into. Fail-loud, not fail-silent, matching the rest
+        // of this function's shape.
         return true;
     }
 }

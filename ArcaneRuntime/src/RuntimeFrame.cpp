@@ -13,6 +13,7 @@
 
 #include <Arcane/Assets/Assets.hpp>       // Arcane::ReadTexturePixels (CaptureTail)
 #include <Arcane/Audio/AudioDevice.hpp>   // complete type for AudioSystem().Update (AdvanceSim's voice reap)
+#include <Arcane/Base/Assert.hpp>         // ARC_ASSERT (FrameExtent's io.graph invariant)
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (PumpAndResize)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Host/GoldenHarness.hpp>  // Arcane::GoldenArtifact (NRI Phase 3, Task 13: shared with ArcaneEditor -- moved out of this file's anonymous namespace)
@@ -76,6 +77,18 @@ namespace
             height = io.graph->Swap().Height();
             return;
         }
+        // io.graph is unconditional as of Phase 5a Task 2b: MainLoop refuses
+        // to reach the frame loop at all if NriGraphContext::Create failed
+        // (RuntimeApp.cpp, ShutdownGraphPath runs and MainLoop returns
+        // first), so every call into RuntimeFrame's functions has a live
+        // vehicle. Asserting here rather than silently leaving width/height
+        // at the caller's zero-initialized default: a 0x0 frame would
+        // propagate into the resolver's material globals and the batcher's
+        // viewport as a quiet wrong-answer instead of a loud one, which is
+        // exactly the defect class this whole phase exists to avoid.
+        ARC_ASSERT(false, "RuntimeFrame::FrameExtent: io.graph is null -- "
+                          "the graph vehicle should be unconditional by the "
+                          "time the frame loop runs");
     }
 }
 

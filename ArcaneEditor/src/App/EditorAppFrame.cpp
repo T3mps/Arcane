@@ -1302,7 +1302,7 @@ namespace Arcane::Editor
         // Begin are what say "record nothing" (Batcher2D::Begin only stores
         // them, and every recording use is inside End(), which this path never
         // calls -- and could not, the batcher being device-less since
-        // CreateForGraph).
+        // GpuContext::Create built it that way).
         //
         // AS OF TASK 9 THIS PHASE DECLARES THE WHOLE VIEWPORT FRAME -- the
         // scene, the game HUD (phase 11's content) and the pick + outline chain

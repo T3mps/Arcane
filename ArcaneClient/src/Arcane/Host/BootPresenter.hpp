@@ -34,9 +34,10 @@
 
 namespace Arcane
 {
-    // Forward-declared, not included: GpuContext.hpp pulls in Window/Device/
-    // Swapchain/ShaderLibrary/Canvas/Batcher2D/TonemapPass/ImGuiLayer/Input --
-    // heavy for a header every boot-stage caller sees. BootPresenter.cpp
+    // Forward-declared, not included: GpuContext.hpp pulls in Window/Batcher2D/
+    // ImGuiLayer/Input (Device/Swapchain/ShaderLibrary/Canvas/TonemapPass were
+    // part of this list before NRI Phase 5a, Task 6 deleted GpuContext's NVRHI
+    // half) -- heavy for a header every boot-stage caller sees. BootPresenter.cpp
     // includes the real header.
     class GpuContext;
 

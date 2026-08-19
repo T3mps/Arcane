@@ -591,10 +591,12 @@ TEST_CASE("assets: RepackStagingToRgba swizzles BGRA, skips row padding, forces 
     // is [B,G,R,A]; TonemapTest.cpp's CheckTonemapGolden pins the same fact
     // GPU-side (its own BGRA8_UNORM readback asserts pixels[0..3] ==
     // B,G,R,A in that order). NRI Phase 5a, Task 4 deleted
-    // OffscreenCanvasTest.cpp, which used to be the citation here -- that
-    // task did not delete Canvas or TonemapPass (both remain live
-    // dependencies of Host/GpuContext.hpp, outside this task's scope), so
-    // TonemapTest.cpp's case still stands as the GPU-side pin. This is the
+    // OffscreenCanvasTest.cpp, which used to be the citation here -- neither
+    // that task nor NRI Phase 5a, Task 6 (which later removed Canvas and
+    // TonemapPass as GpuContext.hpp dependencies) deleted the Canvas or
+    // TonemapPass classes themselves -- both remain live, just no longer
+    // reached through GpuContext -- so TonemapTest.cpp's case still stands
+    // as the GPU-side pin. This is the
     // CPU half of SaveTexturePng, exported exactly so this contract is
     // testable without a device.
     const unsigned char src[2 * 12] = {
