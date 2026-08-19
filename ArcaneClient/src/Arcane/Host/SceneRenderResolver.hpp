@@ -35,7 +35,6 @@
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>   // by value in Services
 
-#include <nvrhi/nvrhi.h>   // nvrhi::IDevice* in Services -- reached through Render/Device.hpp until Task 8b deleted it
 
 #include <functional>
 
@@ -68,7 +67,6 @@ namespace Arcane
             // Forwarded to PostChainCache, which still builds device objects
             // from it. SpriteMaterialCache takes a copy too, but stopped using
             // it at NRI Phase 5a, Task 7 -- see its Services.
-            nvrhi::IDevice* device = nullptr;
             GraphicsBackend backend{};
 
             // The app-shared compile service. Null, or an unavailable one (no

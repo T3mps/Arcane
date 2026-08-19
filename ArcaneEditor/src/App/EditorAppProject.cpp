@@ -57,7 +57,6 @@ namespace Arcane::Editor
         Arcane::Editor::DocServices s;
         const bool graph = GraphMode();
         s.device   = nullptr;
-        s.shaders  = nullptr;
         s.compiler = m_shaderCompiler.get();
         s.sources  = &m_shaderSources;
         s.runtime  = &*m_runtime;

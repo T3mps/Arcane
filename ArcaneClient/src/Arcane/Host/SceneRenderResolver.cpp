@@ -88,7 +88,6 @@ namespace Arcane
         materialServices.compiler     = m_impl->services.compiler;
         materialServices.sources      = m_impl->services.sources;
         materialServices.assets       = assets;
-        materialServices.device       = m_impl->services.device;
         materialServices.backend      = m_impl->services.backend;
         materialServices.resolveAsset = resolveAsset;
         m_impl->materials = std::make_unique<SpriteMaterialCache>(std::move(materialServices));
@@ -97,7 +96,6 @@ namespace Arcane
         postServices.compiler     = m_impl->services.compiler;
         postServices.sources      = m_impl->services.sources;
         postServices.assets       = assets;
-        postServices.device       = m_impl->services.device;
         postServices.backend      = m_impl->services.backend;
         postServices.resolveAsset = resolveAsset;
         m_impl->post = std::make_unique<PostChainCache>(std::move(postServices));

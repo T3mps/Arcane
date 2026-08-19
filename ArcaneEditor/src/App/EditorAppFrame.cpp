@@ -35,7 +35,6 @@
 
 #include <glm/glm.hpp>
 
-#include <nvrhi/nvrhi.h>
 #include <imgui.h>
 
 #include <cctype>
@@ -2849,10 +2848,11 @@ namespace Arcane::Editor
     // unreachable (GraphMode() has been unconditional since Phase 5a Task
     // 2b) and left standing, like CompositeGameUi/RenderSelectionOutline
     // just above, because Task 11 owns the GraphMode() collapse. GpuContext
-    // has built no Swapchain, command list or GpuFrameProgress since this
-    // task deleted Swap()/Cmd()/FrameProgress() along with the rest of its
-    // NVRHI half, so the tail no longer compiles at all; there is nothing
-    // left to guard, so the guard is gone too.
+    // has built no Swapchain, command list or GpuFrameProgress since Task 6
+    // deleted Swap()/Cmd()/FrameProgress() along with the rest of its NVRHI
+    // half, so the tail no longer compiles at all; there is nothing left to
+    // guard, so the guard is gone too. (GpuFrameProgress the CLASS is gone as
+    // well as of Task 9.5a -- it never had a second builder.)
     bool EditorApp::PresentFrame()
     {
         return PresentChromeFrame();

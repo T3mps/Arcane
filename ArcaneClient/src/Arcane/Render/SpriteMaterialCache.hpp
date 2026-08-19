@@ -18,7 +18,6 @@
 #include <Arcane/Guid.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>
 
-#include <nvrhi/nvrhi.h>   // nvrhi::IDevice* in Services -- reached through Render/Device.hpp until Task 8b deleted it
 
 #include <cstdint>
 #include <filesystem>
@@ -58,7 +57,6 @@ namespace Arcane
             // member's mirror (PostChainCache.hpp) and still uses it -- these
             // two retire together with the NVRHI recorder.
             Assets*               assets = nullptr;    // (unused)
-            nvrhi::IDevice*       device = nullptr;    // (unused)
             GraphicsBackend       backend{};
             ResolveAssetFn        resolveAsset;        // Guid -> path (project registry)
         };

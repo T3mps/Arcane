@@ -6,7 +6,6 @@
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"   // StableTextEdit: the stable-buffer text-commit helper
 #include "Widgets/IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
-#include "Widgets/GraphGridPass.hpp"
 #include "Widgets/MaterialParamWidgets.hpp"
 
 // The graph arm's preview vehicle (NRI Phase 3, Task 11). Include-order note
@@ -2553,7 +2552,7 @@ namespace Arcane::Editor
         // Its OWN grid instance -- the phase is per-canvas state, so sharing
         // one with the graph canvas would hand each the other's accumulated
         // pan/zoom on every breadcrumb trip (see DrawCanvasBackdrop).
-        DrawCanvasBackdrop(m_passGrid, m_passGridPhase);
+        DrawCanvasBackdrop(m_passGridPhase);
         // Fills the region: this canvas IS the view now, not a strip over one.
         ed::Begin("##passcanvas", ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
 
@@ -3973,7 +3972,7 @@ namespace Arcane::Editor
         Arcane::MaterialGraph& g = *ActiveGraphOpt();
 
         ed::SetCurrentEditor(m_graphCtx);
-        DrawCanvasBackdrop(m_grid, m_gridPhase);
+        DrawCanvasBackdrop(m_gridPhase);
         // Nothing is drawn above the canvas inside this function, so the
         // remaining region IS the canvas's height.
         ed::Begin("##graphcanvas", ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
@@ -5418,10 +5417,9 @@ namespace Arcane::Editor
                          kPinTextureColor, emphasize);
     }
 
-    void ShaderEditorDocument::DrawCanvasBackdrop(std::unique_ptr<GraphGridPass>& grid,
-                                                  GraphGridPhase& phase)
+    void ShaderEditorDocument::DrawCanvasBackdrop(GraphGridPhase& phase)
     {
-        // ---- Shader-rendered backdrop, UNDER the canvas content ----
+        // ---- ImGui-primitive backdrop, UNDER the canvas content ----
         // The node editor offers no public way to draw beneath its own
         // background/grid layer: everything it emits lands in channels the API
         // does not expose, and the two it does expose (the per-node background
@@ -5431,11 +5429,10 @@ namespace Arcane::Editor
         // ed::Begin -- both the layering and the ScreenToCanvas below depend on
         // it.
         //
-        // The grid instance is a PARAMETER because its phase is per-canvas
-        // STATE (GraphGridPass::UpdatePhase carries a pan/zoom history). Two
-        // canvases sharing one instance would hand each other the other's
-        // accumulated phase every time the view switched, so each canvas owns
-        // its own.
+        // The phase is a PARAMETER because it is per-canvas STATE (a pan/zoom
+        // history, GraphGridPhase::Update). Two canvases sharing one would
+        // hand each other the other's accumulated phase every time the view
+        // switched, so each canvas owns its own.
         //
         // DISCLOSED CONSEQUENCE: the transform read here is the one ed::Begin
         // installed LAST frame. The editor computes the new view in End()
@@ -5463,9 +5460,7 @@ namespace Arcane::Editor
         // Recorded here because this is the one place per canvas that already
         // holds the screen rect BEFORE ed::Begin, which is where ScreenToCanvas
         // still means what it says (inside Begin/End the editor moves ImGui
-        // itself into canvas space, imgui_canvas.cpp:476-487). Computed
-        // unconditionally -- a device-less document still submits nodes, so the
-        // cull test must be live even when the grid is not.
+        // itself into canvas space, imgui_canvas.cpp:476-487).
         //
         // UE's rule, ported: cull against the viewport expanded by a guard band
         // of a quarter of its size on every side (NodePanelDefs::GuardBandArea
@@ -5490,8 +5485,6 @@ namespace Arcane::Editor
             m_cullRectValid = false;
         }
 
-        if (!grid && m_services.device && m_services.shaders)
-            grid = GraphGridPass::Create(m_services.device, m_services.shaders);
         if (canvasSize.x <= 0.0f || canvasSize.y <= 0.0f)
             return;
 
@@ -5516,66 +5509,27 @@ namespace Arcane::Editor
         FillRgba(colors.minor,  kGridMinorColor);
         FillRgba(colors.major,  kGridMajorColor);
 
-        // ===== NO PASS OBJECT: RETURN, AND ON THE GRAPH ARM DRAW INSTEAD ====
-        // THE `!grid` RETURN IS LOAD-BEARING AND IS NOT THE ARM GATE. Every
-        // path out of a null `grid` ends here, because `grid->Update` below
-        // would dereference a null unique_ptr. Two shapes reach it WITH a
-        // device, and both are why this cannot be folded into the arm test:
-        //   * GraphGridPass::Create returned null because Init() failed -- any
-        //     nvrhi binding-layout / buffer / binding-set / command-list
-        //     creation failure on a device-carrying run;
-        //   * m_services.shaders is null with m_services.device set, so Create
-        //     was never attempted at all (the `&&` above).
-        // Both previously drew no backdrop and CONTINUED, and they must keep
-        // doing exactly that.
+        // ===== THE ImGui-PRIMITIVE BACKDROP, AND NOW THE ONLY ONE ===========
+        // Until NRI Phase 5a, Task 9.5a this branched: a device-carrying
+        // document blitted a shader-rendered lattice from GraphGridPass (an
+        // nvrhi render target, its own pipeline and binding sets), and only
+        // the graph arm drew the lattice with ImGui primitives. GraphGridPass
+        // is DELETED -- its Create() needed both an nvrhi device and a
+        // ShaderLibrary, and `m_services.device` has been unconditionally null
+        // since Task 2b's flip, so the pass could never be built and the
+        // ImGui arm was already the only one that ran.
         //
-        // NOT the missing-shader-artifact case, which is what an earlier
-        // version of this comment wrongly claimed: a missing graph_grid_vs/ps
-        // still leaves a live pass object (Create only builds device objects),
-        // whose GetPipeline latches m_shaderMissing, whose Update returns null,
-        // which the `if (tex)` guard below absorbs. That case never reaches
-        // here.
+        // What that arm draws is unchanged: the shared GraphGridPhase state
+        // machine, the same snapped period, the same two octaves. It remains a
+        // CHOICE rather than a stopgap -- the grid is chrome, and an offscreen
+        // graph context per canvas would be a RenderGraph, a descriptor pool, a
+        // graveyard lane and a chrome-side user-texture entry to invalidate, to
+        // draw straight lines.
         //
-        // ===== THE ImGui-PRIMITIVE BACKDROP (Task 11) =======================
-        // The graph arm has no nvrhi device, so GraphGridPass::Create cannot
-        // run at all and there is never a pass. It draws the SAME lattice
-        // instead: the shared GraphGridPhase state machine, the same snapped
-        // period, the same two octaves -- see THE GRAPH ARM'S GRID in
-        // GraphGridPass.hpp for what it keeps and what it drops. A CHOICE,
-        // recorded there: the grid is chrome, and an offscreen graph context
-        // per canvas is a RenderGraph, a descriptor pool, a graveyard lane and
-        // a chrome-side user-texture entry to invalidate -- to draw straight
-        // lines.
-        //
-        // The phase state rides on the DOCUMENT (one per canvas, exactly like
-        // the pass instances) so a canvas keeps its history when the grid
-        // itself does not exist.
-        //
-        // GATED ON THE ARM so the two device-carrying shapes above keep their
-        // existing no-backdrop behaviour: giving them one they did not have
-        // would be an observable NVRHI-arm change in a task whose contract is
-        // that the NVRHI arm does not move. It would be an improvement, and it
-        // is one clause away -- flagged rather than taken.
-        if (!grid)
-        {
-            if (!m_services.device)
-                DrawGraphGridFallback(ImGui::GetWindowDrawList(), canvasMin, canvasSize,
-                                      view, colors, phase);
-            return;
-        }
-
-        if (nvrhi::ITexture* tex = grid->Update(view, colors))
-        {
-            // The target is over-allocated to a quantum, so only its top-left
-            // corner belongs to this region -- hence the UVs.
-            const float u = canvasSize.x / static_cast<float>(grid->AllocatedWidth());
-            const float v = canvasSize.y / static_cast<float>(grid->AllocatedHeight());
-            ImGui::GetWindowDrawList()->AddImage(
-                static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(tex)),
-                canvasMin, ImVec2(canvasMin.x + canvasSize.x,
-                                  canvasMin.y + canvasSize.y),
-                ImVec2(0.0f, 0.0f), ImVec2(u, v));
-        }
+        // The phase state rides on the DOCUMENT (one per canvas) so a canvas
+        // keeps its history across view switches.
+        DrawGraphGridFallback(ImGui::GetWindowDrawList(), canvasMin, canvasSize,
+                              view, colors, phase);
     }
 
     void ShaderEditorDocument::SetPinPivot(std::uint64_t pinId, ImVec2 p)

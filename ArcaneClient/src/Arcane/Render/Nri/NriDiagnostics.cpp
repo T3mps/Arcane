@@ -69,12 +69,6 @@ namespace Arcane
             {
             }
 
-            // No nvrhi::ICommandList exists anywhere on this path -- the
-            // graph records into nri::CommandBuffer. A caller reaching for
-            // this overload has the wrong backend, so it fails rather than
-            // pretending.
-            bool WriteMarker(nvrhi::ICommandList*, std::uint32_t, bool) override { return false; }
-
             // No GPU-written marker layer yet (header: it is its own arc).
             // False, not a silent true: `armed` in Diag::ReplayMarkerBuffer is
             // a RUNTIME kill switch, and claiming a marker went out when none

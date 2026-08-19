@@ -48,7 +48,6 @@
 #include <Arcane/Render/Nri/NriGraphContext.hpp>    // the graph vehicle (RenderGraph); unconditional as of Phase 5a
 #include <Arcane/Render/PickEmit.hpp>                // PickDrawable (--pick-probe)
 
-#include <nvrhi/nvrhi.h>
 
 #include <chrono>
 #include <cstdint>
@@ -123,7 +122,10 @@ namespace Arcane::RuntimeFrame
         std::chrono::steady_clock::time_point& simPrev;
         std::chrono::steady_clock::time_point& lastFrameTime;
         std::chrono::steady_clock::time_point& lastShaderPoll;
-        nvrhi::ITexture*&                      backbuffer;
+        // An `nvrhi::ITexture*& backbuffer` sat here until NRI Phase 5a,
+        // Task 9.5a. PrepareFrame reset it to null every frame and nothing
+        // read it: its last reader, CaptureTail's NVRHI arm, went at Task 4
+        // and the acquire that filled it at Task 6.
 
         // ---- control-flow outputs -------------------------------------------
         // A called free function cannot `break`/`continue` MainLoop's while

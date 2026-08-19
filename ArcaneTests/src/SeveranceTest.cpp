@@ -288,8 +288,9 @@ TEST_CASE("severance: SpriteMaterialCache binds with a NULL device and publishes
     SpriteMaterialCache::Services services;
     services.compiler = &compiler;
     services.sources  = &provider;
-    services.assets   = nullptr;
-    services.device   = nullptr;                     // THE SEVERANCE
+    services.assets   = nullptr;   // THE SEVERANCE (the `device` field it sat
+                                   // beside was deleted at Task 9.5a: unused,
+                                   // and only ever set to exactly this)
     services.backend  = GraphicsBackend::D3D12;
     services.resolveAsset = [&](const Guid& g) -> std::optional<std::filesystem::path>
     {
@@ -343,8 +344,8 @@ TEST_CASE("severance: PostChainCache publishes a PostChainDesc with a NULL devic
     PostChainCache::Services services;
     services.compiler = &compiler;
     services.sources  = &provider;
-    services.assets   = nullptr;
-    services.device   = nullptr;                     // THE SEVERANCE
+    services.assets   = nullptr;   // THE SEVERANCE (see the sprite-material
+                                   // case above for the deleted `device`)
     services.backend  = GraphicsBackend::D3D12;
     services.resolveAsset = [&](const Guid& g) -> std::optional<std::filesystem::path>
     {

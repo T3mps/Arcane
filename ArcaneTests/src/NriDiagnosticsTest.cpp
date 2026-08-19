@@ -77,7 +77,6 @@ namespace
     class StubCrashBackend final : public Arcane::IGpuCrashBackend
     {
     public:
-        bool WriteMarker(nvrhi::ICommandList*, std::uint32_t, bool) override { return false; }
         bool WriteMarkerNative(void*, std::uint32_t, bool) override { return false; }
         void CollectFault(Arcane::Diag::Envelope&) override {}
         Arcane::GpuBreadcrumbs& Breadcrumbs() override { return m_breadcrumbs; }

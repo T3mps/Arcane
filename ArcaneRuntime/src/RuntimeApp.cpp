@@ -34,7 +34,6 @@
 
 #include <Astra/Core/TypeContext.hpp>
 
-#include <nvrhi/nvrhi.h>
 #include <imgui.h>
 
 #include <chrono>
@@ -330,8 +329,9 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
     // Device() along with the rest of its NVRHI half. This used to be a
     // GraphFlavor() ternary against m_gpu->Device().Backend() so the NVRHI
     // arm kept the literal statement its frozen baselines were captured
-    // with; that arm is gone, so the ternary is too.
-    rs.device   = nullptr;
+    // with; that arm went, so the ternary went, and at Task 9.5a the
+    // `rs.device = nullptr` that survived it went too -- Services no longer
+    // has the field.
     rs.backend  = m_config.backend;
     rs.compiler = &m_shaderCompiler;
     rs.sources  = &m_shaderSources;
@@ -441,14 +441,12 @@ void RuntimeApp::MainLoop()
     auto simPrev       = std::chrono::steady_clock::now();
     auto lastFrameTime = simPrev;
     auto lastShaderPoll = simPrev;
-    // Hoisted out of the loop body (NRI Phase 3, Task 4): PrepareFrame
-    // resets and (NVRHI-path only) acquires it, CaptureTail reads it -- two
-    // of the six extracted RuntimeFrame functions need it to survive one
-    // iteration. PrepareFrame resets it to nullptr at the same source spot
-    // the old inline `nvrhi::ITexture* backbuffer = nullptr;` declaration
-    // sat, every frame. NRI Phase 5a, Task 4 deleted RenderNvrhi, the third
-    // function that used to read it.
-    nvrhi::ITexture* backbuffer = nullptr;
+    // An `nvrhi::ITexture* backbuffer` was hoisted out of the loop body here
+    // (NRI Phase 3, Task 4) so it could survive one iteration between
+    // PrepareFrame, which acquired it, and CaptureTail, which read it. Task 4
+    // deleted RenderNvrhi, Task 6 deleted the acquire and Task 4 the read, so
+    // by Task 9.5a it was a variable passed by reference into RuntimeFrame.io
+    // and reset to null every frame for nobody. Gone with the io field.
     bool running = true;
 
     // --nri-graph (NRI Phase 2, Task 7): THE RENDER HALF SWAPS, HERE.
@@ -648,7 +646,6 @@ void RuntimeApp::MainLoop()
         .simPrev         = simPrev,
         .lastFrameTime   = lastFrameTime,
         .lastShaderPoll  = lastShaderPoll,
-        .backbuffer      = backbuffer,
     };
 
     while (running)

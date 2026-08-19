@@ -28,7 +28,6 @@
 #include <Arcane/Guid.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>
 
-#include <nvrhi/nvrhi.h>   // nvrhi::IDevice* in Services -- reached through Render/Device.hpp until Task 8b deleted it
 
 #include <cstdint>
 #include <filesystem>
@@ -113,7 +112,6 @@ namespace Arcane
             // it mirrors SpriteMaterialCache::Services::device, and
             // collapsing device-gated plumbing repo-wide is Task 11's job,
             // not this one's.
-            nvrhi::IDevice*       device = nullptr;
             GraphicsBackend       backend{};
             ResolveAssetFn        resolveAsset;        // Guid -> path (project registry)
         };

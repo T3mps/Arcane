@@ -51,7 +51,6 @@
 
 #include <glm/glm.hpp>
 
-#include <nvrhi/nvrhi.h>
 #include <imgui.h>
 // AddSettingsHandler / FindSettingsHandler, ImGuiSettingsHandler and
 // ImHashStr are internal-only -- ImGui's ini extension point has never been
@@ -767,8 +766,9 @@ namespace Arcane::Editor
             // No NVRHI device to ask for either value any more: GpuContext
             // has built none since NRI Phase 5a, Task 6 deleted Device(),
             // so the GraphFlavor() ternaries this used to be are gone --
-            // there is no NVRHI arm left for them to choose between.
-            rs.device   = nullptr;
+            // there is no NVRHI arm left for them to choose between. Task
+            // 9.5a then deleted SceneRenderResolver::Services::device
+            // itself, so only the backend is set here now.
             rs.backend  = m_config.backend;
             rs.compiler = m_shaderCompiler.get();
             rs.sources  = &m_shaderSources;

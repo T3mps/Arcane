@@ -25,7 +25,7 @@
 
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
-#include <Arcane/Render/GpuInstrumentation.hpp>   // GpuFrameSlot -- stamped bookkeeping, testable with no device
+#include <Arcane/Render/GpuInstrumentation.hpp>   // the process-wide GPU-crash backend slot the [diag] cases install into
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -690,41 +690,17 @@ TEST_CASE("dred tier never selects markers-only while WriteMarkerNative is a stu
 }
 #endif
 
-TEST_CASE("GpuFrameSlot never claims a stamp that did not go out", "[diag]")
-{
-    // The invariant the whole poll/wait split rests on. nvrhi's pollEventQuery
-    // reports an UNSTAMPED query as incomplete FOREVER (Vulkan:
-    // Queue::pollCommandList returns false for commandListID == 0; D3D12:
-    // !started), while waitEventQuery returns from that same state instantly.
-    // So a slot that wrongly believes it is stamped sends the wait into a poll
-    // loop nvrhi will never satisfy -- a multi-second host freeze plus a
-    // gpu-stall report blaming the GPU for a frame that never submitted
-    // anything. Reachable on Vulkan via an ordinary window resize
-    // (OutOfDateKHRError bails BeginFrame before Present ever stamps).
-    //
-    // No device here on purpose: a slot whose query could not be created must
-    // behave like an unstamped slot, and that is exactly what a null device
-    // produces. The GPU-side half of this is desk-covered ([gpu] PacingTest /
-    // SwapchainTest, plus the resize storm in the desk battery).
-    Arcane::GpuFrameSlot slot;
-
-    // Fresh: nothing stamped.
-    CHECK_FALSE(slot.IsStamped());
-
-    // A failed Init leaves it unstamped rather than half-armed.
-    CHECK_FALSE(slot.Init(nullptr));
-    CHECK_FALSE(slot.IsStamped());
-
-    // Stamp with no device: the stamp did NOT go out, so the flag must not
-    // claim it did. This is the assertion that keeps the poll loop honest.
-    slot.Stamp(nullptr, nvrhi::CommandQueue::Graphics);
-    CHECK_FALSE(slot.IsStamped());
-
-    // And the wait over an unstamped/queryless slot returns rather than
-    // polling. If this ever hangs, the regression is back.
-    slot.WaitAndReset(nullptr);
-    CHECK_FALSE(slot.IsStamped());
-}
+// DELETED AT NRI PHASE 5a, TASK 9.5a, AND NAMED RATHER THAN DROPPED:
+// TEST_CASE("GpuFrameSlot never claims a stamp that did not go out").
+// Arcane::GpuFrameSlot is gone -- Task 8b deleted SwapchainD3D12 and
+// SwapchainVulkan, its only two production users, and its whole API was
+// nvrhi-typed (Init/Stamp/WaitAndReset over an nvrhi::EventQueryHandle).
+// The invariant it pinned -- a slot must never report IsStamped() for a
+// stamp that did not go out, or the pacing wait polls a query nvrhi
+// reports incomplete forever -- still binds, but now on NriSwapChain's
+// own frame slots, where the only coverage is the [gpu] desk battery's
+// resize storm. THIS WAS THE LAST UNIT PIN ON IT. Re-pinning it against
+// the graph slots is a Phase 4/5b item.
 
 TEST_CASE("Diagnostics GPU watchdog fires while the render path is parked in a frame-slot wait", "[diag]")
 {
@@ -736,9 +712,11 @@ TEST_CASE("Diagnostics GPU watchdog fires while the render path is parked in a f
     }
 #endif
 
-    // THE case the rule exists for, and the one it could not see before
-    // GpuFrameSlot's polling wait: a wedged GPU parks the main thread in the
-    // swapchain's slot wait, so no new counter value can ever be published --
+    // THE case the rule exists for, and the one it could not see before the
+    // polling frame-slot wait (Arcane::GpuFrameSlot's, then; NriSwapChain's
+    // own frame slots now, and GpuFrameSlot itself was deleted at Task 9.5a):
+    // a wedged GPU parks the main thread in the swapchain's slot wait, so no
+    // new counter value can ever be published --
     // the host is blocked producing one. A blocking wait made that
     // indistinguishable from "not rendering", the freshness gate disarmed on
     // it, and gpu-stall was unreachable in both hosts. The polling wait

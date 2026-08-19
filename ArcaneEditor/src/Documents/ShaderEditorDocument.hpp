@@ -24,10 +24,11 @@
 #include "Scene/EditGesture.hpp"
 #include "Documents/EditorDocument.hpp"
 #include "Widgets/EditorWidgets.hpp"   // TextCommitState / StableTextEdit
-// The grid's PURE half only -- GraphGridPass.hpp itself (nvrhi + ImGui) stays
-// behind the forward declaration below. The two phase members are held BY
-// VALUE because a canvas keeps its pan/zoom history whether or not a shader
-// pass exists to render it (NRI Phase 3, Task 11).
+// The grid's PURE half, and since NRI Phase 5a Task 9.5a its ONLY half:
+// GraphGridPass.hpp (the nvrhi-backed shader pass this used to sit in front
+// of) is deleted, so the two phase members below are what the canvas grid IS.
+// Held BY VALUE because a canvas keeps its pan/zoom history across view
+// switches (NRI Phase 3, Task 11).
 #include "Widgets/GraphGridPhase.hpp"
 
 #include <Arcane/Material/MaterialAsset.hpp>
@@ -57,7 +58,6 @@ namespace Arcane
 {
     class CommandStack;
     class Runtime;
-    class ShaderLibrary;
 
     // ---- The graph arm's preview vehicle (NRI Phase 3, Task 11) ----
     // Forward-declared, never included: NriGraphContext.hpp pulls <NRI.h> plus
@@ -98,23 +98,19 @@ namespace Arcane::Editor
         FullyZoomedIn,      // zoomed in past 1:1
     };
 
-    // The graph canvas's shader-rendered backdrop (GraphGridPass.hpp). Held by
-    // unique_ptr behind a forward declaration so the nvrhi pass machinery stays
-    // out of every translation unit that merely opens a document; the
-    // destructor below is out-of-line, which is what makes that legal.
-    class GraphGridPass;
-
     // Everything a document borrows from the app (all outlive the host's
     // document list -- see EditorApp member ordering).
     struct DocServices
     {
         // Always null (both hosts render through the graph, never the NVRHI
-        // arm -- NRI Phase 5a, Task 4 deleted the NVRHI preview these two used
-        // to feed, OffscreenCanvas + FullscreenMaterialPass/Chain). Kept
-        // rather than deleted: GraphGridPass still reads `device` for its own
-        // NVRHI-backed grid backdrop, gated the same way.
+        // arm -- NRI Phase 5a, Task 4 deleted the NVRHI preview it used to
+        // feed, OffscreenCanvas + FullscreenMaterialPass/Chain). It survives
+        // as the gate on the node-preview thumbnail path below, which is
+        // unreachable precisely because this is null -- see
+        // RefreshNodePreviews. The `shaders` (Arcane::ShaderLibrary*) field
+        // that sat beside it went at Task 9.5a with GraphGridPass, its only
+        // reader; nothing ever assigned it.
         nvrhi::IDevice*               device = nullptr;
-        Arcane::ShaderLibrary*        shaders = nullptr;
         Arcane::ShaderCompiler*       compiler = nullptr;   // app-shared service
         Arcane::ShaderSourceProvider* sources = nullptr;    // template text
         Arcane::Runtime*              runtime = nullptr;    // Assets facade + open project (picker)
@@ -133,10 +129,11 @@ namespace Arcane::Editor
 
         // ===== THE GRAPH ARM'S PREVIEW SEAM (NRI Phase 3, Task 11) ==========
         // On `--nri-graph` there is no `device` above (StageRenderBridge hands
-        // the runtime (nullptr, nullptr)), so GraphGridPass refuses to create
-        // and -- before NRI Phase 5a, Task 4 deleted them -- so did
-        // OffscreenCanvas / FullscreenMaterialPass / FullscreenMaterialChain;
-        // without this seam the document's preview would simply be absent.
+        // the runtime (nullptr, nullptr)), so the NVRHI preview machinery could
+        // never be built: OffscreenCanvas / FullscreenMaterialPass /
+        // FullscreenMaterialChain (deleted at NRI Phase 5a, Task 4) and the
+        // GraphGridPass canvas backdrop (deleted at Task 9.5a). Without this
+        // seam the document's preview would simply be absent.
         // These three are what let it render instead, and all three are
         // BORROWED from EditorApp (which outlives the document list):
         //
@@ -547,11 +544,10 @@ namespace Arcane::Editor
         // Blit one canvas's shader grid backdrop. MUST be called before that
         // canvas's ed::Begin (layering + ScreenToCanvas both require it); the
         // instance is a parameter because the grid's phase is per-canvas state.
-        // `phase` is the SAME canvas's grid history -- carried separately
-        // from `grid` because the ImGui-primitive fallback (the graph arm,
-        // and any run with no grid shader) has no pass object to hold it
-        // in, and a canvas must keep its history either way.
-        void DrawCanvasBackdrop(std::unique_ptr<GraphGridPass>& grid,
+        // `phase` is this canvas's grid history. It is a parameter rather
+        // than a member read because the document owns TWO canvases (graph and
+        // pass) and each keeps its own.
+        void DrawCanvasBackdrop(
                                 GraphGridPhase& phase);
         void DrawGraphPanel();
         // `lod` is the canvas tier for THIS frame, computed once by
@@ -800,22 +796,14 @@ namespace Arcane::Editor
 
         // ---- Graph mode (Slice 9; per-pass graphs) ----
         ax::NodeEditor::EditorContext* m_graphCtx = nullptr;   // lazy; dtor destroys
-        // Shader-rendered canvas backdrop, blitted under the canvas content.
-        // Lazy and optional: device-less services (the headless tests) and a
-        // missing shader artifact both leave it null and simply draw no grid.
-        std::unique_ptr<GraphGridPass> m_grid;
-        // The pass canvas's own backdrop instance. Separate because the grid's
-        // phase is per-canvas state (DrawCanvasBackdrop says why), and the two
-        // views alternate.
-        std::unique_ptr<GraphGridPass> m_passGrid;
-        // ...and the two canvases' PHASE, held here rather than inside the
-        // pass objects above (NRI Phase 3, Task 11). It has to outlive them:
-        // on the graph arm neither pass exists at all and the ImGui-primitive
-        // fallback draws the same lattice from these, and on a device-carrying
-        // run a grid whose shader artifacts are missing takes the same route.
-        // GraphGridPass keeps its OWN copy for its render key -- the two are
-        // never both live for one canvas, because the fallback runs only when
-        // there is no pass.
+        // The two canvases' grid PHASE. Until NRI Phase 5a Task 9.5a these sat
+        // beside a pair of std::unique_ptr<GraphGridPass> members that held an
+        // nvrhi-backed shader lattice; that class is deleted (its Create()
+        // needed a device and a ShaderLibrary, and DocServices::device has been
+        // unconditionally null since Task 2b), so the ImGui-primitive lattice
+        // DrawGraphGridFallback draws from these IS the canvas grid now. Still
+        // two, still by value: the views alternate and each keeps its own
+        // pan/zoom history.
         GraphGridPhase m_gridPhase{};
         GraphGridPhase m_passGridPhase{};
         // Pass-canvas node widths, keyed by pass-canvas node id. Its own map:

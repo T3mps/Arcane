@@ -320,13 +320,10 @@ namespace Arcane
         e.desc.chainInputSlots = p.chainInputSlots;
         e.desc.passes          = std::move(passBytes);
 
-        // Warm the declared texture params NOW -- always device-gated (see
-        // Services::device), so this never runs today; the graph recorder
-        // makes the same Guids resident on its own device through
-        // NriTextureCache instead.
-        if (im.services.assets && im.services.device)
-            for (const Guid& g : e.instance->ResolveTextures())
-                if (g.IsValid())
-                    im.services.assets->GetTexture(AssetId::FromGuid(g));
+        // A texture-param WARM used to sit here, gated on Services::device --
+        // never reachable, because that field was null on every run since the
+        // Phase 5a flip. It went with the field at Task 9.5a. Residency for the
+        // same Guids is the graph recorder's job on its OWN device, through
+        // NriTextureCache; there was never a second place for it to happen.
     }
 }

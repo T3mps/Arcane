@@ -3682,11 +3682,6 @@ namespace
     public:
         explicit MarkerSpyBackend(void* nativeDevice) noexcept : m_nativeDevice(nativeDevice) {}
 
-        bool WriteMarker(nvrhi::ICommandList*, std::uint32_t, bool) override
-        {
-            ++nvrhiMarkers;
-            return false;
-        }
         bool WriteMarkerNative(void*, std::uint32_t, bool) override
         {
             ++nativeMarkers;
@@ -3697,7 +3692,6 @@ namespace
         const char* Name() const override { return "spy"; }
         [[nodiscard]] void* NativeDevice() const override { return m_nativeDevice; }
 
-        int nvrhiMarkers  = 0;
         int nativeMarkers = 0;
 
     private:
@@ -3763,9 +3757,11 @@ TEST_CASE("rendergraph exec: a crash backend on ANOTHER device gets CPU breadcru
 
     // THE PROPERTY: not one native marker crossed the device boundary.
     CHECK(spy.nativeMarkers == 0);
-    // ...and the graph never reaches for the nvrhi overload at all (it holds no
-    // nvrhi::ICommandList -- that is the whole reason WriteMarkerNative exists).
-    CHECK(spy.nvrhiMarkers == 0);
+    // The companion assertion -- `spy.nvrhiMarkers == 0`, that the graph never
+    // reached for IGpuCrashBackend::WriteMarker(nvrhi::ICommandList*) -- is
+    // gone with the overload itself (NRI Phase 5a, Task 9.5a). Not a coverage
+    // loss: an entry point that does not exist cannot be called, which is a
+    // stronger guarantee than the CHECK was.
 
     // The half that MUST survive the gate: the CPU breadcrumb ring still opened
     // one scope per node. Tokens are monotonic from 0 and never reused, so the

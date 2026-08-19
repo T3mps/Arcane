@@ -5,17 +5,24 @@
 // makes a pan track the nodes 1:1 and a zoom grow out of the point the editor
 // zoomed about.
 //
-// SPLIT OUT OF GraphGridPass.hpp AT NRI PHASE 3, TASK 11, and the split is the
-// point: that header reaches nvrhi and ImGui, and TWO consumers now need only
-// this arithmetic -- the shader pass (which renders it in one fullscreen
-// triangle) and the graph arm's ImGui-primitive fallback (which draws the same
-// lattice with AddLine). Keeping the state machine in one place is what makes
-// "both backdrops move identically" a fact rather than a hope; keeping it in a
-// header with no device dependency is what lets a headless test drive it and
-// what keeps it out of every TU that merely opens a document.
+// SPLIT OUT OF GraphGridPass.hpp AT NRI PHASE 3, TASK 11, when there were TWO
+// consumers of this arithmetic -- the nvrhi shader pass (one fullscreen
+// triangle) and the graph arm's ImGui-primitive fallback (AddLine) -- and one
+// copy of the state machine was what made "both backdrops move identically" a
+// fact rather than a hope.
+//
+// THE OTHER CONSUMER IS GONE (NRI Phase 5a, Task 9.5a): GraphGridPass could
+// only be built with an nvrhi::IDevice and a ShaderLibrary, DocServices::device
+// has been unconditionally null since Task 2b, and the class is deleted. Its
+// DrawGraphGridFallback moved here verbatim (bottom of this file), so this
+// header is now the WHOLE canvas grid rather than its pure half. It still has
+// no device dependency, which is what lets a headless test drive it and what
+// keeps it out of every TU that merely opens a document.
 //
 // Nothing here was rewritten -- constants, branches and wrap are verbatim from
-// GraphGridPass's private half.
+// GraphGridPass's private half, as is the relocated drawing function.
+
+#include <imgui.h>   // DrawGraphGridFallback draws the lattice with ImDrawList
 
 #include <cmath>
 #include <cstdint>
@@ -76,8 +83,9 @@ namespace Arcane::Editor
         // kZoomExponent / kBaseSpacingPx / kMinorTargetPx / kMajorEvery. They
         // are duplicated here rather than passed in because the phase update
         // has to know the grid's own screen scale and its coarsest period, and
-        // both are the shader's arithmetic; same mirrored-constant arrangement
-        // msdf.hlsl and TextSystem.cpp use for kPxRange/kAtlasSize.
+        // both are the shader's arithmetic; the same mirrored-constant
+        // arrangement msdf.hlsl and TextSystem.cpp used for kPxRange/
+        // kAtlasSize before Task 9.5a deleted TextSystem.
         static constexpr float kZoomExponent  = 0.7f;   // see the shader's rationale block
         static constexpr float kBaseSpacingPx = 20.0f;
         static constexpr float kMinorTargetPx = 22.0f;
@@ -192,4 +200,103 @@ namespace Arcane::Editor
         float prevScale = 1.0f;
         bool  havePrevView = false;
     };
+
+    // =====================================================================
+    // DrawGraphGridFallback -- THE canvas grid (relocated NRI Phase 5a, 9.5a)
+    // =====================================================================
+    // RELOCATED VERBATIM from GraphGridPass.hpp, which is deleted. It was
+    // written at NRI Phase 3, Task 11 as the graph arm's stand-in for a
+    // shader-rendered lattice; the shader pass needed an nvrhi::IDevice and a
+    // ShaderLibrary, DocServices::device has been unconditionally null since
+    // Phase 5a Task 2b, and Task 9.5a deleted the pass outright. So this is no
+    // longer a fallback in anything but name -- it is the canvas grid.
+    //
+    // THE CHOICE MADE, AND WHY (carried over from the deleted header, because
+    // it is still the reason this is primitives and not a render pass). Two
+    // routes were available for the device-less arm: render the grid through a
+    // tiny offscreen graph frame, or draw it with ImGui primitives. The grid is
+    // CHROME -- a backdrop for a node canvas, never captured, never compared
+    // against a golden, and its only job is to tell the eye that the canvas
+    // panned. An offscreen graph context per canvas (and there are two per
+    // document: the graph canvas and the pass canvas) is a whole RenderGraph,
+    // command-buffer set, descriptor pool and graveyard lane, plus a
+    // user-texture entry on the chrome backend and the invalidate obligations
+    // that come with it -- all to draw straight lines. ImGui primitives draw
+    // the same lines with no GPU object at all. So: PRIMITIVES.
+    //
+    // WHAT IT KEEPS, and it is the part that matters -- the MOTION. It runs
+    // the phase state machine above, so the grid tracks the nodes 1:1 on a pan
+    // and grows out of the editor's own zoom fixed point, answering zoom
+    // sublinearly through the same pow(scale, 0.7) curve. Same two lattices,
+    // same snapped period.
+    //
+    // WHAT IT LOSES, relative to the deleted shader and stated rather than
+    // discovered: the four-octave crossfade (one octave is drawn, so a zoom
+    // crosses LOD steps as a pop rather than a fade), the vignette, and the
+    // shader's analytic anti-aliasing (ImGui's 1px lines are its own AA). And
+    // it costs a few hundred AddLine calls per canvas per frame. That was the
+    // price of the mode when there were two; it is now simply the price.
+    //
+    // The vendored node editor's OWN grid stays switched off through its public
+    // style seam (StyleColor_Grid alpha 0) -- it is a fixed 32 px line pair
+    // with no fade and no styling beyond one color
+    // (imgui_node_editor.cpp:1498-1519), which is what this replaces.
+    //
+    // `min`/`size` are the canvas region in SCREEN coordinates; `phase` is the
+    // caller's per-canvas state (one instance per canvas) and is ADVANCED by
+    // this call.
+    inline void DrawGraphGridFallback(ImDrawList* dl, ImVec2 min, ImVec2 size,
+                                      const GraphGridView& view,
+                                      const GraphGridColors& colors,
+                                      GraphGridPhase& phase)
+    {
+        if (!dl || size.x <= 0.0f || size.y <= 0.0f)
+            return;
+
+        // Phase first, and unconditionally: it is a function of the view
+        // HISTORY, so a frame that skipped it would leave a gap the next frame
+        // reads as a jump.
+        phase.Update(view);
+
+        const auto pack = [](const float (&c)[4])
+        {
+            return ImGui::ColorConvertFloat4ToU32(ImVec4(c[0], c[1], c[2], c[3]));
+        };
+        const ImVec2 maxPt(min.x + size.x, min.y + size.y);
+        // Opaque backdrop, exactly as the shader writes it ("the backdrop is
+        // always written opaque", GraphGridColors above).
+        dl->AddRectFilled(min, maxPt,
+                          ImGui::ColorConvertFloat4ToU32(
+                              ImVec4(colors.canvas[0], colors.canvas[1], colors.canvas[2], 1.0f)));
+
+        const float pm = GraphGridPhase::MinorPeriod(GraphGridPhase::GridScale(view.scale));
+        if (!(pm > 0.5f))
+            return;   // degenerate; a line every half pixel is a fill, not a grid
+        const float pM = pm * GraphGridPhase::kMajorEvery;
+
+        const ImU32 minorCol = pack(colors.minor);
+        const ImU32 majorCol = pack(colors.major);
+
+        // ONE octave, at the snapped period -- see WHAT IT LOSES above. Majors
+        // are drawn over minors rather than instead of them, which is what the
+        // shader's additive octaves do at a major line.
+        const auto lattice = [&](float period, ImU32 col)
+        {
+            // Start at the first lattice point at or after the region's left
+            // edge. fmod can return either sign, so it is normalized into
+            // [0, period) before use.
+            float ox = std::fmod(phase.x, period);
+            if (ox > 0.0f) ox -= period;
+            for (float sx = ox; sx <= size.x; sx += period)
+                if (sx >= 0.0f)
+                    dl->AddLine(ImVec2(min.x + sx, min.y), ImVec2(min.x + sx, maxPt.y), col);
+            float oy = std::fmod(phase.y, period);
+            if (oy > 0.0f) oy -= period;
+            for (float sy = oy; sy <= size.y; sy += period)
+                if (sy >= 0.0f)
+                    dl->AddLine(ImVec2(min.x, min.y + sy), ImVec2(maxPt.x, min.y + sy), col);
+        };
+        lattice(pm, minorCol);
+        lattice(pM, majorCol);
+    }
 }

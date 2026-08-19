@@ -3,9 +3,8 @@
 // GPU crash diagnostics arc (Task 3): the seam a GPU backend implements
 // (Task 5 = D3D12 via WriteBufferImmediate + DRED, Task 6 = Vulkan via the
 // AMD buffer-marker / device-fault extensions). Pure interface -- no GPU
-// calls live in THIS header, only shape. NEVER wrap nvrhi::ICommandList
-// (NVRHI boundary rule) -- WriteMarker passes the raw pointer straight
-// through to the backend, nothing more.
+// calls live in THIS header, only shape. WriteMarkerNative passes the raw
+// native command-list pointer straight through to the backend, nothing more.
 //
 // Task 5 also parks the `.gpudump` container here (Diag::GpuDumpWriter +
 // ParseGpuDump/ReadGpuDump): it is the RAW-capture sibling every backend
@@ -14,8 +13,6 @@
 // no state, so a test links it without pulling in a GPU backend.
 
 #include <Arcane/Base/Api.hpp>
-
-#include <nvrhi/nvrhi.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -27,15 +24,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-
-// Forward declaration only -- MakeVulkanCrashBackend needs the UNWRAPPED
-// nvrhi Vulkan device (queueGetCompletedInstance is declared there, not on
-// nvrhi::IDevice), but this header is also included by the D3D12 device TU
-// and must not drag <nvrhi/vulkan.h> / <vulkan/vulkan.h> in behind it.
-namespace nvrhi::vulkan
-{
-    class IDevice;
-}
 
 namespace Arcane::Diag
 {
@@ -256,25 +244,26 @@ namespace Arcane
         virtual ~IGpuCrashBackend() = default;
 
         // Emits a begin (true) or end (false) marker for scope `id` on
-        // `commandList` (already open). False on failure (e.g. the
-        // required feature/extension isn't available) -- the caller
-        // decides whether that's fatal.
-        virtual bool WriteMarker(nvrhi::ICommandList*, std::uint32_t id, bool begin) = 0;
-
-        // The same marker, for a producer that holds no nvrhi::ICommandList:
-        // Phase 2's NRI frame graph, whose native command list comes from
-        // nri::CoreInterface::GetCommandBufferNativeObject instead of
-        // nvrhi::ICommandList::getNativeObject. `nativeCommandList` is the
-        // backend's own native type (ID3D12GraphicsCommandList* on D3D12,
-        // VkCommandBuffer on Vulkan) and must already be open, exactly as
-        // above.
+        // `nativeCommandList` (already open). False on failure (e.g. the
+        // required feature/extension isn't available) -- the caller decides
+        // whether that's fatal.
         //
-        // This is the SAME marker layer, not a parallel one: WriteMarker
-        // above resolves its native pointer and then calls straight into
-        // this, so both producers write into one marker buffer and one crash
-        // report. Passing the wrong backend's native pointer is undefined --
-        // there is nothing to type-check it against, which is why the two
-        // entry points stay separate rather than one void* overload.
+        // `nativeCommandList` is the backend's own native type
+        // (ID3D12GraphicsCommandList* on D3D12, VkCommandBuffer on Vulkan),
+        // as the NRI frame graph gets it from
+        // nri::CoreInterface::GetCommandBufferNativeObject.
+        //
+        // There was a SECOND entry point here until NRI Phase 5a, Task 9.5a:
+        // WriteMarker(nvrhi::ICommandList*), which resolved its native
+        // pointer through nvrhi::ICommandList::getNativeObject and then
+        // called straight into this one. Its only producer was the NVRHI
+        // recorder, deleted at Task 8b; every surviving implementation
+        // returned false unconditionally. Deleted rather than kept as a stub
+        // -- this is now the ONLY marker entry point, and there is exactly
+        // one marker layer behind it. Passing the wrong backend's native
+        // pointer is undefined (there is nothing to type-check it against),
+        // which is what NativeDevice() below exists to let a producer check
+        // for first.
         virtual bool WriteMarkerNative(void* nativeCommandList, std::uint32_t id, bool begin) = 0;
 
         // The native device this backend's marker buffer lives on
@@ -339,26 +328,30 @@ namespace Arcane
     // it by inspection. "dred:off" before EnableD3D12Dred() has run.
     ARCANE_API const char* DredTier();
 
-    // The D3D12 crash backend over an nvrhi D3D12 device (the native
-    // ID3D12Device comes from getNativeObject, F-4). Null only if `device`
-    // is null: a backend whose marker buffer or DRED tier failed to arm is
-    // still returned, still collects whatever remains, and says so in the
-    // envelope's activeLayers.
-    ARCANE_API std::unique_ptr<IGpuCrashBackend> MakeD3D12CrashBackend(nvrhi::IDevice* device);
-
-    // The Diagnostics::GpuSectionProvider for a backend made above -- pass
-    // the IGpuCrashBackend* as `user`. Runs CollectFault, appends the
-    // human-readable GPU block, and writes <reportStem>.gpudump for gpu
-    // kinds, recording siblingGpuDump ONLY when the file actually landed.
-    // Installed by the device layer, which owns the one
-    // SetGpuSectionProvider call per host lifetime.
-    ARCANE_API void D3D12GpuSectionProvider(Diag::Envelope& envelope,
-                                            std::string& humanText,
-                                            const std::filesystem::path& reportStem,
-                                            void* user);
+    // BOTH GPU-API CRASH BACKENDS ARE GONE (NRI Phase 5a, Task 9.5a).
+    // MakeD3D12CrashBackend(nvrhi::IDevice*) and MakeVulkanCrashBackend
+    // (VulkanCrashDesc) each took an NVRHI device and resolved the native one
+    // through getNativeObject; the NVRHI device layer that was their ONLY
+    // caller was deleted at Task 8b (NriDiagnostics.hpp says exactly that),
+    // so both had been unreachable since. GpuCrashVulkan.cpp is deleted
+    // outright -- MakeVulkanCrashBackend and VulkanGpuSectionProvider were
+    // its only two namespace-scope exports. GpuCrashD3D12.cpp survives for
+    // EnableD3D12Dred/DredTier above, which ARE live (DeviceCreationD3D12.cpp
+    // arms the tier before D3D12CreateDevice; DiagnosticsTest pins it).
+    //
+    // WHAT WENT WITH THEM, named rather than dropped: the D3D12 backend held
+    // the only DRED breadcrumb + page-fault READBACK in the tree, and the
+    // Vulkan backend the only VK_EXT/KHR_device_fault readback and
+    // VK_AMD_buffer_marker layer. The live crash path today is
+    // NriGraphCrashBackend (Nri/NriDiagnostics.cpp), whose payload is the
+    // CPU-side GpuBreadcrumbs ring plus the marker-buffer replay -- it reads
+    // no DRED and no device-fault info. That readback was ALREADY unreachable
+    // (nothing could construct either backend), so this deletes a latent loss
+    // rather than causing one; restoring it belongs to Phase 4's native NRI
+    // marker layer, beside the F-2c-bis obligation that same layer carries.
 
     // ---------------------------------------------------------------------
-    // Vulkan backend (Task 6) -- implemented in GpuCrashVulkan.cpp
+    // Vulkan device-creation record -- the enum outlives its backend
     // ---------------------------------------------------------------------
 
     // What DeviceVulkan actually managed to enable at device creation (F-5).
@@ -377,36 +370,18 @@ namespace Arcane
         // spelling was enabled therefore has to travel with the flag.
         enum class DeviceFault : std::uint8_t { None, Ext, Khr };
 
-        // Possibly validation-wrapped -- getNativeObject forwards verbatim
-        // (validation-device.cpp:85, validation-commandlist.cpp:131), so the
-        // native VkDevice/VkPhysicalDevice and every native command buffer
-        // resolve the same either way.
-        nvrhi::IDevice* device = nullptr;
-
-        // The UNWRAPPED backend device. `queueGetCompletedInstance`
-        // (nvrhi/vulkan.h:45) is declared on nvrhi::vulkan::IDevice only, and
-        // it is the fence-progress source the `breadcrumbs:fence` degrade path
-        // derives scope completion from when VK_AMD_buffer_marker is absent.
-        nvrhi::vulkan::IDevice* backendDevice = nullptr;
-
-        DeviceFault deviceFault  = DeviceFault::None;
-        bool        bufferMarker = false;
+        // The NVRHI-typed members that used to sit here -- `device`
+        // (nvrhi::IDevice*), `backendDevice` (the unwrapped
+        // nvrhi::vulkan::IDevice* the fence-progress degrade path read
+        // queueGetCompletedInstance off) and the `bufferMarker` flag passed
+        // alongside them -- went with MakeVulkanCrashBackend at NRI Phase 5a,
+        // Task 9.5a. What survives is the DeviceFault spelling above and the
+        // field below, because DeviceCreationVulkan RECORDS which
+        // device-fault surface it managed to enable (DeviceCreationVulkan.cpp
+        // :593-602, .hpp:98) independently of whether anything consumes it
+        // yet. The struct is kept, rather than the enum being hoisted to
+        // namespace scope, so those call sites keep spelling it
+        // VulkanCrashDesc::DeviceFault.
+        DeviceFault deviceFault = DeviceFault::None;
     };
-
-    // The Vulkan crash backend. Null only if `desc.device` is null: a backend
-    // whose marker buffer failed to arm, or that got neither optional
-    // extension, is still returned, still collects whatever remains, and says
-    // exactly which layers engaged in the envelope's activeLayers.
-    ARCANE_API std::unique_ptr<IGpuCrashBackend> MakeVulkanCrashBackend(const VulkanCrashDesc& desc);
-
-    // The Diagnostics::GpuSectionProvider for a backend made above -- pass the
-    // IGpuCrashBackend* as `user`. Same contract as D3D12GpuSectionProvider:
-    // runs CollectFault, appends the human-readable GPU block, and writes
-    // <reportStem>.gpudump for gpu kinds, recording siblingGpuDump ONLY when
-    // the file actually landed. Installed by the device layer, which owns the
-    // one SetGpuSectionProvider call per host lifetime.
-    ARCANE_API void VulkanGpuSectionProvider(Diag::Envelope& envelope,
-                                             std::string& humanText,
-                                             const std::filesystem::path& reportStem,
-                                             void* user);
 }

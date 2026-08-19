@@ -491,9 +491,18 @@ TEST_CASE("assets: RepackStagingToRgba swizzles BGRA, skips row padding, forces 
     // OffscreenCanvasTest.cpp, the citation moved to TonemapTest.cpp's
     // CheckTonemapGolden (whose BGRA8_UNORM readback asserted pixels[0..3] ==
     // B,G,R,A in that order), and Task 8b deleted THAT file too, because it
-    // built its device with RenderDevice::Create. The Canvas and TonemapPass
+    // built its device with RenderDevice::Create.
+    //
+    // UPDATED AT TASK 9.5a. This block used to end "The Canvas and TonemapPass
     // classes are still in the tree; they are simply unreachable and now
-    // untested. Re-pinning the swizzle GPU-side is a Phase 5b item.
+    // untested" -- Task 9.5a deleted both classes, so even that consolation is
+    // gone. NOTHING CHANGES FOR THIS CASE: the GPU-side pin was already lost at
+    // 8b with the test, not now with the class, and no code path re-pins it in
+    // the meantime. The graph path's own BGRA handling (NriTextureCache's
+    // Display format, the golden PNG compares in the desk battery) is what
+    // covers the order end-to-end today, and it does so implicitly rather than
+    // by assertion. Re-pinning the swizzle GPU-side, explicitly, is a Phase 5b
+    // item.
     const unsigned char src[2 * 12] = {
         // row 0: pure blue, pure green | 4 padding bytes of garbage
         255, 0, 0, 7,    0, 255, 0, 7,    0xAA, 0xBB, 0xCC, 0xDD,
