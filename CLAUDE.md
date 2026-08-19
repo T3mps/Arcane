@@ -14,13 +14,13 @@ pre-extraction paths (`Arcane/...`, `docs/superpowers/...`, `../ThirdParty`).
 ArcaneCore/        # static lib: Net/Types/Logger + shared header-only utils.
                    #   Namespaced include root ArcaneCore/src/Arcane ->
                    #   #include <Arcane/...>. ZERO game references -- keep it that way.
-ArcaneClient/      # the engine DLL: Base/Platform/Render/Host (SDL3, NVRHI on
+ArcaneClient/      # the engine DLL: Base/Platform/Render/Host (SDL3, NRI on
                    #   D3D12+Vulkan, Batcher2D, ACES tonemap, MSDF text, Assets,
                    #   ImGui, enkiTS jobs, Astra ECS runtime, scene save/load,
                    #   plugin host)
 ArcaneRuntime/     # standalone runtime host: opens an .arcproj, runs its game
                    #   module; --frames N = scripted GPU-verify; F5/F6 hot reload
-ArcaneEditor/      # the ImGui-on-NVRHI editor host (namespace Arcane::Editor)
+ArcaneEditor/      # the ImGui-on-NRI editor host (namespace Arcane::Editor)
 ArcaneHub/         # Tauri launcher (Rust): .arcproj association + recents
 ArcaneServer/      # server-side engine tooling (scaffold)
 ArcaneTests/       # Catch2 suite + HotReloadPluginV1/V2/Bad fixture DLLs
@@ -74,7 +74,7 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
 - **One TU per module owns the Vulkan-Hpp dynamic dispatcher storage** --
   `ArcaneClient/src/Arcane/Render/VulkanDispatchStorage.cpp`. Projects define
   `NDEBUG` in Release; vulkan.hpp's dispatcher layout is NDEBUG-conditional
-  and must match the nvrhi static lib.
+  and must match the NRI static lib.
 - **ABI bumps are cheap** during engine dev -- never weaken a design to avoid
   a `kGamePluginABIVersion` bump (`ArcaneClient/src/Arcane/Plugin/PluginABI.hpp`).
 - The 2D physics engine is **Manifold2D** (github.com/T3mps/Manifold2D),

@@ -145,10 +145,11 @@ project "NRI"
         runtime "Release"
         optimize "on"
         -- NDEBUG must match every other statically-linked dependency in
-        -- this workspace (see the workspace premake5.lua:271-276 note on
-        -- nvrhi/ArcaneClient's DispatchLoaderDynamic layout hazard) -- NRI's
-        -- own D3D12 Agility SDK path and VK dispatch tables carry the same
-        -- NDEBUG-gated layout risk.
+        -- this workspace (see the workspace premake5.lua's ArcaneClient
+        -- Release filter note): NRI's own D3D12 Agility SDK path and VK
+        -- dispatch tables carry NDEBUG-gated layout risk, so a mismatch
+        -- between ArcaneClient.dll and the statically-linked NRI causes a
+        -- lookup to read the wrong offset.
         defines { "NDEBUG" }
 
     filter "configurations:Dist"

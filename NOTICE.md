@@ -20,7 +20,6 @@ file is authoritative. Summary:
 | Mosaic | `ThirdParty/Mosaic` | see `ThirdParty/Mosaic/LICENSE` |
 | msdfgen | `ThirdParty/msdfgen` | MIT (`LICENSE.txt`) |
 | nlohmann/json | `ThirdParty/nlohmann` | MIT |
-| NVRHI | `ThirdParty/nvrhi` | MIT (`LICENSE`) |
 | PicoSHA2 | `ThirdParty/picosha2` | MIT |
 | premake5 (binary) | `ThirdParty/premake5` | BSD 3-Clause |
 | rapidcheck | `ThirdParty/rapidcheck` | BSD 2-Clause (`LICENSE.md`) |

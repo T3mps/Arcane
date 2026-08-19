@@ -1,6 +1,6 @@
 # Arcane
 
-A C++23 game engine for Windows: NVRHI renderer on D3D12 + Vulkan,
+A C++23 game engine for Windows: NRI renderer on D3D12 + Vulkan,
 game-as-DLL hot reload, an ImGui editor, a data-driven runtime host, and a
 project launcher.
 
@@ -11,9 +11,9 @@ https://starworks.dev/arcane
 | Project | What it is |
 |---|---|
 | `ArcaneCore` | Static lib: networking, types, logging, shared header-only utilities. Namespaced include root (`#include <Arcane/...>`), zero game references -- liftable into any project. |
-| `ArcaneClient` | The engine DLL: SDL3 window/input, NVRHI device (D3D12 + Vulkan, 2 frames in flight), linear-HDR Canvas -> sort-keyed Batcher2D -> ACES tonemap, MSDF text, asset cache, ImGui integration, enkiTS job system, ECS runtime (Astra), 2D physics (Manifold2D), scene save/load, plugin host. |
+| `ArcaneClient` | The engine DLL: SDL3 window/input, NRI device (D3D12 + Vulkan, 2 frames in flight), linear-HDR Canvas -> sort-keyed Batcher2D -> ACES tonemap, MSDF text, asset cache, ImGui integration, enkiTS job system, ECS runtime (Astra), 2D physics (Manifold2D), scene save/load, plugin host. |
 | `ArcaneRuntime` | Standalone runtime host: opens an `.arcproj` and runs its game module. `--frames N` is the scripted GPU-verify; F5 = reload with state, F6 = fresh reload. |
-| `ArcaneEditor` | The ImGui-on-NVRHI editor host (`ArcaneEditor.exe`). |
+| `ArcaneEditor` | The ImGui-on-NRI editor host (`ArcaneEditor.exe`). |
 | `ArcaneHub` | Tauri-based project launcher; owns the `.arcproj` file association and recents. |
 | `ArcaneServer` | Server-side engine tooling (scaffold). |
 | `ArcaneTests` | Catch2 test suite (plus hot-reload fixture plugin DLLs). |

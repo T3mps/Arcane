@@ -50,7 +50,7 @@ workspace "Arcane"
     -- imgui wrapper: SDL3 backend includes come from the same vcpkg -md install
     -- used by the rest of the workspace (identical path to IncludeDir["SDL3"]).
     THIRDPARTY_SDL3_INCLUDE     = VCPKG_INSTALLED_MD .. "/include"
-    -- imgui lives inside ArcaneClient.dll (ImGuiLayer + first-party imgui_impl_nvrhi).
+    -- imgui lives inside ArcaneClient.dll (ImGuiLayer + the frame graph's ImGuiNriNode).
     -- Export it so GImGui and the sdl3 backend symbols live in ONE module:
     -- the imgui static lib builds with dllexport, the DLL's own TUs match,
     -- and consumers (ArcaneTests/ArcaneRuntime) import. Without this each module
@@ -76,7 +76,6 @@ workspace "Arcane"
     IncludeDir["tracy"]            = "%{wks.location}/ThirdParty/tracy/public"
     IncludeDir["freetype"]         = "%{wks.location}/ThirdParty/freetype/include"
     IncludeDir["msdfgen"]          = "%{wks.location}/ThirdParty/msdfgen"
-    IncludeDir["nvrhi"]            = "%{wks.location}/ThirdParty/nvrhi/include"
     IncludeDir["NRI"]              = "%{wks.location}/ThirdParty/NRI/Include"
     IncludeDir["VulkanHeaders"]    = "%{wks.location}/ThirdParty/Vulkan-Headers/include"
     IncludeDir["DirectXHeaders"]   = "%{wks.location}/ThirdParty/DirectX-Headers/include"
@@ -95,7 +94,6 @@ group "Dependencies"
     include "ThirdParty/tracy"
     include "ThirdParty/freetype"
     include "ThirdParty/msdfgen"
-    include "ThirdParty/nvrhi"
     include "ThirdParty/NRI"
     include "ThirdParty/imgui"
     include "ThirdParty/imgui-node-editor"
@@ -170,7 +168,7 @@ project "ArcaneCore"
 -- ============================================================================
 -- Arcane: the engine DLL. One DLL, modular inside by folder/namespace
 -- (Base, Platform, Render for M1; Audio/Text/Assets/UI/Jobs/Plugin later).
--- NVRHI and SDL3 link INTO this DLL; consumers link only the import lib.
+-- SDL3 links INTO this DLL; consumers link only the import lib.
 -- Second namespaced include root: src/Arcane/{Base,Platform,Render} --
 -- relative paths are disjoint from ArcaneCore's root (Net/Crypto/Types/Util),
 -- so <Arcane/...> resolves unambiguously across both.
@@ -202,7 +200,6 @@ project "ArcaneClient"
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.picosha2}",
         "%{IncludeDir.spdlog}",
-        "%{IncludeDir.nvrhi}",
         "%{IncludeDir.NRI}",
         "%{IncludeDir.VulkanHeaders}",
         "%{IncludeDir.DirectXHeaders}",
@@ -220,7 +217,7 @@ project "ArcaneClient"
         "%{IncludeDir.Mosaic}",
     }
 
-    links { "ArcaneCore", "nvrhi", "NRI", "msdfgen", "freetype", "imgui", "enkiTS", "Manifold2D" }
+    links { "ArcaneCore", "NRI", "msdfgen", "freetype", "imgui", "enkiTS", "Manifold2D" }
 
     -- Force EVERY imgui object (incl. imgui_demo's ShowDemoWindow) into the
     -- DLL so their dllexport symbols are emitted: a dllexport in a static-lib
@@ -273,10 +270,12 @@ project "ArcaneClient"
         symbols "on"
 
     filter "configurations:Release"
-        -- NDEBUG must match NVRHI's Release build (nvrhi/premake5.lua defines
-        -- NDEBUG in Release). DispatchLoaderDynamic has NDEBUG-gated fields;
-        -- a layout mismatch between ArcaneClient.dll and the statically-linked NVRHI
-        -- causes every Vulkan function-pointer lookup to read the wrong offset.
+        -- NDEBUG must match every other statically-linked dependency in this
+        -- workspace, in particular NRI's Release build (ThirdParty/NRI/premake5.lua
+        -- defines NDEBUG in Release): NRI's D3D12 Agility SDK path and Vulkan
+        -- dispatch tables carry NDEBUG-gated layout risk, so a mismatch between
+        -- ArcaneClient.dll and the statically-linked NRI causes a function-pointer
+        -- lookup to read the wrong offset.
         defines { "ARCANE_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
@@ -321,7 +320,6 @@ project "ArcaneRuntime"
         "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.spdlog}",
-        "%{IncludeDir.nvrhi}",
         "%{IncludeDir.glm}",
         "%{IncludeDir.imgui}",
         "%{IncludeDir.Astra}",
@@ -401,7 +399,6 @@ project "ArcaneEditor"
         "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.spdlog}",
-        "%{IncludeDir.nvrhi}",
         "%{IncludeDir.glm}",
         "%{IncludeDir.imgui}",
         "%{IncludeDir.imguinodeeditor}",
@@ -642,7 +639,6 @@ project "ArcaneTests"
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.freetype}",
         "%{IncludeDir.msdfgen}",
-        "%{IncludeDir.nvrhi}",
         "%{IncludeDir.NRI}",   -- Task 4: NriSubstrateTest.cpp drives nri::Result/Device/nriCreateDevice directly
         "%{IncludeDir.imgui}",
         "%{IncludeDir.imguinodeeditor}",   -- ShaderEditorDocument.cpp (graph canvas, Slice 9)
@@ -755,7 +751,6 @@ local function test_plugin(name, defs)
             "%{wks.location}/ArcaneClient/src",
             "%{IncludeDir.ArcaneCore}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
             "%{IncludeDir.glm}",
-            "%{IncludeDir.nvrhi}",
             "%{IncludeDir.Astra}",
             "%{IncludeDir.enkiTS}",
             "%{IncludeDir.Mosaic}",   -- Astra headers now #include <Mosaic/...> (Mosaic-seam adoption)

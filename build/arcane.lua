@@ -62,7 +62,7 @@ function arcane_game_module(name)
 
         -- Public engine header surface (in-place) + the header-only ThirdParty deps a
         -- game module pulls in transitively (glm/Astra scene types, imgui handoff,
-        -- spdlog via Log.hpp, nvrhi via the render context, the Mosaic threading seam).
+        -- spdlog via Log.hpp, the Mosaic threading seam).
         includedirs {
             "%{wks.location}/Source",
             ARCANE_SDK .. "/ArcaneClient/src",
@@ -72,7 +72,6 @@ function arcane_game_module(name)
             -- include-only, no Core link (Core links into ONE module per process).
             ARCANE_SDK .. "/ArcaneCore/src",
             ARCANE_TP .. "/glm",
-            ARCANE_TP .. "/nvrhi/include",
             ARCANE_TP .. "/Astra/include",
             ARCANE_TP .. "/enkiTS/src",
             ARCANE_TP .. "/imgui",

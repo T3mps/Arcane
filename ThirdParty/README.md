@@ -22,7 +22,7 @@ Prebuilt **tool binaries** live under `tools/` (shader pipeline, used from M2 on
 | **Astra** | v3.1.0 | MIT | Arcane | Archetype ECS, in-house (tests run in its own repo and gate vendor pulls) | (own repo) |
 | **Catch2** | v3 | Boost 1.0 | Server, Arcane | Unit test framework (reducer tests, integration tests) | https://github.com/catchorg/Catch2 |
 | **D3D12MemoryAllocator** | 1d86c11 | MIT | Arcane | D3D12 allocator (include-only from a consumer's POV -- the `.cpp` is pulled in via `#include` by NRI's own D3D12 backend TU, not compiled standalone; NRI v180 pin) | https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator |
-| **DirectX-Headers** | v1.619.1 | MIT | Arcane | D3D12 Agility headers (include-only, NVRHI dep) | https://github.com/microsoft/DirectX-Headers |
+| **DirectX-Headers** | v1.619.1 | MIT | Arcane | D3D12 Agility headers (include-only, NRI dep) | https://github.com/microsoft/DirectX-Headers |
 | **enkiTS** | v1.11 | zlib | Arcane | Job system (Astra IWorkScheduler adapter host) | https://github.com/dougbinks/enkiTS |
 | **freetype** | VER-2-13-3 | FTL | Arcane | Font rasterizer | https://github.com/freetype/freetype |
 | **fun** | — | MIT | Client | Functional library for LuaJIT (`thirdparty.fun`) | https://github.com/luafun/luafun |
@@ -35,8 +35,7 @@ Prebuilt **tool binaries** live under `tools/` (shader pipeline, used from M2 on
 | **miniaudio** | 0.11.25 | MIT-0 | Arcane | Audio engine (single header) | https://github.com/mackron/miniaudio |
 | **msdfgen** | v1.12 (1.12.0) | MIT | Arcane | Multi-channel SDF generation for text glyphs; vendored subset: core + ext/import-font (FreeType bridge); ext/import-svg, ext/save-png, ext/resolve-shape-geometry (tinyxml2/libpng/Skia) excluded | https://github.com/Chlumsky/msdfgen |
 | **nlohmann** | — | MIT | Server, Tools, Arcane | JSON for Modern C++ (single header) | https://github.com/nlohmann/json |
-| **NRI** | v180 (`4b48531`) | MIT | Arcane | NVIDIA Render Interface — the RHI substrate underneath/replacing NVRHI (backends: D3D12, VK, NONE, Validation, Creation; D3D11 + WGPU excluded). **CARRIES LOCAL MODIFICATIONS** — see the "Local modifications" table in `ThirdParty/NRI/README.md`, which an update MUST re-apply (a re-copy replaces `Source/` wholesale and drops them silently). `grep -rn "ARCANE LOCAL FIX" ThirdParty/NRI/Source/` lists them — scoped to `Source/` so the hit count equals the table's row count, since the READMEs name the marker too | https://github.com/NVIDIA-RTX/NRI |
-| **nvrhi** | ada8a14 | MIT | Arcane | GPU abstraction (DX12 + Vulkan backends, DX11 off) | https://github.com/NVIDIA-RTX/NVRHI |
+| **NRI** | v180 (`4b48531`) | MIT | Arcane | NVIDIA Render Interface — the RHI substrate that replaced NVRHI (backends: D3D12, VK, NONE, Validation, Creation; D3D11 + WGPU excluded). **CARRIES LOCAL MODIFICATIONS** — see the "Local modifications" table in `ThirdParty/NRI/README.md`, which an update MUST re-apply (a re-copy replaces `Source/` wholesale and drops them silently). `grep -rn "ARCANE LOCAL FIX" ThirdParty/NRI/Source/` lists them — scoped to `Source/` so the hit count equals the table's row count, since the READMEs name the marker too | https://github.com/NVIDIA-RTX/NRI |
 | **picosha2** | — | MIT | Server, Arcane | SHA-256 password hashing | https://github.com/okdshin/PicoSHA2 |
 | **premake5** | 5.0-beta8 | BSD 3-Clause | Server, Tools, Arcane | Build-system generator (vendored binary) | https://github.com/premake/premake-core |
 | **rapidcheck** | — | BSD 2-Clause | Server, Arcane | Property-based test generator (reducer determinism tests) | https://github.com/emil-e/rapidcheck |
@@ -45,7 +44,7 @@ Prebuilt **tool binaries** live under `tools/` (shader pipeline, used from M2 on
 | **strict** | — | MIT (Lua) | Client | Catches undeclared globals (`thirdparty.strict`) | https://www.lua.org/extras/5.1/strict.lua |
 | **tiny** | — | MIT | Client | tiny-ecs entity-component system (`thirdparty.tiny`) | https://github.com/bakpakin/tiny-ecs |
 | **tracy** | v0.13.1 | BSD 3-Clause | Arcane | Frame profiler client (TRACY_ENABLE in Debug/Release only) | https://github.com/wolfpld/tracy |
-| **Vulkan-Headers** | v1.4.353 | Apache-2.0/MIT | Arcane | Vulkan API headers (include-only, NVRHI dep) | https://github.com/KhronosGroup/Vulkan-Headers |
+| **Vulkan-Headers** | v1.4.353 | Apache-2.0/MIT | Arcane | Vulkan API headers (include-only, NRI dep) | https://github.com/KhronosGroup/Vulkan-Headers |
 | **VulkanMemoryAllocator** | 3aa9212 | MIT | Arcane | Vulkan allocator, header-only (`VMA_IMPLEMENTATION` is defined by NRI's own VK backend TU; NRI v180 pin) | https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator |
 | **Xoshiro** | — | MIT | Server | xoshiro256++ PRNG for deterministic gacha-pull event replay | https://github.com/Reputeless/Xoshiro-cpp |
 

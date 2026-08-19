@@ -1,5 +1,5 @@
 -- Manifold2D -- Aphelyon consumer wrapper (project-only; included by the Arcane
--- workspace, like enkiTS/nvrhi/msdfgen). Builds the vendored include/ + src/ as a
+-- workspace, like enkiTS/NRI/msdfgen). Builds the vendored include/ + src/ as a
 -- StaticLib across the /MD engine boundary (staticruntime parameterized via the
 -- workspace's THIRDPARTY_STATICRUNTIME). The standalone workspace + test suite
 -- live in the Manifold2D repo (D:\dev\starworks\Manifold2D), NOT here.
