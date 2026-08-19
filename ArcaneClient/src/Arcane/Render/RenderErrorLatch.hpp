@@ -173,9 +173,19 @@ namespace Arcane
         // that route here, RouteNriError IS NRI, but DeviceCreationVulkan's
         // VkDebugCallback is the VULKAN VALIDATION LAYER reporting on a device
         // NRI created. "[nri]" names the render path rather than the exact
-        // producer -- strictly better than "[nvrhi]", which named neither, but
-        // NoteError(tag, text) above is the seam that would give each producer
-        // its own tag if that distinction is ever wanted.
+        // producer -- strictly better than "[nvrhi]", which named neither. It
+        // also splits that one callback's output: its warning branch already
+        // logs ARC_WARN("[vk] ...") (DeviceCreationVulkan.cpp:183) while its
+        // errors leave here tagged "[nri]".
+        //
+        // DO NOT "FIX" THAT BY REPOINTING THE VULKAN PRODUCER AT NoteError.
+        // NoteError(tag, text) does take a per-producer tag, but it
+        // DELIBERATELY does not run NotifyIfDeviceRemoved (see its own comment
+        // above), and this substring scan is one of the TWO feeds driving that
+        // backend's device-removed hook -- DeviceCreationVulkan.cpp:119-127
+        // names both. Swapping the call would buy a "[vk]" tag and silently
+        // disarm the .arcdiag/.gpudump/shutdown-latch path for Vulkan device
+        // loss. Giving THIS seam its own tag parameter is the shape that works.
         void NoteNriError(const char* messageText) noexcept
         {
             ++m_errorCount;

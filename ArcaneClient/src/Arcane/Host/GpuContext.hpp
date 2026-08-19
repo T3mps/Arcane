@@ -71,8 +71,15 @@ namespace Arcane
         static std::unique_ptr<GpuContext> Create(const HostConfig& cfg);
 
         // True always (see the file header). Kept as the ONE predicate every
-        // host branch reads -- never a HostConfig flag -- pending Task 11's
-        // collapse of the predicate itself.
+        // host branch reads -- never a HostConfig flag.
+        //
+        // WHO OWNS RETIRING IT: a FOLLOW-ON task, not Task 11. Task 11a
+        // collapsed the editor's wrapper (EditorApp::GraphMode()) and 11b is
+        // prose-only, so nothing named "Task 11" is coming for this one. The
+        // collapse is gated on a decision this accessor cannot make for
+        // itself: ArcaneTests/src/NriHostFlavorTest.cpp asserts on it twice
+        // (:53, :105), so retiring it MOVES the gate counts -- which is why it
+        // could not ride along with a task required to leave them unchanged.
         [[nodiscard]] bool GraphFlavor() const noexcept { return m_graphFlavor; }
 
         Window&        Win()       { return m_window; }

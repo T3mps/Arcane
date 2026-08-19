@@ -556,9 +556,18 @@ namespace Arcane::Editor
         // behind an `if (!m_gpu->GraphFlavor())` guard (OffscreenCanvas +
         // PickBuffer + SelectionOutline, in that dependency order) --
         // GraphFlavor() is unconditional, so that construction was already
-        // unreachable. This stage does nothing at all now; it is left
-        // installed as a boot stage rather than removed, since deleting a
-        // stage outright is Task 11's GraphMode() collapse, not this task's.
+        // unreachable. This stage does nothing at all now, and is still
+        // INSTALLED as a boot stage.
+        //
+        // NOT waiting on Task 11 any more, which is what this used to say.
+        // Task 11a ran that GraphMode() collapse and did not delete this: the
+        // body carries no GraphMode() call, so a predicate collapse never
+        // reached it. Removing it is its own change with its own blast radius:
+        // "render_bridge" is pinned by name in ArcaneTests/src/
+        // BootStageParityTest.cpp's id list (:118), and BOTH sprite_tables and
+        // plugin_load declare a dependsOn edge to it (ProjectBoot.cpp:238,
+        // :239), so deleting the stage re-parents them. It needs its own
+        // owner rather than a task that has already come and gone.
         return true;
     }
 
