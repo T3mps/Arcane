@@ -682,6 +682,61 @@ git commit -m "feat(abi)!: plugin ABI 14 -- the render surface no longer exposes
 
 ---
 
+## Task 9.5: De-NVRHI or delete the remaining consumers
+
+**INSERTED 2026-08-18 (user-approved). Without this task, Task 10 cannot build.**
+
+Task 10's plan is "drop the include dirs, `git rm -r ThirdParty/nvrhi`, rebuild
+clean" — which assumes nothing first-party still consumes NVRHI by then.
+Measured after Task 8b (`720efa91`): **20 first-party files still
+`#include <nvrhi/...>`**, and no task between here and Task 10 removes them.
+Task 9 is the ABI bump (neither `Runtime.hpp` nor `PluginABI.hpp` is even in the
+20); Task 11 is the `GraphMode()` collapse plus a *prose* sweep. As written the
+phase cannot reach exit criterion 5.
+
+`nvrhi::` uses per file, comment lines excluded — the shape of the work:
+
+| Uses | File | Disposition |
+|---:|---|---|
+| 33 | `ArcaneEditor/src/Widgets/GraphGridPass.hpp` | **DELETE** — dead on the graph path (Task 7), owned by no task |
+| 10 | `Render/GpuCrashVulkan.cpp` | crash layer |
+| 9 | `Render/GpuInstrumentation.hpp` | crash layer |
+| 5 | `Render/IGpuCrashBackend.hpp` | crash layer |
+| 9 | `Render/Batcher2D.hpp` | **plugin-visible → fold into Task 9's ABI break** |
+| 8 | `Assets/Assets.hpp` | live consumer |
+| 8 | `ArcaneEditor/src/Documents/ShaderEditorDocument.hpp` | live consumer |
+| 4 | `Render/TonemapPass.hpp` | **DELETE** (only `TonemapTest` consumes it) |
+| 3 | `Render/ShaderLibrary.hpp` | **DELETE** (Task 7 relocated `ResolveFlavorDir`; graph references it nowhere) |
+| 3 | `Render/Canvas.hpp` | **DELETE** |
+| 3 | `Text/TextSystem.hpp` | live consumer |
+| 2 | `SpriteMaterialCache.hpp`, `PostChainCache.hpp`, `SceneRenderResolver.hpp` | mechanical |
+| 1 | `SceneResources.hpp`, `RuntimeFrame.hpp`, `RuntimeApp.cpp`, `SpriteDocument.cpp` | mechanical |
+| 0 | `EditorApp.cpp`, `EditorAppFrame.cpp` | stale includes — free |
+
+**Four clusters, and they are not equally risky:**
+
+1. **Delete the dead classes** — `GraphGridPass`, `TonemapPass`, `Canvas`,
+   `ShaderLibrary`. Pre-deletion grep each one first; that step has caught five
+   plan defects in this phase. Note `TonemapTest.cpp` currently pins BGRA byte
+   order GPU-side and `AssetsTest.cpp` cites it — deleting `TonemapPass` kills
+   that pin, which is a **coverage gap to name**, not to drop silently.
+   `BootPresenter.{hpp,cpp}` is also dead and owned by nobody; fold it in here.
+2. **Finish the crash layer** — 8b re-homed `GpuFaultInjector` and severed the
+   marker channel, but the backends are still NVRHI-typed
+   (`MakeD3D12CrashBackend(nvrhi::IDevice*)`, `MakeVulkanCrashBackend`). This is
+   the highest-risk cluster: it is the diagnostics stack, and `--crash-gpu` is
+   the desk gate for all of it.
+3. **`Batcher2D`** — plugin-visible, so removing its NVRHI surface is an ABI
+   change. **Fold into Task 9** rather than doing it here; it belongs with the
+   v14 bump alongside the `Material2DDesc` shrink already owed.
+4. **The mechanical tail** — ~10 files at 0–3 uses, mostly stale includes.
+
+**Exit condition:** `git grep -l "^\s*#include <nvrhi/" -- 'Arcane*/src/*'`
+returns nothing, and all three configs build. That makes Task 10 the trivial
+build-file task it was written to be.
+
+---
+
 ## Task 10: Drop NVRHI from the build
 
 **Files:**
