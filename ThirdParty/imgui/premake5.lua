@@ -1,7 +1,7 @@
 -- Dear ImGui premake5 build script (Arcane workspace consumer).
 -- MIT -- immediate-mode UI. Compiles imgui core + the SDL3 platform
--- backend; the NVRHI renderer backend is first-party engine code
--- (Arcane/Arcane/src/Arcane/ImGui). Tools/ compiles imgui sources
+-- backend; the NRI renderer backend is first-party engine code
+-- (ArcaneClient/src/Arcane/ImGui). Tools/ compiles imgui sources
 -- directly into its vcxproj and does not use this wrapper.
 project "imgui"
     kind "StaticLib"

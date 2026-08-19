@@ -89,7 +89,7 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
 
 - GPU-touching tests are tagged `[gpu]` -- exclude with `~[gpu]` on machines
   without a capable GPU. GPU tests assert `Arcane::RenderErrorCount() == 0`,
-  which latches BOTH nvrhi diagnostics and raw VK validation VUIDs --
+  which latches BOTH NRI diagnostics and raw D3D12/VK validation VUIDs --
   validation noise is a test failure.
 - ArcaneTests runs in RANDOM order: capture the seed banner on failure and
   reproduce with `--rng-seed N`. Never construct a bare `Arcane::Runtime rt;`
