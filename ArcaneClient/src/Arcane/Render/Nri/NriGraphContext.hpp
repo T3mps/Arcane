@@ -34,8 +34,8 @@
 // builds no NVRHI device at all. Two consequences a desk user sees:
 //   * dx12 Debug genuinely gets the D3D12 CPU debug layer. EnableDebugLayer is
 //     a before-any-device call, and through Phase 2 it was DECLINED here
-//     because the engine's NVRHI device already existed (DeviceD3D12.cpp's
-//     g_d3d12DeviceCreated). Nothing is declined now, so D3D12 validation
+//     because the engine's NVRHI device already existed
+//     (DeviceCreationD3D12.cpp's g_d3d12DeviceCreated). Nothing is declined now, so D3D12 validation
 //     messages reach D3D12DebugLayerCallback and therefore the
 //     RenderErrorCount latch -- for the first time on this path.
 //   * Vulkan's two-VkDevice dispatcher hazard is GONE by construction: there
@@ -59,7 +59,8 @@
 // DXGI allows only ONE flip-model swap chain per HWND at a time
 // (IDXGIFactory2::CreateSwapChainForHwnd's own remark), and both this
 // swapchain (NRI SwapChainD3D12 -> DXGI_SWAP_EFFECT_FLIP_DISCARD) and the
-// engine's (Render/DeviceD3D12.cpp, same swap effect) are flip-model. So
+// the engine's NVRHI one (same swap effect, deleted at Task 8b) were both
+// flip-model. So
 // through Phase 2, while an NVRHI swapchain still existed on the host window,
 // this class had to create its OWN second window and present there. Removing
 // the NVRHI device and binding this swapchain to the host window is therefore

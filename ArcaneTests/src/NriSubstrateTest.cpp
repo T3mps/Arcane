@@ -4,16 +4,23 @@
 //
 // Include order matters in this file: NRI's Extensions/NRIDeviceCreation.h
 // declares nri::Message with an enumerator literally named ERROR, and
-// <windows.h> (dragged in transitively by Arcane/Render/Device.hpp -> spdlog)
-// #defines ERROR via wingdi.h. Once that macro is live, every later textual
-// "ERROR" in this translation unit -- including a qualified nri::Message::ERROR
-// -- gets corrupted by preprocessor substitution. Keep the NRI includes first.
+// <windows.h> #defines ERROR via wingdi.h. Once that macro is live, every
+// later textual "ERROR" in this translation unit -- including a qualified
+// nri::Message::ERROR -- gets corrupted by preprocessor substitution. Keep the
+// NRI includes first.
+//
+// The route is Arcane/Render/RenderErrorLatch.hpp -> Base/Log.hpp -> spdlog.
+// It used to be Arcane/Render/Device.hpp -> (Task 8a) RenderErrorLatch.hpp ->
+// the same; NRI Phase 5a Task 8b deleted Device.hpp, and this file now names
+// RenderDeviceDesc.hpp (for the desc) and the latch (for RenderErrorCount)
+// directly -- the identical hazard at one hop fewer.
 #include <NRI.h>
 #include <Extensions/NRIDeviceCreation.h>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Render/Device.hpp>
+#include <Arcane/Render/RenderDeviceDesc.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/Nri/Graveyard.hpp>
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
@@ -74,8 +81,8 @@ TEST_CASE("nri: NoteError bumps RenderErrorCount by exactly 1 and never fires th
 
     // The text carries the exact substring RenderErrorLatch matches on
     // (NotifyIfDeviceRemoved looks for "Device Removed"). Pushed through
-    // NoteNvrhiError -- which is what NvrhiMessageCallback::message and
-    // NriCommon's RouteNriError both call -- this WOULD fire the hook, and
+    // NoteNvrhiError -- which is what NriCommon's RouteNriError and the Vulkan
+    // debug messenger both call -- this WOULD fire the hook, and
     // firing it from an InfoQueue1 callback thread, mid-D3D12-call, is the
     // re-entrancy hazard NoteError exists to kill. Through NoteError it must
     // stay silent.
@@ -154,8 +161,9 @@ namespace
         Arcane::RenderDeviceDesc desc;
         desc.backend = backend;
 
-        // The creation half -- the same function DeviceVulkan/DeviceD3D12
-        // call, so what gets wrapped is what the engine boots with.
+        // The creation half -- the same function the engine's own boot runs
+        // (Render/DeviceCreation{D3D12,Vulkan}.cpp), so what gets wrapped here
+        // is what the engine boots with.
         auto native = Arcane::NativeDeviceOwner::Create(desc);
         REQUIRE(native != nullptr);
         REQUIRE(native->Backend() == backend);

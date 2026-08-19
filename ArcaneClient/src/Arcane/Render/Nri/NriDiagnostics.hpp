@@ -4,18 +4,21 @@
 // (NRI Phase 3, Task 5).
 //
 // Through Phase 2 every link of the GPU crash-diagnostics chain hung off the
-// NVRHI device's creation path (Render/DeviceD3D12.cpp's Init, Vulkan twin):
+// NVRHI device's creation path (the deleted Render/DeviceD3D12.cpp's Init and
+// its Vulkan twin):
 // the device-removed hook, the Diagnostics GPU-section provider, the
 // process-wide active-crash-backend slot, and -- through GpuFrameProgress --
 // the single Diagnostics::GpuHeartbeat publisher. That was fine while an
 // NVRHI device was the only device a host could have.
 //
-// Task 6 makes it false: `--nri-graph` becomes ONE device, wrapped by NRI,
-// with NO NVRHI device in the process at all. Every link above would then be
+// Task 6 made it false: `--nri-graph` became ONE device, wrapped by NRI, with
+// NO NVRHI device in the process at all. Every link above would then have been
 // unarmed -- no `.arcdiag` on a TDR, no `.gpudump`, no gpu-stall verdict, no
 // host device-lost latch -- and a render-path port that silently gives up the
 // crash diagnostics arc is not a port. CRASH-DIAGNOSTICS PARITY IS A PHASE
-// GATE, so this file is the NRI-side installer for the same chain.
+// GATE, so this file is the NRI-side installer for the same chain. Phase 5a
+// Task 8b finished the job by deleting the NVRHI device layer outright: this
+// file is now the ONLY installer of that chain in the process.
 //
 // -------------------------------------------------------------------------
 // WHAT IT DOES NOT DO, said plainly
@@ -24,7 +27,10 @@
 // (WriteBufferImmediate over an OpenExistingHeapFromAddress placed resource)
 // and the Vulkan one (VK_AMD_buffer_marker + VK_EXT_device_fault) are native,
 // nvrhi-device-shaped objects that stay exactly where they are
-// (GpuCrashD3D12.cpp / GpuCrashVulkan.cpp). What Arm() installs is the
+// (GpuCrashD3D12.cpp / GpuCrashVulkan.cpp -- both files survive Task 8b, and
+// both are unreachable until an NRI-shaped marker layer lands, because the
+// only thing that ever called MakeD3D12CrashBackend / MakeVulkanCrashBackend
+// was the deleted device layer). What Arm() installs is the
 // GRAPH-FLAVORED backend: the CPU-side breadcrumb ring the graph's NodeScope
 // already writes into (RenderGraphExec.cpp), plus a device identity so the
 // cross-device native-marker gate there can OPEN once the flip makes both
@@ -39,17 +45,20 @@
 // -------------------------------------------------------------------------
 // BOTH TOPOLOGIES, one rule
 // -------------------------------------------------------------------------
-// TODAY (two devices: the engine's NVRHI device + the vehicle's NRI device)
-// Arm() finds the process-wide crash-backend slot already full -- the NVRHI
-// device armed it during boot, before the vehicle existed -- and NO-OPS
-// completely. Nothing is reinstalled, nothing is displaced, and the vehicle's
-// breadcrumbs keep landing in the NVRHI backend's ring exactly as they did
+// THROUGH PHASE 3 (two devices: the engine's NVRHI device + the vehicle's NRI
+// device) Arm() found the process-wide crash-backend slot already full -- the
+// NVRHI device armed it during boot, before the vehicle existed -- and NO-OPPED
+// completely. Nothing was reinstalled, nothing displaced, and the vehicle's
+// breadcrumbs kept landing in the NVRHI backend's ring exactly as they did
 // before this file existed.
 //
-// AFTER TASK 6 (one device, no NVRHI device anywhere) the slot is empty and
+// SINCE TASK 6 (one device, no NVRHI device anywhere) the slot is empty and
 // Arm() fills every link. Same call, same call site; which topology it is in
 // is inferred, never configured -- a flag would be a third thing to keep in
-// sync with a fact the slot already states.
+// sync with a fact the slot already states. That inference is what let Task 8b
+// delete the other writer without touching a line of this file: the full-slot
+// branch simply became unreachable in production, and it still refuses for any
+// foreign backend (NriDiagnosticsTest drives it with a stub).
 //
 // Idempotent in both: a second Arm() is a no-op and says so through its
 // return value.
@@ -71,19 +80,20 @@ namespace Arcane
     namespace NriDiagnostics
     {
         // Arms the crash chain over `device`: the device-removed hook (the
-        // SAME per-backend observer the NVRHI device installs, reached by
-        // address through DeviceFactories.hpp), the graph-flavored
-        // Diagnostics::SetGpuSectionProvider, and SetActiveGpuCrashBackend
-        // for this device's backend. Also clears the process-wide device-lost
-        // latch, for the same reason the NVRHI device's Init does: a latch
-        // that outlived the dead device it described would quit the host the
-        // moment a healthy replacement started presenting.
+        // SAME per-backend observer the NVRHI device used to install, reached
+        // by address through DeviceRemovedObservers.hpp), the graph-flavored
+        // Diagnostics::SetGpuSectionProvider, and SetActiveGpuCrashBackend for
+        // this device's backend. Also clears the process-wide device-lost
+        // latch, for the same reason the NVRHI device's Init did: a latch that
+        // outlived the dead device it described would quit the host the moment
+        // a healthy replacement started presenting.
         //
         // Returns true iff THIS call armed. False means "already armed" --
-        // either by a previous Arm() (idempotence) or by the NVRHI device
-        // (the two-device transition runs) -- and in that case nothing at all
-        // was touched. Never fails loudly: an un-armable device degrades one
-        // diagnostic channel, it does not fail a host.
+        // by a previous Arm() (idempotence), or by a foreign backend holding
+        // the slot (the NVRHI device, in the two-device transition runs Task
+        // 8b ended) -- and in that case nothing at all was touched. Never
+        // fails loudly: an un-armable device degrades one diagnostic channel,
+        // it does not fail a host.
         //
         // `device` must outlive the arming, i.e. Disarm() must run before it
         // is destroyed. NriGraphContext owns both calls.
@@ -93,13 +103,14 @@ namespace Arcane
         // it -- the active-backend slot clears CONDITIONALLY
         // (ClearActiveGpuCrashBackendIfCurrent), so a later owner that armed
         // after us keeps its registration. Fences reports before the backend
-        // object is destroyed, the same ordering ~DeviceD3D12 owes
+        // object is destroyed, the same ordering ~DeviceD3D12 owed
         // (Diagnostics::FenceReports). Idempotent; a no-op when not armed.
         ARCANE_API void Disarm() noexcept;
 
-        // Whether Arm() currently holds the chain. False in the two-device
-        // topology even while the chain IS armed -- by the NVRHI device, which
-        // is the honest answer to "did THIS installer arm it".
+        // Whether Arm() currently holds the chain. False when something else
+        // holds it even though the chain IS armed -- which is the honest
+        // answer to "did THIS installer arm it". That was the two-device
+        // topology's normal state; since Task 8b it is a test-only shape.
         [[nodiscard]] ARCANE_API bool IsArmed() noexcept;
 
         // The backend Arm() installed, or null when not armed. Exposed so a
@@ -130,10 +141,12 @@ namespace Arcane
         // THE FAULT INJECTOR TWIN (`--crash-gpu N` on the graph path).
         //
         // Dispatches data/shaders/gpu_fault.hlsl -- the SAME TDR-loop shader
-        // Render/GpuFaultInjector.hpp fires through nvrhi -- as a one-off NRI
-        // compute dispatch on `queue`. Same shader, same two fault mechanisms,
-        // same desk-battery meaning; a port of the recording, not of the
-        // fault. Everything downstream (the device-removed observation, the
+        // Render/GpuFaultInjector.hpp used to fire through nvrhi -- as a
+        // one-off NRI compute dispatch on `queue`. Same shader, same two fault
+        // mechanisms, same desk-battery meaning; a port of the recording, not
+        // of the fault. Task 8b deleted the nvrhi arm, so THIS IS the injector
+        // now, and GpuFaultInjector.hpp is reduced to the breadcrumb name both
+        // arms always shared. Everything downstream (the device-removed observation, the
         // report, the `.gpudump`, the Problems notify) is what Arm() above put
         // in place.
         //
@@ -145,7 +158,7 @@ namespace Arcane
         // built -- an unavailable injector is a missing diagnostic, never a
         // host failure.
         //
-        // NOT a general compute facility, exactly like its nvrhi twin: a
+        // NOT a general compute facility, exactly as its nvrhi twin was not: a
         // closed, single-purpose object with no knobs. When a real NRI compute
         // pass lands it should grow its own seam and this must not be its
         // template.

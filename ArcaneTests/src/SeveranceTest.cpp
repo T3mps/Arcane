@@ -19,7 +19,10 @@
 //
 // Why headless is the right home for this: everything above is CPU work over
 // bytes. The half that genuinely needs a device -- that a device-CARRYING
-// batcher records the same spans -- is the [gpu] case in BatcherTest.cpp.
+// batcher records the same spans -- WAS the [gpu] case in BatcherTest.cpp,
+// retired at NRI Phase 5a Task 8b along with the NVRHI device layer that case
+// built its batcher against. Nothing covers that half today; it is a named
+// Phase 5b gap.
 //
 // The compiles here are REAL (in-process dxcompiler.dll, the same service the
 // editor uses); ShaderCompilerTest.cpp proves that path is device-free, and

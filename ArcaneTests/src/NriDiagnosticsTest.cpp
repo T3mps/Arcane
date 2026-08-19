@@ -25,8 +25,11 @@
 //     real queue) and is desk-proven at D3b. In-session it is compile + shape.
 //
 // Include order: NRI headers first, ALWAYS -- Extensions/NRIDeviceCreation.h
-// declares nri::Message::ERROR and <windows.h> (via Arcane/Render/Device.hpp
-// -> spdlog) #defines ERROR via wingdi.h.
+// declares nri::Message::ERROR and <windows.h> #defines ERROR via wingdi.h.
+// The route is Arcane/Render/RenderErrorLatch.hpp -> Base/Log.hpp -> spdlog.
+// It used to be Arcane/Render/Device.hpp -> (Task 8a) RenderErrorLatch.hpp ->
+// the same; NRI Phase 5a Task 8b deleted Device.hpp and this file includes the
+// latch directly, so it is the identical hazard at one hop fewer.
 #include <NRI.h>
 #include <Extensions/NRIDeviceCreation.h>
 
@@ -34,10 +37,10 @@
 
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
-#include <Arcane/Render/Device.hpp>
 #include <Arcane/Render/GpuBreadcrumbs.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/IGpuCrashBackend.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>   // RenderDeviceRemovedHookForTest -- reached through Device.hpp until Task 8b
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>
 
@@ -484,7 +487,7 @@ TEST_CASE("nri diagnostics: re-arming clears the removal latch, so a second devi
         REQUIRE(hook != nullptr);
 
         const std::uint32_t before = Arcane::Diagnostics::ReportCount();
-        hook();   // exactly what NvrhiMessageCallback does on a removal
+        hook();   // exactly what the latch does on a removal
         CHECK(Arcane::Diagnostics::ReportCount() == before + 1);
         CHECK(Arcane::GpuDeviceLostObserved());
     }

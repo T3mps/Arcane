@@ -648,7 +648,6 @@ void RuntimeApp::MainLoop()
         .pickDrawables   = m_pickDrawables,
         .pickSelectedIds = m_pickSelectedIds,
 #if !defined(ARCANE_DIST)
-        .gpuFault        = m_gpuFault,
         .gpuFaultFired   = m_gpuFaultFired,
 #endif
         .simPrev         = simPrev,

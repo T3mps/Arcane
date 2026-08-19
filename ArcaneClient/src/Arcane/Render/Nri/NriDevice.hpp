@@ -22,7 +22,7 @@
 #include <Extensions/NRIDeviceCreation.h>
 
 #include <Arcane/Base/Api.hpp>
-#include <Arcane/Render/Device.hpp>
+#include <Arcane/Render/RenderDeviceDesc.hpp>
 #include <Arcane/Render/Nri/Graveyard.hpp>
 
 #include <memory>

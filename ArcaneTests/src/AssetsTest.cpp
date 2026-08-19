@@ -1,6 +1,21 @@
-// Assets facade: PNG -> sRGB nvrhi texture with byte-true readback (the
-// sRGB format must round-trip raw bytes exactly on copy), bytes/json
-// loaders, and memoized failure on a missing path.
+// Assets facade: the byte budget, the content root, AssetId resolution,
+// bytes/json loaders, memoized failure on a missing path, and the CPU half of
+// the staging repack.
+//
+// NRI Phase 5a, Task 8b retired this file's three [gpu][d3d12][assets] cases
+// -- SetDevice binding, "texture loads as sRGB and reads back byte-true", and
+// the json loader's incidental use of a real device. All three called
+// Arcane::RenderDevice::Create, and the NVRHI device layer is gone, so no test
+// executable can obtain an nvrhi::IDevice at all.
+//
+// COVERAGE LOST, named rather than dropped: nothing now proves a PNG reaches
+// the GPU as an sRGB texture that copies back byte-true, nor that
+// Assets::SetDevice clears the device-less failure memo. The device-LESS half
+// of both facts still stands (the "GetTexture before a render device is set"
+// case below, and the PixelsFor/registry cases); the upload half is a Phase 5b
+// item once an NRI texture-upload test vehicle exists. NriTextureCacheTest.cpp
+// is the nearest graph-side neighbour and covers the cache, not the
+// decode-to-sRGB contract.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -17,7 +32,6 @@
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Project/Project.hpp>
-#include <Arcane/Render/Device.hpp>
 
 namespace
 {
@@ -220,91 +234,6 @@ TEST_CASE("assets: GetTexture before a render device is set returns null (no cra
     // gets null back -- and never reaches the device gate at all.
     CHECK(assets->GetTexture("does/not/exist.png") == nullptr);
 
-    std::remove(png.string().c_str());
-}
-
-TEST_CASE("assets: SetDevice binds a device to a device-less facade", "[gpu][d3d12][assets]")
-{
-    Arcane::RenderDeviceDesc desc;
-    desc.backend = Arcane::GraphicsBackend::D3D12;
-    auto device = Arcane::RenderDevice::Create(desc);
-    REQUIRE(device != nullptr);
-
-    // Created with NO device: GetTexture is null and the miss is memoized.
-    auto assets = Arcane::Assets::Create(nullptr);
-    REQUIRE(assets != nullptr);
-
-    const auto png = WriteTestPng();
-    CHECK(assets->GetTexture(png) == nullptr);
-
-    // Bind the device late (mirrors Runtime::SetRenderResources). SetDevice clears
-    // the device-less failure memo, so the same path now loads for real.
-    assets->SetDevice(device->Nvrhi());
-    nvrhi::TextureHandle tex = assets->GetTexture(png);
-    REQUIRE(tex != nullptr);
-    CHECK(tex->getDesc().width == 2);
-
-    CHECK(Arcane::RenderErrorCount() == 0);
-    std::remove(png.string().c_str());
-}
-
-TEST_CASE("assets: texture loads as sRGB and reads back byte-true", "[gpu][d3d12][assets]")
-{
-    Arcane::RenderDeviceDesc desc;
-    desc.backend = Arcane::GraphicsBackend::D3D12;
-    auto device = Arcane::RenderDevice::Create(desc);
-    REQUIRE(device != nullptr);
-    auto assets = Arcane::Assets::Create(device->Nvrhi());
-    REQUIRE(assets != nullptr);
-
-    const auto png = WriteTestPng();
-    nvrhi::TextureHandle tex = assets->GetTexture(png);
-    REQUIRE(tex != nullptr);
-    // nvrhi::Format::SRGBA8_UNORM confirmed in nvrhi.h line 186.
-    CHECK(tex->getDesc().format == nvrhi::Format::SRGBA8_UNORM);
-    CHECK(tex->getDesc().width == 2);
-
-    // Cached: identical handle.
-    CHECK(assets->GetTexture(png) == tex);
-
-    // Copy to staging and compare raw bytes (copy does not convert).
-    auto stagingDesc = nvrhi::TextureDesc()
-        .setWidth(2).setHeight(2)
-        .setFormat(nvrhi::Format::SRGBA8_UNORM)
-        .setDebugName("AssetsReadback");
-    auto staging = device->Nvrhi()->createStagingTexture(
-        stagingDesc, nvrhi::CpuAccessMode::Read);
-    auto commandList = device->Nvrhi()->createCommandList();
-    commandList->open();
-    commandList->copyTexture(staging, nvrhi::TextureSlice(),
-                             tex, nvrhi::TextureSlice());
-    commandList->close();
-    device->Nvrhi()->executeCommandList(commandList);
-    device->Nvrhi()->waitForIdle();
-
-    size_t rowPitch = 0;
-    const auto* pixels = static_cast<const uint8_t*>(
-        device->Nvrhi()->mapStagingTexture(staging, nvrhi::TextureSlice(),
-                                           nvrhi::CpuAccessMode::Read, &rowPitch));
-    REQUIRE(pixels != nullptr);
-    CHECK((int)pixels[0] == 255);             // texel (0,0) R
-    CHECK((int)pixels[rowPitch + 4] == 128);  // row 1, second texel, R
-    device->Nvrhi()->unmapStagingTexture(staging);
-    device->Nvrhi()->runGarbageCollection();
-
-    // Memoized failure: a missing path returns null both times (one
-    // ARC_WARN log, no retry storm). ARC_WARN does not increment
-    // RenderErrorCount() -- only NvrhiMessageCallback (nvrhi validation
-    // errors) does. Asset failures use ARC_WARN so the GPU test's
-    // RenderErrorCount() == 0 assertion stays clean.
-    CHECK(assets->GetTexture("does/not/exist.png") == nullptr);
-    CHECK(assets->GetTexture("does/not/exist.png") == nullptr);
-
-    auto bytes = assets->GetBytes("data/fonts/Roboto-Regular.ttf");
-    REQUIRE(bytes != nullptr);
-    CHECK(bytes->size() > 10000);
-
-    CHECK(Arcane::RenderErrorCount() == 0);
     std::remove(png.string().c_str());
 }
 
@@ -546,59 +475,22 @@ TEST_CASE("assets: registry-resolved ids are load-ready -- the content root must
     fs::remove_all(sandbox, ec);
 }
 
-TEST_CASE("assets: json loader -- parse, cache identity, memoized failure", "[gpu][d3d12][assets]")
-{
-    // JSON test: no GPU required; uses a null device since Assets::Create
-    // accepts IDevice* and only needs it for texture uploads.
-    // Use a real device anyway so the test is straightforward.
-    Arcane::RenderDeviceDesc desc;
-    desc.backend = Arcane::GraphicsBackend::D3D12;
-    auto device = Arcane::RenderDevice::Create(desc);
-    REQUIRE(device != nullptr);
-    auto assets = Arcane::Assets::Create(device->Nvrhi());
-    REQUIRE(assets != nullptr);
-
-    // Valid JSON: second call returns the exact same shared_ptr.
-    const auto jsonPath = WriteTestJson(R"({"hello":"world","n":42})");
-    auto doc1 = assets->GetJson(jsonPath);
-    REQUIRE(doc1 != nullptr);
-    CHECK((*doc1)["hello"].get<std::string>() == "world");
-    CHECK((*doc1)["n"].get<int>() == 42);
-
-    auto doc2 = assets->GetJson(jsonPath);
-    CHECK(doc2 == doc1);   // same shared_ptr (cached)
-
-    // Missing file: null both times (memoized failure, no second attempt).
-    CHECK(assets->GetJson("does/not/exist.json") == nullptr);
-    CHECK(assets->GetJson("does/not/exist.json") == nullptr);
-
-    // Malformed JSON: null both times. Use a distinct filename so this path
-    // has no prior cache entry from the valid-JSON write above.
-    const auto badPath = WriteTestJson("{ not valid json !!!}",
-                                       "arcane-assets-test-bad.json");
-    CHECK(assets->GetJson(badPath) == nullptr);
-    CHECK(assets->GetJson(badPath) == nullptr);
-
-    std::remove(jsonPath.string().c_str());
-    std::remove(badPath.string().c_str());
-}
-
 TEST_CASE("assets: RepackStagingToRgba swizzles BGRA, skips row padding, forces opaque alpha",
           "[assets]")
 {
     // A 2x2 BGRA source with a PADDED row pitch (12 bytes for 8 of pixels) --
     // the shape a mapped staging texture actually has. Per-texel byte order
-    // is [B,G,R,A]; TonemapTest.cpp's CheckTonemapGolden pins the same fact
-    // GPU-side (its own BGRA8_UNORM readback asserts pixels[0..3] ==
-    // B,G,R,A in that order). NRI Phase 5a, Task 4 deleted
-    // OffscreenCanvasTest.cpp, which used to be the citation here -- neither
-    // that task nor NRI Phase 5a, Task 6 (which later removed Canvas and
-    // TonemapPass as GpuContext.hpp dependencies) deleted the Canvas or
-    // TonemapPass classes themselves -- both remain live, just no longer
-    // reached through GpuContext -- so TonemapTest.cpp's case still stands
-    // as the GPU-side pin. This is the
-    // CPU half of SaveTexturePng, exported exactly so this contract is
-    // testable without a device.
+    // is [B,G,R,A]. This is the CPU half of SaveTexturePng, exported exactly
+    // so this contract is testable without a device.
+    //
+    // THIS CASE IS NOW THE ONLY PIN ON THAT BYTE ORDER (NRI Phase 5a, Task
+    // 8b). The GPU-side twin walked down a chain of deletions: Task 4 deleted
+    // OffscreenCanvasTest.cpp, the citation moved to TonemapTest.cpp's
+    // CheckTonemapGolden (whose BGRA8_UNORM readback asserted pixels[0..3] ==
+    // B,G,R,A in that order), and Task 8b deleted THAT file too, because it
+    // built its device with RenderDevice::Create. The Canvas and TonemapPass
+    // classes are still in the tree; they are simply unreachable and now
+    // untested. Re-pinning the swizzle GPU-side is a Phase 5b item.
     const unsigned char src[2 * 12] = {
         // row 0: pure blue, pure green | 4 padding bytes of garbage
         255, 0, 0, 7,    0, 255, 0, 7,    0xAA, 0xBB, 0xCC, 0xDD,

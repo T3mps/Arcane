@@ -19,7 +19,7 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
-#include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only --crash-gpu N
+#include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only --crash-gpu N (kPassName only; the injector is NriDiagnostics::FireFault)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle; unconditional as of Phase 5a
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
@@ -179,11 +179,13 @@ private:
 #if !defined(ARCANE_DIST)
     // --crash-gpu N (GPU crash diagnostics arc, Task 11): the desk battery's
     // item-2 trigger -- the same deliberate fault the editor's Build ->
-    // Diagnostics menu item fires, on the host that has no menu. Built lazily at
-    // the firing frame, exactly like the editor's, so an ordinary run pays
-    // nothing. Declared AFTER m_gpu so its NVRHI handles release before the
-    // device (this file's teardown contract).
-    std::unique_ptr<Arcane::GpuFaultInjector> m_gpuFault;
+    // Diagnostics menu item fires, on the host that has no menu.
+    //
+    // ONLY THE FIRED-ONCE LATCH IS LEFT. A `unique_ptr<GpuFaultInjector>` sat
+    // beside it until NRI Phase 5a: Task 4 deleted RenderNvrhi, the one thing
+    // that ever built it, and Task 8b deleted the class. RenderGraph's arm
+    // calls the stateless NriDiagnostics::FireFault, which owns its objects for
+    // the length of one dispatch, so nothing is held between frames.
     bool                                      m_gpuFaultFired = false;
 #endif
 

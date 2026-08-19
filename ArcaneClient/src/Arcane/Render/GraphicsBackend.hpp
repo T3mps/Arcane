@@ -3,7 +3,7 @@
 // Render module: WHICH graphics API this process is running on.
 //
 // NRI Phase 5a, Task 8a: the enum used to sit at the top of
-// Render/Device.hpp, the NVRHI device interface this phase deletes -- so
+// Render/Device.hpp, the NVRHI device interface Task 8b deleted -- so
 // every consumer of "which backend?" pulled <nvrhi/nvrhi.h> transitively,
 // including Render/ShaderPaths.hpp (whose whole job is picking dxil-or-spirv)
 // and the host's own HostConfig. It has no NVRHI dependency of its own and

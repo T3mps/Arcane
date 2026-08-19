@@ -99,7 +99,7 @@ namespace Arcane
         // dx12 carried the identical bug (WriteBufferImmediate against a GPU
         // virtual address minted by another device) and was merely mute about
         // it -- its debug layer could not even load on that path (see
-        // DeviceD3D12.cpp's g_d3d12DeviceCreated).
+        // DeviceCreationD3D12.cpp's g_d3d12DeviceCreated).
         //
         // So the marker is gated on device IDENTITY rather than switched off
         // for the phase: `nativeDevice` is the graph device's own native handle

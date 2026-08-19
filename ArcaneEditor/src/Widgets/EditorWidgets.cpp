@@ -546,10 +546,12 @@ namespace Arcane::Editor
         return false;
     }
 
-    // CURVE IS MIRRORED in two other places -- keep all three in step:
-    //   data/shaders/tonemap.hlsl        (HLSL, branchless min form)
-    //   ArcaneTests/src/TonemapTest.cpp   (CPU golden reference, branchless)
-    // Those two both cite THIS file, so an edit here changes rendered output.
+    // CURVE IS MIRRORED in data/shaders/tonemap.hlsl (HLSL, branchless min
+    // form), which cites THIS file -- so an edit here changes rendered output.
+    // The third copy, a CPU golden reference in ArcaneTests/src/TonemapTest.cpp,
+    // was retired at NRI Phase 5a Task 8b with the NVRHI device layer its
+    // fixture needed. Nothing pins the two survivors against each other until
+    // a graph-side tonemap golden lands.
     float SrgbToLinear(float srgb) noexcept
     {
         // Guard the low end FIRST: std::pow of a negative base with a

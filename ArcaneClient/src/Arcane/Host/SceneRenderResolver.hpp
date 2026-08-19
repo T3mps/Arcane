@@ -33,7 +33,9 @@
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
-#include <Arcane/Render/Device.hpp>   // GraphicsBackend (by value in Services)
+#include <Arcane/Render/GraphicsBackend.hpp>   // by value in Services
+
+#include <nvrhi/nvrhi.h>   // nvrhi::IDevice* in Services -- reached through Render/Device.hpp until Task 8b deleted it
 
 #include <functional>
 

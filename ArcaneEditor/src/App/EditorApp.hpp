@@ -48,7 +48,7 @@
 #include <Arcane/ImGui/OffscreenImGuiLayer.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
-#include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only Build -> Diagnostics -> Crash GPU
+#include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only Build -> Diagnostics -> Crash GPU (kPassName only; the injector is NriDiagnostics::FireFault)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle (chrome + viewport); unconditional as of Phase 5a
 #include <Arcane/Render/PickEmit.hpp>   // PickDrawable -- the graph arm's per-frame pickables
 #include <Arcane/Render/ShaderCompiler.hpp>
@@ -388,9 +388,9 @@ namespace Arcane::Editor
         // this one owns -- so the borrower (declared later) destructs first.
         //
         // NOT on ResetPerProjectState's list, and neither is the viewport
-        // context below -- the same ruling m_gpuFault and the NVRHI viewport
-        // trio already carry: these hold DEVICE resources, not project ones,
-        // and the device outlives a project switch.
+        // context below -- the same ruling the NVRHI viewport trio already
+        // carried: these hold DEVICE resources, not project ones, and the
+        // device outlives a project switch.
         //
         // ===== AND THIS ONE SURVIVES A SWITCH OUTRIGHT (Task 12) =====
         // The decision, made and recorded rather than left implicit: THIS
@@ -1308,19 +1308,17 @@ namespace Arcane::Editor
         // calls this, and everything downstream of the dispatch is the arc's own
         // capture path with nothing special about having been asked for.
         //
-        // Built LAZILY at the first click rather than at boot: a compute
-        // pipeline plus a UAV that exist in every session only to be used in
-        // approximately none of them is a cost with no reader.
-        //
-        // NOT on ResetPerProjectState's list, on purpose: it holds DEVICE
-        // resources, not project ones, and the device outlives a project switch
-        // -- the switch-staleness rule that governs m_reportDiagnostics above
-        // does not reach it.
-        //
-        // Declared after m_gpu (top of the member block) so it releases its
-        // NVRHI handles before the device that made them.
+        // NO INJECTOR OBJECT ANY MORE (NRI Phase 5a). A lazily-built
+        // `unique_ptr<Arcane::GpuFaultInjector>` used to live here, holding a
+        // compute pipeline and a UAV between clicks. Task 6 deleted the NVRHI
+        // arm that was its only builder -- leaving the member permanently null
+        // and saying so in its own comment -- and Task 8b deleted the class
+        // with the rest of the NVRHI layer. NriDiagnostics::FireFault is
+        // stateless: it creates and drops its own one-off objects per
+        // dispatch, so there is nothing left to own, nothing to keep off
+        // ResetPerProjectState's list, and no NVRHI handle whose release order
+        // against the device this declaration position had to guarantee.
         void FireDeliberateGpuFault();
-        std::unique_ptr<Arcane::GpuFaultInjector> m_gpuFault;
         // --crash-gpu N fired already. The menu item is deliberately NOT
         // latched by this -- a user who clicks twice meant it twice; the latch
         // exists only so a per-frame schedule fires once.

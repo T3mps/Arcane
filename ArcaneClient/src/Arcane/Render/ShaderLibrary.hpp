@@ -8,7 +8,7 @@
 // point it at Arcane/data/shaders/generated for the recompile-while-running loop.
 
 #include <Arcane/Base/Api.hpp>
-#include <Arcane/Render/Device.hpp>
+#include <Arcane/Render/GraphicsBackend.hpp>
 
 #include <nvrhi/nvrhi.h>
 

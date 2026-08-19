@@ -102,19 +102,21 @@ namespace Arcane
     // GpuPassScope
     // ---------------------------------------------------------------------
 
-    GpuPassScope::GpuPassScope(nvrhi::ICommandList* commandList, const char* name) noexcept
-        : m_commandList(commandList)
+    GpuPassScope::GpuPassScope(void* nativeCommandList, const char* name) noexcept
+        : m_commandList(nativeCommandList)
     {
         if (!m_commandList || !name)
             return;
 
-        // The nvrhi marker goes out even with no crash backend installed: it is
-        // what a PIX/RenderDoc capture and D3D12 DRED's markers-only tier read,
-        // and DRED enablement (EnableD3D12Dred) is process-global and
-        // independent of whether a backend object exists.
-        m_commandList->beginMarker(name);
-        m_marked = true;
-
+        // THE NVRHI CHANNEL WAS HERE (NRI Phase 5a, Task 8b). The constructor
+        // used to open with m_commandList->beginMarker(name) before touching
+        // the backend at all -- deliberately, because that marker is what a
+        // PIX/RenderDoc capture and D3D12 DRED's markers-only tier read, and
+        // DRED enablement is process-global and independent of whether a
+        // backend object exists. There is no nvrhi command list left to call
+        // it on; see the header's F-2c-bis paragraph for why that does not
+        // strand the Dist tier, and what restores both channels.
+        //
         // Latched, not re-read in the destructor: a teardown that cleared the
         // slot mid-scope must not leave a BeginScope without its EndScope, nor
         // hand the end marker to a different backend than the begin marker.
@@ -126,23 +128,21 @@ namespace Arcane
         m_scoped = true;
 
         // False here means "this layer is unavailable" (no marker buffer, a
-        // failed QueryInterface). It is not fatal and not worth a per-pass log
-        // -- the backend logs its one WARN and records the degrade in
-        // activeLayers, which is where a reader looks.
-        (void)m_backend->WriteMarker(m_commandList, m_token, true);
+        // failed QueryInterface, or -- today -- a graph backend whose native
+        // marker layer is still a stub). It is not fatal and not worth a
+        // per-pass log: the backend logs its one WARN and records the degrade
+        // in activeLayers, which is where a reader looks.
+        (void)m_backend->WriteMarkerNative(m_commandList, m_token, true);
     }
 
     GpuPassScope::~GpuPassScope()
     {
-        // Exact mirror of the constructor's order so the scopes nest: end
-        // marker inside, nvrhi endMarker outside.
+        // Exact mirror of the constructor's order so the scopes nest.
         if (m_scoped && m_backend)
         {
-            (void)m_backend->WriteMarker(m_commandList, m_token, false);
+            (void)m_backend->WriteMarkerNative(m_commandList, m_token, false);
             m_backend->Breadcrumbs().EndScope(m_token);
         }
-        if (m_marked)
-            m_commandList->endMarker();
     }
 
     // ---------------------------------------------------------------------

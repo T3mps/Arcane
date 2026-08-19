@@ -1373,14 +1373,15 @@ namespace Arcane::Editor
         // from the menu item AND from the scheduled --crash-gpu N block at the
         // top of MainLoop, which is how this arm is scriptable at all.
         // NVRHI ARM DELETED, NOT PORTED (NRI Phase 5a, Task 6). This used to
-        // fall through, on `!GraphMode()`, to a lazily-built
-        // Arcane::GpuFaultInjector::Create(m_gpu->Device().Nvrhi(),
-        // m_gpu->Shaders()) fired on m_gpu->Cmd(). GpuContext has built no
-        // NVRHI device, ShaderLibrary or command list at all since this task
-        // deleted Device()/Shaders()/Cmd() along with the rest of its NVRHI
-        // half, so that arm no longer compiles; `GraphMode()` was already
-        // unconditional (the guard below always took it), so there is
-        // nothing left to fall through to and the guard is gone too.
+        // fall through, on `!GraphMode()`, to a lazily-built nvrhi fault
+        // injector made from m_gpu->Device().Nvrhi() and m_gpu->Shaders(),
+        // fired on m_gpu->Cmd(). GpuContext has built no NVRHI device,
+        // ShaderLibrary or command list at all since that task deleted
+        // Device()/Shaders()/Cmd() along with the rest of its NVRHI half, so
+        // that arm no longer compiled; `GraphMode()` was already unconditional
+        // (the guard below always took it), so there was nothing left to fall
+        // through to and the guard went too. Task 8b then deleted the injector
+        // CLASS itself -- FireFault below is the whole story now.
         if (!m_graphChrome)
         {
             ARC_ERROR("Crash GPU: the graph vehicle is not up -- nothing dispatched");

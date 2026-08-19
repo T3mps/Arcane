@@ -340,10 +340,12 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     //     describe;
     //   * it therefore fires BEFORE the frame is declared rather than inside
     //     it, which keeps `pass:gpu-fault` the last scope the GPU begins --
-    //     exactly what the NVRHI arm achieves by recording it first into a
+    //     exactly what the NVRHI arm achieved by recording it first into a
     //     list submitted at the end of the frame.
-    // FireFault is stateless, so io.gpuFault (the nvrhi injector this arm
-    // never builds) stays null on this path; only the fired latch is shared.
+    // FireFault is stateless -- it owns its objects for the length of one
+    // dispatch -- which is why the nvrhi injector this arm never built is gone
+    // from FrameIo entirely (NRI Phase 5a, Task 8b). Only the fired latch was
+    // ever shared, and it is all that is left here.
     if (io.config.crashGpuFrame != 0 && !io.gpuFaultFired &&
         io.frameCount >= io.config.crashGpuFrame)
     {

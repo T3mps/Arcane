@@ -44,7 +44,7 @@
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
-#include <Arcane/Render/GpuFaultInjector.hpp>       // dev-only --crash-gpu N (RenderGraph's fired latch; the injector object itself is unused since RenderNvrhi's deletion)
+#include <Arcane/Render/GpuFaultInjector.hpp>       // dev-only --crash-gpu N (kPassName only; RenderGraph fires through NriDiagnostics::FireFault)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>    // the graph vehicle (RenderGraph); unconditional as of Phase 5a
 #include <Arcane/Render/PickEmit.hpp>                // PickDrawable (--pick-probe)
 
@@ -104,13 +104,13 @@ namespace Arcane::RuntimeFrame
         std::vector<std::uint32_t>&        pickSelectedIds;
 
 #if !defined(ARCANE_DIST)
-        // --crash-gpu N. Same Dist guard as the RuntimeApp members these are
-        // bound to -- see RuntimeApp.hpp. `gpuFault` itself is unused since
-        // RenderNvrhi's deletion (NRI Phase 5a, Task 4) -- it was the nvrhi
-        // fault injector object RenderNvrhi built lazily; RenderGraph's
-        // FireFault is stateless and never built one. `gpuFaultFired` stays
-        // live: both arms shared the ONE fired-once latch.
-        std::unique_ptr<Arcane::GpuFaultInjector>& gpuFault;
+        // --crash-gpu N. Same Dist guard as the RuntimeApp member this is bound
+        // to -- see RuntimeApp.hpp. The `gpuFault` reference that used to sit
+        // here went with the injector object itself at NRI Phase 5a Task 8b:
+        // it had been unused since RenderNvrhi's deletion (Task 4), because
+        // RenderGraph's FireFault is stateless and never built one.
+        // `gpuFaultFired` stays live -- both arms shared the ONE fired-once
+        // latch, and the surviving arm still needs it.
         bool&                                      gpuFaultFired;
 #endif
 

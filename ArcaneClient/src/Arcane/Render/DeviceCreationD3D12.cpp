@@ -12,13 +12,22 @@
 // name RenderErrorLatch instead of NvrhiMessageCallback: same calls, same
 // order, same log lines, same early returns.
 //
+// NRI Phase 5a, Task 8b then deleted DeviceD3D12.cpp and moved the F-3
+// device-removed observer down here too -- it had to travel WITH the deletion
+// of the installer that used to sit beside it, because moving it earlier
+// would have changed the function-pointer value in the hook slot that
+// NriDiagnostics::Disarm compares against.
+//
 // See DeviceCreationD3D12.hpp for the two-consumer shape and the member-order
 // rule. The Vulkan twin (CreateVulkanNativeDevice, and the VkDebugCallback
-// that is this file's messenger analogue) has NOT moved -- it still lives
-// inside DeviceVulkan.cpp.
+// that is this file's messenger analogue) got the same treatment in the same
+// task and now lives in DeviceCreationVulkan.cpp -- the tree is symmetric.
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/DeviceCreationD3D12.hpp>
+#include <Arcane/Render/DeviceRemovedObservers.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>   // NoteGpuDeviceLost -- the host's device-lost latch
 #include <Arcane/Render/IGpuCrashBackend.hpp>   // EnableD3D12Dred -- the F-2 DRED tier, armed before D3D12CreateDevice
 #include <Arcane/Render/RenderErrorLatch.hpp>
 
@@ -48,9 +57,10 @@ namespace Arcane
         // (learn.microsoft.com, ID3D12Debug::EnableDebugLayer, Remarks.)
         //
         // That is exactly what the `--nri-graph` vehicle did on its first desk
-        // run: the engine boots its NVRHI device with the layer OFF (the flag
-        // defaults false -- Device.hpp, the Nahimic-OSD fail-fast hazard), then
-        // the vehicle runs THIS SAME creation half a second time with
+        // run, back when the engine still booted an NVRHI device of its own:
+        // that device came up with the layer OFF (the flag defaults false --
+        // RenderDeviceDesc.hpp, the Nahimic-OSD fail-fast hazard), then the
+        // vehicle ran THIS SAME creation half a second time with
         // enableD3D12DebugLayer forced true, so EnableDebugLayer landed on a
         // process that already owned a live device. Every dx12 vehicle run then
         // failed at D3D12CreateDevice and exited 1 after 0 frames.
@@ -58,18 +68,59 @@ namespace Arcane
         // These two flags make the sequencing structural rather than a rule
         // somebody has to remember at each new call site.
         //
-        // MONOTONE ON PURPOSE, and the conservative direction: `g_d3d12DeviceCreated`
-        // is never cleared, because the NVRHI owner (DeviceD3D12) releases its
-        // device through MEMBER DESTRUCTION rather than DestroyD3D12NativeDevice,
-        // so there is no single point that could decrement a live count without
-        // moving that teardown -- and the failure mode of being wrong here is
-        // asymmetric. Skipping an enable that would have been legal costs one
-        // diagnostic channel; making the call when it is NOT legal removes a live
-        // device. Nothing in the tree recreates a device WITH the layer requested
-        // anyway (only --nri-graph ever sets the flag, and it never recreates
-        // one), so today this costs nothing at all.
+        // MONOTONE ON PURPOSE, and the conservative direction:
+        // `g_d3d12DeviceCreated` is never cleared. It was never cleared because
+        // the NVRHI owner released its device through MEMBER DESTRUCTION rather
+        // than DestroyD3D12NativeDevice; that owner is gone as of Phase 5a Task
+        // 8b and every remaining owner (NativeDeviceOwner) does route teardown
+        // through DestroyD3D12NativeDevice, so a decrement is now expressible
+        // -- but it is deliberately still not done, because the failure mode of
+        // being wrong here is asymmetric. Skipping an enable that would have
+        // been legal costs one diagnostic channel; making the call when it is
+        // NOT legal removes a live device. Nothing in the tree creates a second
+        // D3D12 device at all since the one-device flip, so today this costs
+        // nothing.
         std::atomic<bool> g_d3d12DeviceCreated{ false };
         std::atomic<bool> g_d3d12DebugLayerEnabled{ false };
+
+        // F-3: the ONE device-removed observation point for this backend.
+        // It is reached through RenderErrorLatch's hook slot, which
+        // Render/Nri/NriDiagnostics::Arm fills with ObserveDeviceRemovedD3D12
+        // below. Two producers drive that slot: the latch's "Device Removed"
+        // substring scan (NoteNvrhiError -- what NriCommon's RouteNriError
+        // funnels every ARC_NRI_CHECK failure into), and its TYPED seam
+        // NoteDeviceLost, which is what NriDiagnostics' `--crash-gpu`
+        // removal poll calls once GetDeviceRemovedReason answers.
+        //
+        // NRI Phase 5a, Task 8b: this observer moved here FROM DeviceD3D12.cpp
+        // with that file's deletion, in one step -- moving it earlier would
+        // have changed which function pointer the hook slot holds, which
+        // NriDiagnostics::Disarm compares against. The two observables the
+        // old paragraph here named -- F-3b's NVRHI submit-time message hook,
+        // and F-3c's DXGI Present -- are both gone with the NVRHI layer.
+        //
+        // Once-only per armed device: a removed device keeps reporting removal
+        // on every submit, and the second report is worthless -- the marker
+        // buffer and DRED state belong to the FIRST one. Reset when a new
+        // backend arms (project switch recreates the device).
+        std::atomic<bool> g_deviceRemovedReported{ false };
+
+        void ObserveDeviceRemoved()
+        {
+            if (g_deviceRemovedReported.exchange(true, std::memory_order_acq_rel))
+                return;
+
+            // The reason string is load-bearing: Diagnostics::DeriveKind
+            // classifies the .arcdiag "kind" by case-sensitive substring, and
+            // only a reason containing lowercase "gpu" resolves to a gpu kind
+            // (here "gpu-crash", which is what makes the .gpudump sibling get
+            // written). Do not reword.
+            Diagnostics::WriteReport("gpu-crash: device removed");
+
+            // AFTER the report, deliberately: hosts poll this latch and shut
+            // down on it, and "observed" must always mean "the report exists".
+            NoteGpuDeviceLost();
+        }
 
         // Phase 2, Task 1 instrumentation. WHICH d3d12SDKLayers.dll is
         // servicing the debug layer is the one fact that separates the two
@@ -111,9 +162,9 @@ namespace Arcane
         // messages only. Without this, D3D12 validation text reaches nothing:
         // the block below merely turns break-on-severity off. This is the one
         // channel by which a D3D12 VUID can fail the 0/0 gate, and it is the
-        // exact counterpart of DeviceVulkan.cpp's VkDebugCallback -- same sink,
-        // same severity split, so "an error happened" means one thing on both
-        // backends.
+        // exact counterpart of DeviceCreationVulkan.cpp's VkDebugCallback --
+        // same sink, same severity split, so "an error happened" means one
+        // thing on both backends.
         //
         // __stdcall by D3D12MessageFunc's typedef (d3d12sdklayers.h); the
         // calling convention must match exactly.
@@ -128,14 +179,15 @@ namespace Arcane
             {
             case D3D12_MESSAGE_SEVERITY_CORRUPTION:
             case D3D12_MESSAGE_SEVERITY_ERROR:
-                // Same latch NVRHI's own errors increment, so a raw D3D12
-                // message fails the GPU tests exactly like an [nvrhi] error --
-                // but through NoteError, which tags it "[d3d12]" (this text is
-                // the debug layer's, not NVRHI's) and skips the device-removed
-                // substring hook. This callback runs on whatever thread tripped
-                // the error, from inside a D3D12 call; ObserveDeviceRemoved
-                // writes a report + minidump and belongs on NVRHI's submit-time
-                // feed, which stays the ONE observation point (F-3b). See
+                // Same latch every other render-layer error producer
+                // increments, so a raw D3D12 message fails the GPU tests
+                // exactly like an NRI error -- but through NoteError, which
+                // tags it "[d3d12]" (this text is the debug layer's, nobody
+                // else's) and skips the device-removed substring hook. This
+                // callback runs on whatever thread tripped the error, from
+                // inside a D3D12 call; ObserveDeviceRemoved above writes a
+                // report + minidump, and the producers that may fire it are
+                // the latch's own two seams, not this one. See
                 // RenderErrorLatch::NoteError for the full argument.
                 RenderErrorLatch::Instance().NoteError("d3d12", text);
                 break;
@@ -145,8 +197,8 @@ namespace Arcane
             default:
                 // INFO/MESSAGE: the debug layer emits one per resource create
                 // and destroy. The Vulkan messenger subscribes to Error and
-                // Warning only (DeviceVulkan.cpp) -- match it rather than
-                // drown the log.
+                // Warning only (DeviceCreationVulkan.cpp) -- match it rather
+                // than drown the log.
                 break;
             }
         }
@@ -155,21 +207,20 @@ namespace Arcane
     // ----------------------------------------------------------------
     // The CREATION HALF (NRI Phase 1, Task 7).
     // ----------------------------------------------------------------
-    // This function IS the former prologue of DeviceD3D12::Init, moved out
-    // whole so the NRI wrapper can reuse it: the same calls in the same order
-    // with the same parameters, the same log lines, and the same early
-    // returns. The only textual change is that what used to be written into
-    // DeviceD3D12's members is written into `out` -- which is now where
-    // DeviceD3D12 keeps them anyway (m_creation), so the NVRHI path reads
-    // exactly the values it read before, and the member ORDER inside
-    // D3D12DeviceCreation reproduces the COM release order this class had.
+    // This function WAS the prologue of DeviceD3D12::Init (Phase 1, Task 7
+    // moved it out whole so the NRI wrapper could reuse it; Phase 5a, Task 8b
+    // deleted the class that kept the other half). It is unchanged by either
+    // move: the same calls in the same order with the same parameters, the
+    // same log lines, and the same early returns. The member ORDER inside
+    // D3D12DeviceCreation still reproduces the COM release order that class
+    // had, which is why teardown did not shift either.
     //
     // It sits at namespace scope (outside the anonymous namespace above)
-    // because DeviceCreationD3D12.hpp declares it for the other consumers.
+    // because DeviceCreationD3D12.hpp declares it for its consumers -- today
+    // the ONE consumer, Nri/NriDevice.cpp's NativeDeviceOwner.
     //
-    // Failure leaves `out` holding whatever was created; the caller's
-    // teardown releases it, exactly as ~DeviceD3D12 always did when Init
-    // bailed.
+    // Failure leaves `out` holding whatever was created; the caller's teardown
+    // releases it, exactly as ~DeviceD3D12 did when Init bailed.
     bool CreateD3D12NativeDevice(const RenderDeviceDesc& desc, D3D12DeviceCreation& out)
     {
         // Recorded, not acted on: NRI's own validation layer is available in
@@ -364,8 +415,9 @@ namespace Arcane
                 // create and destroy; filtering here means they are never
                 // stored and never cross into D3D12DebugLayerCallback at all.
                 // Same subscription as the Vulkan messenger, which takes Error
-                // and Warning only (DeviceVulkan.cpp) -- so "an error happened"
-                // and "the log is quiet" mean one thing on both backends.
+                // and Warning only (DeviceCreationVulkan.cpp) -- so "an error
+                // happened" and "the log is quiet" mean one thing on both
+                // backends.
                 D3D12_MESSAGE_SEVERITY denied[]{ D3D12_MESSAGE_SEVERITY_INFO,
                                                  D3D12_MESSAGE_SEVERITY_MESSAGE };
                 D3D12_INFO_QUEUE_FILTER filter{};
@@ -448,9 +500,11 @@ namespace Arcane
 
     // Contract item 12's teardown half, idempotent: the debug layer holds a
     // raw pointer to a function in THIS module and must not outlive it. Split
-    // out of the release below because the NVRHI path has to unregister at
-    // one specific point -- before its nvrhi device is released, which is
-    // exactly where ~DeviceD3D12 called it before this refactor.
+    // out of the release below because the NVRHI path had to unregister at one
+    // specific point -- before its nvrhi device was released, which is exactly
+    // where ~DeviceD3D12 called it. That caller is gone as of Phase 5a Task 8b;
+    // the split stays because DestroyD3D12NativeDevice below is written on top
+    // of it and idempotence makes the pair safe either way.
     void UnregisterD3D12DebugCallback(D3D12DeviceCreation& creation)
     {
         if (creation.infoQueue && creation.infoQueueCookie != 0)
@@ -472,5 +526,47 @@ namespace Arcane
         creation.device.Reset();
         creation.adapter.Reset();
         creation.factory.Reset();
+    }
+
+    // The narrow export (DeviceRemovedObservers.hpp, NRI Phase 3 Task 5): the
+    // SAME observer above, reachable BY ADDRESS from the Render module's
+    // installer. One line, no state, no second observation point -- the
+    // once-only `g_deviceRemovedReported` latch, the "gpu-crash: device
+    // removed" wording and the NoteGpuDeviceLost ordering all stay in
+    // ObserveDeviceRemoved, unchanged and file-local.
+    //
+    // IT STAYS A SEPARATE FUNCTION FROM THE OBSERVER (Task 8b). Folding the
+    // body up into this name would be a behaviour change, not a cleanup:
+    // NriDiagnostics::Disarm clears the hook slot only when it still holds
+    // the address Arm installed, and that address is THIS function's.
+    void ObserveDeviceRemovedD3D12()
+    {
+        ObserveDeviceRemoved();
+    }
+
+    // Its twin (DeviceRemovedObservers.hpp): the store DeviceD3D12::Init used
+    // to make one line above its own ResetGpuDeviceLost(). Since Task 8b
+    // deleted that class, NriDiagnostics::Arm is the ONLY arming site left and
+    // this is its only way to reach a latch that is deliberately file-local.
+    void ResetDeviceRemovedLatchD3D12()
+    {
+        g_deviceRemovedReported.store(false, std::memory_order_release);
+    }
+
+    // The device-loss QUESTION, as opposed to the observers above which are
+    // the ANSWER's delivery. See DeviceRemovedObservers.hpp for why NRI's
+    // D3D12 QueueWaitIdle cannot be asked instead.
+    //
+    // GetDeviceRemovedReason is the one D3D12 call that is defined ON a
+    // removed device. S_OK means "not removed"; every other HRESULT
+    // (DXGI_ERROR_DEVICE_REMOVED / _HUNG / _RESET,
+    // DXGI_ERROR_DRIVER_INTERNAL_ERROR) means it is gone. Deliberately not
+    // once-only and deliberately silent: it observes nothing and reports
+    // nothing, so it stays safe to call from a bail-out path.
+    bool D3D12NativeDeviceRemoved(void* nativeDevice) noexcept
+    {
+        if (!nativeDevice)
+            return false;
+        return FAILED(static_cast<ID3D12Device*>(nativeDevice)->GetDeviceRemovedReason());
     }
 }

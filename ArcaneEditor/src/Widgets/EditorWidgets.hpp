@@ -163,9 +163,10 @@ namespace Arcane::Editor
     // Values outside [0,1] pass through monotonically, so an hdr path cannot clamp
     // anything.
     //
-    // CURVE IS MIRRORED in two other places -- keep all three in step:
-    //   data/shaders/tonemap.hlsl        (HLSL, branchless min form)
-    //   ArcaneTests/src/TonemapTest.cpp   (CPU golden reference, branchless)
+    // CURVE IS MIRRORED in data/shaders/tonemap.hlsl (HLSL, branchless min
+    // form) -- keep both in step. See the .cpp for the third copy that used to
+    // pin them (a CPU golden reference in ArcaneTests/src/TonemapTest.cpp,
+    // retired at NRI Phase 5a Task 8b).
     [[nodiscard]] float SrgbToLinear(float srgb) noexcept;
     [[nodiscard]] float LinearToSrgb(float linear) noexcept;
 }

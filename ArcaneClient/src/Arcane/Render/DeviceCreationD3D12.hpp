@@ -10,7 +10,7 @@
 //
 // Render-internal, not exported: both consumers compile into ArcaneClient.dll.
 
-#include <Arcane/Render/Device.hpp>
+#include <Arcane/Render/RenderDeviceDesc.hpp>
 
 #include <d3d12.h>
 #include <dxgi1_6.h>

@@ -1,83 +1,25 @@
-// [gpu] live integration: drive PlaygroundGame through a real Runtime + Batcher2D into
-// an offscreen HDR canvas; assert the plugin's RenderSubmissionSystem submitted the two
-// sprites and NVRHI/VK validation stayed silent. Device setup copied from SceneSliceTest.
-// Asserts via batcher->Stats() only -> no scene-component TypeID is touched in the test
-// module (the plugin owns the component identities under the shared context).
+// The host slice's HEADLESS remainder.
+//
+// This file used to be a [gpu] live integration: drive PlaygroundGame through a
+// real Runtime + Batcher2D into an offscreen HDR canvas and assert both that
+// the plugin's RenderSubmissionSystem submitted its two sprites and that
+// validation stayed silent. That case built its device with
+// Arcane::RenderDevice::Create, and NRI Phase 5a Task 8b deleted the NVRHI
+// device layer -- there is no longer any way for a test executable to obtain an
+// nvrhi::IDevice, so the case was retired rather than faked.
+//
+// THE COVERAGE THAT LEAVES WITH IT, named rather than dropped: nothing in
+// ArcaneTests now drives a loaded plugin's render submission all the way to a
+// GPU surface. The graph-side replacement (an NRI RenderGraph executing a
+// Batch2DNode over a plugin's submissions) does not exist as a test yet; it is
+// a Phase 5b item. What survives here is the half that never needed a device.
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
-#include <Arcane/Render/Batcher2D.hpp>
-#include <Arcane/Render/Canvas.hpp>
-#include <Arcane/Render/Device.hpp>
-#include <Arcane/Render/ShaderLibrary.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
-#include <Arcane/Plugin/PluginHost.hpp>
-
-#include <glm/glm.hpp>
-
-#include <filesystem>
-
-namespace
-{
-    void RunHostSlice(Arcane::GraphicsBackend backend)
-    {
-        Arcane::RenderDeviceDesc desc;
-        desc.backend = backend;
-        auto device = Arcane::RenderDevice::Create(desc);
-        REQUIRE(device != nullptr);
-
-        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "data/shaders");
-        // REQUIRE'd BEFORE it is dereferenced: Batcher2D::Create takes
-        // shaders.get(), so a failed ShaderLibrary would reach the batcher as a
-        // null and be reported as a batcher failure two lines later (or crash
-        // inside it) instead of naming the shader library.
-        REQUIRE(shaders != nullptr);
-        auto canvas  = Arcane::CreateCanvas(device->Nvrhi(), 1280, 720);
-        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), shaders.get());
-        REQUIRE(canvas  != nullptr);
-        REQUIRE(batcher != nullptr);
-
-        // Inject the process-wide shared TypeContext so the test exe, Arcane.dll,
-        // and the plugin all resolve component TypeIDs from the same slot table.
-        Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
-        Arcane::PluginHost host(rt, std::filesystem::path("PlaygroundGame.dll"));
-        REQUIRE(host.Load());   // plugin registers scene components + systems under the shared ctx
-
-        // ABI v3: the plugin loaded under a v3 EngineContext (imgui fields null here --
-        // headless, no ImGuiLayer). The host resolved the DrawUI hook; calling it is a
-        // no-op for PlaygroundGame, but proves the entry point is live and callable.
-        const Arcane::PluginVTable* vt = host.Vtable();
-        REQUIRE(vt != nullptr);
-        CHECK(vt->ABIVersion() == Arcane::kGamePluginABIVersion);
-        REQUIRE(vt->DrawUI != nullptr);
-        vt->DrawUI();   // no-op; must not crash with a null ImGui context
-
-        for (int i = 0; i < 10; ++i)
-            rt.Loop().Advance(1.0 / 60.0,
-                [&](double dt) { host.Vtable()->FixedUpdate(dt); },
-                [&](double, double) {});
-
-        nvrhi::CommandListHandle cl = device->Nvrhi()->createCommandList();
-        cl->open();
-        cl->clearTextureFloat(canvas->Texture(), nvrhi::AllSubresources,
-                              nvrhi::Color(0, 0, 0, 1));
-        batcher->Begin(cl, canvas->Framebuffer(), canvas->Width(), canvas->Height());
-        rt.SetRenderContext(batcher.get());
-        rt.Loop().SubmitRender();   // plugin's RenderSubmissionSystem -> batcher
-        batcher->End();
-        cl->close();
-        device->Nvrhi()->executeCommandList(cl);
-        device->Nvrhi()->waitForIdle();
-
-        CHECK(batcher->Stats().quads >= 2);         // orbiter + moon submitted via the plugin
-        CHECK(Arcane::RenderErrorCount() == 0);
-        host.Unload();
-        device->Nvrhi()->runGarbageCollection();
-    }
-}
 
 // Headless: the input-store path the host wires in its frame loop (SetInputSnapshot ->
 // Input()). No device needed -- the plugin reads input through Runtime::Input(), so
@@ -108,14 +50,4 @@ TEST_CASE("Host input store: Runtime::Input reflects the last SetInputSnapshot",
     CHECK(got.gamepadConnected);
     CHECK(got.gamepadAxes[0] == -0.5f);
     CHECK(got.wantCaptureKeyboard);
-}
-
-TEST_CASE("d3d12: host slice renders the plugin scene, no validation errors", "[gpu][d3d12]")
-{
-    RunHostSlice(Arcane::GraphicsBackend::D3D12);
-}
-
-TEST_CASE("vulkan: host slice renders the plugin scene, no validation errors", "[gpu][vulkan]")
-{
-    RunHostSlice(Arcane::GraphicsBackend::Vulkan);
 }

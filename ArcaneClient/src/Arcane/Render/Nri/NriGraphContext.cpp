@@ -16,7 +16,7 @@
 
 #include <Arcane/Base/Diagnostics.hpp>              // Heartbeat / GpuHeartbeatRefresh -- the offscreen pacing wait
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Render/Device.hpp>                 // RenderDeviceDesc, RenderErrorCount, ToString(GraphicsBackend)
+#include <Arcane/Render/RenderDeviceDesc.hpp>       // RenderDeviceDesc (and GraphicsBackend + ToString behind it)
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>     // the crash chain, armed by whichever device exists
 #include <Arcane/Render/RenderErrorLatch.hpp>   // the tagged "nri-graph" error seam
 #include <Arcane/Render/PostChainCache.hpp>         // PostChainDesc -- the frame's post-chain shape
@@ -159,8 +159,8 @@ namespace Arcane
         // The creation half, with validation forced ON in Debug -- every
         // channel a validation message can arrive through ends at
         // RenderErrorCount, which is what makes this run's exit code mean
-        // something (VK core + sync validation -> DeviceVulkan.cpp's
-        // VkDebugCallback; the D3D12 debug layer -> DeviceD3D12.cpp's
+        // something (VK core + sync validation -> DeviceCreationVulkan.cpp's
+        // VkDebugCallback; the D3D12 debug layer -> DeviceCreationD3D12.cpp's
         // ID3D12InfoQueue1 callback, which is why enableD3D12DebugLayer is
         // forced here since it defaults FALSE for the Nahimic-OSD fail-fast
         // hazard; NRI's own validation layer -> MakeNriCallbacks).
@@ -168,7 +168,7 @@ namespace Arcane
         // ALL THREE ARE LIVE SINCE TASK 6, and that is the change: this is now
         // the FIRST graphics device the process creates, so
         // ID3D12Debug::EnableDebugLayer -- a before-any-device call -- is
-        // actually made rather than declined (DeviceD3D12.cpp's
+        // actually made rather than declined (DeviceCreationD3D12.cpp's
         // g_d3d12DeviceCreated is still false at this point). dx12 Debug runs
         // therefore route D3D12 CPU validation into D3D12DebugLayerCallback and
         // into the error latch for the first time on this path; findings from

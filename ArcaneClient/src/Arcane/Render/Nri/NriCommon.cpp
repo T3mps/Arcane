@@ -55,9 +55,9 @@ namespace Arcane
 
         // Same gate, new producer: RenderErrorLatch::NoteNvrhiError() both
         // logs at ARC_ERROR (with the "[nvrhi]" tag it always uses, regardless
-        // of producer -- see DeviceVulkan.cpp's VkDebugCallback for the
-        // existing precedent of a non-nvrhi producer routing through this
-        // exact call) and increments the SAME atomic RenderErrorCount() reads.
+        // of producer -- see DeviceCreationVulkan.cpp's VkDebugCallback for the
+        // other non-nvrhi producer routing through this exact call) and
+        // increments the SAME atomic RenderErrorCount() reads.
         // Routing NRI errors through it here, rather than adding a second
         // counter, keeps the 0/0 gate a single source of truth.
         //
@@ -121,8 +121,8 @@ namespace Arcane
         // logs every ERROR and still routes it into RenderErrorCount, so the
         // error latch and the zero-errors gate keep their teeth, and
         // ARC_NRI_CHECK still sees the typed failing Result at the call site.
-        // Only the process-breaking half goes -- matching what the nvrhi arm
-        // has always done for the same class of signal
+        // Only the process-breaking half goes -- matching how the D3D12 debug
+        // layer is armed for the same class of signal
         // (Render/DeviceCreationD3D12.cpp arms the D3D12 InfoQueue with
         // SetBreakOnSeverity(..., FALSE) on all three severities and lets the
         // host do the reporting).
@@ -190,8 +190,9 @@ namespace Arcane
 
         // NRI's DeviceDesc carries no validation-state field (validation is a
         // wrapping choice made at creation time, not a queryable device
-        // property) -- mirror the same compile-time default Render/Device.hpp
-        // already uses for RenderDeviceDesc::enableValidation.
+        // property) -- mirror the same compile-time default
+        // Render/RenderDeviceDesc.hpp already uses for
+        // RenderDeviceDesc::enableValidation.
 #if defined(ARCANE_DEBUG)
         constexpr const char* kValidation = "on";
 #else

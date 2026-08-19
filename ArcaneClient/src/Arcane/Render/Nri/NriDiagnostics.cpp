@@ -12,7 +12,7 @@
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Render/DeviceFactories.hpp>       // ObserveDeviceRemovedD3D12 / ...Vulkan (the narrow export)
+#include <Arcane/Render/DeviceRemovedObservers.hpp> // ObserveDeviceRemovedD3D12 / ...Vulkan (the narrow export)
 #include <Arcane/Render/GpuBreadcrumbs.hpp>
 #include <Arcane/Render/GpuCrashReport.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>
@@ -201,8 +201,9 @@ namespace Arcane
         [[nodiscard]] RenderErrorLatch::DeviceRemovedHook ObserverFor(GraphicsBackend backend) noexcept
         {
             // Per-backend, because the once-only removal latch is: each device
-            // TU owns its own `g_deviceRemovedReported` (DeviceFactories.hpp
-            // states why they are not collapsed into one).
+            // creation half owns its own `g_deviceRemovedReported`
+            // (DeviceRemovedObservers.hpp states why they are not collapsed
+            // into one).
             switch (backend)
             {
             case GraphicsBackend::D3D12:  return &ObserveDeviceRemovedD3D12;
@@ -212,7 +213,7 @@ namespace Arcane
         }
 
         // The observer's other half, resolved the same way for the same reason
-        // (DeviceFactories.hpp): re-arming the once-only latch is what makes
+        // (DeviceRemovedObservers.hpp): re-arming the once-only latch is what makes
         // the observer above report the NEXT removal rather than latch out on
         // the last device's.
         void ResetRemovalLatchFor(GraphicsBackend backend) noexcept
@@ -234,14 +235,19 @@ namespace Arcane
             if (g_backend)
                 return false;   // idempotence: a second Arm touches nothing
 
-            // THE TWO-DEVICE TEST, inferred rather than configured. A full
-            // slot means the NVRHI device armed during boot -- it is the only
-            // other writer -- and displacing it would point the Diagnostics
-            // provider at a backend with no DRED, no device-fault query and no
-            // marker buffer while the device that HAS all three is still the
-            // one rendering. Last-writer-wins makes that trivially possible
-            // and silently wrong, which is exactly why this check is here and
-            // not in the caller.
+            // THE FOREIGN-BACKEND TEST, inferred rather than configured. A
+            // full slot used to mean the NVRHI device had armed during boot --
+            // the two-device transition topology -- and displacing it would
+            // have pointed the Diagnostics provider at a backend with no DRED,
+            // no device-fault query and no marker buffer while the device that
+            // HAD all three was still the one rendering. Task 8b deleted that
+            // other writer, so today the only way to reach this branch is a
+            // caller (or a test) installing a backend of its own. The check
+            // stays: last-writer-wins makes displacement trivially possible and
+            // silently wrong, and refusing is still the right answer for ANY
+            // owner we did not install. NriDiagnosticsTest drives it with a
+            // stub, which is why the log line below still names NVRHI -- that
+            // was the case it was written for.
             if (ActiveGpuCrashBackend() != nullptr)
             {
                 ARC_INFO("[nri] diagnostics: an NVRHI crash backend is already armed -- leaving the "
@@ -254,8 +260,9 @@ namespace Arcane
             auto backend = std::make_unique<NriGraphCrashBackend>(device);
 
             // BOTH latches a new device invalidates, cleared as the PAIR the
-            // device TUs clear them as (DeviceD3D12::Init, DeviceVulkan::Init:
-            // these two calls, adjacent, in this order):
+            // NVRHI device TUs cleared them as (DeviceD3D12::Init and
+            // DeviceVulkan::Init made these two calls, adjacent, in this
+            // order, until Task 8b deleted both files):
             //
             //   * the observer's once-only removal latch -- it says "this
             //     process already reported ITS device loss", which was true of
@@ -303,7 +310,7 @@ namespace Arcane
                 return;
 
             // Symmetric with Arm's install, and in the order ~DeviceD3D12
-            // established: unslot the provider, FENCE any report already
+            // established (that destructor is gone; the order is not): unslot the provider, FENCE any report already
             // mid-flight against this backend (clearing the slot only stops
             // the NEXT report from seeing it -- a watchdog thread can be
             // inside FillReport right now), then the conditional clears.
@@ -352,12 +359,13 @@ namespace Arcane
     namespace
     {
         // -------------------------------------------------------------
-        // The fault injector twin's constants -- IDENTICAL to the nvrhi
+        // The fault injector's constants. They were IDENTICAL to the nvrhi
         // injector's (Render/GpuFaultInjector.cpp), deliberately: the desk
-        // battery compares the two arms' behaviour, and a twin that
-        // dispatched a different workload would be measuring a different
-        // fault. Each one's reasoning lives at that file; only the values
-        // are restated here.
+        // battery compared the two arms' behaviour, and a twin that dispatched
+        // a different workload would have been measuring a different fault.
+        // Task 8b deleted that file -- these are now the ONLY copy, and the
+        // reasoning that used to live over there is restated here where each
+        // value needs it.
         // -------------------------------------------------------------
         struct FaultCB
         {
@@ -388,9 +396,9 @@ namespace Arcane
         constexpr std::uint32_t kFaultIterations   = 0xFFFFFFFFu;
         constexpr std::uint32_t kFaultOobElement   = 1u << 30;
 
-        // The artifact stem + the directory literal GpuContext and
-        // NriGraphContext both resolve through, so ARCANE_SHADER_DIR moves
-        // this arm and the nvrhi arm together.
+        // The artifact stem + the directory literal every shader loader in
+        // the tree resolves through (Render/ShaderPaths.hpp), so
+        // ARCANE_SHADER_DIR still moves this arm with everything else.
         constexpr const char* kFaultShaderStem = "gpu_fault_cs";
         constexpr const char* kFaultShaderDir  = "data/shaders";
 
@@ -675,10 +683,11 @@ namespace Arcane
                 return false;
             }
 
-            // Loud and unconditional, verbatim from the nvrhi twin: this is
-            // the one log line that will be in the console when the session
-            // dies, and the difference between "the diagnostics arc works" and
-            // "the runtime crashed" is whether a reader can find it.
+            // Loud and unconditional, kept verbatim from the nvrhi twin Task
+            // 8b deleted: this is the one log line that will be in the console
+            // when the session dies, and the difference between "the
+            // diagnostics arc works" and "the runtime crashed" is whether a
+            // reader can find it.
             ARC_WARN("[nri] --crash-gpu: dispatching a DELIBERATE GPU fault "
                      "({} groups x 64 threads, {} iterations, OOB element {}). "
                      "The device is expected to be lost.",
@@ -723,11 +732,12 @@ namespace Arcane
             barriers.bufferNum = 1;
             core.CmdBarrier(*objects.cmd, barriers);
 
-            // THE breadcrumb this whole command exists to produce. The nvrhi
-            // twin opens its scope INSIDE Fire() for the same reason (see
-            // GpuFaultInjector.hpp): the scope name IS the payload -- reading
-            // "pass:gpu-fault" back out of a `.arcdiag` is the desk battery
-            // item -- so it must not be forgettable at a call site.
+            // THE breadcrumb this whole command exists to produce. The scope
+            // is opened HERE rather than by the caller (see
+            // GpuFaultInjector.hpp, which is now just the name): the scope name
+            // IS the payload -- reading "pass:gpu-fault" back out of a
+            // `.arcdiag` is the desk battery item -- so it must not be
+            // forgettable at a call site.
             //
             // A compact NodeScope (RenderGraphExec.cpp): the annotation always,
             // the CPU ring when a backend is armed, and the native marker only
@@ -810,7 +820,7 @@ namespace Arcane
             //
             //  (i)  QueueD3D12::WaitIdle returns SUCCESS even when its fence
             //       wait failed, because FenceD3D12::Wait is `void`
-            //       (DeviceFactories.hpp carries the full citation). So
+            //       (DeviceRemovedObservers.hpp carries the full citation). So
             //       ARC_NRI_CHECK above can never see DEVICE_LOST here.
             //  (ii) That fence wait does not even wait for the TDR. It is
             //       WaitForSingleObjectEx(m_Event, NRI_TIMEOUT_FENCE, TRUE)

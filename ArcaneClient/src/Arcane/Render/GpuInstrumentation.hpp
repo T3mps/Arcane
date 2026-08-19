@@ -5,15 +5,33 @@
 // making a GPU hang legible after the fact:
 //
 //   1. GpuPassScope    -- an RAII pass marker. On entry it opens a
-//      GpuBreadcrumbs scope, writes the backend's GPU begin marker, and emits
-//      nvrhi::ICommandList::beginMarker; on exit the mirror image. BOTH marker
-//      channels, always, because they answer the same question from two
-//      independent sources: the first-party marker buffer (F-1/F-5) is what a
-//      crash report replays, and the nvrhi marker is what D3D12 DRED's
-//      markers-only tier records. F-2c-bis is BINDING here -- markers-only DRED
-//      with no nvrhi markers yields an EMPTY breadcrumb list, strictly worse
-//      than no DRED at all, so a scope that emitted only one of the two would
-//      silently invalidate the Dist tier.
+//      GpuBreadcrumbs scope and writes the backend's GPU begin marker; on exit
+//      the mirror image.
+//
+//      F-2c-bis, RESTATED FOR THE ONE-CHANNEL WORLD (NRI Phase 5a, Task 8b).
+//      This scope used to write TWO channels: the first-party marker buffer
+//      (F-1/F-5), which is what a crash report replays, and
+//      nvrhi::ICommandList::beginMarker/endMarker, which is what D3D12 DRED's
+//      MARKERS-ONLY auto-breadcrumb tier records. F-2c-bis was the rule tying
+//      them together: markers-only DRED with no nvrhi markers yields an EMPTY
+//      breadcrumb list -- strictly worse than no DRED at all -- so a scope
+//      emitting only one of the two would silently invalidate the Dist tier.
+//
+//      THE NVRHI CHANNEL IS GONE. Task 8b deleted it here because the layer
+//      that consumed it no longer exists: there is no nvrhi device, no nvrhi
+//      command list, and nothing left to call beginMarker on. F-2c-bis is not
+//      violated by that, because Task 1 had already SUSPENDED the tier that
+//      depended on it -- Dist now selects full auto-breadcrumbs rather than
+//      markers-only (GpuCrashD3D12.cpp), and DiagnosticsTest pins that no
+//      config selects markers-only while there is no marker producer.
+//
+//      WHAT RESTORES BOTH: the native NRI marker layer. Today
+//      IGpuCrashBackend::WriteMarkerNative is a stub on the graph backend
+//      (NriDiagnostics.cpp returns false, deliberately, rather than claiming a
+//      marker went out). When that lands, this scope's WriteMarkerNative call
+//      starts producing real GPU markers with no edit at this line, and the
+//      markers-only DRED tier becomes re-earnable -- in that order, and only
+//      in that order.
 //
 //   2. GpuDrawScope    -- the finer, draw-granular marker. nvrhi markers ONLY,
 //      opt-in via the `diagnostics.drawMarkers` EngineConfig key, and compiled
@@ -21,19 +39,30 @@
 //      entry on purpose: the ring holds GpuBreadcrumbs::kRingCapacity scopes
 //      total, and per-draw entries would evict the pass scopes the report is
 //      actually built from -- trading the answer for the detail.
+//      DEAD SINCE NRI Phase 5a: it is the last nvrhi marker site in the tree,
+//      its one call site is Batcher2D's NVRHI recorder, and nothing reaches
+//      that recorder any more (there is no nvrhi device to build it against).
+//      Left standing on purpose -- severing it means editing Batcher2D's GPU
+//      half, which no task in this phase owns; Task 11's sweep or the batcher's
+//      own graph cutover retires both together.
 //
 //   3. GpuFrameProgress -- the GPU-side heartbeat source. See its own comment;
-//      it is what feeds Diagnostics::GpuHeartbeat.
+//      it is what feeds Diagnostics::GpuHeartbeat. ALSO DEAD since Task 6:
+//      GpuContext built the only one and no longer does. NriSwapChain's own
+//      fence-completed publisher is its 1:1 replacement (NriSwapChain.hpp says
+//      so at length), so this is inventory awaiting the same sweep.
 //
 // The active backend is reached through a process-wide slot rather than
 // plumbed: F-8e's command-list owners are reached from different layers and
-// do not all hold the same handle to plumb one through. GpuContext's own
-// (NVRHI) command list is the one left today -- OffscreenCanvas and
-// PickBuffer, the other two F-8e named, were deleted at NRI Phase 5a, Task 4
-// along with every caller of their private command lists. The slot mirrors
-// Diagnostics::SetGpuSectionProvider exactly -- same owner (the device
-// layer), same lifetime, same install/clear sites -- so there is one rule to
-// get right, not two.
+// do not all hold the same handle to plumb one through. NONE of F-8e's three
+// owners survives -- OffscreenCanvas and PickBuffer went at NRI Phase 5a Task
+// 4, GpuContext's own command list at Task 6 -- and the graph's recorders
+// (RenderGraphExec's NodeScope, NriDiagnostics' fault dispatch) read the slot
+// for exactly the original reason: they are reached from layers that cannot be
+// handed a backend pointer. The slot mirrors Diagnostics::SetGpuSectionProvider
+// exactly -- same owner (NriDiagnostics::Arm/Disarm since Task 8b deleted the
+// NVRHI device layer that used to share it), same lifetime, same install/clear
+// sites -- so there is one rule to get right, not two.
 //
 // THREADING: GpuPassScope/GpuDrawScope are for the thread that records the
 // command list (the main/render thread in both hosts). GpuBreadcrumbs is not
@@ -54,8 +83,9 @@ namespace Arcane
     // The process-wide active-backend slot
     // -----------------------------------------------------------------
 
-    // Install (or replace) the backend pass scopes write into. Called by the
-    // device layer beside its one Diagnostics::SetGpuSectionProvider call.
+    // Install (or replace) the backend pass scopes write into. Called by
+    // NriDiagnostics::Arm beside its one Diagnostics::SetGpuSectionProvider
+    // call (the NVRHI device layer was the other caller until Task 8b).
     ARCANE_API void SetActiveGpuCrashBackend(IGpuCrashBackend* backend) noexcept;
 
     // The installed backend, or null. Null is ORDINARY, not an error: a headless
@@ -78,15 +108,16 @@ namespace Arcane
     // The process-wide device-lost latch
     // -----------------------------------------------------------------
     //
-    // Set by the device layer's ObserveDeviceRemoved AFTER the gpu-crash
-    // report is written -- so "observed" always means "the report exists".
-    // Hosts poll it once per frame (top of MainLoop, both hosts) and shut
-    // down cleanly: there is no device-recovery path today, and a host that
-    // keeps pumping frames at a dead device either spins in a Present-fail
-    // loop (runtime) or walks into an nvrhi access violation on the next
-    // resource-creating path (editor's PickBuffer was the desk repro).
+    // Set by ObserveDeviceRemoved (Render/DeviceCreation{D3D12,Vulkan}.cpp,
+    // where Task 8b moved it with the deletion of DeviceD3D12/DeviceVulkan)
+    // AFTER the gpu-crash report is written -- so "observed" always means "the
+    // report exists". Hosts poll it once per frame (top of MainLoop, both
+    // hosts) and shut down cleanly: there is no device-recovery path today,
+    // and a host that keeps pumping frames at a dead device either spins in a
+    // present-fail loop or walks into an access violation on the next
+    // resource-creating path (the editor's PickBuffer was the desk repro).
     // Same slot idiom as the backend slot above: one process-wide atomic in
-    // Arcane.dll, device layer writes, hosts read.
+    // Arcane.dll, the render layer writes, hosts read.
     ARCANE_API void NoteGpuDeviceLost() noexcept;
     [[nodiscard]] ARCANE_API bool GpuDeviceLostObserved() noexcept;
 
@@ -97,24 +128,46 @@ namespace Arcane
     ARCANE_API void ResetGpuDeviceLost() noexcept;
 
     // -----------------------------------------------------------------
-    // GpuPassScope -- one render pass, both marker channels
+    // GpuPassScope -- one render pass, one marker channel
     // -----------------------------------------------------------------
+    //
+    // NO CALLERS TODAY, stated plainly rather than left for a reader to
+    // discover: its last one was GpuFaultInjector::Fire, retired in the same
+    // task that severed the nvrhi channel (the injector's live arm is
+    // NriDiagnostics::FireFault, which opens its own compact scope). The
+    // graph's own equivalent is RenderGraphExec.cpp's NodeScope -- annotation,
+    // CPU ring, and a native marker gated on device identity -- which is the
+    // richer of the two because it holds the device the compact form cannot.
+    // This class stays because it is the seam a non-graph recorder would use,
+    // and because deleting a public instrumentation type is Task 11's sweep,
+    // not this task's.
 
     class ARCANE_API GpuPassScope
     {
     public:
-        // `commandList` MUST already be open and must stay open for this
-        // object's whole lifetime. Not a style preference: on D3D12 a marker
-        // written to a not-open list latches the marker layer OFF for the rest
-        // of the process (a transient condition read as a capability failure),
-        // and on Vulkan nvrhi's getNativeObject on a closed list is an access
-        // violation with no null to check. `name` must outlive the constructor
-        // call (a literal, in practice) -- it is copied into the breadcrumb
-        // ring and forwarded to nvrhi verbatim.
+        // `nativeCommandList` is the BACKEND'S OWN native command list --
+        // ID3D12GraphicsCommandList* on D3D12, VkCommandBuffer on Vulkan,
+        // exactly what IGpuCrashBackend::WriteMarkerNative documents. It was
+        // an nvrhi::ICommandList* until NRI Phase 5a Task 8b; the nvrhi
+        // marker channel and the type that carried it went together.
         //
-        // Null `commandList`, null backend, or an unarmed backend: every step
-        // degrades independently and none of them throws or logs per-call.
-        GpuPassScope(nvrhi::ICommandList* commandList, const char* name) noexcept;
+        // It MUST already be open and must stay open for this object's whole
+        // lifetime. Not a style preference: on D3D12 a marker written to a
+        // not-open list latches the marker layer OFF for the rest of the
+        // process (a transient condition read as a capability failure).
+        // `name` must outlive the constructor call (a literal, in practice) --
+        // it is copied into the breadcrumb ring.
+        //
+        // CALLERS MUST GATE ON DEVICE IDENTITY before passing a pointer here,
+        // for the reason IGpuCrashBackend::NativeDevice() exists: a marker is
+        // a write from a command buffer into the backend's marker buffer, and
+        // both APIs require the two to belong to ONE device. This class cannot
+        // check -- it holds no device -- so it does not pretend to.
+        //
+        // Null `nativeCommandList`, null backend, or an unarmed backend: every
+        // step degrades independently and none of them throws or logs
+        // per-call.
+        GpuPassScope(void* nativeCommandList, const char* name) noexcept;
         ~GpuPassScope();
 
         GpuPassScope(const GpuPassScope&)            = delete;
@@ -123,11 +176,10 @@ namespace Arcane
         GpuPassScope& operator=(GpuPassScope&&)      = delete;
 
     private:
-        nvrhi::ICommandList* m_commandList = nullptr;
-        IGpuCrashBackend*    m_backend     = nullptr;   // latched at construction: the slot must not change mid-scope
-        std::uint32_t        m_token       = 0;
-        bool                 m_marked      = false;     // an nvrhi beginMarker went out and owes an endMarker
-        bool                 m_scoped      = false;     // a breadcrumb scope is open and owes an EndScope
+        void*             m_commandList = nullptr;
+        IGpuCrashBackend* m_backend     = nullptr;   // latched at construction: the slot must not change mid-scope
+        std::uint32_t     m_token       = 0;
+        bool              m_scoped      = false;     // a breadcrumb scope is open and owes an EndScope
     };
 
     // -----------------------------------------------------------------
@@ -164,19 +216,27 @@ namespace Arcane
     // GpuFrameProgress -- the value Diagnostics::GpuHeartbeat watches
     // -----------------------------------------------------------------
     //
-    // WHY THIS EXISTS AT ALL: there is no cross-backend "completed instance" to
-    // read. nvrhi::IDevice::executeCommandList returns the SUBMITTED instance,
-    // which advances happily while the GPU is wedged; queueGetCompletedInstance
-    // is declared only on nvrhi::vulkan::IDevice (vulkan.h:45) and has no D3D12
-    // sibling in nvrhi. What IS cross-backend is nvrhi's event query, which both
-    // swapchains already use for frame pacing -- so this stamps its own query
-    // chain and polls it NON-BLOCKING (pollEventQuery, nvrhi.h:3712). The
-    // resulting count is honest by construction: it advances only when the
-    // device actually signalled a fence past a point we submitted.
+    // WHY THIS EXISTED AT ALL: nvrhi had no cross-backend "completed instance"
+    // to read. nvrhi::IDevice::executeCommandList returns the SUBMITTED
+    // instance, which advances happily while the GPU is wedged;
+    // queueGetCompletedInstance is declared only on nvrhi::vulkan::IDevice
+    // (vulkan.h:45) and has no D3D12 sibling in nvrhi. What WAS cross-backend
+    // is nvrhi's event query, which both NVRHI swapchains used for frame
+    // pacing -- so this stamps its own query chain and polls it NON-BLOCKING
+    // (pollEventQuery, nvrhi.h:3712). The resulting count is honest by
+    // construction: it advances only when the device actually signalled a
+    // fence past a point we submitted.
     //
-    // Its own chain rather than the swapchain's: the swapchain's queries are
+    // Its own chain rather than the swapchain's: the swapchain's queries were
     // consumed by a BLOCKING wait for slot reuse, and a diagnostics counter must
     // never be the thing that blocks.
+    //
+    // DEAD as of NRI Phase 5a: Task 6 removed the one construction site
+    // (GpuContext) and Task 8b removed the swapchains this describes. NRI has
+    // the completed-instance query nvrhi lacked, so NriSwapChain publishes the
+    // heartbeat directly and this whole class is inventory awaiting Task 11's
+    // sweep. Kept compiling rather than deleted here: it is not in this task's
+    // file list and nothing forces its removal.
     class ARCANE_API GpuFrameProgress
     {
     public:
@@ -248,6 +308,14 @@ namespace Arcane
     // cannot desync from the query it describes: every transition goes through
     // this object, in both backends. A future present-skipping path then gets
     // the right behaviour for free instead of resurrecting the trap.
+    //
+    // ITS TWO PRODUCTION USERS -- SwapchainD3D12 and SwapchainVulkan -- went
+    // with the NVRHI device layer (NRI Phase 5a, Task 8b), so the stamped-bit
+    // RULE now lives on the graph side, in NriSwapChain's own frame slots
+    // (NriSwapChain.hpp cites this comment for why). What still drives THIS
+    // class is DiagnosticsTest's "never claims a stamp that did not go out"
+    // case, which needs no device at all -- which is why the class stays,
+    // rather than because anything renders through it.
     class ARCANE_API GpuFrameSlot
     {
     public:
@@ -285,9 +353,10 @@ namespace Arcane
     // The pacing wait WaitAndReset performs, and what it costs
     // -----------------------------------------------------------------
     //
-    // Both swapchains gate slot reuse on "frame N - kSwapchainFramesInFlight has
-    // retired". That gate used to be a bare `waitEventQuery`, and it is where
-    // the GPU-progress rule went to die: a wedged GPU parks the main thread
+    // Both NVRHI swapchains gated slot reuse on "frame N -
+    // kSwapchainFramesInFlight has retired" (the graph's swapchain still does,
+    // on its own fence). That gate used to be a bare `waitEventQuery`, and it
+    // is where the GPU-progress rule went to die: a wedged GPU parks the main thread
     // INSIDE the wait, so the render path stops publishing, the freshness gate
     // disarms the GPU rule, and the only report that could ever land was a plain
     // `hang`. The rule was unreachable in BOTH hosts -- two frames of headroom is

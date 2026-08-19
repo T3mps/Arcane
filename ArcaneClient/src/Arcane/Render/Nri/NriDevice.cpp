@@ -120,9 +120,10 @@ namespace Arcane
             try
             {
                 // VulkanDeviceCreation's loader member throws when
-                // vulkan-1.dll is absent -- the same throw CreateDeviceVulkan
-                // catches at make_unique<DeviceVulkan>(), caught here for the
-                // same reason (null on a Vulkan-less host, never an escape).
+                // vulkan-1.dll is absent -- the same throw the NVRHI factory
+                // caught at make_unique<DeviceVulkan>() until Task 8b deleted
+                // it. Caught here for the same reason, and now the only place
+                // it is caught (null on a Vulkan-less host, never an escape).
                 owner->m_impl->vulkan = std::make_unique<VulkanDeviceCreation>();
                 if (!CreateVulkanNativeDevice(desc, *owner->m_impl->vulkan))
                     return nullptr;
@@ -228,7 +229,8 @@ namespace Arcane
         // copyCommands2/extendedDynamicState verdicts, and VMA's
         // vulkanApiVersion) and never re-queries it on the wrapper path.
         // `creation.apiMinorVersion` is min(physical minor, REQUESTED minor)
-        // (DeviceVulkan.cpp's Init()), not min(instance minor, physical
+        // (DeviceCreationVulkan.cpp's CreateVulkanNativeDevice), not
+        // min(instance minor, physical
         // minor) as §6 concern 8 phrases it -- see VulkanDeviceCreation::
         // apiMinorVersion's comment in DeviceCreationVulkan.hpp for why the
         // two agree today and the tripwire for when they might stop.

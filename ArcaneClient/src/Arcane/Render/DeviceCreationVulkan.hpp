@@ -18,14 +18,14 @@
 // Phase 0 goldens are this phase's regression floor and the NVRHI path may
 // not shift a pixel.
 //
-// Render-internal, exactly like `DeviceFactories.hpp`: not part of the
+// Render-internal, exactly like `DeviceRemovedObservers.hpp`: not part of the
 // engine's public API surface, and deliberately NOT exported -- both
 // consumers compile into ArcaneClient.dll. (Callers outside the DLL own a
 // creation half through `NativeDeviceOwner` in `Nri/NriDevice.hpp`, which is
 // backend-header-free: the Vulkan-Hpp dynamic-dispatcher storage lives in
 // this module alone -- see VulkanDispatchStorage.cpp.)
 
-#include <Arcane/Render/Device.hpp>
+#include <Arcane/Render/RenderDeviceDesc.hpp>
 #include <Arcane/Render/IGpuCrashBackend.hpp>   // VulkanCrashDesc::DeviceFault
 
 #include <vulkan/vulkan.hpp>
@@ -44,8 +44,9 @@ namespace Arcane
         // vulkan-1.dll's module handle, and the default dispatcher's function
         // pointers are resolved through it. (It was `DeviceVulkan::m_loader`,
         // declared first for this exact reason.) Its constructor THROWS when
-        // the loader is absent: the same throw `CreateDeviceVulkan`'s
-        // try/catch has always caught at `make_unique<DeviceVulkan>()`.
+        // the loader is absent: the same throw the NVRHI factory's try/catch
+        // caught at `make_unique<DeviceVulkan>()` until Task 8b deleted it,
+        // and that `NativeDeviceOwner::Create` catches now.
         vk::detail::DynamicLoader loader;
 
         vk::Instance               instance;
@@ -60,7 +61,7 @@ namespace Arcane
         int graphicsQueueFamily = -1;
 
         // Contract item 5 / §6 concern 8: the API minor version the device
-        // was ACTUALLY created with. What DeviceVulkan.cpp's Init() actually
+        // was ACTUALLY created with. What CreateVulkanNativeDevice actually
         // computes is min(physical minor, REQUESTED minor / kApiMinorVersion)
         // -- not min(instance minor, physical minor) as §6.8 phrases it,
         // because the instance version is never separately queried anywhere
@@ -69,7 +70,7 @@ namespace Arcane
         // requires physicalApiMinor >= kApiMinorVersion, so the min() always
         // resolves to kApiMinorVersion (currently 1.3) -- the same answer
         // §6.8 wants, since requesting 1.3 at vkCreateInstance implies the
-        // instance supports >= 1.3 too. See DeviceVulkan.cpp's kApiVersion
+        // instance supports >= 1.3 too. See DeviceCreationVulkan.cpp's kApiVersion
         // comment for the tripwire if that request ever changes. NRI reads
         // `minorVersion` verbatim in wrapper mode and never re-queries it, so
         // this may never be replaced by a constant.
@@ -108,7 +109,8 @@ namespace Arcane
     // The extracted prologue of `DeviceVulkan::Init`, verbatim. Returns false
     // (having logged via ARC_ERROR) exactly where Init used to; leaves `out`
     // holding whatever was created so the caller's teardown path can release
-    // it. Throws what Init threw -- `CreateDeviceVulkan`'s catch is unchanged.
+    // it. Throws what Init threw -- `NativeDeviceOwner::Create`'s catch is
+    // the one that reports it.
     bool CreateVulkanNativeDevice(const RenderDeviceDesc& desc, VulkanDeviceCreation& out);
 
     // The tail of `~DeviceVulkan`, verbatim: device, then debug messenger,

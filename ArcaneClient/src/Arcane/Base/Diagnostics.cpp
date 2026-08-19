@@ -667,7 +667,7 @@ namespace
         {
             // "gpu" in the reason is load-bearing: DeriveKind classifies on it
             // and it is what gets the `.gpudump` sibling written. Same wording
-            // rule as ObserveDeviceRemoved (Render/DeviceD3D12.cpp).
+            // rule as ObserveDeviceRemoved (Render/DeviceCreationD3D12.cpp).
             WriteReportImpl("gpu-crash: device removed "
                             "(D3D12 debug-layer fail-fast 0x87d after the loss)", ep);
 

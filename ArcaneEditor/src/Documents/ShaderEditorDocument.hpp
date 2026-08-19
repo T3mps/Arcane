@@ -33,7 +33,8 @@
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
-#include <Arcane/Render/Device.hpp>
+#include <Arcane/Render/GraphicsBackend.hpp>
+#include <nvrhi/nvrhi.h>   // nvrhi::IDevice* in Deps -- reached through Render/Device.hpp until Task 8b deleted it
 // PostChainDesc -- the DEVICE-FREE description of a compiled fullscreen
 // material (bytecode + merged template + instance + input wiring). Held BY
 // VALUE below because it is what the graph arm's preview renders from and what

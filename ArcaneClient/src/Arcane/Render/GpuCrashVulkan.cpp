@@ -33,10 +33,11 @@
 // and vkGetDeviceFaultInfoEXT appear in this file and nowhere else in the
 // engine.
 //
-// Entry-point resolution follows the file it is armed from: DeviceVulkan uses
-// the Vulkan-Hpp default dynamic dispatcher and re-inits it against the
-// VkDevice AFTER device creation (DeviceVulkan.cpp's
-// VULKAN_HPP_DEFAULT_DISPATCHER.init(m_device)), which is exactly a
+// Entry-point resolution follows the file the device is created in: the
+// Vulkan creation half uses the Vulkan-Hpp default dynamic dispatcher and
+// re-inits it against the VkDevice AFTER device creation
+// (DeviceCreationVulkan.cpp's VULKAN_HPP_DEFAULT_DISPATCHER.init(out.device)),
+// which is exactly a
 // vkGetDeviceProcAddr sweep of every extension entry point -- including these
 // two -- and it resolves them to null when the extension was not enabled.
 // A null function pointer is therefore the authoritative "not available"

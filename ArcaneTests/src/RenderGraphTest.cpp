@@ -6225,8 +6225,9 @@ TEST_CASE("pick geometry: ONE emitter feeds both recorders -- id k+1, back-to-fr
 // Their proof is therefore desk-side and specific: D3a's stage compares on the
 // textured ReferenceProject scene, where a wrong set selection shows up as the
 // wrong image (or the white texel) at t0. BatcherTest.cpp's
-// "[gpu][d3d12] a DEVICE-LESS batcher drains identical spans..." is the other
-// half and is likewise desk-run.
+// "[gpu][d3d12] a DEVICE-LESS batcher drains identical spans..." WAS the
+// other half; that file went with the NVRHI device layer at NRI Phase 5a Task
+// 8b, so the desk stage compare is the whole proof now.
 // ======================================================================
 
 TEST_CASE("nri graph frame: the batch stage declares one canvas transient and nothing else",
