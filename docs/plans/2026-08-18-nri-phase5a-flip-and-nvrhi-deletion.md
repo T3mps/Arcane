@@ -940,3 +940,159 @@ git commit -m "refactor!: one render path -- GraphMode() and the last two-path p
 - **Any coverage gap Task 4 names** when retiring `MaterialChainGpuTest` / `MaterialGpuTest` cases with no graph-side equivalent.
 - **The boundary doc (Phase 5b)** — rewrite and re-ratify after Phase 4, once bindless and mesh resources have exercised the parts of the RHI boundary 2D never touches.
 - **Plugin-owned offscreen render targets** — `OffscreenCanvas` was the plugin-facing way to get one and it is gone with no replacement. No current consumer, so this is a capability to design deliberately if something ever needs it, not a regression to patch.
+
+---
+
+# MILESTONE RECORD — NRI Phase 5a (written 2026-08-19)
+
+**This record is the phase's only surviving artifact.** The SDD workspace
+(`.superpowers/sdd/2026-08-18-nri-phase5a-flip-and-nvrhi-deletion/`) is
+gitignored and is deleted at phase close; everything worth keeping is here.
+
+> **STATUS: D5a-2 (Task 12 Step 1) HAS NOT RUN.** This record covers the
+> implementation and review, which are complete. The desk-checkpoint result and
+> the final "phase closed" line are OWED and must be appended after the battery
+> is driven. Do not delete the SDD workspace until then.
+> Battery: `Desktop\D5a-2-Battery.ps1` (written, parse-checked, not run).
+
+## Final state
+
+| | |
+|---|---|
+| Commit range | `a4947f8d..3d0d4bcf` — 39 commits on `main`, **unpushed** |
+| Second repo | `082d817d` in `D:\dev\starworks\Gacha` (`Game/Aphelyon.arcproj` to ABI 15), **unpushed** |
+| Gate | **Debug 47669/1015, Release 47669/1015, Dist 47597/1009**, run from each config's own exe dir |
+| Gate at phase start | 47694/1015 (Debug/Release), 47613/1009 (Dist) |
+| Plugin ABI | **15** (`PluginABI.hpp`); both `.arcproj` files restamped |
+| Exit criterion 5 | `#include <nvrhi/` and non-comment `nvrhi::` both **empty** tree-wide; `ThirdParty/nvrhi/` deleted; no `.lua` reference |
+
+**`f7e3d40f` in that range is NOT part of this phase** — it is an off-phase note
+recording the `Nri/nodes/` domain reorganization owed at Deadlock T1, committed
+separately so the phase tree stayed clean.
+
+## What the deletion removed
+
+`ThirdParty/nvrhi/` — **73 tracked files, ~40,400 lines**, deleted wholesale at
+Task 10 (`1b11197d`). Verified two ways that agree:
+`git ls-tree -r <base> -- ThirdParty/nvrhi | wc -l` and `git diff --stat`.
+(An earlier report said 86; that figure never reproduced.)
+
+First-party classes deleted across Tasks 4–9.5b: the NVRHI render passes and
+their tests, `ImGuiNvrhi`, `GpuContext`'s NVRHI half, the NVRHI device layer
+(`Device*`, `Swapchain*`, `NvrhiMessageCallback`), `GraphGridPass`,
+`TonemapPass`, `Canvas`, `TextSystem`, `ShaderLibrary`, the `Batcher2D` NVRHI
+recorder, and `data/shaders/graph_grid.hlsl`.
+
+**Survivors deliberately kept, each with a live consumer** — all four named,
+because an earlier report's summary omitted one: `Swapchain.hpp`'s
+`kSwapchainFramesInFlight` (relocated to `FramePacing.hpp`), `Canvas`,
+`TonemapPass` (`TonemapTest` is live and is `AssetsTest`'s GPU-side BGRA
+byte-order pin), and the `RenderErrorCount()` latch (relocated to
+`RenderErrorLatch.{hpp,cpp}`).
+
+## Amendments this plan's text owed, and now carries
+
+Four were ratified in-tree during execution (`291113b2`, `1a72a4e8`, `6cc70381`,
+`097f6a27`) and four more at the final-review fix wave (`7bf8803f`), all by
+**addition with a dated marker, never by replacement**. The outstanding one:
+
+- **Global Constraints still state one gate baseline for "both configs".**
+  Dist's true baseline is **81 assertions / 6 cases lower** — six
+  `#if !defined(ARCANE_DIST)` cases in `ArcaneTests/src/HostConfigTest.cpp`
+  cover NRI-graph / pick-probe dev scaffolding not built into Dist.
+  Arithmetic: 1015 − 6 = 1009, 47694 − 81 = 47613. Every task reported Dist
+  against 1009 + delta.
+
+## Corrections to the permanent record
+
+- **`d5be0898`'s commit body says "14 sites across 10 files".** The true figures
+  are **16 sites / 11 files / 15 hunks**. The body cannot be corrected without
+  rewriting history; **these are the correct numbers.**
+- **`NoteNriError`/`NoteNriFatal` are `noexcept`** where the `nvrhi::message()`
+  they replaced was not, so a throwing `ARC_ERROR` would `std::terminate`
+  rather than propagate. **Accepted deliberately** (controller ruling, Task 8a):
+  it matches the established in-tree pattern — `NoteError`/`NoteDeviceLost` were
+  already `noexcept` with `ARC_ERROR` — the path is unreachable in practice
+  (spdlog swallows sink errors; fmt strings are compile-checked), and removing
+  it would make the new functions inconsistent with their own siblings.
+
+## The single largest deliberate carry
+
+**`GraphFlavor()` + `BootPresenter` + `StageRenderBridge` + `NoteNriFatal` +
+`RuntimeFrame`'s `io.graph` guard + three empty-body editor functions
+(`CompositeGameUi`, `RenderSelectionOutline`, `CaptureEditorGolden`) are ONE
+unit, and it could not ride in this phase.** Retiring `GraphFlavor()` drops the
+two `NriHostFlavorTest.cpp:53,:105` assertions — i.e. it **moves the gate** —
+and every task after Task 9 was required to hold the gate fixed. The three empty
+bodies are correct today: the graph does that work earlier in the same frame
+(`vp.pickOutline`, `vp.capture`, `BeginGameUiFrame()`), verified at source but
+never executed — which is why D5a-2 must confirm the outline still renders.
+
+## Other carries
+
+- **GPU pixel-correctness coverage — the weightiest.** ~2,200 lines across 7 test
+  files retired with the NVRHI passes: pick id-pass correctness, the
+  selection-outline JFA algorithm (12 cases, the largest single loss),
+  sprite/fullscreen/chain material rendering, post-chain last-good, and 2 ImGui
+  pixel cases. All were `[gpu]`-tagged so the agent gate never ran them — **but
+  they were desk-runnable, and nothing replaced them.** Arguably a Phase 4 input.
+- **`ArcaneHub/src-tauri/src/launch.rs:192-197,295,303`** — a real
+  cross-subsystem bug. Its `scripted` heuristic assumes only a `--nri-graph` run
+  takes the graph path; since the flip that is false for every launch, so a
+  Hub-launched run tripping a render error inside the 2-second boot watchdog can
+  be misreported as an engine/ABI refusal. **Not fixed:** Rust/Tauri, its own
+  build and release cadence; the exposure is documented at the producing site
+  (`ArcaneEditor/src/main.cpp`). It should be its own small task.
+- **`pulse_sprite.arcmat:28`** claims Batcher2D packs material CB values "every
+  `End()`". False since `ec0e4f09` (ABI 13, Phase 3) — authored true at
+  `ef9acd49` and falsified a day later without a sweep. It lives inside the
+  `snippet` field (compiled HLSL) of the **one golden-coverage sprite material**,
+  so it is fixed **only with a golden re-verify, or not at all**. `ec0e4f09` may
+  have left siblings.
+- **Nothing reads DRED output.** Task 1's tier fix is correct and its `[diag]`
+  test passes, but `GetAutoBreadcrumbsOutput` / `DeviceRemovedExtendedData` /
+  `GetPageFaultAllocationOutput` have no callers — only the four `...Settings`
+  interfaces inside `EnableD3D12Dred`. Pre-existing: the phase deleted the dead
+  reader, it did not create the gap. The minidump is deliberately not
+  `WithFullMemory`, so post-mortem extraction should not be assumed either.
+- `PostChainCache.cpp:3`'s unused `Assets.hpp` include; `AssetsTest.cpp:42`'s
+  uncalled `WriteTestPng()`; `EditorAppProject.cpp`'s constructed-unused
+  `BootPresenter overlay` and its now-unreachable quit-consumption rationale;
+  ~135 lines of present-tense two-path vocabulary; `NOTICE.md` has no NRI or
+  AgilitySDK row; repo-wide CRLF vs `.gitattributes` `eol=lf`.
+- **USER-OWED:** `ARCANE_SDK` is stale at machine level (reads
+  `D:\dev\starworks\Gacha\Arcane`, which does not exist). Every battery masked
+  it by driving MSBuild against already-generated solutions; the first premake
+  regeneration after merge fails. Fixing it also clears Gacha's generated
+  `Aphelyon.vcxproj`, which still lists the deleted `ThirdParty\nvrhi\include`.
+
+## Method lessons — the phase's real cost centre
+
+The final whole-branch review found **zero code defects across 35 commits**.
+Every failure this phase produced was a *claim written without the right check*:
+
+1. **Derive counts; never recall them.** Six reports carried a number that
+   failed to reproduce. Two concealed a real omission. One was invalidated by
+   the very edit that shipped it. Pin every count to a commit, state the
+   pathspec, and re-derive after the last edit. *A wrong number that agrees with
+   the sentence around it reads as verified.*
+2. **Ask what would FALSIFY the claim and run THAT.** Two Critical findings came
+   from a real command answering a different question: `--diff-filter=D` says
+   WHO deleted a file, never WHEN relative to a sentence.
+3. **Sweep for the CLAIM, not the symbol.** Six same-commit self-contradictions
+   shipped and were caught. The final review found three dangling authority
+   citations every sweep missed because they name a deleted **file**, not a
+   symbol or NVRHI vocabulary — found only by set-differencing every
+   `file:line` citation against files that exist. **Run that instrument.**
+4. **A green gate proves nothing about either host.** ArcaneTests compiles
+   neither `EditorApp.cpp` nor `RuntimeApp.cpp`. State evidence precisely.
+5. **Correct a permanent record by ADDITION, never replacement.**
+6. **Pre-deletion grep, per file, reported with nulls.** It caught six plan
+   defects — including one that would have deleted the home of the
+   `RenderErrorCount()` latch every desk battery asserts.
+7. **Split a task along its fault line before it grows.** Five splits (2, 8,
+   9.5, 9.5b, 11); the Task 2 split surfaced a latent Dist-only
+   null-dereference that would otherwise have shipped.
+8. **The sweep pathspec is an instrument with blind spots.** `*.cpp *.hpp *.lua`
+   cannot see `.rs`, `.ts`, `.svelte`, `.ps1`, `.bat`, `.hlsl`, `.arcmat` or
+   `.json`. The ArcaneHub bug and the orphaned shader both live in that gap.
