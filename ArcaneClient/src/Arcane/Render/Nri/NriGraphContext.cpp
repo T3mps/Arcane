@@ -21,7 +21,7 @@
 #include <Arcane/Render/NvrhiMessageCallback.hpp>   // the tagged "nri-graph" error seam
 #include <Arcane/Render/PostChainCache.hpp>         // PostChainDesc -- the frame's post-chain shape
 #include <Arcane/Render/GpuInstrumentation.hpp>       // GpuDeviceLostObserved -- the device-lost teardown gate
-#include <Arcane/Render/ShaderLibrary.hpp>          // ShaderLibrary::ResolveFlavorDir
+#include <Arcane/Render/ShaderPaths.hpp>            // ShaderPaths::ResolveFlavorDir
 #include <Arcane/Render/Swapchain.hpp>              // kSwapchainFramesInFlight
 
 #include <SDL3/SDL_timer.h>                         // SDL_DelayNS -- the offscreen pacing wait's sleep
@@ -441,10 +441,10 @@ namespace Arcane
         m_graph = std::make_unique<RenderGraph>();
 
         // The offline artifacts the nodes below need as RAW BYTECODE (NRI's
-        // ShaderDesc takes a blob; ShaderLibrary hands back nvrhi handles).
-        // Resolved once, here, so a missing shader directory is one loud line
-        // at boot instead of a per-node mystery.
-        m_shaderDir = ShaderLibrary::ResolveFlavorDir(config.backend, kShaderDir);
+        // ShaderDesc takes a blob, not a compiled shader object). Resolved
+        // once, here, so a missing shader directory is one loud line at boot
+        // instead of a per-node mystery.
+        m_shaderDir = ShaderPaths::ResolveFlavorDir(config.backend, kShaderDir);
         if (m_shaderDir.empty())
         {
             ARC_ERROR("[nri-graph] no shader directory -- the graph path cannot build its pipelines");

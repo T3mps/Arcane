@@ -1,23 +1,25 @@
 #include <Arcane/Render/SpriteCache.hpp>
 
 #include <Arcane/Assets/Assets.hpp>
-#include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Project/AssetId.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>
-
-#include <nvrhi/nvrhi.h>
 
 #include <utility>
 
 namespace Arcane
 {
+    // THE KEEP-ALIVE MAP IS GONE (NRI Phase 5a, Task 7). A second map held a
+    // reference to every resolved GPU texture, because SpriteEntry::texture is
+    // a BARE pointer and the Assets facade's own LRU could evict the last
+    // reference out from under it. Residency is NriTextureCache's job
+    // exclusively now -- it keys off SpriteEntry::textureId, the device-free
+    // half of the pair -- so there is no engine-side GPU texture for this cache
+    // to pin. See Request() for why nothing fills `texture` any more.
     struct SpriteCache::Impl
     {
         Services services;
-        std::unordered_map<Guid, SpriteEntry>          table;
-        std::unordered_map<Guid, nvrhi::TextureHandle> handles;   // keep-alive refs
+        std::unordered_map<Guid, SpriteEntry> table;
     };
 
     SpriteCache::SpriteCache(Services services)
@@ -64,111 +66,93 @@ namespace Arcane
         if (!data)
             return cacheDefault("asset failed to load");
 
-        // Success: the entry always carries the asset's own pivot. Texture/
-        // UV/size resolve only when the texture Guid is valid AND the Assets
-        // facade yields something -- a memoized prior load failure returns
-        // null here too, same as an unset texture Guid. Either way
+        // Success: the entry always carries the asset's own pivot. UV/size
+        // resolve only when the texture Guid is valid AND the Assets facade
+        // yields pixels for it -- a memoized prior load failure returns null
+        // here too, same as an unset texture Guid. Either way
         // ComputeSpriteGeom(data, 0, 0) is the documented 1x1 m / full-UV
         // fallback (SpriteAsset.hpp:64-66, SpriteAsset.cpp:104-106), so the
         // untextured case needs no special-case geometry of its own.
         SpriteEntry entry;
         entry.pivot = data->pivot;
-        // The DEVICE-FREE key (NRI Phase 3, Task 2), set whether or not the
-        // GPU texture below resolves: it is the asset the graph path's
-        // NriTextureCache uploads onto its own device, and in graph mode
-        // `entry.texture` is null for every sprite because Assets holds no
-        // NVRHI device at all.
+        // The DEVICE-FREE key (NRI Phase 3, Task 2), and since Task 7 the ONLY
+        // key: it names the asset the graph path's NriTextureCache uploads onto
+        // its own device. Set unconditionally, including when the image has no
+        // decodable pixels -- the record must still say WHICH image it wanted.
         entry.textureId = data->texture;
 
-        nvrhi::TextureHandle tex;
         std::uint32_t texWidth = 0, texHeight = 0;
-        bool havePixels = false;
         if (data->texture.IsValid() && m_impl->services.assets)
         {
             // Geometry's dimensions come from PixelsFor -- device-free, so
-            // this resolves even with no render device bound (null-device
-            // legal). GetTexture routes its own upload through the SAME
-            // retained pixels (Assets.cpp), so this is a decode cache hit
-            // whichever of the two is called first.
+            // this resolves with no render device bound, which is the only
+            // configuration there is.
             //
-            // THE DIMENSIONS ARE COPIED OUT BEFORE THE NEXT ASSETS CALL, and
-            // that ordering is the contract, not a style choice (Assets.hpp:
-            // "valid only until evicted -- callers that need it to outlive the
-            // current call must copy it, not hold the pointer"). PixelsFor
-            // returns a BARE pointer into the facade's LRU-budgeted pixel
-            // cache and drops its own pin before returning; GetTexture ends
-            // with `m_textures.Put(...); EnforceBudget();`, and EnforceBudget
-            // evicts the globally least-recently-used entry across ALL FOUR
-            // caches -- the pixel cache included, and this entry is the least
-            // recently used of the pair the moment the texture lands. So the
-            // pointer below may be freed by the very next line; reading
-            // pixels->width after it is a use-after-free. This is the only one
-            // of the four PixelsFor callers that makes a second Assets call at
-            // all, which is why the discipline has to be visible here.
+            // THE DIMENSIONS ARE COPIED OUT IMMEDIATELY, and that ordering is
+            // the contract, not a style choice (Assets.hpp: "valid only until
+            // evicted -- callers that need it to outlive the current call must
+            // copy it, not hold the pointer"). PixelsFor returns a BARE pointer
+            // into the facade's LRU-budgeted pixel cache and drops its own pin
+            // before returning, so ANY later Assets call may free it and read
+            // it back as garbage. This function used to make exactly such a
+            // call -- a GetTexture whose trailing EnforceBudget() can evict the
+            // globally least-recently-used entry across all four caches, the
+            // pixel cache included -- and reading pixels->width after it was a
+            // real use-after-free, fixed by copying first. That second call is
+            // gone (NRI Phase 5a, Task 7), so the hazard is now structurally
+            // absent rather than merely avoided; the copy stays anyway, because
+            // it costs nothing and it is what keeps the next Assets call added
+            // here from being a bug.
             const PixelData* pixels = m_impl->services.assets->PixelsFor(data->texture);
             if (pixels)
             {
-                havePixels = true;
-                texWidth   = pixels->width;
-                texHeight  = pixels->height;
+                texWidth  = pixels->width;
+                texHeight = pixels->height;
             }
-            tex = m_impl->services.assets->GetTexture(AssetId::FromGuid(data->texture));
         }
 
-        if (tex)
-        {
-            // The live GPU texture's desc describes the SAME decode PixelsFor
-            // just supplied (GetTexture is a consumer of it) -- the two must
-            // always agree when both exist. A mismatch here would mean the
-            // NVRHI upload path and the device-free pixel supply have drifted
-            // apart, which the "identical GPU result" contract forbids.
-            // Asserted against the COPIES taken above, never against a pointer
-            // GetTexture may have invalidated.
-            const auto& desc = tex->getDesc();
-            ARC_ASSERT(havePixels && texWidth == desc.width && texHeight == desc.height,
-                       "SpriteCache: PixelsFor and GetTexture disagree on texture dimensions");
-        }
+        // NOTHING RESOLVES entry.texture ANY MORE (NRI Phase 5a, Task 7). It
+        // used to hold an Assets::GetTexture result, pinned alive by a
+        // second map in Impl. Both are gone together: the pointer names an
+        // object on an engine-owned NVRHI device, no such device is created in
+        // any configuration, and GetTexture accordingly returns null for every
+        // sprite (Assets.cpp: "No render device yet ... degrade to null"). The
+        // field stays null, which is what it already was at runtime, and
+        // `entry.textureId` above is what the graph path resolves through
+        // NriTextureCache. The PixelsFor/GetTexture dimension cross-check went
+        // with it -- there is no second dimension source left to disagree.
         const ResolvedSpriteGeom g = ComputeSpriteGeom(*data, texWidth, texHeight);
         entry.uvMin = g.uvMin;
         entry.uvMax = g.uvMax;
         entry.sizeMeters = g.sizeMeters;
 
-        if (tex)
-        {
-            entry.texture = tex.Get();
-            m_impl->handles.emplace(id, std::move(tex));   // keep-alive: outlives Assets' own LRU eviction
-        }
-
         m_impl->table.emplace(id, entry);
     }
 
+    // THE EVICT-BEFORE-RELEASE HOOK BELOW IS INERT, and stated rather than
+    // quietly left to look live: `entry.texture` is never set any more (see
+    // Request), so the guard never passes and Batcher2D::RemoveTexture is never
+    // called from here. It is kept, rather than torn out with the map it
+    // guarded, because RemoveTexture is a Batcher2D vtable slot and removing
+    // that whole NVRHI surface is a plugin-ABI change this task is fenced out
+    // of. When it goes, these two guards go with it.
     void SpriteCache::Invalidate(const Guid& id)
     {
         const auto it = m_impl->table.find(id);
         if (it != m_impl->table.end())
         {
-            // Evict BEFORE release (Batcher2D.hpp:181-191): the cached
-            // texture->binding-set entry pins the texture alive, and a stale
-            // entry would be served for a DIFFERENT texture if the allocator
-            // reuses the freed address (ABA). This is that hook's first-ever
-            // caller.
             if (it->second.texture && m_impl->services.batcher)
                 m_impl->services.batcher->RemoveTexture(it->second.texture);
             m_impl->table.erase(it);
         }
-        m_impl->handles.erase(id);
     }
 
     void SpriteCache::Clear()
     {
-        // Same evict-before-release order as Invalidate (Batcher2D.hpp:
-        // 181-191): drop every live texture's cached binding-set entry FIRST,
-        // while handles still holds the keep-alive ref, then clear both maps.
         if (m_impl->services.batcher)
             for (const auto& [id, entry] : m_impl->table)
                 if (entry.texture)
                     m_impl->services.batcher->RemoveTexture(entry.texture);
         m_impl->table.clear();
-        m_impl->handles.clear();
     }
 }

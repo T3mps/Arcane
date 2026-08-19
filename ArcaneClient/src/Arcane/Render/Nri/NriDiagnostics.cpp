@@ -22,7 +22,7 @@
 #if !defined(ARCANE_DIST)
     #include <Arcane/Render/GpuFaultInjector.hpp>   // kPassName -- ONE spelling of the breadcrumb both arms produce
     #include <Arcane/Render/ShaderConventions.hpp>  // kCsEntry -- the entry name the artifact was compiled with
-    #include <Arcane/Render/ShaderLibrary.hpp>      // ResolveFlavorDir -- the SAME artifact directory the nvrhi twin loads from
+    #include <Arcane/Render/ShaderPaths.hpp>        // ResolveFlavorDir -- the ONE artifact directory every shader loader resolves through
 #endif
 
 #undef ERROR
@@ -495,7 +495,7 @@ namespace Arcane
             const nri::CoreInterface& core = device.Core();
 
             const std::filesystem::path dir =
-                ShaderLibrary::ResolveFlavorDir(device.Backend(), kFaultShaderDir);
+                ShaderPaths::ResolveFlavorDir(device.Backend(), kFaultShaderDir);
             if (dir.empty())
             {
                 ARC_ERROR("[nri] --crash-gpu: no shader directory -- nothing dispatched");

@@ -31,34 +31,45 @@ namespace Arcane
     class MaterialInstance;
     struct GlobalParams;
 
-    // A registered scene sprite material (Slice 8): shaders compiled from the
-    // SPRITE template (sprite_material.hlsl register map), the layout/values
-    // pair, and the declared texture params already resolved to GPU handles
-    // (ordinal order -- they bind at t1..; t0 is the sprite's own texture).
-    // The instance is the SAVED asset's values -- scene sprites never render a
-    // document's working copy.
+    // A registered scene sprite material (Slice 8): the shader bytecode
+    // compiled from the SPRITE template (sprite_material.hlsl register map)
+    // plus the layout/values pair. The instance is the SAVED asset's values --
+    // scene sprites never render a document's working copy.
+    //
+    // NO GPU OBJECTS LIVE HERE (NRI Phase 5a, Task 7). This struct used to
+    // carry `nvrhi::ShaderHandle vs/ps` and a
+    // `std::vector<nvrhi::TextureHandle> paramTextures` beside the bytes
+    // below. Those three were BINDING STATE FOR A BINDER THAT NO LONGER
+    // EXISTS: the only code that ever read them through a Material2DDesc was
+    // the NVRHI recorder inside Batcher2D.cpp, and the graph's Batch2DNode --
+    // the one recorder left -- has always resolved its own shaders from
+    // `vsBytes`/`psBytes` and its own textures from the instance's Guids
+    // through NriTextureCache. They were deleted rather than retyped: a
+    // backend-neutral restatement of them would have had no reader.
+    //
+    // The DECLARED TEXTURE COUNT, which `paramTextures` used to carry
+    // implicitly as its size, was never the authority -- `templ->TextureCount()`
+    // is, and is what sized the vector. Consumers that need the t1.. width ask
+    // the template.
     struct Material2DDesc
     {
-        nvrhi::ShaderHandle vs;
-        nvrhi::ShaderHandle ps;
         std::shared_ptr<const MaterialTemplate> templ;
         std::shared_ptr<const MaterialInstance> instance;
-        std::vector<nvrhi::TextureHandle> paramTextures;
 
-        // The STITCHED, COMPILED blobs `vs`/`ps` were created from -- retained
-        // (NRI Phase 2, Task 9) because a SECOND graphics device in the same
-        // process cannot use an nvrhi::ShaderHandle, only the bytecode behind
-        // it. The graph path's Batch2DNode builds its own NRI pipelines from
-        // exactly these bytes, so both recorders run the same shader rather
-        // than two independently compiled ones.
+        // The STITCHED, COMPILED shader blobs -- retained (NRI Phase 2,
+        // Task 9) because a SECOND graphics device in the same process cannot
+        // use a compiled shader OBJECT, only the bytecode behind it. The graph
+        // path's Batch2DNode builds its NRI pipelines from exactly these
+        // bytes, so a recompile and a render always agree about which shader
+        // ran.
         //
         // ONE target, not both: the producer (SpriteMaterialCache) already
         // picks dxil-or-spirv by the process's GraphicsBackend, and the graph
         // vehicle runs on that same backend (RuntimeApp builds both from one
         // HostConfig). shared_ptr so a Material2DDesc stays cheap to copy and
         // so a RE-compile is observable as a new pointer.
-        // Null on a material registered without them: the graph path then
-        // falls back to the plain sprite pipeline and says so once.
+        // Null on a material registered without them -- which is now a REFUSED
+        // registration, since nothing else could ever record it.
         std::shared_ptr<const std::vector<std::uint8_t>> vsBytes;
         std::shared_ptr<const std::vector<std::uint8_t>> psBytes;
     };

@@ -1001,9 +1001,9 @@ namespace Arcane
         [[nodiscard]] const GlobalParams& CurrentGlobals() const noexcept { return m_currentGlobals; }
 
         // The raw bytecode of the offline shader artifact `name` -- the SAME
-        // `<name>.bin` the NVRHI path loads through ShaderLibrary, from the same
-        // directory (ShaderLibrary::ResolveFlavorDir, so ARCANE_SHADER_DIR moves
-        // both paths together). Loaded once and cached; the returned bytes live
+        // `<name>.bin` every other shader loader reads, from the same directory
+        // (ShaderPaths::ResolveFlavorDir, so ARCANE_SHADER_DIR moves all of
+        // them together). Loaded once and cached; the returned bytes live
         // as long as this vehicle, which is what NriPipelineCache's fill
         // contract needs (CreateGraphicsPipeline dereferences the blob after the
         // fill callback returns). Empty span when the artifact is missing or

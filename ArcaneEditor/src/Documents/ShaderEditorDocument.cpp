@@ -1548,11 +1548,11 @@ namespace Arcane::Editor
     {
         // The graph twin of RefreshSpritePreviewBinding: same shared instance
         // pointer (so live param edits keep flowing through PackCB), same
-        // register-then-update shape. What differs is that the material is
-        // registered from BYTES rather than nvrhi handles -- Batch2DNode
-        // builds its own NRI pipeline from them -- and that the texture params
-        // resolve by Guid through this context's NriTextureCache instead of
-        // being handed over as device textures.
+        // register-then-update shape. The material is registered from BYTES --
+        // Batch2DNode builds its own NRI pipeline from them -- and the texture
+        // params resolve by Guid through this context's NriTextureCache. Since
+        // NRI Phase 5a, Task 7 that is the ONLY shape a registration has:
+        // Material2DDesc carries no device objects at all.
         if (!m_graphBatch || m_surface != 1 || !m_graphSpriteBlobs.vs ||
             !m_graphSpriteBlobs.ps || !m_instance || !m_boundTemplate)
             return;
@@ -1568,10 +1568,10 @@ namespace Arcane::Editor
         desc.instance = m_instance;
         desc.vsBytes  = m_graphSpriteBlobs.vs;
         desc.psBytes  = m_graphSpriteBlobs.ps;
-        // SIZED, never filled -- exactly what Task 2 left SpriteMaterialCache
-        // doing on this arm: the t1.. range WIDTH is what both recorders need,
-        // and the graph recorder resolves the same Guids itself.
-        desc.paramTextures.resize(m_instance->ResolveTextures().size());
+        // No texture table to size: Material2DDesc::paramTextures is gone (NRI
+        // Phase 5a, Task 7). The t1.. WIDTH comes from `templ->TextureCount()`,
+        // which is where it always came from, and the graph recorder resolves
+        // the declared Guids off `instance` itself.
 
         if (m_graphSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId)
         {

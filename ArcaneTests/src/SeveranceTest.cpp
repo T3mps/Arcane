@@ -230,7 +230,6 @@ TEST_CASE("severance: RegisterMaterial accepts a BYTES-ONLY registration with no
     Material2DDesc desc;
     desc.templ    = templ;
     desc.instance = instance;
-    // No `vs`/`ps` handles -- there is no device to have created them on.
     desc.vsBytes  = std::make_shared<const std::vector<std::uint8_t>>(
         std::vector<std::uint8_t>{ 1, 2, 3, 4 });
     desc.psBytes  = std::make_shared<const std::vector<std::uint8_t>>(
@@ -242,20 +241,20 @@ TEST_CASE("severance: RegisterMaterial accepts a BYTES-ONLY registration with no
 
     const Material2DDesc* published = batcher->MaterialDesc(id);
     REQUIRE(published != nullptr);
-    CHECK(published->vs == nullptr);          // no handles, and that is legal now
-    CHECK(published->ps == nullptr);
     REQUIRE(published->vsBytes != nullptr);   // the BYTES are the product
     REQUIRE(published->psBytes != nullptr);
     CHECK(published->vsBytes->size() == 4);
     CHECK(published->psBytes->size() == 4);
     CHECK(published->templ == templ);
     CHECK(published->instance == instance);
-    // The declared-texture table is sized from the template even device-less,
-    // so the graph recorder's t1.. range has the right width.
-    CHECK(published->paramTextures.size() == 1);
+    // The declared-texture WIDTH the graph recorder's t1.. range needs comes
+    // from the template, which is where it always came from -- the
+    // `paramTextures` vector that used to mirror it is deleted (NRI Phase 5a,
+    // Task 7) and this is the surviving authority.
+    CHECK(published->templ->TextureCount() == 1);
 
-    // A registration with NEITHER handles nor bytes is still refused: nothing
-    // could ever record it.
+    // A registration with NO bytes is still refused: nothing could ever
+    // record it.
     Material2DDesc empty;
     empty.templ    = templ;
     empty.instance = instance;
@@ -307,11 +306,9 @@ TEST_CASE("severance: SpriteMaterialCache binds with a NULL device and publishes
     const auto entry = table.find(data.id);
     REQUIRE(entry != table.end());
 
-    // ...and it carries the bytes the graph recorder needs, with no handles.
+    // ...and it carries the bytes the graph recorder needs.
     const Material2DDesc* desc = batcher->MaterialDesc(entry->second);
     REQUIRE(desc != nullptr);
-    CHECK(desc->vs == nullptr);
-    CHECK(desc->ps == nullptr);
     REQUIRE(desc->vsBytes != nullptr);
     REQUIRE(desc->psBytes != nullptr);
     CHECK_FALSE(desc->vsBytes->empty());

@@ -1,16 +1,12 @@
 #include <Arcane/Render/ShaderLibrary.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Render/ShaderPaths.hpp>
 
-#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 namespace Arcane
 {
@@ -164,41 +160,17 @@ namespace Arcane
         };
     }
 
-    std::filesystem::path ShaderLibrary::ResolveFlavorDir(
-        GraphicsBackend backend, const std::filesystem::path& shaderDir)
-    {
-        std::filesystem::path dir = shaderDir;
-        if (const char* overrideDir = std::getenv("ARCANE_SHADER_DIR"))
-            dir = overrideDir;
-
-        if (dir.is_relative())
-        {
-            // Relative dirs anchor to the executable, not the CWD: the
-            // build copies artifacts next to consumer exes, and tests must
-            // pass regardless of where they are launched from.
-#ifdef _WIN32
-            wchar_t modulePath[MAX_PATH]{};
-            if (GetModuleFileNameW(nullptr, modulePath, MAX_PATH) != 0)
-                dir = std::filesystem::path(modulePath).parent_path() / dir;
-#endif
-        }
-        dir /= (backend == GraphicsBackend::Vulkan) ? "spirv" : "dxil";
-
-        if (!std::filesystem::is_directory(dir))
-        {
-            ARC_ERROR("Shader directory not found: {}", dir.string());
-            return {};
-        }
-        return dir;
-    }
-
     std::unique_ptr<ShaderLibrary> ShaderLibrary::Create(
         nvrhi::IDevice* device, GraphicsBackend backend,
         const std::filesystem::path& shaderDir)
     {
-        // Resolution lives in ResolveFlavorDir so the NRI graph path -- which
-        // loads the same artifacts as raw bytecode -- cannot drift from it.
-        const std::filesystem::path dir = ResolveFlavorDir(backend, shaderDir);
+        // Resolution lives in ShaderPaths::ResolveFlavorDir so the NRI graph
+        // path -- which loads the same artifacts as raw bytecode -- cannot
+        // drift from it. It MOVED there at NRI Phase 5a, Task 7: it was the
+        // only member of this NVRHI class the graph ever called, so hosting it
+        // here forced a graph-side include of an NVRHI header.
+        const std::filesystem::path dir =
+            ShaderPaths::ResolveFlavorDir(backend, shaderDir);
         if (dir.empty())
             return nullptr;   // ResolveFlavorDir already logged why
         return std::make_unique<ShaderLibraryImpl>(device, dir);

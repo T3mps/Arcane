@@ -20,6 +20,7 @@
 #include <Arcane/Assets/Assets.hpp>          // Arcane::Assets (the EvictingAssets fake), PixelData
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
+#include <Arcane/Project/AssetId.hpp>       // AssetId::FromGuid -- driving the fake's eviction by hand
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/SpriteCache.hpp>
 #include <Arcane/Scene/Components.hpp>
@@ -255,21 +256,28 @@ TEST_CASE("SpriteCache::Invalidate forces the next Request to re-read the file",
     std::error_code ec; fs::remove_all(dir, ec);
 }
 
-TEST_CASE("SpriteCache reads PixelsFor's dimensions BEFORE the GetTexture call that can evict them",
+TEST_CASE("SpriteCache makes exactly ONE Assets call, so nothing can evict PixelsFor's pointer",
           "[sprite][pixels]")
 {
-    // THE WHOLE-BRANCH REVIEW'S C1. SpriteCache is the only one of the four
-    // PixelsFor callers that holds the returned pointer across another Assets
-    // call, and Assets.hpp is explicit that it may not: the pointer is owned by
-    // an LRU-budgeted cache and "callers that need it to outlive the current
-    // call must copy it". GetTexture's tail (`m_textures.Put(...);
-    // EnforceBudget();`) is exactly such a call -- the sweep is cross-cache and
-    // the just-unpinned pixel entry is the least recently used of the pair.
+    // THE WHOLE-BRANCH REVIEW'S C1, NOW STRUCTURAL. SpriteCache was the only
+    // one of the four PixelsFor callers that held the returned pointer across
+    // another Assets call, and Assets.hpp is explicit that it may not: the
+    // pointer is owned by an LRU-budgeted cache and "callers that need it to
+    // outlive the current call must copy it". The offending second call was a
+    // GetTexture whose tail (`m_textures.Put(...); EnforceBudget();`) sweeps
+    // cross-cache, with the just-unpinned pixel entry the least recently used
+    // of the pair. C1 was first fixed by COPYING the dimensions out before it.
+    //
+    // NRI Phase 5a, Task 7 removed the GetTexture call itself: SpriteEntry's
+    // GPU texture and the keep-alive map that pinned it are gone, residency is
+    // NriTextureCache's job, and the sprite is named by Guid alone. So the
+    // hazard is now absent rather than avoided, and THAT is what this case
+    // pins: exactly one Assets call, therefore no interleaved eviction is
+    // reachable at all. Re-add a second Assets call to Request() and this
+    // fails, pointing at the paragraph above -- which is the guard C1 earned.
     //
     // Invisible to every gate before this case: ReferenceProject's marker PNG
     // is 179 bytes against a 256 MiB budget, so the sweep never fires there.
-    // EvictingAssets makes the eviction unconditional and the READ ORDER the
-    // only thing that decides the answer.
     const fs::path dir  = MakeTempDir("pixels_order");
     const fs::path file = dir / "probe.arcsprite";
     const Arcane::Guid texture = Arcane::Guid::Generate();
@@ -283,21 +291,26 @@ TEST_CASE("SpriteCache reads PixelsFor's dimensions BEFORE the GetTexture call t
     Arcane::SpriteCache cache(std::move(s));
 
     cache.Request(id);
-    REQUIRE(assets.pixelsForCalls == 1);
-    REQUIRE(assets.getTextureCalls == 1);
+    REQUIRE(assets.pixelsForCalls  == 1);
+    REQUIRE(assets.getTextureCalls == 0);   // THE INVARIANT: no second call to evict across
     REQUIRE(cache.Table().contains(id));
 
-    // 8x4 px at 100 px/m. Read AFTER GetTexture the dimensions are 0x0 and
-    // ComputeSpriteGeom returns its documented 1x1 m / full-UV fallback -- the
-    // silent wrong-size sprite this ordering exists to prevent (and, in
-    // production, a genuine read of freed memory rather than a benign zero).
+    // 8x4 px at 100 px/m -- the dimensions really were read. Had an eviction
+    // interleaved, they would be 0x0 and ComputeSpriteGeom would return its
+    // documented 1x1 m / full-UV fallback: the silent wrong-size sprite this
+    // whole case exists to prevent.
     const Arcane::SpriteEntry entry = cache.Table().at(id);
     CHECK(entry.sizeMeters.x == 0.08f);
     CHECK(entry.sizeMeters.y == 0.04f);
+    // Residency is not this cache's business any more -- the record names its
+    // image by Guid and carries no device object.
+    CHECK(entry.texture == nullptr);
+    CHECK(entry.textureId == texture);
 
-    // ...and the fake really did invalidate, so the two orders genuinely
-    // disagree. Without this the case above would still pass if EvictingAssets
-    // silently stopped evicting, and would then be pinning nothing at all.
+    // ...and EvictingAssets still MODELS the eviction, so the guard above is
+    // pinning a real hazard rather than a fake that quietly stopped evicting.
+    // Driven by hand, since SpriteCache no longer drives it.
+    assets.GetTexture(Arcane::AssetId::FromGuid(texture));
     const Arcane::PixelData* after = assets.PixelsFor(texture);
     REQUIRE(after != nullptr);
     CHECK(after->width == 0);

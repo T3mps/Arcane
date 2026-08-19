@@ -1,12 +1,16 @@
 #include <Arcane/Render/SpriteMaterialCache.hpp>
 
-#include <Arcane/Assets/Assets.hpp>
+// Assets.hpp and Project/AssetId.hpp are NO LONGER INCLUDED (NRI Phase 5a,
+// Task 7): the only thing this unit ever did with the Assets facade was
+// resolve declared texture params to GPU objects for Material2DDesc::
+// paramTextures, and that field is gone. Services::assets survives as a
+// (now unused) member -- see SpriteMaterialCache.hpp -- which needs only the
+// forward declaration the header already carries.
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
-#include <Arcane/Project/AssetId.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>
@@ -206,36 +210,14 @@ namespace Arcane
     {
         Impl& im = *this;
 
-        // THE SEVERANCE (NRI Phase 3, Task 2). createShader is the ONE line in
-        // this whole function that needs a graphics device, and what it
-        // produces -- the two nvrhi handles -- is consumed by the NVRHI
-        // recorder alone. The BLOBS below are what the graph recorder builds
-        // its own pipeline from, and they exist whether or not a device does.
-        // So a device-less run skips this and registers a bytes-only material
-        // (Batcher2D::BuildEntry accepts exactly that); nothing else here
-        // changes, and with a device present the behaviour is unchanged.
-        nvrhi::ShaderHandle vs, ps;
-        if (im.services.device)
-        {
-            vs = im.services.device->createShader(
-                nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
-                    .setEntryName(kVsEntry)
-                    .setDebugName((p.data.name + "_sprite_vs").c_str()),
-                p.vsBytes.data(), p.vsBytes.size());
-            ps = im.services.device->createShader(
-                nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
-                    .setEntryName(kPsEntry)
-                    .setDebugName((p.data.name + "_sprite_ps").c_str()),
-                p.psBytes.data(), p.psBytes.size());
-            if (!vs || !ps)
-            {
-                ARC_WARN("SpriteMaterialCache: createShader failed for material {}",
-                         p.id.ToString());
-                if (!im.table.contains(p.id))
-                    im.failed.insert(p.id);
-                return;
-            }
-        }
+        // THE SEVERANCE (NRI Phase 3, Task 2) COMPLETED (NRI Phase 5a, Task 7).
+        // createShader was the ONE line in this whole function that needed a
+        // graphics device, and what it produced -- the two compiled shader
+        // objects -- was consumed by the NVRHI recorder alone. That recorder no
+        // longer reads them (Material2DDesc dropped the pair), so the call is
+        // gone and this function needs no device at all. The BLOBS below are
+        // what the graph recorder builds its own pipeline from, and they always
+        // existed whether or not a device did.
 
         // Layer the SAVED values exactly like the editor's bind: template <-
         // base's params <- ... <- this asset's params (overrides on top).
@@ -249,34 +231,25 @@ namespace Arcane
         }
         ApplyMaterialParams(p.data, *inst);
 
-        // Declared texture params -> GPU handles through the Assets GUID seam
-        // (null slots fall back to the batcher's white texel).
         Material2DDesc desc;
-        desc.vs = vs;
-        desc.ps = ps;
         desc.templ = p.templ;
         desc.instance = inst;
-        // The SAME blobs the two handles above were created from, retained for
-        // the second recorder (NRI Phase 2, Task 9 -- Material2DDesc::vsBytes).
-        // Moved out of the pending entry, which is erased right after this
-        // returns, so nothing is copied and nothing is compiled twice. Exactly
-        // ONE target survives: the one `im.services.backend` selected above,
-        // which is the backend the whole process runs on.
+        // The retained blobs the graph recorder builds its pipeline from
+        // (NRI Phase 2, Task 9 -- Material2DDesc::vsBytes). Moved out of the
+        // pending entry, which is erased right after this returns, so nothing
+        // is copied and nothing is compiled twice. Exactly ONE target survives:
+        // the one `im.services.backend` selected above, which is the backend
+        // the whole process runs on.
         desc.vsBytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(p.vsBytes));
         desc.psBytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(p.psBytes));
-        const std::vector<Guid> texGuids = inst->ResolveTextures();
-        // SIZED even device-less: the table's WIDTH is the template's texture
-        // count and both recorders bind that many t1.. slots. Only the
-        // CONTENTS need a device -- and the graph recorder never reads them
-        // (it resolves the same Guids through NriTextureCache onto its own
-        // device), so a device-less run leaves them null rather than warming a
-        // per-texture GetTexture failure into the Assets cache.
-        desc.paramTextures.resize(texGuids.size());
-        if (im.services.assets && im.services.device)
-            for (std::size_t i = 0; i < texGuids.size(); ++i)
-                if (texGuids[i].IsValid())
-                    desc.paramTextures[i] =
-                        im.services.assets->GetTexture(AssetId::FromGuid(texGuids[i]));
+        // THE DECLARED TEXTURE PARAMS ARE NOT RESOLVED HERE, and have not been
+        // resolvable in any running configuration since the graph became the
+        // only render path. Material2DDesc::paramTextures held them as GPU
+        // objects for the NVRHI recorder; that field is gone (NRI Phase 5a,
+        // Task 7). The graph recorder reads the same declarations straight off
+        // `instance` (ResolveTextures() -> Guids) and resolves them through
+        // NriTextureCache onto its own device, so nothing was lost with the
+        // vector -- the Guids were always the durable half of the pair.
 
         const auto existing = im.table.find(p.id);
         if (existing != im.table.end())

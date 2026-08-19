@@ -104,8 +104,11 @@ namespace Arcane
 
         // One material-table entry. Built-ins (0..2) resolve shaders through
         // the ShaderLibrary by name every pipeline build (hot reload via
-        // Generation); registered entries own their compiled handles + the
-        // layout/values pair and a dedicated binding layout / volatile CB.
+        // Generation); registered entries own the layout/values pair, the
+        // retained shader bytecode, and a dedicated binding layout / volatile
+        // CB. The layout/CB half is DEAD as of NRI Phase 5a, Task 7 -- see
+        // GetPipeline, which refuses every registered material now that the
+        // compiled shader pair is gone from Material2DDesc.
         struct MaterialEntry
         {
             bool builtIn = true;
@@ -706,25 +709,22 @@ namespace Arcane
             // locals: a failure leaves the table untouched).
             bool BuildEntry(MaterialEntry& out, Material2DDesc desc)
             {
-                // THE BLOB RELAXATION (NRI Phase 3, Task 2). The compiled
-                // HANDLES are what the NVRHI recorder needs; the retained
-                // BLOBS are what the graph recorder needs -- and a device-less
-                // producer (SpriteMaterialCache with no device) can only make
-                // the second. So a registration is accepted when it carries
-                // EITHER, and the handle-only requirement drops to "handles or
-                // bytes". `templ`/`instance` stay mandatory: they are the
+                // THE BLOB RELAXATION (NRI Phase 3, Task 2) CLOSED (NRI Phase
+                // 5a, Task 7). It let a registration carry compiled HANDLES or
+                // retained BLOBS, because a device-less producer
+                // (SpriteMaterialCache with no device) could only make the
+                // second. The handles are gone from Material2DDesc, so "either"
+                // has collapsed to the one that was always the general case:
+                // the BYTES. `templ`/`instance` stay mandatory -- they are the
                 // layout and the values, and no recorder can bind without them.
-                const bool haveHandles = desc.vs && desc.ps;
-                const bool haveBytes   = desc.vsBytes && desc.psBytes
-                                      && !desc.vsBytes->empty() && !desc.psBytes->empty();
-                if ((!haveHandles && !haveBytes) || !desc.templ || !desc.instance)
+                const bool haveBytes = desc.vsBytes && desc.psBytes
+                                    && !desc.vsBytes->empty() && !desc.psBytes->empty();
+                if (!haveBytes || !desc.templ || !desc.instance)
                 {
-                    ARC_WARN("Batcher2D::RegisterMaterial: null template/instance, or neither "
-                             "compiled shaders nor retained shader bytecode");
+                    ARC_WARN("Batcher2D::RegisterMaterial: null template/instance, or no "
+                             "retained shader bytecode");
                     return false;
                 }
-                if (desc.paramTextures.size() != desc.templ->TextureCount())
-                    desc.paramTextures.resize(desc.templ->TextureCount());
 
                 // Layout mirrors sprite_material.hlsl's register map: push
                 // constants b0, material CB b1 (when numeric params exist),
@@ -753,6 +753,13 @@ namespace Arcane
                 // refuses outright above. What survives is `desc` -- which is
                 // the product, since MaterialDesc(id) is how the graph path
                 // builds its own pipeline and bindings from the same bytes.
+                //
+                // NEVER REACHED WITH A DEVICE EITHER, since NRI Phase 5a,
+                // Task 7: GetPipeline refuses registered materials outright, so
+                // nothing consumes `entry.layout`/`materialCb` even when they
+                // are built. They are left standing rather than torn out here
+                // because the whole NVRHI recorder goes together, and its
+                // removal is a vtable change this task is fenced out of.
                 if (HasDevice())
                 {
                     entry.layout = m_device->createBindingLayout(layoutDesc);
@@ -820,14 +827,16 @@ namespace Arcane
                         setDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(
                             kSpriteGlobalCbSlot, m_globalsCb));
                         setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, texture));
+                        // The declared t1.. slots bind the white texel and
+                        // nothing else since NRI Phase 5a, Task 7 deleted
+                        // Material2DDesc::paramTextures. UNREACHABLE either
+                        // way: GetPipeline refuses every registered material
+                        // below, so this arm is never asked for a set. Kept
+                        // only so the layout it mirrors stays readable beside
+                        // BuildEntry's -- it dies with the recorder.
                         for (uint32_t t = 0; t < e.desc.templ->TextureCount(); ++t)
-                        {
-                            nvrhi::ITexture* param = e.desc.paramTextures[t]
-                                                         ? e.desc.paramTextures[t].Get()
-                                                         : m_whiteTexture.Get();
                             setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(
-                                kSpriteMaterialTextureBase + t, param));
-                        }
+                                kSpriteMaterialTextureBase + t, m_whiteTexture.Get()));
                         setDesc.addItem(nvrhi::BindingSetItem::Sampler(0, m_sampler));
                         set = m_device->createBindingSet(setDesc, e.layout);
                     }
@@ -851,12 +860,39 @@ namespace Arcane
                 if (!pipeline)
                 {
                     const MaterialEntry& e = m_materials[material];
-                    nvrhi::ShaderHandle vs = e.builtIn
-                        ? m_shaders->Get(e.vsName, nvrhi::ShaderType::Vertex)
-                        : e.desc.vs;
-                    nvrhi::ShaderHandle ps = e.builtIn
-                        ? m_shaders->Get(e.psName, nvrhi::ShaderType::Pixel)
-                        : e.desc.ps;
+                    if (!e.builtIn)
+                    {
+                        // REGISTERED MATERIALS NO LONGER RENDER HERE (NRI
+                        // Phase 5a, Task 7). Their pipelines were built from
+                        // Material2DDesc::vs/ps, compiled shader objects that
+                        // only the producer holding a device could make; that
+                        // pair is deleted, and the retained bytes beside it
+                        // belong to the graph recorder, which builds its own
+                        // pipelines from them (Batch2DNode).
+                        //
+                        // NOTHING REACHES THIS. A registered material can only
+                        // be drawn here by a batcher that has BOTH a device and
+                        // a registration, and no such instance is constructed
+                        // anywhere: every production Batcher2D::Create call
+                        // passes (nullptr, nullptr), and the only registering
+                        // tests are device-less. It refuses loudly rather than
+                        // silently skipping the run, because a silent skip is a
+                        // missing sprite with no line in the log.
+                        if (!m_warnedRegisteredPipeline)
+                        {
+                            m_warnedRegisteredPipeline = true;
+                            ARC_ERROR("Batcher2D: the NVRHI recorder cannot draw REGISTERED "
+                                      "material {} -- its compiled shader pair is gone and the "
+                                      "retained bytecode is the graph recorder's input. Drain() "
+                                      "this batcher instead of End()ing it. Further occurrences "
+                                      "are silent.", material);
+                        }
+                        return nullptr;
+                    }
+                    nvrhi::ShaderHandle vs =
+                        m_shaders->Get(e.vsName, nvrhi::ShaderType::Vertex);
+                    nvrhi::ShaderHandle ps =
+                        m_shaders->Get(e.psName, nvrhi::ShaderType::Pixel);
                     if (!vs || !ps)
                         return nullptr;
 
@@ -919,6 +955,8 @@ namespace Arcane
             uint16_t m_order = 0;
             // End()'s device-less refusal, said once for the whole run.
             bool m_warnedDevicelessEnd = false;
+            // GetPipeline's registered-material refusal, same once-per-run rule.
+            bool m_warnedRegisteredPipeline = false;
             // DrainInternal's once-per-Begin() guard and its one carried
             // result (End() needs it for the registered-material uploads).
             bool m_drained = false;

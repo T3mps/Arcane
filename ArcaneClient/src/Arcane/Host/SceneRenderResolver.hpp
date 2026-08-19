@@ -56,12 +56,17 @@ namespace Arcane
             // SpriteMaterialTable resources are published. Required.
             Runtime* runtime = nullptr;
 
-            // The frame batcher registered materials bind into and evicted
-            // sprite textures are dropped from. Null (a headless host or a
-            // test) disables material binding; sprite resolution still works.
+            // The frame batcher registered materials bind into. Null (a
+            // headless host or a test) disables material binding; sprite
+            // resolution still works. It also carried the sprite caches'
+            // texture-eviction hook, which went inert at NRI Phase 5a, Task 7
+            // when SpriteEntry stopped naming a device object (SpriteCache.cpp).
             Batcher2D* batcher = nullptr;
 
-            nvrhi::IDevice* device = nullptr;   // createShader, at the drain site
+            // Forwarded to PostChainCache, which still builds device objects
+            // from it. SpriteMaterialCache takes a copy too, but stopped using
+            // it at NRI Phase 5a, Task 7 -- see its Services.
+            nvrhi::IDevice* device = nullptr;
             GraphicsBackend backend{};
 
             // The app-shared compile service. Null, or an unavailable one (no

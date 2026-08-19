@@ -4,10 +4,11 @@
 // into Arcane::SpriteEntry records for the scene's SpriteTable. Mirrors
 // SpriteMaterialCache's host integration (SpriteMaterialCache.hpp) minus
 // compilation -- there is no async compile step here, so Request() resolves
-// synchronously in one call: load the .arcsprite JSON (LoadSpriteAsset),
-// resolve its texture Guid through Assets::GetTexture (a cached facade,
-// synchronous -- Assets.hpp:79-81), and compute UVs/size via ComputeSpriteGeom
-// against the texture's actual pixel dimensions. A failed resolve
+// synchronously in one call: load the .arcsprite JSON (LoadSpriteAsset), read
+// the source image's pixel dimensions through Assets::PixelsFor (a cached,
+// DEVICE-FREE facade), and compute UVs/size via ComputeSpriteGeom against
+// them. The resolved record names its texture by Guid only -- residency on the
+// GPU is NriTextureCache's job, not this cache's. A failed resolve
 // (unresolvable Guid, missing file, bad JSON) caches a DEFAULT SpriteEntry
 // (1x1 m untextured placeholder) directly in the PUBLISHED table --
 // deliberately different from SpriteMaterialCache::Request, which keeps
@@ -51,8 +52,8 @@ namespace Arcane
 
         struct Services
         {
-            Assets*        assets  = nullptr;   // GetTexture(AssetId)
-            Batcher2D*     batcher = nullptr;   // RemoveTexture on eviction
+            Assets*        assets  = nullptr;   // PixelsFor(Guid) -- image dimensions
+            Batcher2D*     batcher = nullptr;   // RemoveTexture on eviction (inert; see the .cpp)
             ResolveAssetFn resolveAsset;        // Guid -> path (project registry)
         };
 
@@ -66,22 +67,18 @@ namespace Arcane
         // SpriteMaterialCache.hpp:62-65). Call per frame per referenced sprite Guid.
         void Request(const Guid& id);
 
-        // Asset re-saved / removed: evict its Batcher2D texture binding-set
-        // entry FIRST -- Batcher2D.hpp:181-191 is explicit that RemoveTexture
-        // must run BEFORE the texture is released, since the cached binding-set
-        // entry pins the texture alive (leak) and a stale entry would be served
-        // for a DIFFERENT texture if the allocator reuses the freed address
-        // (ABA) -- then drop the table + keep-alive entries so the next Request
-        // re-resolves from disk.
+        // Asset re-saved / removed: drop the table entry so the next Request
+        // re-resolves from disk. The keep-alive map this also used to clear is
+        // gone (NRI Phase 5a, Task 7 -- see SpriteCache.cpp), and the
+        // Batcher2D::RemoveTexture eviction it performed first is now inert
+        // because no SpriteEntry carries a texture object any more.
         void Invalidate(const Guid& id);
 
         // Forget everything (project switch): a Guid resolves through the
         // CURRENT project's registry, so a cached entry from the outgoing
         // project may resolve to something else entirely (or nothing) once the
         // project changes -- same rationale as SpriteMaterialCache::Clear()
-        // (SpriteMaterialCache.hpp:79-81). Evicts every live texture from the
-        // batcher first (Invalidate's order, Batcher2D.hpp:181-191) before
-        // dropping both maps.
+        // (SpriteMaterialCache.hpp:79-81).
         void Clear();
 
         // Guid -> resolved record (the SpriteTable payload). Stable storage
