@@ -35,9 +35,10 @@
 // An OUT_OF_DATE-only auto-recreate would therefore "fix" the hard VK error
 // but never the soft one, silently continuing to present into a suboptimal
 // surface until a genuinely fatal acquire forced a recreate. The window's
-// resize EVENT (driven externally into Resize(), the same shape as
-// GpuContext::OnResize for the NVRHI swapchains) is complete and covers both
-// backends uniformly, so it is the only trigger this class listens to.
+// resize EVENT (driven externally into Resize(), the same shape
+// GpuContext::OnResize drove for the NVRHI swapchains before NRI Phase 5a,
+// Task 6 deleted it) is complete and covers both backends uniformly, so it is
+// the only trigger this class listens to.
 // AcquireNextTexture()/Present() still handle a stray OUT_OF_DATE (the one
 // VK CAN report) as an ordinary, non-latching skip -- see the .cpp.
 //
@@ -100,8 +101,9 @@ namespace Arcane
     class ARCANE_API NriSwapChain
     {
     public:
-        // `device` and `window` must outlive this object (same contract as
-        // the NVRHI swapchains -- Device.hpp's CreateSwapchain comment).
+        // `device` and `window` must outlive this object (same contract the
+        // NVRHI swapchains carried, back when Render/Device.hpp's
+        // CreateSwapchain comment stated it -- that file is deleted).
         // Window must have been created with a valid native handle (HWND on
         // Windows -- Window::NativeHandle()). Returns null on failure, reason
         // already logged.
@@ -156,8 +158,8 @@ namespace Arcane
         // cheap structurally-safe alternative (deferring the free until a
         // Present() that a resize may have already made impossible is frame-
         // graph machinery, not this class's job) -- the reference NVRHI
-        // Vulkan swapchain has the identical gap (SwapchainVulkan::Resize,
-        // DeviceVulkan.cpp, also unconditional). Task 9's frame loop (and
+        // Vulkan swapchain had the identical gap (SwapchainVulkan::Resize, in
+        // the deleted DeviceVulkan.cpp, also unconditional). Task 9's frame loop (and
         // every later caller) MUST sequence Resize() -- driven by the
         // window's resize event -- at frame boundaries only, never between
         // Acquire and Present. Debug builds ARC_ASSERT this; release builds
@@ -170,7 +172,8 @@ namespace Arcane
         // NRI's SwapChainFormat is an abstract BT709/BT2020 classification,
         // not a channel-order pin: D3D12's own concrete mapping table
         // hardcodes BT709_G22_8BIT -> DXGI_FORMAT_R8G8B8A8_UNORM (RGBA, not
-        // NVRHI's BGRA -- SwapChainD3D12.hpp), and VK's format-priority sort
+        // NVRHI's BGRA -- its own SwapChainD3D12.hpp, no longer in the tree),
+        // and VK's format-priority sort
         // also prefers R8G8B8A8_UNORM over B8G8R8A8_UNORM when both are
         // available (SwapChainVK.hpp). Callers that need to compare against
         // NVRHI's BGRA8_UNORM must read this, not assume it.

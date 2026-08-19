@@ -21,7 +21,7 @@
 // would have produced the same picture with THREE pool slots and a chain
 // restriction the material system does not have.
 //
-// TonemapNode is the exact NRI counterpart of Render/TonemapPass.cpp: the
+// TonemapNode is the exact NRI counterpart of the deleted Render/TonemapPass.cpp: the
 // same two offline shader bins, the same POINT/clamp sampler (1:1 canvas ->
 // backbuffer), the same single 3-vertex draw with no vertex buffer
 // (data/shaders/tonemap.hlsl builds the triangle from SV_VertexID).

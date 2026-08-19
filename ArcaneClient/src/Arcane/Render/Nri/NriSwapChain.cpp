@@ -128,9 +128,10 @@ namespace Arcane
         desc.queue               = m_device->GraphicsQueue();
         desc.width               = (nri::Dim_t)m_width;
         desc.height              = (nri::Dim_t)m_height;
-        // kSwapchainFramesInFlight + 1: the same textureNum shape NVRHI's own
-        // swapchains use (kBackbufferCount == 3 in both DeviceD3D12.cpp and
-        // DeviceVulkan.cpp) and the one NRISamples' NRIFramework recommends
+        // kSwapchainFramesInFlight + 1: the same textureNum shape the deleted
+        // NVRHI swapchains used (kBackbufferCount == 3 in both the now-deleted
+        // Render/DeviceD3D12.cpp and Render/DeviceVulkan.cpp) and the one
+        // NRISamples' NRIFramework recommends
         // (GetOptimalSwapChainTextureNum() == GetQueuedFrameNum() + 1) --
         // texture count strictly greater than frames-in-flight is also what
         // makes the recycled-by-frame-index acquire-fence indexing below
@@ -144,16 +145,17 @@ namespace Arcane
         // order, only this abstract class -- the concrete nri::Format is
         // queried after creation, not assumed.
         desc.format = nri::SwapChainFormat::BT709_G22_8BIT;
-        // No ALLOW_TEARING: mirrors NVRHI's D3D12 path exactly (DXGI_SWAP_
-        // EFFECT_FLIP_DISCARD, and Present() never passes DXGI_PRESENT_ALLOW_
-        // TEARING -- DeviceD3D12.cpp). On Vulkan, leaving ALLOW_TEARING unset
-        // means NRI's own present-mode search (SwapChainVK.hpp) tries MAILBOX
-        // first when not syncing (matching NVRHI's Vulkan path, which also
-        // prefers Mailbox over Immediate), falling back to FIFO_LATEST_READY
-        // or FIFO if Mailbox is unavailable -- NVRHI would fall back to
+        // No ALLOW_TEARING: mirrors what the deleted NVRHI D3D12 path did
+        // exactly (DXGI_SWAP_EFFECT_FLIP_DISCARD, and Present() never passed
+        // DXGI_PRESENT_ALLOW_TEARING -- Render/DeviceD3D12.cpp, no longer in
+        // the tree). On Vulkan, leaving ALLOW_TEARING unset means NRI's own
+        // present-mode search (SwapChainVK.hpp) tries MAILBOX first when not
+        // syncing (matching what NVRHI's Vulkan path did too, which also
+        // preferred Mailbox over Immediate), falling back to FIFO_LATEST_READY
+        // or FIFO if Mailbox is unavailable -- NVRHI would have fallen back to
         // Immediate instead in that case. Documented, minor, VK-only gap: we
-        // do not chase NVRHI's present-mode selection past what the VSYNC bit
-        // alone controls (task scope: no speculative mailbox-mode logic).
+        // do not chase NVRHI's old present-mode selection past what the VSYNC
+        // bit alone controls (task scope: no speculative mailbox-mode logic).
         desc.flags = m_vsync ? nri::SwapChainBits::VSYNC : nri::SwapChainBits::NONE;
         // aka "frames in flight" per NRISwapChain.h -- keep DXGI's own
         // frame-latency machinery (SetMaximumFrameLatency, D3D12 non-WAITABLE
@@ -254,8 +256,9 @@ namespace Arcane
         // and its Present() would free the nri::Texture* already handed to
         // the caller inside DestroySwapChain below, with no API signal --
         // a silent dangling pointer. No cheap structurally-safe fix exists
-        // (the reference NVRHI Vulkan swapchain has the identical gap,
-        // SwapchainVulkan::Resize in DeviceVulkan.cpp), so this is a loud
+        // (the reference NVRHI Vulkan swapchain had the identical gap --
+        // SwapchainVulkan::Resize, in the deleted Render/DeviceVulkan.cpp),
+        // so this is a loud
         // contract violation rather than a handled case: fatal in debug
         // (ARC_ASSERT, compiled out in release -- Mosaic/Assert.hpp), and an
         // unconditional ARC_WARN on the release path so the violation is
@@ -323,8 +326,9 @@ namespace Arcane
         // re-signalling the acquire fence, advancing an internal present id),
         // so a second call before Present() would clobber the first
         // acquire's un-consumed fence -- the same VUID-class hazard
-        // SwapchainVulkan::BeginFrame guards against (DeviceVulkan.cpp,
-        // "re-acquiring would reuse the already-signaled binary semaphore").
+        // SwapchainVulkan::BeginFrame used to guard against (in the deleted
+        // DeviceVulkan.cpp: "re-acquiring would reuse the already-signaled
+        // binary semaphore").
         if (m_acquired)
             return m_textures[m_currentTextureIndex].texture;
 
@@ -358,8 +362,8 @@ namespace Arcane
             // return code) is what drives Resize(), so by the time the
             // caller's NEXT frame acquires, Resize() should already have run.
             // Routine, not latch-worthy -- exactly how SwapchainVulkan's own
-            // OutOfDateKHRError catch treats it (DeviceVulkan.cpp: no
-            // RenderErrorCount bump). Deliberately NOT routed through
+            // OutOfDateKHRError catch treated it (in the deleted
+            // DeviceVulkan.cpp: no RenderErrorCount bump). Deliberately NOT routed through
             // ARC_NRI_CHECK for that reason -- see the .hpp's header comment
             // for the full SUBOPTIMAL/OUT_OF_DATE reasoning.
             ARC_WARN("[nri] AcquireNextTexture: swapchain out of date at {}x{}, "
@@ -412,9 +416,9 @@ namespace Arcane
         // fence's signal -- "signal at submit". Mirrors NRISamples' trailing
         // signal-only submit ("Signaling after Present improves D3D11
         // performance a bit", Source/Triangle.cpp/Resize.cpp) and
-        // SwapchainVulkan::Present's own empty-submit semaphore flush
-        // (DeviceVulkan.cpp) -- same idiom, NRI's fence model instead of a
-        // raw VkSemaphore.
+        // SwapchainVulkan::Present's own empty-submit semaphore flush, back
+        // when that class existed (in the deleted DeviceVulkan.cpp) -- same
+        // idiom, NRI's fence model instead of a raw VkSemaphore.
         nri::FenceSubmitDesc signal = {};
         signal.fence = m_frameFence;
         signal.value = m_frameCounter + 1;   // 1-based signal values, matching NRISamples ("1 + frameIndex")

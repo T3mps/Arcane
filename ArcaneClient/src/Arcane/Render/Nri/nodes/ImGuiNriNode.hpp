@@ -10,10 +10,10 @@
 // and that ORDER IS THE MECHANISM: declaration order is execution order on
 // this graph, so ImGui composites onto the display-referred backbuffer after
 // the tonemap (and after the selection outline, when a probe run armed it)
-// and before the capture node reads it. It mirrors what the NVRHI host does
-// -- RuntimeApp records `pass:imgui` after `pass:tone`, into the same
-// backbuffer framebuffer, and the screenshot/golden readback happens after
-// both.
+// and before the capture node reads it. It mirrors what the NVRHI host used
+// to do -- RuntimeApp recorded `pass:imgui` after `pass:tone`, into the same
+// backbuffer framebuffer, and the screenshot/golden readback happened after
+// both, before the NVRHI path was deleted.
 //
 // THE OBJECT HERE OWNS ALMOST NOTHING. Everything with a GPU lifetime lives
 // in ImGuiNri (Arcane/ImGui/ImGuiNri.hpp) -- the §7 "PORT OURS" backend that

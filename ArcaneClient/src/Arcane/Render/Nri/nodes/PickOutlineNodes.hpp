@@ -10,8 +10,10 @@
 //
 // EDITOR WIRING IS PHASE 3. What landed here in Phase 2 was the NODES, driven by
 // `--nri-graph --pick-probe x,y` and a SCRIPTED selection, so they render real
-// ReferenceProject content and are desk-comparable against the NVRHI twins
-// (Render/PickBuffer.cpp and Render/SelectionOutline.cpp). TWO THINGS can arm
+// ReferenceProject content; through Phase 3 they were desk-comparable against
+// the NVRHI twins (Render/PickBuffer.cpp and Render/SelectionOutline.cpp),
+// both deleted at NRI Phase 5a, Task 4 -- this is the only implementation
+// left. TWO THINGS can arm
 // them now: that flag (RuntimeFrame.cpp, the ONLY arming on the runtime host)
 // and NodeSet::pickOutline (EditorApp's viewport context, per-frame). With
 // NEITHER, nothing below is declared, created or recorded and the frame is
@@ -76,9 +78,11 @@
 //     SPIR-V build shifts b0 to set-0 binding 256 (compile-shaders.bat's
 //     `-fvk-b-shift 256 0`). A root constant lowers to a VK push-constant
 //     block, which those shaders do not declare -- binding one would leave the
-//     uniform block unwritten on Vulkan. Changing the HLSL is not an option
-//     either: SelectionOutline.cpp binds real constant buffers there and the
-//     NVRHI path is the compatibility floor.
+//     uniform block unwritten on Vulkan. Changing the HLSL was not an option
+//     either while SelectionOutline.cpp (deleted at Task 4) bound real
+//     constant buffers there and the NVRHI path was the compatibility floor;
+//     the shape stays pinned today for the shader/HLSL contract reasons
+//     above, independent of NVRHI.
 //     => the three outline passes take DESCRIPTOR-SET constant buffers out of
 //     a per-frame-slot HOST_UPLOAD arena, the idiom Batch2DNode and
 //     PostChainNode already carry (and which the same carry names as the
@@ -124,17 +128,17 @@ namespace Arcane
 
     // The entity-id target's format: single-channel 32-bit UINT, 0 ==
     // background, k == the k-th drawn silhouette. Integer so the PS writes an
-    // exact id (no float rounding) -- PickBuffer.cpp's kIdFormat, verbatim.
+    // exact id (no float rounding) -- the deleted PickBuffer.cpp's kIdFormat, verbatim.
     inline constexpr nri::Format kGraphPickIdFormat = nri::Format::R32_UINT;
 
-    // The jump-flood field's format. SelectionOutline.cpp's kFieldFormat:
+    // The jump-flood field's format. The deleted SelectionOutline.cpp's kFieldFormat:
     // .xy is a normalized [-1,1] silhouette-edge position, .z a +-1
     // select/hover tag, .w a 0..1 coverage -- renderable and sample-able on
     // both backends.
     inline constexpr nri::Format kGraphOutlineFieldFormat = nri::Format::RGBA16_SNORM;
 
     // The outline field's maximum useful radius, in 1x px --
-    // SelectionOutline.cpp's `kMaxThicknessPx`, and the ONLY input to the
+    // the deleted SelectionOutline.cpp's `kMaxThicknessPx`, and the ONLY input to the
     // jump-flood schedule below. The composite discards any pixel farther than
     // half the outline width from an edge, so the field only has to be exact
     // near a silhouette; the field is deliberately EMPTY (w == 0) beyond this.
@@ -271,15 +275,16 @@ namespace Arcane
         //
         // It was 1 through Phase 2 -- the vehicle's job was to prove the NODES
         // and the probe run had no NVRHI twin in the same process to match. In
-        // Phase 3 the editor drives BOTH arms over one scene and its NVRHI arm
-        // supersamples (EditorApp's PickBuffer::Create), so 1 here was a
-        // quarter-pixel shift in every seed position and a visibly different
-        // outline edge in the `full` golden. Both arms now read
-        // Arcane::kPickSupersample -- see PickEmit.hpp.
+        // Phase 3 the editor drove BOTH arms over one scene and its NVRHI arm
+        // supersampled (EditorApp's PickBuffer::Create, since deleted at Task
+        // 4), so 1 here was a quarter-pixel shift in every seed position and a
+        // visibly different outline edge in the `full` golden. Both arms read
+        // Arcane::kPickSupersample at the time; the NVRHI arm and PickBuffer
+        // are gone and this node is the only reader left -- see PickEmit.hpp.
         static constexpr std::uint32_t kSuperSample = kPickSupersample;
 
         // data/shaders/entity_id.hlsl's BatchConstants: float2 invHalfViewport
-        // + float2 pad, byte-identical to PickBuffer.cpp's IdPushConstants.
+        // + float2 pad, byte-identical to the deleted PickBuffer.cpp's IdPushConstants.
         struct RootConstants
         {
             float invHalfViewportX = 0.0f;

@@ -40,10 +40,10 @@ namespace Arcane
         }
 
         // The engine's canvas clear, verbatim from RuntimeApp::MainLoop's
-        // clearTextureFloat on the NVRHI path. It lives HERE, in the only node
-        // that clears the canvas, so the two paths cannot drift into different
-        // backgrounds -- which is what makes a stage golden's background pixels
-        // match by construction rather than by coincidence.
+        // clearTextureFloat call on the (now-deleted) NVRHI path. It lives
+        // HERE, in the only node that clears the canvas at all now that the
+        // NVRHI path is gone -- originally chosen so the two paths could not
+        // drift into different backgrounds; today it's simply the sole clear.
         constexpr float kCanvasClear[4] = { 0.02f, 0.02f, 0.04f, 1.0f };
 
         // The canvas is RGBA16F. Since Task 10 the constant lives beside the

@@ -188,7 +188,7 @@ namespace Arcane
         textureDesc.width     = (nri::Dim_t)pixels->width;
         textureDesc.height    = (nri::Dim_t)pixels->height;
         textureDesc.depth     = 1;
-        textureDesc.mipNum    = 1;   // the NVRHI path uploads mip 0 only too
+        textureDesc.mipNum    = 1;   // the (deleted) NVRHI path uploaded mip 0 only too
         textureDesc.layerNum  = 1;
         textureDesc.sampleNum = 1;
         if (!ARC_NRI_CHECK(core.CreateCommittedTexture(m_device->Device(), nri::MemoryLocation::DEVICE,

@@ -77,8 +77,10 @@ namespace Arcane
         // It is not a GpuPassScope subclass or a template over the two: the
         // classes share no member and no branch once the two calls differ.
         //
-        // The crash backend is the SAME process-wide one the NVRHI passes
-        // write into (installed by the device layer over the nvrhi device).
+        // The crash backend is the SAME process-wide slot the NVRHI passes
+        // used to write into (installed, through Phase 2, by the device layer
+        // over the nvrhi device); today NriDiagnostics::Arm installs it over
+        // whichever NRI device exists, and there is no other writer left.
         // Every step degrades independently: no backend, an unarmed backend, a
         // backend that hands back no native command list, or a backend whose
         // marker buffer lives on ANOTHER DEVICE each disable exactly their own

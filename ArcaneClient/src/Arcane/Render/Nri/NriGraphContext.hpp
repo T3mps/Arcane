@@ -59,12 +59,12 @@
 // DXGI allows only ONE flip-model swap chain per HWND at a time
 // (IDXGIFactory2::CreateSwapChainForHwnd's own remark), and both this
 // swapchain (NRI SwapChainD3D12 -> DXGI_SWAP_EFFECT_FLIP_DISCARD) and the
-// the engine's NVRHI one (same swap effect, deleted at Task 8b) were both
-// flip-model. So
-// through Phase 2, while an NVRHI swapchain still existed on the host window,
-// this class had to create its OWN second window and present there. Removing
-// the NVRHI device and binding this swapchain to the host window is therefore
-// a single, indivisible change -- plan reconciliation 1.
+// engine's NVRHI one (same swap effect, deleted at Task 8b) were both
+// flip-model. So, through Phase 2, while an NVRHI swapchain still existed on
+// the host window, this class had to create its OWN second window and
+// present there. Removing the NVRHI device and binding this swapchain to the
+// host window is therefore a single, indivisible change -- plan
+// reconciliation 1.
 //
 // WHAT THE CALLER OWES: the borrowed window must OUTLIVE this object. The
 // runtime host guarantees that by declaring m_graphContext AFTER m_gpu, so it
@@ -302,7 +302,7 @@ namespace Arcane
 
     // THE LINEAR CANVAS FORMAT every node on this path renders into: the batch
     // node's canvas, and every post-chain pass's target. RGBA16F, matching
-    // Canvas.cpp's kCanvasFormat (nvrhi::Format::RGBA16_FLOAT) -- colours are
+    // the deleted Canvas.cpp's kCanvasFormat (nvrhi::Format::RGBA16_FLOAT) -- colours are
     // LINEAR and may exceed 1.0, and the tonemap node is what turns them
     // display-referred. It lives HERE, next to the frame's shape, because two
     // nodes now have to agree on it: a post target that did not match the

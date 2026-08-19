@@ -96,8 +96,8 @@ namespace Arcane
         // SelectionOutline::Params' defaults, verbatim: amber selected, cyan
         // hovered, a 3 px outline CENTERED on the silhouette edge with a 1 px
         // AA ramp. Display-referred -- the composite writes straight into the
-        // tonemapped backbuffer with no sRGB conversion, exactly as the NVRHI
-        // twin does into the post-tonemap output texture.
+        // tonemapped backbuffer with no sRGB conversion, exactly as the
+        // (now-deleted) NVRHI twin did into the post-tonemap output texture.
         constexpr float kSelectColor[4] = { 1.0f, 0.65f, 0.10f, 1.0f };
         constexpr float kHoverColor[4]  = { 0.25f, 0.70f, 1.00f, 1.0f };
         constexpr float kSelectThickPx  = 3.0f;

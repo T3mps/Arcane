@@ -181,7 +181,7 @@ namespace Arcane
 #if defined(ARCANE_DEBUG)
         dd.enableValidation      = true;
         dd.enableD3D12DebugLayer = true;
-        dd.enableSyncValidation  = true;   // VK-only; see Device.hpp
+        dd.enableSyncValidation  = true;   // VK-only; see RenderDeviceDesc.hpp
 #else
         // Release/Dist: leave RenderDeviceDesc's own defaults (validation off)
         // rather than forcing debug layers into an optimized build. A Release
@@ -1191,11 +1191,12 @@ namespace Arcane
         //
         // STAGE GATING, and it is no longer a no-op: `batch` means "batcher +
         // tonemap and nothing else", so it drops the chain even when the scene
-        // binds one -- the SAME bypass RuntimeApp applies to the NVRHI path,
-        // which is what lets a batch-stage golden compare the same content on
-        // both recorders. Since Task 12 `post` and `full` differ too -- the
-        // HUD node below is declared under `full` only, again matching what
-        // RuntimeApp does to the NVRHI path.
+        // binds one -- the SAME bypass RuntimeApp used to apply to the
+        // (now-deleted) NVRHI path, which is what let a batch-stage golden
+        // compare the same content on both recorders back when there were
+        // two. Since Task 12 `post` and `full` differ too -- the HUD node
+        // below is declared under `full` only, again matching what RuntimeApp
+        // did on the NVRHI path before it was deleted.
         // ---------------------------------------------------------------
         RgTexture sceneColor = handles.canvas;
         if (shape.stage != GoldenStage::Batch && shape.post && !shape.post->passes.empty())
@@ -1304,13 +1305,13 @@ namespace Arcane
         // tonemap (host chrome is display-referred and must not be graded),
         // after the outline composite when a probe run armed one, and BEFORE
         // the capture, because a `full` golden's baseline was captured from
-        // the NVRHI path WITH the HUD on it. Declaration order is execution
-        // order here, so this placement is the whole mechanism; it is the same
-        // order RuntimeApp records on the NVRHI path (pass:tone, then
-        // pass:imgui, then the readback).
+        // the (now-deleted) NVRHI path WITH the HUD on it. Declaration order
+        // is execution order here, so this placement is the whole mechanism;
+        // it is the same order RuntimeApp recorded on the NVRHI path before
+        // it was deleted (pass:tone, then pass:imgui, then the readback).
         //
-        // STAGE GATED, and it is the same gate RuntimeApp applies to the NVRHI
-        // path: `batch` and `post` end the ImGui frame without rendering it,
+        // STAGE GATED, and it is the same gate RuntimeApp used to apply to
+        // the NVRHI path: `batch` and `post` end the ImGui frame without rendering it,
         // because the HUD would sit on top of every stage golden and mask
         // exactly the pixels a node-by-node cutover needs to compare. The
         // driver expresses that by passing no draw data at all, and this
@@ -1514,8 +1515,8 @@ namespace Arcane
         // before the graph is declared (the node imports the buffer, so it has
         // to exist first). A failure here degrades to an uncaptured frame
         // rather than a failed one -- the run's pixels are still valid, only
-        // the artifact is lost, which is the same exit-3 class the NVRHI
-        // path's own capture failure reports.
+        // the artifact is lost, which is the same exit-3 class the
+        // (now-deleted) NVRHI path's own capture failure used to report.
         FrameDesc effective = frame;
         if (effective.capture && !EnsureCaptureBuffer())
             effective.capture = false;
@@ -1821,8 +1822,8 @@ namespace Arcane
 
         // The copy was recorded into the frame that was just submitted and
         // presented; it has to have LANDED before the mapped bytes mean
-        // anything. Same stall the NVRHI path's own capture pays, on a frame
-        // the process is about to exit after.
+        // anything. Same stall the (now-deleted) NVRHI path's own capture
+        // used to pay, on a frame the process is about to exit after.
         (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
 
         const auto* mapped = static_cast<const std::uint8_t*>(

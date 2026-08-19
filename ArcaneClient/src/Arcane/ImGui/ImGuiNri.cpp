@@ -154,19 +154,23 @@ namespace Arcane
             return false;
         }
 
-        // Exactly ImGuiNvrhiRenderer::Init's three lines, on whatever context
-        // is CURRENT. HasTextures is the 1.92 protocol NewFrameTexUpdates
-        // implements; HasVtxOffset is what lets one concatenated vertex buffer
-        // serve every draw list (DrawIndexedDesc::baseVertex).
+        // Sets the same three flags the deleted ImGuiNvrhiRenderer::Init used
+        // to, on whatever context is CURRENT. HasTextures is the 1.92
+        // protocol NewFrameTexUpdates implements; HasVtxOffset is what lets
+        // one concatenated vertex buffer serve every draw list
+        // (DrawIndexedDesc::baseVertex).
         //
-        // On the Phase-2 vehicle the host's ImGuiLayer has already created the
-        // context and run ImGuiNvrhiRenderer::Init on it, so this OVERWRITES
-        // the backend name and re-ORs flags that are already set. Both are
-        // harmless -- the name is cosmetic and the flags are idempotent -- and
-        // only one of the two backends is ever asked to render a frame (the
-        // NVRHI half's Render() is inside RuntimeApp's non-graph branch). The
-        // guard is for a host that builds the vehicle before any context
-        // exists: ImGui::GetIO() would assert on a null GImGui.
+        // The host's ImGuiLayer has already created and pinned its context by
+        // the time this runs on an ordinary boot, so this OVERWRITES the
+        // backend name and re-ORs flags ImGuiLayer's own Init already set --
+        // both harmless, the name is cosmetic and the flags are idempotent.
+        // It fires again, on that same still-live context, every time the
+        // graph vehicle is rebuilt (a project switch tears down and recreates
+        // NriGraphContext, and with it this node), which is the other reason
+        // the overwrite has to be harmless rather than merely convenient --
+        // there is exactly one ImGui renderer backend in the process today,
+        // not two. The guard is for a host that builds the vehicle before any
+        // context exists: ImGui::GetIO() would assert on a null GImGui.
         if (ImGui::GetCurrentContext() == nullptr)
         {
             ARC_WARN("[nri-graph] ImGuiNri::Init ran with no current ImGui context -- the backend "

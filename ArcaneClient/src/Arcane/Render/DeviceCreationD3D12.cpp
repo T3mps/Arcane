@@ -262,8 +262,11 @@ namespace Arcane
                 // BACK" note further down, arrived at by removing the other
                 // device rather than by enabling the layer earlier. This
                 // branch stays because the guard is general (any second device
-                // that requests the layer), and it is still reachable while
-                // the editor's own flip is in flight.
+                // that requests the layer) -- the editor's own flip
+                // (EditorApp::GraphMode(), collapsed at NRI Phase 5a, Task 11a)
+                // is long since complete, so nothing in the tree creates a
+                // second D3D12 device today, but the branch remains reachable
+                // by anything that does.
                 //
                 // This device gets NO D3D12 debug layer: enabling it now would
                 // remove the engine's live NVRHI device (and, observed at the

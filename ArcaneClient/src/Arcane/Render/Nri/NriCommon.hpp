@@ -31,8 +31,10 @@ namespace Arcane
 
     // Install into DeviceCreationDesc/wrapper descs: routes NRI's
     // MessageCallback into ARC_INFO/WARN/ERROR by severity, ERRORs bump
-    // RenderErrorCount. Mirrors the NVRHI message-callback latch
-    // (Render/RenderErrorLatch.hpp) -- same gate, new producer.
+    // RenderErrorCount. Feeds the same gate the NVRHI message-callback latch
+    // used to (Render/RenderErrorLatch.hpp) -- same gate, new producer; NRI
+    // Phase 5a Task 8a moved the seam off the last nvrhi-typed hop (see
+    // NriCommon.cpp's RouteNriError).
     ARCANE_API nri::CallbackInterface MakeNriCallbacks() noexcept;
 
     // One INFO line: nriVersion + which backend + validation on/off.
