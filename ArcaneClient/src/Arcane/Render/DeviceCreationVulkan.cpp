@@ -11,10 +11,11 @@
 // path) called the SAME function, so only its address was wrong.
 //
 // Nothing below changed except its file and ONE line: VkDebugCallback now
-// names RenderErrorLatch::NoteNvrhiError directly instead of reaching it
+// names RenderErrorLatch::NoteNriError directly instead of reaching it
 // through NvrhiMessageCallback::message(Error, ...), which was deleted with
-// the NVRHI layer. Same counter, same "[nvrhi]" tag, same removal scan --
-// NvrhiMessageCallback's Error branch WAS that call since Task 8a.
+// the NVRHI layer. Same counter, same removal scan -- NvrhiMessageCallback's
+// Error branch WAS that call since Task 8a. (The tag it logs under was
+// "[nvrhi]" through Task 8b and is "[nri]" since Task 11a.)
 //
 // THE DEVICE-REMOVED OBSERVER MOVED WITH IT, in one step, on purpose. Its
 // once-only latch is file-local per backend and the installer that used to
@@ -119,7 +120,7 @@ namespace Arcane
         // It is reached through RenderErrorLatch's hook slot, which
         // Render/Nri/NriDiagnostics::Arm fills with ObserveDeviceRemovedVulkan
         // below. Two producers drive that slot on this backend: the latch's
-        // "Device Removed" substring scan (NoteNvrhiError -- what NriCommon's
+        // "Device Removed" substring scan (NoteNriError -- what NriCommon's
         // RouteNriError funnels every ARC_NRI_CHECK failure into), and its
         // TYPED seam NoteDeviceLost, which is how an nri::Result::DEVICE_LOST
         // off a QueueSubmit/AcquireNextTexture/QueuePresent gets here without
@@ -164,11 +165,11 @@ namespace Arcane
         // The call below is the ONE line Task 8b changed in this file. It was
         // NvrhiMessageCallback::Instance().message(MessageSeverity::Error,
         // text), and that adapter's Error branch had been exactly this call
-        // since Task 8a -- so the counter, the "[nvrhi]" tag and the
-        // "Device Removed" removal scan are all unchanged. The tag is left
-        // alone deliberately: renaming it is a log-text change, and this task
-        // moves code rather than observables. Task 11 owns the vocabulary
-        // sweep (RenderErrorLatch.hpp says the same).
+        // since Task 8a -- so the counter and the "Device Removed" removal scan
+        // are unchanged. Task 8b left the tag alone deliberately (renaming it
+        // is a log-text change, and that task moved code rather than
+        // observables); Task 11a then took the vocabulary sweep and retagged it
+        // "[nvrhi]" -> "[nri]", renaming the seam to NoteNriError with it.
         VKAPI_ATTR vk::Bool32 VKAPI_CALL VkDebugCallback(
             vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
             vk::DebugUtilsMessageTypeFlagsEXT /*types*/,
@@ -177,7 +178,7 @@ namespace Arcane
         {
             const char* text = (data && data->pMessage) ? data->pMessage : "";
             if (severity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError)
-                RenderErrorLatch::Instance().NoteNvrhiError(text);
+                RenderErrorLatch::Instance().NoteNriError(text);
             else
                 ARC_WARN("[vk] {}", text);
             return VK_FALSE;

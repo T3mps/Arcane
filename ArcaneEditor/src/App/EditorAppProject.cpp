@@ -57,14 +57,16 @@ namespace Arcane::Editor
     Arcane::Editor::DocServices EditorApp::MakeDocServices()
     {
         Arcane::Editor::DocServices s;
-        const bool graph = GraphMode();
         s.compiler = m_shaderCompiler.get();
         s.sources  = &m_shaderSources;
         s.runtime  = &*m_runtime;
         s.undo     = m_undo ? &*m_undo : nullptr;
         s.clock    = &m_editorClock;
         s.backend  = m_config.backend;
-        if (graph && m_graphChrome)
+        // Task 11a: this was `if (graph && m_graphChrome)`, where `graph` was
+        // GraphMode(). That term was unconditionally true; the null check on
+        // m_graphChrome is the term that ever decided anything, and it stays.
+        if (m_graphChrome)
         {
             // THE PROCESS'S ONE DEVICE, owned by the chrome context (Task 6):
             // a document's preview context BORROWS it, exactly as the viewport
@@ -821,25 +823,22 @@ namespace Arcane::Editor
                 // OUTGOING extent, so the panel does not snap back to the boot
                 // default for a frame; 0/0 (nothing was there to measure)
                 // means "the boot extent", which that function names.
-                if (GraphMode())
+                if (!BuildGraphViewportContext(keepViewportW, keepViewportH))
                 {
-                    if (!BuildGraphViewportContext(keepViewportW, keepViewportH))
-                    {
-                        // Already logged. Fail the stage -- plugin_load is
-                        // skipped and the fallback below converges the session
-                        // on project-less -- AND request the exit, because a
-                        // graph session with no viewport context is not a
-                        // degraded editor, it is one whose phase 10 has
-                        // nothing to render into. Same code and same meaning
-                        // as CreateGraphVehicles failing at boot (exit 1); the
-                        // frame loop reads m_requestExit before any phase
-                        // runs, and this frame's remaining phases already
-                        // tolerate a null viewport context (they must: they
-                        // are reached with one only here).
-                        NoteGraphFrameFailure("the viewport graph context could not be rebuilt "
-                                              "for the project switch");
-                        return false;
-                    }
+                    // Already logged. Fail the stage -- plugin_load is
+                    // skipped and the fallback below converges the session
+                    // on project-less -- AND request the exit, because a
+                    // graph session with no viewport context is not a
+                    // degraded editor, it is one whose phase 10 has
+                    // nothing to render into. Same code and same meaning
+                    // as CreateGraphVehicles failing at boot (exit 1); the
+                    // frame loop reads m_requestExit before any phase
+                    // runs, and this frame's remaining phases already
+                    // tolerate a null viewport context (they must: they
+                    // are reached with one only here).
+                    NoteGraphFrameFailure("the viewport graph context could not be rebuilt "
+                                          "for the project switch");
+                    return false;
                 }
                 return true;
             };
@@ -933,9 +932,19 @@ namespace Arcane::Editor
         // during a graph-mode switch cannot escalate into a FALSE hang report.
         // A hang report raised across a switch on this arm describes a real
         // stall.
+        // `overlay` IS NOW INERT, and deliberately still constructed. This ran
+        // `seq.Run(GraphMode() ? nullptr : &overlay)`; the predicate was
+        // unconditionally true, so nullptr is the arm that was ever taken, and
+        // Task 11a collapsed the ternary to it. BootPresenter itself cannot be
+        // retired here: its other two construction sites (EditorApp.cpp and
+        // RuntimeApp.cpp) are gated on GpuContext::GraphFlavor(), a DIFFERENT
+        // predicate 11a does not own -- so the class, and this local with it,
+        // are carried to whoever collapses GraphFlavor(). The constructor is a
+        // two-member init and the destructor is defaulted, so keeping the
+        // object costs nothing and changes nothing.
         Arcane::BootPresenter overlay(*m_gpu, Arcane::BootPresenterMode::Overlay);
         Arcane::BootSequence  seq(std::move(stages));
-        const Arcane::BootResult r = seq.Run(GraphMode() ? nullptr : &overlay);
+        const Arcane::BootResult r = seq.Run(nullptr);
         if (!r.ok)
         {
             // Important 1 (2026-07-31 review): a window close mid-switch is

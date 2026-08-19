@@ -105,17 +105,18 @@ namespace Arcane
         //     VUID or a graph refusal fails the 0/0 gate exactly like any
         //     other render-layer error. That is the whole point of the latch.
         //   - It logs under the producer's OWN tag. The D3D12 callback used
-        //     to reach the latch by calling NoteNvrhiError below, which
+        //     to reach the latch by calling the substring seam below, which
         //     printed debug-layer text as "[nvrhi] ..." -- a lie about the
         //     message's origin, and the first thing to mislead whoever reads
-        //     the log.
+        //     the log. (That seam is NoteNriError now, and tags "[nri]"; see
+        //     its own comment for the tag-honesty caveat that remains.)
         //   - It deliberately does NOT run NotifyIfDeviceRemoved. That hook
         //     writes a diagnostic report and a minidump; the D3D12 debug
         //     layer invokes its message callback on whatever thread tripped
         //     the error, from INSIDE a D3D12 call, so letting a "Device
         //     Removed" substring there re-enter removal handling is a
         //     re-entrancy hazard for no gain. The submit-time feed (see
-        //     NoteNvrhiError and NoteDeviceLost) stays the ONE device-removed
+        //     NoteNriError and NoteDeviceLost) stays the ONE device-removed
         //     observation point -- F-3b, and the reason the hook lives there.
         void NoteError(const char* tag, const char* text) noexcept
         {
@@ -159,22 +160,37 @@ namespace Arcane
         // repointed the one call. NVRHI's own message callback was the third
         // and went with the device layer.
         //
-        // The "[nvrhi]" tag is FIXED and STILL deliberately unchanged. Task 8a
-        // left it because a relocation must move zero observables; Task 8b
-        // left it because deleting a layer is not a reason to rewrite log text
-        // that desk transcripts and battery items are read against. Renaming
-        // it is a vocabulary change, and Task 11 owns the vocabulary sweep.
-        void NoteNvrhiError(const char* messageText) noexcept
+        // RETAGGED "[nvrhi]" -> "[nri]", AND RENAMED, at NRI Phase 5a Task 11a.
+        // Tasks 8a and 8b deliberately left both alone (a relocation must move
+        // zero observables; deleting a layer is not a reason to rewrite log
+        // text), deferring the vocabulary change to Task 11. NVRHI is gone from
+        // the tree entirely by then, so the old name and tag pointed at a layer
+        // that does not exist. Nothing automated consumed the tag: the D5a-1
+        // battery matches only `RenderErrorCount N -> N`, no ArcaneTests case
+        // asserts on the tag text, and no in-repo script greps it.
+        //
+        // TAG-HONESTY CAVEAT, stated rather than hidden: of the two producers
+        // that route here, RouteNriError IS NRI, but DeviceCreationVulkan's
+        // VkDebugCallback is the VULKAN VALIDATION LAYER reporting on a device
+        // NRI created. "[nri]" names the render path rather than the exact
+        // producer -- strictly better than "[nvrhi]", which named neither, but
+        // NoteError(tag, text) above is the seam that would give each producer
+        // its own tag if that distinction is ever wanted.
+        void NoteNriError(const char* messageText) noexcept
         {
             ++m_errorCount;
-            ARC_ERROR("[nvrhi] {}", messageText);
+            ARC_ERROR("[nri] {}", messageText);
             NotifyIfDeviceRemoved(messageText);
         }
 
-        void NoteNvrhiFatal(const char* messageText) noexcept
+        // NO CALLERS as of Task 11a (NVRHI's message callback was the only one,
+        // and it went with the device layer at Task 8b). Kept as the Fatal twin
+        // of the seam above rather than deleted, since deleting it is not a
+        // retag; flagged in that task's report as a deletion candidate.
+        void NoteNriFatal(const char* messageText) noexcept
         {
             ++m_errorCount;
-            ARC_CRITICAL("[nvrhi] {}", messageText);
+            ARC_CRITICAL("[nri] {}", messageText);
             NotifyIfDeviceRemoved(messageText);
         }
 

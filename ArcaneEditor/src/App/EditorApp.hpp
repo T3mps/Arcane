@@ -141,9 +141,10 @@ namespace Arcane::Editor
         bool       Create();
         InitResult Init();
         // THE GRAPH VEHICLES' CREATE, run by Main() between boot and the frame
-        // loop. Its `!GraphMode()` early return never fires in practice as of
-        // Phase 5a (Task 2b) -- GraphMode() is unconditional -- so this always
-        // builds the vehicles. It sits HERE rather than in a boot stage for
+        // loop. It carried an `!GraphMode()` early return that never fired
+        // (Phase 5a, Task 2b made that predicate unconditional; Task 11a then
+        // deleted it), so this always builds the vehicles. It sits HERE
+        // rather than in a boot stage for
         // the ordering RuntimeApp::MainLoop proved at three desk checkpoints:
         // the window is Show()n FIRST and the swapchain built over an
         // already-mapped window, because a surface created against a window
@@ -302,11 +303,12 @@ namespace Arcane::Editor
         // Arcane::GoldenArtifact (Host/GoldenHarness.hpp), the pairing
         // RuntimeFrame::CaptureTail used for the NVRHI backbuffer. NRI Phase
         // 5a, Task 4 deleted that whole arm (OffscreenCanvas is gone); the
-        // function is now the `if (GraphMode()) return;` no-op it already
-        // reduced to on every real run, left standing rather than deleted
-        // along with its one caller (RenderSelectionOutline/CompositeGameUi
-        // carry the identical shape, for the identical reason -- see their
-        // own definitions). The graph arm's capture is unaffected: it is
+        // function had reduced to an `if (GraphMode()) return;` no-op on every
+        // real run, and Task 11a's removal of that predicate leaves it EMPTY.
+        // It is left standing with its one caller, as inert scaffolding
+        // (RenderSelectionOutline/CompositeGameUi carry the identical shape,
+        // for the identical reason -- see their own definitions). The graph
+        // arm's capture is unaffected: it is
         // armed as a NODE inside RenderSceneToViewport's own FrameDesc
         // instead (see that method) -- there is no separate "read this
         // texture" entry point on that recorder, so piggybacking on the
@@ -648,17 +650,19 @@ namespace Arcane::Editor
         // never m_play.IsPlaying() raw, so the predicate has one greppable name.
         [[nodiscard]] bool InPlayMode() const noexcept { return m_play.IsPlaying(); }
 
-        // ---- THE graph/NVRHI predicate (--nri-graph, NRI Phase 3, Task 8) ---
-        // The editor's counterpart of RuntimeApp's `m_gpu->GraphFlavor()`
-        // branches, and the ONE name every mode gate in this host reads --
-        // never a HostConfig flag, for GpuContext.hpp's stated reason: what
-        // matters at a call site is whether the NVRHI members EXIST, not which
-        // flag caused that. TRUE EVERYWHERE, Dist included, as of Phase 5a
-        // (Task 2b): StageGpuCore now takes GpuContext::CreateForGraph
-        // unconditionally, so every gate below folds to the graph arm, in
-        // every configuration.
-        [[nodiscard]] bool GraphMode() const noexcept
-        { return m_gpu && m_gpu->GraphFlavor(); }
+        // ---- THE graph/NVRHI predicate: DELETED (NRI Phase 5a, Task 11a) ----
+        // `GraphMode()` -- `m_gpu && m_gpu->GraphFlavor()` -- stood here and
+        // gated 9 call sites across this host. Both of its terms became
+        // unconditional: `gpu_core` is a Fatal boot stage that fails the boot
+        // when GpuContext::Create returns null, so m_gpu is non-null anywhere
+        // Main() can reach; and Create sets m_graphFlavor = true before its
+        // first fallible step, with a private constructor making it the only
+        // way a GpuContext exists. So the predicate was true at every site and
+        // the branches it fed were collapsed to their surviving arms.
+        //
+        // GpuContext::GraphFlavor() ITSELF SURVIVES and still has live callers
+        // (EditorApp.cpp, RuntimeApp.cpp, and two ArcaneTests assertions);
+        // retiring it is a separate predicate collapse this task did not own.
 
         // ---- THE HOVER predicate (whole-branch review, C2) -------------------
         // "The pointer is over the Viewport panel AND that fact is allowed to

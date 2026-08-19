@@ -218,12 +218,12 @@ namespace Arcane::Editor
             // recorders (the graph arm's post chain is bytes with no NVRHI
             // object to ask Ready() of); NRI Phase 5a, Task 4 deleted that
             // NVRHI object and rebuilt census.postBound's own computation on
-            // the same bytes this ternary's graph arm already read (see
-            // SceneRenderResolver.cpp's Materials()), so both sides of this
-            // ternary agree now -- kept standing rather than collapsed, since
-            // that is Task 11's GraphMode() sweep, not this one's.
+            // the same bytes the graph arm already read (see
+            // SceneRenderResolver.cpp's Materials()), so both sides of the
+            // ternary this used to be agreed. Task 11a collapsed it to the
+            // surviving arm: PostDesc() read directly.
             const Arcane::SceneRenderResolver::MaterialCensus census = m_resolver->Materials();
-            const bool postBound = GraphMode() ? (m_resolver->PostDesc() != nullptr) : census.postBound;
+            const bool postBound = (m_resolver->PostDesc() != nullptr);
             if (census.spriteBound != census.spriteReferenced ||
                 (census.postReferenced && !postBound))
             {
@@ -1872,16 +1872,14 @@ namespace Arcane::Editor
     // submission.
     //
     // NRI Phase 5a, Task 4 deleted the NVRHI arm this function used to carry
-    // below the `if (GraphMode())` early return (the GPU composite of the
-    // game HUD into m_viewportTargets.canvas's output texture, a direct
-    // nvrhi call) -- GraphMode() is unconditional, so that arm was already
-    // unreachable. This function is now a no-op; it is left standing, rather
-    // than deleted along with its one caller, because Task 11 owns the
-    // GraphMode() collapse this would otherwise pre-empt.
+    // below an `if (GraphMode())` early return (the GPU composite of the game
+    // HUD into m_viewportTargets.canvas's output texture, a direct nvrhi
+    // call) -- that predicate was unconditionally true, so the arm was already
+    // unreachable. Task 11a removed the predicate, which leaves this function
+    // EMPTY. It and its one caller are inert scaffolding; retiring them is
+    // outside a predicate collapse and is carried in that task's report.
     void EditorApp::CompositeGameUi()
     {
-        if (GraphMode())
-            return;
     }
 
     // Phase 12: Edit-mode selection/hover outline. Occupies the same slot as the
@@ -1899,16 +1897,14 @@ namespace Arcane::Editor
     // maps m_selection through the same k+1 id assignment PickBuffer used to.
     //
     // NRI Phase 5a, Task 4 deleted the NVRHI arm this function used to carry
-    // below the `if (GraphMode())` early return (PickBuffer::RenderIdPass +
-    // SelectionOutline::Render, direct nvrhi calls) -- GraphMode() is
-    // unconditional, so that arm was already unreachable. This function is
-    // now a no-op; it is left standing, rather than deleted along with its
-    // one caller, because Task 11 owns the GraphMode() collapse this would
-    // otherwise pre-empt.
+    // below an `if (GraphMode())` early return (PickBuffer::RenderIdPass +
+    // SelectionOutline::Render, direct nvrhi calls) -- that predicate was
+    // unconditionally true, so the arm was already unreachable. Task 11a
+    // removed the predicate, which leaves this function EMPTY. It and its one
+    // caller are inert scaffolding; retiring them is outside a predicate
+    // collapse and is carried in that task's report.
     void EditorApp::RenderSelectionOutline()
     {
-        if (GraphMode())
-            return;
     }
 
     // Phase 13: the editor's own document upkeep. The compile pump that used to
@@ -2580,82 +2576,81 @@ namespace Arcane::Editor
         // honest again only because Task 9 restored the game context; while
         // it read `false` unconditionally neither arm could have had a
         // faithful pick.
-        if (GraphMode())
+        // ---- STEP 1: a landed readback -----------------------------
+        // ProbeResult does NOT self-clear (it reports the same pair every
+        // frame until the next drain), so DeferredPick::Land is what makes
+        // consumption exactly-once -- it refuses anything but the ticket
+        // outstanding, and returns to Idle whether or not the answer
+        // survived its staleness checks.
+        if (m_viewportTargets.graph)
         {
-            // ---- STEP 1: a landed readback -----------------------------
-            // ProbeResult does NOT self-clear (it reports the same pair every
-            // frame until the next drain), so DeferredPick::Land is what makes
-            // consumption exactly-once -- it refuses anything but the ticket
-            // outstanding, and returns to Idle whether or not the answer
-            // survived its staleness checks.
-            if (m_viewportTargets.graph)
+            if (const auto probe = m_viewportTargets.graph->ProbeResult())
             {
-                if (const auto probe = m_viewportTargets.graph->ProbeResult())
+                if (const auto hit = m_deferredPick.Land(probe->ticket, probe->id,
+                                                         m_sceneEpoch, InPlayMode()))
                 {
-                    if (const auto hit = m_deferredPick.Land(probe->ticket, probe->id,
-                                                             m_sceneEpoch, InPlayMode()))
+                    // A THIRD staleness check, on top of Land's epoch and
+                    // play-mode ones: the entity must still exist in the
+                    // LIVE registry. The retained table can name an entity
+                    // that was deleted (Delete key, an undo) without the
+                    // scene having been REPLACED, which is a case no epoch
+                    // can see. Dropping it is the safe direction -- note it
+                    // is NOT folded into the miss branch, because a stale
+                    // hit is "we do not know", where a miss is the positive
+                    // statement "the user clicked background".
+                    if (hit->entity.IsValid())
                     {
-                        // A THIRD staleness check, on top of Land's epoch and
-                        // play-mode ones: the entity must still exist in the
-                        // LIVE registry. The retained table can name an entity
-                        // that was deleted (Delete key, an undo) without the
-                        // scene having been REPLACED, which is a case no epoch
-                        // can see. Dropping it is the safe direction -- note it
-                        // is NOT folded into the miss branch, because a stale
-                        // hit is "we do not know", where a miss is the positive
-                        // statement "the user clicked background".
-                        if (hit->entity.IsValid())
+                        if (m_runtime->Registry().IsValid(hit->entity))
                         {
-                            if (m_runtime->Registry().IsValid(hit->entity))
-                            {
-                                if (hit->ctrlHeld)
-                                    m_selection.Toggle(hit->entity);
-                                else
-                                    m_selection.Select(hit->entity);
-                            }
-                        }
-                        else if (!hit->ctrlHeld)
-                        {
-                            // Ctrl+click on empty space is a miss, not a
-                            // deselect-all -- the NVRHI branch's rule, and the
-                            // ctrl state is the one captured AT THE CLICK
-                            // rather than whatever is held now.
-                            m_selection.Clear();
+                            if (hit->ctrlHeld)
+                                m_selection.Toggle(hit->entity);
+                            else
+                                m_selection.Select(hit->entity);
                         }
                     }
-                }
-                // Bounded, and loud if it ever fires: the readback is
-                // guaranteed to drain after kSwapchainFramesInFlight RENDERED
-                // frames, and ArmGraphViewportFrame keeps the chain declared
-                // for exactly as long as this is Busy() -- so the only way to
-                // exhaust the budget is a very long run of Skipped frames (a
-                // collapsed Viewport panel). Giving up beats a state machine
-                // that never returns to Idle.
-                if (m_deferredPick.TickAndMaybeAbandon())
-                {
-                    ARC_WARN("Viewport pick: no readback landed within {} frames -- the click was "
-                             "dropped (was the Viewport panel collapsed?)",
-                             Arcane::Editor::DeferredPick::kMaxFramesInFlight);
+                    else if (!hit->ctrlHeld)
+                    {
+                        // Ctrl+click on empty space is a miss, not a
+                        // deselect-all -- the NVRHI branch's rule, and the
+                        // ctrl state is the one captured AT THE CLICK
+                        // rather than whatever is held now.
+                        m_selection.Clear();
+                    }
                 }
             }
-
-            // ---- STEP 2: this frame's click ----------------------------
-            // Arm replaces any outstanding request: the newest click wins, and
-            // the older one's copy is dropped on arrival by its stale ticket.
-            // The scene epoch and play mode recorded here describe the scene
-            // the USER clicked on, which is what the landing compares against.
-            if (fs.vp.clicked && !m_gizmoCapturedClick && !m_gizmoDrag.active && !fs.gameUiClaims)
+            // Bounded, and loud if it ever fires: the readback is
+            // guaranteed to drain after kSwapchainFramesInFlight RENDERED
+            // frames, and ArmGraphViewportFrame keeps the chain declared
+            // for exactly as long as this is Busy() -- so the only way to
+            // exhaust the budget is a very long run of Skipped frames (a
+            // collapsed Viewport panel). Giving up beats a state machine
+            // that never returns to Idle.
+            if (m_deferredPick.TickAndMaybeAbandon())
             {
-                m_deferredPick.Arm(glm::ivec2((int)fs.vp.clickLocalX, (int)fs.vp.clickLocalY),
-                                   fs.vp.ctrlHeld, m_sceneEpoch, InPlayMode());
+                ARC_WARN("Viewport pick: no readback landed within {} frames -- the click was "
+                         "dropped (was the Viewport panel collapsed?)",
+                         Arcane::Editor::DeferredPick::kMaxFramesInFlight);
             }
-            return;
         }
 
-        // NRI Phase 5a, Task 4 deleted the NVRHI arm this used to fall through
-        // to (a synchronous PickBuffer::Pick against the SAME four guard
-        // conditions, verbatim -- see the comment above). GraphMode() is
-        // unconditional, so that arm was already unreachable.
+        // ---- STEP 2: this frame's click ----------------------------
+        // Arm replaces any outstanding request: the newest click wins, and
+        // the older one's copy is dropped on arrival by its stale ticket.
+        // The scene epoch and play mode recorded here describe the scene
+        // the USER clicked on, which is what the landing compares against.
+        if (fs.vp.clicked && !m_gizmoCapturedClick && !m_gizmoDrag.active && !fs.gameUiClaims)
+        {
+            m_deferredPick.Arm(glm::ivec2((int)fs.vp.clickLocalX, (int)fs.vp.clickLocalY),
+                               fs.vp.ctrlHeld, m_sceneEpoch, InPlayMode());
+        }
+        // Kept verbatim from the `if (GraphMode())` block Task 11a unwrapped:
+        // this was that block's own trailing return, and it is now simply the
+        // function's last statement. What it used to skip -- a synchronous
+        // PickBuffer::Pick against the SAME four guard conditions -- was the
+        // NVRHI arm, deleted at NRI Phase 5a, Task 4; the predicate that
+        // guarded it was unconditionally true, so nothing followed it even
+        // then.
+        return;
     }
 
     // Phase 18: the selection-driven panels. Runs after the click-pick above so
@@ -2845,9 +2840,10 @@ namespace Arcane::Editor
     // used to be `if (GraphMode()) return PresentChromeFrame(); <NVRHI
     // backbuffer acquire, command-list clear, ImGuiLayer::Render (deleted at
     // Task 5), submit, present, FrameProgress().EndFrame()>` -- already
-    // unreachable (GraphMode() has been unconditional since Phase 5a Task
-    // 2b) and left standing, like CompositeGameUi/RenderSelectionOutline
-    // just above, because Task 11 owns the GraphMode() collapse. GpuContext
+    // unreachable (that predicate was unconditionally true from Phase 5a Task
+    // 2b, and Task 11a has since removed it). Unlike CompositeGameUi/
+    // RenderSelectionOutline just above, this function still does real work --
+    // it forwards to PresentChromeFrame -- so it stays. GpuContext
     // has built no Swapchain, command list or GpuFrameProgress since Task 6
     // deleted Swap()/Cmd()/FrameProgress() along with the rest of its NVRHI
     // half, so the tail no longer compiles at all; there is nothing left to
@@ -2906,20 +2902,18 @@ namespace Arcane::Editor
     // the window's own backbuffer.
     //
     // NRI Phase 5a, Task 4 deleted that whole arm (OffscreenCanvas is gone),
-    // leaving only the `if (GraphMode())` no-op this function already
+    // leaving only an `if (GraphMode())` no-op this function had already
     // reduced to on every real run: the graph arm's capture is armed as a
     // NODE inside RenderSceneToViewport's own FrameDesc instead (vp.capture),
     // and read back synchronously right there -- there is no separate "read
     // this texture" entry point on that recorder for a later phase to use,
     // which is exactly the reasoning CaptureGraphViewportPng's own comment
     // gives for why an auto-screenshot re-renders rather than reads the last
-    // frame. This function is left standing, rather than deleted along with
-    // its one caller, because Task 11 owns the GraphMode() collapse this
-    // would otherwise pre-empt.
+    // frame. Task 11a removed the predicate, which leaves this function
+    // EMPTY. It and its one caller are inert scaffolding; retiring them is
+    // outside a predicate collapse and is carried in that task's report.
     void EditorApp::CaptureEditorGolden()
     {
-        if (GraphMode())
-            return;
     }
 
     void EditorApp::EndFrame(LoopState& ls)

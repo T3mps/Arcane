@@ -53,11 +53,11 @@ namespace Arcane
             return "Unknown";
         }
 
-        // Same gate, new producer: RenderErrorLatch::NoteNvrhiError() both
-        // logs at ARC_ERROR (with the "[nvrhi]" tag it always uses, regardless
+        // Same gate, new producer: RenderErrorLatch::NoteNriError() both
+        // logs at ARC_ERROR (with the "[nri]" tag it always uses, regardless
         // of producer -- see DeviceCreationVulkan.cpp's VkDebugCallback for the
-        // other non-nvrhi producer routing through this exact call) and
-        // increments the SAME atomic RenderErrorCount() reads.
+        // other producer, the Vulkan validation layer, routing through this
+        // exact call) and increments the SAME atomic RenderErrorCount() reads.
         // Routing NRI errors through it here, rather than adding a second
         // counter, keeps the 0/0 gate a single source of truth.
         //
@@ -67,7 +67,7 @@ namespace Arcane
         // Same counter, same tag, same removal scan.
         void RouteNriError(const char* text)
         {
-            RenderErrorLatch::Instance().NoteNvrhiError(text);
+            RenderErrorLatch::Instance().NoteNriError(text);
         }
 
         // NRI's own MessageCallback signature (Extensions/NRIDeviceCreation.h):

@@ -81,7 +81,7 @@ TEST_CASE("nri: NoteError bumps RenderErrorCount by exactly 1 and never fires th
 
     // The text carries the exact substring RenderErrorLatch matches on
     // (NotifyIfDeviceRemoved looks for "Device Removed"). Pushed through
-    // NoteNvrhiError -- which is what NriCommon's RouteNriError and the Vulkan
+    // NoteNriError -- which is what NriCommon's RouteNriError and the Vulkan
     // debug messenger both call -- this WOULD fire the hook, and
     // firing it from an InfoQueue1 callback thread, mid-D3D12-call, is the
     // re-entrancy hazard NoteError exists to kill. Through NoteError it must

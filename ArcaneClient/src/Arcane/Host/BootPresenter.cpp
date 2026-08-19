@@ -33,7 +33,7 @@ namespace Arcane
 
         // EVERYTHING BELOW THIS POINT IS DELETED, NOT PORTED (NRI Phase 5a,
         // Task 6). It was already dead code before this task: every caller
-        // gates constructing a BootPresenter behind `!GraphFlavor()`/
+        // gated constructing a BootPresenter behind `!GraphFlavor()`/
         // `!GraphMode()` (RuntimeApp::StageFinalize, EditorApp's matching
         // stage, EditorAppProject's switch overlay), which has been
         // unconditionally false since the Movement 1 flip -- so this
@@ -49,10 +49,19 @@ namespace Arcane
         // flavor, so none of that compiles any more, and there is nothing
         // left to port it to: the frame graph's ImGuiNriNode is what
         // actually composites a progress overlay today, on a path this class
-        // never touches. Task 11 owns retiring this class outright along
-        // with the rest of the GraphMode() collapse; until then it is kept
-        // as an intact, if inert, IBootPresenter implementation rather than
-        // an ImGui frame that gets Begin()'d and never Rendered.
+        // never touches.
+        //
+        // STILL NOT RETIRED after Task 11a, and here is the exact blocker.
+        // 11a collapsed EditorApp::GraphMode(), which covered only ONE of the
+        // three gates above -- EditorAppProject's switch overlay, which now
+        // passes nullptr unconditionally (its `overlay` local is constructed
+        // and unused, deliberately). The other two, RuntimeApp::StageFinalize
+        // and EditorApp's matching stage, gate on GpuContext::GraphFlavor(),
+        // a predicate 11a did not own and which still has live callers and
+        // ArcaneTests assertions. So this class dies with the GraphFlavor()
+        // collapse, not this one; until then it is kept as an intact, if
+        // inert, IBootPresenter implementation rather than an ImGui frame
+        // that gets Begin()'d and never Rendered.
         //
         // m_hasPresentedFrame is now WRITE-DEAD: the deleted tail was its
         // only assignment site (the real draw+present path used to set it

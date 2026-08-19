@@ -87,7 +87,7 @@ namespace Arcane
         // It is reached through RenderErrorLatch's hook slot, which
         // Render/Nri/NriDiagnostics::Arm fills with ObserveDeviceRemovedD3D12
         // below. Two producers drive that slot: the latch's "Device Removed"
-        // substring scan (NoteNvrhiError -- what NriCommon's RouteNriError
+        // substring scan (NoteNriError -- what NriCommon's RouteNriError
         // funnels every ARC_NRI_CHECK failure into), and its TYPED seam
         // NoteDeviceLost, which is what NriDiagnostics' `--crash-gpu`
         // removal poll calls once GetDeviceRemovedReason answers.

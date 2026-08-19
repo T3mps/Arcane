@@ -32,11 +32,18 @@
 // command list anywhere in this object.
 //
 // GraphFlavor() answers true unconditionally now (every construction path
-// goes through this one Create()). It is intentionally NOT collapsed here:
-// Task 11 owns the repo-wide sweep that retires the predicate itself, once
-// every remaining call site that branches on it (GraphMode() and its
-// RuntimeApp/RuntimeFrame equivalents) is swept in one pass rather than
-// piecemeal across several tasks.
+// goes through this one Create(), and Create sets m_graphFlavor = true before
+// its first fallible step; the constructor is private, so there is no other
+// way a GpuContext exists). It is STILL NOT collapsed here.
+//
+// Task 11a retired the EDITOR's wrapper, EditorApp::GraphMode() -- which was
+// `m_gpu && m_gpu->GraphFlavor()` -- and the 9 call sites it fed. GraphFlavor()
+// ITSELF SURVIVES, with live callers this accessor must keep serving:
+// EditorApp.cpp and RuntimeApp.cpp each gate their BootPresenter construction
+// on `!GraphFlavor()`, each has a banner-text ternary reading it, and two
+// ArcaneTests cases assert on it directly. Retiring it is therefore a
+// SEPARATE collapse -- it moves the test gate, which a predicate-only task
+// must not do -- and it is what actually unblocks deleting BootPresenter.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/ImGui/ImGuiLayer.hpp>

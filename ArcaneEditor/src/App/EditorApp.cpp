@@ -1482,16 +1482,15 @@ namespace Arcane::Editor
     // BORROWS the device the chrome context creates.
     bool EditorApp::CreateGraphVehicles()
     {
-        // Unreachable in practice (GraphMode() is unconditional as of Phase
-        // 5a, Task 2b) -- kept standing rather than collapsed, since that
-        // collapse is Task 11's job. NRI Phase 5a, Task 4: this used to read
-        // "the NVRHI arm builds its trio in StageRenderBridge" -- that trio
+        // Task 11a removed an `if (!GraphMode()) return true;` guard that stood
+        // here. GraphMode() was unconditionally true from Phase 5a Task 2b, so
+        // the early return never fired and the whole body below is what always
+        // ran. NRI Phase 5a, Task 4: the guard's comment used to read "the
+        // NVRHI arm builds its trio in StageRenderBridge" -- that trio
         // (OffscreenCanvas/PickBuffer/SelectionOutline) and StageRenderBridge's
         // construction of it are both deleted; StageRenderBridge does nothing
         // at all now (see its own comment).
-        if (!GraphMode())
-            return true;
-
+        //
         // Formerly `#if !defined(ARCANE_DIST)` here (NRI Phase 5a, Task 2a):
         // that guard existed only because the graph path was opt-in dev
         // scaffolding, and at the time GraphMode() was structurally false in
@@ -1725,9 +1724,10 @@ namespace Arcane::Editor
 
     int EditorApp::Main()
     {
-        // Unconditional as of Phase 5a (Task 2b): CreateGraphVehicles' early
-        // return on `!GraphMode()` never fires in practice now (GraphMode()
-        // is unconditional too), so this line always builds the vehicles.
+        // Unconditional as of Phase 5a (Task 2b), and structurally so since
+        // Task 11a: CreateGraphVehicles carried an `if (!GraphMode()) return
+        // true;` early return that never fired, and that guard is now gone
+        // outright -- so this line always builds the vehicles.
         if (!CreateGraphVehicles())
             return 1;
         MainLoop();
