@@ -171,9 +171,44 @@ namespace Arcane
     //     outside SeveranceTest), but it cannot be removed here: the internal
     //     run list IS Batch2DDrawSpan (`using BatchRun = Batch2DDrawSpan`), so
     //     the field and the recorder go together, and the recorder's signatures
-    //     reach into Text/TextSystem and ShaderLibrary -- files Task 9.5 owns.
+    //     reach into ShaderLibrary -- a file Task 9.5 owns. (This entry also
+    //     named Text/TextSystem; those files no longer existed when it was
+    //     written -- b2e85adb had already deleted them. v15 closed the rest.)
     //     It goes there, and it will need its own bump. Reject the pairing.
-    inline constexpr uint32_t kGamePluginABIVersion = 14;
+    // v15 (2026-08-19): NRI Phase 5a, Task 9.5b-ii -- exactly the bump v14's
+    //     closing paragraph above owed. NVRHI LEAVES THE PLUGIN SURFACE
+    //     ENTIRELY: no header a game module compiles includes <nvrhi/...> any
+    //     more, which is what lets Task 10 delete ThirdParty/nvrhi. Three
+    //     independent reasons, each on its own sufficient:
+    //       * BATCH2DDRAWSPAN SHRANK. `nvrhi::ITexture* texture` is deleted
+    //         from the MIDDLE of the struct, so `firstIndex`/`indexCount`/
+    //         `textureId` all move. It is returned BY VALUE across the vtable
+    //         inside Batch2DDrained (a span over an array of them, whose
+    //         ELEMENT STRIDE changed again), so a v14 module reads every field
+    //         of every span after the first at the wrong offset. Precisely the
+    //         v13 failure class (:124-129), running the other direction.
+    //       * SPRITEENTRY SHRANK, AND AT ITS FIRST FIELD. `nvrhi::ITexture*
+    //         texture` was SpriteEntry's leading member (Scene/
+    //         SceneResources.hpp); removing it moves every remaining field,
+    //         and the header-only RenderSubmissionSystem the plugin compiles
+    //         ITSELF reads them out of a map the host filled. Same reasoning
+    //         as the v13 entry's third bullet (:130-134), inverted.
+    //       * THE BATCHER2D VTABLE CHANGED SHAPE, NOT JUST ITS SIGNATURES.
+    //         Six virtuals lost NVRHI parameters (Begin, Quad, QuadMaterial,
+    //         Glyph, QuadTextured, and Create's static factory beside them),
+    //         and `RemoveTexture(nvrhi::ITexture*)` was REMOVED FROM THE
+    //         MIDDLE of the class -- which slides Stats/Drain/MaterialDesc/
+    //         QuadTextured up one slot each. That is the exact hazard the v11
+    //         entry (:96-103) explains and Drain()'s "declared last" comment
+    //         guards against; it is done here deliberately, and it is safe
+    //         ONLY because this gate refuses every pre-v15 module outright.
+    //     Assets also lost SetDevice, both GetTexture overloads and the three
+    //     NVRHI free functions (LoadDisplayTexture/ReadTexturePixels/
+    //     SaveTexturePng), and ShaderLibrary was deleted outright -- all
+    //     callerless, none of them by-value plugin surface, so they add
+    //     nothing to the verdict above. NOTHING SHIPPED between v14 and v15,
+    //     so no compatibility shim is owed. Reject the pairing.
+    inline constexpr uint32_t kGamePluginABIVersion = 15;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

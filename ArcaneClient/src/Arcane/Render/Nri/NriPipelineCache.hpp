@@ -102,7 +102,7 @@ namespace Arcane
 
         struct GraphicsKey
         {
-            // The caller's shader identity: a ShaderLibrary id pair packed
+            // The caller's shader identity: a pair of artifact ids packed
             // into 64 bits, a material hash, whatever the caller uses -- the
             // cache never interprets it, it only compares it. It MUST change
             // whenever the bytecode `fill` would supply changes, or a stale

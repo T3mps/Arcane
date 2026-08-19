@@ -30,12 +30,12 @@
 // shape (and the same reasoning) as NriGraphContext::AssetResolveFn: a RENDER
 // object must not grow a Runtime.
 //
-// THE SRGB RULE is Assets::GetTexture's, mirrored deliberately rather than
-// re-decided: that path uploads `nvrhi::Format::SRGBA8_UNORM` (Assets.cpp's
-// GetTexture), the canvas is LINEAR, and the hardware does the decode -- so a
-// UNORM view here would render the same asset visibly brighter than the NVRHI
-// path and turn a golden compare into a hunt. RGBA8_SRGB is that format's NRI
-// spelling.
+// THE SRGB RULE was inherited from Assets::GetTexture rather than re-decided:
+// that path uploaded `nvrhi::Format::SRGBA8_UNORM`, the canvas is LINEAR, and
+// the hardware does the decode -- so a UNORM view here would render the same
+// asset visibly brighter and turn a golden compare into a hunt. RGBA8_SRGB is
+// that format's NRI spelling. (GetTexture itself was deleted at ABI v15; this
+// cache is the only uploader left, so the rule now lives here alone.)
 //
 // FAILURES ARE MEMOIZED, exactly once each: an entry is inserted BEFORE the
 // first early return, with null members, so an unresolvable or undecodable
@@ -84,10 +84,10 @@ namespace Arcane
         using PixelSupplyFn = std::function<const PixelData*(const Guid&)>;
 
         // ===== WHICH COLOUR SPACE THE VIEW SAMPLES IN (NRI Phase 3, Task 11)
-        // The graph twin of the split the NVRHI side has always had between
-        // Assets::GetTexture and LoadDisplayTexture, and it exists for exactly
-        // the same reason -- the two have DIFFERENT consumers and there is no
-        // format that serves both:
+        // Inherited from the split the NVRHI side had between
+        // Assets::GetTexture and LoadDisplayTexture (both deleted at ABI v15),
+        // and kept for exactly the reason they had it -- the two have
+        // DIFFERENT consumers and there is no format that serves both:
         //
         //   Srgb    -- the SCENE. Uploads RGBA8_SRGB, so the sampler decodes
         //              to linear for the linear canvas and the hardware does

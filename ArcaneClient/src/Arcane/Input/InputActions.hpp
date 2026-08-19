@@ -39,7 +39,7 @@ namespace Arcane
         virtual bool LoadJson(const nlohmann::json& doc) = 0;
 
         // Reads + parses the file. Relative paths resolve against the exe
-        // (ShaderLibrary pattern). False on missing/unreadable/malformed.
+        // (the engine-wide anchor). False on missing/unreadable/malformed.
         virtual bool LoadFile(const std::filesystem::path& path) = 0;
 
         // Evaluates every map's actions from the snapshot. Once per frame,

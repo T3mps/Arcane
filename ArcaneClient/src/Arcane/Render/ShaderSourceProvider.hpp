@@ -4,7 +4,7 @@
 // seam between "who stores shader source" and "who consumes it" (the material
 // template stitcher + the runtime ShaderCompiler, Slice 4). Today it reads
 // loose files under registered root directories (first hit wins; relative
-// roots anchor exe-relative, the ShaderLibrary convention). Later the same
+// roots anchor exe-relative, the engine-wide convention). Later the same
 // signature resolves Guid-addressed sources through the AssetRegistry -- the
 // consumers never learn where source text lives. Deliberately uncached: source
 // files are tiny, a fresh read keeps the hot-reload loop honest, and the

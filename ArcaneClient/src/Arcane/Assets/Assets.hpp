@@ -10,7 +10,6 @@
 #include <Arcane/Assets/ImageIo.hpp>
 #include <Arcane/Project/AssetId.hpp>
 
-#include <nvrhi/nvrhi.h>
 #include <Json.hpp>
 
 #include <cstdint>
@@ -43,23 +42,29 @@ namespace Arcane
         uint64_t byteBudget = 256ull * 1024 * 1024;
     };
 
+    // THE FACADE IS DEVICE-FREE as of ABI v15 (NRI Phase 5a, Task 9.5b-ii).
+    // It used to own a render device and upload textures through it; three
+    // members went when NVRHI did, and each was independently dead first:
+    //   Create(nvrhi::IDevice*, ...) -- every call site tree-wide passed
+    //     nullptr, so the parameter is gone rather than retyped.
+    //   SetDevice(nvrhi::IDevice*)   -- zero callers anywhere, production or
+    //     test. Its last production caller (SpriteDocument's texture preview)
+    //     went at Task 7.
+    //   GetTexture(path)/GetTexture(AssetId) -> nvrhi::TextureHandle -- zero
+    //     PRODUCTION callers; it returned null unconditionally, because the
+    //     guard it opened with (`if (!m_device) return nullptr;`) could never
+    //     fail to fire once no device was ever set.
+    // WHAT REPLACES THE UPLOAD PATH: nothing here. PixelsFor(Guid) below is
+    // the device-free supply, and the graph path's NriTextureCache is what
+    // puts those pixels on a device.
     class ARCANE_API Assets
     {
     public:
-        static std::unique_ptr<Assets> Create(nvrhi::IDevice* device,
-                                              const AssetsDesc& desc = {});
+        static std::unique_ptr<Assets> Create(const AssetsDesc& desc = {});
         virtual ~Assets() = default;
 
-        // Bind (or rebind) the render device used for texture uploads. The facade
-        // may be constructed device-less (headless / before the host creates its
-        // device); the host calls this once the device exists so GetTexture works.
-        // Passing a different (or first) device invalidates any cached textures --
-        // they are bound to the previous device -- and any device-less failures
-        // memoized before a device was available.
-        virtual void SetDevice(nvrhi::IDevice* device) = 0;
-
         // Base directory prepended to RELATIVE paths in the PATH overloads of
-        // GetTexture/GetBytes/GetJson; absolute paths pass through unchanged. The
+        // GetBytes/GetJson; absolute paths pass through unchanged. The
         // host sets this from the open project's game:// mount (project Content/)
         // so loose-file loads resolve under the project instead of exe-relative.
         // Empty (default) == the legacy exe-relative behavior.
@@ -89,25 +94,15 @@ namespace Arcane
             std::function<std::optional<std::filesystem::path>(const AssetId&)>;
         virtual void SetAssetResolver(AssetResolver resolver) = 0;
 
-        // Color texture (sRGB). Null on failure (logged once, memoized). Also
-        // null (no crash) when no render device has been set yet.
-        virtual nvrhi::TextureHandle GetTexture(
-            const std::filesystem::path& path) = 0;
-        virtual nvrhi::TextureHandle GetTexture(const AssetId& id) = 0;
-
-        // Decoded pixels for a texture asset, device-free: no render device is
-        // ever required (null-device legal, unlike GetTexture). Resolves `id`
-        // through the installed AssetResolver exactly like GetTexture(AssetId),
-        // then decodes once and retains the result -- a second call for the
-        // same id is a cache hit, returning the SAME pointer. GetTexture reads
-        // its own upload bytes through this same retained cache, so a prior
-        // GetTexture(AssetId::FromGuid(id)) call makes this a cache hit too
-        // (and vice versa). Null on an invalid/unresolvable id or a decode
-        // failure (logged once, memoized). The returned pointer is owned by
-        // the facade's LRU-budgeted pixel cache (bytes-weighted, beside
-        // GetTexture's texture cache) and is valid only until evicted --
-        // callers that need it to outlive the current call must copy it, not
-        // hold the pointer.
+        // Decoded pixels for a texture asset, device-free -- THE facade's
+        // image supply since ABI v15 removed GetTexture. Resolves `id` through
+        // the installed AssetResolver, then decodes once and retains the
+        // result: a second call for the same id is a cache hit, returning the
+        // SAME pointer. Null on an invalid/unresolvable id or a decode failure
+        // (logged once, memoized). The returned pointer is owned by the
+        // facade's LRU-budgeted pixel cache (bytes-weighted) and is valid only
+        // until evicted -- callers that need it to outlive the current call
+        // must copy it, not hold the pointer.
         virtual const PixelData* PixelsFor(const Guid& id) = 0;
 
         // Raw file bytes (fonts, blobs). Null on failure (memoized).
@@ -123,33 +118,34 @@ namespace Arcane
         virtual AssetStats Stats() const = 0;
     };
 
-    // Load an image file into a DISPLAY-REFERRED (RGBA8_UNORM) texture, for ImGui/UI
-    // where the sampled texel composites DIRECTLY into the display-referred target
-    // (the ImGui backbuffer / a tonemapped viewport output). This is deliberately NOT
-    // Assets::GetTexture, which uploads sRGB (SRGBA8_UNORM) so the sampler yields linear
-    // for the all-linear scene canvas -- feeding that to ImGui double-decodes and reads
-    // too dark. Uncached: the caller owns the returned handle (editor icons/logos are
-    // few and long-lived, so the facade's LRU budget would only get in the way). Relative
-    // paths resolve exe-relative (same anchor as Assets). Null on failure (logged once).
-    //
-    // maxSize (0 = off) caps the larger dimension by a one-pass area-average (box) downscale
-    // BEFORE upload (aspect preserved). The ImGui sampler has no mipmaps, so a large source
-    // drawn small (e.g. a 550px logo at 24px) would alias hard under single-tap bilinear.
-    // Size maxSize to ~2x the on-screen draw size: the area-average removes aliasing, and the
-    // UI's own bilinear then only minifies <=2x (a clean box) -- and it uploads far less VRAM.
-    ARCANE_API nvrhi::TextureHandle LoadDisplayTexture(
-        nvrhi::IDevice* device, const std::filesystem::path& path, uint32_t maxSize = 0);
+    // THE THREE NVRHI FREE FUNCTIONS ARE GONE at ABI v15 (NRI Phase 5a, Task
+    // 9.5b-ii). All three took a device or a texture object, all three had
+    // ZERO callers left, and in each case the CPU half that survives below is
+    // the one both arms already shared:
+    //   LoadDisplayTexture(IDevice*, path, maxSize) -- decoded a UI image and
+    //     uploaded it display-referred (RGBA8_UNORM, not GetTexture's sRGB, so
+    //     ImGui does not double-decode). LoadDisplayPixels is its CPU half and
+    //     the editor's only remaining route (EditorApp's toolbar logo).
+    //   ReadTexturePixels(IDevice*, ITexture*, ...) -- staging copy +
+    //     waitForIdle + map into tight RGBA8. Its last caller was
+    //     SaveTexturePng; the graph path reads its image through
+    //     NriGraphContext::ReadCapture instead.
+    //   SaveTexturePng(IDevice*, ITexture*, path, maxWidth) -- the two above
+    //     joined to WriteThumbnailPngRgba, which is what both arms call now.
+    // RepackStagingToRgba below outlives ReadTexturePixels, its last caller:
+    // it is an exported, unit-tested byte-order contract, and deleting a
+    // tested pure function is not this task's to do.
 
-    // THE CPU HALF OF LoadDisplayTexture (NRI Phase 3, Task 11): the
+    // THE CPU HALF OF THE OLD LoadDisplayTexture (NRI Phase 3, Task 11): the
     // exe-relative resolve, the decode and the maxSize area-average downscale,
-    // with NO device -- the pixels the loader above would have uploaded.
+    // with NO device.
     //
-    // It exists because the graph path has a second uploader and no
-    // nvrhi::IDevice: an editor chrome image (the toolbar logo) reaches the GPU
-    // through NriTextureCache with ColorSpace::Display, which takes its bytes
-    // from a PixelSupplyFn rather than from a file. Same relationship
-    // RepackStagingToRgba has to SaveTexturePng -- one definition of what the
-    // pixels ARE, two ways of getting them onto a device.
+    // It exists because the graph path uploads through a different route: an
+    // editor chrome image (the toolbar logo) reaches the GPU through
+    // NriTextureCache with ColorSpace::Display, which takes its bytes from a
+    // PixelSupplyFn rather than from a file. Same relationship
+    // RepackStagingToRgba has to the PNG writer -- one definition of what the
+    // pixels ARE, independent of how they get onto a device.
     //
     // `out` is left default-constructed (i.e. !Valid()) on any failure, which
     // is WARN-logged, never ERROR (a missing UI image must not trip the GPU
@@ -159,35 +155,24 @@ namespace Arcane
     ARCANE_API bool LoadDisplayPixels(
         const std::filesystem::path& path, uint32_t maxSize, PixelData& out);
 
-    // The CPU half of SaveTexturePng, exported so its byte-order contract is
-    // unit-testable without a device: repack mapped staging rows (rowPitch may
-    // exceed w*4) into a tight RGBA buffer, swizzling when the source rows are
-    // BGRA (the OffscreenCanvas output order) and forcing alpha OPAQUE either
-    // way -- a screenshot is a picture of the screen, and whatever coverage
-    // math left in the target's alpha channel must not punch holes in it.
+    // Repack mapped staging rows (rowPitch may exceed w*4) into a tight RGBA
+    // buffer, swizzling when the source rows are BGRA (the OffscreenCanvas
+    // output order) and forcing alpha OPAQUE either way -- a screenshot is a
+    // picture of the screen, and whatever coverage math left in the target's
+    // alpha channel must not punch holes in it. Exported so that byte-order
+    // contract is unit-testable without a device, which is now the only way it
+    // is exercised: ReadTexturePixels, its one caller, went at ABI v15.
     ARCANE_API void RepackStagingToRgba(
         const unsigned char* src, size_t rowPitch, uint32_t width, uint32_t height,
         bool bgraSource, std::vector<unsigned char>& out);
 
-    // The GPU half of SaveTexturePng, exported for the golden harness:
-    // staging copy + waitForIdle + map + RepackStagingToRgba into tight,
-    // alpha-opaque RGBA8. SYNCHRONOUS -- one deliberate stall, rare-event
-    // callers only, never the frame loop. Accepts BGRA8_UNORM (swizzled) and
-    // RGBA8_UNORM; anything else is refused (WARN). False on any failure.
-    ARCANE_API bool ReadTexturePixels(
-        nvrhi::IDevice* device, nvrhi::ITexture* texture,
-        std::uint32_t& width, std::uint32_t& height,
-        std::vector<unsigned char>& rgba);
-
-    // THE CPU HALF OF SaveTexturePng (NRI Phase 3, Task 11), exported for the
-    // same reason RepackStagingToRgba above is: it is the whole of what
-    // "write this image as a cover thumbnail" MEANS -- the width cap, the
-    // area-average downscale, the opaque-alpha rule and the PNG write -- and
-    // there is now a second producer of the pixels that has no nvrhi::ITexture
-    // to hand over. The graph path reads its image through
-    // NriGraphContext::ReadCapture (already tight, already BGRA-normalized)
-    // and lands here; SaveTexturePng below reads its own and lands here too,
-    // so the two cannot disagree about what a cover is.
+    // THE WHOLE OF "WRITE THIS IMAGE AS A COVER THUMBNAIL" (NRI Phase 3, Task
+    // 11) -- the width cap, the area-average downscale, the opaque-alpha rule
+    // and the PNG write. Exported for the same reason RepackStagingToRgba
+    // above is, and since ABI v15 it is the ONLY cover writer: the graph path
+    // reads its image through NriGraphContext::ReadCapture (already tight,
+    // already BGRA-normalized) and lands here, and the NVRHI arm that used to
+    // land here through SaveTexturePng is deleted.
     //
     // `rgba` is TIGHT RGBA8 (no row padding), `width` x `height`. maxWidth
     // (0 = off) caps the WIDTH -- not the larger dimension, unlike the loader
@@ -198,21 +183,4 @@ namespace Arcane
     ARCANE_API bool WriteThumbnailPngRgba(
         const std::filesystem::path& path, std::uint32_t width, std::uint32_t height,
         std::vector<unsigned char> rgba, uint32_t maxWidth = 0);
-
-    // Save a GPU texture as a PNG on disk -- the writer twin of
-    // LoadDisplayTexture (the editor's Saved/AutoScreenshot.png, which the
-    // Arcane Hub reads as the project's cover thumbnail, rides this).
-    // SYNCHRONOUS: staging copy + waitForIdle + map, the PickBuffer idiom --
-    // one deliberate stall per call, so callers are rare events (a save, a
-    // shutdown), never the frame loop. Accepts BGRA8_UNORM (the tonemapped
-    // OffscreenCanvas output; swizzled) and RGBA8_UNORM; anything else is
-    // refused. maxWidth (0 = off) caps the width via the same area-average
-    // downscale the loader uses (aspect preserved) -- a thumbnail should not
-    // ship megabytes. Parent directories are created. False on any failure,
-    // logged as WARN, never ERROR: a screenshot that cannot be written must
-    // not trip the GPU tests' RenderErrorCount()==0 gate.
-    ARCANE_API bool SaveTexturePng(
-        nvrhi::IDevice* device, nvrhi::ITexture* texture,
-        const std::filesystem::path& path, uint32_t maxWidth = 0);
-
 }

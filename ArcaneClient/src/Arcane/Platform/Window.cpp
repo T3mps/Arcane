@@ -177,7 +177,7 @@ namespace Arcane
             return false;
 
         // Resolve relative paths against the exe dir (not the CWD) so the icon loads
-        // regardless of where the editor is launched from -- matching Assets/ShaderLibrary
+        // regardless of where the editor is launched from -- matching Assets/ShaderPaths
         // and the editor's exe-relative font/data layout. SDL_GetBasePath() is SDL-owned.
         std::filesystem::path resolved = path;
         if (resolved.is_relative())

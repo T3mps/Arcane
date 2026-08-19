@@ -1164,21 +1164,20 @@ namespace Arcane::Editor
         // shader-diagnostics producer only, per DiagLocator::File's callers).
         Arcane::Editor::ShaderEditorDocument* FindByPath(const std::filesystem::path& path);
 
-        // The Arcane logo, shown at the left of the transport toolbar (Unity-style). A
-        // display-referred (UNORM) texture -- NOT Assets::GetTexture's sRGB -- so it
-        // composites correctly through the ImGui backend. Loaded once in Init; passed to
-        // DrawSimTimeToolbar as an ImTextureID (the raw nvrhi::ITexture*). Null if the
-        // image is missing (the toolbar simply omits it). Holds an NVRHI handle, so like
-        // the other render resources it is declared after m_gpu (destructs before the device).
-        nvrhi::TextureHandle m_toolbarLogo;
-        // THE GRAPH ARM'S SAME MARK (NRI Phase 3, Task 11). The handle above
-        // cannot exist without an nvrhi device, so on `--nri-graph` the logo
-        // reaches the GPU the way every other image on that arm does: decoded
-        // device-free (Arcane::LoadDisplayPixels, the CPU half of
-        // LoadDisplayTexture) and uploaded by the CHROME context's
-        // NriTextureCache under a synthetic per-run Guid -- with
-        // ColorSpace::Display, because ImGui draws AFTER the tonemap and an
-        // sRGB view under it decodes a second time and reads dark.
+        // THE ARCANE LOGO shown at the left of the transport toolbar
+        // (Unity-style), decoded device-free (Arcane::LoadDisplayPixels) and
+        // uploaded by the CHROME context's NriTextureCache under a synthetic
+        // per-run Guid -- with ColorSpace::Display, because ImGui draws AFTER
+        // the tonemap and an sRGB view under it decodes a second time and
+        // reads dark.
+        //
+        // An `nvrhi::TextureHandle m_toolbarLogo` sat above these three until
+        // ABI v15 (NRI Phase 5a, Task 9.5b-ii), holding the NVRHI arm's own
+        // copy of the same image. It could only be filled by
+        // LoadDisplayTexture, which needed a device the editor stopped
+        // creating at Task 6, so it was a default-constructed (null) handle
+        // for its whole life and ToolbarLogoTextureId's fallback branch below
+        // always yielded 0.
         //
         // The pixels are RETAINED (rather than decoded on demand) because the
         // cache's supply is a callback it may invoke at any Resolve, and this
@@ -1193,13 +1192,12 @@ namespace Arcane::Editor
         Arcane::Guid      m_graphLogoId;
         Arcane::PixelData m_graphLogoPixels;
         std::uint64_t     m_graphLogoTexture = 0;   // ImTextureID (raw nri::Texture*)
-        // The toolbar's mark for whichever arm is live -- 0 = no mark, which
-        // DrawSimTimeToolbar already treats as "skip it".
+        // The toolbar's mark -- 0 = no mark, which DrawSimTimeToolbar already
+        // treats as "skip it". It chose between two arms until ABI v15; the
+        // NVRHI arm's handle is gone, so the graph one is simply it.
         [[nodiscard]] std::uint64_t ToolbarLogoTextureId() const noexcept
         {
-            return m_graphLogoTexture != 0
-                       ? m_graphLogoTexture
-                       : (std::uint64_t)(std::intptr_t)m_toolbarLogo.Get();
+            return m_graphLogoTexture;
         }
 
         // File -> Open Project (soft-restart). The menu sets menuReq.openProject;

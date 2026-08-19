@@ -23,7 +23,8 @@ namespace Arcane
 {
     namespace
     {
-        // Resolve a path exe-relative when relative -- mirrors ShaderLibrary. Relative
+        // Resolve a path exe-relative when relative -- the engine-wide anchor
+        // (Render/ShaderPaths.hpp carries the shader-side copy). Relative
         // paths anchor to the executable directory so tests pass regardless of CWD.
         std::filesystem::path ExeRelative(const std::filesystem::path& path)
         {
@@ -37,11 +38,11 @@ namespace Arcane
             return path;
         }
 
-        // Read all bytes from a file. Returns empty on any failure (mirrors
-        // ShaderLibrary::ReadFileBytes; kept local -- not exported).
+        // Read all bytes from a file. Returns empty on any failure (kept
+        // local -- not exported).
         // A legitimately empty file is treated as missing and callers memoize
-        // it as a failure -- empty assets are unsupported (matches ShaderLibrary
-        // semantics).
+        // it as a failure -- empty assets are unsupported. (This mirrored
+        // ShaderLibrary::ReadFileBytes, which was deleted at ABI v15.)
         std::vector<uint8_t> ReadFileBytes(const std::filesystem::path& path)
         {
             std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -75,23 +76,9 @@ namespace Arcane
         class AssetsImpl final : public Assets
         {
         public:
-            AssetsImpl(nvrhi::IDevice* device, const AssetsDesc& desc)
-                : m_device(device), m_byteBudget(desc.byteBudget)
+            explicit AssetsImpl(const AssetsDesc& desc)
+                : m_byteBudget(desc.byteBudget)
             {
-            }
-
-            void SetDevice(nvrhi::IDevice* device) override
-            {
-                if (device == m_device)
-                    return;
-                m_device = device;
-                // Cached textures belong to the old device, and any failure
-                // memoized while the device was null (see GetTexture's guard)
-                // was not a real load failure -- drop both so a bound device
-                // gets a clean retry. Bytes/JSON/pixel caches are device-
-                // independent -- PixelsFor's decoded pixels never touch a
-                // device at all, so a device rebind must not evict them.
-                m_textures.Clear();
             }
 
             void SetContentRoot(const std::filesystem::path& root) override
@@ -137,12 +124,6 @@ namespace Arcane
             // with an ifstream, so verbatim IS the convention and this facade was
             // the sole violator of it. See ResolveAssetPath for the other half of
             // the rule (who DOES anchor).
-            nvrhi::TextureHandle GetTexture(const AssetId& id) override
-            {
-                const auto p = ResolveId(id);
-                return p ? TextureForResolved(*p) : nullptr;
-            }
-
             const PixelData* PixelsFor(const Guid& id) override
             {
                 const auto p = ResolveId(AssetId::FromGuid(id));
@@ -166,12 +147,6 @@ namespace Arcane
             // anchor. Both routes converge on the same *Resolved workers below,
             // so a file reached by Guid and the same file reached by path still
             // share ONE cache entry (CacheKey canonicalises both).
-            nvrhi::TextureHandle GetTexture(
-                const std::filesystem::path& path) override
-            {
-                return TextureForResolved(ResolveAssetPath(path));
-            }
-
             BytesPtr GetBytes(const std::filesystem::path& path) override
             {
                 return BytesForResolved(ResolveAssetPath(path));
@@ -186,8 +161,7 @@ namespace Arcane
             {
                 AssetStats s;
                 s.totalBytes = TotalBytes();
-                s.count = (uint32_t)(m_textures.Count() +
-                                     m_bytes.Count() +
+                s.count = (uint32_t)(m_bytes.Count() +
                                      m_json.Count() +
                                      m_pixels.Count());
                 return s;
@@ -199,84 +173,13 @@ namespace Arcane
             // themselves: the anchoring decision is made exactly once, by the
             // caller, which is what makes the id route's "already load-ready"
             // contract structural instead of incidental.
-            nvrhi::TextureHandle TextureForResolved(const std::filesystem::path& resolved)
-            {
-                const std::string key = CacheKey(resolved);
-
-                if (m_textures.Has(key))
-                {
-                    if (m_textures.IsFailure(key))
-                        return nullptr;
-                    return m_textures.Get(key);
-                }
-
-                // CONSUMER of the retained pixel supply: decode itself moved
-                // into PixelsFor (device-free, shared with the graph's own
-                // per-Guid lookups -- a prior PixelsFor(id) or GetTexture call
-                // for this same path is a cache hit here). Runs even with no
-                // device bound yet, so the pixels are ready the moment a
-                // device does bind (SetDevice does not clear m_pixels).
-                const PixelData* pixels = PixelsForResolved(resolved, key);
-                if (!pixels)
-                {
-                    // PixelsForResolved already WARN-logged the specific
-                    // decode failure and memoized it in m_pixels; memoize the
-                    // texture-cache entry too so a repeat GetTexture call
-                    // short-circuits here without even a hash lookup there.
-                    m_textures.PutFailure(key);
-                    return nullptr;
-                }
-
-                // No render device -- and since NRI Phase 5a, Task 9 that is the
-                // ONLY case: deleting Runtime::SetRenderResources removed
-                // SetDevice's last production caller, so this facade is
-                // device-less for its whole life outside tests. Degrade to null
-                // instead of dereferencing a null m_device. Memoize the miss so a
-                // per-frame caller does not restart a warn storm; SetDevice
-                // clears it later (tests still exercise that path).
-                if (!m_device)
-                {
-                    ARC_WARN("Assets: GetTexture before render device set");
-                    m_textures.PutFailure(key);
-                    return nullptr;
-                }
-
-                const uint64_t bytes = (uint64_t)pixels->width * pixels->height * 4;
-                auto texDesc = nvrhi::TextureDesc()
-                    .setWidth(pixels->width)
-                    .setHeight(pixels->height)
-                    .setFormat(nvrhi::Format::SRGBA8_UNORM)
-                    .setInitialState(nvrhi::ResourceStates::ShaderResource)
-                    .setKeepInitialState(true)
-                    .setDebugName(resolved.filename().string().c_str());
-                nvrhi::TextureHandle tex = m_device->createTexture(texDesc);
-                if (!tex)
-                {
-                    ARC_WARN("Assets: createTexture failed for: {}",
-                             resolved.string());
-                    m_textures.PutFailure(key);
-                    return nullptr;
-                }
-
-                // Upload via transient command list -- exact pattern from
-                // Batcher2D::Init (white texel upload). Source bytes come from
-                // the retained pixel cache now, not a fresh stbi_load -- no
-                // matching free here; eviction of the m_pixels entry is the
-                // new reclaim point for this buffer.
-                {
-                    nvrhi::CommandListHandle upload =
-                        m_device->createCommandList();
-                    upload->open();
-                    upload->writeTexture(tex, 0, 0, pixels->rgba.data(),
-                                         (size_t)pixels->width * 4);
-                    upload->close();
-                    m_device->executeCommandList(upload);
-                }
-
-                m_textures.Put(key, tex, bytes);
-                EnforceBudget();
-                return tex;
-            }
+            // TextureForResolved -- the sRGB upload GetTexture rode -- is
+            // deleted at ABI v15 with GetTexture itself. It had reached its
+            // `m_device->createTexture` line exactly never since NRI Phase 5a,
+            // Task 9: that task removed Runtime::SetRenderResources, which was
+            // SetDevice's last production caller, so `if (!m_device)` short-
+            // circuited every call. Its decode half survives untouched as
+            // PixelsForResolved below, which is what it already delegated to.
 
             BytesPtr BytesForResolved(const std::filesystem::path& resolved)
             {
@@ -390,15 +293,15 @@ namespace Arcane
 
             uint64_t TotalBytes() const
             {
-                return m_textures.TotalBytes() +
-                       m_bytes.TotalBytes() +
+                return m_bytes.TotalBytes() +
                        m_json.TotalBytes() +
                        m_pixels.TotalBytes();
             }
 
             // Budget sweep, run after every insert: evict the globally
-            // least-recently-used entry -- across ALL FOUR caches, comparable
-            // via the shared recency clock -- until the facade total is back
+            // least-recently-used entry -- across ALL THREE caches (it was
+            // four until ABI v15 deleted the texture cache with GetTexture),
+            // comparable via the shared recency clock -- until the total is back
             // under budget. Pinned (refcounted) entries are never offered by
             // LeastRecentEvictable and Evict refuses them; memoized failures
             // are ~zero cost and skipped (evicting them frees nothing and
@@ -415,34 +318,28 @@ namespace Arcane
                     std::string key, candKey;
                     uint64_t used = UINT64_MAX, candUsed = 0;
                     int which = -1;
-                    if (m_textures.LeastRecentEvictable(candKey, candUsed) &&
+                    if (m_bytes.LeastRecentEvictable(candKey, candUsed) &&
                         candUsed < used)
                     {
                         key = candKey; used = candUsed; which = 0;
                     }
-                    if (m_bytes.LeastRecentEvictable(candKey, candUsed) &&
+                    if (m_json.LeastRecentEvictable(candKey, candUsed) &&
                         candUsed < used)
                     {
                         key = candKey; used = candUsed; which = 1;
                     }
-                    if (m_json.LeastRecentEvictable(candKey, candUsed) &&
-                        candUsed < used)
-                    {
-                        key = candKey; used = candUsed; which = 2;
-                    }
                     if (m_pixels.LeastRecentEvictable(candKey, candUsed) &&
                         candUsed < used)
                     {
-                        key = candKey; used = candUsed; which = 3;
+                        key = candKey; used = candUsed; which = 2;
                     }
 
                     bool evicted = false;
                     switch (which)
                     {
-                    case 0: evicted = m_textures.Evict(key); break;
-                    case 1: evicted = m_bytes.Evict(key); break;
-                    case 2: evicted = m_json.Evict(key); break;
-                    case 3: evicted = m_pixels.Evict(key); break;
+                    case 0: evicted = m_bytes.Evict(key); break;
+                    case 1: evicted = m_json.Evict(key); break;
+                    case 2: evicted = m_pixels.Evict(key); break;
                     default: break;
                     }
                     if (!evicted)
@@ -536,7 +433,6 @@ namespace Arcane
                 Diagnostics::Publish("assets.unresolved", diags);
             }
 
-            nvrhi::IDevice* m_device;
             uint64_t m_byteBudget;
             std::filesystem::path m_contentRoot;   // empty => exe-relative (legacy)
             AssetResolver m_resolver;              // empty => AssetId loads fail
@@ -550,21 +446,22 @@ namespace Arcane
             // insertion order is the row order the user sees.
             std::vector<Guid> m_unresolvedDiagnosticIds;
 
-            // ONE recency clock across the four caches (declared first: the
+            // ONE recency clock across the three caches (declared first: the
             // caches capture its address) so the budget sweep can compare LRU
             // candidates cross-cache. See AssetCache's shared-clock ctor.
+            // A fourth, AssetCache<nvrhi::TextureHandle> m_textures, went with
+            // GetTexture at ABI v15 -- nothing had inserted into it since NRI
+            // Phase 5a, Task 9.
             uint64_t m_lruClock = 0;
-            AssetCache<nvrhi::TextureHandle>     m_textures{&m_lruClock};
             AssetCache<BytesPtr>                 m_bytes{&m_lruClock};
             AssetCache<JsonPtr>                  m_json{&m_lruClock};
             AssetCache<PixelDataPtr>             m_pixels{&m_lruClock};
         };
     }
 
-    std::unique_ptr<Assets> Assets::Create(nvrhi::IDevice* device,
-                                           const AssetsDesc& desc)
+    std::unique_ptr<Assets> Assets::Create(const AssetsDesc& desc)
     {
-        return std::make_unique<AssetsImpl>(device, desc);
+        return std::make_unique<AssetsImpl>(desc);
     }
 
     namespace
@@ -628,7 +525,7 @@ namespace Arcane
 
         // Optional area-average downscale so the larger dimension fits maxSize (aspect
         // preserved). Callers size maxSize to ~2x the on-screen draw size so
-        // the UI's own bilinear minification stays clean (see LoadDisplayTexture's doc).
+        // the UI's own bilinear minification stays clean (see LoadDisplayPixels' doc).
         if (maxSize > 0 && ((uint32_t)w > maxSize || (uint32_t)h > maxSize))
         {
             int dw, dh;
@@ -650,51 +547,11 @@ namespace Arcane
         return out.Valid();
     }
 
-    nvrhi::TextureHandle LoadDisplayTexture(nvrhi::IDevice* device,
-                                            const std::filesystem::path& path,
-                                            uint32_t maxSize)
-    {
-        if (!device)
-        {
-            ARC_WARN("LoadDisplayTexture: no render device");
-            return nullptr;
-        }
-
-        // The decode + downscale are LoadDisplayPixels' (NRI Phase 3, Task
-        // 11), so the graph path's own uploader and this one cannot disagree
-        // about what the image is. The one behavioural difference from the
-        // pre-split version is that the pixels are always copied into a
-        // std::vector before upload, even when no downscale ran -- the same
-        // buffer the downscale path always used.
-        PixelData pixels;
-        if (!LoadDisplayPixels(path, maxSize, pixels))
-            return nullptr;
-
-        // RGBA8_UNORM, NOT sRGB: the sampled texel goes straight to the display-referred
-        // target (matches the ImGui backend's own font/texture format in ImGuiNvrhi.cpp).
-        auto texDesc = nvrhi::TextureDesc()
-            .setWidth(pixels.width)
-            .setHeight(pixels.height)
-            .setFormat(nvrhi::Format::RGBA8_UNORM)
-            .setInitialState(nvrhi::ResourceStates::ShaderResource)
-            .setKeepInitialState(true)
-            .setDebugName(ExeRelative(path).filename().string().c_str());
-        nvrhi::TextureHandle tex = device->createTexture(texDesc);
-        if (!tex)
-        {
-            ARC_WARN("LoadDisplayTexture: createTexture failed for: {}", path.string());
-            return nullptr;
-        }
-
-        // Transient upload command list -- same pattern as Assets::GetTexture / Batcher2D.
-        nvrhi::CommandListHandle upload = device->createCommandList();
-        upload->open();
-        upload->writeTexture(tex, 0, 0, pixels.rgba.data(), (size_t)pixels.width * 4);
-        upload->close();
-        device->executeCommandList(upload);
-
-        return tex;
-    }
+    // LoadDisplayTexture's body -- LoadDisplayPixels plus an RGBA8_UNORM
+    // createTexture and a transient upload command list -- is deleted at ABI
+    // v15 with its declaration. It had no callers: the editor's toolbar logo,
+    // its last one, moved to LoadDisplayPixels + NriTextureCache at NRI Phase
+    // 3, Task 11.
 
     void RepackStagingToRgba(const unsigned char* src, size_t rowPitch,
                              uint32_t width, uint32_t height, bool bgraSource,
@@ -727,63 +584,11 @@ namespace Arcane
         }
     }
 
-    bool ReadTexturePixels(nvrhi::IDevice* device, nvrhi::ITexture* texture,
-                          std::uint32_t& width, std::uint32_t& height,
-                          std::vector<unsigned char>& rgba)
-    {
-        width = height = 0;
-        rgba.clear();
-        if (!device || !texture)
-        {
-            ARC_WARN("ReadTexturePixels: no device or texture");
-            return false;
-        }
-        const nvrhi::TextureDesc& srcDesc = texture->getDesc();
-        const bool bgra = srcDesc.format == nvrhi::Format::BGRA8_UNORM;
-        if (!bgra && srcDesc.format != nvrhi::Format::RGBA8_UNORM)
-        {
-            ARC_WARN("ReadTexturePixels: unsupported source format");
-            return false;
-        }
-
-        // The PickBuffer idiom: staging copy, execute, waitForIdle, map. One
-        // synchronous stall, owned by a rare event (save/shutdown).
-        auto stagingDesc = nvrhi::TextureDesc()
-            .setWidth(srcDesc.width)
-            .setHeight(srcDesc.height)
-            .setFormat(srcDesc.format)
-            .setDebugName("SaveTexturePngStaging");
-        nvrhi::StagingTextureHandle staging =
-            device->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
-        if (!staging)
-        {
-            ARC_WARN("ReadTexturePixels: createStagingTexture failed");
-            return false;
-        }
-
-        nvrhi::CommandListHandle cl = device->createCommandList();
-        cl->open();
-        cl->copyTexture(staging, nvrhi::TextureSlice(), texture, nvrhi::TextureSlice());
-        cl->close();
-        device->executeCommandList(cl);
-        device->waitForIdle();
-
-        size_t rowPitch = 0;
-        const auto* mapped = static_cast<const unsigned char*>(device->mapStagingTexture(
-            staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
-        if (!mapped)
-        {
-            ARC_WARN("ReadTexturePixels: mapStagingTexture failed");
-            return false;
-        }
-        RepackStagingToRgba(mapped, rowPitch, srcDesc.width, srcDesc.height, bgra, rgba);
-        device->unmapStagingTexture(staging);
-        device->runGarbageCollection();
-
-        width = srcDesc.width;
-        height = srcDesc.height;
-        return true;
-    }
+    // ReadTexturePixels' body -- the PickBuffer idiom (staging copy, execute,
+    // waitForIdle, map) feeding RepackStagingToRgba -- is deleted at ABI v15
+    // with its declaration. Its only caller was SaveTexturePng, deleted with
+    // it; the graph path gets the same bytes from
+    // NriGraphContext::ReadCapture.
 
     bool WriteThumbnailPngRgba(const std::filesystem::path& path,
                                std::uint32_t width, std::uint32_t height,
@@ -801,8 +606,9 @@ namespace Arcane
         // transparent texel back in: a screenshot is a picture of the screen,
         // and whatever coverage math left in the source's alpha channel must
         // not punch holes in it. Byte-identical to RepackStagingToRgba's rule,
-        // which is why SaveTexturePng below can route through here without
-        // changing what it writes.
+        // which is why the NVRHI arm (ReadTexturePixels -> SaveTexturePng,
+        // both deleted at ABI v15) could route through here without changing
+        // what it wrote.
         for (std::size_t i = 3; i < rgba.size(); i += 4)
             rgba[i] = 0xFF;
 
@@ -824,19 +630,10 @@ namespace Arcane
         return WritePngRgba(path, width, height, rgba.data());
     }
 
-    bool SaveTexturePng(nvrhi::IDevice* device, nvrhi::ITexture* texture,
-                        const std::filesystem::path& path, uint32_t maxWidth)
-    {
-        std::uint32_t w = 0, h = 0;
-        std::vector<unsigned char> rgba;
-        if (!ReadTexturePixels(device, texture, w, h, rgba))
-            return false;
-        // The cap, the downscale, the opaque-alpha rule and the write are ONE
-        // definition now, shared with the graph path's capture read (NRI
-        // Phase 3, Task 11). ReadTexturePixels already forced alpha opaque, so
-        // the pass inside is a no-op here -- this writes what it always wrote.
-        return WriteThumbnailPngRgba(path, w, h, std::move(rgba), maxWidth);
-    }
+    // SaveTexturePng -- ReadTexturePixels joined to WriteThumbnailPngRgba --
+    // is deleted at ABI v15 with both its declaration and its GPU half. It had
+    // no callers: the editor's cover-thumbnail write goes straight to
+    // WriteThumbnailPngRgba from the graph capture (EditorApp.cpp).
 
     bool LoadPngRgba(const std::filesystem::path& path,
                      std::uint32_t& width, std::uint32_t& height,

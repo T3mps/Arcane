@@ -63,7 +63,7 @@ TEST_CASE("nri landing: GpuContext's graph flavor builds the device-less half an
     // The data-supply side is fully live on a device-less Batcher2D -- this is
     // what the graph's Batch2DNode drains, and it is why the NVRHI device could
     // be dropped at all (Task 2's severance).
-    gpu->Batch().Begin(nullptr, nullptr, 128, 64);
+    gpu->Batch().Begin(128, 64);
     gpu->Batch().Rect(glm::vec2(0.0f), glm::vec2(16.0f), glm::vec4(1.0f));
     const Arcane::Batch2DDrained drained = gpu->Batch().Drain();
     CHECK(drained.vertices.size() == 4);

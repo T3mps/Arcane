@@ -60,10 +60,10 @@ namespace Arcane
         constexpr std::uint64_t kUploadRingBytesPerFrame = 4ull * 1024 * 1024;
 
         // Where the offline shader artifacts live, relative to the executable.
-        // The SAME literal GpuContext::Create hands ShaderLibrary
-        // (Host/GpuContext.cpp), resolved through the same function -- so a
-        // desk user pointing ARCANE_SHADER_DIR at a live recompile moves both
-        // render paths together instead of comparing two different shaders.
+        // The SAME literal the deleted NVRHI shader loader was handed, and
+        // still resolved through the same function (ShaderPaths::
+        // ResolveFlavorDir) -- so a desk user pointing ARCANE_SHADER_DIR at a
+        // live recompile moves every shader consumer together.
         constexpr const char* kShaderDir = "data/shaders";
 
         // WritePngRgba wants RGBA; NRI resolves the swapchain's channel order

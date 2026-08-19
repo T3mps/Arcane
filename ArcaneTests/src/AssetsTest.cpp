@@ -9,13 +9,16 @@
 // executable can obtain an nvrhi::IDevice at all.
 //
 // COVERAGE LOST, named rather than dropped: nothing now proves a PNG reaches
-// the GPU as an sRGB texture that copies back byte-true, nor that
-// Assets::SetDevice clears the device-less failure memo. The device-LESS half
-// of both facts still stands (the "GetTexture before a render device is set"
-// case below, and the PixelsFor/registry cases); the upload half is a Phase 5b
-// item once an NRI texture-upload test vehicle exists. NriTextureCacheTest.cpp
-// is the nearest graph-side neighbour and covers the cache, not the
-// decode-to-sRGB contract.
+// the GPU as an sRGB texture that copies back byte-true. The upload half is a
+// Phase 5b item once an NRI texture-upload test vehicle exists;
+// NriTextureCacheTest.cpp is the nearest graph-side neighbour and covers the
+// cache, not the decode-to-sRGB contract.
+//
+// The device-LESS half of that fact used to stand here as a
+// "GetTexture before a render device is set" case. ABI v15 (Task 9.5b-ii)
+// deleted Assets::SetDevice and both GetTexture overloads outright, so that
+// case went too -- see where it stood, below. The decode/memo behaviour it
+// leaned on is covered through PixelsFor (AssetsPixelsTest.cpp).
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -72,7 +75,7 @@ TEST_CASE("assets: byte budget evicts least-recently-used entries and stays with
 
     Arcane::AssetsDesc desc;
     desc.byteBudget = 100;
-    auto assets = Arcane::Assets::Create(nullptr, desc);
+    auto assets = Arcane::Assets::Create(desc);
     REQUIRE(assets != nullptr);
 
     auto pa = assets->GetBytes(a);
@@ -110,7 +113,7 @@ TEST_CASE("assets: budget is facade-wide -- a JSON load evicts older bytes entri
 
     Arcane::AssetsDesc desc;
     desc.byteBudget = 100;
-    auto assets = Arcane::Assets::Create(nullptr, desc);
+    auto assets = Arcane::Assets::Create(desc);
     REQUIRE(assets != nullptr);
 
     auto pa = assets->GetBytes(a);
@@ -142,7 +145,7 @@ TEST_CASE("assets: an asset larger than the whole budget is served but not cache
 
     Arcane::AssetsDesc desc;
     desc.byteBudget = 50;
-    auto assets = Arcane::Assets::Create(nullptr, desc);
+    auto assets = Arcane::Assets::Create(desc);
     REQUIRE(assets != nullptr);
 
     // The load succeeds (the caller holds the bytes) but the budget is
@@ -168,7 +171,7 @@ TEST_CASE("assets: memoized failures are ~zero cost and survive the budget sweep
 
     Arcane::AssetsDesc desc;
     desc.byteBudget = 50;
-    auto assets = Arcane::Assets::Create(nullptr, desc);
+    auto assets = Arcane::Assets::Create(desc);
     REQUIRE(assets != nullptr);
 
     CHECK(assets->GetBytes("does/not/exist.bin") == nullptr);  // memoized, 0 bytes
@@ -198,7 +201,7 @@ TEST_CASE("assets: byteBudget 0 opts out of eviction; default is 256 MiB", "[ass
 
     Arcane::AssetsDesc desc;
     desc.byteBudget = 0;                       // unbounded (the legacy contract)
-    auto assets = Arcane::Assets::Create(nullptr, desc);
+    auto assets = Arcane::Assets::Create(desc);
     REQUIRE(assets != nullptr);
 
     auto pa = assets->GetBytes(a);
@@ -215,30 +218,19 @@ TEST_CASE("assets: byteBudget 0 opts out of eviction; default is 256 MiB", "[ass
     std::remove(c.string().c_str());
 }
 
-TEST_CASE("assets: GetTexture before a render device is set returns null (no crash)", "[assets]")
-{
-    // Facade built device-less -- which since NRI Phase 5a, Task 9 is the only
-    // way a HOST ever builds it: deleting Runtime::SetRenderResources removed
-    // Assets::SetDevice's last production caller. This case stopped being the
-    // "before" state and became the steady state.
-    // GetTexture must degrade to null instead of dereferencing a null device.
-    auto assets = Arcane::Assets::Create(nullptr);
-    REQUIRE(assets != nullptr);
-
-    const auto png = WriteTestPng();          // a real, loadable PNG on disk...
-    CHECK(assets->GetTexture(png) == nullptr); // ...still null: no device to upload to
-    CHECK(assets->GetTexture(png) == nullptr); // memoized: second call also null, no retry
-
-    // A missing path is likewise null -- but for a DIFFERENT reason than the
-    // two calls above, and this comment used to have it backwards ("never
-    // reaches stbi_load"). Since NRI Phase 3 Task 1 the DECODE PRECEDES the
-    // device-null check: GetTexture routes through PixelsForResolved first, so
-    // a missing file fails inside LoadPngRgba -- which does call stbi_load and
-    // gets null back -- and never reaches the device gate at all.
-    CHECK(assets->GetTexture("does/not/exist.png") == nullptr);
-
-    std::remove(png.string().c_str());
-}
+// DELETED AT ABI v15 (NRI Phase 5a, Task 9.5b-ii): the case
+// "assets: GetTexture before a render device is set returns null (no crash)"
+// -- 1 REQUIRE + 3 CHECKs. It asserted that a device-less facade degraded
+// GetTexture to null instead of dereferencing a null device, on a real PNG and
+// on a missing path. There is no longer a GetTexture, a device, or a device-
+// less state to be in: Assets is unconditionally device-free, so the property
+// is not merely untested but unstateable.
+//
+// NOTHING IS UNCOVERED BY THIS. What the case really pinned -- that a decode
+// failure is memoized and does not retry-storm -- is pinned directly by
+// AssetsPixelsTest's "PixelsFor on a missing or unresolvable Guid returns null,
+// memoized" and "...whose file fails to decode returns null, memoized", which
+// exercise the same PixelsForResolved memo through the surviving entry point.
 
 TEST_CASE("Assets content-root anchors relative loads", "[assets]")
 {
@@ -249,7 +241,7 @@ TEST_CASE("Assets content-root anchors relative loads", "[assets]")
     fs::create_directories(root, ec);
     std::ofstream(root / "probe.json", std::ios::binary) << R"({"ok":true})";
 
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     assets->SetContentRoot(root);
 
     auto doc = assets->GetJson("probe.json");   // relative -> resolves under root
@@ -275,7 +267,7 @@ TEST_CASE("Assets resolves AssetId loads through the installed resolver", "[asse
     const Arcane::Guid jsonId = Arcane::Guid::Generate();
     const Arcane::Guid binId = Arcane::Guid::Generate();
 
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
 
     SECTION("no resolver installed -> null (one warning, no crash)")
     {
@@ -309,9 +301,9 @@ TEST_CASE("Assets resolves AssetId loads through the installed resolver", "[asse
         CHECK(assets->GetJson(Arcane::AssetId::FromGuid(Arcane::Guid::Generate())) == nullptr);
         CHECK(assets->GetJson(Arcane::AssetId{}) == nullptr);
 
-        // Texture by id without a device: resolves, then degrades to null
-        // exactly like the path overload (no crash headless).
-        CHECK(assets->GetTexture(Arcane::AssetId::FromGuid(binId)) == nullptr);
+        // A fourth CHECK here -- GetTexture(AssetId) degrading to null like the
+        // path overload -- went with GetTexture at ABI v15. The id-routing it
+        // shared with the three above is still covered by them.
     }
 
     SECTION("a real Project's ResolveAsset plugs in as the resolver")
@@ -429,7 +421,7 @@ TEST_CASE("assets: registry-resolved ids are load-ready -- the content root must
     CHECK_FALSE(resolvedPng->is_absolute());
     CHECK(resolvedPng->generic_string() == "Proj/Content/textures/marker.png");
 
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     REQUIRE(assets != nullptr);
     // Exactly Runtime::OpenProject's two calls, in its order.
     assets->SetContentRoot(proj->Root() / "Content");
@@ -458,20 +450,26 @@ TEST_CASE("assets: registry-resolved ids are load-ready -- the content root must
     REQUIRE(byPath != nullptr);
     CHECK(byPath.get() == doc.get());
 
-    // GetTexture(AssetId) proved WITHOUT a device: it decodes through the same
-    // retained pixel supply before it ever needs one, so a fresh facade that has
-    // only ever seen GetTexture must be holding the REAL file's pixels. Overwrite
-    // the file afterwards -- a PixelsFor that still answers 2x2 can only be
-    // serving what GetTexture decoded, and it decoded the right file.
-    auto texAssets = Arcane::Assets::Create(nullptr);
+    // THE ID ROUTE RETAINS WHAT IT DECODED, on a FRESH facade: the first call
+    // resolves through the project and decodes, and a second call for the same
+    // id is served from the retained pixel cache rather than from disk.
+    // Overwrite the file in between -- an answer that is still 2x2 can only be
+    // the retained decode, and it decoded the right file rather than the decoy
+    // at the doubled path.
+    //
+    // The first call was GetTexture(AssetId) until ABI v15, which proved the
+    // same thing one layer up (it decoded through this same supply before it
+    // ever reached its device gate). GetTexture is gone; PixelsFor is the
+    // route that remains, and it is the one that was doing the work.
+    auto texAssets = Arcane::Assets::Create();
     texAssets->SetContentRoot(proj->Root() / "Content");
     texAssets->SetAssetResolver(
         [p = &*proj](const Arcane::AssetId& id) { return p->ResolveAsset(id); });
-    CHECK(texAssets->GetTexture(Arcane::AssetId::FromGuid(*pngId)) == nullptr);   // headless
+    REQUIRE(texAssets->PixelsFor(*pngId) != nullptr);   // first call: resolve + decode
     writePng("Proj/Content/textures/marker.png", 8, 8);
     const Arcane::PixelData* cached = texAssets->PixelsFor(*pngId);
     REQUIRE(cached != nullptr);
-    CHECK(cached->width  == 2u);   // 4 == GetTexture read the decoy; 8 == it re-read disk
+    CHECK(cached->width  == 2u);   // 4 == it read the decoy; 8 == it re-read disk
     CHECK(cached->height == 2u);
 
     fs::current_path(cwdGuard.prev, ec);   // step out of the tree before removing it
@@ -483,7 +481,7 @@ TEST_CASE("assets: RepackStagingToRgba swizzles BGRA, skips row padding, forces 
 {
     // A 2x2 BGRA source with a PADDED row pitch (12 bytes for 8 of pixels) --
     // the shape a mapped staging texture actually has. Per-texel byte order
-    // is [B,G,R,A]. This is the CPU half of SaveTexturePng, exported exactly
+    // is [B,G,R,A]. This was the CPU half of SaveTexturePng, exported exactly
     // so this contract is testable without a device.
     //
     // THIS CASE IS NOW THE ONLY PIN ON THAT BYTE ORDER (NRI Phase 5a, Task

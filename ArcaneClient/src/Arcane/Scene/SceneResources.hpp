@@ -8,8 +8,6 @@
 
 #include <Astra/Entity/Entity.hpp>
 
-#include <nvrhi/nvrhi.h>
-
 #include <glm/glm.hpp>
 
 #include <cmath>
@@ -77,27 +75,28 @@ namespace Arcane
         float            alpha = 0.0f;              // RunLoop::Alpha() in [0,1); host-set each frame
     };
 
-    // One .arcsprite asset, resolved for submission: the GPU texture its source
-    // texture Guid loaded to, plus ComputeSpriteGeom's output (SpriteAsset.hpp)
-    // -- UVs for the pixel sub-rect and the world size in meters -- and the
-    // asset's normalized pivot. Precomputed host-side so RenderSubmissionSystem
-    // never touches the Assets facade or re-derives rect math per frame.
+    // One .arcsprite asset, resolved for submission: the source texture's
+    // asset Guid, plus ComputeSpriteGeom's output (SpriteAsset.hpp) -- UVs for
+    // the pixel sub-rect and the world size in meters -- and the asset's
+    // normalized pivot. Precomputed host-side so RenderSubmissionSystem never
+    // touches the Assets facade or re-derives rect math per frame.
     struct SpriteEntry
     {
-        nvrhi::ITexture* texture = nullptr;      // null = untextured (tint quad)
         glm::vec2 uvMin{0.0f, 0.0f};
         glm::vec2 uvMax{1.0f, 1.0f};
         glm::vec2 sizeMeters{1.0f, 1.0f};
         glm::vec2 pivot{0.5f, 0.5f};
-        // The SOURCE TEXTURE's asset Guid (.arcsprite's `texture` field),
-        // APPENDED at ABI v13 so no field above it moves. It is the
-        // DEVICE-FREE half of the pair above: `texture` is an object on the
-        // engine's NVRHI device and is null whenever no such device exists
-        // (graph mode) or the image is still loading, while this names the
-        // asset either way. RenderSubmissionSystem submits both
-        // (Batcher2D::QuadTextured) so the drained span carries both, and the
-        // NRI recorder -- which cannot use `texture` at all -- resolves this
-        // through NriTextureCache. Nil when the sprite declares no texture.
+        // The SOURCE TEXTURE's asset Guid (.arcsprite's `texture` field), and
+        // since ABI v15 the record's only texture identity. Device-free by
+        // construction: RenderSubmissionSystem hands it to
+        // Batcher2D::QuadTextured, it travels into the drained span, and the
+        // NRI recorder resolves it through NriTextureCache. Nil when the
+        // sprite declares no texture.
+        //
+        // An `nvrhi::ITexture* texture` was the FIRST field here from Task 8
+        // until ABI v15 (NRI Phase 5a, Task 9.5b-ii). SpriteCache stopped
+        // setting it at Task 7 -- residency became NriTextureCache's job -- so
+        // it was null in every entry, and it was deleted rather than retyped.
         Guid textureId{};
     };
 

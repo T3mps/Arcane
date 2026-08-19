@@ -12,8 +12,9 @@
 
 namespace Arcane
 {
-    // Entry-point + profile conventions (ShaderLibrary derives entry names from
-    // the artifact stem suffix: _vs -> vs_main, _ps -> ps_main, _cs -> cs_main).
+    // Entry-point + profile conventions (a shader loader derives entry names
+    // from the artifact stem suffix: _vs -> vs_main, _ps -> ps_main,
+    // _cs -> cs_main).
     inline constexpr const char* kVsEntry = "vs_main";
     inline constexpr const char* kPsEntry = "ps_main";
     inline constexpr const char* kCsEntry = "cs_main";

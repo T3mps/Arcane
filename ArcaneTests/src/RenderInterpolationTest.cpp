@@ -120,12 +120,12 @@ namespace
         glm::vec2 lastRectPos{0.0f, 0.0f};    // top-left origin of the last Rect/Quad
         glm::vec2 lastRectSize{0.0f, 0.0f};
 
-        void Begin(nvrhi::ICommandList*, nvrhi::IFramebuffer*, uint32_t, uint32_t) override {}
+        void Begin(uint32_t, uint32_t) override {}
         void SetLayer(uint16_t, uint16_t) override {}
-        void Quad(glm::vec2 p, glm::vec2 sz, nvrhi::ITexture*, glm::vec2, glm::vec2,
+        void Quad(glm::vec2 p, glm::vec2 sz, glm::vec2, glm::vec2,
                   glm::vec4, float rot) override
         { ++rectCalls; lastRotation = rot; lastRectPos = p; lastRectSize = sz; }
-        void Glyph(glm::vec2, glm::vec2, nvrhi::ITexture*, glm::vec2, glm::vec2,
+        void Glyph(glm::vec2, glm::vec2, glm::vec2, glm::vec2,
                    glm::vec4) override {}
         void Rect(glm::vec2 p, glm::vec2 sz, glm::vec4, float rot) override
         { ++rectCalls; lastRotation = rot; lastRectPos = p; lastRectSize = sz; }
@@ -134,7 +134,6 @@ namespace
         { ++circleCalls; lastCircleCenter = c; }
         void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
         void End() override {}
-        void RemoveTexture(nvrhi::ITexture*) override {}
         Arcane::Batch2DStats Stats() const override { return {}; }
 
         // Center of the last Rect/Quad (Batcher2D quads are top-left origin).

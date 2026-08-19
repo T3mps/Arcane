@@ -61,9 +61,11 @@ namespace Arcane
 
             // The frame batcher registered materials bind into. Null (a
             // headless host or a test) disables material binding; sprite
-            // resolution still works. It also carried the sprite caches'
-            // texture-eviction hook, which went inert at NRI Phase 5a, Task 7
-            // when SpriteEntry stopped naming a device object (SpriteCache.cpp).
+            // resolution still works. It was ALSO forwarded to SpriteCache for
+            // a texture-eviction hook -- that hook went inert at NRI Phase 5a,
+            // Task 7 when SpriteEntry stopped naming a device object, and was
+            // deleted at ABI v15 with Batcher2D::RemoveTexture, so material
+            // binding is the whole of what this field does now.
             Batcher2D* batcher = nullptr;
 
             // Forwarded to both sub-caches as the shader-compile target

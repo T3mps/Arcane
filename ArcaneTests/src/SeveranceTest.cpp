@@ -2,11 +2,14 @@
 // DATA-SUPPLY side no longer needs an NVRHI device.
 //
 // Three producers had a hard device dependency and each one is exercised here
-// with `device == nullptr`:
+// without one. (Two of the three took an explicit `device == nullptr` when this
+// file was written; ABI v15 -- NRI Phase 5a, Task 9.5b-ii -- deleted those
+// parameters outright, so device-free is no longer a mode they are put into but
+// the only shape they have.)
 //
-//   * Batcher2D  -- Create(nullptr, nullptr) builds an instance whose
+//   * Batcher2D  -- Create() builds an instance whose
 //     Begin/SetLayer/Quad*/Drain/RegisterMaterial/MaterialDesc are fully live
-//     and whose End() (the NVRHI recorder) refuses loudly.
+//     and whose End() (once the NVRHI recorder) refuses loudly.
 //   * SpriteMaterialCache -- a real dxc compile lands and Binds against a
 //     device-less batcher: the registration carries the retained BLOBS, which
 //     is what the graph recorder builds its own pipeline from.
@@ -102,19 +105,19 @@ namespace
 // Batcher2D -- the device-less instance
 // =====================================================================
 
-TEST_CASE("severance: Batcher2D::Create(nullptr, nullptr) yields a live, device-less batcher",
+TEST_CASE("severance: Batcher2D::Create() yields a live, device-less batcher",
           "[batcher][severance]")
 {
-    auto batcher = Batcher2D::Create(nullptr, nullptr);
+    auto batcher = Batcher2D::Create();
     REQUIRE(batcher != nullptr);   // NOT null: a missing device is not a failure
 
-    batcher->Begin(nullptr, nullptr, 128, 64);
+    batcher->Begin(128, 64);
     batcher->SetLayer(0, 0);
     batcher->QuadTextured(Batcher2D::kMaterialSprite, kTexA,
-                          glm::vec2(0.0f), glm::vec2(16.0f), /*texture=*/nullptr,
+                          glm::vec2(0.0f), glm::vec2(16.0f),
                           glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
     batcher->QuadTextured(Batcher2D::kMaterialSprite, kTexB,
-                          glm::vec2(16.0f, 0.0f), glm::vec2(16.0f), /*texture=*/nullptr,
+                          glm::vec2(16.0f, 0.0f), glm::vec2(16.0f),
                           glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
     batcher->Rect(glm::vec2(0.0f, 32.0f), glm::vec2(8.0f), glm::vec4(1.0f));
 
@@ -127,14 +130,16 @@ TEST_CASE("severance: Batcher2D::Create(nullptr, nullptr) yields a live, device-
     CHECK(drained.globals != nullptr);
 
     // THE SPAN KEY. Three distinct texture identities (A, B, nil) -> three
-    // runs, even though every `texture` pointer is null: without the Guid in
-    // the split they would have coalesced into ONE run of 18 indices and the
-    // graph recorder would have drawn one image three times.
+    // runs. Without the Guid in the split they would coalesce into ONE run of
+    // 18 indices and the graph recorder would draw one image three times --
+    // which is exactly what the `nvrhi::ITexture*` half of the key would have
+    // produced, since it was null for all three. (That field, and the
+    // `CHECK(span.texture == nullptr)` that stood in this loop, went at ABI
+    // v15.)
     REQUIRE(drained.spans.size() == 3);
     for (const Batch2DDrawSpan& span : drained.spans)
     {
         CHECK(span.material == Batcher2D::kMaterialSprite);
-        CHECK(span.texture == nullptr);   // device-less: there IS no texture object
         CHECK(span.indexCount == 6);
     }
     CHECK(drained.spans[0].textureId == kTexA);
@@ -155,15 +160,15 @@ TEST_CASE("severance: two quads sharing one texture Guid still coalesce into one
     // The other half of the split rule: the Guid must SEPARATE distinct assets
     // without FRAGMENTING a shared one, or every textured sprite would be its
     // own draw call.
-    auto batcher = Batcher2D::Create(nullptr, nullptr);
+    auto batcher = Batcher2D::Create();
     REQUIRE(batcher != nullptr);
 
-    batcher->Begin(nullptr, nullptr, 64, 64);
+    batcher->Begin(64, 64);
     batcher->QuadTextured(Batcher2D::kMaterialSprite, kTexA,
-                          glm::vec2(0.0f), glm::vec2(8.0f), nullptr,
+                          glm::vec2(0.0f), glm::vec2(8.0f),
                           glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
     batcher->QuadTextured(Batcher2D::kMaterialSprite, kTexA,
-                          glm::vec2(8.0f, 0.0f), glm::vec2(8.0f), nullptr,
+                          glm::vec2(8.0f, 0.0f), glm::vec2(8.0f),
                           glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
 
     const Batch2DDrained drained = batcher->Drain();
@@ -177,14 +182,14 @@ TEST_CASE("severance: Quad/Rect/Circle/Glyph record a NIL texture id", "[batcher
     // The plain (pre-Task-2) submission API cannot name an asset, so every one
     // of its spans must read as untextured -- which is what makes the graph
     // recorder bind its white texel for them rather than a stale image.
-    auto batcher = Batcher2D::Create(nullptr, nullptr);
+    auto batcher = Batcher2D::Create();
     REQUIRE(batcher != nullptr);
 
-    batcher->Begin(nullptr, nullptr, 64, 64);
-    batcher->Quad(glm::vec2(0.0f), glm::vec2(4.0f), nullptr,
+    batcher->Begin(64, 64);
+    batcher->Quad(glm::vec2(0.0f), glm::vec2(4.0f),
                   glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
     batcher->Circle(glm::vec2(32.0f), 4.0f, glm::vec4(1.0f));
-    batcher->Glyph(glm::vec2(8.0f), glm::vec2(4.0f), nullptr,
+    batcher->Glyph(glm::vec2(8.0f), glm::vec2(4.0f),
                    glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
     batcher->Line(glm::vec2(0.0f), glm::vec2(16.0f), 2.0f, glm::vec4(1.0f));
     batcher->Triangle(glm::vec2(0.0f), glm::vec2(4.0f, 0.0f), glm::vec2(0.0f, 4.0f),
@@ -199,14 +204,15 @@ TEST_CASE("severance: Quad/Rect/Circle/Glyph record a NIL texture id", "[batcher
 TEST_CASE("severance: a device-less End() records nothing and leaves the batch drainable",
           "[batcher][severance]")
 {
-    auto batcher = Batcher2D::Create(nullptr, nullptr);
+    auto batcher = Batcher2D::Create();
     REQUIRE(batcher != nullptr);
 
-    batcher->Begin(nullptr, nullptr, 64, 64);
+    batcher->Begin(64, 64);
     batcher->Rect(glm::vec2(0.0f), glm::vec2(8.0f), glm::vec4(1.0f));
 
-    // End() IS the NVRHI recorder. It must not touch the null device, and it
-    // must not silently claim to have drawn anything.
+    // End() WAS the NVRHI recorder; since ABI v15 there is no device for it
+    // to touch at all. It must still not silently claim to have drawn
+    // anything.
     batcher->End();
     CHECK(batcher->Stats().drawCalls == 0);
     CHECK(batcher->Stats().quads == 0);
@@ -221,7 +227,7 @@ TEST_CASE("severance: a device-less End() records nothing and leaves the batch d
 TEST_CASE("severance: RegisterMaterial accepts a BYTES-ONLY registration with no device",
           "[batcher][severance]")
 {
-    auto batcher = Batcher2D::Create(nullptr, nullptr);
+    auto batcher = Batcher2D::Create();
     REQUIRE(batcher != nullptr);
 
     auto templ = std::make_shared<MaterialTemplate>(MaterialTemplate::Build(
@@ -298,7 +304,7 @@ TEST_CASE("severance: SpriteMaterialCache binds with a NULL device and publishes
     };
     SpriteMaterialCache cache(std::move(services));
 
-    auto batcher = Batcher2D::Create(nullptr, nullptr);
+    auto batcher = Batcher2D::Create();
     REQUIRE(batcher != nullptr);
 
     cache.Request(data.id, 0.0);

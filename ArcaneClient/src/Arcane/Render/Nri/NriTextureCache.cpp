@@ -172,8 +172,9 @@ namespace Arcane
         nri::TextureDesc textureDesc = {};
         textureDesc.type      = nri::TextureType::TEXTURE_2D;
         textureDesc.usage     = nri::TextureUsageBits::SHADER_RESOURCE;
-        // THE SPACE DECIDES THE FORMAT, and both halves mirror an existing
-        // NVRHI rule rather than being re-decided here (see ColorSpace):
+        // THE SPACE DECIDES THE FORMAT, and both halves were inherited from
+        // the NVRHI rules rather than re-decided here (see ColorSpace; both
+        // sources were deleted at ABI v15):
         //   Srgb    -> Assets::GetTexture's nvrhi::Format::SRGBA8_UNORM. The
         //              canvas is linear and the hardware does the decode, so a
         //              UNORM here would render the same asset visibly brighter

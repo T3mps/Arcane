@@ -39,7 +39,6 @@
 namespace Arcane
 {
     class Assets;
-    class Batcher2D;
 
     class ARCANE_API SpriteCache
     {
@@ -50,10 +49,11 @@ namespace Arcane
         using ResolveAssetFn =
             std::function<std::optional<std::filesystem::path>(const Guid&)>;
 
+        // `Batcher2D* batcher` sat here for the evict-before-release hook;
+        // it went with Batcher2D::RemoveTexture at ABI v15 (see the .cpp).
         struct Services
         {
             Assets*        assets  = nullptr;   // PixelsFor(Guid) -- image dimensions
-            Batcher2D*     batcher = nullptr;   // RemoveTexture on eviction (inert; see the .cpp)
             ResolveAssetFn resolveAsset;        // Guid -> path (project registry)
         };
 
@@ -68,10 +68,10 @@ namespace Arcane
         void Request(const Guid& id);
 
         // Asset re-saved / removed: drop the table entry so the next Request
-        // re-resolves from disk. The keep-alive map this also used to clear is
-        // gone (NRI Phase 5a, Task 7 -- see SpriteCache.cpp), and the
-        // Batcher2D::RemoveTexture eviction it performed first is now inert
-        // because no SpriteEntry carries a texture object any more.
+        // re-resolves from disk. It is now exactly that one erase -- the
+        // keep-alive map it also cleared went at NRI Phase 5a, Task 7, and the
+        // Batcher2D::RemoveTexture eviction it performed first went at ABI v15
+        // (Task 9.5b-ii), because no SpriteEntry carries a texture object.
         void Invalidate(const Guid& id);
 
         // Forget everything (project switch): a Guid resolves through the

@@ -68,27 +68,26 @@ TEST_CASE("QuadCorners: 90 degrees rotates the edges about the center", "[render
 // ============================================================================
 namespace
 {
-    // A stand-in for a GPU texture: the mock only RECORDS the pointer (it never
-    // dereferences it, and neither does RenderSubmissionSystem), so a CPU-only
-    // test can still exercise the TEXTURED arm and its UVs. Not an object --
-    // never dereference this.
-    nvrhi::ITexture* const kFakeTexture =
-        reinterpret_cast<nvrhi::ITexture*>(static_cast<std::uintptr_t>(0xF0F0));
+    // A `nvrhi::ITexture* const kFakeTexture` (the address 0xF0F0, recorded but
+    // never dereferenced) stood here until ABI v15 (NRI Phase 5a, Task
+    // 9.5b-ii), as the stand-in that let a CPU-only test drive the TEXTURED
+    // arm. A sprite is named by asset Guid now, so an ordinary generated Guid
+    // does that job -- and it is the real key rather than a stand-in for one.
 
     // Recording mock: captures the Rect/Quad rotation + the Circle submissions.
     // `rects` keeps the FULL quad geometry per submission (both the untextured
-    // Rect arm and the textured Quad arm land here) so the pivot/size derivation
-    // can be asserted, not just the rotation that flows through it.
+    // Rect arm and the textured QuadTextured arm land here) so the pivot/size
+    // derivation can be asserted, not just the rotation that flows through it.
     struct MockBatcher final : Arcane::Batcher2D
     {
         struct RectRec
         {
-            glm::vec2        pos{0.0f, 0.0f};
-            glm::vec2        size{0.0f, 0.0f};
-            float            rotation = 0.0f;
-            nvrhi::ITexture* texture = nullptr;
-            glm::vec2        uvMin{0.0f, 0.0f};
-            glm::vec2        uvMax{0.0f, 0.0f};
+            glm::vec2    pos{0.0f, 0.0f};
+            glm::vec2    size{0.0f, 0.0f};
+            float        rotation = 0.0f;
+            Arcane::Guid textureId{};        // nil == the untextured arm
+            glm::vec2    uvMin{0.0f, 0.0f};
+            glm::vec2    uvMax{0.0f, 0.0f};
         };
 
         int                  rectCalls = 0;
@@ -98,23 +97,37 @@ namespace
         glm::vec2            lastCircleCenter{0.0f, 0.0f};
         std::vector<RectRec> rects;
 
-        void Begin(nvrhi::ICommandList*, nvrhi::IFramebuffer*, uint32_t, uint32_t) override {}
+        void Begin(uint32_t, uint32_t) override {}
         void SetLayer(uint16_t, uint16_t) override {}
-        void Quad(glm::vec2 pos, glm::vec2 size, nvrhi::ITexture* texture,
+        void Quad(glm::vec2 pos, glm::vec2 size,
                   glm::vec2 uvMin, glm::vec2 uvMax,
                   glm::vec4, float rotation) override
         {
             ++rectCalls;
             lastRotation = rotation;
-            rects.push_back(RectRec{pos, size, rotation, texture, uvMin, uvMax});
+            rects.push_back(RectRec{pos, size, rotation, Arcane::Guid::Nil(),
+                                    uvMin, uvMax});
         }
-        void Glyph(glm::vec2, glm::vec2, nvrhi::ITexture*, glm::vec2, glm::vec2,
+        // THE IDENTITY-CARRYING SUBMISSION -- what RenderSubmissionSystem's
+        // textured arm actually calls. Overridden rather than left to the
+        // interface default (which forwards to Quad and drops the Guid on the
+        // floor), so a case can assert WHICH asset the draw named.
+        void QuadTextured(uint16_t, const Arcane::Guid& textureId,
+                          glm::vec2 pos, glm::vec2 size,
+                          glm::vec2 uvMin, glm::vec2 uvMax,
+                          glm::vec4, float rotation) override
+        {
+            ++rectCalls;
+            lastRotation = rotation;
+            rects.push_back(RectRec{pos, size, rotation, textureId, uvMin, uvMax});
+        }
+        void Glyph(glm::vec2, glm::vec2, glm::vec2, glm::vec2,
                    glm::vec4) override {}
         void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4, float rotation) override
         {
             ++rectCalls;
             lastRotation = rotation;
-            rects.push_back(RectRec{pos, size, rotation, nullptr,
+            rects.push_back(RectRec{pos, size, rotation, Arcane::Guid::Nil(),
                                     glm::vec2(0.0f), glm::vec2(1.0f)});
         }
         void Line(glm::vec2, glm::vec2, float, glm::vec4) override {}
@@ -126,7 +139,6 @@ namespace
         }
         void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
         void End() override {}
-        void RemoveTexture(nvrhi::ITexture*) override {}
         Arcane::Batch2DStats Stats() const override { return {}; }
     };
 
@@ -226,7 +238,8 @@ TEST_CASE("Sprite with a resolved SpriteTable entry uses derived size and UVs",
     std::unordered_map<Arcane::Guid, Arcane::SpriteEntry> table;
     const auto gid = Arcane::Guid::Generate();
     Arcane::SpriteEntry e;
-    e.texture    = kFakeTexture;          // textured arm: UVs must reach the draw
+    const auto texId = Arcane::Guid::Generate();
+    e.textureId  = texId;                 // textured arm: UVs must reach the draw
     e.sizeMeters = glm::vec2(2.0f, 0.5f); // e.g. a 200x50 px sub-rect at ppu 100
     e.uvMin      = glm::vec2(0.25f, 0.5f);
     e.uvMax      = glm::vec2(0.75f, 1.0f);
@@ -250,7 +263,7 @@ TEST_CASE("Sprite with a resolved SpriteTable entry uses derived size and UVs",
 
     REQUIRE(batcher.rects.size() == 1);
     CHECK(batcher.rects[0].size == glm::vec2(6.0f, 2.0f));
-    CHECK(batcher.rects[0].texture == kFakeTexture);
+    CHECK(batcher.rects[0].textureId == texId);
     CHECK(batcher.rects[0].uvMin == glm::vec2(0.25f, 0.5f));
     CHECK(batcher.rects[0].uvMax == glm::vec2(0.75f, 1.0f));
 }

@@ -33,18 +33,17 @@ namespace
     struct CountingBatcher final : Arcane::Batcher2D
     {
         int rects = 0;
-        void Begin(nvrhi::ICommandList*, nvrhi::IFramebuffer*, uint32_t, uint32_t) override {}
+        void Begin(uint32_t, uint32_t) override {}
         void SetLayer(uint16_t, uint16_t) override {}
-        void Quad(glm::vec2, glm::vec2, nvrhi::ITexture*, glm::vec2, glm::vec2,
+        void Quad(glm::vec2, glm::vec2, glm::vec2, glm::vec2,
                   glm::vec4, float) override { ++rects; }
-        void Glyph(glm::vec2, glm::vec2, nvrhi::ITexture*, glm::vec2, glm::vec2,
+        void Glyph(glm::vec2, glm::vec2, glm::vec2, glm::vec2,
                    glm::vec4) override {}
         void Rect(glm::vec2, glm::vec2, glm::vec4, float) override { ++rects; }
         void Line(glm::vec2, glm::vec2, float, glm::vec4) override {}
         void Circle(glm::vec2, float, glm::vec4) override {}
         void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
         void End() override {}
-        void RemoveTexture(nvrhi::ITexture*) override {}
         Arcane::Batch2DStats Stats() const override { return {}; }
     };
 }

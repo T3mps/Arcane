@@ -1,9 +1,9 @@
-// PixelsFor: the device-free decoded-pixel supply (NRI Phase 3, Task 1).
-// Retained, LRU-budgeted beside the texture cache, keyed by the resolved
-// Guid -> path exactly like GetTexture(AssetId): decode-once, cache-hit on
-// repeat access, memoized failure on a bad/unresolvable id or a corrupt
-// file. Headless throughout -- Assets::Create(nullptr): PixelsFor never
-// needs a render device (that is the entire point of this seam).
+// PixelsFor: the device-free decoded-pixel supply (NRI Phase 3, Task 1), and
+// since ABI v15 the facade's ONLY image route. Retained, LRU-budgeted beside
+// the bytes/json caches, keyed by the resolved Guid -> path: decode-once,
+// cache-hit on repeat access, memoized failure on a bad/unresolvable id or a
+// corrupt file. Headless throughout -- Assets::Create() takes no device and
+// PixelsFor never needed one (that is the entire point of this seam).
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -78,7 +78,7 @@ TEST_CASE("assets: PixelsFor decodes a fixture PNG to the exact byte pattern", "
     const auto png = WriteCheckerPng("arcane-assets-pixels-exact.png");
     const Arcane::Guid id = Arcane::Guid::Generate();
 
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     REQUIRE(assets != nullptr);
     assets->SetAssetResolver(OneShotResolver(id, png));
 
@@ -98,7 +98,7 @@ TEST_CASE("assets: PixelsFor is a cache hit -- the second call returns the same 
     const auto png = WriteCheckerPng("arcane-assets-pixels-cachehit.png");
     const Arcane::Guid id = Arcane::Guid::Generate();
 
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     assets->SetAssetResolver(OneShotResolver(id, png));
 
     const Arcane::PixelData* first = assets->PixelsFor(id);
@@ -112,7 +112,7 @@ TEST_CASE("assets: PixelsFor is a cache hit -- the second call returns the same 
 TEST_CASE("assets: PixelsFor on a missing or unresolvable Guid returns null, memoized",
           "[assets][pixels]")
 {
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     REQUIRE(assets != nullptr);
 
     // No resolver installed at all: every id fails, warn-once per id.
@@ -152,7 +152,7 @@ TEST_CASE("assets: PixelsFor on a resolvable Guid whose file fails to decode ret
     { std::ofstream f(junk, std::ios::binary); f << "not a png at all"; }
 
     const Arcane::Guid id = Arcane::Guid::Generate();
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     assets->SetAssetResolver(OneShotResolver(id, junk));
 
     CHECK(assets->PixelsFor(id) == nullptr);
@@ -179,7 +179,7 @@ TEST_CASE("assets: PixelsFor budget evicts least-recently-used pixel entries",
 
     Arcane::AssetsDesc desc;
     desc.byteBudget = 280;   // two 128-byte entries fit (256); three do not (384)
-    auto assets = Arcane::Assets::Create(nullptr, desc);
+    auto assets = Arcane::Assets::Create(desc);
     REQUIRE(assets != nullptr);
     assets->SetAssetResolver(
         [&](const Arcane::AssetId& id) -> std::optional<fs::path>

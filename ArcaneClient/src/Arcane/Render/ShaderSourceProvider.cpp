@@ -12,7 +12,7 @@ namespace Arcane
 {
     namespace
     {
-        // Mirrors the Assets/ShaderLibrary anchor: relative paths resolve against
+        // Mirrors the Assets/ShaderPaths anchor: relative paths resolve against
         // the executable directory so lookups work regardless of CWD.
         std::filesystem::path ExeRelative(const std::filesystem::path& path)
         {

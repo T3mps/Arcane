@@ -75,7 +75,7 @@ TEST_CASE("AudioDevice null backend lifecycle and controls", "[audio]")
     using namespace Arcane::Audio;
 
     AudioDevice audio;
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     AudioDeviceDesc desc;
     desc.enableDevice = false;
 
@@ -94,7 +94,7 @@ TEST_CASE("AudioDevice null backend sound bus voice handles", "[audio]")
     using namespace Arcane::Audio;
 
     AudioDevice audio;
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     AudioDeviceDesc deviceDesc;
     deviceDesc.enableDevice = false;
     REQUIRE(audio.Init(assets.get(), deviceDesc));
@@ -152,7 +152,7 @@ TEST_CASE("AudioDevice keeps two simultaneous voices valid (stable-address pools
     using namespace Arcane::Audio;
 
     AudioDevice audio;
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     AudioDeviceDesc deviceDesc;
     deviceDesc.enableDevice = false;
     REQUIRE(audio.Init(assets.get(), deviceDesc));
@@ -201,7 +201,7 @@ TEST_CASE("AudioDevice supports multiple buses and a parent/child hierarchy", "[
     using namespace Arcane::Audio;
 
     AudioDevice audio;
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     AudioDeviceDesc deviceDesc;
     deviceDesc.enableDevice = false;
     REQUIRE(audio.Init(assets.get(), deviceDesc));
@@ -245,7 +245,7 @@ TEST_CASE("AudioDevice bumps generation so a freed-then-reused voice handle is s
     using namespace Arcane::Audio;
 
     AudioDevice audio;
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     AudioDeviceDesc deviceDesc;
     deviceDesc.enableDevice = false;
     REQUIRE(audio.Init(assets.get(), deviceDesc));
@@ -279,7 +279,7 @@ TEST_CASE("AudioDevice reclaims finished one-shot voices; keeps looping ones", "
     using namespace Arcane::Audio;
 
     AudioDevice audio;
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     AudioDeviceDesc deviceDesc;
     deviceDesc.enableDevice = false;   // null backend: Update pumps audio time for us
     REQUIRE(audio.Init(assets.get(), deviceDesc));
@@ -321,7 +321,7 @@ TEST_CASE("AudioDevice load failure returns an invalid handle without crashing",
     using namespace Arcane::Audio;
 
     AudioDevice audio;
-    auto assets = Arcane::Assets::Create(nullptr);
+    auto assets = Arcane::Assets::Create();
     AudioDeviceDesc deviceDesc;
     deviceDesc.enableDevice = false;
     REQUIRE(audio.Init(assets.get(), deviceDesc));

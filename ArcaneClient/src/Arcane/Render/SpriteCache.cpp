@@ -2,7 +2,6 @@
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>
 
 #include <utility>
@@ -10,12 +9,13 @@
 namespace Arcane
 {
     // THE KEEP-ALIVE MAP IS GONE (NRI Phase 5a, Task 7). A second map held a
-    // reference to every resolved GPU texture, because SpriteEntry::texture is
+    // reference to every resolved GPU texture, because SpriteEntry::texture was
     // a BARE pointer and the Assets facade's own LRU could evict the last
     // reference out from under it. Residency is NriTextureCache's job
-    // exclusively now -- it keys off SpriteEntry::textureId, the device-free
-    // half of the pair -- so there is no engine-side GPU texture for this cache
-    // to pin. See Request() for why nothing fills `texture` any more.
+    // exclusively now -- it keys off SpriteEntry::textureId -- so there is no
+    // engine-side GPU texture for this cache to pin. `texture` itself was
+    // deleted from SpriteEntry at ABI v15 (Task 9.5b-ii), which is why this
+    // file no longer includes Batcher2D.hpp at all.
     struct SpriteCache::Impl
     {
         Services services;
@@ -111,16 +111,15 @@ namespace Arcane
             }
         }
 
-        // NOTHING RESOLVES entry.texture ANY MORE (NRI Phase 5a, Task 7). It
-        // used to hold an Assets::GetTexture result, pinned alive by a
-        // second map in Impl. Both are gone together: the pointer names an
-        // object on an engine-owned NVRHI device, no such device is created in
-        // any configuration, and GetTexture accordingly returns null for every
-        // sprite (Assets.cpp: "No render device yet ... degrade to null"). The
-        // field stays null, which is what it already was at runtime, and
+        // THERE IS NO entry.texture TO RESOLVE (deleted at ABI v15, Task
+        // 9.5b-ii; nothing had filled it since NRI Phase 5a, Task 7). It held
+        // an Assets::GetTexture result pinned alive by a second map in Impl:
+        // the pointer named an object on an engine-owned NVRHI device, no such
+        // device is created in any configuration, and GetTexture accordingly
+        // returned null for every sprite -- so GetTexture, the map, the field
+        // and the PixelsFor/GetTexture dimension cross-check are all gone.
         // `entry.textureId` above is what the graph path resolves through
-        // NriTextureCache. The PixelsFor/GetTexture dimension cross-check went
-        // with it -- there is no second dimension source left to disagree.
+        // NriTextureCache, and PixelsFor is the one dimension source.
         const ResolvedSpriteGeom g = ComputeSpriteGeom(*data, texWidth, texHeight);
         entry.uvMin = g.uvMin;
         entry.uvMax = g.uvMax;
@@ -129,30 +128,20 @@ namespace Arcane
         m_impl->table.emplace(id, entry);
     }
 
-    // THE EVICT-BEFORE-RELEASE HOOK BELOW IS INERT, and stated rather than
-    // quietly left to look live: `entry.texture` is never set any more (see
-    // Request), so the guard never passes and Batcher2D::RemoveTexture is never
-    // called from here. It is kept, rather than torn out with the map it
-    // guarded, because RemoveTexture is a Batcher2D vtable slot and removing
-    // that whole NVRHI surface is a plugin-ABI change this task is fenced out
-    // of. When it goes, these two guards go with it.
+    // THE EVICT-BEFORE-RELEASE HOOK IS GONE (NRI Phase 5a, Task 9.5b-ii, ABI
+    // v15), which is what the previous task's comment here promised would
+    // happen "when RemoveTexture goes". Both guards were already inert --
+    // `entry.texture` had not been set since Task 7 -- and all four pieces
+    // (the field, the two guards, Batcher2D::RemoveTexture and the
+    // binding-set cache it swept) were deleted together. `Services::batcher`
+    // went with them: nothing else in this file ever used it.
     void SpriteCache::Invalidate(const Guid& id)
     {
-        const auto it = m_impl->table.find(id);
-        if (it != m_impl->table.end())
-        {
-            if (it->second.texture && m_impl->services.batcher)
-                m_impl->services.batcher->RemoveTexture(it->second.texture);
-            m_impl->table.erase(it);
-        }
+        m_impl->table.erase(id);
     }
 
     void SpriteCache::Clear()
     {
-        if (m_impl->services.batcher)
-            for (const auto& [id, entry] : m_impl->table)
-                if (entry.texture)
-                    m_impl->services.batcher->RemoveTexture(entry.texture);
         m_impl->table.clear();
     }
 }

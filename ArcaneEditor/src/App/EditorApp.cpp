@@ -1287,7 +1287,7 @@ namespace Arcane::Editor
         // safe at either call site: phase 10's own frame already drained this
         // batcher, and the next frame's phase 10 re-Begins it again.
         Arcane::Batcher2D& b = m_gpu->Batch();
-        b.Begin(nullptr, nullptr, graph->SurfaceWidth(), graph->SurfaceHeight());
+        b.Begin(graph->SurfaceWidth(), graph->SurfaceHeight());
         SubmitSceneToBatcher(b);
 
         const Arcane::GlobalParams globals =
@@ -1563,10 +1563,11 @@ namespace Arcane::Editor
             chromeNode->AdoptImGuiContext(m_editorImguiContext);
 
         // ===== THE TOOLBAR MARK, ON THIS ARM (NRI Phase 3, Task 11) =========
-        // StageEditorShell skips LoadDisplayTexture here (no nvrhi device), so
+        // StageEditorShell had no nvrhi device to upload the logo through, so
         // the logo took the "missing PNG" path and the toolbar showed no mark.
         // The graph route is the one the plan names: the CHROME context's
-        // NriTextureCache, which is the only uploader on this arm.
+        // NriTextureCache, which is the only uploader there is (the NVRHI
+        // loader it replaced, LoadDisplayTexture, went at ABI v15).
         //
         // A SYNTHETIC PER-RUN GUID, because this image is not a project asset
         // -- it is a file beside the exe -- and the cache's whole vocabulary is

@@ -7,6 +7,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-// The writer twin (Assets::SaveTexturePng rides it). Same one-TU rule.
+// The writer twin (WritePngRgba / WriteThumbnailPngRgba ride it). Same
+// one-TU rule.
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>

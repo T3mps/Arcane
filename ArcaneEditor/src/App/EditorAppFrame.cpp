@@ -1341,7 +1341,7 @@ namespace Arcane::Editor
             const std::uint32_t h = ViewportHeight();
 
             Arcane::Batcher2D& b = m_gpu->Batch();
-            b.Begin(nullptr, nullptr, w, h);
+            b.Begin(w, h);
             SubmitSceneToBatcher(b);
 
             // Copied, not borrowed, by FrameDesc -- but the local has to

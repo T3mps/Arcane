@@ -3,11 +3,13 @@
 // rules about what an image IS had to stop living inside functions that take
 // one.
 //
-//   LoadDisplayPixels      -- the CPU half of LoadDisplayTexture (exe-relative
+//   LoadDisplayPixels      -- once the CPU half of LoadDisplayTexture, and the
+//                             whole of it since ABI v15 (exe-relative
 //                             resolve + decode + maxSize area-average
 //                             downscale). Feeds the editor's toolbar logo into
 //                             NriTextureCache's PixelSupplyFn on the graph arm.
-//   WriteThumbnailPngRgba  -- the CPU half of SaveTexturePng (opaque alpha +
+//   WriteThumbnailPngRgba  -- once the CPU half of SaveTexturePng, and the
+//                             whole of it since ABI v15 (opaque alpha +
 //                             width cap + downscale + write). The graph arm's
 //                             auto-screenshot reads its pixels through
 //                             NriGraphContext::ReadCapture and lands here; the

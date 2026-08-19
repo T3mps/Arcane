@@ -138,16 +138,18 @@ namespace Arcane
                 case SpriteShape::Rect:
                 default:
                 {
-                    // Texture + UVs come from the resolved sprite asset (its
-                    // pixel sub-rect, normalized by ComputeSpriteGeom). No
-                    // asset, or an asset whose source texture is nil / not
-                    // loaded yet: null texture and the full-range UVs a
+                    // Texture identity + UVs come from the resolved sprite
+                    // asset (its pixel sub-rect, normalized by
+                    // ComputeSpriteGeom). No asset, or an asset whose source
+                    // texture is nil: a nil Guid and the full-range UVs a
                     // full-texture sprite would have anyway.
-                    nvrhi::ITexture* tex = entry ? entry->texture : nullptr;
-                    // The DEVICE-FREE twin of `tex` (ABI v13). In graph mode
-                    // there is no NVRHI device, so `tex` is null for EVERY
-                    // sprite and can no longer distinguish "untextured" from
-                    // "textured on a device that does not exist" -- this can.
+                    //
+                    // An `nvrhi::ITexture* tex` was read from the same entry
+                    // and passed alongside until ABI v15 (NRI Phase 5a, Task
+                    // 9.5b-ii). It was null for EVERY sprite -- no NVRHI
+                    // device is created in any configuration -- so it could
+                    // not tell "untextured" from "textured on a device that
+                    // does not exist". The Guid can, and is now the only key.
                     const Guid texId = entry ? entry->textureId : Guid::Nil();
                     const glm::vec2 uvMin = entry ? entry->uvMin : glm::vec2(0.0f, 0.0f);
                     const glm::vec2 uvMax = entry ? entry->uvMax : glm::vec2(1.0f, 1.0f);
@@ -158,20 +160,20 @@ namespace Arcane
                     const uint16_t materialId =
                         materials && sprite.material.IsValid()
                             ? materials->Resolve(sprite.material) : 0;
-                    // QuadTextured IS QuadMaterial plus the identity: with a
-                    // device present it records exactly the quad the two calls
-                    // it replaces recorded (same material, same texture object,
-                    // same vertices), which is what keeps the NVRHI floor
-                    // bit-green. The three-way branch is unchanged except that
-                    // the textured arm now also fires when only the Guid
-                    // survives -- the graph-mode case.
+                    // QuadTextured IS QuadMaterial plus the identity: same
+                    // material, same vertices, one Guid more. The three-way
+                    // branch is by (has material, has image): a registered
+                    // material always goes through the material arm, a bare
+                    // image through the built-in sprite arm, and a sprite that
+                    // names neither falls back to a tint Rect so it still
+                    // draws.
                     if (materialId != 0)
-                        ctx->batcher->QuadTextured(materialId, texId, dstPos, dstSize, tex,
+                        ctx->batcher->QuadTextured(materialId, texId, dstPos, dstSize,
                                                    uvMin, uvMax,
                                                    sprite.tint, worldRot);
-                    else if (tex || texId.IsValid())
+                    else if (texId.IsValid())
                         ctx->batcher->QuadTextured(Batcher2D::kMaterialSprite, texId,
-                                                   dstPos, dstSize, tex,
+                                                   dstPos, dstSize,
                                                    uvMin, uvMax,
                                                    sprite.tint, worldRot);
                     else

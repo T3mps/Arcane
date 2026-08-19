@@ -243,9 +243,10 @@ TEST_CASE("nri texture cache: Release BURIES its objects rather than destroying 
 // ===================================================================
 // COLOUR SPACE (NRI Phase 3, Task 11)
 // ===================================================================
-// The graph twin of the NVRHI split between Assets::GetTexture (sRGB, for the
+// Inherited from the NVRHI split between Assets::GetTexture (sRGB, for the
 // linear scene canvas) and LoadDisplayTexture (UNORM, for ImGui's
-// display-referred target). The cache now keys on (Guid, space), and these
+// display-referred target) -- both deleted at ABI v15, leaving this cache the
+// only place the distinction lives. It keys on (Guid, space), and these
 // cases pin the two properties that has to have: the DEFAULT is unchanged
 // (every scene caller keeps sRGB without asking), and the two spaces are
 // genuinely SEPARATE residents rather than one entry serving both.

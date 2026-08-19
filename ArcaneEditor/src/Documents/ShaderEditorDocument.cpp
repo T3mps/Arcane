@@ -1501,12 +1501,13 @@ namespace Arcane::Editor
                 });
         }
 
-        // The document's OWN recorder. Device-less by construction (Task 2's
-        // Create(nullptr, nullptr)), and owned rather than borrowed from the
+        // The document's OWN recorder -- owned rather than borrowed from the
         // editor: this frame is declared from Tick (phase 13), long after
         // phase 10 drained the editor's scene batcher, and two owners of one
-        // batcher is how two frames' content merges into one.
-        m_graphBatch = Arcane::Batcher2D::Create(nullptr, nullptr);
+        // batcher is how two frames' content merges into one. (Create took a
+        // device + ShaderLibrary pair it was only ever passed nulls for; both
+        // parameters went at ABI v15.)
+        m_graphBatch = Arcane::Batcher2D::Create();
         if (!m_graphBatch)
             ARC_WARN("ShaderEditorDocument '{}': the graph preview batcher could not be created",
                      m_title);
@@ -1595,11 +1596,10 @@ namespace Arcane::Editor
         globals.viewportHeight = static_cast<float>(kGraphPreviewSize);
 
         Arcane::Batcher2D& b = *m_graphBatch;
-        // Null command list + null framebuffer say "record nothing" -- the same
-        // two nulls EditorApp::RenderSceneToViewport passes, and the only legal
-        // pair for a device-less batcher (every recording use is inside End(),
-        // which the NODE drains rather than this code calling).
-        b.Begin(nullptr, nullptr, kGraphPreviewSize, kGraphPreviewSize);
+        // Extent only, since ABI v15: the null command list + null framebuffer
+        // that used to lead Begin were read by End() alone, and the NODE
+        // drains this batch rather than this code calling End().
+        b.Begin(kGraphPreviewSize, kGraphPreviewSize);
         // AFTER Begin, matching SubmitSceneToBatcher's own SetGlobals call --
         // so a future change to what Begin resets cannot silently drop this.
         // (Before NRI Phase 5a, Task 4 deleted it, Tick's NVRHI arm matched
@@ -1623,7 +1623,7 @@ namespace Arcane::Editor
             const float s = 0.8f * extent;
             b.QuadMaterial(m_graphSpriteMaterial,
                            glm::vec2((extent - s) * 0.5f, (extent - s) * 0.5f),
-                           glm::vec2(s, s), nullptr,
+                           glm::vec2(s, s),
                            glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
         }
 

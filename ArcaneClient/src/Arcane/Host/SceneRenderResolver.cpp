@@ -78,9 +78,10 @@ namespace Arcane
         Assets* assets = m_impl->services.runtime
                        ? &m_impl->services.runtime->AssetsFacade() : nullptr;
 
+        // No batcher forward: SpriteCache::Services lost its `batcher` at ABI
+        // v15 with Batcher2D::RemoveTexture, the only thing it fed.
         SpriteCache::Services spriteServices;
         spriteServices.assets       = assets;
-        spriteServices.batcher      = m_impl->services.batcher;
         spriteServices.resolveAsset = resolveAsset;
         m_impl->sprites = std::make_unique<SpriteCache>(std::move(spriteServices));
 

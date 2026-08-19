@@ -11,7 +11,7 @@
 #include "RuntimeFrame.hpp"
 #include "RuntimeApp.hpp"   // FrameIo::app.PushSceneCamera -- see that method's comment
 
-#include <Arcane/Assets/Assets.hpp>       // Arcane::ReadTexturePixels (CaptureTail)
+#include <Arcane/Assets/Assets.hpp>       // Arcane::WritePngRgba (CaptureTail's screenshot write), reached via Assets.hpp -> ImageIo.hpp. ReadTexturePixels was the old justification here; it was deleted at ABI v15.
 #include <Arcane/Audio/AudioDevice.hpp>   // complete type for AudioSystem().Update (AdvanceSim's voice reap)
 #include <Arcane/Base/Assert.hpp>         // ARC_ASSERT (FrameExtent's io.graph invariant)
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (PumpAndResize)
@@ -290,12 +290,12 @@ void PrepareFrame(FrameIo& io)
 // passed here.
 //
 // The plugin's RENDER submission runs on BOTH paths as of Task 8: the
-// batcher is Begin()'d with no command list (nothing is recorded into
-// NVRHI here), SubmitRender fills it exactly as it does above, and the
-// graph's Batch2DNode DRAINS it -- one batcher, one batching algorithm,
-// two recorders. End() is deliberately NOT called on this path: it is
-// the NVRHI recorder, and calling it would need a target this path does
-// not have. Since Task 6 that batcher is DEVICE-LESS by construction
+// batcher is Begin()'d with the canvas extent alone (it took a command
+// list and a framebuffer until ABI v15, and both were always null),
+// SubmitRender fills it exactly as it does above, and the graph's
+// Batch2DNode DRAINS it -- one batcher, one batching algorithm, one
+// recorder. End() is deliberately NOT called on this path: it WAS the
+// NVRHI recorder and now records nothing at all. Since Task 6 that batcher is DEVICE-LESS by construction
 // (GpuContext::Create, renamed from CreateForGraph at NRI Phase 5a,
 // Task 6, once it became GpuContext's only factory), so End() would
 // refuse anyway.
@@ -402,11 +402,11 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     std::uint32_t frameWidth = 0, frameHeight = 0;
     FrameExtent(io, frameWidth, frameHeight);
 
-    // The 2D submission, CPU-identical to the NVRHI block above. The
-    // null command list / null framebuffer are what say "record
-    // nothing": Batcher2D::Begin only stores them, and every recording
-    // use is inside End(), which this path never calls.
-    io.gpu->Batch().Begin(nullptr, nullptr, frameWidth, frameHeight);
+    // The 2D submission. Begin takes only the canvas extent since ABI v15 --
+    // the null command list / null framebuffer that used to lead it were read
+    // by End() alone, and End() records nothing. This batch reaches the GPU
+    // through the graph's Batch2DNode, which drains it.
+    io.gpu->Batch().Begin(frameWidth, frameHeight);
     io.gpu->Batch().SetGlobals(io.frameGlobals);
     io.app.PushSceneCamera((float)frameWidth, (float)frameHeight);
     {
@@ -573,7 +573,8 @@ bool CaptureTail(FrameIo& io)
             // Only a GOLDEN run fails on this. A --screenshot-only run has
             // always degraded to a warning (a screenshot that cannot be
             // written must not trip the GPU tests' RenderErrorCount()==0
-            // gate -- SaveTexturePng's own contract), and folding the two
+            // gate -- the rule SaveTexturePng carried, now
+            // WriteThumbnailPngRgba's), and folding the two
             // readbacks into one must not quietly change that.
             if (io.config.GoldenMode())
             {

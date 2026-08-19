@@ -67,8 +67,10 @@ namespace Arcane
         static_assert(sizeof(BatchRootConstants) == 16, "must match sprite.hlsl's BatchConstants");
 
         // The built-in shader pairs, in Batcher2D::kMaterial* order -- the SAME
-        // offline bins the NVRHI batcher loads through ShaderLibrary
-        // (Batcher2D.cpp's material table).
+        // offline bins Batcher2D's material table names by string
+        // (Batcher2D.cpp's InitMaterialTable). The NVRHI batcher used to load
+        // them through ShaderLibrary; both were deleted at ABI v15, and this
+        // node is the only loader of them left.
         constexpr const char* kBuiltInVs[] = { "sprite_vs", "circle_vs", "msdf_vs" };
         constexpr const char* kBuiltInPs[] = { "sprite_ps", "circle_ps", "msdf_ps" };
 

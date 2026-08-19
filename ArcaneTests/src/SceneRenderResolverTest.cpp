@@ -68,7 +68,7 @@ namespace
     }
 
     // As above but WITH a source texture Guid, so SpriteCache takes the
-    // textured branch (PixelsFor + GetTexture) instead of the untextured one.
+    // textured branch (PixelsFor) instead of the untextured one.
     Arcane::Guid WriteTexturedSprite(const fs::path& file, const Arcane::Guid& texture,
                                      float ppu)
     {
@@ -81,26 +81,32 @@ namespace
         return data.id;
     }
 
-    // An Assets facade whose PIXEL ENTRY IS EVICTED BY GetTexture -- the
+    // An Assets facade whose PIXEL ENTRY IS EVICTED BY A SECOND CALL -- the
     // production behaviour, modelled deterministically.
     //
     // In the real facade PixelsFor hands back a bare pointer INTO its
     // LRU-budgeted pixel cache and releases its own pin before returning
     // (Assets.cpp: `m_pixels.Acquire(key); EnforceBudget(); m_pixels.Release(key);`),
-    // and GetTexture ends `m_textures.Put(...); EnforceBudget();` -- a sweep
-    // that evicts the globally least-recently-used entry across ALL FOUR
-    // caches, the pixel cache included. So a caller holding the pointer across
-    // the GetTexture call can be reading freed memory.
+    // and any other inserting call ends `Put(...); EnforceBudget();` -- a sweep
+    // that evicts the globally least-recently-used entry across ALL the
+    // facade's caches, the pixel cache included. So a caller holding the
+    // pointer across a second Assets call can be reading freed memory.
     //
-    // WHY THIS IS A FAKE AND NOT THE REAL FACADE: reaching the real eviction
-    // needs GetTexture to reach `m_textures.Put` (Assets.cpp:273), which needs
-    // a live nvrhi device -- a [gpu] item, and this defect must be catchable in
-    // the ~[gpu] gate. What the fake pins is the ORDER, which is the whole
-    // fix: it hands out a stable pointer, then on GetTexture RESETS the object
-    // it pointed at to a default-constructed PixelData (0x0, no bytes) -- the
-    // deterministic stand-in for "that buffer was freed and its memory reused".
-    // Read before the call, the dimensions are the image's; read after, they
-    // are zeros and ComputeSpriteGeom silently returns its 1x1 m fallback.
+    // THE SECOND CALL USED TO BE GetTexture, whose tail did exactly that; ABI
+    // v15 (NRI Phase 5a, Task 9.5b-ii) deleted GetTexture and the texture cache
+    // with it. GetBytes stands in: it is an inserting, sweeping call on the
+    // same shared LRU clock, which is the only property this fake needs from
+    // it. What the fake pins is the ORDER: it hands out a stable pointer, then
+    // on the second call RESETS the object it pointed at to a default-
+    // constructed PixelData (0x0, no bytes) -- the deterministic stand-in for
+    // "that buffer was freed and its memory reused". Read before the call, the
+    // dimensions are the image's; read after, they are zeros and
+    // ComputeSpriteGeom silently returns its 1x1 m fallback.
+    //
+    // WHY A FAKE AND NOT THE REAL FACADE: reaching a real cross-cache eviction
+    // needs a budget small enough to sweep, and ReferenceProject's marker PNG
+    // is 179 bytes against a 256 MiB default -- so the sweep never fires in any
+    // gate. The fake makes the ordering hazard reachable in ~[gpu].
     class EvictingAssets final : public Arcane::Assets
     {
     public:
@@ -111,17 +117,8 @@ namespace
             m_pixels.rgba.assign(static_cast<std::size_t>(w) * h * 4, 0xFF);
         }
 
-        void SetDevice(nvrhi::IDevice*) override {}
         void SetContentRoot(const std::filesystem::path&) override {}
         void SetAssetResolver(AssetResolver) override {}
-
-        nvrhi::TextureHandle GetTexture(const std::filesystem::path&) override { return nullptr; }
-        nvrhi::TextureHandle GetTexture(const Arcane::AssetId&) override
-        {
-            ++getTextureCalls;
-            m_pixels = Arcane::PixelData{};   // "the LRU sweep took the pixel entry"
-            return nullptr;                   // no device: the facade's own headless answer
-        }
 
         const Arcane::PixelData* PixelsFor(const Arcane::Guid&) override
         {
@@ -129,14 +126,22 @@ namespace
             return &m_pixels;
         }
 
+        // THE EVICTING CALL -- see the class comment. Everything else answers
+        // null without touching m_pixels.
+        std::shared_ptr<const std::vector<std::uint8_t>> GetBytes(const Arcane::AssetId&) override
+        {
+            ++evictingCalls;
+            m_pixels = Arcane::PixelData{};   // "the LRU sweep took the pixel entry"
+            return nullptr;
+        }
+
         std::shared_ptr<const std::vector<std::uint8_t>> GetBytes(const std::filesystem::path&) override { return nullptr; }
-        std::shared_ptr<const std::vector<std::uint8_t>> GetBytes(const Arcane::AssetId&) override { return nullptr; }
         std::shared_ptr<const nlohmann::json> GetJson(const std::filesystem::path&) override { return nullptr; }
         std::shared_ptr<const nlohmann::json> GetJson(const Arcane::AssetId&) override { return nullptr; }
         Arcane::AssetStats Stats() const override { return {}; }
 
-        int pixelsForCalls  = 0;
-        int getTextureCalls = 0;
+        int pixelsForCalls = 0;
+        int evictingCalls  = 0;
 
     private:
         Arcane::PixelData m_pixels;
@@ -166,7 +171,8 @@ TEST_CASE("SpriteCache resolves a Guid once and keeps serving that entry", "[spr
     const Arcane::SpriteEntry first = cache.Table().at(id);
     CHECK(first.pivot.x == 0.25f);
     CHECK(first.pivot.y == 0.75f);
-    CHECK(first.texture == nullptr);          // no Assets facade -> untextured
+    // (A `CHECK(first.texture == nullptr)` stood here -- no Assets facade, so
+    // untextured -- until ABI v15 deleted SpriteEntry::texture.)
     CHECK(first.sizeMeters.x == 1.0f);        // ComputeSpriteGeom's 0x0 fallback
     CHECK(first.sizeMeters.y == 1.0f);
 
@@ -205,7 +211,8 @@ TEST_CASE("SpriteCache memoises a failed resolve as the visible placeholder", "[
     // silently vanishing.
     REQUIRE(cache.Table().contains(id));
     const Arcane::SpriteEntry entry = cache.Table().at(id);
-    CHECK(entry.texture == nullptr);
+    // (A `CHECK(entry.texture == nullptr)` stood here until ABI v15 deleted
+    // SpriteEntry::texture.)
     CHECK(entry.sizeMeters.x == 1.0f);
     CHECK(entry.sizeMeters.y == 1.0f);
 
@@ -264,7 +271,7 @@ TEST_CASE("SpriteCache makes exactly ONE Assets call, so nothing can evict Pixel
     // another Assets call, and Assets.hpp is explicit that it may not: the
     // pointer is owned by an LRU-budgeted cache and "callers that need it to
     // outlive the current call must copy it". The offending second call was a
-    // GetTexture whose tail (`m_textures.Put(...); EnforceBudget();`) sweeps
+    // GetTexture whose tail (`m_textures.Put(...); EnforceBudget();`) swept
     // cross-cache, with the just-unpinned pixel entry the least recently used
     // of the pair. C1 was first fixed by COPYING the dimensions out before it.
     //
@@ -275,6 +282,11 @@ TEST_CASE("SpriteCache makes exactly ONE Assets call, so nothing can evict Pixel
     // pins: exactly one Assets call, therefore no interleaved eviction is
     // reachable at all. Re-add a second Assets call to Request() and this
     // fails, pointing at the paragraph above -- which is the guard C1 earned.
+    //
+    // The invariant is unchanged by ABI v15 deleting GetTexture outright. What
+    // changed is only which call the fake evicts on (GetBytes now) -- the case
+    // asserts ONE Assets call total, so it would catch a re-added second call
+    // of any name.
     //
     // Invisible to every gate before this case: ReferenceProject's marker PNG
     // is 179 bytes against a 256 MiB budget, so the sweep never fires there.
@@ -291,8 +303,8 @@ TEST_CASE("SpriteCache makes exactly ONE Assets call, so nothing can evict Pixel
     Arcane::SpriteCache cache(std::move(s));
 
     cache.Request(id);
-    REQUIRE(assets.pixelsForCalls  == 1);
-    REQUIRE(assets.getTextureCalls == 0);   // THE INVARIANT: no second call to evict across
+    REQUIRE(assets.pixelsForCalls == 1);
+    REQUIRE(assets.evictingCalls == 0);   // THE INVARIANT: no second call to evict across
     REQUIRE(cache.Table().contains(id));
 
     // 8x4 px at 100 px/m -- the dimensions really were read. Had an eviction
@@ -302,15 +314,16 @@ TEST_CASE("SpriteCache makes exactly ONE Assets call, so nothing can evict Pixel
     const Arcane::SpriteEntry entry = cache.Table().at(id);
     CHECK(entry.sizeMeters.x == 0.08f);
     CHECK(entry.sizeMeters.y == 0.04f);
-    // Residency is not this cache's business any more -- the record names its
-    // image by Guid and carries no device object.
-    CHECK(entry.texture == nullptr);
+    // Residency is not this cache's business -- the record names its image by
+    // Guid and carries no device object. (A `CHECK(entry.texture == nullptr)`
+    // stood beside this until ABI v15 deleted the field itself, which makes
+    // the same statement structurally.)
     CHECK(entry.textureId == texture);
 
     // ...and EvictingAssets still MODELS the eviction, so the guard above is
     // pinning a real hazard rather than a fake that quietly stopped evicting.
     // Driven by hand, since SpriteCache no longer drives it.
-    assets.GetTexture(Arcane::AssetId::FromGuid(texture));
+    assets.GetBytes(Arcane::AssetId::FromGuid(texture));
     const Arcane::PixelData* after = assets.PixelsFor(texture);
     REQUIRE(after != nullptr);
     CHECK(after->width == 0);

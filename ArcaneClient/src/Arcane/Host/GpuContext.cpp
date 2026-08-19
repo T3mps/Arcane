@@ -46,14 +46,14 @@ namespace Arcane
             return nullptr;
         }
 
-        // DEVICE-LESS (NRI Phase 3, Task 2): Begin/SetLayer/Quad*/Drain/
-        // RegisterMaterial/SetGlobals/MaterialDesc/Stats are all live -- which
-        // is the whole data-supply side of the frame -- and only End(), the
-        // NVRHI recorder, refuses (there is no recorder left to call it
-        // through: GpuContext builds no command list at all now). The
-        // caller's Batch2DNode DRAINS this instance: one batcher, one
-        // batching algorithm.
-        ctx->m_batcher = Batcher2D::Create(nullptr, nullptr);
+        // A CPU BATCHER, and at ABI v15 there is no other kind: Batcher2D
+        // stopped taking an (nvrhi::IDevice*, ShaderLibrary*) pair once every
+        // call site in the tree had been passing (nullptr, nullptr) for two
+        // tasks. Begin/SetLayer/Quad*/Drain/RegisterMaterial/SetGlobals/
+        // MaterialDesc/Stats are the whole data-supply side of the frame; the
+        // caller's Batch2DNode DRAINS this instance and issues the draws
+        // through NRI. One batcher, one batching algorithm.
+        ctx->m_batcher = Batcher2D::Create();
         if (!ctx->m_batcher) { ARC_ERROR("GpuContext: batcher create failed"); return nullptr; }
 
         // ImGuiLayer has one flavor since NRI Phase 5a, Task 5: context + SDL3

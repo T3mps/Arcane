@@ -34,7 +34,7 @@ namespace Arcane
 
     // Compares two tight RGBA8 images. A dimension mismatch returns
     // ok=false, dimensionsMatch=false, everything else zero. Alpha
-    // participates like any channel, but ReadTexturePixels pins it to 255
+    // participates like any channel, but the capture path pins it to 255
     // on BOTH the capture side and the compare side -- a broken-alpha
     // pipeline is masked, not caught. This is NOT an alpha-correctness gate.
     [[nodiscard]] ARCANE_API GoldenCompareResult CompareRgbaImages(

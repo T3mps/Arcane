@@ -6266,22 +6266,22 @@ TEST_CASE("nri graph frame: the batch's descriptor-set count is its distinct tex
     // the node's arithmetic, not a restatement of it. What it does NOT cover is
     // the ALLOCATION that arithmetic gates (EnsureSpriteSet) -- see the block
     // comment above.
-    auto batcher = Arcane::Batcher2D::Create(nullptr, nullptr);
+    auto batcher = Arcane::Batcher2D::Create();
     REQUIRE(batcher != nullptr);
 
     const Arcane::Guid a = *Arcane::Guid::FromString("aaaaaaaa-0000-0000-0000-000000000001");
     const Arcane::Guid b = *Arcane::Guid::FromString("bbbbbbbb-0000-0000-0000-000000000002");
 
-    batcher->Begin(nullptr, nullptr, 64, 64);
+    batcher->Begin(64, 64);
     batcher->Rect(glm::vec2(0.0f), glm::vec2(8.0f), glm::vec4(1.0f));      // nil id
     batcher->QuadTextured(Arcane::Batcher2D::kMaterialSprite, a,
-                          glm::vec2(0.0f), glm::vec2(8.0f), nullptr,
+                          glm::vec2(0.0f), glm::vec2(8.0f),
                           glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
     batcher->QuadTextured(Arcane::Batcher2D::kMaterialSprite, b,
-                          glm::vec2(8.0f, 0.0f), glm::vec2(8.0f), nullptr,
+                          glm::vec2(8.0f, 0.0f), glm::vec2(8.0f),
                           glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
     batcher->QuadTextured(Arcane::Batcher2D::kMaterialSprite, a,   // a REPEAT of `a`
-                          glm::vec2(16.0f, 0.0f), glm::vec2(8.0f), nullptr,
+                          glm::vec2(16.0f, 0.0f), glm::vec2(8.0f),
                           glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f));
 
     const Arcane::Batch2DDrained drained = batcher->Drain();
@@ -6295,7 +6295,7 @@ TEST_CASE("nri graph frame: the batch's descriptor-set count is its distinct tex
     CHECK(Arcane::Batch2DNode::DistinctTextureCount(drained.spans) == 2);
 
     // An untextured batch needs none.
-    batcher->Begin(nullptr, nullptr, 64, 64);
+    batcher->Begin(64, 64);
     batcher->Rect(glm::vec2(0.0f), glm::vec2(8.0f), glm::vec4(1.0f));
     batcher->Circle(glm::vec2(32.0f), 4.0f, glm::vec4(1.0f));
     const Arcane::Batch2DDrained plain = batcher->Drain();

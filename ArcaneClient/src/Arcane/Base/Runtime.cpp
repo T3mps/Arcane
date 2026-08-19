@@ -40,7 +40,7 @@ namespace Arcane
     {
         // Directory of the running executable, so exe-relative engine assets (here the
         // shipped data/EngineConfig defaults) resolve regardless of CWD -- mirrors the
-        // exe-relative pattern in Assets.cpp / ShaderLibrary.cpp.
+        // exe-relative pattern in Assets.cpp / Render/ShaderPaths.cpp.
         std::filesystem::path ExeDir()
         {
 #ifdef _WIN32
@@ -185,7 +185,7 @@ namespace Arcane
             // an interactive host passes true. AudioDeviceDesc::enableDevice defaults false
             // for the same reason, so a real device is always opt-in.
             audioDesc.enableDevice = enableAudioDevice;
-            assets = Assets::Create(nullptr);
+            assets = Assets::Create();
             // Engine-default config layer (shipped beside the exe). A host with no
             // project still gets this base (e.g. input bindings for bare ArcaneRuntime);
             // OpenProject re-layers the project + user files on top.
