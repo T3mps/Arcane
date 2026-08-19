@@ -255,8 +255,11 @@ void PrepareFrame(FrameIo& io)
     // gone, and at Task 9.5a so is io.backbuffer itself -- it had no reader
     // left (CaptureTail only ever read it on the NVRHI arm, which is gone
     // too), so a field reset to null every frame for nobody went with the
-    // rest. Task 11 still owns collapsing the `if (io.graph)` guards
-    // themselves, repo-wide.
+    // rest. Collapsing the remaining `if (io.graph)` guards (io.graph is
+    // never null -- see FrameIo's own field comment) belongs to a follow-on
+    // task, not Task 11 as this used to say: 11a collapsed only
+    // EditorApp::GraphMode(), io.graph is a different (FrameIo) predicate it
+    // never touched, and 11b is prose-only.
 
     // Scene asset resolution, BEFORE the batcher's Begin and before
     // SubmitRender: the drain inside registers compiled materials with the

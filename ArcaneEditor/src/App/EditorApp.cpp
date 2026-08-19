@@ -2205,8 +2205,9 @@ namespace Arcane::Editor
         // ===== THE EXIT-CODE FOLD (NRI Phase 3, Task 10) ======================
         // Mirrors RuntimeApp::Run's tail, code for code, so one desk battery
         // item reads the same against either host. Everything below is 0 on an
-        // ordinary NVRHI run, which is what keeps the default arm's contract
-        // ("0 clean, 1 boot/init failed") exactly what it was.
+        // ordinary run -- the contract this fold has always kept ("0 clean, 1
+        // boot/init failed"), unconditionally now that the graph is the only
+        // render path (Phase 5a, Task 2b).
         //
         // A device-loss exit is an abnormal end even though it was orderly: the
         // crash report exists, but the session did not do what it was asked to.

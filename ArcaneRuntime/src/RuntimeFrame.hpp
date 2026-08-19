@@ -77,7 +77,7 @@ namespace Arcane::RuntimeFrame
     {
         // ---- the pointers MainLoop already owned ----------------------------
         Arcane::GpuContext*          gpu;       // never null once MainLoop is running
-        Arcane::NriGraphContext*     graph;     // null on every ordinary (NVRHI) run
+        Arcane::NriGraphContext*     graph;     // never null: m_graphContext is built unconditionally before the frame loop starts (Phase 5a, Task 2b's boot refusal)
         Arcane::SceneRenderResolver* resolver;  // null iff the boot scene published none
         Arcane::Runtime*             runtime;
         Arcane::PluginHost*          plugin;

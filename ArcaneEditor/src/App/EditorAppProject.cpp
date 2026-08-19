@@ -594,11 +594,12 @@ namespace Arcane::Editor
         // destroys the graph viewport context) to "render_bridge" (which builds
         // its replacement) -- NRI Phase 3, Task 12. Locals rather than members
         // for the same reason lockedRoot above is one: their lifetime is
-        // exactly this call, and both stages capture by reference. 0/0 on the
-        // NVRHI arm, where nothing reads them, and on a graph session whose
-        // viewport context is already gone -- the rebuild reads that as "use
-        // the boot default", so a lost extent costs one deferred resize (phase
-        // 8 re-measures the panel every frame) and never a wrong picture.
+        // exactly this call, and both stages capture by reference. 0/0 on a
+        // graph session whose viewport context is already gone (and, through
+        // Phase 5a, on the now-deleted NVRHI arm too, where nothing read
+        // them) -- the rebuild reads that as "use the boot default", so a
+        // lost extent costs one deferred resize (phase 8 re-measures the
+        // panel every frame) and never a wrong picture.
         std::uint32_t keepViewportW = 0, keepViewportH = 0;
 
         // ONE shared stage source (architecture pass sec 5). The ctx and pathStr are
@@ -786,13 +787,13 @@ namespace Arcane::Editor
             stages.push_back(std::move(projectOpen));
         }
 
-        // render_bridge: switch-LOCAL body. On the NVRHI arm the boot body
-        // builds the viewport canvas/picker/outline, which already exist, so
-        // the delta IS the switch: hand the editor lock over and load the new
-        // project's input config.
+        // render_bridge: switch-LOCAL body. On the (now-deleted) NVRHI arm the
+        // boot body used to build the viewport canvas/picker/outline, which
+        // already existed, so the delta WAS the switch: hand the editor lock
+        // over and load the new project's input config.
         //
-        // ON THE GRAPH ARM IT ALSO REBUILDS THE VIEWPORT TRIO, and that is the
-        // same job under a different shape rather than an extra one: the
+        // THE GRAPH ARM ALSO REBUILDS THE VIEWPORT TRIO, and that was always
+        // the same job under a different shape rather than an extra one: the
         // offscreen NriGraphContext IS that arm's whole trio (canvas, picker
         // and outline are NODES inside its frame -- ViewportTargets::graph),
         // "switch_teardown" above destroyed it because its caches are keyed by
@@ -1349,7 +1350,7 @@ namespace Arcane::Editor
     // rather than reacting to one.
     //
     // What happens after the dispatch is deliberately NOT handled here: the
-    // device dies inside NVRHI, the RenderErrorLatch device-removed hook runs
+    // device dies, NRI's callback interface reports it, the RenderErrorLatch device-removed hook runs
     // ObserveDeviceRemoved, that calls Diagnostics::WriteReport("gpu-crash:
     // device removed"), the GPU-section provider fills the envelope, and the
     // `.arcdiag`/`.gpudump` pair lands in the project's Saved/Diagnostics.

@@ -1923,8 +1923,9 @@ namespace Arcane::Editor
         // Task 11). By now the chrome frame whose draw lists named them has
         // been recorded AND submitted, which is the whole condition the
         // deferral exists to satisfy. Same idiom, one level up, as
-        // ShaderEditorDocument's own m_nodePreviewRetired.clear() at the top of
-        // Tick.
+        // ShaderEditorDocument's own per-node preview retirement used to be at
+        // the top of Tick, before NRI Phase 5a, Task 9.5b-i deleted that dead
+        // machinery (m_nodePreviewRetired included) outright.
         DrainRetiredDocPreviews();
         PollMaterialWatch();   // external .arcmat edits (~1 Hz mtime sweep)
         m_documents.TickAll(m_gameUi.frameDt);

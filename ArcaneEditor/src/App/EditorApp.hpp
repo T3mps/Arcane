@@ -546,8 +546,9 @@ namespace Arcane::Editor
         // lives inside the Viewport panel, never over the editor chrome. Created
         // in Init after the editor ImGui layer is up; the plugin is pointed at it
         // via Runtime::SetImGui (in place of the editor context). Declared after
-        // m_gpu (destructs BEFORE the device -- it holds NVRHI handles built from
-        // m_gpu->Device()) and before m_runtime/m_plugin (destructs AFTER the
+        // m_gpu (destructs BEFORE it -- GpuContext has no Device() any more,
+        // see below for the real reason this ordering matters) and before
+        // m_runtime/m_plugin (destructs AFTER the
         // plugin -- the plugin holds this ctx via SetImGui and may touch ImGui
         // during Unload/Shutdown, so this must outlive it). Its destructor
         // restores the editor context, so ~GpuContext's ImGuiLayer teardown stays
@@ -1051,10 +1052,14 @@ namespace Arcane::Editor
         // Shader-editor services + open documents (Slice 5). The compiler is the
         // app-shared compile service: documents Submit through it, and the
         // resolver's Refresh (phase 9) Polls/Drains it once per frame, offering
-        // each result to the open documents first -- that drain is the ONE place
-        // compile results become NVRHI shaders.
-        // Documents hold NVRHI resources -> declared after m_gpu (destruct
-        // before the device) and after m_runtime (they borrow its Assets).
+        // each result to the open documents first -- that drain used to be the
+        // ONE place compile results became NVRHI shaders; NRI Phase 5a, Task 4
+        // /9.5b deleted that half, so today the drain only hands documents raw
+        // DXIL/SPIR-V bytecode (see ShaderEditorDocument::BindIfComplete's
+        // severance note: the bytes are retained, never bound to a device, and
+        // the graph arm builds its own NRI pipeline from exactly those bytes).
+        // Documents hold no device-bound resources any more; declared after
+        // m_runtime because they still borrow its Assets.
         std::unique_ptr<Arcane::ShaderCompiler> m_shaderCompiler;
         Arcane::ShaderSourceProvider            m_shaderSources;
         // Scene asset resolution (sprite-resolution lift, 2026-07-29): ONE

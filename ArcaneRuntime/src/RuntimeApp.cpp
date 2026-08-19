@@ -368,12 +368,18 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
     // backbuffer this call, drew nothing"), and why one retry + a hard
     // refusal to Show() an undrawn window follow.
     //
-    // NONE OF IT ON THE GRAPH FLAVOR (NRI Phase 3, Task 6): BootPresenter
-    // draws through the NVRHI swapchain + ImGui renderer, and neither exists
-    // there. The window is revealed by MainLoop instead, as soon as the graph
-    // vehicle that owns its only swapchain has been created -- see the reveal
-    // comment there for why that is the same "never show a window nothing can
-    // draw into" rule expressed against a different device.
+    // NONE OF IT ON THE GRAPH FLAVOR: GraphFlavor() answers true
+    // unconditionally (GpuContext::Create sets it before returning; see that
+    // accessor's own comment for who owns retiring the predicate), so this
+    // `if` is never taken -- and BootPresenter::Present is dead code
+    // regardless of that: its drawing body (the NVRHI swapchain + ImGui
+    // renderer this used to describe) was deleted at NRI Phase 5a, Task 6
+    // (see BootPresenter.cpp), so even a caller that somehow reached it would
+    // get an event pump and nothing drawn. The window is revealed by MainLoop
+    // instead, as soon as the graph vehicle that owns its only swapchain has
+    // been created -- see the reveal comment there for why that is the same
+    // "never show a window nothing can draw into" rule expressed against a
+    // different device.
     if (!m_gpu->GraphFlavor())
     {
         m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
@@ -480,9 +486,11 @@ void RuntimeApp::MainLoop()
     m_graphErrorBaseline = Arcane::RenderErrorCount();
     Arcane::Diagnostics::SetPhase("nri graph vehicle boot");
 
-    // THE REVEAL, which StageFinalize could not do on this path (its
-    // BootPresenter draws through an NVRHI swapchain + ImGui renderer, and
-    // neither exists here). It happens BEFORE the create below, which is
+    // THE REVEAL, which StageFinalize's `if (!m_gpu->GraphFlavor())` branch
+    // could never have done anyway -- that branch is dead (GraphFlavor() is
+    // unconditionally true) and BootPresenter::Present's drawing body is
+    // deleted regardless (see BootPresenter.cpp and StageFinalize's own
+    // comment). It happens BEFORE the create below, which is
     // the ORDER the Phase-2 vehicle proved at three desk checkpoints: its
     // own window was created VISIBLE and its swapchain built over an
     // already-shown window. Keeping that order rather than showing
