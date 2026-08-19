@@ -907,6 +907,13 @@ git commit -m "refactor!: one render path -- GraphMode() and the last two-path p
 > | `git grep -in nvrhi -- '*.lua'` | **1** — `ThirdParty/NRI/premake5.lua:3`, historical prose |
 > | `git grep -in nvrhi -- '*.cpp' '*.hpp' '*.lua'` | **757 lines / 129 files, all comment or prose** |
 >
+> RE-DERIVED after the fix wave's last edit, at `bf06c9b3`: **754 lines / 129
+> files**; `#include <nvrhi/` still **0**; `nvrhi::` still **81, every one in a
+> `//` comment, 0 in code**. The 3-line drop is the wave's own C2/C3/C4 retags.
+> The INVARIANT (nothing in code or build inputs) is what to carry forward; the
+> line total drifts with every prose edit and should not be quoted as a fact
+> without re-running the grep.
+>
 > So: **NVRHI is gone from the build and from the code. What remains is
 > commentary** — and of it, roughly 135 lines still use PRESENT-TENSE two-path
 > vocabulary ("the NVRHI path does X") rather than historical framing. That
