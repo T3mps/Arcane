@@ -5,6 +5,16 @@
 // and tests can run compute/offscreen work without any window.
 
 #include <Arcane/Base/Api.hpp>
+// NRI Phase 5a, Task 8a: two groups of declarations that used to live HERE
+// now live in headers with no nvrhi dependency, because the graph path needs
+// them and this file is the NVRHI device interface the phase deletes. Both
+// are included so every existing consumer of Device.hpp keeps compiling
+// unchanged:
+//   * GraphicsBackend + ToString  -> Render/GraphicsBackend.hpp
+//   * RenderErrorCount and the four *ForTest seams, plus the latch they read
+//                                 -> Render/RenderErrorLatch.hpp
+#include <Arcane/Render/GraphicsBackend.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>
 
 #include <nvrhi/nvrhi.h>
 
@@ -16,63 +26,6 @@ namespace Arcane
 {
     class Window;
     class Swapchain;
-
-    enum class GraphicsBackend : uint8_t
-    {
-        D3D12,
-        Vulkan,
-    };
-
-    ARCANE_API const char* ToString(GraphicsBackend backend);
-
-    // Total render-layer Error/Fatal diagnostics since process start, across
-    // all devices and EVERY producer -- not just NVRHI's own message callback:
-    // the Vulkan debug messenger, the D3D12 debug layer's InfoQueue1 callback,
-    // NRI's callback interface and ARC_NRI_CHECK, and anything else reporting
-    // through NvrhiMessageCallback::NoteError all land in this one counter.
-    // GPU tests assert this stays zero -- the machine-enforced form of the
-    // "validation must stay silent" foundation rule.
-    ARCANE_API uint64_t RenderErrorCount();
-
-    // Test support ONLY -- production code must never call this (the count
-    // above is documented as "since process start"). Restores the 0/0 gate
-    // latch to zero; exists so a test that deliberately trips it (proving a
-    // discipline macro reaches the real, shared latch rather than a fake
-    // local counter) can clean up after itself instead of leaking a
-    // permanent +1 into every unrelated test case's RenderErrorCount()==0
-    // assertion for the rest of the process. Same idiom as
-    // ResetGpuDeviceLost() (GpuInstrumentation.hpp).
-    ARCANE_API void ResetRenderErrorCount();
-
-    // Test support ONLY -- the two seams a [nri] case needs to prove that
-    // NvrhiMessageCallback::NoteError reaches THIS latch (and that it does
-    // NOT fire the device-removed hook). They exist because
-    // NvrhiMessageCallback is a header-only singleton -- a function-local
-    // static in NvrhiMessageCallback.hpp -- so a test exe that included that
-    // header would drive its OWN instance while RenderErrorCount(), exported
-    // from ArcaneClient.dll, kept reading the DLL's. Production code inside
-    // the DLL calls NvrhiMessageCallback::Instance().NoteError directly and
-    // must never reach for these.
-    ARCANE_API void NoteRenderErrorForTest(const char* tag, const char* text) noexcept;
-
-    // Installs (or, with nullptr, clears) the device-removed hook on the
-    // DLL-side NvrhiMessageCallback. Last-writer-wins, exactly like the
-    // class's own setter -- so a test MUST clear it before the function it
-    // names goes out of scope, and must not run while a real device holds
-    // the slot (no device exists in the ~[gpu] gate, which is where the one
-    // caller lives).
-    ARCANE_API void SetRenderDeviceRemovedHookForTest(void (*hook)()) noexcept;
-
-    // Reads the same DLL-side slot back, without ever invoking the hook.
-    // Test support ONLY, and for the same header-only-singleton reason as the
-    // setter above. The slot is last-writer-wins with TWO writers now -- the
-    // NVRHI device layer's Init/dtor, and Render/Nri/NriDiagnostics::Arm/
-    // Disarm after Phase 3's one-device flip -- so "arming installed one" and
-    // "a second arm left it alone" are properties a headless case can only
-    // state if it can read the slot. Production code has no business reading
-    // it: the hook exists to be CALLED by NvrhiMessageCallback, by nobody
-    // else.
-    [[nodiscard]] ARCANE_API void (*RenderDeviceRemovedHookForTest() noexcept)();
 
     struct RenderDeviceDesc
     {

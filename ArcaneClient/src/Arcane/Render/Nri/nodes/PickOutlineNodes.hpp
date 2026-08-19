@@ -108,7 +108,7 @@
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/PickEmit.hpp>        // PickDrawable, PickIdVertex, BuildPickIdGeometry
-#include <Arcane/Render/Swapchain.hpp>       // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>       // kSwapchainFramesInFlight
 
 #include <cstdint>
 #include <memory>

@@ -17,7 +17,7 @@
 #include <Arcane/Render/GpuCrashReport.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/IGpuCrashBackend.hpp>
-#include <Arcane/Render/NvrhiMessageCallback.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>
 
 #if !defined(ARCANE_DIST)
     #include <Arcane/Render/GpuFaultInjector.hpp>   // kPassName -- ONE spelling of the breadcrumb both arms produce
@@ -196,9 +196,9 @@ namespace Arcane
         // race is Diagnostics::FenceReports, called in Disarm.)
         std::mutex                             g_armMutex;
         std::unique_ptr<NriGraphCrashBackend>  g_backend;
-        NvrhiMessageCallback::DeviceRemovedHook g_installedHook = nullptr;
+        RenderErrorLatch::DeviceRemovedHook    g_installedHook = nullptr;
 
-        [[nodiscard]] NvrhiMessageCallback::DeviceRemovedHook ObserverFor(GraphicsBackend backend) noexcept
+        [[nodiscard]] RenderErrorLatch::DeviceRemovedHook ObserverFor(GraphicsBackend backend) noexcept
         {
             // Per-backend, because the once-only removal latch is: each device
             // TU owns its own `g_deviceRemovedReported` (DeviceFactories.hpp
@@ -249,7 +249,7 @@ namespace Arcane
                 return false;
             }
 
-            const NvrhiMessageCallback::DeviceRemovedHook hook = ObserverFor(device.Backend());
+            const RenderErrorLatch::DeviceRemovedHook hook = ObserverFor(device.Backend());
 
             auto backend = std::make_unique<NriGraphCrashBackend>(device);
 
@@ -271,7 +271,7 @@ namespace Arcane
             ResetGpuDeviceLost();
 
             if (hook)
-                NvrhiMessageCallback::Instance().SetDeviceRemovedHook(hook);
+                RenderErrorLatch::Instance().SetDeviceRemovedHook(hook);
             // THE UPCAST IS EXPLICIT (whole-branch review, T5). The provider
             // recovers `user` as an IGpuCrashBackend* before down-casting, and
             // says so in its own comment -- but this call used to hand it a
@@ -314,12 +314,12 @@ namespace Arcane
             // CONDITIONAL, for the same stale-owner reason
             // ClearActiveGpuCrashBackendIfCurrent exists: if something else
             // installed a hook after us, unslotting it here would disconnect a
-            // live, unrelated owner. NvrhiMessageCallback's setter has no
+            // live, unrelated owner. RenderErrorLatch's setter has no
             // compare-and-clear of its own, so the comparison happens here.
             if (g_installedHook
-                && NvrhiMessageCallback::Instance().CurrentDeviceRemovedHook() == g_installedHook)
+                && RenderErrorLatch::Instance().CurrentDeviceRemovedHook() == g_installedHook)
             {
-                NvrhiMessageCallback::Instance().SetDeviceRemovedHook(nullptr);
+                RenderErrorLatch::Instance().SetDeviceRemovedHook(nullptr);
             }
 
             g_installedHook = nullptr;
@@ -860,7 +860,7 @@ namespace Arcane
 
                 if (removed)
                 {
-                    NvrhiMessageCallback::Instance().NoteDeviceLost(
+                    RenderErrorLatch::Instance().NoteDeviceLost(
                         "nri",
                         "[nri] --crash-gpu: ID3D12Device::GetDeviceRemovedReason says the device "
                         "is gone -- DEVICE_LOST (QueueD3D12::WaitIdle could not report it: it "

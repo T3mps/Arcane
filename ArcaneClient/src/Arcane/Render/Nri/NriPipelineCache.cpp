@@ -13,7 +13,7 @@
 #include "NriCommon.hpp"
 
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Render/NvrhiMessageCallback.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>
 
 #undef ERROR
 
@@ -31,7 +31,7 @@ namespace Arcane
         // is what makes a graph desk run's exit code meaningful.
         void CacheError(const std::string& text)
         {
-            NvrhiMessageCallback::Instance().NoteError("nri-graph", text.c_str());
+            RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
 
         // Byte-wise equality over two POD arrays -- see RegisterLayout's

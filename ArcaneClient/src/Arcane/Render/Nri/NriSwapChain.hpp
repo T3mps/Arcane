@@ -46,7 +46,7 @@
 // -------------------------------------------------------------------------
 // Same shape as the NVRHI swapchains' GpuFrameSlot pacing, replumbed onto
 // NRI's fence model: ONE timeline nri::Fence, kSwapchainFramesInFlight slots
-// (Render/Swapchain.hpp -- reused, not reinvented), signalled with an
+// (Render/FramePacing.hpp -- reused, not reinvented), signalled with an
 // increasing value at the tail of Present() and waited on at the top of
 // AcquireNextTexture() once frameCounter >= kSwapchainFramesInFlight (so the
 // first kSwapchainFramesInFlight frames never wait at all -- no call, not
@@ -84,7 +84,7 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
-#include <Arcane/Render/Swapchain.hpp>   // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>   // kSwapchainFramesInFlight
 
 #include <cstdint>
 #include <memory>

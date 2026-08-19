@@ -71,7 +71,7 @@
 #include <Arcane/Material/GlobalParams.hpp>   // GlobalParams (16 bytes, held by value)
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
-#include <Arcane/Render/Swapchain.hpp>        // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>        // kSwapchainFramesInFlight
 
 #include <cstdint>
 #include <memory>

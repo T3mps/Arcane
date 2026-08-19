@@ -72,11 +72,13 @@ TEST_CASE("nri: NoteError bumps RenderErrorCount by exactly 1 and never fires th
     g_deviceRemovedHookFired = false;
     Arcane::SetRenderDeviceRemovedHookForTest(&RecordDeviceRemovedHook);
 
-    // The text carries the exact substring NvrhiMessageCallback matches on
+    // The text carries the exact substring RenderErrorLatch matches on
     // (NotifyIfDeviceRemoved looks for "Device Removed"). Pushed through
-    // message() this WOULD fire the hook -- and firing it from an InfoQueue1
-    // callback thread, mid-D3D12-call, is the re-entrancy hazard NoteError
-    // exists to kill. Through NoteError it must stay silent.
+    // NoteNvrhiError -- which is what NvrhiMessageCallback::message and
+    // NriCommon's RouteNriError both call -- this WOULD fire the hook, and
+    // firing it from an InfoQueue1 callback thread, mid-D3D12-call, is the
+    // re-entrancy hazard NoteError exists to kill. Through NoteError it must
+    // stay silent.
     Arcane::NoteRenderErrorForTest("d3d12", "Device Removed! (synthetic, from a unit test)");
 
     CHECK(Arcane::RenderErrorCount() == 1);

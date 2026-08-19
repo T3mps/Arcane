@@ -18,11 +18,11 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/Device.hpp>                 // RenderDeviceDesc, RenderErrorCount, ToString(GraphicsBackend)
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>     // the crash chain, armed by whichever device exists
-#include <Arcane/Render/NvrhiMessageCallback.hpp>   // the tagged "nri-graph" error seam
+#include <Arcane/Render/RenderErrorLatch.hpp>   // the tagged "nri-graph" error seam
 #include <Arcane/Render/PostChainCache.hpp>         // PostChainDesc -- the frame's post-chain shape
 #include <Arcane/Render/GpuInstrumentation.hpp>       // GpuDeviceLostObserved -- the device-lost teardown gate
 #include <Arcane/Render/ShaderPaths.hpp>            // ShaderPaths::ResolveFlavorDir
-#include <Arcane/Render/Swapchain.hpp>              // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>              // kSwapchainFramesInFlight
 
 #include <SDL3/SDL_timer.h>                         // SDL_DelayNS -- the offscreen pacing wait's sleep
 
@@ -47,7 +47,7 @@ namespace Arcane
         // what makes a `--nri-graph` desk run's exit code meaningful.
         void GraphError(const std::string& text)
         {
-            NvrhiMessageCallback::Instance().NoteError("nri-graph", text.c_str());
+            RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
 
         // Per-frame-slot upload arena -- the batch node's vertex + index

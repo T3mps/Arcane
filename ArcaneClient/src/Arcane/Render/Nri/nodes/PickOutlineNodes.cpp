@@ -15,7 +15,7 @@
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Render/NvrhiMessageCallback.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry / kPsEntry
 // Deliberately NOT Render/SelectionOutline.hpp: that header pulls nvrhi into a
 // file whose whole point is the NRI recorder. The one thing worth pinning
@@ -41,7 +41,7 @@ namespace Arcane
         // --nri-graph run's exit code mean something.
         void GraphError(const std::string& text)
         {
-            NvrhiMessageCallback::Instance().NoteError("nri-graph", text.c_str());
+            RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
 
         // ----------------------------------------------------------------

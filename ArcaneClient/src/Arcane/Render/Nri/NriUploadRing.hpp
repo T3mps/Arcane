@@ -42,7 +42,7 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
-#include <Arcane/Render/Swapchain.hpp>   // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>   // kSwapchainFramesInFlight
 
 #include <cstdint>
 #include <vector>

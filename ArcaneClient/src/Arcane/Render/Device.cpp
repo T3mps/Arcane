@@ -2,44 +2,13 @@
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/DeviceFactories.hpp>
-#include <Arcane/Render/NvrhiMessageCallback.hpp>
 
 namespace Arcane
 {
-    uint64_t RenderErrorCount()
-    {
-        return NvrhiMessageCallback::Instance().ErrorCount();
-    }
-
-    void ResetRenderErrorCount()
-    {
-        NvrhiMessageCallback::Instance().ResetForTest();
-    }
-
-    void NoteRenderErrorForTest(const char* tag, const char* text) noexcept
-    {
-        NvrhiMessageCallback::Instance().NoteError(tag, text);
-    }
-
-    void SetRenderDeviceRemovedHookForTest(void (*hook)()) noexcept
-    {
-        NvrhiMessageCallback::Instance().SetDeviceRemovedHook(hook);
-    }
-
-    void (*RenderDeviceRemovedHookForTest() noexcept)()
-    {
-        return NvrhiMessageCallback::Instance().CurrentDeviceRemovedHook();
-    }
-
-    const char* ToString(GraphicsBackend backend)
-    {
-        switch (backend)
-        {
-            case GraphicsBackend::D3D12:  return "D3D12";
-            case GraphicsBackend::Vulkan: return "Vulkan";
-        }
-        return "Unknown";
-    }
+    // NRI Phase 5a, Task 8a: RenderErrorCount and the four *ForTest seams
+    // moved to Render/RenderErrorLatch.cpp, and ToString(GraphicsBackend) to
+    // Render/GraphicsBackend.cpp. None of them is about NVRHI device creation,
+    // and all of them outlive this file. What is left below is.
 
     std::unique_ptr<RenderDevice> RenderDevice::Create(const RenderDeviceDesc& desc)
     {

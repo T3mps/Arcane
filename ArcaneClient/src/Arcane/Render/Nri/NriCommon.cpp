@@ -6,7 +6,7 @@
 #include "NriCommon.hpp"
 
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Render/NvrhiMessageCallback.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>
 
 // Arcane/Base/Log.hpp -> spdlog pulls in <windows.h>, whose wingdi.h
 // unconditionally #defines ERROR (a GDI region-type constant, value 0).
@@ -53,16 +53,21 @@ namespace Arcane
             return "Unknown";
         }
 
-        // Same gate, new producer: NvrhiMessageCallback::message() both logs
-        // at ARC_ERROR (with the "[nvrhi]" tag it always uses, regardless of
-        // producer -- see DeviceVulkan.cpp's VkDebugCallback for the existing
-        // precedent of a non-nvrhi producer routing through this exact call)
-        // and increments the SAME atomic Device.cpp's RenderErrorCount()
-        // reads. Routing NRI errors through it here, rather than adding a
-        // second counter, keeps the 0/0 gate a single source of truth.
+        // Same gate, new producer: RenderErrorLatch::NoteNvrhiError() both
+        // logs at ARC_ERROR (with the "[nvrhi]" tag it always uses, regardless
+        // of producer -- see DeviceVulkan.cpp's VkDebugCallback for the
+        // existing precedent of a non-nvrhi producer routing through this
+        // exact call) and increments the SAME atomic RenderErrorCount() reads.
+        // Routing NRI errors through it here, rather than adding a second
+        // counter, keeps the 0/0 gate a single source of truth.
+        //
+        // Phase 5a Task 8a moved that seam off NvrhiMessageCallback -- this
+        // call used to be `message(nvrhi::MessageSeverity::Error, text)` --
+        // so the NRI path no longer reaches the latch through an nvrhi type.
+        // Same counter, same tag, same removal scan.
         void RouteNriError(const char* text)
         {
-            NvrhiMessageCallback::Instance().message(nvrhi::MessageSeverity::Error, text);
+            RenderErrorLatch::Instance().NoteNvrhiError(text);
         }
 
         // NRI's own MessageCallback signature (Extensions/NRIDeviceCreation.h):
@@ -118,7 +123,7 @@ namespace Arcane
         // ARC_NRI_CHECK still sees the typed failing Result at the call site.
         // Only the process-breaking half goes -- matching what the nvrhi arm
         // has always done for the same class of signal
-        // (Render/DeviceD3D12.cpp arms the D3D12 InfoQueue with
+        // (Render/DeviceCreationD3D12.cpp arms the D3D12 InfoQueue with
         // SetBreakOnSeverity(..., FALSE) on all three severities and lets the
         // host do the reporting).
         void NRI_CALL NriAbortExecution(void* /*userArg*/)
@@ -155,7 +160,7 @@ namespace Arcane
         // (which is the hazard NoteError exists to avoid).
         if (result == nri::Result::DEVICE_LOST)
         {
-            NvrhiMessageCallback::Instance().NoteDeviceLost("nri", buffer);
+            RenderErrorLatch::Instance().NoteDeviceLost("nri", buffer);
             return false;
         }
 

@@ -6,7 +6,7 @@
 #include <optional>
 #include <string>
 #include <Arcane/Base/Api.hpp>
-#include <Arcane/Render/Device.hpp>   // Arcane::GraphicsBackend
+#include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend
 namespace Arcane
 {
     // WHICH SLICE OF THE FRAME a golden capture/compare covers (NRI Phase 2).

@@ -20,7 +20,7 @@
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Render/Batcher2D.hpp>        // Batch2DDrained / Batch2DVertex / Batch2DDrawSpan
-#include <Arcane/Render/NvrhiMessageCallback.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>  // kVsEntry / kPsEntry
 
 #undef ERROR
@@ -36,7 +36,7 @@ namespace Arcane
     {
         void GraphError(const std::string& text)
         {
-            NvrhiMessageCallback::Instance().NoteError("nri-graph", text.c_str());
+            RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
 
         // The engine's canvas clear, verbatim from RuntimeApp::MainLoop's

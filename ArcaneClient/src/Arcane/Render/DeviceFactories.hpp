@@ -30,10 +30,17 @@ namespace Arcane
     // Render module's own internal factory header (not the public API --
     // Device.hpp) because nothing outside this module may install a hook.
     // The alternatives were worse: moving the observers out of their TUs
-    // would separate them from the per-backend latch and the DRED/fault
-    // state they describe (and the brief forbids it), and a new
-    // "device-removed registry" would be a second slot to keep in sync with
-    // NvrhiMessageCallback's, which is already last-writer-wins.
+    // would separate them from the per-backend latch they guard (and the
+    // brief forbids it), and a new "device-removed registry" would be a
+    // second slot to keep in sync with RenderErrorLatch's, which is already
+    // last-writer-wins.
+    //
+    // NRI Phase 5a, Task 8a: the hook slot moved from NvrhiMessageCallback to
+    // Render/RenderErrorLatch.hpp, and the D3D12 DRED/InfoQueue arming the
+    // observers describe moved from DeviceD3D12.cpp to
+    // Render/DeviceCreationD3D12.cpp. The observers themselves did NOT move --
+    // they stay beside their file-local latch, which is what this paragraph
+    // is about, and what the two forwarders below exist to reach.
     //
     // Per-backend rather than one function, because the latch is per-backend:
     // each TU's `g_deviceRemovedReported` is armed/cleared beside the crash

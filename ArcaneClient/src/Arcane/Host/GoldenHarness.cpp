@@ -15,7 +15,7 @@
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (the hang watchdog's liveness signal)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
-#include <Arcane/Render/Device.hpp>       // Arcane::GraphicsBackend
+#include <Arcane/Render/GraphicsBackend.hpp>       // Arcane::GraphicsBackend
 #include <Arcane/Render/ShaderCompiler.hpp>
 
 #include <chrono>

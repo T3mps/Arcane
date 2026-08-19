@@ -22,7 +22,7 @@
 #include <Arcane/Render/Nri/Graveyard.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriTextureCache.hpp>
-#include <Arcane/Render/Device.hpp>   // RenderErrorCount -- the shared validation latch
+#include <Arcane/Render/RenderErrorLatch.hpp>   // RenderErrorCount -- the shared validation latch
 
 #undef ERROR
 

@@ -16,7 +16,7 @@
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialSource.hpp>    // kSceneInput / kMaxPassInputs
 #include <Arcane/Material/MaterialTemplate.hpp>
-#include <Arcane/Render/NvrhiMessageCallback.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/PostChainCache.hpp>      // PostChainDesc
 #include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry / kPsEntry
 
@@ -32,7 +32,7 @@ namespace Arcane
     {
         void GraphError(const std::string& text)
         {
-            NvrhiMessageCallback::Instance().NoteError("nri-graph", text.c_str());
+            RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
 
         // FNV-1a over the stitched bytecode, for the same two jobs it does in

@@ -16,6 +16,7 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/IGpuCrashBackend.hpp>
 #include <Arcane/Render/NvrhiMessageCallback.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/Swapchain.hpp>
 
 #include <SDL3/SDL.h>
@@ -1303,7 +1304,7 @@ namespace Arcane
             ResetGpuDeviceLost();
             // F-3b: the cross-backend observable, armed now that there is
             // something to collect with.
-            NvrhiMessageCallback::Instance().SetDeviceRemovedHook(&ObserveDeviceRemoved);
+            RenderErrorLatch::Instance().SetDeviceRemovedHook(&ObserveDeviceRemoved);
             // The ONE SetGpuSectionProvider call per host lifetime. Only
             // one RenderDevice backend is live per process, so this and
             // DeviceD3D12's call are two TEXTUAL sites of a single runtime
@@ -1339,7 +1340,7 @@ namespace Arcane
             // report from seeing it. See Diagnostics::FenceReports.
             Diagnostics::FenceReports();
             (void)ClearActiveGpuCrashBackendIfCurrent(m_crashBackend.get());
-            NvrhiMessageCallback::Instance().SetDeviceRemovedHook(nullptr);
+            RenderErrorLatch::Instance().SetDeviceRemovedHook(nullptr);
         }
         if (m_nvrhi)
         {

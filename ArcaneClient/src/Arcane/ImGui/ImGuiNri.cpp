@@ -15,9 +15,9 @@
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
-#include <Arcane/Render/NvrhiMessageCallback.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry / kPsEntry
-#include <Arcane/Render/Swapchain.hpp>           // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>           // kSwapchainFramesInFlight
 
 #include <imgui.h>
 
@@ -37,7 +37,7 @@ namespace Arcane
         // run's exit code meaningful.
         void GraphError(const std::string& text)
         {
-            NvrhiMessageCallback::Instance().NoteError("nri-graph", text.c_str());
+            RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
 
         // 16-byte root-constant block matching imgui.hlsl's ImGuiConstants

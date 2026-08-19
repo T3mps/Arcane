@@ -16,7 +16,7 @@
 #include <vector>
 
 #include <Arcane/Guid.hpp>
-#include <Arcane/Render/Device.hpp>   // Arcane::GraphicsBackend
+#include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend
 
 namespace Arcane::Editor::RuntimeLaunch
 {

@@ -7,6 +7,10 @@
 // happened. Anything needing the GPU drained calls waitForIdle() itself.
 
 #include <Arcane/Base/Api.hpp>
+// kSwapchainFramesInFlight moved to Render/FramePacing.hpp in Task 8a -- it is
+// the graph's slot count too, and it must outlive this NVRHI interface.
+// Included here so this header still means what its own comment above says.
+#include <Arcane/Render/FramePacing.hpp>
 
 #include <nvrhi/nvrhi.h>
 
@@ -14,10 +18,6 @@
 
 namespace Arcane
 {
-    // CPU may run this many frames ahead of the GPU. Slot gating lives
-    // INSIDE the swapchains; nothing above this interface sees it.
-    inline constexpr uint32_t kSwapchainFramesInFlight = 2;
-
     class ARCANE_API Swapchain
     {
     public:

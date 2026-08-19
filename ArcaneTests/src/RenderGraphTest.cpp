@@ -12,15 +12,16 @@
 // Include order matters here for the same reason it does in
 // NriSubstrateTest.cpp: NriDevice.hpp pulls in Extensions/NRIDeviceCreation.h,
 // which declares nri::Message with an enumerator literally named ERROR, and
-// <windows.h> (reachable through Arcane/Render/Device.hpp -> spdlog) #defines
-// ERROR via wingdi.h. Keep the NRI includes first.
+// <windows.h> (reachable through Arcane/Base/Log.hpp -> spdlog, which nearly
+// every engine header below pulls in) #defines ERROR via wingdi.h. Keep the
+// NRI includes first.
 #include <NRI.h>
 #include <Extensions/NRIDeviceCreation.h>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/ImGui/ImGuiNri.hpp>           // the user-texture invalidation hook (Task 8-pre)
-#include <Arcane/Render/Device.hpp>            // RenderErrorCount / ResetRenderErrorCount
+#include <Arcane/Render/RenderErrorLatch.hpp>  // RenderErrorCount / ResetRenderErrorCount
 #include <Arcane/Render/GpuBreadcrumbs.hpp>    // the CPU-side ring the marker-policy case reads
 #include <Arcane/Render/GpuInstrumentation.hpp>// SetActiveGpuCrashBackend / ClearActiveGpuCrashBackendIfCurrent
 #include <Arcane/Render/IGpuCrashBackend.hpp>  // IGpuCrashBackend, for the marker-policy spy
@@ -35,7 +36,7 @@
 #include <Arcane/Render/Batcher2D.hpp>         // a device-less batcher drains the spans a node counts
 #include <Arcane/Render/PostChainCache.hpp>    // PostChainDesc -- the frame's post-chain wiring
 #include <Arcane/Material/MaterialSource.hpp>  // kSceneInput
-#include <Arcane/Render/Swapchain.hpp>         // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>         // kSwapchainFramesInFlight
 
 // AFTER the NRI + engine headers, deliberately: this file's include-order note
 // above pins NRI first, and imgui.h is an ordinary header with no ERROR clash.

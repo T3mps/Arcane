@@ -14,7 +14,7 @@
 // resolves through here, so they cannot drift.
 
 #include <Arcane/Base/Api.hpp>
-#include <Arcane/Render/Device.hpp>   // GraphicsBackend
+#include <Arcane/Render/GraphicsBackend.hpp>   // GraphicsBackend
 
 #include <filesystem>
 

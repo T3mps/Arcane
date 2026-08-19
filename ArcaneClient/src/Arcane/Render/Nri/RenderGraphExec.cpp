@@ -35,8 +35,8 @@
 #include <Arcane/Render/GpuBreadcrumbs.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/IGpuCrashBackend.hpp>
-#include <Arcane/Render/NvrhiMessageCallback.hpp>
-#include <Arcane/Render/Swapchain.hpp>   // kSwapchainFramesInFlight
+#include <Arcane/Render/RenderErrorLatch.hpp>
+#include <Arcane/Render/FramePacing.hpp>   // kSwapchainFramesInFlight
 
 #undef ERROR
 
@@ -57,7 +57,7 @@ namespace Arcane
         // Both land in the same RenderErrorCount() latch the 0/0 gate reads.
         void GraphError(const std::string& text)
         {
-            NvrhiMessageCallback::Instance().NoteError("nri-graph", text.c_str());
+            RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
 
         // ---------------------------------------------------------------

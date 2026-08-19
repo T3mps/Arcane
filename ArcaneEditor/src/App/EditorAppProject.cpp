@@ -1340,7 +1340,7 @@ namespace Arcane::Editor
     // rather than reacting to one.
     //
     // What happens after the dispatch is deliberately NOT handled here: the
-    // device dies inside NVRHI, NvrhiMessageCallback's device-removed hook runs
+    // device dies inside NVRHI, the RenderErrorLatch device-removed hook runs
     // ObserveDeviceRemoved, that calls Diagnostics::WriteReport("gpu-crash:
     // device removed"), the GPU-section provider fills the envelope, and the
     // `.arcdiag`/`.gpudump` pair lands in the project's Saved/Diagnostics.

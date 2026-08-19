@@ -5,7 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
-#include <Arcane/Render/Device.hpp>   // RenderErrorCount()
+#include <Arcane/Render/RenderErrorLatch.hpp>   // RenderErrorCount()
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (the engine-roster survivor check)
 
 #include "Helpers/TestTypeContext.hpp"
