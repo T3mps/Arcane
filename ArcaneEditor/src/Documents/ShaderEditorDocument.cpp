@@ -177,7 +177,8 @@ namespace Arcane::Editor
         constexpr ImVec4 kNodeTitleText    = ImVec4(0.808f, 0.808f, 0.831f, 1.0f);
         constexpr ImVec4 kNodeBadgeText    = ImVec4(1.0f,   0.4f,   0.3f,   1.0f);
         // Selection/hover reuse the viewport's outline language so one accent
-        // means "selected" everywhere in the editor (SelectionOutline.hpp:47-48).
+        // means "selected" everywhere in the editor (kSelectColor / kHoverColor,
+        // ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.cpp:101).
         constexpr ImVec4 kNodeSelBorder    = ImVec4(1.0f,  0.65f, 0.10f, 1.0f);   // amber
         constexpr ImVec4 kNodeHovBorder    = ImVec4(0.25f, 0.70f, 1.0f,  1.0f);   // cyan
         constexpr ImVec4 kGroupBgColor     = ImVec4(0.220f, 0.220f, 0.235f, 0.25f);

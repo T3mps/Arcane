@@ -240,12 +240,14 @@ namespace Arcane
             // stays: last-writer-wins makes displacement trivially possible and
             // silently wrong, and refusing is still the right answer for ANY
             // owner we did not install. NriDiagnosticsTest drives it with a
-            // stub, which is why the log line below still names NVRHI -- that
-            // was the case it was written for.
+            // stub. The log line below names no backend VENDOR, only the fact
+            // that the slot is occupied by an owner we did not install -- which
+            // is all that is knowable here now that the NVRHI writer this test
+            // was originally written for is gone.
             if (ActiveGpuCrashBackend() != nullptr)
             {
-                ARC_INFO("[nri] diagnostics: an NVRHI crash backend is already armed -- leaving the "
-                         "chain to it (the two-device transition topology)");
+                ARC_INFO("[nri] diagnostics: a GPU crash backend we did not install is already "
+                         "armed -- leaving the chain to its owner");
                 return false;
             }
 

@@ -27,7 +27,8 @@
 // Domain color-coding is deliberately NOT monochrome and does not live here:
 // the inspector's X/Y/Z axis bars (EditorWidgets.cpp), the shader graph's
 // typed pin dots and node accents (ShaderEditorDocument.cpp), and the amber
-// viewport selection outline (SelectionOutline.hpp:47-48) all keep their hues.
+// viewport selection outline (the NRI outline composite's kSelectColor,
+// Render/Nri/nodes/PickOutlineNodes.cpp:101) all keep their hues.
 // UE does the same -- the monochrome rule governs CHROME, not data.
 //
 // All values are DISPLAY-REFERRED: the editor's ImGui pass draws post-tonemap
@@ -103,10 +104,10 @@ namespace Arcane::Editor
 
         // -- DELIBERATELY NOT GRAY ----------------------------------------
         // The drop-target frame speaks the editor's existing amber "this is
-        // the thing you are acting on" language (SelectionOutline.hpp:47's
-        // selectColor, and the shader graph's selected-node border), not the
-        // stock pure yellow. Histogram bars are a data mark, exempt like the
-        // axis bars.
+        // the thing you are acting on" language (the viewport outline's
+        // kSelectColor, Render/Nri/nodes/PickOutlineNodes.cpp:101, and the
+        // shader graph's selected-node border), not the stock pure yellow.
+        // Histogram bars are a data mark, exempt like the axis bars.
         inline constexpr ImVec4 kAmber      = ImVec4(1.000f, 0.650f, 0.100f, 1.00f);
         inline constexpr ImVec4 kAmberLight = ImVec4(1.000f, 0.780f, 0.350f, 1.00f);
 

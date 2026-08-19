@@ -629,8 +629,7 @@ namespace Arcane
                 {
                     m_warnedFormat = true;
                     GraphError("ImGuiNri: an ImGui texture is not 4 bytes/pixel (RGBA32) -- this "
-                               "backend uploads RGBA8_UNORM only, matching ImGuiNvrhi. The texture "
-                               "is skipped.");
+                               "backend uploads RGBA8_UNORM only. The texture is skipped.");
                 }
                 return;
             }

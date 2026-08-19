@@ -17,11 +17,12 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry / kPsEntry
-// Deliberately NOT Render/SelectionOutline.hpp: that header pulls nvrhi into a
-// file whose whole point is the NRI recorder. The one thing worth pinning
-// across the two -- the seed CB's id capacity -- is pinned against the SHADER
-// instead (the static_asserts below), which is the contract both recorders
-// actually share.
+// This file used to justify NOT including Render/SelectionOutline.hpp, which
+// pulled nvrhi in; that header was deleted at NRI Phase 5a Task 4 and this is
+// the only outline recorder left. What survives the note is the arrangement it
+// described: the seed CB's id capacity -- and every other CB layout here -- is
+// pinned against the SHADER (the static_asserts below) rather than against a
+// second C++ declaration, so the pin still has a counterparty.
 
 #undef ERROR
 
@@ -70,7 +71,8 @@ namespace Arcane
         static_assert(offsetof(SeedCB, selectedIds) == 32, "id array starts at offset 32");
         // `uint4 gSelectedIds[16]` in the shader == 64 uints == 256 bytes. This
         // is the cross-check that keeps the C++ cap and the HLSL array the same
-        // size without dragging nvrhi in through SelectionOutline.hpp.
+        // size, pinned against the SHADER rather than against the deleted
+        // SelectionOutline.hpp (see the include note at the top of this file).
         static_assert(OutlineNode::kMaxSelectedIds * sizeof(std::uint32_t) == 256,
                       "the seed CB's id capacity must match outline_seed.hlsl's uint4[16]");
         static_assert(sizeof(SeedCB) <= OutlineNode::kCbMaxBytes,

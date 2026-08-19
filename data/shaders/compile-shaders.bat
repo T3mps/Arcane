@@ -1,8 +1,10 @@
 @echo off
 :: Compiles every engine shader entry point to DXIL + SPIR-V loose artifacts.
 :: Invoked by the premake prebuild step on the Arcane project; also runnable
-:: by hand for the hot-reload dev loop (the running app picks changes up via
-:: ShaderLibrary::Poll when ARCANE_SHADER_DIR points at generated\).
+:: by hand for the dev loop, with ARCANE_SHADER_DIR pointing at generated\
+:: (Arcane/Render/ShaderPaths.hpp is what reads it). The artifact hot-reload
+:: this line used to name, ShaderLibrary::Poll, is GONE -- that class was
+:: deleted at NRI Phase 5a Task 9.5b-ii.
 ::
 :: SPIR-V register shifts MUST match nvrhi::VulkanBindingOffsets defaults
 :: (t=0, s=128, b=256, u=384). ShaderMake (vendored) replaces this script
@@ -13,8 +15,9 @@
 :: service (ShaderCompiler). SPIRV_FLAGS below must mirror kSpirvArgs there.
 ::
 :: INVARIANT: the output stem's _vs/_ps/_cs suffix (4th arg) must agree with
-:: the entry point's <type>_main prefix (2nd arg) -- ShaderLibrary derives the
-:: SPIR-V entry name from the stem suffix. Mismatch = late Vulkan failure.
+:: the entry point's <type>_main prefix (2nd arg) -- a loader derives the entry
+:: name from the stem suffix (_vs -> vs_main, ...), per the entry/profile
+:: conventions in ShaderConventions.hpp:15-23. Mismatch = late Vulkan failure.
 setlocal
 set DXC=%~dp0..\..\ThirdParty\tools\dxc\dxc.exe
 set SRC=%~dp0
