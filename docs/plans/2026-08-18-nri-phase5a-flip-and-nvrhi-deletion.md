@@ -518,6 +518,45 @@ git commit -m "refactor(render)!: shared batcher/shader/sprite types drop their 
 - Modify: `Render/Nri/NriDevice.*`, `Render/Nri/NriDiagnostics.cpp`
 - Test: `ArcaneTests/src/DiagnosticsTest.cpp`
 
+> **AMENDED 2026-08-18 — TASK 8 OWNS FIVE RELOCATIONS, NOT TWO, AND ONE EXTRA
+> DELETION.** The plan text below names DRED configuration and InfoQueue arming.
+> Reading the code during Tasks 4–7 found three more things living in files this
+> task deletes, each needed by the graph path, plus a class Task 7 could not
+> reach from inside its own fences:
+>
+> 1. **`RenderErrorCount()` and its latch storage.** Storage is
+>    `NvrhiMessageCallback.hpp:156`; the accessor is declared `Device.hpp:35` and
+>    defined `Device.cpp:9-12`. The graph consumes it at ~70 sites
+>    (`NriCommon.cpp:65` `RouteNriError` — what every `ARC_NRI_CHECK` funnels
+>    into — `:158` `NoteDeviceLost`, `NriDiagnostics.cpp:274/320/322`, plus
+>    `NoteError` wrappers across `RenderGraphExec`, `PickOutlineNodes`,
+>    `FullscreenNodes`, `NriPipelineCache`, `NriGraphContext`, `Batch2DNode`,
+>    `ImGuiNri`). It feeds the exit-code-2 latch read at `EditorApp.cpp:2076` /
+>    `RuntimeApp.cpp:824` — **the invariant every desk battery asserts as
+>    `RenderErrorCount B -> N`.** Deleting `Device.cpp` without relocating this
+>    destroys the phase's own verification instrument.
+> 2. **`kSwapchainFramesInFlight`**, hosted in `Render/Swapchain.hpp`, which this
+>    task deletes via the `SwapchainD3D12`/`SwapchainVulkan` derivations at
+>    `DeviceD3D12.cpp:303` / `DeviceVulkan.cpp:228`. **13 files include that
+>    header**, 8 under `Nri/` — including `NriSwapChain.hpp:49`, whose own
+>    comment says "Render/Swapchain.hpp -- reused, not reinvented".
+> 3. **The `GraphicsBackend` enum**, which reaches `Render/ShaderPaths.hpp` (new
+>    in Task 7) only through `Device.hpp` — so `ShaderPaths` still pulls nvrhi
+>    transitively until the enum moves.
+> 4. **`Render/ShaderLibrary.{hpp,cpp}` must be added to this task's delete
+>    list.** Task 7 relocated `ResolveFlavorDir` to `Render/ShaderPaths.*` and
+>    left the graph referencing `ShaderLibrary` **nowhere** (verified: the only
+>    hits under `Nri/` are three comments), but could not delete the class —
+>    its surviving consumers include `GpuFaultInjector` and `TonemapPass`
+>    (this task's), `Runtime` (Task 9's), and `Batcher2D.hpp:220`, a
+>    plugin-visible `Create` signature. Once this task deletes `RenderDevice`,
+>    the `git rm` falls out as a by-product. **Without this amendment the class
+>    silently survives the phase.**
+>
+> Also note: `BootPresenter.{hpp,cpp}` and `ArcaneEditor/src/Widgets/GraphGridPass.*`
+> are named in NO task's file list anywhere in this plan, and both were found
+> dead on the graph path (Tasks 6 and 7). Task 11 inherits them.
+
 **Interfaces:**
 - Consumes: Tasks 4-7.
 - Produces: DRED setup and InfoQueue arming live on the NRI device-creation path. `GpuPassScope` emits the first-party breadcrumb channel only. `GpuFaultInjector::Create(NriDevice&)` / `Fire(nri::CommandBuffer*)`.
@@ -579,6 +618,36 @@ git commit -m "refactor(diag)!: DRED and the fault injector move to the NRI devi
 - Produces: ABI 14. `Runtime` exposes no render-backend types.
 
 Verified: **neither ReferenceProject nor Aphelyon calls `Device()`, `Shaders()`, `SetRenderResources` or `OffscreenCanvas`** — grep returned nothing in either. The removal is safe; the bump is required because the vtable shape changes.
+
+> **AMENDED 2026-08-18 — THE v14 BUMP HAS A SECOND, STRONGER JUSTIFICATION THE
+> PLAN NEVER STATED, AND IT IS ALREADY OWED BY TASK 7.**
+>
+> Task 7 (`f148ea9d`) **shrank `Material2DDesc`** by deleting `vs`, `ps` and
+> `paramTextures`. That struct crosses the plugin boundary **by value**:
+> `Runtime.hpp:155` exposes `SetRenderContext(Batcher2D*)`, `PluginABI.hpp:92`
+> states plainly that **"Plugins compile their own copy of `Batcher2D.hpp`"**,
+> and `RegisterMaterial(Material2DDesc)` is a by-value vtable slot. The ABI was
+> bumped for exactly this class of change **twice already** — v12
+> ("Material2DDesc gained the retained shader BLOBS", `:105-111`) and v13
+> ("same class as v12's Material2DDesc growth, one indirection deeper", `:129`).
+>
+> So v14 is not merely "the render surface no longer exposes NVRHI types": it is
+> **required to gate a layout change that is already in the tree at ABI 13.**
+> Cite it in the bump comment. Until this task lands, a module built before
+> `f148ea9d` will load into the current engine with no gate — the v12/v13
+> stack-corruption class with the safety catch disarmed. (Exposure is limited:
+> no game-module source references `Material2DDesc` or `RegisterMaterial` —
+> grep over `ReferenceProject/` and `Gacha/Game/` is empty — and the D5a
+> batteries `/t:Rebuild` modules per config. The risk is a hand-run host against
+> a stale module.)
+>
+> **CARRY:** `Batch2DDrawSpan::texture` (`Batcher2D.hpp:150`) is still
+> `nvrhi::ITexture*` and **no task owns it.** Task 7's Produces line covered the
+> span struct as well as the material struct; only the material half landed.
+> Removing the field changes `Batch2DDrained`'s layout, which is returned by
+> value across the vtable — the same bump rationale as `PluginABI.hpp:125-129`.
+> Decide here whether v14 also absorbs it, or whether it is deliberately
+> deferred past this phase.
 
 - [ ] **Step 1: Delete the three members and their backing storage.** The doc comment describes "a plugin that needs to build its OWN engine render objects (e.g. an OffscreenCanvas...)" — that capability is gone with the class; if a plugin ever needs graph-side resources, that is a new, deliberate API, not a resurrected NVRHI pointer.
 
