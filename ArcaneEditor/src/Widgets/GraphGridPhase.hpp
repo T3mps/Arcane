@@ -79,16 +79,40 @@ namespace Arcane::Editor
     // full; read it there.
     struct GraphGridPhase
     {
-        // MIRRORED CONSTANTS. These four must stay equal to graph_grid.hlsl's
-        // kZoomExponent / kBaseSpacingPx / kMinorTargetPx / kMajorEvery. They
-        // are duplicated here rather than passed in because the phase update
-        // has to know the grid's own screen scale and its coarsest period, and
-        // both are the shader's arithmetic; the same mirrored-constant
-        // arrangement msdf.hlsl and TextSystem.cpp used for kPxRange/
-        // kAtlasSize before Task 9.5a deleted TextSystem.
-        static constexpr float kZoomExponent  = 0.7f;   // see the shader's rationale block
+        // THESE FOUR ARE NOW FREE-STANDING -- NO MIRROR OBLIGATION.
+        // They were MIRRORED CONSTANTS, pinned equal to graph_grid.hlsl's
+        // kZoomExponent / kBaseSpacingPx / kMinorTargetPx / kMajorEvery, for as
+        // long as a shader-rendered backdrop was the other consumer. That
+        // consumer went at NRI Phase 5a Task 9.5a with GraphGridPass, and the
+        // shader itself was deleted at the final-review fix wave once nothing
+        // loaded it. There is no second copy left to drift against: the
+        // ImGui-primitive fallback below is the ONLY reader, and these are
+        // simply its tuning values. Change them freely -- but change them
+        // TOGETHER with the band assertions in GraphGridPhaseTest.cpp, which
+        // are what actually holds the design invariant now.
+        //
+        // WHY 0.7 (kept because the shader's rationale block was its only home):
+        // screen period = kBaseSpacingPx * pow(zoom, k). At k = 1 the grid is
+        // rigidly welded to canvas content; at k = 0 it ignores zoom entirely.
+        // k = 0.7 makes the grid track zoom sublinearly, and over the editor's
+        // 0.1-2.0 zoom table (ShaderEditorDocument.cpp, kZoomLevels) yields
+        // 0.7*log2(20) = 3.0 LOD crossings. MORE CROSSINGS IS NOT A RISK: lines
+        // at 2*pm are exactly every other line of pm for any k, so a crossing
+        // can only ever fade out lines that are already redundant -- never a
+        // pop. Nor does k change density, because the octave snap normalizes the
+        // period at every zoom (see MinorPeriod), which is why kBaseSpacingPx
+        // needed no compensating adjustment. Worked endpoints at k = 0.7:
+        // pm = 16.0 px at zoom 0.100, 20.0 px at 1.000, 16.2 px at 2.000 -- the
+        // whole domain sits inside the design band.
+        static constexpr float kZoomExponent  = 0.7f;
+        // Grid spacing in canvas units at zoom = 1, before the octave LOD snap.
         static constexpr float kBaseSpacingPx = 20.0f;
+        // The on-screen spacing the minor octave is driven TOWARD, so the
+        // backdrop can neither collapse into mush nor dissolve into emptiness.
         static constexpr float kMinorTargetPx = 22.0f;
+        // Major lines every N minor lines. Powers of two only: the LOD steps by
+        // doubling, and a power-of-two ratio keeps majors landing exactly on
+        // minor lines across a step (so majors never "slide" through the field).
         static constexpr float kMajorEvery    = 8.0f;
 
         // A view scale change below this (relative) is treated as no change at
@@ -103,8 +127,9 @@ namespace Arcane::Editor
             return std::pow(viewScale > 1e-4f ? viewScale : 1e-4f, kZoomExponent);
         }
 
-        // The snapped minor period, in screen pixels. Mirror of the LOD block
-        // in graph_grid.hlsl's ps_main; always lands in (kMinorTargetPx/2, kMinorTargetPx].
+        // The snapped minor period, in screen pixels. This IS the LOD block now
+        // -- it was a mirror of graph_grid.hlsl's ps_main until that shader was
+        // deleted; always lands in (kMinorTargetPx/2, kMinorTargetPx].
         static float MinorPeriod(float gridScale) noexcept
         {
             const float basePeriod = kBaseSpacingPx * gridScale;

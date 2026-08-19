@@ -42,8 +42,11 @@ call :compile outline_jfa vs_main vs_6_5 outline_jfa_vs || exit /b 1
 call :compile outline_jfa ps_main ps_6_5 outline_jfa_ps || exit /b 1
 call :compile outline_composite vs_main vs_6_5 outline_composite_vs || exit /b 1
 call :compile outline_composite ps_main ps_6_5 outline_composite_ps || exit /b 1
-call :compile graph_grid vs_main vs_6_5 graph_grid_vs || exit /b 1
-call :compile graph_grid ps_main ps_6_5 graph_grid_ps || exit /b 1
+:: graph_grid_vs/_ps were emitted here until the NRI Phase 5a final-review fix
+:: wave. Their only loader was GraphGridPass, deleted at Task 9.5a; the shader
+:: graph's backdrop is now drawn with ImGui primitives
+:: (ArcaneEditor/src/Widgets/GraphGridPhase.hpp, DrawGraphGridFallback), so
+:: graph_grid.hlsl was deleted with these two lines.
 :: The deliberate GPU-fault dispatch (GpuFaultInjector.hpp) -- the ONLY compute
 :: entry point in the tree, and not part of any render path. Built in every
 :: configuration because this script has no configuration awareness; the code

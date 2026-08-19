@@ -508,8 +508,11 @@ namespace Arcane::Editor
         void ApplyGraphCanvasStyle()
         {
             ed::Style& s = ed::GetStyle();
-            // The vendored grid AND background fill are switched off; the
-            // shader backdrop (graph_grid.hlsl) is blitted underneath instead.
+            // The vendored grid AND background fill are switched off; our own
+            // lattice is drawn underneath instead -- DrawGraphGridFallback
+            // (Widgets/GraphGridPhase.hpp), via ImDrawList. It was a BLITTED
+            // shader backdrop (graph_grid.hlsl) until NRI Phase 5a Task 9.5a
+            // deleted GraphGridPass; the shader itself went with the fix wave.
             // Wholesale replacement is the only option available: the built-in
             // grid's 32 px spacing is a hardcoded local with no StyleVar and no
             // LOD fade (imgui_node_editor.cpp:1506-1517).

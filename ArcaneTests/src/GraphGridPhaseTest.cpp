@@ -98,7 +98,11 @@ TEST_CASE("graph grid phase: a ZOOM grows the lattice out of the view's own fixe
 TEST_CASE("graph grid phase: the snapped minor period always lands in its half-octave band",
           "[editor][material]")
 {
-    // Mirror of the LOD block in graph_grid.hlsl's ps_main: whatever the zoom,
+    // THE band invariant, no longer a mirror of anything: this was pinned
+    // against the LOD block in graph_grid.hlsl's ps_main until that shader was
+    // deleted (nothing loaded it after Task 9.5a took GraphGridPass). With the
+    // ImGui fallback the only reader, THIS ASSERTION is what holds the design.
+    // Whatever the zoom,
     // the drawn period stays inside (kMinorTargetPx/2, kMinorTargetPx]. That
     // is what keeps the grid legible at every zoom instead of collapsing into
     // a fill or spreading into two lines on screen -- and it is the number the
