@@ -708,7 +708,7 @@ phase cannot reach exit criterion 5.
 | 4 | `Render/TonemapPass.hpp` | **DELETE** (only `TonemapTest` consumes it) |
 | 3 | `Render/ShaderLibrary.hpp` | **DELETE** (Task 7 relocated `ResolveFlavorDir`; graph references it nowhere) |
 | 3 | `Render/Canvas.hpp` | **DELETE** |
-| 3 | `Text/TextSystem.hpp` | live consumer |
+| 3 | `Text/TextSystem.hpp` | **DELETE — corrected 2026-08-19.** Listed as a live consumer above when this task was inserted; it is not. Verified: exactly ONE includer tree-wide, its own `.cpp`, and its factory is `TextSystem::Create(nvrhi::IDevice*)` — unreachable for the same reason `ShaderLibrary` is. Task 8b's review caught this: its report ranked "TextSystem has ZERO tests left" as the phase's biggest *live* coverage loss while its own dead-code inventory implied otherwise. The lost tests were coverage of a dead class, so the genuinely live losses (Assets' GPU upload, the host-slice end-to-end) rank above it. |
 | 2 | `SpriteMaterialCache.hpp`, `PostChainCache.hpp`, `SceneRenderResolver.hpp` | mechanical |
 | 1 | `SceneResources.hpp`, `RuntimeFrame.hpp`, `RuntimeApp.cpp`, `SpriteDocument.cpp` | mechanical |
 | 0 | `EditorApp.cpp`, `EditorAppFrame.cpp` | stale includes — free |
