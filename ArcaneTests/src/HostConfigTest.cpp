@@ -165,8 +165,9 @@ TEST_CASE("host config: the golden flags compose with the EDITOR's launch vocabu
 
 #if !defined(ARCANE_DIST)
     // And the full editor stack: --project + --nri-graph + golden -- the
-    // exact combination D3c's baseline capture runs (both editor NVRHI and
-    // editor graph mode reuse this same parse).
+    // exact combination D3c's baseline capture ran, back when the editor
+    // still had an NVRHI arm alongside the graph one, both routing through
+    // this same parse.
     const auto graphGolden = Run({"--nri-graph", "--project", "ReferenceProject",
                                   "--golden-capture", "goldens/editor", "--frames", "120"});
     REQUIRE(graphGolden.config.has_value());

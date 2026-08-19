@@ -7,8 +7,8 @@
 //   * ARMING is fully reachable. Every slot Arm() fills is a process-wide
 //     pointer slot in Arcane.dll with a reader, and NriDevice::CreateNoneForTests
 //     gives a real nri::Device to arm over. So "the NONE device arms the hook
-//     slot", "a double Arm touches nothing", "an NVRHI-armed process is left
-//     alone" and "Disarm empties exactly what Arm filled" are all EXACT
+//     slot", "a double Arm touches nothing", "an incumbent-armed process is
+//     left alone" and "Disarm empties exactly what Arm filled" are all EXACT
 //     properties here, not proxies.
 //   * The HEARTBEAT's end-to-end path is not: its value source is a GPU
 //     timeline fence (NONE's GetFenceValue returns 0 unconditionally) and its
@@ -70,10 +70,11 @@ namespace
         ScopedNriDiagnostics& operator=(const ScopedNriDiagnostics&) = delete;
     };
 
-    // Stands in for the NVRHI device having armed first -- the two-device
-    // transition topology. Nothing about it needs to work; Arm()'s test is
-    // "the active-backend slot is non-null", and that is the only fact the
-    // NVRHI device publishes about itself that this file can see.
+    // Stands in for whatever incumbent backend armed first -- historically
+    // the NVRHI device, in the two-device transition topology --nri-graph
+    // used to create. Nothing about it needs to work; Arm()'s test is "the
+    // active-backend slot is non-null", and that is the only fact an
+    // incumbent backend publishes about itself that this file can see.
     class StubCrashBackend final : public Arcane::IGpuCrashBackend
     {
     public:
@@ -298,11 +299,15 @@ TEST_CASE("nri diagnostics: a NONE device arms the whole chain, and a second Arm
 
 TEST_CASE("nri diagnostics: Arm no-ops when an NVRHI crash backend already holds the chain", "[nri]")
 {
-    // THE TWO-DEVICE TRANSITION TOPOLOGY -- today's `--nri-graph` run, where
-    // the engine's NVRHI device armed during boot and the vehicle's NRI device
-    // comes up second. Displacing that backend would point the Diagnostics
-    // GPU-section provider at a ring with no DRED, no device-fault query and
-    // no marker buffer while the device that HAS all three is still rendering.
+    // THE TWO-DEVICE TRANSITION TOPOLOGY, historically -- back when
+    // `--nri-graph` meant the engine's NVRHI device armed during boot and the
+    // vehicle's NRI device came up second. NVRHI is gone and the graph is the
+    // only device now, but the property pinned here is general: displacing
+    // ANY incumbent backend would point the Diagnostics GPU-section provider
+    // at a ring with no DRED, no device-fault query and no marker buffer
+    // while the device that HAS all three is still rendering. (The TEST_CASE
+    // title above still says "NVRHI crash backend" -- that is the test-name
+    // string, code rather than prose, and out of this sweep's scope.)
     REQUIRE_FALSE(Arcane::NriDiagnostics::IsArmed());
     REQUIRE(Arcane::ActiveGpuCrashBackend() == nullptr);
 

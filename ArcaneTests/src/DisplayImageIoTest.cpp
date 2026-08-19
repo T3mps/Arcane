@@ -10,10 +10,12 @@
 //                             NriTextureCache's PixelSupplyFn on the graph arm.
 //   WriteThumbnailPngRgba  -- once the CPU half of SaveTexturePng, and the
 //                             whole of it since ABI v15 (opaque alpha +
-//                             width cap + downscale + write). The graph arm's
-//                             auto-screenshot reads its pixels through
-//                             NriGraphContext::ReadCapture and lands here; the
-//                             NVRHI arm reads its own and lands here too.
+//                             width cap + downscale + write). The editor's
+//                             cover-thumbnail write reads pixels through
+//                             NriGraphContext::ReadCapture and lands here --
+//                             the only caller since the NVRHI arm
+//                             (ReadTexturePixels -> SaveTexturePng) was
+//                             deleted at ABI v15.
 //
 // Same precedent as RepackStagingToRgba, which was exported at the previous
 // phase for exactly this: one definition, two ways of getting the pixels.

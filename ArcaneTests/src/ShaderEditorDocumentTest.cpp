@@ -733,8 +733,9 @@ TEST_CASE("severance: a DEVICE-LESS fullscreen material publishes its preview as
     DocServices services;
     services.compiler = &compiler;
     services.sources = &sources;
-    // services.device deliberately left null -- THIS is the graph flavor's
-    // shape (EditorApp::StageRenderBridge hands the runtime (nullptr, nullptr)).
+    // DocServices has no device member at all any more (deleted at NRI Phase
+    // 5a, Task 9.5b) -- services is built with only compiler/sources below,
+    // which is this test's stand-in for the graph flavor's device-less shape.
 
     const auto loaded = Arcane::LoadMaterialAsset(file);
     REQUIRE(loaded.has_value());

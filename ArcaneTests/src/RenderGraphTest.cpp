@@ -4400,9 +4400,12 @@ TEST_CASE("nri graph frame: --golden-stage batch drops the post chain; post and 
 {
     // The stage vocabulary is the ONE thing that makes a node-by-node cutover
     // comparable: a batch-stage golden must contain the batcher and the
-    // tonemap and nothing else, on BOTH recorders. RuntimeApp applies exactly
-    // this bypass to the NVRHI path (`stageSkipsPost`), so if this gate broke,
-    // a batch golden would compare a graded frame against an ungraded one.
+    // tonemap and nothing else. NriGraphContext::BuildFrame applies exactly
+    // this bypass today (`shape.stage != GoldenStage::Batch` gating the post
+    // chain -- NriGraphContext.cpp) -- the deleted NVRHI path's own
+    // `stageSkipsPost` local served the same rule before NRI Phase 5a -- so
+    // if this gate broke, a batch golden would compare a graded frame
+    // against an ungraded one.
     const Arcane::PostChainDesc chain = MakeLinearChain(2);
 
     const struct { Arcane::GoldenStage stage; std::size_t nodes; std::uint32_t passes; } cases[] = {
@@ -5511,7 +5514,8 @@ TEST_CASE("nri graph frame: the outline field ping-pongs through TWO pool slots 
     // smaller one runs the SAME steps through the same two slots. The step
     // count being extent-independent is the D3c change (it used to shrink with
     // the canvas): the schedule is derived from the outline's thickness, which
-    // is what makes it identical to the NVRHI arm's at every viewport size.
+    // is what made it identical to the (since-deleted) NVRHI arm's at every
+    // viewport size, and still holds now that the graph is the only arm.
     Arcane::RenderGraph small;
     Arcane::RgFrameShape smallShape;
     smallShape.canvasWidth  = 16;
@@ -5799,9 +5803,11 @@ TEST_CASE("nri graph frame: a capture frame copies the backbuffer AFTER the HUD 
 
 TEST_CASE("nri graph frame: --golden-stage batch and post drop the HUD; full keeps it", "[nri]")
 {
-    // The SAME gate RuntimeApp applies to the NVRHI path, where both non-Full
-    // stages call ImGui::EndFrame() instead of rendering. Host chrome sits on
-    // top of every pixel a batch/post golden exists to compare, so if this gate
+    // The SAME gate RuntimeApp applies today, mirroring the NVRHI block's
+    // rule exactly from back when that block existed (NRI Phase 5a, Task 4
+    // deleted RenderNvrhi outright): both non-Full stages call
+    // ImGui::EndFrameDiscard() instead of rendering. Host chrome sits on top
+    // of every pixel a batch/post golden exists to compare, so if this gate
     // broke, a stage golden would compare a chromed frame against a bare
     // baseline -- and the diff would look like a batch-node regression.
     const struct { Arcane::GoldenStage stage; std::size_t nodes; bool hud; } cases[] = {

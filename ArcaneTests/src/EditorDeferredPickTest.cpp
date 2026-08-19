@@ -81,10 +81,12 @@ TEST_CASE("deferred pick: a click resolves through the table of the frame that r
 
 TEST_CASE("deferred pick: id 0 is BACKGROUND, a real answer rather than a failure", "[editor]")
 {
-    // The NVRHI arm clears the selection on an empty-space click and treats
-    // ctrl+click on empty space as a miss instead. Both need the id-0 landing
-    // to be a HIT with an invalid entity, not a nullopt -- nullopt means "do
-    // not touch the selection", which is the opposite instruction.
+    // HandleViewportPick clears the selection on an empty-space click and
+    // treats ctrl+click on empty space as a miss instead (a rule the NVRHI
+    // arm set and the graph arm inherited verbatim -- EditorAppFrame.cpp).
+    // Both need the id-0 landing to be a HIT with an invalid entity, not a
+    // nullopt -- nullopt means "do not touch the selection", which is the
+    // opposite instruction.
     DeferredPick pick;
     pick.Arm(glm::ivec2(0, 0), /*ctrlHeld=*/true, 1, false);
     const auto request = pick.TakeRequest(Table({ 5 }));
