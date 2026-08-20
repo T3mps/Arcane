@@ -90,4 +90,41 @@ namespace Arcane
     // a string literal at each of the editor's two call sites (NVRHI +
     // graph) so the two cannot drift to different spellings.
     inline constexpr const char* kEditorGoldenNamePrefix = "editor";
+
+    // ===== THE EDITOR GOLDEN VIEWPORT EXTENT, PINNED ========================
+    // The editor's golden captures are VIEWPORT-ONLY and therefore
+    // LAYOUT-SIZED: the image is the offscreen viewport target, whose extent
+    // is normally the Viewport PANEL's measured content region. That makes the
+    // capture's dimensions a function of the saved ImGui layout
+    // (%LOCALAPPDATA%\Arcane\editor\layouts\<project-guid>.ini), which is
+    // per-project persisted state that any interactive session can change.
+    //
+    // WHAT THAT COST, and why this constant exists: the D5a-1 desk checkpoint's
+    // own DRIVE session rebuilt the offscreen context at a new panel height and
+    // persisted it. At D5a-2 every editor golden compared 654x330 (frozen)
+    // against 654x354 (current) and reported `dims MISMATCH, maxDelta 0, bad
+    // 0.0000%` -- width identical, ZERO pixel differences, pure geometry. So a
+    // drive session silently invalidated the very goldens the next checkpoint
+    // compared against, and the editor half of the golden signal was worth
+    // nothing until someone re-baselined it.
+    //
+    // Re-baselining is the wrong fix: it makes the goldens follow the layout
+    // rather than the renderer, and re-capturing a golden to make a compare
+    // pass is exactly the move that turns a floor into a rubber stamp. Pinning
+    // the extent is the right one -- the capture stops depending on layout
+    // state at all, so the comparison answers "did the RENDERER change" and
+    // nothing else.
+    //
+    // THE VALUES ARE THE FROZEN GOLDENS' OWN DIMENSIONS, read out of the PNG
+    // IHDRs in ReferenceProject/Goldens (all six editor-*.png are 654x330).
+    // They are deliberately NOT a fresh choice: picking any other number would
+    // require re-capturing, which is the thing this exists to avoid.
+    //
+    // GOLDEN RUNS ONLY. An ordinary interactive session must keep sizing the
+    // target to the panel, or the viewport would render at a fixed resolution
+    // and scale -- so the editor applies these only under GoldenMode(). The
+    // panel still measures and still displays; in a golden run its ImGui::Image
+    // is simply scaled, which no golden reads.
+    inline constexpr std::uint32_t kEditorGoldenViewportW = 654;
+    inline constexpr std::uint32_t kEditorGoldenViewportH = 330;
 }

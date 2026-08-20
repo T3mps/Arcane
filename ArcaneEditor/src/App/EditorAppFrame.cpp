@@ -2467,8 +2467,28 @@ namespace Arcane::Editor
                                             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
                                             /*showToolOverlay=*/!InPlayMode());
         m_viewportDockId = fs.vp.dockId;
-        m_viewportTargets.pendingW = fs.vp.desiredW;
-        m_viewportTargets.pendingH = fs.vp.desiredH;
+        // A GOLDEN RUN DOES NOT LET THE LAYOUT SIZE THE CAPTURE. The editor's
+        // goldens are viewport-only and therefore layout-sized, so without this
+        // the image's dimensions are a function of the saved per-project ImGui
+        // layout -- and D5a-1's own drive session proved that is not stable
+        // across a checkpoint: it persisted a taller panel and left all six
+        // editor goldens comparing 654x330 against 654x354 at maxDelta 0, a
+        // pure-geometry failure with zero pixel differences. See
+        // kEditorGoldenViewportW/H for the full account and why the fix is
+        // pinning rather than re-baselining.
+        //
+        // COHERENT BY CONSTRUCTION, which is the reason this one assignment is
+        // the whole change: ViewportWidth()/ViewportHeight() report the
+        // offscreen TARGET's extent (graph->SurfaceWidth/Height), not the
+        // panel's, so pinning the target pins the camera fit, the pick
+        // projection and the capture together. The panel keeps measuring and
+        // keeps drawing; its ImGui::Image is simply scaled, and no golden
+        // reads the panel.
+        const bool pinGoldenExtent = m_config.GoldenMode();
+        m_viewportTargets.pendingW = pinGoldenExtent ? Arcane::kEditorGoldenViewportW
+                                                     : fs.vp.desiredW;
+        m_viewportTargets.pendingH = pinGoldenExtent ? Arcane::kEditorGoldenViewportH
+                                                     : fs.vp.desiredH;
         m_viewportRect     = fs.vp.imageRect;
         m_viewportActive   = Arcane::Editor::SceneInputActive(fs.vp.hovered, fs.vp.focused);
     }

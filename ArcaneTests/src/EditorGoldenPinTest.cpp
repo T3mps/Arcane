@@ -27,6 +27,7 @@
 
 #include <Astra/Registry/Registry.hpp>
 
+#include <Arcane/Host/GoldenHarness.hpp>   // kEditorGoldenViewportW/H -- the PINNED golden extent
 #include <Arcane/Render/PickEmit.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
@@ -78,9 +79,16 @@ TEST_CASE("Golden camera pin frames the whole scene into the capture extent", "[
     MakeSprite(*reg, glm::vec2(-4.0f, 0.5f), glm::vec2(2.0f, 1.0f));
     MakeSprite(*reg, glm::vec2(5.0f, -1.5f), glm::vec2(3.0f, 2.0f));
 
-    // The DOCKED panel extent, not the 1280x720 boot default -- the whole
-    // point of re-deriving the pin per frame.
-    const glm::vec2 viewport(654.0f, 330.0f);
+    // THE PINNED GOLDEN EXTENT, read from the shared constant rather than
+    // spelled here. It used to be the docked panel's measured extent (the
+    // point of re-deriving the pin per frame), which is exactly what made the
+    // editor goldens layout-sized and let a drive session invalidate them --
+    // the extent is pinned for golden runs now. Taking the number from the
+    // same constant EditorApp applies is what stops the CAMERA FIT this case
+    // checks and the CAPTURE those goldens hold from ever drifting apart:
+    // two spellings of 654x330 could disagree, one constant cannot.
+    const glm::vec2 viewport(static_cast<float>(Arcane::kEditorGoldenViewportW),
+                             static_cast<float>(Arcane::kEditorGoldenViewportH));
     const auto cam = Arcane::Editor::GoldenPinnedCamera(*reg, viewport);
     REQUIRE(cam.has_value());
 
@@ -113,7 +121,8 @@ TEST_CASE("Golden camera pin is a pure function of scene and extent", "[editor]"
     // where EditorCamera::Frame leaves zoom alone) still lands on the SAME
     // zoom rather than inheriting whatever the session held.
     auto reg = MakeSceneRegistry();
-    const glm::vec2 viewport(654.0f, 330.0f);
+    const glm::vec2 viewport(static_cast<float>(Arcane::kEditorGoldenViewportW),
+                             static_cast<float>(Arcane::kEditorGoldenViewportH));
 
     SECTION("an empty scene pins nothing -- the caller must leave the camera alone")
     {

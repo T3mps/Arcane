@@ -28,6 +28,7 @@
 #include "Documents/CrashReportDocument.hpp"
 #include "Documents/SpriteDocument.hpp"
 
+#include <Arcane/Host/GoldenHarness.hpp>   // kEditorGoldenViewportW/H -- the pinned golden boot extent
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Base/Assert.hpp>   // ARC_ASSERT (StageEditorShell's context tripwire)
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::ReadFile (crashReportFactory/Peek, beside materialFactory)
@@ -1594,6 +1595,21 @@ namespace Arcane::Editor
         {
             width  = 1280;
             height = 720;
+        }
+
+        // A GOLDEN RUN PINS THE EXTENT FROM FRAME ONE. Phase 16's assignment is
+        // what actually holds the size for the run (see it for the why), and it
+        // lands on the SECOND frame at the earliest -- the panel has to draw
+        // once before anything measures it. Applying the same pin to the boot
+        // extent removes that dependency entirely: the target is the golden
+        // extent from the first recorded frame, a `--frames 1` golden run works,
+        // and no run spends a ResizeOffscreen (two full device idles) walking
+        // 1280x720 down to it. Ordinary sessions are untouched and keep the
+        // boot extent above.
+        if (m_config.GoldenMode())
+        {
+            width  = Arcane::kEditorGoldenViewportW;
+            height = Arcane::kEditorGoldenViewportH;
         }
 
         // BOTH OPTIONAL NODE SETS (NRI Phase 3, Task 9). This context is the
