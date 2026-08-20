@@ -351,7 +351,31 @@ namespace Arcane::Editor
         void ShutdownGraphPath();
 
         HostConfig                        m_config;
-        std::unique_ptr<GpuContext>       m_gpu;                    // destructs LAST
+
+        // DECLARED HERE FOR ITS LIFETIME, NOT ITS SUBJECT. The semantics live
+        // with RetargetLayoutIni() far below; this is the only reason the
+        // declaration is not down there beside them.
+        //
+        // ImGui BORROWS this string -- `io.IniFilename = m_layoutIniPath.c_str()`
+        // and ImGui never copies it. ImGui::Shutdown(), reached from
+        // ~ImGuiLayer which m_gpu OWNS, then calls SaveIniSettingsToDisk() on
+        // that borrowed pointer. Members destruct in REVERSE declaration order,
+        // so this string MUST be declared ABOVE m_gpu to outlive it. Declared
+        // below m_gpu it dies first and the save reads freed heap: a real
+        // use-after-free that only faults once the block has been reused, which
+        // is why it surfaced as an INTERMITTENT 0xC0000005 in MultiByteToWideChar
+        // at editor teardown -- about one run in twelve -- rather than as a
+        // reliable crash. Found at the NRI Phase 5a D5a-2 desk checkpoint; it
+        // predates that phase.
+        //
+        // Same discipline as m_config above, which m_bootCtx borrows
+        // projectPath/pluginPath from for exactly the same reason.
+        std::string                       m_layoutIniPath;
+
+        std::unique_ptr<GpuContext>       m_gpu;                    // destructs LAST, except
+                                                                    // m_config and m_layoutIniPath
+                                                                    // which outlive it BY DESIGN
+                                                                    // (see the note above)
 
         // ---- The graph vehicles (--nri-graph, NRI Phase 3, Task 8) ----------
         // THE CHROME CONTEXT: the host-window NriGraphContext. It owns the
@@ -790,7 +814,10 @@ namespace Arcane::Editor
         // and a project's own saved layout applies on the next BOOT into it.
         // No mid-session ini reload: ImGui applies loaded dock data only to
         // windows as they appear, so a live reload would half-apply.
-        std::string m_layoutIniPath;
+        //
+        // THE STRING ITSELF IS DECLARED UP WITH m_config, ABOVE m_gpu -- ImGui
+        // borrows it and saves through that borrow from ~ImGuiLayer, so it has
+        // to outlive m_gpu. See the lifetime note at its declaration.
         void RetargetLayoutIni();
 
         // ---- Diagnostics dump dir, per project (GPU crash diagnostics arc,
