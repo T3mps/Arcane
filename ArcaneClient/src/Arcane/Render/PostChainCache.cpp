@@ -1,6 +1,5 @@
 #include <Arcane/Render/PostChainCache.hpp>
 
-#include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>

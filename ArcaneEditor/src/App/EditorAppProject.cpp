@@ -949,16 +949,27 @@ namespace Arcane::Editor
         if (!r.ok)
         {
             // Important 1 (2026-07-31 review): a window close mid-switch is
-            // NOT a failure -- the overlay presenter's Present() returned false
-            // because it saw the OS quit event (BootPresenter.cpp), and
-            // BootSequence::Run turned that into quitRequested + failedStage =
-            // "quit requested". Reporting that through m_modalErrors would
-            // show a bogus "failed at stage 'quit requested'" banner AND leave
-            // the editor running -- the quit event is already consumed by the
-            // presenter's own pump, so PumpFrameEvents' SDL_EVENT_QUIT check
-            // will never see it on a later frame; without this branch the user
-            // has to click the X a second time. m_requestExit hands the exit
-            // back to the normal frame loop instead (see PumpFrameEvents).
+            // NOT a failure -- BootSequence::Run reports it as quitRequested +
+            // failedStage = "quit requested". Reporting that through
+            // m_modalErrors would show a bogus "failed at stage 'quit
+            // requested'" banner AND leave the editor running, so this branch
+            // hands the exit back to the normal frame loop via m_requestExit
+            // (see PumpFrameEvents).
+            //
+            // HOW THE QUIT REACHES HERE HAS CHANGED, and the original reasoning
+            // no longer holds. This was written when Run() took a LIVE
+            // presenter: BootPresenter::Present() saw the OS quit event and
+            // CONSUMED it, so PumpFrameEvents could never see it on a later
+            // frame, which made this branch the only thing standing between the
+            // user and a second click on the X. Run() is passed nullptr now
+            // (NRI Phase 5a, Task 11a collapsed the ternary to the arm that was
+            // always taken), so no Present() runs, nothing consumes the quit,
+            // and PumpFrameEvents WOULD see it next frame. The branch stays
+            // because it still exits on the FIRST click instead of a frame
+            // later, and still suppresses the bogus banner -- but it is no
+            // longer load-bearing for event consumption. It becomes so again if
+            // a presenter is ever restored here; whoever collapses
+            // GraphFlavor() and settles BootPresenter's fate owns that call.
             // The project-less convergence below still runs unconditionally --
             // it is correct regardless of why r.ok is false, per this block's
             // own "either way" comment further down.

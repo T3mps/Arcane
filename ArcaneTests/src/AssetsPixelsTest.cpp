@@ -9,7 +9,8 @@
 
 // stb_image_write: implementation is owned by VendorSmokeTest.cpp in this
 // same exe (STB_IMAGE_WRITE_IMPLEMENTATION defined there). Include header
-// only here -- mirrors AssetsTest.cpp's WriteTestPng idiom.
+// only here. (AssetsTest.cpp used the same idiom until its own PNG writer
+// went with the GetTexture case at ABI v15 -- this file is now its only user.)
 #include <stb_image_write.h>
 
 #include <cstdint>
@@ -47,9 +48,9 @@ namespace
     }
 
     // Writes the 8x4 checker fixture to a uniquely-named temp file and
-    // returns its path -- same on-disk-fixture idiom as AssetsTest.cpp's
-    // WriteTestPng (a real, loadable PNG written by the test, no vendored
-    // fixture asset).
+    // returns its path: a real, loadable PNG written by the test, no vendored
+    // fixture asset. AssetsTest.cpp carried the same idiom until ABI v15
+    // deleted GetTexture and left its writer with no caller.
     std::filesystem::path WriteCheckerPng(const char* name)
     {
         const auto pixels = CheckerPixels();

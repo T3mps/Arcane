@@ -38,19 +38,6 @@
 
 namespace
 {
-    // Writes a 2x2 PNG with known bytes into the temp dir.
-    std::filesystem::path WriteTestPng()
-    {
-        const unsigned char pixels[2 * 2 * 4] = {
-            255, 0, 0, 255,   0, 255, 0, 255,
-            0, 0, 255, 255,   128, 64, 32, 255,
-        };
-        const auto path =
-            std::filesystem::temp_directory_path() / "arcane-assets-test.png";
-        REQUIRE(stbi_write_png(path.string().c_str(), 2, 2, 4, pixels, 8) != 0);
-        return path;
-    }
-
     // Writes a temp JSON file; returns its path.
     std::filesystem::path WriteTestJson(const std::string& content,
                                         const char* name = "arcane-assets-test.json")
