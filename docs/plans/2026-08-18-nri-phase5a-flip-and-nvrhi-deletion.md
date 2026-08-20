@@ -949,11 +949,10 @@ git commit -m "refactor!: one render path -- GraphMode() and the last two-path p
 (`.superpowers/sdd/2026-08-18-nri-phase5a-flip-and-nvrhi-deletion/`) is
 gitignored and is deleted at phase close; everything worth keeping is here.
 
-> **STATUS: D5a-2 (Task 12 Step 1) HAS NOT RUN.** This record covers the
-> implementation and review, which are complete. The desk-checkpoint result and
-> the final "phase closed" line are OWED and must be appended after the battery
-> is driven. Do not delete the SDD workspace until then.
-> Battery: `Desktop\D5a-2-Battery.ps1` (written, parse-checked, not run).
+> **STATUS: D5a-2 IS GREEN. THE PHASE IS CLOSED (2026-08-20).** Both halves of
+> the closing desk checkpoint pass; the result is recorded at the tail of this
+> record. The SDD workspace has been deleted -- this document is the phase's
+> only surviving artifact, as intended.
 
 ## Final state
 
@@ -1096,3 +1095,78 @@ Every failure this phase produced was a *claim written without the right check*:
 8. **The sweep pathspec is an instrument with blind spots.** `*.cpp *.hpp *.lua`
    cannot see `.rs`, `.ts`, `.svelte`, `.ps1`, `.bat`, `.hlsl`, `.arcmat` or
    `.json`. The ArcaneHub bug and the orphaned shader both live in that gap.
+
+---
+
+## D5a-2 RESULT — PHASE CLOSED (2026-08-20)
+
+**GREEN. Both halves.** Transcript `Desktop\d5a2-transcript-20260820-082257.txt`;
+battery `Desktop\D5a-2-Battery.ps1`.
+
+**Automated half:**
+- **12/12 RUNTIME goldens at maxDelta 0** — Debug *and* Dist × dx12/vulkan ×
+  batch/post/full. These are the dimension-stable ones, and they are the pixel
+  evidence: **the NVRHI deletion moved zero pixels.**
+- **Exit criterion 4 MET** — all 6 module loads (2 projects × 3 configs), each
+  with an explicit `plugin-load … module loaded` assertion, every latch
+  `0 -> 0`, no `[nvrhi]` tag, no stale-module warning.
+- Crash battery all PASS — device-removed verdict + 11 artifacts per run.
+- Release clean runs 4/4 PASS.
+
+**Drive half: all nine items clean**, including item 1 (click-pick), item 2
+(selection outline renders in Edit *and* Play) and item 3 (game UI composites) —
+the three that no automated signal can reach, and the three that had to be
+confirmed by hand because `RenderSelectionOutline` and `CompositeGameUi` are now
+empty bodies whose work the graph does earlier in the same frame.
+
+### Three defects the checkpoint found — none a Phase 5a regression
+
+1. **THE SINGLE-SLOT HAZARD IS ONE LEVEL DEEPER THAN PREVIOUSLY RECORDED.**
+   `premake5.lua:355,430` give **each host** a postbuild `{COPYDIR}` of the whole
+   repo `ReferenceProject\` into its own bin dir. So `--project ReferenceProject`
+   (relative) resolves to `<hostdir>\ReferenceProject`, **not the repo** — and
+   that copy refreshes **only when the host EXE relinks**. Rebuilding the game
+   module alone updates the repo slot and leaves every host copy stale, so a
+   host can load whatever flavour was in the repo slot the last time its exe was
+   linked. Observed: a **Debug-flavour `ReferenceGame.dll` in the Release host
+   dirs**, failing `plugin_load` off a perfectly clean build. Aphelyon was immune
+   only because it is passed as an **absolute** path. Anything that rebuilds a
+   game module must refresh the per-host copy or relink the host.
+2. **The editor exits 0 when the game module fails to load.** The runtime treats
+   `plugin_load` as a fatal boot stage; the editor does not. A Release editor
+   logged `failed to load the game module` and still exited 0 — so an exit-code
+   check passes a host that came up with no game module. Assert on the log text.
+   Whether the editor *should* be that lenient is an open question, not a defect.
+3. **Pre-existing use-after-free at editor teardown (NOT this phase).**
+   `~EditorApp` → `~m_gpu` → `~ImGuiLayer` → `ImGui::DestroyContext` →
+   `ImGui::Shutdown` → `SaveIniSettingsToDisk` → AV `0xc0000005` in
+   `MultiByteToWideChar`. `EditorApp.cpp:1004` sets
+   `io.IniFilename = m_layoutIniPath.c_str()` — a **borrowed** pointer — but
+   `m_gpu` is declared at `EditorApp.hpp:354` ("destructs LAST") and
+   `m_layoutIniPath` at `:793`, so the string dies **first** and ImGui reads
+   freed heap on the way out. The path is well past SSO length, so it is a
+   genuine heap use-after-free; whether it faults depends on block reuse, which
+   is why it fired once per ~12 editor runs, on a different run each time.
+   **Verified pre-existing:** at phase base `a4947f8d`, `GpuContext.hpp:156`
+   already owned the ImGuiLayer and the two members sat in the same order.
+   Fix is one line — null `io.IniFilename` before `m_gpu` dies, or reorder the
+   members. **CARRY: its own small task.**
+
+### Editor goldens — a LAYOUT carry, not a pixel delta
+
+All 12 editor goldens report `dims MISMATCH, maxDelta 0, bad 0.0000%` —
+654×330 frozen vs 654×354 now. Width identical, **zero pixel differences**,
+height +24px. Traced to D5a-1's **own drive session**: the offscreen context was
+rebuilt at 654×354 during the project switch and that persisted into the editor
+layout. D5a-1's own battery documents the property — *"editor golden captures
+are viewport-only and layout-sized"*. So a drive session can invalidate the very
+goldens the next checkpoint compares against.
+
+**Not re-captured here.** The runtime goldens carry the pixel evidence, and the
+drive half confirmed the editor renders correctly by hand. Re-capturing at
+654×354 is a deliberate act for whoever next needs editor goldens — and only
+ever *after* a clean drive, never to make a compare pass.
+
+**Method note for the next checkpoint:** editor goldens are only meaningful if
+the layout is pinned. Either fix the panel geometry for golden runs, or accept
+that they are re-baselined after any interactive session.
