@@ -85,6 +85,42 @@ TEST_CASE("golden: dimension mismatch fails loudly, never reads memory", "[golde
     CHECK_FALSE(r.dimensionsMatch);
 }
 
+TEST_CASE("golden: on a dimension mismatch the STATS ARE DEFAULTS, not measurements",
+          "[golden]")
+{
+    // THE TRAP THIS PINS, and it is not hypothetical -- it cost a real
+    // misreading. On unequal extents CompareRgbaImages returns immediately with
+    // a default-constructed result, so `maxChannelDelta == 0` and
+    // `badPixelFraction == 0` mean "NOTHING WAS COMPARED", not "the images
+    // match". A milestone record read a logged "dims MISMATCH, maxDelta 0, bad
+    // 0.0000%" as evidence of zero pixel differences; the conclusion later
+    // turned out to be right and the evidence for it never existed.
+    //
+    // The images here are maximally different -- all 0x00 against all 0xFF --
+    // so if any pixel were read, maxChannelDelta would be 255. It stays 0
+    // precisely because the short-circuit fires first. That is what makes this
+    // case a proof about the CONTRACT rather than about these two buffers.
+    const auto black = Flat(8, 8, 0x00);
+    const auto white = Flat(4, 4, 0xFF);
+    const GoldenCompareResult r =
+        CompareRgbaImages(black.data(), 8, 8, white.data(), 4, 4);
+
+    REQUIRE_FALSE(r.dimensionsMatch);
+    CHECK(r.maxChannelDelta  == 0);      // NOT "identical" -- never looked
+    CHECK(r.badPixelFraction == 0.0f);   // NOT "no bad pixels" -- never looked
+    CHECK(r.firstBadX == 0);
+    CHECK(r.firstBadY == 0);
+
+    // And the same buffers at EQUAL extents do read as maximally different,
+    // which is what proves the zeros above came from the early return rather
+    // than from the comparator being blind to this content.
+    const auto whiteBig = Flat(8, 8, 0xFF);
+    const GoldenCompareResult cmp =
+        CompareRgbaImages(black.data(), 8, 8, whiteBig.data(), 8, 8);
+    CHECK(cmp.dimensionsMatch);
+    CHECK(cmp.maxChannelDelta == 255);
+}
+
 TEST_CASE("golden: diff png lands on disk for a failed compare", "[golden]")
 {
     const std::filesystem::path dir =

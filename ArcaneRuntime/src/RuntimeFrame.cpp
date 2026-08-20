@@ -142,7 +142,43 @@ bool PumpAndResize(FrameIo& io)
         // went with the follow-on GraphFlavor() collapse -- see FrameExtent
         // above for why the field is unconditional and where the one
         // remaining fail-loud on it lives.
+        //
+        // ===== A RESIZE IS NEVER SILENT, AND IN A GOLDEN RUN IT IS LOUD =====
+        // This host CAPTURES ITS SWAPCHAIN, so the golden's dimensions are the
+        // window's client extent -- which the OS owns, not us. Following a
+        // resize without saying so is how a run that started at 1280x720 came
+        // back 1280x712 and reported a bare "dims MISMATCH" indistinguishable
+        // from a pixel regression; the actual extents were recoverable only by
+        // reading the IHDR of the .actual.png the comparator drops.
+        //
+        // NOT PINNED, DELIBERATELY, and this is the difference from the
+        // EDITOR's golden extent (Host/GoldenHarness.hpp,
+        // kEditorGoldenViewportW/H). The editor captures an OFFSCREEN target it
+        // owns outright, so its size is ours to fix. A window-backed swapchain
+        // is not: Vulkan's surface currentExtent is authoritative and refusing
+        // to follow it produces a surface/swapchain mismatch, which trades a
+        // legible failure for an illegible one. So the rule here is HONESTY,
+        // not control -- report it, let the compare fail, and make the reason
+        // unmissable in the log.
+        const std::uint32_t wasW = io.graph->SurfaceWidth();
+        const std::uint32_t wasH = io.graph->SurfaceHeight();
         io.graph->Resize(events.width, events.height);
+        if (wasW != events.width || wasH != events.height)
+        {
+            if (io.config.GoldenMode() || !io.config.screenshotPath.empty())
+            {
+                ARC_WARN("[nri-graph] the window was RESIZED mid-run: {}x{} -> {}x{}. This run "
+                         "captures its swapchain, so the artifact will carry the NEW extent and "
+                         "any golden compare against the old one will fail on dimensions -- that "
+                         "is a window event, NOT a rendering regression.",
+                         wasW, wasH, events.width, events.height);
+            }
+            else
+            {
+                ARC_INFO("[nri-graph] window resized: {}x{} -> {}x{}",
+                         wasW, wasH, events.width, events.height);
+            }
+        }
     }
     if (eventWindow.IsMinimized())
     {

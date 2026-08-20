@@ -116,14 +116,38 @@ namespace Arcane
                      name, r.maxChannelDelta, r.badPixelFraction * 100.0f);
             return 0;
         }
-        ARC_ERROR("golden FAIL: {} (dims {}, maxDelta {}, bad {:.4f}%, first ({},{}))",
-                  name, r.dimensionsMatch ? "ok" : "MISMATCH",
-                  r.maxChannelDelta, r.badPixelFraction * 100.0f, r.firstBadX, r.firstBadY);
+        // A DIMENSION MISMATCH GETS ITS OWN MESSAGE, AND IT MUST NOT QUOTE THE
+        // COMPARISON FIELDS. CompareRgbaImages SHORT-CIRCUITS on unequal extents
+        // (GoldenImage.cpp) and returns a DEFAULT-CONSTRUCTED result, so
+        // maxDelta/bad/first are zeros that were never computed -- no pixel was
+        // ever read. The single message this used to share printed them anyway,
+        // as "dims MISMATCH, maxDelta 0, bad 0.0000%", which reads exactly like
+        // "the images are identical apart from their size" and was taken that
+        // way in a milestone record: the conclusion happened to be right and the
+        // evidence for it did not exist. Report the two extents instead -- they
+        // are the only facts a dimension mismatch actually produces, and they
+        // say immediately whether this is a layout/window drift or a real
+        // capture bug.
+        if (!r.dimensionsMatch)
+        {
+            ARC_ERROR("golden FAIL: {} (DIMENSIONS DIFFER -- golden {}x{}, captured {}x{}; "
+                      "NO pixels were compared, so this says nothing about content)",
+                      name, gw, gh, width, height);
+            (void)WritePngRgba(dir / (name + ".actual.png"), width, height, actual.data());
+            return 3;
+        }
+        // Extents agree, so this is a REAL pixel delta and every field above is
+        // a measurement. The diff png is unconditional here -- its old
+        // `if (r.dimensionsMatch)` guard became unreachable when the mismatch
+        // case grew its own early return, and WriteDiffPng no-ops on unequal
+        // extents anyway.
+        ARC_ERROR("golden FAIL: {} (dims ok {}x{}, maxDelta {}, bad {:.4f}%, first ({},{}))",
+                  name, gw, gh, r.maxChannelDelta, r.badPixelFraction * 100.0f,
+                  r.firstBadX, r.firstBadY);
         (void)WritePngRgba(dir / (name + ".actual.png"), width, height, actual.data());
-        if (r.dimensionsMatch)
-            (void)WriteDiffPng(dir / (name + ".diff.png"),
-                                golden.data(), actual.data(), gw, gh,
-                                GoldenCompareParams{}.channelTolerance);
+        (void)WriteDiffPng(dir / (name + ".diff.png"),
+                            golden.data(), actual.data(), gw, gh,
+                            GoldenCompareParams{}.channelTolerance);
         return 3;
     }
 }
