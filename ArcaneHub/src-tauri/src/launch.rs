@@ -66,6 +66,44 @@ pub enum OpenOutcome {
 /// margin so the report always has a Hub left to show it.
 const BOOT_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// Could this run reach the editor's POST-BOOT meaning of exit code 3?
+///
+/// THE COLLISION (ArcaneEditor/src/main.cpp's exit table states it in full):
+/// exit codes 2 and 3 mean different things depending on WHEN in the run they
+/// fire, and the wait thread's decoder only sees a number and a duration.
+///
+///   * 2 -- pre-boot: the project gate (wrong abi, unreadable manifest).
+///          post-boot: RenderErrorCount grew across the run.
+///   * 3 -- pre-boot: the project is already open in another live editor.
+///          post-boot: a golden capture/compare failed.
+///
+/// A run that reaches EditorApp::Run() has cleared both pre-boot refusals, so
+/// from there on the later meanings apply -- but from outside the process the
+/// Hub sees only the code, and any exit inside BOOT_WATCHDOG looks pre-boot.
+///
+/// ONLY CODE 3 IS DECIDABLE FROM THE ARGS, which is why this predicate covers
+/// it alone. A post-boot 3 requires golden mode, and golden flags are DEV/DESK
+/// vocabulary this Hub never passes on its own -- the only route is a user
+/// deliberately saving them into a project's extra launch args. So their
+/// presence is real evidence.
+///
+/// CODE 2 HAS NO SUCH PREDICATE AND MUST NOT BE GIVEN ONE. This function's
+/// ancestor also guarded code 2, keying on `--frames`/`--golden-`/`--nri-graph`
+/// on the premise that only a run carrying `--nri-graph` took the graph path.
+/// NRI Phase 5a (Task 2b) made the frame graph the only render path and
+/// retired that flag to a parsed-and-ignored no-op, which falsified the
+/// premise for EVERY launch since: an ordinary Hub launch carries none of
+/// those tokens yet reaches the graph, and so can exit 2 for a render error
+/// while being reported as an engine/abi refusal. The decoder names both
+/// meanings instead.
+///
+/// `--frames` is likewise NOT evidence and is deliberately absent: on its own
+/// it cannot produce a post-boot 2 or 3, so counting it only suppressed a
+/// correct pre-boot diagnosis on short scripted runs.
+fn golden_run(extra: &[String]) -> bool {
+    extra.iter().any(|a| a.starts_with("--golden-"))
+}
+
 pub fn now_utc_iso() -> String {
     // Seconds since the epoch is enough to sort "last opened" and avoids
     // pulling a date crate in for a display string.
@@ -179,22 +217,11 @@ pub fn do_open_project(
         .map(|e| project::split_args(&e.args))
         .unwrap_or_default();
 
-    // IS THIS A SCRIPTED RUN? (whole-branch review, M5.) The exit-code decoder
-    // in the wait thread below reads 2 and 3 as PRE-BOOT meanings -- "refused
-    // the project" and "already open elsewhere" -- for any exit inside the 2s
-    // watchdog. Those are only the editor's meanings before its window opens;
-    // a run carrying the scripted vocabulary reuses the same numbers for
-    // something else entirely (ArcaneEditor/src/main.cpp's exit table: 2 =
-    // RenderErrorCount grew, 3 = a golden capture/compare failed), and a short
-    // `--frames N` run finishing inside two seconds is ordinary rather than
-    // exotic. Since the args appended above are the user's own saved tokens,
-    // verbatim, this is the one place that can tell the two apart.
-    let scripted = extra.iter().any(|a| {
-        a == "--frames"
-            || a.starts_with("--frames=")
-            || a.starts_with("--golden-")
-            || a == "--nri-graph"
-    });
+    // Can this run produce a POST-BOOT exit 3? (See golden_run's own comment
+    // for the whole exit-code collision, and for why exit 2 gets no such
+    // predicate.) The args appended above are the user's own saved tokens,
+    // verbatim, so this is the one place that can ask.
+    let golden = golden_run(&extra);
 
     // Adopt what the probe just said: the entry's cached abi/build refresh so
     // the UI's next load speaks about the binary that actually launched.
@@ -286,22 +313,35 @@ pub fn do_open_project(
 
             if started.elapsed() < BOOT_WATCHDOG {
                 let why = match status.and_then(|s| s.code()) {
-                    // Exit 2 is the editor's own project gate (ArcaneEditor
-                    // main.cpp): wrong abi, unreadable manifest, refused boot.
-                    // Guarded on `scripted`: on a run carrying --frames /
-                    // --golden-* / --nri-graph the SAME code means
-                    // "RenderErrorCount grew", and claiming an abi gate would
-                    // send the user hunting the wrong thing.
-                    Some(2) if !scripted => {
-                        "the editor refused the project (engine/abi gate)".to_string()
+                    // Exit 2 IS AMBIGUOUS AND NO ARG CAN DISAMBIGUATE IT.
+                    // Pre-boot it is the editor's project gate (wrong abi,
+                    // unreadable manifest); post-boot it is "RenderErrorCount
+                    // grew". This arm used to claim the gate outright whenever
+                    // the saved args looked unscripted -- correct only while
+                    // `--nri-graph` selected the render path. Phase 5a made the
+                    // NRI graph unconditional, so an ORDINARY launch (no saved
+                    // args at all) can exit 2 for a render error, and the
+                    // confident wording sent the user hunting an abi gate that
+                    // was never involved. Name both, in the order they are
+                    // worth checking, and let the log settle it.
+                    Some(2) => {
+                        "the editor exited with code 2 -- either it refused the project \
+                         (engine/abi gate) or the render path reported errors during the \
+                         run; the editor's log says which"
+                            .to_string()
                     }
                     // Exit 3 is the editor's OWN double-open refusal (it
                     // focused the rival before exiting). Rare from here --
                     // this Hub's guard focuses first -- but reachable when a
                     // rival appeared between the guard and the editor's boot.
-                    // Same guard: on a scripted run 3 is a golden failure.
-                    Some(3) if !scripted => {
+                    // This one KEEPS its guard: post-boot 3 is a golden
+                    // capture/compare failure, which is unreachable without
+                    // golden vocabulary in the args.
+                    Some(3) if !golden => {
                         "that project is already open in another editor".to_string()
+                    }
+                    Some(3) => {
+                        "a golden capture or compare failed (exit 3)".to_string()
                     }
                     Some(c) => format!("the editor exited immediately with code {c}"),
                     None => "the editor was killed before it opened".to_string(),
@@ -535,5 +575,35 @@ mod tests {
     fn shell_engine_with_nothing_registered_is_none() {
         let s = hub(vec![rp("D:/G/My/My.arcproj", None)], vec![]);
         assert!(shell_engine(&s, "D:/G/My/My.arcproj").is_none());
+    }
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn golden_run_sees_golden_vocabulary_only() {
+        assert!(golden_run(&args(&["--golden-capture", "D:/out"])));
+        assert!(golden_run(&args(&["--golden-compare", "D:/out"])));
+        assert!(golden_run(&args(&["--frames", "5", "--golden-stage", "batch"])));
+        // The realistic desk pairing.
+        assert!(golden_run(&args(&["--frames", "3", "--golden-capture", "D:/g"])));
+    }
+
+    #[test]
+    fn golden_run_is_false_for_an_ordinary_launch() {
+        // THE BUG THIS PINS: an ordinary launch carries no saved args at all,
+        // and since the Phase 5a flip it still reaches the NRI graph -- so its
+        // exit 2 must NOT be decoded through a "scripted" predicate. Nothing
+        // here may ever start returning true.
+        assert!(!golden_run(&[]));
+        assert!(!golden_run(&args(&["--backend", "vulkan"])));
+        assert!(!golden_run(&args(&["--frames", "5"])));
+        assert!(!golden_run(&args(&["--frames=5"])));
+        // `--nri-graph` is a retired no-op (Phase 5a, Task 2b). A stale saved
+        // copy of it says nothing about the run and must not suppress the
+        // pre-boot double-open diagnosis.
+        assert!(!golden_run(&args(&["--nri-graph"])));
+        assert!(!golden_run(&args(&["--nri-graph", "--frames", "2"])));
     }
 }

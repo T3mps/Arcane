@@ -93,28 +93,26 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 // editor's golden exit to be "identical to GoldenArtifact" -- i.e. the SAME
 // 3 RuntimeApp::Run already reports -- so giving the editor's golden failure
 // a different number would break host-to-host parity to solve a Hub-only
-// ambiguity, and the real fix belongs in launch.rs. AS OF THE WHOLE-BRANCH
-// REVIEW'S FIX WAVE IT IS THERE: ArcaneHub/src-tauri/src/launch.rs guards its
-// pre-boot decode on the project's saved extra args carrying none of
-// `--frames`/`--golden-`/`--nri-graph`, so a scripted run's 2/3 is reported
-// verbatim instead of as a boot refusal. THAT CLOSES THE GOLDEN HALF ONLY --
-// read the next paragraph before concluding the collision is dealt with.
+// ambiguity, and the real fix belongs in launch.rs. IT IS THERE:
+// ArcaneHub/src-tauri/src/launch.rs guards its pre-boot decode of code 3 on
+// the project's saved extra args carrying `--golden-`, so a golden run's 3 is
+// reported as a golden failure instead of a boot refusal. THAT CLOSES THE
+// GOLDEN HALF ONLY -- read the next paragraph for code 2, which is not
+// closeable the same way.
 //
-// FOR THE GRAPH COLLISION (code 2, RenderErrorCount grew), THE GUARD DOES NOT
-// CLOSE IT, and this is where the block ends because it is the part still
-// open. The old reasoning -- that reaching code 2 required a power user saving
-// `--nri-graph --crash-gpu N` into extra-args, same as the golden case -- was
-// true only while the flag gated the graph path, and Phase 5a (Task 2b) ended
-// that. The NRI frame graph is now the only render path, unconditionally, so
-// code 2 can fire on ANY ordinary Hub launch that happens to exit inside the
-// 2s watchdog with a validation error, not only a deliberately scripted one.
-// launch.rs's `scripted` guard keys off the saved extra args carrying one of
-// `--frames` / `--golden-` / `--nri-graph` -- and an ORDINARY launch carries
-// NONE of them, while the graph path (and its exit codes) is live regardless.
-// So such a run is decoded as pre-boot and misreported as "refused
-// (engine/abi gate)" instead of a render-path failure. NOT FIXED HERE: this is
-// a gap in launch.rs's guard that the flip exposed, not something an
-// editor-side comment fix can close; needs its own triage.
+// FOR THE GRAPH COLLISION (code 2, RenderErrorCount grew), NO GUARD CAN CLOSE
+// IT, and launch.rs has stopped pretending otherwise. The old reasoning --
+// that reaching code 2 required a power user saving `--nri-graph --crash-gpu N`
+// into extra-args, same as the golden case -- was true only while the flag
+// gated the graph path, and Phase 5a (Task 2b) ended that. The NRI frame graph
+// is the only render path now, unconditionally, so code 2 can fire on ANY
+// ordinary Hub launch that exits inside the 2s watchdog with a validation
+// error, and an ordinary launch carries none of the tokens a heuristic could
+// key on. RESOLVED IN launch.rs (see `golden_run` there): its arg predicate
+// now covers code 3 ALONE, where golden vocabulary is genuine evidence, and
+// the code-2 arm names BOTH meanings -- project gate or render error -- rather
+// than confidently reporting an engine/abi refusal that was never involved.
+// Two unit tests pin the predicate false for an ordinary launch.
 //
 // ===== WHICH SHARED HostConfig FLAGS THIS HOST ACTUALLY HONOURS ==============
 // The table above is exhaustive about EXIT CODES; this is the separate,
