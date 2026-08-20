@@ -18,7 +18,6 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/GpuContext.hpp>
 #include <Arcane/Host/FramePerf.hpp>
-#include <Arcane/Host/BootPresenter.hpp>
 #include <Arcane/Host/BootSequence.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>
@@ -260,9 +259,8 @@ namespace Arcane::Editor
         // OffscreenImGuiLayer::Render (phase 11), the graph arm hands
         // RenderToDrawData()'s output to a graph node (phase 10) and is the
         // only caller left -- NRI Phase 5a, Task 4 deleted the NVRHI arm's
-        // call site (CompositeGameUi is now a standing no-op; see its own
-        // comment). Same discipline, and the same reason, as
-        // SubmitSceneToBatcher.
+        // call site, and the empty phase-11 function it left behind is gone
+        // too. Same discipline, and the same reason, as SubmitSceneToBatcher.
         [[nodiscard]] bool BeginGameUiFrame();
         // The graph arm's FrameDesc arming for the pick + outline chain and the
         // game HUD -- i.e. everything phases 11, 12 and 17 contribute to a frame
@@ -271,8 +269,11 @@ namespace Arcane::Editor
         // value, because a span into a temporary is the one mistake this shape
         // exists to make impossible.
         void ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp);
-        void CompositeGameUi();
-        void RenderSelectionOutline();
+        // NO phase 11 / phase 12 members. CompositeGameUi and
+        // RenderSelectionOutline were declared here and called from MainLoop
+        // between phases 10 and 13; ArmGraphViewportFrame above satisfies both
+        // one phase earlier, inside the frame phase 10 declares. See its
+        // definition, and the phase-11/12 note at that call site in MainLoop.
         void PumpEditorDocuments();
         void DrawEditorUi(LoopState& ls, const FrameState& fs);
         void ConsumeMenuRequests(Arcane::Editor::MenuRequests& menuReq,
@@ -297,24 +298,15 @@ namespace Arcane::Editor
         // MainLoop skips the rest of the frame). Its own definition carries the
         // frame's declared shape and the four fields deliberately left default.
         bool PresentChromeFrame();
-        // NRI Phase 3, Task 13: used to be the NVRHI arm's half of the editor
-        // golden harness -- read the canvas output back via
-        // Arcane::ReadTexturePixels and hand the pixels to
-        // Arcane::GoldenArtifact (Host/GoldenHarness.hpp), the pairing
-        // RuntimeFrame::CaptureTail used for the NVRHI backbuffer. NRI Phase
-        // 5a, Task 4 deleted that whole arm (OffscreenCanvas is gone); the
-        // function had reduced to an `if (GraphMode()) return;` no-op on every
-        // real run, and Task 11a's removal of that predicate leaves it EMPTY.
-        // It is left standing with its one caller, as inert scaffolding
-        // (RenderSelectionOutline/CompositeGameUi carry the identical shape,
-        // for the identical reason -- see their own definitions). The graph
-        // arm's capture is unaffected: it is
-        // armed as a NODE inside RenderSceneToViewport's own FrameDesc
-        // instead (see that method) -- there is no separate "read this
-        // texture" entry point on that recorder, so piggybacking on the
-        // frame already being declared is the only shape that exists, and
-        // that was already true before this task.
-        void CaptureEditorGolden();
+        // NO CaptureEditorGolden member either, for the same reason and by the
+        // same two steps: it was the NVRHI arm's half of the editor golden
+        // harness (ReadTexturePixels off the canvas output -> Arcane::
+        // GoldenArtifact, Host/GoldenHarness.hpp, pairing what
+        // RuntimeFrame::CaptureTail did for the NVRHI backbuffer). The graph
+        // arm's capture is armed as a NODE inside RenderSceneToViewport's own
+        // FrameDesc and read back there -- that recorder has no separate "read
+        // this texture" entry point, so piggybacking on the already-declared
+        // frame is the only shape that exists.
         void EndFrame(LoopState& ls);
 
         // ---- The graph arm's EXIT-CODE FOLD (NRI Phase 3, Task 10) ----------
@@ -490,8 +482,8 @@ namespace Arcane::Editor
         // The editor's counterpart of RuntimeApp::m_goldenExit: 0 ordinarily;
         // set to 3 by the golden warm-up's census refusal (MainLoop, before
         // the frame loop starts) or by a capture/compare failure on the last
-        // frame (CaptureEditorGolden on the NVRHI arm, RenderSceneToViewport
-        // on the graph arm) -- the SAME exit code RuntimeApp::Run reports for
+        // frame (RenderSceneToViewport's capture block, the one capture path
+        // left) -- the SAME exit code RuntimeApp::Run reports for
         // the identical failure, and the same Arcane::GoldenArtifact call
         // produces it on both hosts. Read by Run()'s tail, OUTRANKED by
         // m_graphExit (precedence 1 > 2 > 3, matching RuntimeApp::Run's own
@@ -510,9 +502,9 @@ namespace Arcane::Editor
         // here.
         int m_goldenExit = 0;
         // NRI Phase 3, Task 13 fix round 1 (IMPORTANT, review finding 2):
-        // latches "a capture was genuinely ATTEMPTED", set by BOTH capture
-        // paths (CaptureEditorGolden, the NVRHI arm; RenderSceneToViewport's
-        // capture block, the graph arm) the moment either one confirms this
+        // latches "a capture was genuinely ATTEMPTED", set by
+        // RenderSceneToViewport's capture block (the NVRHI arm had a second
+        // path; it went with its canvas) the moment it confirms this
         // is the run's last frame AND has a real target to read -- NOT
         // merely that the last-frame arithmetic fired. Without this, a
         // golden run whose last iteration's viewport frame came back
@@ -533,9 +525,11 @@ namespace Arcane::Editor
         // here is gone: it existed to defer binding a swapchain-backed
         // presenter until StageEditorShell had installed fonts/theme, which
         // mattered only because BootSequence used to drive THAT presenter's
-        // Present() automatically after every stage. It no longer does --
-        // the swapchain-backed m_presenter below is now used exactly once,
-        // explicitly, by StageSplashReady, so there is nothing left to defer.
+        // Present() automatically after every stage. It no longer does, and
+        // the swapchain-backed presenter it deferred (Arcane::BootPresenter,
+        // held here as an optional m_presenter) is itself gone -- retired with
+        // GpuContext::GraphFlavor(), the predicate whose false arm was its
+        // last construction site. The splash is the only presenter now.
         Arcane::BootSplashWindow*             m_splash = nullptr;
         // A class member, not a Run()-local (2026-07-30 review round 2,
         // finding 2): StageSplashReady needs to call Disarm() on THIS exact
@@ -546,11 +540,6 @@ namespace Arcane::Editor
         // device dependency, so unlike m_presenter it can exist for the
         // App's whole lifetime rather than being emplaced late.
         Arcane::BootSplashPresenter           m_splashPresenter;
-        // Cannot be constructed before StageGpuCore builds m_gpu. Emplaced
-        // lazily inside StageSplashReady, the one place it is used -- see
-        // that method's body for why the old "must not bind too early"
-        // hazard this comment used to describe no longer applies.
-        std::optional<Arcane::BootPresenter>  m_presenter;
 
         // Captured at the end of StageGpuCore (right after GpuContext::Create
         // has created the editor's ImGuiLayer, which is the only ImGui
@@ -576,7 +565,7 @@ namespace Arcane::Editor
         // plugin -- the plugin holds this ctx via SetImGui and may touch ImGui
         // during Unload/Shutdown, so this must outlive it). Its destructor
         // restores the editor context, so ~GpuContext's ImGuiLayer teardown stays
-        // valid. See CompositeGameUi.
+        // valid. See BeginGameUiFrame, phase 11's surviving CPU half.
         //
         // NON-NULL UNCONDITIONALLY (NRI Phase 3, Task 9; NRI Phase 5a, Task 5
         // removed OffscreenImGuiLayer's own flavor split, so the single
@@ -680,14 +669,17 @@ namespace Arcane::Editor
         // gated 9 call sites across this host. Both of its terms became
         // unconditional: `gpu_core` is a Fatal boot stage that fails the boot
         // when GpuContext::Create returns null, so m_gpu is non-null anywhere
-        // Main() can reach; and Create sets m_graphFlavor = true before its
-        // first fallible step, with a private constructor making it the only
-        // way a GpuContext exists. So the predicate was true at every site and
-        // the branches it fed were collapsed to their surviving arms.
+        // Main() can reach; and GpuContext's own flavor flag was set true
+        // before Create's first fallible step, with a private constructor
+        // making it the only way a GpuContext exists. So the predicate was true
+        // at every site and the branches it fed were collapsed to their
+        // surviving arms.
         //
-        // GpuContext::GraphFlavor() ITSELF SURVIVES and still has live callers
-        // (EditorApp.cpp, RuntimeApp.cpp, and two ArcaneTests assertions);
-        // retiring it is a separate predicate collapse this task did not own.
+        // GpuContext::GraphFlavor() OUTLIVED THIS ONE and is gone too, retired
+        // in the follow-on collapse that took its last five call sites (two
+        // banner ternaries, two dead BootPresenter gates, two ArcaneTests
+        // assertions) along with the BootPresenter class itself. There is no
+        // graph/NVRHI predicate left anywhere in either host.
 
         // ---- THE HOVER predicate (whole-branch review, C2) -------------------
         // "The pointer is over the Viewport panel AND that fact is allowed to
@@ -714,12 +706,11 @@ namespace Arcane::Editor
         // (-1, -1) (the NVRHI arm's SelectionOutline::Params::cursorPx used
         // the identical sentinel before NRI Phase 5a, Task 4 deleted it).
         //
-        // READ BY ArmGraphViewportFrame (phase 12's gate on the graph arm,
-        // which is now the only arm -- see RenderSelectionOutline's own
-        // comment for why that function still exists as a standing no-op
-        // rather than being deleted along with the NVRHI cursor derivation
-        // it used to carry). Ordinary (non-golden) runs are untouched: hover
-        // behaves exactly as before.
+        // READ BY ArmGraphViewportFrame, which carries phase 12's gate on the
+        // only arm there is; the NVRHI cursor derivation this sentinel was
+        // shared with went at Task 4, and phase 12's own function with it.
+        // Ordinary (non-golden) runs are untouched: hover behaves exactly as
+        // before.
         [[nodiscard]] bool HoverLive() const noexcept
         { return m_gameUi.inViewport && !m_config.GoldenMode(); }
 
@@ -1464,12 +1455,15 @@ namespace Arcane::Editor
         // rather than before one exists.
         bool m_raiseOpenProjectOnStart = false;
 
-        // Set by SwitchProject when its overlay BootPresenter reports the window
-        // closed mid-switch (BootResult::quitRequested), instead of treating that
-        // as a failed switch (Important 1, 2026-07-31 review): the presenter
-        // already consumed the OS quit event during its own event pump, so it
-        // will not reach PumpFrameEvents' own SDL_EVENT_QUIT check on a later
-        // frame. PumpFrameEvents reads this flag first and requests the same
+        // Set by SwitchProject when its BootSequence reports the window closed
+        // mid-switch (BootResult::quitRequested), instead of treating that
+        // as a failed switch (Important 1, 2026-07-31 review). The rationale
+        // was that the switch's overlay presenter consumed the OS quit event
+        // during its own event pump, so it would not reach PumpFrameEvents'
+        // SDL_EVENT_QUIT check on a later frame; that presenter is gone and the
+        // switch runs with none, so the flag now only buys exiting on the FIRST
+        // click rather than a frame later -- see SwitchProject's own comment.
+        // PumpFrameEvents reads this flag first and requests the same
         // normal exit a live quit would, instead of surfacing through m_modalErrors.
         // Safe to check unconditionally: SwitchProject's switch_teardown stage
         // has already reset m_scene to a clean Untitled state by the time this

@@ -193,16 +193,18 @@ namespace Arcane
             NotifyIfDeviceRemoved(messageText);
         }
 
-        // NO CALLERS as of Task 11a (NVRHI's message callback was the only one,
-        // and it went with the device layer at Task 8b). Kept as the Fatal twin
-        // of the seam above rather than deleted, since deleting it is not a
-        // retag; flagged in that task's report as a deletion candidate.
-        void NoteNriFatal(const char* messageText) noexcept
-        {
-            ++m_errorCount;
-            ARC_CRITICAL("[nri] {}", messageText);
-            NotifyIfDeviceRemoved(messageText);
-        }
+        // A NoteNriFatal Fatal twin of the seam above used to sit here. NVRHI's
+        // message callback was its only caller and went with the device layer
+        // at Task 8b, leaving it with none; Task 11a flagged it as a deletion
+        // candidate rather than deleting it, because that task was a retag.
+        // Deleted in the follow-on collapse, and NRI's own vocabulary is why it
+        // is not coming back on its own: nri::Message has exactly INFO,
+        // WARNING and ERROR (Extensions/NRIDeviceCreation.h) -- no fatal
+        // severity at all -- and NriMessageCallback routes only ERROR here,
+        // logging the other two straight to ARC_INFO/ARC_WARN
+        // (NriCommon.cpp:84-101). There is no producer that could reach a Fatal
+        // twin, so restoring one means inventing a caller, not just declaring
+        // the function.
 
     private:
         void NotifyIfDeviceRemoved(const char* messageText)

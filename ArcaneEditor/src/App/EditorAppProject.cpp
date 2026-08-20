@@ -884,11 +884,13 @@ namespace Arcane::Editor
             stages.push_back(std::move(plugin));
         }
 
-        // Overlay, not Fullscreen: the editor window is already up and this
-        // must not erase its last frame (BootPresenter.cpp: only the
-        // Fullscreen branch clears the backbuffer).
-        //
-        // ===== AND NO PRESENTER AT ALL ON THE GRAPH ARM (Task 12) ===========
+        // ===== NO PRESENTER AT ALL FOR THE SWITCH (Task 12) =================
+        // This used to build an Overlay-mode presenter rather than a Fullscreen
+        // one, because the editor window is already up and the switch must not
+        // erase its last frame (only the Fullscreen branch cleared the
+        // backbuffer). Moot now -- Arcane::BootPresenter no longer exists at
+        // all -- but the reasoning below is why nothing replaced it, and it
+        // still binds anyone who wants a progress overlay here.
         // Two independent reasons, either of which alone decides it:
         //
         //   1. IT CANNOT RUN THERE. BootPresenter::Present was NVRHI to the
@@ -933,17 +935,15 @@ namespace Arcane::Editor
         // during a graph-mode switch cannot escalate into a FALSE hang report.
         // A hang report raised across a switch on this arm describes a real
         // stall.
-        // `overlay` IS NOW INERT, and deliberately still constructed. This ran
-        // `seq.Run(GraphMode() ? nullptr : &overlay)`; the predicate was
-        // unconditionally true, so nullptr is the arm that was ever taken, and
-        // Task 11a collapsed the ternary to it. BootPresenter itself cannot be
-        // retired here: its other two construction sites (EditorApp.cpp and
-        // RuntimeApp.cpp) are gated on GpuContext::GraphFlavor(), a DIFFERENT
-        // predicate 11a does not own -- so the class, and this local with it,
-        // are carried to whoever collapses GraphFlavor(). The constructor is a
-        // two-member init and the destructor is defaulted, so keeping the
-        // object costs nothing and changes nothing.
-        Arcane::BootPresenter overlay(*m_gpu, Arcane::BootPresenterMode::Overlay);
+        // THE `overlay` LOCAL IS GONE. This ran
+        // `seq.Run(GraphMode() ? nullptr : &overlay)` over an
+        // Arcane::BootPresenter built here; the predicate was unconditionally
+        // true, so nullptr is the arm that was ever taken, Task 11a collapsed
+        // the ternary to it, and the local survived only because the class did
+        // -- its other two construction sites were gated on
+        // GpuContext::GraphFlavor(), a predicate 11a did not own. The
+        // follow-on collapse retired that predicate and BootPresenter with it,
+        // so there is no longer an object to construct.
         Arcane::BootSequence  seq(std::move(stages));
         const Arcane::BootResult r = seq.Run(nullptr);
         if (!r.ok)
@@ -958,18 +958,18 @@ namespace Arcane::Editor
             //
             // HOW THE QUIT REACHES HERE HAS CHANGED, and the original reasoning
             // no longer holds. This was written when Run() took a LIVE
-            // presenter: BootPresenter::Present() saw the OS quit event and
-            // CONSUMED it, so PumpFrameEvents could never see it on a later
-            // frame, which made this branch the only thing standing between the
-            // user and a second click on the X. Run() is passed nullptr now
-            // (NRI Phase 5a, Task 11a collapsed the ternary to the arm that was
-            // always taken), so no Present() runs, nothing consumes the quit,
-            // and PumpFrameEvents WOULD see it next frame. The branch stays
-            // because it still exits on the FIRST click instead of a frame
-            // later, and still suppresses the bogus banner -- but it is no
-            // longer load-bearing for event consumption. It becomes so again if
-            // a presenter is ever restored here; whoever collapses
-            // GraphFlavor() and settles BootPresenter's fate owns that call.
+            // presenter, whose Present() saw the OS quit event and CONSUMED it,
+            // so PumpFrameEvents could never see it on a later frame -- which
+            // made this branch the only thing standing between the user and a
+            // second click on the X. Run() is passed nullptr now (Task 11a
+            // collapsed the ternary to the arm that was always taken; the
+            // presenter class itself is deleted), so no Present() runs, nothing
+            // consumes the quit, and PumpFrameEvents WOULD see it next frame.
+            // The branch stays because it still exits on the FIRST click
+            // instead of a frame later, and still suppresses the bogus banner
+            // -- but it is no longer load-bearing for event consumption. It
+            // becomes so again only if some presenter is restored here, which
+            // is now a design decision rather than a pending cleanup.
             // The project-less convergence below still runs unconditionally --
             // it is correct regardless of why r.ok is false, per this block's
             // own "either way" comment further down.
@@ -977,7 +977,7 @@ namespace Arcane::Editor
             {
                 ARC_WARN("Open Project: the switch to '{}' was aborted by a quit at stage '{}' -- "
                          "exiting. If you did not close the window, this is a spurious quit and the "
-                         "BootPresenter line above names the stage it landed on.",
+                         "stage named above is where it landed.",
                          path.generic_string(), r.failedStage);
                 m_requestExit = true;
             }

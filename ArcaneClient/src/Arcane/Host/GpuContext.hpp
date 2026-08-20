@@ -31,19 +31,14 @@
 // else -- there is no RenderDevice, Swapchain, ShaderLibrary, Canvas or
 // command list anywhere in this object.
 //
-// GraphFlavor() answers true unconditionally now (every construction path
-// goes through this one Create(), and Create sets m_graphFlavor = true before
-// its first fallible step; the constructor is private, so there is no other
-// way a GpuContext exists). It is STILL NOT collapsed here.
-//
-// Task 11a retired the EDITOR's wrapper, EditorApp::GraphMode() -- which was
-// `m_gpu && m_gpu->GraphFlavor()` -- and the 9 call sites it fed. GraphFlavor()
-// ITSELF SURVIVES, with live callers this accessor must keep serving:
-// EditorApp.cpp and RuntimeApp.cpp each gate their BootPresenter construction
-// on `!GraphFlavor()`, each has a banner-text ternary reading it, and two
-// ArcaneTests cases assert on it directly. Retiring it is therefore a
-// SEPARATE collapse -- it moves the test gate, which a predicate-only task
-// must not do -- and it is what actually unblocks deleting BootPresenter.
+// THERE IS NO FLAVOR PREDICATE ANY MORE. This class carried a GraphFlavor()
+// accessor over a m_graphFlavor member through the whole NRI port; Create()
+// set it true before its first fallible step and the constructor is private,
+// so it had answered true unconditionally since the Phase 5a flip. It was
+// retired in the follow-on collapse that also deleted BootPresenter (its two
+// `!GraphFlavor()` gates were that class's only remaining construction
+// sites), because retiring it MOVES the test gate -- ArcaneTests asserted on
+// it twice -- which the phase's own tasks were forbidden to do.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/ImGui/ImGuiLayer.hpp>
@@ -70,18 +65,6 @@ namespace Arcane
         // exists.
         static std::unique_ptr<GpuContext> Create(const HostConfig& cfg);
 
-        // True always (see the file header). Kept as the ONE predicate every
-        // host branch reads -- never a HostConfig flag.
-        //
-        // WHO OWNS RETIRING IT: a FOLLOW-ON task, not Task 11. Task 11a
-        // collapsed the editor's wrapper (EditorApp::GraphMode()) and 11b is
-        // prose-only, so nothing named "Task 11" is coming for this one. The
-        // collapse is gated on a decision this accessor cannot make for
-        // itself: ArcaneTests/src/NriHostFlavorTest.cpp asserts on it twice
-        // (:53, :105), so retiring it MOVES the gate counts -- which is why it
-        // could not ride along with a task required to leave them unchanged.
-        [[nodiscard]] bool GraphFlavor() const noexcept { return m_graphFlavor; }
-
         Window&        Win()       { return m_window; }
         Batcher2D&     Batch()     { return *m_batcher; }
         ImGuiLayer&    Imgui()     { return *m_imgui; }
@@ -103,7 +86,5 @@ namespace Arcane
         std::unique_ptr<ImGuiLayer>    m_imgui;
         std::unique_ptr<InputDevices>  m_inputDevices;
         std::unique_ptr<InputActions>  m_input;
-
-        bool m_graphFlavor = false;
     };
 }

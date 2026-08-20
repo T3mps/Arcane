@@ -58,42 +58,32 @@ namespace
     // TRANSIENT sized to this swapchain inside BuildFrame -- so the swapchain
     // is the single source of truth, not a proxy for one.
     //
-    // `if (io.graph)` survives here rather than being collapsed to an
-    // unconditional read: `io.graph` is unconditional as of Phase 5a Task 2b
-    // (the same invariant `if (!io.graph)`/`if (io.graph)` express throughout
-    // this file). Collapsing it belongs to a FOLLOW-ON task, not to Task 11 as
-    // this used to say -- 11a collapsed EditorApp::GraphMode() only (`io.graph`
-    // is a different predicate, a FrameIo field rather than that accessor) and
-    // 11b is prose-only, so the repo-wide pass this names has been and gone
-    // without reaching here. It is the same follow-on that owns
-    // GpuContext::GraphFlavor(); see that accessor's comment for why the two
-    // travel together. What NRI Phase 5a, Task 6 forced here is narrower: the dead
-    // NVRHI tail this function used to fall through to (`io.gpu->Cnv()`) no
-    // longer compiles at all, because GpuContext has built no NVRHI canvas
-    // since that task deleted Cnv() along with the rest of its NVRHI half --
-    // so the tail is gone rather than ported to an accessor that cannot
-    // compile.
+    // ASSERT-THEN-READ, not `if (io.graph) ... else fail`. `io.graph` is
+    // unconditional as of Phase 5a Task 2b: MainLoop refuses to reach the frame
+    // loop at all if NriGraphContext::Create failed (RuntimeApp.cpp,
+    // ShutdownGraphPath runs and MainLoop returns first), so every call into
+    // RuntimeFrame's functions has a live vehicle -- which is why RenderGraph
+    // and CaptureTail in this same file already dereference it with no guard.
+    // The guard that used to stand here was the last two-path scaffolding on
+    // this predicate, and it went with GpuContext::GraphFlavor() in the
+    // follow-on collapse; the fail-loud it protected is KEPT, hoisted above the
+    // read rather than left as an unreachable tail.
+    //
+    // The assert is not decoration. A 0x0 frame would propagate into the
+    // resolver's material globals and the batcher's viewport as a quiet
+    // wrong-answer instead of a loud one, which is exactly the defect class
+    // this whole phase exists to avoid. (What NRI Phase 5a, Task 6 forced here
+    // was narrower: the dead NVRHI tail this function used to fall through to,
+    // `io.gpu->Cnv()`, stopped compiling when Cnv() went with the rest of
+    // GpuContext's NVRHI half, so it was deleted rather than ported.)
     void FrameExtent(const Arcane::RuntimeFrame::FrameIo& io,
                      std::uint32_t& width, std::uint32_t& height)
     {
-        if (io.graph)
-        {
-            width  = io.graph->Swap().Width();
-            height = io.graph->Swap().Height();
-            return;
-        }
-        // io.graph is unconditional as of Phase 5a Task 2b: MainLoop refuses
-        // to reach the frame loop at all if NriGraphContext::Create failed
-        // (RuntimeApp.cpp, ShutdownGraphPath runs and MainLoop returns
-        // first), so every call into RuntimeFrame's functions has a live
-        // vehicle. Asserting here rather than silently leaving width/height
-        // at the caller's zero-initialized default: a 0x0 frame would
-        // propagate into the resolver's material globals and the batcher's
-        // viewport as a quiet wrong-answer instead of a loud one, which is
-        // exactly the defect class this whole phase exists to avoid.
-        ARC_ASSERT(false, "RuntimeFrame::FrameExtent: io.graph is null -- "
-                          "the graph vehicle should be unconditional by the "
-                          "time the frame loop runs");
+        ARC_ASSERT(io.graph, "RuntimeFrame::FrameExtent: io.graph is null -- "
+                             "the graph vehicle should be unconditional by the "
+                             "time the frame loop runs");
+        width  = io.graph->Swap().Width();
+        height = io.graph->Swap().Height();
     }
 }
 
@@ -148,9 +138,11 @@ bool PumpAndResize(FrameIo& io)
         // aimed at a device this process does not create. The `else` arm
         // that used to call it is deleted outright now (NRI Phase 5a,
         // Task 6): GpuContext::OnResize itself is gone, along with the rest
-        // of the NVRHI half.
-        if (io.graph)
-            io.graph->Resize(events.width, events.height);
+        // of the NVRHI half. The `if (io.graph)` that guarded this one call
+        // went with the follow-on GraphFlavor() collapse -- see FrameExtent
+        // above for why the field is unconditional and where the one
+        // remaining fail-loud on it lives.
+        io.graph->Resize(events.width, events.height);
     }
     if (eventWindow.IsMinimized())
     {
@@ -255,11 +247,10 @@ void PrepareFrame(FrameIo& io)
     // gone, and at Task 9.5a so is io.backbuffer itself -- it had no reader
     // left (CaptureTail only ever read it on the NVRHI arm, which is gone
     // too), so a field reset to null every frame for nobody went with the
-    // rest. Collapsing the remaining `if (io.graph)` guards (io.graph is
-    // never null -- see FrameIo's own field comment) belongs to a follow-on
-    // task, not Task 11 as this used to say: 11a collapsed only
-    // EditorApp::GraphMode(), io.graph is a different (FrameIo) predicate it
-    // never touched, and 11b is prose-only.
+    // rest. The two `if (io.graph)` guards this comment used to carry forward
+    // are gone as well, collapsed alongside GpuContext::GraphFlavor() -- every
+    // read of the field in this file is unconditional now, over the single
+    // fail-loud in FrameExtent.
 
     // Scene asset resolution, BEFORE the batcher's Begin and before
     // SubmitRender: the drain inside registers compiled materials with the
@@ -552,7 +543,8 @@ bool CaptureTail(FrameIo& io)
     if (lastFrame && (!io.config.screenshotPath.empty() || io.config.GoldenMode()))
     {
         // LATCHED BEFORE THE READBACK, not after (whole-branch review, I2;
-        // exactly the editor's rule at CaptureEditorGolden): this is the
+        // exactly the editor's rule in RenderSceneToViewport's capture block,
+        // which is where its golden capture lives now): this is the
         // "did the run ever reach a real capture" signal MainLoop's post-loop
         // check reads, and it must be true even when the readback then fails
         // -- that failure sets goldenExit = 3 itself, below, and the two are

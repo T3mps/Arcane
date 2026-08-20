@@ -5886,8 +5886,8 @@ TEST_CASE("nri graph frame: the GAME UI node sits between the tonemap and the ou
     // NRI Phase 3, Task 9. The editor's viewport frame carries a SECOND ImGui
     // node -- the game/plugin HUD -- and where it sits is the whole of what this
     // declaration decides. It is the editor's own compositing order expressed
-    // against this recorder: EditorApp::CompositeGameUi (phase 11) runs after
-    // the scene render and BEFORE EditorApp::RenderSelectionOutline (phase 12).
+    // against this recorder: the editor's phase 11 (the game HUD) runs after
+    // the scene render and BEFORE its phase 12 (the selection outline).
     //
     // NOTHING EXERCISES THAT ORDER TODAY, which is exactly why it is pinned
     // here: the two are mutually exclusive by MODE in the editor (Play draws

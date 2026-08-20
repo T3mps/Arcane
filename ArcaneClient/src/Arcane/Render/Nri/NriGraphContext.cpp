@@ -1235,9 +1235,11 @@ namespace Arcane
         // ---------------------------------------------------------------
         // THE GAME HUD (Task 9), declared BETWEEN the tonemap and the
         // pick/outline chain -- which is the editor's own compositing order
-        // expressed against this recorder: EditorApp::CompositeGameUi (phase
-        // 11) runs after the scene render and BEFORE
-        // EditorApp::RenderSelectionOutline (phase 12). The two are mutually
+        // expressed against this recorder: the editor's phase 11 (the game HUD)
+        // runs after the scene render and BEFORE phase 12 (the selection
+        // outline). Neither phase has a function of its own any more -- both are
+        // armed into THIS frame by EditorApp::ArmGraphViewportFrame, so this
+        // declaration order is now the only place it is stated. They are mutually
         // exclusive by MODE there (Play draws the HUD, Edit draws the outline),
         // so no frame exercises the order today -- which is exactly why it is
         // pinned by declaration rather than left to be discovered by whoever
@@ -1273,10 +1275,10 @@ namespace Arcane
         // the capture, which is both halves of the ordering contract:
         //
         //   * AFTER the tonemap, because the composite blends over the
-        //     DISPLAY-REFERRED backbuffer -- exactly what the editor does
-        //     (EditorApp::RenderSelectionOutline composites into the canvas's
-        //     post-tonemap OUTPUT framebuffer, after the scene render and
-        //     before the ImGui pass);
+        //     DISPLAY-REFERRED backbuffer -- exactly what the editor's phase 12
+        //     did on the NVRHI arm (composite into the canvas's post-tonemap
+        //     OUTPUT framebuffer, after the scene render and before the ImGui
+        //     pass);
         //   * BEFORE the capture, because the capture node copies the
         //     backbuffer and must see the outline. Declaration order IS
         //     execution order on this graph, so this placement is the whole

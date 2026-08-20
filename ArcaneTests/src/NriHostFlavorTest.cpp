@@ -3,13 +3,15 @@
 //
 // What is here:
 //   * GpuContext::Create builds the device-less half -- window, device-less
-//     Batcher2D, graph ImGuiLayer, input -- and answers GraphFlavor() true.
-//     That predicate is what every host branch gates on, so pinning it is
-//     pinning the boot split. (NRI Phase 5a, Task 6 renamed this from
-//     CreateForGraph once it became the only factory GpuContext has --
-//     Device/Swap/Shaders/Cnv/Tone/Cmd/EnsurePost/FramebufferFor/OnResize
-//     and the NVRHI members behind them no longer exist at all, so there is
-//     no second half left to distinguish this one from.)
+//     Batcher2D, graph ImGuiLayer, input -- and nothing else. (NRI Phase 5a,
+//     Task 6 renamed this from CreateForGraph once it became the only factory
+//     GpuContext has -- Device/Swap/Shaders/Cnv/Tone/Cmd/EnsurePost/
+//     FramebufferFor/OnResize and the NVRHI members behind them no longer
+//     exist at all, so there is no second half left to distinguish this one
+//     from.) The GraphFlavor() predicate this file used to assert on twice
+//     went with the follow-on collapse: with one factory and no second
+//     flavor there is no boot split left to pin, so what remains here is the
+//     SHAPE Create() produces, which is the part that can still regress.
 //   * ImGuiLayer::Create pins its own context in BeginFrame and in
 //     RenderToDrawData/EndFrameDiscard even when another context was left
 //     current. That pin is the Phase-2 carry this task closes: the graph
@@ -48,9 +50,6 @@ TEST_CASE("nri landing: GpuContext's graph flavor builds the device-less half an
 
     auto gpu = Arcane::GpuContext::Create(cfg);
     REQUIRE(gpu != nullptr);
-
-    // THE GATE every host call site branches on.
-    CHECK(gpu->GraphFlavor());
 
     // The window is real (the NRI swapchain binds it at MainLoop time) and
     // hidden (the host reveals it once the graph vehicle exists).
@@ -102,7 +101,6 @@ TEST_CASE("nri landing: the editor's graph-mode frame tail -- Begin then discard
 
     auto gpu = Arcane::GpuContext::Create(cfg);
     REQUIRE(gpu != nullptr);
-    REQUIRE(gpu->GraphFlavor());
 
     // The atlas, eagerly: this flavor installs no renderer backend, so nothing
     // would otherwise service the 1.92 texture protocol. Same recipe as the

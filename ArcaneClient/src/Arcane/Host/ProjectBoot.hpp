@@ -368,7 +368,7 @@ namespace Arcane::HostBoot
     // are declared here with NO run callable (Make's `run` parameter
     // defaults to an empty std::function) because their real work needs a
     // HOST-OWNED object (EditorApp::m_gpu/m_runtime/m_plugin/m_resolver/
-    // m_presenter, ArcaneRuntime's equivalents) or an editor-exe-only type
+    // m_splash, ArcaneRuntime's equivalents) or an editor-exe-only type
     // (EditorTheme/EditorFonts/ShaderEditorDocument) that this module,
     // compiled into Arcane.dll, cannot reach or see -- Arcane.dll cannot
     // depend on ArcaneEditor.exe. Each host is REQUIRED to overwrite that
@@ -376,11 +376,13 @@ namespace Arcane::HostBoot
     // constructing a BootSequence (see EditorApp::Run / RuntimeApp::Run).
     // The editor-only splash_ready is one of these host-owned ids (Task 8c,
     // 2026-07-30 correction) -- it used to be ctx-only shared logic (plain
-    // Window::Show()/BootSplashWindow::Close()), but revealing the window
-    // now also means Present()-ing one real frame through the swapchain-
-    // backed BootPresenter first (EditorApp::m_presenter), which this module
-    // cannot reach; see EditorStages' splash_ready push_back for the reveal-
-    // ordering reasoning and EditorApp::StageSplashReady for the body.
+    // Window::Show()/BootSplashWindow::Close()), because it also had to draw
+    // one real frame through a host-owned swapchain-backed presenter this
+    // module cannot reach. That presenter is deleted and the reveal has moved
+    // out of the stage entirely, but the stage stays host-owned: its splash
+    // members are host state as well. See EditorStages' splash_ready
+    // push_back for the reveal-ordering reasoning and
+    // EditorApp::StageSplashReady for the body.
     //
     // An id with no host override left empty is NOT tolerated silently: Make()
     // substitutes a sentinel body that logs ARC_ERROR naming the exact id and

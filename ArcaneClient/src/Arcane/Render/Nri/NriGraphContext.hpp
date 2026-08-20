@@ -500,7 +500,7 @@ namespace Arcane
             // ---- the GAME's own HUD (Task 9) ----------------------------
             // A SECOND ImDrawData, from a SECOND ImGui context, drawn between
             // the tonemap and the pick/outline chain -- the editor's phase 11
-            // (CompositeGameUi) then phase 12 (RenderSelectionOutline) order,
+            // (the game HUD) then phase 12 (the selection outline) order,
             // expressed against this recorder. Same borrowing rules as `imgui`
             // below (record-time consumption, valid until that context's next
             // NewFrame). Null means "no game HUD this frame", which is what

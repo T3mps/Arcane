@@ -104,12 +104,13 @@ TEST_CASE("golden harness: the editor's prefix names editor-<stage->-<backend>.p
             cfg.goldenCapturePath = dir.string();
             cfg.goldenStage       = sc.stage;
             cfg.backend           = backend;
-            // The SAME named constant EditorApp::CaptureEditorGolden and
-            // RenderSceneToViewport's capture block pass -- if either drifts
-            // to a literal "editor" string, this still passes (both would
-            // agree), but a drift AWAY from the constant at either call site
-            // would not be caught here; that is a grep, not a test, and the
-            // constant existing at all is what makes the grep possible.
+            // The SAME named constant RenderSceneToViewport's capture block
+            // passes -- the editor's ONE golden call site now that the NVRHI
+            // arm's separate capture function is gone. If it drifts to a
+            // literal "editor" string this still passes (both sides would
+            // agree), but a drift AWAY from the constant would not be caught
+            // here; that is a grep, not a test, and the constant existing at
+            // all is what makes the grep possible.
             REQUIRE(GoldenArtifact(cfg, 1, 1, actual, Arcane::kEditorGoldenNamePrefix) == 0);
             const std::filesystem::path expected =
                 dir / (std::string(Arcane::kEditorGoldenNamePrefix) + "-" +

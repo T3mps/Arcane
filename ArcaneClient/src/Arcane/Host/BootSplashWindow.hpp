@@ -133,12 +133,15 @@ namespace Arcane
     // BootProgress update to the splash window's SetStatusText/SetProgress
     // instead of drawing a swapchain frame (Task 8c). Wired as BootSequence::
     // Run's ONE presenter for the WHOLE boot, from runtime_create through
-    // finalize -- the swapchain-backed BootPresenter (BootPresenter.hpp) is
-    // used exactly once, explicitly, by the LAST stage's own body
-    // (EditorApp::StageSplashReady / RuntimeApp::StageFinalize), never
-    // through this per-stage pump. See the design doc's Task 8c correction
-    // (docs/superpowers/specs/2026-07-29-async-boot-loading-screen-design.md)
-    // for the full "who draws what, when" picture.
+    // finalize -- and, since the GraphFlavor() collapse, the ONLY presenter
+    // there is. A swapchain-backed Arcane::BootPresenter used to be drawn once
+    // more, explicitly, by the LAST stage's own body
+    // (EditorApp::StageSplashReady / RuntimeApp::StageFinalize) and never
+    // through this per-stage pump; both hosts reveal their window from the
+    // graph vehicle's creation now instead, and that class is deleted. See the
+    // design doc's Task 8c correction
+    // (docs/specs/2026-07-29-async-boot-loading-screen-design.md) for the
+    // original "who draws what, when" picture -- it predates the deletion.
     //
     // Header-only and deliberately NOT ARCANE_API: it derives from the
     // exported IBootPresenter interface but is compiled straight into each

@@ -599,8 +599,8 @@ namespace Arcane
     // Declares "outlinecomposite": blends the field over `target` -- the
     // imported backbuffer the tonemap has already written. Declared AFTER the
     // tonemap and BEFORE the capture node, which is the editor's own
-    // compositing order (EditorApp::RenderSelectionOutline runs after the scene
-    // render and before the ImGui pass).
+    // compositing order (its phase 12 runs after the scene render and before
+    // the ImGui pass).
     ARCANE_API void AddOutlineCompositeNode(RenderGraph& graph, NriGraphContext* context,
                                             RgTexture field, RgTexture target,
                                             std::uint32_t width, std::uint32_t height);

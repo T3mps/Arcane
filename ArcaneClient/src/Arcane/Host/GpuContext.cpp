@@ -35,7 +35,6 @@ namespace Arcane
         // early return (members destruct in reverse declaration order, the shutdown
         // order).
         auto ctx = std::unique_ptr<GpuContext>(new GpuContext());
-        ctx->m_graphFlavor = true;
 
         // THE window of the process, created first for the reason stated in
         // the header: it destructs LAST, and the NRI swapchain the caller

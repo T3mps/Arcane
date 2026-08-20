@@ -12,7 +12,6 @@
 #include <Arcane/Host/GpuContext.hpp>
 #include <Arcane/Host/FramePerf.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
-#include <Arcane/Host/BootPresenter.hpp>
 #include <Arcane/Host/BootSequence.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>
@@ -118,10 +117,6 @@ private:
     // m_splash in the ctor's init list (declared right after it, so
     // declaration order matches).
     Arcane::BootSplashPresenter           m_splashPresenter;
-    // Cannot be constructed before StageGpuCore builds m_gpu. Emplaced
-    // lazily inside StageFinalize, the one place it is used now -- see that
-    // method's body.
-    std::optional<Arcane::BootPresenter>  m_presenter;
 
     Astra::TypeContext*                 m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)
     // engaged by the boot sequence before MainLoop()/Shutdown() touch them (bare -> deref is safe).

@@ -310,9 +310,8 @@ namespace Arcane::Editor
             return false;
         }
 
-        ARC_INFO("{} -- Arcane Editor host, backend {}{}", Arcane::BuildInfo(),
-                 Arcane::ToString(m_config.backend),
-                 m_gpu->GraphFlavor() ? " (NRI graph: no NVRHI device in this process)" : "");
+        ARC_INFO("{} -- Arcane Editor host, backend {}", Arcane::BuildInfo(),
+                 Arcane::ToString(m_config.backend));
         ctx.gpu = m_gpu.get();
 
         // Capture the editor's own ImGui context right after GpuContext::
@@ -321,10 +320,11 @@ namespace Arcane::Editor
         // against this, see its own body).
         m_editorImguiContext = ImGui::GetCurrentContext();
 
-        // Does NOT construct m_presenter here (Task 8c, 2026-07-30
-        // correction): the swapchain-backed BootPresenter is needed exactly
-        // once now, for the single reveal frame StageSplashReady draws right
-        // before Show()/Close() -- there is no more "next automatic
+        // Constructs NO presenter here (Task 8c, 2026-07-30
+        // correction): the swapchain-backed BootPresenter this used to defer
+        // was needed exactly once, for the single reveal frame StageSplashReady
+        // drew right before Show()/Close(), and it is deleted now along with
+        // that reveal -- there is no more "next automatic
         // present() call" to worry about landing on an unready ImGui context,
         // because BootSequence's per-stage pump is driven by the pre-device
         // splash (Arcane::BootSplashPresenter, bound for the whole Run() call
@@ -1031,87 +1031,26 @@ namespace Arcane::Editor
         // everything is ready to go" -> Hide() -> "Do final set up on the
         // editor frame and show it" -> CreateDefaultMainFrame).
         //
-        // Two constraints still bind even though the reveal moved to the end:
-        //   1. Never reveal an undrawn window. m_gpu's window has existed
-        //      (hidden) since StageGpuCore, but nothing has ever presented a
-        //      frame into its swapchain -- BootSequence's per-stage pump has
-        //      been driven by the pre-device splash (Arcane::
-        //      BootSplashPresenter, see Run() below) for this WHOLE boot, and
-        //      that presenter never touches the swapchain. So: construct the
-        //      swapchain-backed BootPresenter here (first and only use) and
-        //      Present() ONE real frame at fraction=1.0 before doing anything
-        //      else -- stageId/detail are left empty, matching BootProgress's
-        //      own documented "terminal tick" shape (BootSequence.hpp).
-        //   2. Never leave a gap with neither window on screen. Show() the
-        //      real window -- which now holds that just-drawn frame, not
-        //      garbage -- BEFORE Close()ing the pre-device splash. Reversing
-        //      these two leaves a frame with neither on screen.
+        // THE REVEAL IS NOT IN THIS STAGE. It used to be, behind an
+        // `if (!m_gpu->GraphFlavor())` gate: construct the swapchain-backed
+        // BootPresenter (its first and only use), Present() one terminal frame
+        // at fraction=1.0, check HasPresentedFrame() so a window nothing drew
+        // into is never shown, then Show() the real window before Close()ing
+        // the splash. That gate has been unconditionally false since the Phase
+        // 5a flip, and the follow-on GraphFlavor() collapse retired the
+        // predicate, the BootPresenter class and the dead block as one unit.
         //
-        // 2026-07-30 review round 2, finding 2's second half: Present()'s
-        // return alone cannot distinguish "drew and presented" from "no
-        // backbuffer this call, drew nothing" -- both return true.
-        // HasPresentedFrame() is the added signal that lets this stage tell
-        // them apart, so it never Show()s a window nothing was drawn into.
+        // CreateGraphVehicles() reveals the window instead, immediately before
+        // building the graph vehicle that owns its only swapchain -- the same
+        // "never show a window nothing can draw into" rule expressed against a
+        // different device, and the same Show()-then-create ordering the
+        // runtime's three desk checkpoints proved. Both constraints the old
+        // block existed to satisfy are therefore still met; they are just met
+        // by the one object that can actually draw a frame here.
         //
-        // NONE OF IT ON THE GRAPH FLAVOR (NRI Phase 3, Task 8), exactly as
-        // RuntimeApp::StageFinalize gates its own copy at Task 6: BootPresenter
-        // draws through the NVRHI swapchain + ImGui renderer, and neither
-        // exists here. The window is revealed by CreateGraphVehicles() instead,
-        // immediately before the graph vehicle that owns its only swapchain is
-        // built -- the same "never show a window nothing can draw into" rule
-        // expressed against a different device, and the same Show()-then-create
-        // ordering the runtime's three desk checkpoints proved. The splash
-        // Disarm/Close below still runs on BOTH arms: it is the end of boot
-        // either way.
-        if (!m_gpu->GraphFlavor())
-        {
-            m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
-            Arcane::BootProgress done;   // stageId/detail empty: the terminal tick
-            done.fraction = 1.0f;
+        // What remains in this stage is the splash Disarm/Close below, which
+        // always ran on both arms: it is the end of boot either way.
 
-            bool ok = m_presenter->Present(done);
-            if (ok && !m_presenter->HasPresentedFrame())
-            {
-                // Transient no-backbuffer (zero-size window mid-resize, surface
-                // out of date). Every OTHER Present() call in this class's life
-                // gets a "next frame" to self-correct on; this one does not --
-                // it IS the frame the window reveals. One retry.
-                ok = m_presenter->Present(done);
-            }
-            if (!ok)
-            {
-                // Quit requested during this pump: PumpEvents() drained a real
-                // SDL_EVENT_QUIT/WINDOW_CLOSE_REQUESTED for m_gpu's own window --
-                // distinct from m_splashPresenter's quit detection above (that
-                // one only covers the SPLASH being closed); this is the real
-                // window's own event backlog, unpumped for the whole boot until
-                // this exact call. Do not reveal an undrawn window -- abort as a
-                // Fatal-stage failure like any other boot stage would. (Honest
-                // asymmetry, not silently patched: this specific path reports
-                // exit code 1, not the 0 a quit normally gets via
-                // BootResult::quitRequested, because that flag is set only by
-                // BootSequence::Run's OWN present() calls, not by a stage's
-                // return value. An OS-shutdown broadcast landing in exactly this
-                // narrow window is the only realistic trigger.)
-                return false;
-            }
-            if (!m_presenter->HasPresentedFrame())
-            {
-                // Still nothing drawn after one retry -- extremely unlikely (two
-                // consecutive zero-size/surface-out-of-date reports back to
-                // back), but the never-fail-boot contract does not extend to
-                // "never fail to draw a window": refusing to reveal garbage is
-                // safer than showing it.
-                ARC_ERROR("Arcane Editor: failed to present the boot-complete frame -- refusing to reveal an undrawn window");
-                return false;
-            }
-
-            // Show() also RAISES (Task 8d defect B, Window.cpp) -- and it must run
-            // while the splash still holds the foreground, i.e. strictly before
-            // the Close() below, or Windows' foreground lock refuses the raise and
-            // the editor opens behind the window stack.
-            m_gpu->Win().Show();
-        }
         // Disarm BEFORE Close(): m_splashPresenter's own quit detection
         // (Run()'s comment / BootSplashPresenter::Present) would otherwise
         // see the splash we are about to close OURSELVES transition
@@ -1517,9 +1456,10 @@ namespace Arcane::Editor
         // m_viewportTargets.graph never built.
         Arcane::Diagnostics::SetPhase("nri graph vehicle boot");
 
-        // THE REVEAL, which StageSplashReady could not do on this flavor (its
-        // BootPresenter draws through an NVRHI swapchain + ImGui renderer, and
-        // neither exists here). BEFORE the create, per the ordering above.
+        // THE REVEAL, which StageSplashReady could never do: it drew through a
+        // BootPresenter over an NVRHI swapchain + ImGui renderer, neither of
+        // which exists here -- and both that presenter and the predicate
+        // gating it are now deleted. BEFORE the create, per the ordering above.
         // Show() also RAISES, which is the launch reveal this host owes exactly
         // once.
         m_gpu->Win().Show();

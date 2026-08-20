@@ -523,13 +523,14 @@ namespace Arcane::HostBoot
         // to the user, and the bar has moved.
         //
         // Depends on `run` being a HOST override, not a ctx-only shared
-        // lambda like it was before this task: revealing the window now also
-        // needs to Present() one real frame through the swapchain-backed
-        // BootPresenter first (see the "who draws the reveal frame" note
-        // below), and that presenter is host-owned state
-        // (EditorApp::m_presenter) this module cannot reach -- the same
-        // structural reason render_bridge/plugin_load/etc. are host
-        // overrides. `Make(...)` below is therefore called with NO trailing
+        // lambda like it was before this task: revealing the window needed
+        // host-owned state this module cannot reach -- the same structural
+        // reason render_bridge/plugin_load/etc. are host overrides. (The
+        // specific object was a swapchain-backed BootPresenter the stage drew
+        // one frame through; that class is deleted and the reveal has moved to
+        // the graph vehicle's creation, but splash_ready stays a host override
+        // because m_splash/m_splashPresenter are host state too.)
+        // `Make(...)` below is therefore called with NO trailing
         // `run` argument, which installs Make's Unpatched(id) sentinel (see
         // this file's top) -- EditorApp::Run() is REQUIRED to overwrite it
         // with StageSplashReady, same as every other host-owned id.
@@ -540,12 +541,12 @@ namespace Arcane::HostBoot
         //      into the swapchain by this point -- BootSequence's per-stage
         //      pump has been driven by the pre-device splash presenter for
         //      the ENTIRE run, and that presenter never touches the
-        //      swapchain. StageSplashReady's body resolves this by
-        //      Present()-ing ONE real frame through the swapchain-backed
-        //      BootPresenter (Fullscreen, fraction=1.0) BEFORE calling
-        //      Show() -- one frame the user will not perceive as a loading
-        //      screen, matching UE's splash->main-frame handoff being a
-        //      single hide/show pair rather than a fade.
+        //      swapchain. StageSplashReady resolved this by Present()-ing ONE
+        //      real frame through a swapchain-backed BootPresenter
+        //      (Fullscreen, fraction=1.0) BEFORE calling Show(). That class is
+        //      deleted; the constraint is met instead by revealing the window
+        //      from the graph vehicle's creation, which is the first moment
+        //      anything CAN draw into it -- see EditorApp::StageSplashReady.
         //   2. Never leave a gap with neither window on screen. Show() the
         //      real window (now holding that just-drawn frame) BEFORE
         //      Close()ing the pre-device splash -- reversing these two still

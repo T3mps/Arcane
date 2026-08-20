@@ -139,14 +139,14 @@ bool RuntimeApp::StageGpuCore(Arcane::HostBoot::BootContext& ctx)
         return false;
     }
 
-    ARC_INFO("{} -- ArcaneRuntime host, backend {}{}", Arcane::BuildInfo(),
-             Arcane::ToString(m_config.backend),
-             m_gpu->GraphFlavor() ? " (NRI graph: no NVRHI device in this process)" : "");
+    ARC_INFO("{} -- ArcaneRuntime host, backend {}", Arcane::BuildInfo(),
+             Arcane::ToString(m_config.backend));
     ctx.gpu = m_gpu.get();
 
-    // Does NOT construct m_presenter here (Task 8c, 2026-07-30 correction):
-    // the swapchain-backed BootPresenter is needed exactly once now, for the
-    // single reveal frame StageFinalize draws right before Show()/Close() --
+    // Constructs NO presenter here (Task 8c, 2026-07-30 correction): the
+    // swapchain-backed BootPresenter this used to defer was needed exactly
+    // once, for the single reveal frame StageFinalize drew right before
+    // Show()/Close(), and it is deleted now along with that reveal --
     // BootSequence's per-stage pump is driven by the pre-device splash
     // (Arcane::BootSplashPresenter, bound for the whole Run() call in Run()
     // below) for the ENTIRE boot instead. m_presenter is emplaced lazily
@@ -351,66 +351,22 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
     // is the LAST core stage both hosts run, matching where the editor's own
     // splash_ready now sits (it depends on "finalize" -- see ProjectBoot.cpp).
     //
-    // Same two constraints as the editor's StageSplashReady, and the same
-    // resolution -- see that method's comment in EditorApp.cpp for the full
-    // reasoning (UnrealEdGlobals.cpp:215-236's hide-then-show shape):
-    //   1. Never reveal an undrawn window: Present() one real frame through
-    //      the swapchain-backed BootPresenter (fraction=1.0, the terminal
-    //      tick) before doing anything else -- nothing has drawn into this
-    //      window's swapchain yet, because BootSequence's per-stage pump has
-    //      been driven by the pre-device splash presenter for the WHOLE run.
-    //   2. Never leave a gap with neither window on screen: Show() the real
-    //      window (now holding that frame) BEFORE Close()ing the splash.
+    // THE REVEAL IS NOT IN THIS STAGE, and the editor's StageSplashReady
+    // carries the same history in full. It used to sit here behind an
+    // `if (!m_gpu->GraphFlavor())` gate: Present() one terminal frame
+    // (fraction=1.0) through the swapchain-backed BootPresenter, refuse to
+    // Show() a window nothing drew into, then Show() before Close()ing the
+    // splash. That gate has been unconditionally false since the Phase 5a
+    // flip, and the follow-on GraphFlavor() collapse retired the predicate,
+    // the BootPresenter class and the dead block as one unit.
     //
-    // 2026-07-30 review round 2, finding 2's second half: see EditorApp::
-    // StageSplashReady's matching comment for why Present()'s return alone
-    // is not enough (it returns true on BOTH "drew and presented" and "no
-    // backbuffer this call, drew nothing"), and why one retry + a hard
-    // refusal to Show() an undrawn window follow.
+    // MainLoop reveals the window instead, as soon as the graph vehicle that
+    // owns its only swapchain has been created -- see the reveal comment there
+    // for why that is the same "never show a window nothing can draw into"
+    // rule expressed against a different device. Both constraints the old
+    // block existed to satisfy still hold; they are met by the one object that
+    // can actually draw a frame here.
     //
-    // NONE OF IT ON THE GRAPH FLAVOR: GraphFlavor() answers true
-    // unconditionally (GpuContext::Create sets it before returning; see that
-    // accessor's own comment for who owns retiring the predicate), so this
-    // `if` is never taken -- and BootPresenter::Present is dead code
-    // regardless of that: its drawing body (the NVRHI swapchain + ImGui
-    // renderer this used to describe) was deleted at NRI Phase 5a, Task 6
-    // (see BootPresenter.cpp), so even a caller that somehow reached it would
-    // get an event pump and nothing drawn. The window is revealed by MainLoop
-    // instead, as soon as the graph vehicle that owns its only swapchain has
-    // been created -- see the reveal comment there for why that is the same
-    // "never show a window nothing can draw into" rule expressed against a
-    // different device.
-    if (!m_gpu->GraphFlavor())
-    {
-        m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
-        Arcane::BootProgress done;   // stageId/detail empty: the terminal tick
-        done.fraction = 1.0f;
-
-        bool ok = m_presenter->Present(done);
-        if (ok && !m_presenter->HasPresentedFrame())
-            ok = m_presenter->Present(done);   // one retry: transient no-backbuffer (zero-size/out-of-date)
-        if (!ok)
-        {
-            // Quit requested during this pump (m_gpu's own window's event
-            // backlog, unpumped for the whole boot until this exact call --
-            // distinct from m_splashPresenter's quit detection, which only
-            // covers the splash). Same honest asymmetry as the editor: this
-            // path reports exit code 1, not the 0 BootResult::quitRequested
-            // would give, because that flag is set only by BootSequence::Run's
-            // OWN present() calls, not a stage's return value.
-            return false;
-        }
-        if (!m_presenter->HasPresentedFrame())
-        {
-            ARC_ERROR("ArcaneRuntime: failed to present the boot-complete frame -- refusing to reveal an undrawn window");
-            return false;
-        }
-
-        // Show() also RAISES (Task 8d defect B) -- and must run while the splash
-        // still holds the foreground, strictly before the Close() below. Same
-        // constraint and same reason as EditorApp::StageSplashReady.
-        m_gpu->Win().Show();
-    }
     // Disarm BEFORE Close() -- see EditorApp::StageSplashReady's matching
     // comment for why this specific ordering is required.
     m_splashPresenter.Disarm();
@@ -486,11 +442,10 @@ void RuntimeApp::MainLoop()
     m_graphErrorBaseline = Arcane::RenderErrorCount();
     Arcane::Diagnostics::SetPhase("nri graph vehicle boot");
 
-    // THE REVEAL, which StageFinalize's `if (!m_gpu->GraphFlavor())` branch
-    // could never have done anyway -- that branch is dead (GraphFlavor() is
-    // unconditionally true) and BootPresenter::Present's drawing body is
-    // deleted regardless (see BootPresenter.cpp and StageFinalize's own
-    // comment). It happens BEFORE the create below, which is
+    // THE REVEAL, which StageFinalize could never have done: its reveal sat
+    // behind an `if (!m_gpu->GraphFlavor())` branch that was dead long before
+    // the predicate and the BootPresenter it built were deleted -- see that
+    // method's own comment. It happens BEFORE the create below, which is
     // the ORDER the Phase-2 vehicle proved at three desk checkpoints: its
     // own window was created VISIBLE and its swapchain built over an
     // already-shown window. Keeping that order rather than showing
@@ -948,9 +903,10 @@ int RuntimeApp::Run()
     // comment. Safe to run unconditionally: it tolerates m_splash ==
     // nullptr, same never-fail contract as BootSplashWindow itself. It is a
     // class member, not constructed here, so StageFinalize can Disarm() it
-    // before closing the splash intentionally -- see that method. The
-    // swapchain-backed BootPresenter (m_presenter) is used exactly once,
-    // explicitly, inside StageFinalize -- never through this pump.
+    // before closing the splash intentionally -- see that method. It is also
+    // the ONLY presenter this host has now: the swapchain-backed BootPresenter
+    // StageFinalize used to draw exactly one frame through is deleted, and the
+    // window reveal moved to MainLoop's graph-vehicle creation.
     const Arcane::BootResult boot = seq.Run(&m_splashPresenter);
     if (!boot.ok)
         return boot.quitRequested ? 0 : 1;

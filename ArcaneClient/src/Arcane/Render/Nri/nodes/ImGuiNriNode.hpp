@@ -146,8 +146,8 @@ namespace Arcane
         // tonemap, after the outline composite, before the capture.
         HostHud,
         // The GAME's own HUD, `FrameDesc::gameUi`, declared between the tonemap
-        // and the pick/outline chain: the editor's phase 11 (CompositeGameUi)
-        // then phase 12 (RenderSelectionOutline) order, expressed against this
+        // and the pick/outline chain: the editor's phase 11 (the game HUD)
+        // then phase 12 (the selection outline) order, expressed against this
         // recorder. The two are mutually exclusive by MODE in the editor (Play
         // draws the HUD, Edit draws the outline), so the order is a fidelity
         // guarantee rather than something a frame exercises today.
