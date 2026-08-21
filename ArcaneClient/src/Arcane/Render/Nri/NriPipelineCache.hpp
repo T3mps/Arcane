@@ -6,14 +6,19 @@
 // named a real, constructible type) and FILLED IN HERE by Task 7, in place --
 // no signature anywhere changed, because there was nothing to change.
 //
-// WHAT IT IS. Two dedup'd tables over one NriDevice:
+// WHAT IT IS. Three dedup'd tables over one NriDevice (the third, compute
+// pipelines, landed in Task 2 of Phase 4 -- NodeKind::Compute existed on the
+// graph before that with no cache path exercising it):
 //
 //   * pipeline LAYOUTS, keyed by the nri::PipelineLayoutDesc itself
 //     (RegisterLayout returns a small dense id; registering an identical desc
 //     twice returns the SAME id and creates nothing);
 //   * graphics PIPELINES, keyed by GraphicsKey -- {shader pair, layout id,
 //     attachment formats, colour count, topology, blend} -- with the actual
-//     nri::GraphicsPipelineDesc filled by a caller callback on a MISS only.
+//     nri::GraphicsPipelineDesc filled by a caller callback on a MISS only;
+//   * compute PIPELINES, keyed by ComputeKey -- {shader id, layout id}, no
+//     format/blend block since a compute pipeline bakes no attachment state
+//     -- with the actual nri::ComputePipelineDesc filled the same way.
 //
 // WHY FORMATS ARE IN THE KEY (spec: "formats live in PSOs"). NRI has no
 // render-pass object and no format-agnostic PSO: a graphics pipeline bakes its
@@ -135,6 +140,20 @@ namespace Arcane
             [[nodiscard]] bool operator==(const GraphicsKey&) const noexcept = default;
         };
 
+        // Task 2 (Phase 4): the compute sibling of GraphicsKey. No format/
+        // blend block -- a compute pipeline bakes no attachment state at
+        // all, so shaderId + layoutId is the entire identity. Same fill
+        // callback contract as GetGraphics applies to GetCompute (see the
+        // header's FILL CALLBACK CONTRACT); the only key-derived field a
+        // compute desc has is pipelineLayout.
+        struct ComputeKey
+        {
+            std::uint64_t shaderId = 0;                  // same id space as GraphicsKey::shaderPairId
+            std::uint32_t layoutId = kInvalidLayout;     // kInvalidLayout is REFUSED
+
+            [[nodiscard]] bool operator==(const ComputeKey&) const noexcept = default;
+        };
+
         NriPipelineCache() = default;
 
         // Owns live NRI objects tied to one device; copying would double-free
@@ -192,15 +211,39 @@ namespace Arcane
         [[nodiscard]] nri::Pipeline* GetGraphics(const GraphicsKey& key,
                                                  const std::function<void(nri::GraphicsPipelineDesc&)>& fill);
 
-        // Buries every pipeline and every layout at `fence` and empties both
-        // tables. Idempotent; a no-op on a cache that created nothing. Layout
-        // ids issued before this call are NOT reissued after it -- the id
-        // counter keeps climbing -- so a stale id can never silently resolve
-        // to a different layout.
+        // Task 2 (Phase 4): the compute sibling of GetGraphics, mirroring it
+        // exactly -- same layout lookup, same re-stamp discipline (`fill`
+        // runs ONLY on a miss and receives a desc whose key-derived field,
+        // pipelineLayout, is already set; the cache re-stamps it after
+        // `fill` returns so a callback cannot desynchronise the cache from
+        // what it created -- rule 1 of the header's fill contract). Rule 2
+        // binds here too: `desc.shader.bytecode` (and `entryPointName`, if
+        // set) are pointers into caller memory that CreateComputePipeline
+        // reads AFTER `fill` returns, so the bytecode they point at must
+        // live in a scope that ENCLOSES this call. Rule 3 binds as well:
+        // anything `fill` sets that is not part of ComputeKey (flags,
+        // robustness) must be folded into `shaderId`, the same way
+        // GraphicsKey::shaderPairId is the caller's discriminator for its
+        // own non-keyed state.
+        // Null on failure (unbound cache, unregistered layoutId, or NRI
+        // refused the pipeline) -- already logged and latched; the failed
+        // key is NOT cached, so a later call retries rather than serving
+        // null forever.
+        [[nodiscard]] nri::Pipeline* GetCompute(const ComputeKey& key,
+                                                const std::function<void(nri::ComputePipelineDesc&)>& fill);
+
+        // Buries every pipeline (graphics and compute) and every layout at
+        // `fence` and empties all three tables. Idempotent; a no-op on a
+        // cache that created nothing. Layout ids issued before this call are
+        // NOT reissued after it -- the id counter keeps climbing -- so a
+        // stale id can never silently resolve to a different layout.
         void Clear(Graveyard& graveyard, std::uint64_t fence);
 
         // Introspection for tests and shutdown logs -- not part of any
-        // cross-task contract.
+        // cross-task contract. PipelineCount() is GRAPHICS pipelines only
+        // (GetGraphics's own table); it predates GetCompute and no test or
+        // caller relies on it covering compute too, so its scope is left as
+        // it was rather than silently widened.
         [[nodiscard]] std::size_t LayoutCount() const noexcept { return m_layouts.size(); }
         [[nodiscard]] std::size_t PipelineCount() const noexcept { return m_pipelines.size(); }
 
@@ -234,6 +277,16 @@ namespace Arcane
             nri::Pipeline* pipeline = nullptr;
         };
 
+        // Task 2 (Phase 4): ComputeKey's own table -- a separate vector from
+        // PipelineEntry rather than a variant/union member, because the two
+        // key types are unrelated (no shared base) and a linear scan over a
+        // handful of entries doesn't benefit from being merged.
+        struct ComputeEntry
+        {
+            ComputeKey     key{};
+            nri::Pipeline* pipeline = nullptr;
+        };
+
         // Fills `entry`'s owned copy from `desc`. Static because it runs
         // before the entry has an id or an object.
         static void Flatten(LayoutEntry& entry, const nri::PipelineLayoutDesc& desc);
@@ -241,6 +294,7 @@ namespace Arcane
         NriDevice*                 m_device = nullptr;
         std::vector<LayoutEntry>   m_layouts;     // index == the id it was issued under, minus m_layoutBase
         std::vector<PipelineEntry> m_pipelines;   // linear scan: a 2D frame has a handful
+        std::vector<ComputeEntry>  m_computePipelines;   // linear scan, same reasoning as m_pipelines
         // Ids are issued from a counter that NEVER resets, so an id from
         // before a Clear() cannot resolve after it (Layout() range-checks
         // against this base). See Clear().

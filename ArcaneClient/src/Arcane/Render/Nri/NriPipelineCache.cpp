@@ -160,8 +160,13 @@ namespace Arcane
 
     NriPipelineCache::~NriPipelineCache()
     {
-        if (m_layouts.empty() && m_pipelines.empty())
+        if (m_layouts.empty() && m_pipelines.empty() && m_computePipelines.empty())
             return;
+
+        // Both pipeline tables count as "pipeline(s)" here -- graphics and
+        // compute are both just nri::Pipeline objects this cache owns and
+        // must destroy, and the safety net below treats them identically.
+        const std::size_t pipelineCount = m_pipelines.size() + m_computePipelines.size();
 
         if (!m_device)
         {
@@ -169,7 +174,7 @@ namespace Arcane
             // stating it beats a null deref if it ever does.
             ARC_WARN("[nri-graph] ~NriPipelineCache: {} pipeline(s) + {} layout(s) leaked -- the "
                      "cache has no device to destroy them through",
-                     m_pipelines.size(), m_layouts.size());
+                     pipelineCount, m_layouts.size());
             return;
         }
 
@@ -178,7 +183,7 @@ namespace Arcane
         // buried against at higher values. Destroy directly, behind an idle.
         ARC_WARN("[nri-graph] ~NriPipelineCache: {} pipeline(s) + {} layout(s) still live -- the "
                  "owner never called Clear(); destroying them directly behind a DeviceWaitIdle",
-                 m_pipelines.size(), m_layouts.size());
+                 pipelineCount, m_layouts.size());
 
         const nri::CoreInterface& core = m_device->Core();
         if (core.DeviceWaitIdle)
@@ -186,9 +191,12 @@ namespace Arcane
 
         for (PipelineEntry& entry : m_pipelines)
             if (entry.pipeline) core.DestroyPipeline(entry.pipeline);
+        for (ComputeEntry& entry : m_computePipelines)
+            if (entry.pipeline) core.DestroyPipeline(entry.pipeline);
         for (LayoutEntry& entry : m_layouts)
             if (entry.layout) core.DestroyPipelineLayout(entry.layout);
         m_pipelines.clear();
+        m_computePipelines.clear();
         m_layouts.clear();
     }
 
@@ -327,18 +335,87 @@ namespace Arcane
         return pipeline;
     }
 
+    // Task 2 (Phase 4): the compute sibling of GetGraphics above -- read that
+    // function's comments first, this one only calls out where compute
+    // differs.
+    nri::Pipeline* NriPipelineCache::GetCompute(const ComputeKey& key,
+                                                const std::function<void(nri::ComputePipelineDesc&)>& fill)
+    {
+        if (!m_device)
+        {
+            CacheError("NriPipelineCache::GetCompute: the cache is not bound to a device -- "
+                       "call Bind() first");
+            return nullptr;
+        }
+
+        // Linear scan, same reasoning as GetGraphics's own table.
+        for (const ComputeEntry& entry : m_computePipelines)
+        {
+            if (entry.key == key)
+                return entry.pipeline;
+        }
+
+        nri::PipelineLayout* layout = Layout(key.layoutId);
+        if (!layout)
+        {
+            CacheError("NriPipelineCache::GetCompute: layoutId " + std::to_string(key.layoutId)
+                        + " was never registered with this cache");
+            return nullptr;
+        }
+
+        // Key-derived state, set BEFORE fill so a callback can read it, and
+        // re-stamped AFTER fill so a callback cannot break it (header: the
+        // fill contract, rule 1). Unlike GraphicsKey there is no format or
+        // blend block to stamp -- pipelineLayout is the entire key-derived
+        // surface of a ComputePipelineDesc; `shader` is `fill`'s to set, and
+        // its bytecode pointer is `fill`'s to keep alive (rule 2).
+        const auto stampKeyState = [&](nri::ComputePipelineDesc& desc)
+        {
+            desc.pipelineLayout = layout;
+        };
+
+        nri::ComputePipelineDesc desc = {};
+        stampKeyState(desc);
+        if (fill)
+            fill(desc);
+        stampKeyState(desc);
+
+        nri::Pipeline* pipeline = nullptr;
+        if (!ARC_NRI_CHECK(m_device->Core().CreateComputePipeline(m_device->Device(), desc, pipeline))
+            || !pipeline)
+        {
+            // NOT cached: same reasoning as GetGraphics -- a transient
+            // creation failure must not poison the key for the rest of the
+            // run.
+            CacheError("NriPipelineCache::GetCompute: CreateComputePipeline failed for shader "
+                        + std::to_string(key.shaderId));
+            return nullptr;
+        }
+
+        m_computePipelines.push_back(ComputeEntry{ key, pipeline });
+        return pipeline;
+    }
+
     void NriPipelineCache::Clear(Graveyard& graveyard, std::uint64_t fence)
     {
-        if (m_layouts.empty() && m_pipelines.empty())
+        if (m_layouts.empty() && m_pipelines.empty() && m_computePipelines.empty())
             return;
         if (!m_device)
-            return;   // nothing can be live without a device (see RegisterLayout/GetGraphics)
+            return;   // nothing can be live without a device (see RegisterLayout/GetGraphics/GetCompute)
 
         const nri::CoreInterface* core = &m_device->Core();
 
         // Pipelines before layouts: a pipeline references the layout it was
         // created with, and the graveyard runs thunks in burial order.
+        // Graphics and compute pipelines are peers here -- both are just
+        // nri::Pipeline objects that reference a layout -- so only "both
+        // precede every layout" matters, not their relative order.
         for (PipelineEntry& entry : m_pipelines)
+        {
+            if (entry.pipeline)
+                graveyard.Bury(fence, [core, p = entry.pipeline] { core->DestroyPipeline(p); });
+        }
+        for (ComputeEntry& entry : m_computePipelines)
         {
             if (entry.pipeline)
                 graveyard.Bury(fence, [core, p = entry.pipeline] { core->DestroyPipeline(p); });
@@ -354,6 +431,7 @@ namespace Arcane
         // than to whatever landed in the same slot next.
         m_layoutBase += static_cast<std::uint32_t>(m_layouts.size());
         m_pipelines.clear();
+        m_computePipelines.clear();
         m_layouts.clear();
     }
 }

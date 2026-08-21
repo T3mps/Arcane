@@ -4574,6 +4574,16 @@ namespace
         key.blend           = Arcane::NriPipelineCache::GraphicsKey::Blend::AlphaOver;
         return key;
     }
+
+    // Task 2's ComputeKey sibling: same idea, no format/blend block -- a
+    // compute pipeline bakes no attachment state.
+    Arcane::NriPipelineCache::ComputeKey MakeComputeKey(std::uint32_t layoutId)
+    {
+        Arcane::NriPipelineCache::ComputeKey key;
+        key.shaderId = 0x5678;
+        key.layoutId = layoutId;
+        return key;
+    }
 }
 
 TEST_CASE("nri pipeline cache: RegisterLayout dedups identical descs and separates different ones", "[nri]")
@@ -4673,6 +4683,120 @@ TEST_CASE("nri pipeline cache: GetGraphics creates once per key and serves the r
     cache.Clear(device->Graves(), 0);
     device->Graves().Drain();
     CHECK(Arcane::RenderErrorCount() == before);
+}
+
+// Task 2 (Phase 4): NodeKind::Compute's cache path. ComputeKey mirrors
+// GraphicsKey with no format/blend block; GetCompute mirrors GetGraphics --
+// same layout lookup, same re-stamp discipline (see NriPipelineCache.hpp's
+// FILL CALLBACK CONTRACT), same "not cached on failure" retry semantics.
+TEST_CASE("nri pipeline cache: GetCompute creates once per key and serves the rest", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriPipelineCache cache;
+    cache.Bind(*device);
+    const std::uint32_t layout = cache.RegisterLayout(MakeLayoutDesc(nri::StageBits::COMPUTE_SHADER));
+    REQUIRE(layout != Arcane::NriPipelineCache::kInvalidLayout);
+
+    int fills = 0;
+    // What a real caller supplies: the shader stage + fixed-function bits.
+    // It must NOT touch pipelineLayout -- and this one deliberately does,
+    // because the cache re-stamps that field after the callback returns
+    // (rule 1) precisely so a callback cannot desynchronise the cache from
+    // what it actually created.
+    const auto fill = [&](nri::ComputePipelineDesc& desc)
+    {
+        ++fills;
+        desc.pipelineLayout = nullptr;
+        desc.robustness     = nri::Robustness::OFF;
+    };
+
+    const Arcane::NriPipelineCache::ComputeKey key = MakeComputeKey(layout);
+
+    nri::Pipeline* first = cache.GetCompute(key, fill);
+    REQUIRE(first != nullptr);
+    CHECK(fills == 1);
+
+    // A HIT: same key, no second creation, no second fill -- the behaviour
+    // this task exists to pin.
+    nri::Pipeline* second = cache.GetCompute(key, fill);
+    CHECK(second == first);
+    CHECK(fills == 1);
+
+    // A MISS on shaderId alone -- ComputeKey's equivalent of GraphicsKey's
+    // shaderPairId discriminator.
+    Arcane::NriPipelineCache::ComputeKey otherShader = key;
+    otherShader.shaderId = 0x9999;
+    REQUIRE(cache.GetCompute(otherShader, fill) != nullptr);
+    CHECK(fills == 2);
+
+    // ...and a MISS on layoutId alone, against a second registered layout.
+    const std::uint32_t layout2 = cache.RegisterLayout(MakeLayoutDesc(nri::StageBits::COMPUTE_SHADER
+                                                                       | nri::StageBits::FRAGMENT_SHADER));
+    REQUIRE(layout2 != Arcane::NriPipelineCache::kInvalidLayout);
+    REQUIRE(cache.GetCompute(MakeComputeKey(layout2), fill) != nullptr);
+    CHECK(fills == 3);
+
+    // Clear buries compute pipelines the same way it buries graphics ones:
+    // 3 pipelines (this case's) + 2 layouts, all at one fence.
+    CHECK(device->Graves().Pending() == 0);
+    cache.Clear(device->Graves(), 0);
+    CHECK(device->Graves().Pending() == 5);
+    device->Graves().Drain();
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("nri pipeline cache: GetCompute refuses an unbound cache or unregistered layoutId "
+          "without invoking fill, and never caches the refusal", "[nri]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    int fills = 0;
+    const auto fill = [&](nri::ComputePipelineDesc&) { ++fills; };
+
+    // 1. An unbound cache -- nothing can be created against no device.
+    {
+        Arcane::NriPipelineCache unbound;
+        CHECK(unbound.GetCompute(MakeComputeKey(0), fill) == nullptr);
+    }
+
+    Arcane::NriPipelineCache cache;
+    cache.Bind(*device);
+    const std::uint32_t layout = cache.RegisterLayout(MakeLayoutDesc(nri::StageBits::COMPUTE_SHADER));
+    REQUIRE(layout != Arcane::NriPipelineCache::kInvalidLayout);
+
+    // 2. kInvalidLayout -- the default-constructed key's own layoutId, and
+    // explicitly refused (see ComputeKey's own comment).
+    Arcane::NriPipelineCache::ComputeKey invalid;
+    invalid.layoutId = Arcane::NriPipelineCache::kInvalidLayout;
+    CHECK(cache.GetCompute(invalid, fill) == nullptr);
+
+    // 3. A layoutId this cache never issued (not the sentinel, just unknown).
+    CHECK(cache.GetCompute(MakeComputeKey(layout + 500), fill) == nullptr);
+
+    // None of the three reached the fill callback, and none was cached as a
+    // poisoned entry a later call would keep serving -- proven by a
+    // subsequent, correctly-keyed call still reaching `fill` and succeeding.
+    CHECK(fills == 0);
+    REQUIRE(cache.GetCompute(MakeComputeKey(layout), fill) != nullptr);
+    CHECK(fills == 1);
+
+    // Every refusal went through the tagged "nri-graph" seam, same as
+    // GetGraphics's contract-breach case.
+    CHECK(Arcane::RenderErrorCount() > before);
+
+    cache.Clear(device->Graves(), 0);
+    device->Graves().Drain();
+    // Restore the latch so the rest of this process still sees a clean
+    // baseline -- the same courtesy the GetGraphics contract-breach case
+    // extends.
+    Arcane::ResetRenderErrorCount();
 }
 
 TEST_CASE("nri pipeline cache: Clear buries everything at one fence and reissues no stale id", "[nri]")
