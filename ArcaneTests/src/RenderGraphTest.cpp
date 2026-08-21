@@ -1303,6 +1303,39 @@ TEST_CASE("rendergraph compile: (e) disjoint lifetimes with DIFFERENT descs do n
     CHECK(compiled.poolSlotCount == 2);
 }
 
+TEST_CASE("rendergraph compile: (T3P4) two identical transients differing only in mipCount do not share a pool slot", "[nri]")
+{
+    // Task 3 (Phase 4). Same shape as the "(e) disjoint lifetimes with
+    // DIFFERENT descs" case above, with mipCount as the ONLY differing
+    // field -- disjoint lifetimes deliberately, so a pool-key that ignores
+    // mipCount would greedily merge these into ONE slot (this is exactly
+    // the failure the pool-slot compatibility key exists to prevent: a
+    // 1-mip physical texture handed to a pass that declared 4).
+    Arcane::RenderGraph graph;
+    Arcane::RgTexture oneMip, fourMip;
+
+    graph.AddNode("declare", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            Arcane::RgTextureDesc mipped = MakeColorDesc();
+            mipped.mipCount = 4;
+            oneMip  = builder.CreateTexture("one-mip", MakeColorDesc());
+            fourMip = builder.CreateTexture("four-mip", mipped);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+    graph.AddNode("uses-one", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder) { builder.Write(oneMip, Arcane::RgUsage::ShaderWriteCs); },
+        [](Arcane::RenderGraphNodeContext&) {});
+    graph.AddNode("uses-four", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder) { builder.Write(fourMip, Arcane::RgUsage::ShaderWriteCs); },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.transientPoolSlot.size() == 2);
+    CHECK(compiled.transientPoolSlot[0] != compiled.transientPoolSlot[1]);
+    CHECK(compiled.poolSlotCount == 2);
+}
+
 TEST_CASE("rendergraph compile: a transient buffer never shares a pool slot with a transient texture", "[nri]")
 {
     Arcane::RenderGraph graph;
@@ -1392,6 +1425,30 @@ TEST_CASE("rendergraph compile: (f) reading a never-written transient buffer is 
     CHECK_FALSE(graph.Compile(&error).has_value());
     INFO("message was: " << error);
     CHECK(error.find("never-written-buf") != std::string::npos);
+}
+
+TEST_CASE("rendergraph compile: (T3P4) a transient texture declared with mipCount = 0 is refused, naming the resource", "[nri]")
+{
+    // Task 3 (Phase 4). 0 has no realizable meaning -- a texture always has
+    // at least one mip level, and 1 (the default) already means "no chain" --
+    // so this is refused here rather than silently realized as 1 mip anyway
+    // or left for RealizePool to guess at.
+    Arcane::RenderGraph graph;
+
+    graph.AddNode("declare", Arcane::RenderGraph::NodeKind::Compute,
+        [](Arcane::RenderGraphBuilder& builder)
+        {
+            Arcane::RgTextureDesc desc = MakeColorDesc();
+            desc.mipCount = 0;
+            const Arcane::RgTexture tex = builder.CreateTexture("zero-mip-tex", desc);
+            builder.Write(tex, Arcane::RgUsage::ShaderWriteCs);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    std::string error;
+    CHECK_FALSE(graph.Compile(&error).has_value());
+    INFO("message was: " << error);
+    CHECK(error.find("zero-mip-tex") != std::string::npos);
 }
 
 TEST_CASE("rendergraph compile: (f) reading a transient BEFORE the node that writes it is refused", "[nri]")
@@ -2612,6 +2669,46 @@ TEST_CASE("rendergraph exec: a desc change after Reset re-creates and buries exa
     device->Graves().Reap(graph.DebugSubmitCount());
     CHECK(device->Graves().Pending() == 0);
 
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("rendergraph exec: (T3P4) a transient declared with mipCount = 4 realizes a 4-mip nri::TextureDesc", "[nri]")
+{
+    // Task 3 (Phase 4), plumbing point 1: RealizePool's desired nri::TextureDesc
+    // must carry the declared mip chain through to CreateCommittedTexture.
+    // Read back via DebugPoolTextureMipCount() -- the NONE backend's own
+    // GetTextureDesc() is a fixed dummy (ImplNONE.cpp) and cannot see this.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    Arcane::NriUploadRing    ring;
+    Arcane::NriPipelineCache pipelines;
+    Arcane::RenderGraph      graph;
+    const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines, 0 };
+
+    Arcane::RgTextureDesc mippedDesc = MakeColorDesc(64, 64);
+    mippedDesc.mipCount = 4;
+
+    graph.AddNode("write", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            const Arcane::RgTexture mipped = builder.CreateTexture("mipped", mippedDesc);
+            builder.Write(mipped, Arcane::RgUsage::ShaderWriteCs);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.poolSlotCount == 1);
+    REQUIRE(graph.Execute(desc, compiled));
+
+    const std::optional<std::uint32_t> mipCount = graph.DebugPoolTextureMipCount(0);
+    REQUIRE(mipCount.has_value());
+    CHECK(*mipCount == 4);
+
+    graph.ReleaseGpuResources();
+    device->Graves().Reap(graph.DebugSubmitCount());
     CHECK(Arcane::RenderErrorCount() == before);
 }
 

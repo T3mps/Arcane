@@ -251,6 +251,25 @@ namespace Arcane
         };
 
         // --------------------------------------------------------------
+        // Pass 0 (Task 3, Phase 4): RgTextureDesc.mipCount validation. A
+        // texture always has at least one mip level -- 1 (the default)
+        // already means "no chain" -- so 0 has no realizable meaning and is
+        // refused here, up front, rather than reaching RealizePool and
+        // becoming either a silent 1-mip texture or an nri::TextureDesc the
+        // backend rejects for a reason far from this declaration.
+        // --------------------------------------------------------------
+        for (std::size_t i = 0; i < m_textures.size(); ++i)
+        {
+            if (m_textures[i].kind != ResourceKind::Transient)
+                continue;   // ImportTexture carries no RgTextureDesc to validate
+            if (m_textures[i].desc.mipCount == 0)
+            {
+                return fail("RenderGraph::Compile: transient texture '" + m_textures[i].name
+                            + "' declares mipCount = 0 -- 1 means no chain, not 0");
+            }
+        }
+
+        // --------------------------------------------------------------
         // Pass 1: structural validation of the Raster nodes' attachments.
         // This is where the attachment handles get decoded -- the setters
         // (SetColorAttachments/SetDepthAttachment) deliberately store them
@@ -418,6 +437,9 @@ namespace Arcane
                 const RgTextureDesc& lhs = m_textures[a.resourceIndex].desc;
                 const RgTextureDesc& rhs = m_textures[b.resourceIndex].desc;
                 return lhs.format == rhs.format && lhs.width == rhs.width && lhs.height == rhs.height
+                    // Task 3 (Phase 4): a mismatch here would hand a pass a
+                    // physical texture with fewer mips than it declared.
+                    && lhs.mipCount == rhs.mipCount
                     && lhs.depthStencil == rhs.depthStencil;
             }
             const BufferResource& lhs = m_buffers[a.resourceIndex];

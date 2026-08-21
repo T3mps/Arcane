@@ -602,7 +602,13 @@ namespace Arcane
                     slot.texture.width       = static_cast<nri::Dim_t>(resource.desc.width);
                     slot.texture.height      = static_cast<nri::Dim_t>(resource.desc.height);
                     slot.texture.depth       = 1;
-                    slot.texture.mipNum      = 1;
+                    // Task 3 (Phase 4): the declared mip chain. Compile()
+                    // already refused mipCount == 0, so this is always >= 1;
+                    // nri::Dim_t is 16-bit, but a mip count anywhere near
+                    // that range is not a real texture, so no separate
+                    // overflow guard (unlike width/height below, which
+                    // extents realistically DO approach).
+                    slot.texture.mipNum      = static_cast<nri::Dim_t>(resource.desc.mipCount);
                     slot.texture.layerNum    = 1;
                     slot.texture.sampleNum   = 1;
                     slot.texture.usage       = nri::TextureUsageBits::NONE;
@@ -854,9 +860,18 @@ namespace Arcane
                 return true;
 
             nri::TextureViewDesc viewDesc = {};
-            viewDesc.texture = texture;
-            viewDesc.type    = depth ? nri::TextureView::DEPTH_STENCIL_ATTACHMENT
-                                      : nri::TextureView::COLOR_ATTACHMENT;
+            viewDesc.texture   = texture;
+            viewDesc.type      = depth ? nri::TextureView::DEPTH_STENCIL_ATTACHMENT
+                                        : nri::TextureView::COLOR_ATTACHMENT;
+            // Task 3 (Phase 4): an attachment view always targets exactly
+            // mip 0, explicitly -- zero-init's default (mipOffset = 0,
+            // mipNum = 0 = REMAINING) used to coincide with "the only mip"
+            // because every realized texture had exactly one; now that a
+            // pool texture can carry a chain, REMAINING would ask for every
+            // mip, which neither COLOR_ATTACHMENT nor DEPTH_STENCIL_ATTACHMENT
+            // views can be.
+            viewDesc.mipOffset = 0;
+            viewDesc.mipNum    = 1;
             // A transient's format is the one it was realized with; an
             // imported texture's is whatever it actually is, read back from
             // NRI rather than assumed (an imported backbuffer's channel
@@ -930,6 +945,13 @@ namespace Arcane
             return std::nullopt;
         }
         return m_poolFirstBefore[slot];
+    }
+
+    std::optional<std::uint32_t> RenderGraph::DebugPoolTextureMipCount(std::uint32_t poolSlot) const
+    {
+        if (poolSlot >= m_pool.size() || !m_pool[poolSlot].isTexture || !m_pool[poolSlot].texture)
+            return std::nullopt;
+        return m_pool[poolSlot].textureDesc.mipNum;
     }
 
     // ==================================================================

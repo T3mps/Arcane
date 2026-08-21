@@ -105,13 +105,21 @@ namespace Arcane
     struct RgTexture { std::uint32_t index = kInvalid; };
     struct RgBuffer  { std::uint32_t index = kInvalid; };
 
-    // Subset of nri::TextureDesc the graph owns. Mip/layer/sample counts and
-    // sharing mode are not here -- add them when a task actually needs them
-    // (YAGNI), not speculatively now.
+    // Subset of nri::TextureDesc the graph owns. mipCount landed in Task 3
+    // (Phase 4) -- the 3D slice's mip chain, the one YAGNI deferral this
+    // phase actually needs. Layer count, sample count, sharing mode, and any
+    // TYPE beyond TEXTURE_2D (array/3D/cube) are still not here; each arrives
+    // in its own later phase with its own consumer, same as mipCount did --
+    // add on demand, not speculatively.
     struct RgTextureDesc
     {
         nri::Format   format = nri::Format::UNKNOWN;
         std::uint32_t width = 0, height = 0;
+        std::uint32_t mipCount = 1;           // Task 3 (Phase 4): 1 = no chain (default -- every
+                                               // existing declaration is unaffected). 0 is REFUSED
+                                               // at Compile (RenderGraph.cpp); realized verbatim into
+                                               // nri::TextureDesc::mipNum and into the pool-slot
+                                               // compatibility key (RenderGraphExec.cpp/RenderGraph.cpp).
         bool          depthStencil = false;   // chooses attachment vs shader usage bits (Task 4)
     };
 
@@ -769,6 +777,16 @@ namespace Arcane
         // outgoing state IN FULL -- access, layout and stages. nullopt if that
         // slot saw no barrier in the last Execute().
         [[nodiscard]] std::optional<nri::AccessLayoutStage> DebugFirstBarrierBefore(std::uint32_t slot) const;
+
+        // Task 3 (Phase 4). The MIP COUNT pool slot `poolSlot` was actually
+        // realized with -- read from the graph's own CPU-side record
+        // (PoolResource::textureDesc), not a device query: the NONE backend
+        // these [nri] tests run on stubs nri::CoreInterface::GetTextureDesc
+        // to a fixed dummy regardless of what was created (ImplNONE.cpp), so
+        // it cannot observe RealizePool's mip-chain decision. This can.
+        // nullopt if the slot is out of range, was never realized, or holds
+        // a buffer rather than a texture.
+        [[nodiscard]] std::optional<std::uint32_t> DebugPoolTextureMipCount(std::uint32_t poolSlot) const;
 
     private:
         friend class RenderGraphBuilder;
