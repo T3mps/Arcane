@@ -1351,6 +1351,18 @@ namespace Arcane
         // the scene without host chrome does not want the plugin's either. See
         // DeclareGraphFrame's gate for the full account.
         bool gameUi = false;
+
+        // Task 4 (Phase 4): declare a D32_SFLOAT depth transient, canvas-sized,
+        // for the frame's opaque 3D pass. `RgUsage::DepthWrite` and
+        // `RenderGraph::SetDepthAttachment` both already existed (Phase 2) with
+        // no production consumer; this flag gives DeclareGraphFrame a reason to
+        // create the resource. It does NOT wire up a consumer -- nothing in
+        // DeclareGraphFrame Writes or attaches it yet, because the first real
+        // consumer (MeshNode) is Task 7's. See RgFrameHandles::depth and
+        // DeclareGraphFrame's own comment at the depth block for the full
+        // account of what "declared but unconsumed" costs (nothing: Compile()
+        // gives an untouched transient no lifetime and no pool slot).
+        bool depth = false;
     };
 
     struct RgFrameHandles
@@ -1378,6 +1390,17 @@ namespace Arcane
         // Thickness-derived, so it is the SAME on every surface size (D3c) --
         // OutlineJfaStepCount(kOutlineMaxThicknessPx), clamped to kMaxJfaSteps.
         std::uint32_t jfaStepCount = 0;
+
+        // Task 4 (Phase 4): the depth transient RgFrameShape::depth asked for,
+        // or an invalid handle when it did not. DECLARED, NOT CONSUMED here --
+        // no node in DeclareGraphFrame Writes or attaches it, so it carries no
+        // lifetime and no pool slot until a later node does (Task 7's MeshNode:
+        // Write(handles.depth, RgUsage::DepthWrite) + SetDepthAttachment(
+        // handles.depth), in ITS OWN Setup -- the same split AddBatch2DNode
+        // does NOT use for `canvas`, which it both creates and writes itself;
+        // depth is split across two tasks instead of two lines because Task 7
+        // does not exist yet).
+        RgTexture depth{};
     };
 
     ARCANE_API RgFrameHandles DeclareGraphFrame(RenderGraph& graph, const RgFrameShape& shape,

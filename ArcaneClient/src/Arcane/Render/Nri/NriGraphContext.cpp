@@ -1160,6 +1160,66 @@ namespace Arcane
         handles.canvas = AddBatch2DNode(graph, context, shape.canvasWidth, shape.canvasHeight);
 
         // ---------------------------------------------------------------
+        // THE DEPTH TRANSIENT (Task 4, Phase 4). Closes gap F: RgUsage::
+        // DepthWrite, RenderGraph::SetDepthAttachment and the barrier mapping
+        // (RenderGraph.cpp's StateFor) all landed in an earlier phase with no
+        // production node ever calling any of them. This is that resource --
+        // NOT a consumer of it.
+        //
+        // D32_SFLOAT, canvas-sized, so it can pair with `handles.canvas` as a
+        // Raster node's colour + depth attachments the moment something wants
+        // to. Nothing in this function is that something yet: no Read(), no
+        // Write(), no SetDepthAttachment() -- those three calls are what a
+        // real opaque-geometry pass does with a depth target, and writing them
+        // here ahead of that pass existing would be inventing one. The first
+        // real consumer is MeshNode (Task 7), which will Write(handles.depth,
+        // RgUsage::DepthWrite) + SetDepthAttachment(handles.depth) in ITS OWN
+        // Setup -- exactly the CreateTexture-then-Write-then-attach shape
+        // AddBatch2DNode already uses for `canvas` above, just split across
+        // two tasks because Task 7 does not exist yet.
+        //
+        // CreateTexture() is only callable from inside a node's Setup (the
+        // RenderGraphBuilder that exposes it is constructed by AddNode() and
+        // by nothing else), so declaring the resource at all -- even
+        // unconsumed -- needs a node. NodeKind::Compute, not Raster: this node
+        // declares no attachment (that is Task 7's job), and a Raster node
+        // with none would fail NodeHasRequiredAttachments() at Compile().
+        //
+        // GATED LIKE EVERY OTHER OPTIONAL PIECE OF THIS FRAME: shape.depth ==
+        // false adds NO node and creates NO resource, so "not asking costs
+        // nothing" holds by construction -- a frame that never sets `depth`
+        // is byte-for-byte the frame this function built before this block
+        // existed (same node count, same node names, same pool slot count).
+        // A frame that DOES ask for it still costs nothing at Execute() time:
+        // an untouched transient gets no lifetime and no pool slot ("a
+        // transient no node touches has no lifetime and no pool slot",
+        // RenderGraph.hpp), so RealizePool never allocates it.
+        //
+        // POSITIONED RIGHT AFTER THE CANVAS, before the post chain and the
+        // tonemap -- Task 7's own test brief already requires "mesh before
+        // tonemap", and declaring the resource this early makes
+        // `handles.depth` available to every node declared after this point,
+        // the same way `handles.canvas` is. Task 7 is free to move or replace
+        // this block outright when MeshNode lands; nothing downstream in this
+        // function depends on ITS position, only on `handles.depth` being
+        // valid once shape.depth is true.
+        // ---------------------------------------------------------------
+        if (shape.depth)
+        {
+            graph.AddNode("depth", RenderGraph::NodeKind::Compute,
+                [&handles, &shape](RenderGraphBuilder& builder)
+                {
+                    RgTextureDesc desc;
+                    desc.format       = nri::Format::D32_SFLOAT;
+                    desc.width        = shape.canvasWidth;
+                    desc.height       = shape.canvasHeight;
+                    desc.depthStencil = true;
+                    handles.depth = builder.CreateTexture("depth", desc);
+                },
+                [](RenderGraphNodeContext&) {});
+        }
+
+        // ---------------------------------------------------------------
         // THE POST CHAIN (Task 10). One node per chain pass, between the
         // canvas and the tonemap; the tonemap then samples the LAST pass's
         // target instead of the canvas. Everything about the ping-pong -- two
