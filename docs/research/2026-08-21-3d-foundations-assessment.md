@@ -118,17 +118,100 @@ per project, not recalled.
 `Panels/EditorPanels.cpp`, `Scene/ComponentCatalog.{cpp,hpp}`,
 `Viewport/EditorCamera.{cpp,hpp}`
 
-### Two consequences the file list makes unavoidable
+### Three consequences the file list makes unavoidable
 
-1. **This is a plugin ABI break.** `Transform` crosses `Plugin/PluginABI.hpp`.
-   The ABI goes 15 → 16, and every consuming project's `.arcproj` needs
-   restamping — the same chore already visible in Gacha's history
-   (`chore(game): restamp Aphelyon.arcproj to engine ABI 15`). Standing
-   direction is that ABI bumps are cheap during engine development, so this is
-   a tracked consequence rather than an obstacle.
-2. **This is a scene file-format break.** `SceneSerializer` and `SceneAsset`
-   both carry `Transform`. Every existing `.arcscene` changes shape. See Open
-   Questions.
+1. **This is a plugin ABI break — but by recompilation, not by layout.**
+   `Transform` does *not* appear structurally in `Plugin/PluginABI.hpp`; the
+   only reference there is the changelog line for **v7 (2026-07-24): "LocalTransform
+   renamed to Transform"**. That line is the precedent, though: a game module
+   compiles against `Components.hpp`, so changing `Transform`'s layout requires
+   every consumer to recompile, and the project treated a *rename* of this same
+   type as ABI-relevant. ABI goes 15 → 16 and every consuming `.arcproj` needs
+   restamping — the chore already visible in Gacha's history
+   (`chore(game): restamp Aphelyon.arcproj to engine ABI 15`). Standing direction
+   is that ABI bumps are cheap during engine development.
+2. **The scene format changes, but the serializer probably does not.**
+   `SceneSerializer.hpp:7` describes itself as driven by a **descriptor factory
+   "instead of a hardcoded Transform+SpriteRenderer pair"** — it serializes
+   through reflection. So the on-disk shape follows the reflected fields
+   automatically and the serializer needs little or no editing. What changes is
+   that **old files no longer load**, which is what makes the clean-break
+   decision cheap rather than what makes it expensive.
+3. **The inspector already handles `glm::vec3`; the quaternion is the new work.**
+   `ArcaneEditor/src/Panels/InspectorFields.cpp:39-40,216-220` already registers
+   `TypeID<glm::vec3>` / `TypeID<glm::vec4>` and draws them. No equivalent exists
+   for `glm::quat`. That is the one genuinely new inspector field type F1 needs —
+   presenting Euler angles over quaternion storage, with the existing
+   `ASTRA_REFLECT_ATTR(AngleFormat, Radians)` on the current scalar `rotation`
+   as the precedent for how angle presentation is already expressed.
+
+---
+
+## The hierarchy traversal problem
+
+Found while reviewing the above, and it changes F1's shape.
+
+`Relations::ForEachDescendant` (`Astra/Registry/Relations.hpp:158`) **copies the
+entire traversal cache by value on every call**:
+
+```cpp
+auto cache = m_relationsGraph->GetDescendantsCached(m_rootEntity);   // :165
+```
+
+`GetDescendantsCached` (`RelationshipGraph.hpp:759`) returns `TraversalCache`
+**by value, under a `std::shared_mutex`** — and the comment there explains why it
+must: the caches live in a non-pointer-stable `FlatMap`, so a concurrent insert
+can rehash and dangle any reference that escapes the lock. It is a correct safety
+decision that is simply wrong for a per-frame path.
+
+So before a single matrix multiply, transform propagation pays a shared-mutex
+lock, a hash lookup, and **a heap allocation plus a full copy of every entity in
+the scene**. Then, per entity, four random-access lookups:
+`GetComponent<Transform>`, `GetComponent<WorldTransform>`, `GetParent`,
+`GetComponent<WorldTransform>(parent)`. That is the opposite of what an ECS is
+fast at.
+
+`TransformSystems.hpp` calls it **twice per frame** — `:45` to collect entities
+needing a `WorldTransform`, `:59` to propagate. Two full copies per frame.
+
+**The problem is bounded.** Every traversal caller in the engine:
+
+| Caller | Frequency | Verdict |
+|---|---|---|
+| `Scene/TransformSystems.hpp:45,59` | **every frame** | the problem |
+| `Serialization/SceneSerializer.hpp:72` | save / load | fine |
+| `ArcaneEditor Panels/EditorPanels.cpp:1467` | UI interaction | fine |
+| `ArcaneEditor Scene/SelectionOps.hpp:30` | user selection | fine |
+
+One hot-path caller; the other three are per-user-action, where a copy costs
+nothing.
+
+### The fix: decouple structure from values
+
+Hierarchy is **structural** and changes rarely. Transform **values** change every
+frame. Today both are recomputed together, per frame. They should not be.
+
+- Arcane owns a flat, topologically sorted `order` array plus a `parentIndex`
+  array (index into `order`; a sentinel for roots), rebuilt **only when Astra's
+  `m_structureVersion` changes** — that version already exists and already drives
+  Astra's own cache invalidation.
+- Per frame becomes a linear pass:
+  `world[i] = parentIndex[i] == kRoot ? local[i] : world[parentIndex[i]] * local[i]`.
+  Parents precede children, so the parent's world matrix is already final. Two
+  packed arrays, sequential access, no locks, no map lookups, no copies.
+- Dirty flags so untouched subtrees are skipped entirely — in most scenes, most
+  of them.
+
+This is substantially what Unity DOTS does with hierarchy-depth grouping and
+`LocalToWorld`.
+
+**Where the fix belongs.** A non-copying cached traversal is *generic ECS
+capability*, and the standing direction is that generic capability is built in
+the lower layer rather than worked around above it (Mosaic / Astra / Manifold2D →
+Arcane → editor). So **Astra** should expose the structure version and a build
+path that does not copy; the topological order, the dirty policy, and the
+definition of "spatial" are **Arcane's** and stay here. The Astra-first vendoring
+workflow applies: commit in the Astra repo, then `scripts\sync-astra.ps1`.
 
 ---
 
@@ -136,7 +219,10 @@ per project, not recalled.
 
 ### F1 — the transform spine
 
-The type change, and it must land first and alone.
+The type change **and** the propagation rework. They belong together:
+`TransformSystems.hpp` is being rewritten for `mat4` regardless, and porting the
+type change through a propagation algorithm already known to be wrong is wasted
+work.
 
 | Type | From | To |
 |---|---|---|
@@ -162,6 +248,14 @@ the correct degenerate case, not a compromise: `PhysicsSystem` writes back
 position/rotation, and doing so into `.xy` and the Z-axis rotation of a 3D
 transform is exactly what a 2D simulation in a 3D world means. It also keeps a
 57-file type change from colliding with a physics migration.
+
+**And the propagation rework**, per "The hierarchy traversal problem" above:
+`TransformSystems` stops calling `ForEachDescendant` per frame and instead owns a
+topologically sorted `order` + `parentIndex` pair rebuilt only on structure
+change, with a linear per-frame pass and dirty-flag skipping. The two current
+traversals collapse to zero on a steady-state frame. Astra gains whatever minimal
+surface that needs (structure version, non-copying build); the ordering and dirty
+policy stay in Arcane.
 
 ### F2 — 3D vocabulary in the scene
 
@@ -251,21 +345,43 @@ update cadence is what makes the v0.1 risk acceptable here.
 
 ---
 
-## Open questions — needed before F1 can be specced
+## Decisions taken 2026-08-21
 
-1. **Scene file migration.** Widening `Transform` changes the serialized shape.
-   Version-bump with an upgrade path, or a clean break? Pre-launch, a clean
-   break is likely right and is cheap now and expensive later — but it is a
-   decision, and `ReferenceProject` plus any Gacha scenes are the corpus.
-2. **Does `SpriteRenderer` stay 2D-positioned, or become a billboard/quad in 3D
-   space?** This determines whether 2D content shares the world depth buffer
-   with meshes, which is what resolves F5 properly rather than by ordering. It
-   also determines whether `Batcher2D` is a *world* renderer or a *screen-space*
-   one — the ambiguity that made the 3D-over-2D question hard to answer at all.
-3. **Does the orthographic camera path survive unchanged?** It is `glm::vec2`-
-   shaped throughout and is the path every existing 2D scene uses. Preserving it
-   byte-identically through F1 is achievable but should be an explicit
-   requirement, as it was in Phase 4 Task 5.
+1. **Scene file migration: CLEAN BREAK.** No upgrade path, no version shim. The
+   corpus is **two authored scenes** — `ReferenceProject/Content/scenes/main.arcscene`
+   and Gacha's `Game/Content/scenes/test.arcscene` (the other five `.arcscene`
+   hits on disk are build-output copies). Re-authoring two files, one of them
+   named `test`, is cheaper than an upgrade path written once, run once, and
+   maintained forever. Consistent with the project's existing schema convention
+   — *"edit-and-rebuild rather than write-numbered-migrations… the
+   trail-of-tears in git log is the migration history."*
+2. **Phase 4 Task 8 (bindless material table): HELD**, not cancelled. It has no
+   scene dependency, but F2 is where materials become assets, and a bindless
+   table's *policy* — capacity, slot lifetime, eviction, write-once vs per-frame
+   descriptors — falls out of how materials load and stream. The *mechanism* is
+   invariant; the policy is not. Task 7's fix round already deleted ~135 lines of
+   guessed-ahead binding code for exactly this reason; building the table before
+   F2 would repeat that at one task's remove.
+3. **Orthographic camera path must survive F1 byte-identically.** It is
+   `glm::vec2`-shaped throughout and is the path every existing 2D scene uses.
+   This is an explicit F1 requirement, as it was in Phase 4 Task 5.
+
+## Still open
+
+**Does `SpriteRenderer` stay 2D-positioned, or become a world quad in 3D space?**
+
+Not required for F1 — F1's requirement is only that sprites keep rendering
+*exactly* as they do today, reading `position.xy` and the Z-axis rotation from a
+3D transform. But it is required before F5, and it is what resolves the
+compositing question properly instead of by an ordering rule.
+
+**Recommendation:** make it a world object with a 3D transform, drawn into the
+same depth buffer as meshes. Sprites here are already world content — MKS meters,
+an orthographic camera in meters, sprite shapes deliberately matched to collider
+shapes. Unity and Godot both treat sprites as world objects with a Z and keep
+screen-space UI a separate system; this engine already *has* that separate system
+in ImGui-after-tonemap. Whether a given sprite billboards toward the camera
+should be a per-sprite flag, not a global decision.
 
 ---
 
