@@ -50,15 +50,11 @@ TEST_CASE("HostConfig parses --scene as a guid override", "[host]") {
     CHECK(def.config->sceneOverride.empty());
 }
 #if !defined(ARCANE_DIST)
-// NRI Phase 5a, Task 2b -- HostConfig::nriGraph is retired (the NRI frame
-// graph is the only render path now, unconditionally, in every
-// configuration), and --nri-graph is registered UNCONDITIONALLY too (see
-// HostConfig.cpp) rather than inside this Dist guard -- so this case has no
-// Dist-only subject left to cover; the case below proves the unconditional
-// registration instead. What survives here, still guarded (no reason to
-// relocate it), is the one thing that was never Dist-specific: that a
-// command line pairing --nri-graph with the rest of the run vocabulary still
-// parses cleanly, exactly as it always did.
+// --nri-graph is a retired no-op (the NRI frame graph is the only render path,
+// unconditionally) and is registered unconditionally, so the every-configuration
+// claim belongs to the last case in this file. What THIS one pins, still inside
+// the Dist guard, is the part that was never Dist-specific: a command line
+// pairing --nri-graph with the rest of the run vocabulary parses cleanly.
 TEST_CASE("host config: --nri-graph still composes with the run vocabulary", "[host][nri]") {
     const auto paired = Run({"--nri-graph", "--frames", "120", "--screenshot", "nri-graph.png",
                              "--backend", "vulkan", "--no-vsync"});
@@ -68,21 +64,14 @@ TEST_CASE("host config: --nri-graph still composes with the run vocabulary", "[h
     CHECK(paired.config->backend == Arcane::GraphicsBackend::Vulkan);
     CHECK_FALSE(paired.config->vsync);
 }
-// NRI Phase 3, Task 8 -- THE EDITOR JOINS THE HONOR LIST. HostConfig::Parse is
-// shared by both hosts and needed no change for this, which is exactly why the
-// claim is worth pinning: what changed is that ArcaneEditor now ACTS on
-// --nri-graph (GpuContext::CreateForGraph + a chrome NriGraphContext + an
-// offscreen one for the Viewport panel) instead of ignoring it, and the flag's
-// documentation in HostConfig.hpp says so. The parse-level obligation that
-// follows is that a SCRIPTED EDITOR GRAPH RUN is a legal command line, since
-// the editor's own launch vocabulary (--project / --plugin / --scene) is
-// disjoint from the runtime's usual one and had never been parsed alongside
-// this flag.
+// HostConfig::Parse is shared by both hosts, so the obligation pinned here is
+// that a SCRIPTED EDITOR RUN is a legal command line: the editor's own launch
+// vocabulary (--project / --plugin / --scene) is disjoint from the runtime's
+// usual one, and this is what proves the two compose.
 //
 // As with the case above, this is the only headless coverage available: the
-// editor's boot split lives in EditorApp.cpp, which is not compiled into this
-// exe, and everything past the flag needs a window and a real device (desk
-// checkpoint D3c).
+// editor's boot lives in EditorApp.cpp, which is not compiled into this exe,
+// and everything past the flag needs a window and a real device.
 TEST_CASE("host config: --nri-graph composes with the EDITOR's launch vocabulary", "[host][nri]") {
     const auto editorRun = Run({"--nri-graph", "--project", "ReferenceProject",
                                 "--scene", "a5e0c1de-1111-4222-8333-444455556666",
@@ -109,7 +98,7 @@ TEST_CASE("host config: --nri-graph composes with the EDITOR's launch vocabulary
     REQUIRE(faultRun.config.has_value());
     CHECK(faultRun.config->crashGpuFrame == 30u);
 }
-// NRI Phase 2, Task 11 -- the pick/outline probe. Guarded like --nri-graph
+// The pick/outline probe. Guarded like --nri-graph
 // (both are DEV scaffolding registered inside HostConfig.cpp's
 // `#if !defined(ARCANE_DIST)` block), and, like it, the parse round-trip is the
 // ONLY headless coverage the flag can have: everything past it needs a window,
@@ -172,15 +161,11 @@ TEST_CASE("host config: --pick-probe refuses bad syntax at parse time", "[host][
         CHECK(o.exitCode == 2);
     }
 }
-// NRI Phase 5a, Task 2b -- RETITLED, and the noGraph sub-case INVERTED. The
-// pick/outline nodes used to live ONLY in NriGraphContext's frame, so a probe
-// on the NVRHI path was refused as a silent no-op (--pick-probe without
-// --nri-graph, exit 2). The NRI frame graph is now the only render path,
-// unconditionally, so those nodes are always present and that exact command
-// line is legal -- pinned below rather than deleted, so the behaviour change
-// is on record. The noFrames refusal is untouched: the readback still lands
-// a couple of frames after the pass that wrote it, so an open-ended run
-// would still exit on a window close having reported nothing at all.
+// --pick-probe does NOT require --nri-graph: the pick/outline nodes are always
+// present, because the NRI frame graph is the only render path. It DOES still
+// require --frames -- the readback lands a couple of frames after the pass that
+// wrote it, so an open-ended run would exit on a window close having reported
+// nothing at all.
 TEST_CASE("host config: --pick-probe still requires --frames, no longer requires --nri-graph", "[host][nri]") {
     const auto noGraph = Run({"--frames", "60", "--pick-probe", "640,360"});
     REQUIRE(noGraph.config.has_value());
@@ -198,11 +183,9 @@ TEST_CASE("host config: --pick-probe still requires --frames, no longer requires
     CHECK_FALSE(plain.config->pickProbe);
 }
 #endif
-// NRI Phase 5a, Task 2b -- UNGUARDED, deliberately: every case above this
-// point that touches --nri-graph is still Dist-excluded (several pair it
-// with --pick-probe/--crash-gpu, which stay Dist-only; the rest stayed
-// guarded too, simply because there was no reason to relocate them -- see
-// their own comments), so none of it can show that --nri-graph itself now
+// UNGUARDED, deliberately: every case above this point that touches
+// --nri-graph is Dist-excluded (several pair it with --pick-probe/--crash-gpu,
+// which stay Dist-only), so none of it can show that --nri-graph itself
 // parses in a Dist build. This case is the one that does: the flag is
 // retired to a no-op rather than rejected -- scripts, the Hub's saved launch
 // args and the desk batteries all still pass it, and a hard "unknown

@@ -667,17 +667,15 @@ TEST_CASE("Republishing an identical diagnostic set is idempotent", "[diagnostic
 }
 
 // =====================================================================
-// THE SEVERANCE (NRI Phase 3, Task 11)
+// THE SEVERANCE
 // =====================================================================
-// A device-less document used to DROP its compiled bytecode on the floor: the
-// two bind sites gated the WHOLE function on m_services.device, so a
-// `--nri-graph` editor compiled a material perfectly and then had nothing to
-// show for it. The bytes are now RETAINED and published as a device-free
+// A document RETAINS its compiled bytecode and publishes it as a device-free
 // description -- exactly the shape PostChainCache publishes for a scene post
-// material, which is exactly what the graph's PostChainNode consumes.
+// material, and exactly what the graph's PostChainNode consumes. Nothing is
+// dropped for want of a device.
 //
-// These are the same headless idiom Task 2's [render][severance] cases used:
-// a real dxc compile through the app-shared ShaderCompiler, no device
+// Same headless idiom as SeveranceTest.cpp's [render][severance] cases: a real
+// dxc compile through the app-shared ShaderCompiler, no device
 // anywhere. What they pin is the DATA SUPPLY -- that a compile with no device
 // still produces something a second recorder could render. They cannot pin the
 // render itself (that needs an NriGraphContext and therefore a device); the
@@ -733,9 +731,8 @@ TEST_CASE("severance: a DEVICE-LESS fullscreen material publishes its preview as
     DocServices services;
     services.compiler = &compiler;
     services.sources = &sources;
-    // DocServices has no device member at all any more (deleted at NRI Phase
-    // 5a, Task 9.5b) -- services is built with only compiler/sources below,
-    // which is this test's stand-in for the graph flavor's device-less shape.
+    // DocServices has no device member at all: services is built with only
+    // compiler/sources below, which is the shape a real document gets.
 
     const auto loaded = Arcane::LoadMaterialAsset(file);
     REQUIRE(loaded.has_value());

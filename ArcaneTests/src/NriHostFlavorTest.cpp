@@ -1,31 +1,21 @@
-// THE LANDING'S HEADLESS HALF (NRI Phase 3, Task 6): the host-side shapes the
-// one-device flip introduced, exercised with NO graphics device of any kind.
+// THE HOST SLICE'S HEADLESS HALF: the host-side shapes, exercised with NO
+// graphics device of any kind.
 //
 // What is here:
-//   * GpuContext::Create builds the device-less half -- window, device-less
-//     Batcher2D, graph ImGuiLayer, input -- and nothing else. (NRI Phase 5a,
-//     Task 6 renamed this from CreateForGraph once it became the only factory
-//     GpuContext has -- Device/Swap/Shaders/Cnv/Tone/Cmd/EnsurePost/
-//     FramebufferFor/OnResize and the NVRHI members behind them no longer
-//     exist at all, so there is no second half left to distinguish this one
-//     from.) The GraphFlavor() predicate this file used to assert on twice
-//     went with the follow-on collapse: with one factory and no second
-//     flavor there is no boot split left to pin, so what remains here is the
-//     SHAPE Create() produces, which is the part that can still regress.
+//   * GpuContext::Create builds a window, a device-less Batcher2D, an
+//     ImGuiLayer and input -- and nothing else. It is GpuContext's ONLY
+//     factory, so what is pinned here is the SHAPE Create() produces, which is
+//     the part that can still regress.
 //   * ImGuiLayer::Create pins its own context in BeginFrame and in
 //     RenderToDrawData/EndFrameDiscard even when another context was left
-//     current. That pin is the Phase-2 carry this task closes: the graph
-//     render arm used to call ImGui::Render()/EndFrame() BARE.
-//   * (Task 8) The EDITOR's graph-mode frame tail -- BeginFrame then
-//     EndFrameDiscard, repeatedly, through the device-less GpuContext -- is
-//     legal and balanced. That is the mid-phase decision Task 8 made about
-//     what the editor's main window does before Task 10 gives it a chrome
-//     frame, and an unbalanced pair there is a HANG rather than a bad pixel.
+//     current, so no caller has to call ImGui::Render()/EndFrame() BARE.
+//   * The EDITOR's frame tail -- BeginFrame then EndFrameDiscard, repeatedly,
+//     through the device-less GpuContext -- is legal and balanced. An
+//     unbalanced pair there is a HANG rather than a bad pixel.
 //
 // What is NOT here, and why:
 //   * NriGraphContext's borrowed-window mode needs a real device and a real
-//     swapchain; it is desk checkpoint D3b's, per the phase's no-GPU-in-session
-//     rule.
+//     swapchain; it is a desk item, per the no-GPU-in-session rule.
 //
 // Windows are created HIDDEN throughout (GpuContext::Create does so itself),
 // so this runs on an agent without flashing windows.
@@ -60,8 +50,8 @@ TEST_CASE("nri landing: GpuContext's graph flavor builds the device-less half an
     CHECK(h > 0);
 
     // The data-supply side is fully live on a device-less Batcher2D -- this is
-    // what the graph's Batch2DNode drains, and it is why the NVRHI device could
-    // be dropped at all (Task 2's severance).
+    // what the graph's Batch2DNode drains, and it is the whole of the severance
+    // (SeveranceTest.cpp).
     gpu->Batch().Begin(128, 64);
     gpu->Batch().Rect(glm::vec2(0.0f), glm::vec2(16.0f), glm::vec4(1.0f));
     const Arcane::Batch2DDrained drained = gpu->Batch().Drain();
@@ -80,12 +70,10 @@ TEST_CASE("nri landing: GpuContext's graph flavor builds the device-less half an
 TEST_CASE("nri landing: the editor's graph-mode frame tail -- Begin then discard, repeatable, "
           "through the device-less GpuContext", "[nri]")
 {
-    // NRI Phase 3, TASK 8, and it pins a DECISION rather than a library
-    // property. The editor's graph mode composites no chrome until Task 10, so
-    // EditorAppFrame::PresentFrame's graph arm does exactly one thing:
-    // Imgui().EndFrameDiscard(), pairing the BeginFrame that DrawEditorUi made
-    // earlier in the same frame. THE HAZARD IT CLOSES IS A HANG, not a wrong
-    // pixel -- an unpaired BeginFrame asserts inside ImGui on the NEXT frame,
+    // This pins a DECISION rather than a library property: every BeginFrame the
+    // editor makes is paired, on the device-less GpuContext, by an
+    // EndFrameDiscard. THE HAZARD IT CLOSES IS A HANG, not a wrong pixel --
+    // an unpaired BeginFrame asserts inside ImGui on the NEXT frame,
     // and returning "no backbuffer" from that arm instead would make MainLoop
     // `continue` past EndFrame every frame, freezing the --frames N budget and
     // the plugin hot-reload poll forever.

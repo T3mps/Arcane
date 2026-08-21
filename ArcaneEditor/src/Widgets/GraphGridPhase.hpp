@@ -1,26 +1,12 @@
 #pragma once
 
-// GraphGridPhase: the shader-graph canvas backdrop's PURE half -- the view it
-// is told about, the palette it is drawn in, and the phase state machine that
-// makes a pan track the nodes 1:1 and a zoom grow out of the point the editor
-// zoomed about.
+// GraphGridPhase: the shader-graph canvas backdrop -- the view it is told
+// about, the palette it is drawn in, the phase state machine that makes a pan
+// track the nodes 1:1 and a zoom grow out of the point the editor zoomed about,
+// and (at the bottom of this file) the drawing itself.
 //
-// SPLIT OUT OF GraphGridPass.hpp AT NRI PHASE 3, TASK 11, when there were TWO
-// consumers of this arithmetic -- the nvrhi shader pass (one fullscreen
-// triangle) and the graph arm's ImGui-primitive fallback (AddLine) -- and one
-// copy of the state machine was what made "both backdrops move identically" a
-// fact rather than a hope.
-//
-// THE OTHER CONSUMER IS GONE (NRI Phase 5a, Task 9.5a): GraphGridPass could
-// only be built with an nvrhi::IDevice and a ShaderLibrary, DocServices::device
-// has been unconditionally null since Task 2b, and the class is deleted. Its
-// DrawGraphGridFallback moved here verbatim (bottom of this file), so this
-// header is now the WHOLE canvas grid rather than its pure half. It still has
-// no device dependency, which is what lets a headless test drive it and what
-// keeps it out of every TU that merely opens a document.
-//
-// Nothing here was rewritten -- constants, branches and wrap are verbatim from
-// GraphGridPass's private half, as is the relocated drawing function.
+// IT HAS NO DEVICE DEPENDENCY. That is what lets a headless test drive the
+// whole grid, and what keeps it out of every TU that merely opens a document.
 
 #include <imgui.h>   // DrawGraphGridFallback draws the lattice with ImDrawList
 
@@ -67,31 +53,20 @@ namespace Arcane::Editor
     };
 
     // ===================================================================
-    // THE GRID'S WHOLE MEMORY, extracted (NRI Phase 3, Task 11)
+    // THE GRID'S WHOLE MEMORY
     // ===================================================================
-    // Lifted OUT of GraphGridPass verbatim -- same constants, same three
-    // branches, same wrap -- because the ImGui fallback needs exactly this and
-    // a second copy of a state machine is how two backdrops start disagreeing
-    // about where the lattice is. It is PURE: no device, no ImGui, no NRI,
-    // which also makes it the one piece of the grid a headless test can drive.
-    //
-    // The rationale for every line is at UpdatePhase's old site, kept below in
-    // full; read it there.
+    // PURE: no device, no ImGui, no NRI, which is what makes it the piece of
+    // the grid a headless test can drive. The rationale for every line is at
+    // UpdatePhase below; read it there.
     struct GraphGridPhase
     {
-        // THESE FOUR ARE NOW FREE-STANDING -- NO MIRROR OBLIGATION.
-        // They were MIRRORED CONSTANTS, pinned equal to graph_grid.hlsl's
-        // kZoomExponent / kBaseSpacingPx / kMinorTargetPx / kMajorEvery, for as
-        // long as a shader-rendered backdrop was the other consumer. That
-        // consumer went at NRI Phase 5a Task 9.5a with GraphGridPass, and the
-        // shader itself was deleted at the final-review fix wave once nothing
-        // loaded it. There is no second copy left to drift against: the
-        // ImGui-primitive fallback below is the ONLY reader, and these are
-        // simply its tuning values. Change them freely -- but change them
-        // TOGETHER with the band assertions in GraphGridPhaseTest.cpp, which
-        // are what actually holds the design invariant now.
+        // THESE FOUR ARE FREE-STANDING -- NO MIRROR OBLIGATION. There is no
+        // second copy to drift against: DrawGraphGridFallback below is the ONLY
+        // reader, and these are simply its tuning values. Change them freely --
+        // but change them TOGETHER with the band assertions in
+        // GraphGridPhaseTest.cpp, which are what holds the design invariant.
         //
-        // WHY 0.7 (kept because the shader's rationale block was its only home):
+        // WHY 0.7:
         // screen period = kBaseSpacingPx * pow(zoom, k). At k = 1 the grid is
         // rigidly welded to canvas content; at k = 0 it ignores zoom entirely.
         // k = 0.7 makes the grid track zoom sublinearly, and over the editor's
@@ -227,18 +202,12 @@ namespace Arcane::Editor
     };
 
     // =====================================================================
-    // DrawGraphGridFallback -- THE canvas grid (relocated NRI Phase 5a, 9.5a)
+    // DrawGraphGridFallback -- THE canvas grid
     // =====================================================================
-    // RELOCATED VERBATIM from GraphGridPass.hpp, which is deleted. It was
-    // written at NRI Phase 3, Task 11 as the graph arm's stand-in for a
-    // shader-rendered lattice; the shader pass needed an nvrhi::IDevice and a
-    // ShaderLibrary, DocServices::device has been unconditionally null since
-    // Phase 5a Task 2b, and Task 9.5a deleted the pass outright. So this is no
-    // longer a fallback in anything but name -- it is the canvas grid.
+    // "Fallback" in name only: this is the canvas grid, and the only one.
     //
-    // THE CHOICE MADE, AND WHY (carried over from the deleted header, because
-    // it is still the reason this is primitives and not a render pass). Two
-    // routes were available for the device-less arm: render the grid through a
+    // THE CHOICE MADE, AND WHY, because it is the reason this is primitives and
+    // not a render pass. Two routes were available: render the grid through a
     // tiny offscreen graph frame, or draw it with ImGui primitives. The grid is
     // CHROME -- a backdrop for a node canvas, never captured, never compared
     // against a golden, and its only job is to tell the eye that the canvas
@@ -249,18 +218,16 @@ namespace Arcane::Editor
     // that come with it -- all to draw straight lines. ImGui primitives draw
     // the same lines with no GPU object at all. So: PRIMITIVES.
     //
-    // WHAT IT KEEPS, and it is the part that matters -- the MOTION. It runs
+    // WHAT IT DOES, and it is the part that matters -- the MOTION. It runs
     // the phase state machine above, so the grid tracks the nodes 1:1 on a pan
     // and grows out of the editor's own zoom fixed point, answering zoom
     // sublinearly through the same pow(scale, 0.7) curve. Same two lattices,
     // same snapped period.
     //
-    // WHAT IT LOSES, relative to the deleted shader and stated rather than
-    // discovered: the four-octave crossfade (one octave is drawn, so a zoom
-    // crosses LOD steps as a pop rather than a fade), the vignette, and the
-    // shader's analytic anti-aliasing (ImGui's 1px lines are its own AA). And
-    // it costs a few hundred AddLine calls per canvas per frame. That was the
-    // price of the mode when there were two; it is now simply the price.
+    // WHAT IT COSTS, stated rather than discovered: no four-octave crossfade
+    // (one octave is drawn, so a zoom crosses LOD steps as a pop rather than a
+    // fade), no vignette, and no analytic anti-aliasing (ImGui's 1px lines are
+    // its own AA). And a few hundred AddLine calls per canvas per frame.
     //
     // The vendored node editor's OWN grid stays switched off through its public
     // style seam (StyleColor_Grid alpha 0) -- it is a fixed 32 px line pair

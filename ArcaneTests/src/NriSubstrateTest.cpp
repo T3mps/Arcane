@@ -1,6 +1,6 @@
-// NRI substrate, Task 4: result-check discipline (ARC_NRI_CHECK/NriCheckImpl),
-// the callback-to-latch wiring (MakeNriCallbacks), and the one-line identity
-// log (LogNriIdentity). Headless -- [nri], inside the ~[gpu] dev gate.
+// NRI substrate: result-check discipline (ARC_NRI_CHECK/NriCheckImpl), the
+// callback-to-latch wiring (MakeNriCallbacks), and the one-line identity log
+// (LogNriIdentity). Headless -- [nri], inside the ~[gpu] dev gate.
 //
 // Include order matters in this file: NRI's Extensions/NRIDeviceCreation.h
 // declares nri::Message with an enumerator literally named ERROR, and
@@ -9,11 +9,9 @@
 // nri::Message::ERROR -- gets corrupted by preprocessor substitution. Keep the
 // NRI includes first.
 //
-// The route is Arcane/Render/RenderErrorLatch.hpp -> Base/Log.hpp -> spdlog.
-// It used to be Arcane/Render/Device.hpp -> (Task 8a) RenderErrorLatch.hpp ->
-// the same; NRI Phase 5a Task 8b deleted Device.hpp, and this file now names
-// RenderDeviceDesc.hpp (for the desc) and the latch (for RenderErrorCount)
-// directly -- the identical hazard at one hop fewer.
+// The route into spdlog is Arcane/Render/RenderErrorLatch.hpp -> Base/Log.hpp.
+// This file names RenderDeviceDesc.hpp (for the desc) and the latch (for
+// RenderErrorCount) directly.
 #include <NRI.h>
 #include <Extensions/NRIDeviceCreation.h>
 

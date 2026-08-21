@@ -1,6 +1,6 @@
-// NriTextureCache (NRI Phase 3, Task 2) -- the SHARED Guid -> nri::Texture
-// residency cache, promoted out of Batch2DNode's private one so the batch node
-// and the post chain sample the SAME upload instead of each owning a copy.
+// NriTextureCache -- the SHARED Guid -> nri::Texture residency cache, so the
+// batch node and the post chain sample the SAME upload instead of each owning
+// a copy.
 //
 // Everything here runs on the NONE backend through
 // NriDevice::CreateNoneForTests(), which is the sanctioned carve-out from the
@@ -241,22 +241,20 @@ TEST_CASE("nri texture cache: Release BURIES its objects rather than destroying 
 }
 
 // ===================================================================
-// COLOUR SPACE (NRI Phase 3, Task 11)
+// COLOUR SPACE
 // ===================================================================
-// Inherited from the NVRHI split between Assets::GetTexture (sRGB, for the
-// linear scene canvas) and LoadDisplayTexture (UNORM, for ImGui's
-// display-referred target) -- both deleted at ABI v15, leaving this cache the
-// only place the distinction lives. It keys on (Guid, space), and these
-// cases pin the two properties that has to have: the DEFAULT is unchanged
-// (every scene caller keeps sRGB without asking), and the two spaces are
-// genuinely SEPARATE residents rather than one entry serving both.
+// THIS CACHE IS THE ONLY PLACE THE DISTINCTION LIVES: sRGB for the linear scene
+// canvas, UNORM for ImGui's display-referred target. It keys on (Guid, space),
+// and these cases pin the two properties that has to have: the DEFAULT is sRGB
+// (every scene caller gets it without asking), and the two spaces are genuinely
+// SEPARATE residents rather than one entry serving both.
 //
 // What NONE cannot show is the FORMAT itself -- ImplNONE hands back a
 // dummy-but-non-null texture for any desc and there is no GetTextureDesc to
 // read it back through on that backend. The format branch is one ternary at
-// the create site and its consumer (ImGuiNri::EnsureEntry reads the texture's
-// ACTUAL format for its view) is a desk item, D3c: the logo drawn DARK is what
-// a wrong space looks like.
+// the create site, and its consumer (ImGuiNri::EnsureEntry reads the texture's
+// ACTUAL format for its view) is a desk item: the logo drawn DARK is what a
+// wrong space looks like.
 
 TEST_CASE("nri texture cache: the colour space is part of an image's identity", "[nri]")
 {

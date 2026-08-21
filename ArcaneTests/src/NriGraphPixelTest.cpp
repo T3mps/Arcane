@@ -1,11 +1,7 @@
 // NODE-LEVEL PIXEL CORRECTNESS for the NRI frame graph -- [gpu], DESK ONLY.
 //
 // ===== WHY THIS FILE EXISTS ==================================================
-// NRI Phase 5a retired ~2,200 lines across seven [gpu] test files along with
-// the NVRHI render passes they drove (MaterialChainGpuTest, MaterialGpuTest,
-// OffscreenCanvasTest, PickBufferTest, PostChainGpuTest, SelectionOutlineTest,
-// SpriteMaterialGpuTest, plus two ImGui pixel cases) and NOTHING replaced them.
-// At that point the entire suite's [gpu] coverage was TWO cases, both in
+// Without it the suite's entire [gpu] coverage is TWO cases, both in
 // NriSubstrateTest.cpp, and both device-WRAP smokes: they prove a native device
 // survives the trip into NRI and say nothing whatsoever about pixels.
 //
@@ -20,8 +16,8 @@
 //   * THE PICK ID PASS IS EXACT. Its output is an R32_UINT hit-proxy id, not a
 //     colour: no tonemap, no colour space, no filtering. `k+1 for the k-th
 //     drawable, 0 for background` is an integer contract and is asserted as
-//     one. This is where the value of the file is concentrated -- it is the
-//     coverage PickBufferTest lost, and it is exactly reproducible.
+//     one. This is where the value of the file is concentrated, and it is
+//     exactly reproducible.
 //
 //   * COLOUR IS ASSERTED STRUCTURALLY. Everything reaching ReadCapture has been
 //     through AddTonemapNode, so the canvas clear ({0.02, 0.02, 0.04, 1.0},

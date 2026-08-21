@@ -1,31 +1,23 @@
-// THE SEVERANCE (NRI Phase 3, Task 2) -- headless proof that the frame's
-// DATA-SUPPLY side no longer needs an NVRHI device.
+// THE SEVERANCE -- headless proof that the frame's DATA-SUPPLY side needs no
+// graphics device.
 //
-// Three producers had a hard device dependency and each one is exercised here
-// without one. (Two of the three took an explicit `device == nullptr` when this
-// file was written; ABI v15 -- NRI Phase 5a, Task 9.5b-ii -- deleted those
-// parameters outright, so device-free is no longer a mode they are put into but
-// the only shape they have.)
+// Three producers are exercised without one. Device-free is not a mode they are
+// put into; it is the only shape they have.
 //
 //   * Batcher2D  -- Create() builds an instance whose
 //     Begin/SetLayer/Quad*/Drain/RegisterMaterial/MaterialDesc are fully live
-//     and whose End() (once the NVRHI recorder) refuses loudly.
+//     and whose End() records nothing and refuses loudly.
 //   * SpriteMaterialCache -- a real dxc compile lands and Binds against a
 //     device-less batcher: the registration carries the retained BLOBS, which
 //     is what the graph recorder builds its own pipeline from.
-//   * PostChainCache -- the same, and its PostChainDesc is published even
-//     though no chain object could be built without a device. (At the time
-//     this comment was written, that object was FullscreenMaterialChain, an
-//     NVRHI class; NRI Phase 5a, Task 4 deleted it outright -- the point
-//     below stands regardless: PostChainCache never gated the desc publish
-//     on it being possible.)
+//   * PostChainCache -- the same, and its PostChainDesc is published without
+//     any chain object needing to exist: the cache never gated the desc publish
+//     on one being possible.
 //
 // Why headless is the right home for this: everything above is CPU work over
 // bytes. The half that genuinely needs a device -- that a device-CARRYING
-// batcher records the same spans -- WAS the [gpu] case in BatcherTest.cpp,
-// retired at NRI Phase 5a Task 8b along with the NVRHI device layer that case
-// built its batcher against. Nothing covers that half today; it is a named
-// Phase 5b gap.
+// batcher records the same spans -- HAS NO COVERAGE AT ALL today. That is a
+// named gap, not an oversight.
 //
 // The compiles here are REAL (in-process dxcompiler.dll, the same service the
 // editor uses); ShaderCompilerTest.cpp proves that path is device-free, and
@@ -131,11 +123,8 @@ TEST_CASE("severance: Batcher2D::Create() yields a live, device-less batcher",
 
     // THE SPAN KEY. Three distinct texture identities (A, B, nil) -> three
     // runs. Without the Guid in the split they would coalesce into ONE run of
-    // 18 indices and the graph recorder would draw one image three times --
-    // which is exactly what the `nvrhi::ITexture*` half of the key would have
-    // produced, since it was null for all three. (That field, and the
-    // `CHECK(span.texture == nullptr)` that stood in this loop, went at ABI
-    // v15.)
+    // 18 indices and the graph recorder would draw one image three times. The
+    // Guid IS the key -- a span carries no texture pointer to fall back on.
     REQUIRE(drained.spans.size() == 3);
     for (const Batch2DDrawSpan& span : drained.spans)
     {
@@ -210,9 +199,8 @@ TEST_CASE("severance: a device-less End() records nothing and leaves the batch d
     batcher->Begin(64, 64);
     batcher->Rect(glm::vec2(0.0f), glm::vec2(8.0f), glm::vec4(1.0f));
 
-    // End() WAS the NVRHI recorder; since ABI v15 there is no device for it
-    // to touch at all. It must still not silently claim to have drawn
-    // anything.
+    // End() records nothing -- there is no device for it to touch. It must
+    // still not silently claim to have drawn anything.
     batcher->End();
     CHECK(batcher->Stats().drawCalls == 0);
     CHECK(batcher->Stats().quads == 0);
@@ -257,9 +245,7 @@ TEST_CASE("severance: RegisterMaterial accepts a BYTES-ONLY registration with no
     CHECK(published->templ == templ);
     CHECK(published->instance == instance);
     // The declared-texture WIDTH the graph recorder's t1.. range needs comes
-    // from the template, which is where it always came from -- the
-    // `paramTextures` vector that used to mirror it is deleted (NRI Phase 5a,
-    // Task 7) and this is the surviving authority.
+    // from the template, and the template is its only authority.
     CHECK(published->templ->TextureCount() == 1);
 
     // A registration with NO bytes is still refused: nothing could ever
@@ -294,9 +280,7 @@ TEST_CASE("severance: SpriteMaterialCache binds with a NULL device and publishes
     SpriteMaterialCache::Services services;
     services.compiler = &compiler;
     services.sources  = &provider;
-    services.assets   = nullptr;   // THE SEVERANCE (the `device` field it sat
-                                   // beside was deleted at Task 9.5a: unused,
-                                   // and only ever set to exactly this)
+    services.assets   = nullptr;   // THE SEVERANCE
     services.backend  = GraphicsBackend::D3D12;
     services.resolveAsset = [&](const Guid& g) -> std::optional<std::filesystem::path>
     {
@@ -363,14 +347,9 @@ TEST_CASE("severance: PostChainCache publishes a PostChainDesc with a NULL devic
     for (const ShaderCompileResult& r : DrainBlocking(compiler))
         cache.ConsumeResult(r);
 
-    // NRI Phase 5a, Task 4 deleted FullscreenMaterialChain (the NVRHI object
-    // this cache used to ALSO build, gated on the device that was never
-    // there anyway) along with Chain(), the accessor that used to prove its
-    // absence here. There is no chain gate left to sit behind.
-    //
-    // THE DESC IS PUBLISHED ANYWAY: bytes, layout and values, which is the
-    // whole of what the graph's PostChainNode consumes -- and, as of this
-    // task, the whole of what this cache produces on its only remaining path.
+    // THE DESC IS THE PRODUCT: bytes, layout and values, which is the whole of
+    // what the graph's PostChainNode consumes and the whole of what this cache
+    // produces. There is no chain object, and no gate to sit behind.
     const PostChainDesc* desc = cache.Desc(data.id);
     REQUIRE(desc != nullptr);
     REQUIRE(desc->templ != nullptr);

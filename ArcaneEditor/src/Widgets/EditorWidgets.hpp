@@ -155,8 +155,8 @@ namespace Arcane::Editor
 
     // ---- colour ---------------------------------------------------------------
     // sRGB <-> linear, the IEC 61966-2-1 piecewise curve. This is the SAME
-    // transfer nvrhi::Format::SRGBA8_UNORM applies in hardware when a texture is
-    // sampled (Assets.cpp:176), and that is the whole point: before this, a tint
+    // transfer nri::Format::RGBA8_SRGB applies in hardware when a texture is
+    // sampled (NriTextureCache.cpp:183), and that is the whole point: before this, a tint
     // and a texture pixel authored as the same number meant DIFFERENT colours in
     // the same multiply (#808080 -> linear 0.216 as a pixel, 0.502 as a tint).
     //
@@ -164,9 +164,7 @@ namespace Arcane::Editor
     // anything.
     //
     // CURVE IS MIRRORED in data/shaders/tonemap.hlsl (HLSL, branchless min
-    // form) -- keep both in step. See the .cpp for the third copy that used to
-    // pin them (a CPU golden reference in ArcaneTests/src/TonemapTest.cpp,
-    // retired at NRI Phase 5a Task 8b).
+    // form) -- keep both in step by hand; no test compares them. See the .cpp.
     [[nodiscard]] float SrgbToLinear(float srgb) noexcept;
     [[nodiscard]] float LinearToSrgb(float linear) noexcept;
 }

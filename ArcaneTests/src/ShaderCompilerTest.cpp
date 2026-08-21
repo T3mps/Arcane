@@ -1,7 +1,7 @@
 // Runtime shader compile service (Slice 2 of the shader-editor arc): in-process
 // dxcompiler.dll, dual DXIL+SPIR-V targets from one source, structured diag
 // parsing (Clang grammar), content-hash cache, debounce/coalesce, superseded
-// drop. CPU-only (no NVRHI) -- the drain site owning createShader is Slice 4.
+// drop. CPU-only: no device anywhere in this file.
 // The dxc DLLs are copied beside the test exe by the premake postbuild.
 
 #include <catch2/catch_test_macros.hpp>

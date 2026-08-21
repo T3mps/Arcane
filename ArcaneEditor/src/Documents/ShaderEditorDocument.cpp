@@ -3642,12 +3642,9 @@ namespace Arcane::Editor
         // also what keeps a narrow node from collapsing the thumbnail.
         constexpr float kThumbMin = 96.0f;
         const float kThumbDraw = width > kThumbMin ? width : kThumbMin;
-        // The Output node shows the material's own preview (the pass canvas's
-        // base-node convention) -- from whichever arm made it. This is the
-        // ONLY branch left: the per-node compile/record machinery that used
-        // to serve non-Output nodes is deleted (NRI Phase 5a, Task 9.5b)
-        // rather than ported, and was already unreachable dead code before
-        // that (see the banner above).
+        // The Output node shows the material's own preview -- the pass
+        // canvas's base-node convention. It is the ONLY node with a preview:
+        // there is no per-node compile/record machinery.
         if (n.type == Arcane::GraphNodeType::Output)
         {
             if (const ImTextureID id = PreviewImageOf().id)
@@ -3687,9 +3684,6 @@ namespace Arcane::Editor
             m_graphPositionsApplied = false;
             m_nodeWidths.clear();   // ids are only unique per graph
             RebuildDiagBadges();
-            // The RefreshNodePreviews() call that used to run here on a pass
-            // switch is deleted with the per-node-thumbnail feature (NRI
-            // Phase 5a, Task 9.5b) -- it was always a no-op.
         }
         Arcane::MaterialGraph& g = *ActiveGraphOpt();
 
@@ -3722,12 +3716,8 @@ namespace Arcane::Editor
         // the view during End -- but it is taken before Begin because
         // ScreenToCanvas has to be, so the two calls stay separate.
         const NodeLOD lod = NodeLODForScale(ViewScale());
-        // Culled-node set for THIS submission: refilled below. This used to be
-        // read one frame later by RenderNodePreviews so a culled node cost no
-        // preview GPU; that reader is deleted (NRI Phase 5a, Task 9.5b) and
-        // the set is currently write-only (see its declaration's comment in
-        // the header) -- left in place as outside this task's scope, flagged
-        // in the task report.
+        // Culled-node set for THIS submission: refilled below. Currently
+        // WRITE-ONLY -- nothing reads it (see its declaration in the header).
         m_culledGraphNodes.clear();
 
         // Wire anchors are per-frame: nodes move, the view moves, and a pin
@@ -5233,22 +5223,13 @@ namespace Arcane::Editor
         FillRgba(colors.minor,  kGridMinorColor);
         FillRgba(colors.major,  kGridMajorColor);
 
-        // ===== THE ImGui-PRIMITIVE BACKDROP, AND NOW THE ONLY ONE ===========
-        // Until NRI Phase 5a, Task 9.5a this branched: a device-carrying
-        // document blitted a shader-rendered lattice from GraphGridPass (an
-        // nvrhi render target, its own pipeline and binding sets), and only
-        // the graph arm drew the lattice with ImGui primitives. GraphGridPass
-        // is DELETED -- its Create() needed both an nvrhi device and a
-        // ShaderLibrary, and `m_services.device` has been unconditionally null
-        // since Task 2b's flip, so the pass could never be built and the
-        // ImGui arm was already the only one that ran.
-        //
-        // What that arm draws is unchanged: the shared GraphGridPhase state
-        // machine, the same snapped period, the same two octaves. It remains a
-        // CHOICE rather than a stopgap -- the grid is chrome, and an offscreen
-        // graph context per canvas would be a RenderGraph, a descriptor pool, a
-        // graveyard lane and a chrome-side user-texture entry to invalidate, to
-        // draw straight lines.
+        // ===== THE ImGui-PRIMITIVE BACKDROP =================================
+        // The lattice is drawn with ImGui primitives through the shared
+        // GraphGridPhase state machine -- one snapped period, two octaves. That
+        // is a CHOICE rather than a stopgap: the grid is chrome, and an
+        // offscreen graph context per canvas would be a RenderGraph, a
+        // descriptor pool, a graveyard lane and a chrome-side user-texture entry
+        // to invalidate, to draw straight lines.
         //
         // The phase state rides on the DOCUMENT (one per canvas) so a canvas
         // keeps its history across view switches.
@@ -5699,11 +5680,9 @@ namespace Arcane::Editor
             m_services.undo->Push(std::make_unique<ParamEditCommand>(
                 m_anchor, d.nameHash, "Edit " + d.name,
                 hadBefore, before, /*hasAfter=*/true, value));
-        // NRI Phase 5a, Task 4: this used to force a sprite-preview binding
-        // refresh on a texture pick (the NVRHI arm's Material2DDesc resolves
-        // its texture handles once, at registration -- see ApplyParamEdit's
-        // note). The graph arm's texture params resolve by Guid, fresh, every
-        // frame through NriTextureCache, so there is nothing left to trigger.
+        // No binding refresh on a texture pick: texture params resolve by
+        // Guid, fresh, every frame through NriTextureCache, so there is nothing
+        // to invalidate.
     }
 
     void ShaderEditorDocument::DrawParamsPanel()

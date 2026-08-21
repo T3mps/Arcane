@@ -1,23 +1,19 @@
 #pragma once
 
 // DeferredPick -- the viewport click-pick that CANNOT ANSWER IN THE FRAME IT IS
-// ASKED (NRI Phase 3, Task 9), as a pure state machine.
+// ASKED, as a pure state machine.
 //
 // ===================================================================
 // WHY THIS EXISTS AT ALL
 // ===================================================================
-// On the NVRHI arm a viewport click is resolved inside one statement:
-// PickBuffer::Pick renders the id pass and then calls waitForIdle to read one
-// texel back. That is a full GPU stall, which is affordable exactly because it
-// happens on a click rather than every frame.
+// The readback is a graph COPY node into a per-frame-slot HOST_READBACK region,
+// and the CPU reads a region only at the moment the graph is about to overwrite
+// it -- so the value that comes back is the one written
+// kSwapchainFramesInFlight frames ago (PickOutlineNodes.hpp, THE READBACK). No
+// fence query, no idle, and no answer this frame.
 //
-// The graph arm cannot do that and must not want to. Its readback is a graph
-// COPY node into a per-frame-slot HOST_READBACK region, and the CPU reads a
-// region only at the moment the graph is about to overwrite it -- so the value
-// that comes back is the one written kSwapchainFramesInFlight frames ago
-// (PickOutlineNodes.hpp, THE READBACK). No fence query, no idle, and no answer
-// this frame. The plan's reconciliation 5 accepts that latency; what it does
-// not accept is applying the WRONG answer, and everything below is about that.
+// THAT LATENCY IS ACCEPTED. What is NOT accepted is applying the WRONG answer,
+// and everything below is about that.
 //
 // ===================================================================
 // THE THREE HAZARDS, and which member closes each
@@ -76,8 +72,8 @@ namespace Arcane::Editor
         enum class Phase : std::uint8_t { Idle, Armed, InFlight };
 
         // What one landed readback resolves to. An INVALID entity is a real
-        // answer and means BACKGROUND -- the host clears the selection on it
-        // (unless ctrl was held), exactly as the NVRHI arm does on id 0.
+        // answer and means BACKGROUND (id 0) -- the host clears the selection
+        // on it, unless ctrl was held.
         struct Hit
         {
             Astra::Entity entity{};

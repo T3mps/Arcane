@@ -1,19 +1,14 @@
-// GraphGridPhase (NRI Phase 3, Task 11) -- the shader-graph canvas backdrop's
-// PURE half, split out of GraphGridPass so the shader pass and the graph arm's
-// ImGui-primitive fallback provably moved the SAME lattice. GraphGridPass was
-// deleted at NRI Phase 5a, Task 9.5a, so the fallback is now the only mover --
-// which makes this file the ONLY coverage of the lattice, not half of it.
+// GraphGridPhase -- the shader-graph canvas backdrop's state machine, and the
+// ONLY coverage of the lattice.
 //
-// It had no coverage at all before the split, because it was a private member
-// of a class that could not be constructed without an nvrhi device. It is the one
-// part of the grid where a bug is a WRONG PICTURE rather than a missing one --
-// a phase that does not track the view makes the backdrop swim under the nodes
-// on every pan, which is exactly the defect the state machine was written to
-// fix (a phase computed straight from the view pins a zoom at the region's
-// top-left corner).
+// It is the one part of the grid where a bug is a WRONG PICTURE rather than a
+// missing one -- a phase that does not track the view makes the backdrop swim
+// under the nodes on every pan, which is exactly the defect the state machine
+// was written to fix (a phase computed straight from the view pins a zoom at
+// the region's top-left corner).
 //
-// What is NOT here: the shader's octave crossfade, its vignette and its
-// anti-aliasing, none of which are in this struct.
+// What is NOT here: the octave crossfade, the vignette and the anti-aliasing,
+// none of which are in this struct.
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -98,11 +93,9 @@ TEST_CASE("graph grid phase: a ZOOM grows the lattice out of the view's own fixe
 TEST_CASE("graph grid phase: the snapped minor period always lands in its half-octave band",
           "[editor][material]")
 {
-    // THE band invariant, no longer a mirror of anything: this was pinned
-    // against the LOD block in graph_grid.hlsl's ps_main until that shader was
-    // deleted (nothing loaded it after Task 9.5a took GraphGridPass). With the
-    // ImGui fallback the only reader, THIS ASSERTION is what holds the design.
-    // Whatever the zoom,
+    // THE band invariant, a mirror of nothing: DrawGraphGridFallback is the
+    // only reader of these constants, so THIS ASSERTION is what holds the
+    // design. Whatever the zoom,
     // the drawn period stays inside (kMinorTargetPx/2, kMinorTargetPx]. That
     // is what keeps the grid legible at every zoom instead of collapsing into
     // a fill or spreading into two lines on screen -- and it is the number the
@@ -147,17 +140,3 @@ TEST_CASE("graph grid phase: a long pan stays bounded, and the wrap is invisible
     CHECK((diff < 1e-1f || std::fabs(diff - wrap) < 1e-1f));
 }
 
-// DELETED AT NRI PHASE 5a, TASK 9.5a: TEST_CASE("graph grid: Create
-// refuses without EITHER of its two inputs"). Arcane::Editor::GraphGridPass
-// is gone -- its Create(nvrhi::IDevice*, ShaderLibrary*) could never be
-// satisfied once DocServices::device went unconditionally null at Task 2b,
-// and its ImGui-primitive twin -- DrawGraphGridFallback, which moved with
-// the deletion and now lives at Widgets/GraphGridPhase.hpp, not in this file
-// -- is the only canvas backdrop there is.
-//
-// NOT A COVERAGE GAP. Everything that case pinned was the refusal of a
-// constructor that no longer exists; the lattice itself was always the
-// PURE half tested throughout this file, and
-// ShaderEditorDocument::DrawCanvasBackdrop now calls DrawGraphGridFallback
-// unconditionally rather than behind a `!grid` test, so there is strictly
-// less branch to get wrong than the case guarded.

@@ -1,5 +1,5 @@
-// NriDiagnostics (NRI Phase 3, Task 5): the crash chain armed by whichever
-// device exists. Headless -- [nri], inside the ~[gpu] dev gate.
+// NriDiagnostics: the crash chain armed by whichever device exists. Headless
+// -- [nri], inside the ~[gpu] dev gate.
 //
 // WHAT IS AND IS NOT REACHABLE HERE, stated up front because the split is the
 // whole reason these cases look the way they do:
@@ -22,14 +22,11 @@
 //     pinned once, generically, in DiagnosticsTest.cpp; a second slow twin of
 //     it would buy nothing this cannot state exactly.
 //   * FireFault is [gpu] by construction (MapBuffer, a compute pipeline, a
-//     real queue) and is desk-proven at D3b. In-session it is compile + shape.
+//     real queue) and is desk-proven. In-session it is compile + shape.
 //
 // Include order: NRI headers first, ALWAYS -- Extensions/NRIDeviceCreation.h
 // declares nri::Message::ERROR and <windows.h> #defines ERROR via wingdi.h.
-// The route is Arcane/Render/RenderErrorLatch.hpp -> Base/Log.hpp -> spdlog.
-// It used to be Arcane/Render/Device.hpp -> (Task 8a) RenderErrorLatch.hpp ->
-// the same; NRI Phase 5a Task 8b deleted Device.hpp and this file includes the
-// latch directly, so it is the identical hazard at one hop fewer.
+// The route into spdlog is Arcane/Render/RenderErrorLatch.hpp -> Base/Log.hpp.
 #include <NRI.h>
 #include <Extensions/NRIDeviceCreation.h>
 
@@ -70,11 +67,10 @@ namespace
         ScopedNriDiagnostics& operator=(const ScopedNriDiagnostics&) = delete;
     };
 
-    // Stands in for whatever incumbent backend armed first -- historically
-    // the NVRHI device, in the two-device transition topology --nri-graph
-    // used to create. Nothing about it needs to work; Arm()'s test is "the
-    // active-backend slot is non-null", and that is the only fact an
-    // incumbent backend publishes about itself that this file can see.
+    // Stands in for whatever incumbent backend armed first. Nothing about it
+    // needs to work; Arm()'s test is "the active-backend slot is non-null",
+    // and that is the only fact an incumbent backend publishes about itself
+    // that this file can see.
     class StubCrashBackend final : public Arcane::IGpuCrashBackend
     {
     public:
@@ -299,15 +295,11 @@ TEST_CASE("nri diagnostics: a NONE device arms the whole chain, and a second Arm
 
 TEST_CASE("nri diagnostics: Arm no-ops when an NVRHI crash backend already holds the chain", "[nri]")
 {
-    // THE TWO-DEVICE TRANSITION TOPOLOGY, historically -- back when
-    // `--nri-graph` meant the engine's NVRHI device armed during boot and the
-    // vehicle's NRI device came up second. NVRHI is gone and the graph is the
-    // only device now, but the property pinned here is general: displacing
-    // ANY incumbent backend would point the Diagnostics GPU-section provider
-    // at a ring with no DRED, no device-fault query and no marker buffer
-    // while the device that HAS all three is still rendering. (The TEST_CASE
-    // title above still says "NVRHI crash backend" -- that is the test-name
-    // string, code rather than prose, and out of this sweep's scope.)
+    // THE PROPERTY IS GENERAL: displacing ANY incumbent crash backend would
+    // point the Diagnostics GPU-section provider at a ring with no DRED, no
+    // device-fault query and no marker buffer, while the device that HAS all
+    // three is still rendering. So Arm() must no-op rather than take the chain
+    // from whoever already holds it.
     REQUIRE_FALSE(Arcane::NriDiagnostics::IsArmed());
     REQUIRE(Arcane::ActiveGpuCrashBackend() == nullptr);
 
@@ -324,7 +316,7 @@ TEST_CASE("nri diagnostics: Arm no-ops when an NVRHI crash backend already holds
     CHECK(Arcane::NriDiagnostics::ArmedBackend() == nullptr);
 
     // Untouched, all of it: the incumbent keeps the backend slot, and no hook
-    // was installed on its behalf either (the NVRHI device owns that too).
+    // was installed on its behalf either (the incumbent owns that too).
     CHECK(Arcane::ActiveGpuCrashBackend() == &nvrhiBackend);
     CHECK(Arcane::RenderDeviceRemovedHookForTest() == nullptr);
 

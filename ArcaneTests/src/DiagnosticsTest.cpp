@@ -673,10 +673,10 @@ TEST_CASE("Diagnostics GPU watchdog writes a gpu-stall report when the fence sto
 #if defined(_WIN32)
 TEST_CASE("dred tier never selects markers-only while WriteMarkerNative is a stub", "[diag]")
 {
-    // F-2c-bis: markers-only auto-breadcrumbs with no marker producer yields an
-    // EMPTY breadcrumb list -- strictly worse than no DRED. The NRI path is the
-    // only path as of Phase 5a and its WriteMarkerNative returns false, so this
-    // tier must not be selected in ANY config until the native marker arc lands.
+    // Markers-only auto-breadcrumbs with no marker producer yields an EMPTY
+    // breadcrumb list -- strictly worse than no DRED. The NRI path is the only
+    // path and its WriteMarkerNative returns false, so this tier must not be
+    // selected in ANY config until the native marker arc lands.
     //
     // EnableD3D12Dred() must run first: g_dredTier starts at "dred:off", and
     // reading the accessor without arming it would pass in every config for
@@ -690,17 +690,11 @@ TEST_CASE("dred tier never selects markers-only while WriteMarkerNative is a stu
 }
 #endif
 
-// DELETED AT NRI PHASE 5a, TASK 9.5a, AND NAMED RATHER THAN DROPPED:
-// TEST_CASE("GpuFrameSlot never claims a stamp that did not go out").
-// Arcane::GpuFrameSlot is gone -- Task 8b deleted SwapchainD3D12 and
-// SwapchainVulkan, its only two production users, and its whole API was
-// nvrhi-typed (Init/Stamp/WaitAndReset over an nvrhi::EventQueryHandle).
-// The invariant it pinned -- a slot must never report IsStamped() for a
-// stamp that did not go out, or the pacing wait polls a query nvrhi
-// reports incomplete forever -- still binds, but now on NriSwapChain's
-// own frame slots, where the only coverage is the [gpu] desk battery's
-// resize storm. THIS WAS THE LAST UNIT PIN ON IT. Re-pinning it against
-// the graph slots is a Phase 4/5b item.
+// A NAMED COVERAGE GAP, with no unit pin anywhere: a frame slot must never
+// report IsStamped() for a stamp that did not go out, or the pacing wait polls
+// a query that is reported incomplete forever. That binds on NriSwapChain's
+// frame slots, and the only thing exercising them is the [gpu] desk battery's
+// resize storm. Re-pinning it as a unit case is still owed.
 
 TEST_CASE("Diagnostics GPU watchdog fires while the render path is parked in a frame-slot wait", "[diag]")
 {
@@ -712,11 +706,10 @@ TEST_CASE("Diagnostics GPU watchdog fires while the render path is parked in a f
     }
 #endif
 
-    // THE case the rule exists for, and the one it could not see before the
-    // polling frame-slot wait (Arcane::GpuFrameSlot's, then; NriSwapChain's
-    // own frame slots now, and GpuFrameSlot itself was deleted at Task 9.5a):
-    // a wedged GPU parks the main thread in the swapchain's slot wait, so no
-    // new counter value can ever be published --
+    // THE case the rule exists for, and the one it could not see before
+    // NriSwapChain's frame-slot wait became a POLLING one: a wedged GPU parks
+    // the main thread in the swapchain's slot wait, so no new counter value
+    // can ever be published --
     // the host is blocked producing one. A blocking wait made that
     // indistinguishable from "not rendering", the freshness gate disarmed on
     // it, and gpu-stall was unreachable in both hosts. The polling wait

@@ -32,106 +32,62 @@
 static constexpr const wchar_t* kAppUserModelId = L"dev.starworks.arcane";
 #endif
 
-// Agility SDK handshake (NRI Phase 1, contract §2.3): the D3D12 loader
-// reads these EXPORTED symbols from the EXE to redirect device creation
-// into the vendored D3D12Core.dll under .\D3D12\. Version must match the
-// vendored package; the empirical proof is NRI logging "Using
-// ID3D12Device10+" (contract §6 item 3) at the desk milestone.
+// Agility SDK handshake: the D3D12 loader reads these EXPORTED symbols from
+// the EXE to redirect device creation into the vendored D3D12Core.dll under
+// .\D3D12\. Version must match the vendored package; the proof it took is NRI
+// logging "Using ID3D12Device10+".
 extern "C" __declspec(dllexport) extern const unsigned D3D12SDKVersion = 619;
 extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D12\\";
 
-// ===== THE EDITOR'S FULL PROCESS EXIT-CODE TABLE (NRI Phase 3, Task 13) ====
-// Gathered in ONE place, per Task 10's own handoff (concern §6.2: "state the
-// editor's full exit-code table in one place if it grows a golden code (3)
-// as well" -- it now has, see EditorApp::Run()'s tail). This function's own
-// `return rc;` at the bottom is the single point every path below drains
-// through, which is what makes this comment honestly exhaustive rather than
-// a claim about code scattered across three files.
+// ===== THE EDITOR'S FULL PROCESS EXIT-CODE TABLE ============================
+// Gathered in ONE place. This function's own `return rc;` at the bottom is the
+// single point every path below drains through, which is what makes this
+// comment honestly exhaustive rather than a claim about code scattered across
+// three files.
 //
 //   0  -- clean exit (including a user quit / closed splash mid-boot).
 //   1  -- a boot/init failure (EditorApp::InitResult::Failed), OR a graph
-//         frame FAILED, OR GPU device loss. As of Phase 5a (Task 2b) the
-//         graph frame FAILED case can fire on ANY run -- the NRI frame
-//         graph is the only render path now, not gated behind --nri-graph.
+//         frame FAILED, OR GPU device loss. The NRI frame graph is the only
+//         render path, so the graph-frame case can fire on ANY run.
 //   2  -- PRE-BOOT, from THIS function: no project and no plugin with
 //         --frames (a scripted run with nothing to open and nobody to
-//         answer a dialog). Also HostConfig::Parse's own refusals (bad
-//         flag, golden mode without --frames, a non-Full --golden-stage
-//         outside golden mode, etc.) -- those return before main() even
+//         answer a dialog). Also HostConfig::Parse's own refusals (a bad
+//         flag, a bad option value) -- those return before main() even
 //         reaches this point.
-//   2  -- RenderErrorCount GREW across the run, teardown included. Same
-//         Phase 5a correction as code 1: not gated behind --nri-graph
-//         anymore, so this can fire on any run.
+//   2  -- RenderErrorCount GREW across the run, teardown included. Like
+//         code 1 it is ungated, so it can fire on any run.
 //   3  -- PRE-BOOT, from THIS function: this project is already open in
 //         another live editor (the direct-launch double-open guard below;
-//         the rival is focused before returning).
-//   3  -- (NRI Phase 3, Task 13) a golden capture/compare FAILED -- the
-//         SAME code RuntimeApp::Run reports for the identical failure, and
-//         mandated to match it (see EditorApp.hpp's m_goldenExit).
+//         the rival is focused before returning). This is code 3's ONLY
+//         meaning -- nothing post-boot produces it.
 //
-// THE COLLISION, named rather than left for a reader to rediscover: exit
-// codes 2 and 3 mean TWO DIFFERENT THINGS depending on WHEN in the run they
-// fire, and ArcaneHub's launch.rs decoder (BOOT_WATCHDOG, 2 seconds) reads
-// whichever one arrives inside that window and reports the PRE-BOOT meaning
-// unconditionally: `Some(2)` -> "refused (engine/abi gate)", `Some(3)` ->
-// "already open in another editor". A run that reaches EditorApp::Run() at
-// all has already cleared both pre-boot refusals THIS function performs, so
-// from here on 2/3 mean the LATER things above -- but the Hub cannot tell
-// the difference from the outside, and would misreport a fast one.
+// THE COLLISION, named rather than left for a reader to rediscover: exit code 2
+// means TWO DIFFERENT THINGS depending on WHEN in the run it fires, and
+// ArcaneHub's launch.rs decoder (BOOT_WATCHDOG, 2 seconds) reads whichever one
+// arrives inside that window. A run that reaches EditorApp::Run() at all has
+// already cleared the pre-boot refusals THIS function performs, so from there
+// on a 2 means the later thing above -- but the Hub cannot tell the difference
+// from the outside, and would misreport a fast one.
 //
-// FOR THE GOLDEN COLLISION (code 3), THIS STILL DOES NOT FIRE IN PRACTICE:
-// the golden flags remain DEV/DESK VOCABULARY the Hub's own `open_project`
-// launch never passes (launch.rs only ever adds `--project` plus a
-// project's saved "extra launch args", which default empty). THE ONE PATH
-// THAT COULD REACH IT is a power user deliberately saving
-// `--golden-capture ... --frames N` into a project's extra-args setting AND
-// that scripted run finishing inside 2 seconds -- plausible for a short
-// --frames count on a fast machine. That is a real, if narrow and opt-in,
-// collision path, not merely a theoretical one.
-//
-// NOT FIXED WITH A DISTINCT CODE HERE: this task's own contract requires the
-// editor's golden exit to be "identical to GoldenArtifact" -- i.e. the SAME
-// 3 RuntimeApp::Run already reports -- so giving the editor's golden failure
-// a different number would break host-to-host parity to solve a Hub-only
-// ambiguity, and the real fix belongs in launch.rs. IT IS THERE:
-// ArcaneHub/src-tauri/src/launch.rs guards its pre-boot decode of code 3 on
-// the project's saved extra args carrying `--golden-`, so a golden run's 3 is
-// reported as a golden failure instead of a boot refusal. THAT CLOSES THE
-// GOLDEN HALF ONLY -- read the next paragraph for code 2, which is not
-// closeable the same way.
-//
-// FOR THE GRAPH COLLISION (code 2, RenderErrorCount grew), NO GUARD CAN CLOSE
-// IT, and launch.rs has stopped pretending otherwise. The old reasoning --
-// that reaching code 2 required a power user saving `--nri-graph --crash-gpu N`
-// into extra-args, same as the golden case -- was true only while the flag
-// gated the graph path, and Phase 5a (Task 2b) ended that. The NRI frame graph
-// is the only render path now, unconditionally, so code 2 can fire on ANY
-// ordinary Hub launch that exits inside the 2s watchdog with a validation
+// NO GUARD CAN CLOSE IT, and launch.rs does not pretend otherwise. The NRI
+// frame graph is the only render path, unconditionally, so code 2 can fire on
+// ANY ordinary Hub launch that exits inside the 2s watchdog with a validation
 // error, and an ordinary launch carries none of the tokens a heuristic could
-// key on. RESOLVED IN launch.rs (see `golden_run` there): its arg predicate
-// now covers code 3 ALONE, where golden vocabulary is genuine evidence, and
-// the code-2 arm names BOTH meanings -- project gate or render error -- rather
-// than confidently reporting an engine/abi refusal that was never involved.
-// Two unit tests pin the predicate false for an ordinary launch.
+// key on. So launch.rs's code-2 arm names BOTH meanings -- project gate or
+// render error -- rather than confidently reporting an engine/abi refusal that
+// was never involved.
 //
 // ===== WHICH SHARED HostConfig FLAGS THIS HOST ACTUALLY HONOURS ==============
 // The table above is exhaustive about EXIT CODES; this is the separate,
 // easily-confused question of FLAGS, and it is called out because HostConfig
 // is shared by both hosts, so a flag the editor parses is not automatically a
-// flag the editor DOES anything with. As of the whole-branch review (I4),
-// corrected at D3 exit (2026-08-18 -- `--perf` was listed honoured and is not):
-//   --project/--plugin/--scene/--frames/--backend/--vsync  -- honoured.
-//   --screenshot        -- honoured (both render arms) since the fix wave; it
-//                          captures the VIEWPORT panel's texture, not the
-//                          editor window, exactly as --golden-* does here.
-//   --golden-*          -- honoured (Task 13); artifacts carry the `editor-`
-//                          stem prefix, not the runtime's `main-`.
-//   --nri-graph         -- RETIRED to a parsed-and-ignored no-op as of Phase
-//                          5a (Task 2b): the NRI frame graph is the only
-//                          render path now, unconditionally, so there is
-//                          nothing left for this flag to select. (Was
-//                          "honoured (Tasks 8-13)" through Phase 3, when it
-//                          still chose between two arms.)
+// flag the editor DOES anything with.
+//   --project/--plugin/--scene/--frames/--backend/--no-vsync -- honoured.
+//   --screenshot        -- honoured; it captures the VIEWPORT panel's texture,
+//                          not the editor window.
+//   --nri-graph         -- PARSED AND IGNORED: the NRI frame graph is the only
+//                          render path, so there is nothing left for this flag
+//                          to select.
 //   --crash-gpu N       -- honoured (also reachable from the Debug menu).
 //   --pick-probe x,y    -- PARSED AND INERT ON THIS HOST. It is a RUNTIME desk
 //                          item: one fixed canvas pixel reported as an exit
@@ -140,22 +96,16 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          latch the flag on an offscreen (viewport) context
 //                          for that reason -- passing it here is a no-op, not a
 //                          second pick mechanism.
-//   --perf              -- PARSED AND INERT ON THIS HOST, and always has been.
-//                          EditorApp constructs FramePerf m_perf(m_config.perf)
-//                          and never calls FrameStart/Add/Tick -- the ctor and
-//                          the member declaration are its ONLY references in
-//                          this tree, so no [PERF] line has ever been emitted
-//                          here by any build. The runtime drives the same class
-//                          from RuntimeFrame.cpp (Tick is the sole emitter).
-//                          WAIVED rather than wired at D3 exit: FramePerf's
-//                          seven fixed buckets (sim/rec/end/tone/imgui/present/
-//                          poll) do not map onto this host's 19-phase frame,
-//                          and no pre-port editor baseline exists in any commit
-//                          -- so the number could never have proven
-//                          non-regression, only stated an absolute. Plan item 6
-//                          ("--perf on both hosts' graph modes") is therefore
-//                          runtime-satisfied, editor-waived; it is the FOURTH
-//                          amendment the Phase 3 milestone record carries.
+//   --perf              -- PARSED AND INERT ON THIS HOST. EditorApp constructs
+//                          FramePerf m_perf(m_config.perf) and never calls
+//                          FrameStart/Add/Tick -- the ctor and the member
+//                          declaration are its ONLY references in this tree, so
+//                          no [PERF] line is emitted here by any build. The
+//                          runtime drives the same class from RuntimeFrame.cpp
+//                          (Tick is the sole emitter). NOT WIRED because
+//                          FramePerf's seven fixed buckets (sim/rec/end/tone/
+//                          imgui/present/poll) do not map onto this host's
+//                          19-phase frame.
 // =============================================================================
 int main(int argc, char** argv)
 {

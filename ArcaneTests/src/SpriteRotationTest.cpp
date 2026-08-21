@@ -68,11 +68,8 @@ TEST_CASE("QuadCorners: 90 degrees rotates the edges about the center", "[render
 // ============================================================================
 namespace
 {
-    // A `nvrhi::ITexture* const kFakeTexture` (the address 0xF0F0, recorded but
-    // never dereferenced) stood here until ABI v15 (NRI Phase 5a, Task
-    // 9.5b-ii), as the stand-in that let a CPU-only test drive the TEXTURED
-    // arm. A sprite is named by asset Guid now, so an ordinary generated Guid
-    // does that job -- and it is the real key rather than a stand-in for one.
+    // A sprite is named by asset Guid, so an ordinary generated Guid drives the
+    // TEXTURED arm here -- the real key rather than a stand-in for one.
 
     // Recording mock: captures the Rect/Quad rotation + the Circle submissions.
     // `rects` keeps the FULL quad geometry per submission (both the untextured

@@ -157,8 +157,8 @@ namespace Arcane::Editor
         if (InPlayMode())
             m_play.Stop(*m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
         m_selection.Clear();
-        // The graph arm's click-pick can have a readback IN FLIGHT that names
-        // entities of the outgoing scene (NRI Phase 3, Task 9). Bumping the
+        // Click-pick can have a readback IN FLIGHT that names entities of the
+        // outgoing scene. Bumping the
         // epoch is what makes it refuse to apply to the incoming one, and the
         // Reset inside drops it immediately rather than waiting for the answer
         // to arrive and be rejected. Both belong HERE, with the other handles

@@ -349,7 +349,7 @@ TEST_CASE("device-lost latch: set-after-report semantics, host-visible, re-armab
     Arcane::ResetGpuDeviceLost();
     CHECK_FALSE(Arcane::GpuDeviceLostObserved());
 
-    // ...and it FORWARDS to Base (NRI Phase 3, D3b 0x87D closeout). The
+    // ...and it FORWARDS to Base. The
     // top-level exception filter classifies a D3D12 debug-layer fail-fast
     // (code 0x87D) as the already-known device loss rather than as a fresh
     // crash, and Base cannot include Render to ask, so Render tells it.

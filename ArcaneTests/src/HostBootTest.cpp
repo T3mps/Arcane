@@ -13,9 +13,9 @@
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Serialization/SceneAsset.hpp>   // kSceneJsonVersion, kSceneExt
 
-// The golden-scene content case below (NRI Phase 2, Task 2) stitches and
-// compiles ReferenceProject's shipped .arcmat files -- no device involved, the
-// same headless [shadercompile] idiom MaterialSourceTest uses.
+// The scene-content case below stitches and compiles ReferenceProject's
+// shipped .arcmat files -- no device involved, the same headless
+// [shadercompile] idiom MaterialSourceTest uses.
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
@@ -654,16 +654,16 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
     std::sort(names.begin(), names.end());
     CHECK(names == std::vector<std::string>{"BoxA", "BoxB", "Ground", "PulseBox"});
 
-    // NRI Phase 2, Task 2: the scene is the fixture the stage goldens are
-    // captured from, so the two seams it was enriched to cover are pinned here
-    // -- a sprite that carries a REGISTERED sprite material (Batcher2D's
-    // per-material CB + binding-set path) and a scene PostProcess assignment
-    // (the PostChainCache path). Both are Guid references into this project's
-    // asset registry: a renamed/moved .arcmat resolves to nothing, the seam
-    // silently stops being exercised, and the goldens go on passing while
-    // covering less than they claim. Resolving them here is what makes that
-    // loud. (`.arcmat` is a NATIVE asset -- the Guid lives in the file's own
-    // "id" -- so this is the same resolution SceneRenderResolver performs.)
+    // ReferenceProject's scene is the engine's canonical render fixture, so
+    // the two seams it carries are pinned here -- a sprite with a REGISTERED
+    // sprite material (Batcher2D's per-material CB + binding-set path) and a
+    // scene PostProcess assignment (the PostChainCache path). Both are Guid
+    // references into this project's asset registry: a renamed/moved .arcmat
+    // resolves to nothing and the seam silently stops being exercised, while
+    // everything that runs over the fixture goes on passing and covering less
+    // than it claims. Resolving them here is what makes that loud. (`.arcmat`
+    // is a NATIVE asset -- the Guid lives in the file's own "id" -- so this is
+    // the same resolution SceneRenderResolver performs.)
     REQUIRE(foundPulseBox);
     const Arcane::SpriteRenderer* pulse =
         runtime.Registry().GetComponent<Arcane::SpriteRenderer>(pulseBox);
@@ -682,11 +682,12 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
     CHECK(postMatPath->filename() == "reference_post.arcmat");
 }
 
-// --- NRI Phase 2, Task 2 (fix round 1): the golden warm-up's probe -------------
-// ArcaneRuntime refuses a golden run whose scene did not bind every material it
-// declares, and SceneRenderResolver::Materials() is the fact it refuses on. The
-// gate cannot exercise the binding half (that needs a device and a compile
-// service) -- but the REFERENCED half is pure scene data, and it is the half
+// --- the material census -------------------------------------------------
+// SceneRenderResolver::Materials() reports which materials a scene DECLARES and
+// which of them are BOUND -- the fact a caller waiting on a fully-rendered
+// frame polls. The gate cannot exercise the binding half (that needs a device
+// and a compile service) -- but the REFERENCED half is pure scene data, and it
+// is the half
 // that decays silently: drop the PostProcess component or repoint the sprite's
 // material Guid and the stage goldens keep passing while quietly covering less.
 // Pinning it here means such an edit fails the gate instead.
@@ -741,15 +742,14 @@ TEST_CASE("ReferenceProject's scene reports the materials the golden warm-up wai
     }
 }
 
-// --- NRI Phase 2, Task 2: the golden scene's material content ------------------
-// The two .arcmat assets the enriched scene references are AUTHORED CONTENT, and
-// nothing else in the headless suite would notice a hand-edit that broke them:
-// a mistyped //@param or a snippet that no longer compiles surfaces as an
-// unshaded quad / a missing post chain at the desk, one GPU round trip later,
-// and a stage golden captured from that content would freeze the broken picture
-// as the baseline. This case stitches both through the real engine templates and
-// runs DXC over every stitched source -- CPU only, no device, so it belongs to
-// the ~[gpu] gate.
+// --- the reference scene's material content ------------------------------
+// The two .arcmat assets the scene references are AUTHORED CONTENT, and nothing
+// else in the headless suite would notice a hand-edit that broke them: a
+// mistyped //@param or a snippet that no longer compiles surfaces as an
+// unshaded quad / a missing post chain at the desk, one GPU round trip later.
+// This case stitches both through the real engine templates and runs DXC over
+// every stitched source -- CPU only, no device, so it belongs to the ~[gpu]
+// gate.
 
 TEST_CASE("ReferenceProject's golden materials stitch and compile on both targets",
           "[host][project][shadercompile]")

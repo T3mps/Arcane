@@ -1,29 +1,18 @@
 // Selection outline: OutlineJfaStepCount reverse-lookup ([outline], CPU) and
 // PickPassId/PickSampleTexel ([pick], CPU).
 //
-// NRI Phase 5a, Task 4 deleted Arcane::SelectionOutline (the NVRHI JFA
-// distance-field + composite pass) along with its only callers -- the
-// graph's OutlineNode (Render/Nri/nodes/PickOutlineNodes.*) is the only
-// selection-outline implementation left, and its jump-schedule length is
-// tested below directly (OutlineJfaStepCount, the sole surviving
-// implementation of the formula JfaPassCount used to own).
+// THE GRAPH'S OutlineNode (Render/Nri/nodes/PickOutlineNodes.*) is the only
+// selection-outline implementation, and OutlineJfaStepCount below is the sole
+// implementation of its jump-schedule formula.
 //
-// This file's former "GPU test ([gpu][selection])" section -- five backend-
-// parameterized helpers (CheckSelectionField, CheckSelectionComposite,
-// CheckSelectionFieldMultiSelect, CheckSelectionCompositeTouchingUnion,
-// CheckSelectionCompositeMultiSelect), 10 TEST_CASEs total across d3d12/
-// vulkan -- pinned GPU-executed PIXEL correctness of the JFA algorithm:
-// nearest-edge distance field construction, multi-id selection membership,
-// the touching-silhouette union (no spurious seam at a shared edge), and the
-// amber/cyan anti-aliased straddle composite. That whole section is deleted
-// with SelectionOutline, and it is a COVERAGE GAP, not a like-for-like move:
-// RenderGraphTest.cpp's OutlineNode coverage is entirely structural (barriers,
-// pool slots, frame composition against a null context -- see its own "GPU-
-// free by construction" banner), never a real render + readback. Nothing
-// currently proves the graph's OutlineNode produces the same PIXELS the NVRHI
-// twin was proven to -- only that the two share the same jump SCHEDULE
-// (RenderGraphTest.cpp's "outline jfa" case) and the same node-graph shape.
-// Named here for the Phase 5b carry list.
+// A NAMED COVERAGE GAP: nothing pins the GPU-executed PIXEL correctness of the
+// JFA algorithm -- nearest-edge distance field construction, multi-id selection
+// membership, the touching-silhouette union (no spurious seam at a shared
+// edge), or the amber/cyan anti-aliased straddle composite. RenderGraphTest.cpp
+// covers OutlineNode entirely structurally (barriers, pool slots, frame
+// composition against a null context -- see its own "GPU-free by construction"
+// banner), never a real render + readback. What IS pinned is the jump SCHEDULE
+// (RenderGraphTest.cpp's "outline jfa" case) and the node-graph shape.
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>

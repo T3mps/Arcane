@@ -2,13 +2,12 @@
 // BEFORE a compile is submitted, so these run without a device or an
 // initialized compiler -- the request simply never exposes a bound chain.
 //
-// NRI Phase 5a, Task 4: these cases read Desc() (was Chain()) -- this
-// Fixture was already device-less (no Services::device set), so Chain()
-// (the deleted NVRHI accessor) was always null here regardless; Desc() is
-// the exact same "nothing bound" signal on the one path this cache has left.
-// PostChainGpuTest.cpp, which pinned the successful end-to-end path (async
-// compile, bind, last-good) via the NVRHI OffscreenCanvas/FullscreenMaterialChain
-// harness, is deleted along with them -- see the commit body for that gap.
+// These cases read Desc(), which is the cache's whole product and its "nothing
+// bound" signal both.
+//
+// A NAMED COVERAGE GAP: nothing pins the SUCCESSFUL end-to-end path -- async
+// compile, bind, last-good -- because that needs a device and a real chain
+// consumer. Only the refusals are covered here.
 
 #include <catch2/catch_test_macros.hpp>
 

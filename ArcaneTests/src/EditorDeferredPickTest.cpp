@@ -1,5 +1,5 @@
-// DeferredPick -- the graph arm's viewport click-pick, which cannot answer in
-// the frame it is asked (NRI Phase 3, Task 9).
+// DeferredPick -- the viewport click-pick, which cannot answer in the frame it
+// is asked.
 //
 // WHY THIS FILE IS WORTH ITS WEIGHT. EditorApp*.cpp is not compiled into
 // ArcaneTests (see its own header: a green suite proves nothing about frame
@@ -82,8 +82,8 @@ TEST_CASE("deferred pick: a click resolves through the table of the frame that r
 TEST_CASE("deferred pick: id 0 is BACKGROUND, a real answer rather than a failure", "[editor]")
 {
     // HandleViewportPick clears the selection on an empty-space click and
-    // treats ctrl+click on empty space as a miss instead (a rule the NVRHI
-    // arm set and the graph arm inherited verbatim -- EditorAppFrame.cpp).
+    // treats ctrl+click on empty space as a miss instead
+    // (EditorAppFrame.cpp).
     // Both need the id-0 landing to be a HIT with an invalid entity, not a
     // nullopt -- nullopt means "do not touch the selection", which is the
     // opposite instruction.

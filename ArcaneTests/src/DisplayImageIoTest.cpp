@@ -1,24 +1,17 @@
-// The two CPU halves split out at NRI Phase 3, Task 11, both for the same
-// reason: the graph path has a SECOND uploader and NO nvrhi::IDevice, so the
-// rules about what an image IS had to stop living inside functions that take
-// one.
+// Two CPU-side image routines, both device-free for the same reason: the rules
+// about what an image IS must not live inside functions that take a device.
 //
-//   LoadDisplayPixels      -- once the CPU half of LoadDisplayTexture, and the
-//                             whole of it since ABI v15 (exe-relative
-//                             resolve + decode + maxSize area-average
-//                             downscale). Feeds the editor's toolbar logo into
-//                             NriTextureCache's PixelSupplyFn on the graph arm.
-//   WriteThumbnailPngRgba  -- once the CPU half of SaveTexturePng, and the
-//                             whole of it since ABI v15 (opaque alpha +
-//                             width cap + downscale + write). The editor's
-//                             cover-thumbnail write reads pixels through
-//                             NriGraphContext::ReadCapture and lands here --
-//                             the only caller since the NVRHI arm
-//                             (ReadTexturePixels -> SaveTexturePng) was
-//                             deleted at ABI v15.
+//   LoadDisplayPixels      -- exe-relative resolve + decode + maxSize
+//                             area-average downscale. Feeds the editor's
+//                             toolbar logo into NriTextureCache's
+//                             PixelSupplyFn.
+//   WriteThumbnailPngRgba  -- opaque alpha + width cap + downscale + write.
+//                             The editor's cover-thumbnail write reads pixels
+//                             through NriGraphContext::ReadCapture and lands
+//                             here; it is the only caller.
 //
-// Same precedent as RepackStagingToRgba, which was exported at the previous
-// phase for exactly this: one definition, two ways of getting the pixels.
+// Same precedent as RepackStagingToRgba: one definition, however many ways of
+// getting the pixels.
 
 #include <catch2/catch_test_macros.hpp>
 

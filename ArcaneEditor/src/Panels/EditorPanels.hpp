@@ -126,11 +126,11 @@ namespace Arcane::Editor
     // native resources on restore. Does NOT take a RunLoop&: play.Stop() ->
     // Runtime::RestoreRegistry destroys and replaces the RunLoop, so the loop is fetched
     // fresh from `runtime` AFTER Play/Stop handling. `logoTex` is the Arcane logo as an
-    // ImGui texture id (the raw nvrhi::ITexture* as a uint64_t, matching DrawViewportPanel's
+    // ImGui texture id (the raw nri::Texture* as a uint64_t, matching DrawViewportPanel's
     // convention); drawn as a small mark at the far LEFT of the strip (Unity-style). 0 skips it.
     //
-    // `mode` is the play-mode dropdown's persisted state (Task 6, runtime-host-fold
-    // arc), read AND written here: the chevron button after Step opens a popup whose
+    // `mode` is the play-mode dropdown's persisted state, read AND written
+    // here: the chevron button after Step opens a popup whose
     // rows set it directly. In Viewport mode the Play button behaves exactly as
     // before (play.Play/Stop). In SeparateWindow mode, clicking Play does NOT touch
     // `play` at all (fire-and-forget: nothing to Stop) -- instead this returns true

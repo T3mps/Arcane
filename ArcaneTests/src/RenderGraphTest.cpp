@@ -1,7 +1,8 @@
-// RenderGraph (Phase 2, Tasks 3+4): headless [nri] coverage of the pure
-// declaration invariants (Task 3) and of Compile()'s derived barriers,
-// transient lifetimes and pool-slot assignment (Task 4) -- no nri device, no
-// Execute() (Task 6). See RenderGraph.hpp's file header for the design
+// RenderGraph: headless [nri] coverage of the pure declaration invariants and
+// of Compile()'s derived barriers, transient lifetimes and pool-slot
+// assignment. The cases in this first section use no nri device and never call
+// Execute(); the executor's own section starts further down. See
+// RenderGraph.hpp's file header for the design
 // reference (Filament's frame graph, Apache-2.0) and the eager-setup/
 // deferred-execute model these cases rely on: a node's Setup callback runs
 // synchronously inside AddNode(), so a Setup that captures the RenderGraph
@@ -1861,8 +1862,8 @@ TEST_CASE("uploadring layout: high-water tracks the peak cursor across multiple 
 }
 
 // =========================================================================
-// Task 6: the EXECUTOR. NONE-backend integration -- still "[nri]", still
-// inside the ~[gpu] dev gate.
+// THE EXECUTOR. NONE-backend integration -- still "[nri]", still inside the
+// ~[gpu] dev gate.
 //
 // What a NONE device buys and what it does not. ImplNONE.cpp answers every
 // CoreInterface entry these cases drive (CreateCommittedTexture/Buffer,
@@ -1871,7 +1872,7 @@ TEST_CASE("uploadring layout: high-water tracks the peak cursor across multiple 
 // SetDebugName, the annotations) with a dummy non-null object and SUCCESS,
 // so what runs here is the executor's REAL control flow -- ordering,
 // refusals, pool reuse, burial -- against a device that records nothing.
-// Pixels, actual barriers and present are [gpu] desk items, per the plan.
+// Pixels, actual barriers and present are [gpu] desk items.
 //
 // Three NONE footguns these cases are built around:
 //   * MapBuffer returns null unconditionally, so NriUploadRing::Init() cannot
@@ -1892,8 +1893,8 @@ TEST_CASE("uploadring layout: high-water tracks the peak cursor across multiple 
 // makes the graph die first (RgExecuteDesc::device's and ::graves' shared
 // "must outlive the graph" contract, made structural).
 //
-// WHICH LANE THESE CASES PASS, and why it is the device's (NRI Phase 3,
-// Task 8-pre): RgExecuteDesc::graves is a per-CONTEXT Graveyard, and a case
+// WHICH LANE THESE CASES PASS, and why it is the device's:
+// RgExecuteDesc::graves is a per-CONTEXT Graveyard, and a case
 // that drives ONE graph has exactly one context's worth of burials -- so
 // `device->Graves()` is a perfectly good lane for it, and passing it keeps
 // every assertion in this file reading the same object it always did. It is a
@@ -2272,17 +2273,17 @@ TEST_CASE("rendergraph exec: the POOL EPOCH moves on a shrink and on a desc chan
 TEST_CASE("rendergraph exec: a retired pool texture is buried AFTER every view naming it -- "
           "including a holder that SKIPPED the reshaping frame", "[nri]")
 {
-    // THE ORDERING HALF of the pool-epoch contract (whole-branch review, I1).
+    // THE ORDERING HALF of the pool-epoch contract.
     // The epoch case above pins that a holder is TOLD; this one pins that the
     // telling happens in time to matter.
     //
     // A Graveyard replays its due prefix in BURIAL ORDER (Graveyard.hpp), so
     // "a view must never be destroyed after the texture it views" is really "a
-    // view must never be BURIED after it". Through Phase 2 RealizePool buried
-    // the texture inline, from the middle of Execute() -- ahead of every node
-    // view buried by the exec fns that follow (same value, same lane), and
-    // frames ahead of a node that was not in the reshaping frame at all. That
-    // second case is the routine one now: the outline chain is declared only
+    // view must never be BURIED after it". A texture buried INLINE, from the
+    // middle of Execute(), would land ahead of every node view buried by the
+    // exec fns that follow (same value, same lane), and frames ahead of a node
+    // that was not in the reshaping frame at all. That
+    // second case is the routine one: the outline chain is declared only
     // while something wants an outline, so toggling the selection off shrinks
     // the pool on a frame OutlineNode does not record.
     //
@@ -2405,7 +2406,7 @@ TEST_CASE("rendergraph exec: a retired pool texture is buried AFTER every view n
 TEST_CASE("rendergraph exec: a release with a staged retirement buries it too, rather than "
           "stranding it", "[nri]")
 {
-    // The staging area's other exit (whole-branch review, I1). The flush lives
+    // The staging area's other exit. The flush lives
     // at the top of the next Execute() -- and that Execute may never come: a
     // ReleaseGpuResources (the editor's project switch / resize path) or
     // ~RenderGraph is the end of the line. ReleaseGpuResourcesInternal
@@ -2586,9 +2587,9 @@ TEST_CASE("rendergraph exec: a desc change after Reset re-creates and buries exa
     CHECK(graph.DebugTransientCount() == resized.poolSlotCount);
     CHECK(graph.DebugTransientCreateCount() == firstPoolSlots + resized.poolSlotCount);
 
-    // THE TWO HALVES RETIRE ON DIFFERENT SCHEDULES, and the split is the
-    // ordering fix (whole-branch review, I1 -- see the "buried AFTER every view
-    // naming it" case). The VIEWS go into the graveyard immediately, here: one
+    // THE TWO HALVES RETIRE ON DIFFERENT SCHEDULES, and that split is what
+    // makes the order right (see the "buried AFTER every view naming it"
+    // case). The VIEWS go into the graveyard immediately, here: one
     // of them, because on the NONE backend every CreateTexture hands back the
     // same dummy pointer, so all three transients share one cached attachment
     // view and the first slot's sweep takes it. The TEXTURES are staged instead
@@ -2683,7 +2684,7 @@ TEST_CASE("rendergraph exec: a swapchain-importing node refuses a null swapChain
 TEST_CASE("rendergraph exec: an offscreen frame executes with NO swapchain -- no acquire, no "
           "present, and the graph's own fence still advances", "[nri]")
 {
-    // The executor half of NRI Phase 3, Task 7. RgExecuteDesc::swapChain is
+    // RgExecuteDesc::swapChain is
     // documented as "null = headless/offscreen" and the refusal case above
     // proves the NEGATIVE (a swapchain IMPORT with no swapchain is refused);
     // this proves the POSITIVE, which is what NriGraphContext::
@@ -2795,13 +2796,13 @@ TEST_CASE("rendergraph exec: an offscreen frame executes with NO swapchain -- no
 }
 
 // =========================================================================
-// TWO CONTEXTS, ONE DEVICE -- the per-context Graveyard LANE (NRI Phase 3,
-// Task 8-pre). The topology Task 8 wires up: an editor holding a host-window
-// context (chrome -> present) and an offscreen context (the viewport) over ONE
-// NriDevice, because Vulkan-Hpp's default dispatcher binds one VkDevice per
-// process and DXGI allows one flip-model swapchain per HWND.
+// TWO CONTEXTS, ONE DEVICE -- the per-context Graveyard LANE. The editor's
+// topology: a host-window context (chrome -> present) and an offscreen context
+// (the viewport) over ONE NriDevice, because Vulkan-Hpp's default dispatcher
+// binds one VkDevice per process and DXGI allows one flip-model swapchain per
+// HWND.
 //
-// WHAT WAS WRONG WITH ONE GRAVEYARD. Burials are keyed to the burying GRAPH's
+// WHY ONE SHARED GRAVEYARD IS WRONG. Burials are keyed to the burying GRAPH's
 // own submission fence, and two contexts have two RenderGraphs and therefore
 // two INDEPENDENT fence timelines whose values mean nothing to each other. In
 // one shared graveyard that is (i) a Debug nondecreasing assert the moment the
@@ -3118,10 +3119,10 @@ TEST_CASE("rendergraph exec: a graph whose Execute ENTERED and FAILED buries its
 TEST_CASE("imgui-nri: both invalidation variants evict the pointer-keyed entry and RETIRE its "
           "set -- deferred buries the view in the lane, Now destroys it in the call", "[nri]")
 {
-    // THE ABA CLOSURE (NRI Phase 3, Task 8-pre; NriGraphContext.hpp item (2)).
+    // THE ABA CLOSURE (NriGraphContext.hpp item (2)).
     //
     // THE HAZARD. ImGuiNri caches per texture by RAW POINTER, because that is
-    // what an ImTextureID is on this backend (§7.3). NRI does not ref-count, so
+    // what an ImTextureID is on this backend. NRI does not ref-count, so
     // when the editor's ResizeOffscreen destroys the viewport output and creates
     // its replacement, NRI is free to hand the replacement the address the
     // destroyed one just vacated -- and a bit-identical ImTextureID then reports
@@ -3285,17 +3286,16 @@ TEST_CASE("imgui-nri: both invalidation variants evict the pointer-keyed entry a
 TEST_CASE("imgui-nri: Release stamps the ADOPTED context's atlas, never whichever one is current",
           "[nri]")
 {
-    // NRI Phase 3, Task 9 (fix round 1). Release walks
+    // Release walks
     // ImGui::GetPlatformIO().Textures and, for every RefCount==1 ImTextureData,
     // invalidates its TexID and asks for Destroyed -- the right thing for THE
     // backend of that context (it catches an ImTextureData that was never
     // serviced: a stuck WantCreate, or a WantDestroy that arrived after the
     // last frame).
     //
-    // IT USED TO WALK WHATEVER CONTEXT WAS CURRENT. With one backend per
-    // process that was right by luck. The editor now holds two -- a chrome
-    // backend over the editor context and a game backend over the plugin's --
-    // and BOTH are Released from teardowns that pin neither.
+    // IT MUST WALK ITS OWN CONTEXT, NOT WHATEVER IS CURRENT. The editor holds
+    // two -- a chrome backend over the editor context and a game backend over
+    // the plugin's -- and BOTH are Released from teardowns that pin neither.
     //
     // WHAT THE DAMAGE ACTUALLY IS, because it is not "the texture reads as
     // Destroyed": ImTextureData::SetStatus (imgui.h) BOUNCES a Destroyed
@@ -3657,15 +3657,13 @@ TEST_CASE("rendergraph exec: ReleaseGpuResources + Drain destroys imported views
 }
 
 // ======================================================================
-// The GPU-marker policy on the graph path (D1 shakedown, finding B)
+// The GPU-marker policy on the graph path
 // ======================================================================
-// The vehicle holds TWO devices through Phase 2 -- the engine's NVRHI device,
-// which the process-wide crash backend was built over, and the graph's NRI
-// device -- and a native GPU marker is a write from THIS command buffer into
-// THAT backend's marker buffer. Across a device boundary that is a spec
-// violation: the first desk run fired 20 x
-// VUID-vkCmdWriteBufferMarkerAMD-commonparent, and dx12 had the same bug
-// silently (a GPU virtual address from another device's address space).
+// A native GPU marker is a write from THIS command buffer into the crash
+// backend's marker buffer. When those two belong to DIFFERENT devices that is a
+// spec violation: it fires VUID-vkCmdWriteBufferMarkerAMD-commonparent on
+// vulkan, and dx12 has the same bug silently (a GPU virtual address from
+// another device's address space).
 //
 // NodeScope now gates the native marker on device IDENTITY. This case pins the
 // gate from the closed side, which is the side that matters and the only one a
@@ -3757,11 +3755,6 @@ TEST_CASE("rendergraph exec: a crash backend on ANOTHER device gets CPU breadcru
 
     // THE PROPERTY: not one native marker crossed the device boundary.
     CHECK(spy.nativeMarkers == 0);
-    // The companion assertion -- `spy.nvrhiMarkers == 0`, that the graph never
-    // reached for IGpuCrashBackend::WriteMarker(nvrhi::ICommandList*) -- is
-    // gone with the overload itself (NRI Phase 5a, Task 9.5a). Not a coverage
-    // loss: an entry point that does not exist cannot be called, which is a
-    // stronger guarantee than the CHECK was.
 
     // The half that MUST survive the gate: the CPU breadcrumb ring still opened
     // one scope per node. Tokens are monotonic from 0 and never reused, so the
@@ -3773,24 +3766,20 @@ TEST_CASE("rendergraph exec: a crash backend on ANOTHER device gets CPU breadcru
 }
 
 // ======================================================================
-// The --nri-graph vehicle's frame SHAPE (Phase 2, Task 7)
+// THE VEHICLE'S FRAME SHAPE
 // ======================================================================
 // NriGraphContext itself needs a window, a device and a swapchain, so it is
-// desk-only. Its DECLARATIONS are not: Compile() is pure, so the exact node/
-// usage shape NriGraphContext::BuildFrame declares can be restated here and
-// its derived barrier chain pinned headlessly. That is what makes "the clear
+// desk-only. Its DECLARATIONS are not: Compile() is pure, so the frame's exact
+// node/usage shape can be pinned headlessly. That is what makes "the clear
 // frame presents, and a capture frame copies before it presents" a checked
-// property rather than a desk observation -- and it is the chain Task 8 will
-// insert its batch node into.
-// ======================================================================
-// THE VEHICLE'S FRAME SHAPE (Phase 2, Tasks 7-8).
+// property rather than a desk observation.
 //
 // These cases DRIVE Arcane::DeclareGraphFrame -- the very function
 // NriGraphContext::BuildFrame calls -- with a null context, so every
 // declaration, resource and attachment is the real one and only the exec fns
-// are inert. Task 7's version of this case TRANSCRIBED BuildFrame's
-// declarations instead, which meant a change to the frame could not make it
-// red; this can, and Task 8's frame change did.
+// are inert. TRANSCRIBING BuildFrame's declarations instead would mean a change
+// to the frame could not make these red; driving the real function is what
+// makes them drift-proof.
 // ======================================================================
 
 TEST_CASE("nri graph frame: batch -> tonemap derives canvas colour -> shader-read -> present", "[nri]")
@@ -3915,7 +3904,7 @@ TEST_CASE("nri graph frame: a capture frame copies the backbuffer BEFORE it pres
 }
 
 // ======================================================================
-// THE OFFSCREEN FRAME (NRI Phase 3, Task 7).
+// THE OFFSCREEN FRAME.
 //
 // Same drive as every case above -- Arcane::DeclareGraphFrame with a null
 // context -- because the ONE thing that differs between an offscreen frame and
@@ -4248,7 +4237,7 @@ TEST_CASE("nri graph frame: the canvas transient is swapchain-sized RGBA16F and 
 }
 
 // ======================================================================
-// THE POST CHAIN IN THE FRAME (Phase 2, Task 10).
+// THE POST CHAIN IN THE FRAME.
 //
 // Same drive as the cases above -- Arcane::DeclareGraphFrame with a null
 // context -- so the nodes, the reads/writes and the derived barrier chain are
@@ -4397,18 +4386,15 @@ TEST_CASE("nri graph frame: the post chain inserts one node per pass between the
 TEST_CASE("nri graph frame: --golden-stage batch drops the post chain; post and full keep it",
           "[nri]")
 {
-    // The stage vocabulary is the ONE thing that makes a node-by-node cutover
-    // comparable: a batch-stage golden must contain the batcher and the
-    // tonemap and nothing else. NriGraphContext::BuildFrame applies exactly
-    // this bypass today (`shape.stage != GoldenStage::Batch` gating the post
-    // chain -- NriGraphContext.cpp) -- the deleted NVRHI path's own
-    // `stageSkipsPost` local served the same rule before NRI Phase 5a -- so
-    // if this gate broke, a batch golden would compare a graded frame
-    // against an ungraded one.
+    // A NULL `post` IS how a caller asks for the frame WITHOUT a chain, and
+    // NriGraphContext::BuildFrame gates on exactly that -- `if (shape.post &&
+    // !shape.post->passes.empty())` (NriGraphContext.cpp). There is no stage
+    // ordinal; the presence of the chain is the whole switch.
+    //
+    // If that gate broke, a caller that asked for an ungraded frame would get a
+    // graded one, and the grade would read as a scene difference.
     const Arcane::PostChainDesc chain = MakeLinearChain(2);
 
-    // A NULL `post` IS how a caller asks for the frame without a chain -- the
-    // mechanism that replaced the GoldenStage ordinal (see FrameDesc).
     const struct { const Arcane::PostChainDesc* post; std::size_t nodes; std::uint32_t passes; } cases[] = {
         { nullptr, 2, 0 },
         { &chain,  4, 2 },
@@ -4556,7 +4542,7 @@ TEST_CASE("nri graph frame: a post chain whose base reads the scene keeps the ca
 }
 
 // ======================================================================
-// NriPipelineCache (Phase 2, Task 7)
+// NriPipelineCache
 // ======================================================================
 // The NONE backend is enough to prove everything that is actually the
 // CACHE's behaviour. Its CreatePipelineLayout/CreateGraphicsPipeline hand
@@ -4806,11 +4792,10 @@ TEST_CASE("nri batch2d material layout: root CONSTANTS only, so the root space a
     // THE RULE, pinned. NRI refuses a layout whose rootRegisterSpace equals a
     // descriptor set's registerSpace -- but ONLY when the layout also carries
     // root DESCRIPTORS or root SAMPLERS (Source/Validation/DeviceVal.hpp).
-    // sprite_material.hlsl puts every register in the implicit space0 and the
-    // NVRHI path is the format-compatibility floor, so BOTH spaces must be 0
-    // and these two counts must therefore stay zero. Adding a root descriptor
-    // for b1/b2 -- the shape the plan originally sketched -- makes NRI reject
-    // the layout at creation, on a device this gate does not have.
+    // sprite_material.hlsl puts every register in the implicit space0, so BOTH
+    // spaces must be 0 and these two counts must therefore stay zero. Adding a
+    // root descriptor for b1/b2 makes NRI reject the layout at creation, on a
+    // device this gate does not have.
     REQUIRE(layout.desc.rootDescriptorNum == 0);
     REQUIRE(layout.desc.rootSamplerNum == 0);
     CHECK(layout.desc.rootRegisterSpace == 0);
@@ -4999,7 +4984,7 @@ TEST_CASE("nri batch2d constant arena: every (frame slot, region) pair owns a di
 }
 
 // ======================================================================
-// PostChainNode's pure halves (Phase 2, Task 10)
+// PostChainNode's pure halves
 // ======================================================================
 
 TEST_CASE("nri post chain layout: NO root constants, b0/b1 CBVs, and the chain inputs share ONE "
@@ -5208,14 +5193,14 @@ TEST_CASE("nri post chain arena: every (frame slot, region) pair owns a distinct
 }
 
 // ======================================================================
-// THE PICK + JFA OUTLINE CHAIN (Phase 2, Task 11).
+// THE PICK + JFA OUTLINE CHAIN.
 //
 // Same drive as every case above -- Arcane::DeclareGraphFrame with a null
 // context -- so these fail when the DECLARATIONS change, not when a
 // transcription of them goes stale. What they pin is the whole of the task's
-// shape contract: with the flag off the frame is byte-for-byte Task 10's, and
-// with it on the chain appears in exactly one place with exactly one derived
-// barrier chain.
+// shape contract: with the chain off the frame is byte-for-byte the post-chain
+// frame's, and with it on the chain appears in exactly one place with exactly
+// one derived barrier chain.
 //
 // GPU-free by construction: none of this needs a device, because Compile() is
 // pure and the node OBJECTS (which do need one) are only reached from exec fns
@@ -5224,22 +5209,17 @@ TEST_CASE("nri post chain arena: every (frame slot, region) pair owns a distinct
 
 TEST_CASE("outline jfa: the graph's jump schedule matches the pinned expected sequence, step for step", "[nri]")
 {
-    // THE CROSS-ARM CONTRACT (NRI Phase 3, D3c), historically -- and the only
-    // place it could be stated without a GPU. JFA is an APPROXIMATION: the
-    // nearest seed it settles on a few px from a silhouette depends on the
-    // jump SEQUENCE, and a few px from a silhouette is exactly where
-    // outline_composite's 1-px AA ramp lives. So "both schedules flood the
-    // whole field" was not enough for the editor's `full` golden to compare
-    // equal across the arms -- the sequences had to be the same one.
+    // A LITERAL PIN, and the only statement of this contract that needs no GPU.
+    // JFA is an APPROXIMATION: the nearest seed it settles on a few px from a
+    // silhouette depends on the jump SEQUENCE, and a few px from a silhouette
+    // is exactly where outline_composite's 1-px AA ramp lives. "The schedule
+    // floods the whole field" is therefore NOT enough to pin the picture -- the
+    // exact sequence is what places the outline.
     //
-    // NRI Phase 5a, Task 4 deleted SelectionOutline.{hpp,cpp} (the NVRHI twin)
-    // along with JfaPassCount, its schedule-length formula and this case's
-    // former cross-check partner -- OutlineJfaStepCount/OutlineJfaJump are the
-    // only implementation left, so there is no second opinion to compare
-    // against anymore. What remains is a literal pin of the exact sequence
-    // the twin used to be checked against, which is just as effective a
-    // regression guard on a pure function: any future change to the formula
-    // still trips here.
+    // OutlineJfaStepCount/OutlineJfaJump are the only implementation, so there
+    // is no second opinion to cross-check against; the expected sequence below
+    // is spelled out instead. On a pure function that is just as effective a
+    // regression guard -- any change to the formula still trips here.
     const std::uint32_t steps = Arcane::OutlineJfaStepCount(Arcane::kOutlineMaxThicknessPx);
     REQUIRE(steps <= Arcane::OutlineNode::kMaxJfaSteps);   // never clamped away
 
@@ -5278,16 +5258,11 @@ TEST_CASE("outline jfa: the graph's id pass supersamples by the pinned constant"
     // could see. outline_seed.hlsl averages the ss*ss subsamples of each 1x
     // pixel into a SUB-PIXEL centroid and stores THAT as the seed position; the
     // composite then measures its distance to it. At ss=1 every seed sits at its
-    // pixel centre. So an arm that supersamples and an arm that does not would
-    // not merely differ in quality -- they would place the outline differently,
-    // by up to a quarter pixel, against a 1-px AA ramp. (This case used to be
-    // titled "both arms' id pass supersamples by the SAME factor" and pin that
-    // property across the NVRHI and graph arms; NRI Phase 5a, Task 4 deleted
-    // the NVRHI arm, so there is only one id pass left to pin the constant on.)
+    // pixel centre. So changing the supersample factor does not merely change
+    // quality -- it MOVES the outline, by up to a quarter pixel, against a 1-px
+    // AA ramp. That is why the constant is pinned rather than tuned freely.
     //
-    // ONE constant: PickNode sizes its graph transient by it. (Before NRI
-    // Phase 5a, Task 4 deleted PickBuffer, EditorApp handed the same number
-    // to PickBuffer::Create -- the NVRHI twin's identical id-target sizing.)
+    // ONE constant: PickNode sizes its graph transient by it.
     CHECK(Arcane::kPickSupersample >= 1);
     CHECK(Arcane::PickNode::kSuperSample == Arcane::kPickSupersample);
 }
@@ -5468,9 +5443,7 @@ TEST_CASE("nri graph frame: the pick chain's barriers are derived, including the
     // The composite: ONE barrier, the field's COLOR_ATTACHMENT ->
     // SHADER_RESOURCE. The backbuffer gets none, and that is DERIVED rather
     // than forgotten -- the tonemap already left it in COLOR_ATTACHMENT and a
-    // consecutive same-state declaration produces no transition, which is
-    // exactly what nvrhi's own state tracker does for a non-UAV state
-    // (CommandListResourceStateTracker::requireTextureState).
+    // consecutive same-state declaration produces no transition.
     const Arcane::RgCompiledNode& composite = compiled.nodes[5 + steps];
     REQUIRE(composite.preBarriers.size() == 1);
     CHECK(composite.preBarriers[0].isTexture);
@@ -5510,10 +5483,9 @@ TEST_CASE("nri graph frame: the outline field ping-pongs through TWO pool slots 
 
     // And the slot count is genuinely independent of the canvas -- a much
     // smaller one runs the SAME steps through the same two slots. The step
-    // count being extent-independent is the D3c change (it used to shrink with
-    // the canvas): the schedule is derived from the outline's thickness, which
-    // is what made it identical to the (since-deleted) NVRHI arm's at every
-    // viewport size, and still holds now that the graph is the only arm.
+    // count is extent-INDEPENDENT by design: the schedule is derived from the
+    // outline's THICKNESS, not the canvas, so it is identical at every viewport
+    // size.
     Arcane::RenderGraph small;
     Arcane::RgFrameShape smallShape;
     smallShape.canvasWidth  = 16;
@@ -5661,8 +5633,7 @@ TEST_CASE("nri graph frame: the HUD node is absent unless the frame carries draw
         // ...and it derives NO barrier: two consecutive ColorWrite
         // declarations on one texture are the same state, and Compile skips
         // same-state transitions. That is deliberately identical to what the
-        // outline composite does (Task 11's concern 2) and to what NVRHI's own
-        // state tracker does; the ROP's destination read for the alpha blend
+        // outline composite does; the ROP's destination read for the alpha blend
         // is inside AccessBits::COLOR_ATTACHMENT.
         CHECK(compiled.nodes[2].preBarriers.empty());
 
@@ -5677,7 +5648,7 @@ TEST_CASE("nri graph frame: an imgui-only shape (the editor's chrome) declares c
           "HUD, imports its backbuffer, and adds no capture",
           "[nri]")
 {
-    // NRI Phase 3, Task 10. The shape EditorApp::PresentChromeFrame ASKS FOR:
+    // The shape EditorApp::PresentChromeFrame ASKS FOR:
     // an imgui-only RgFrameShape, i.e. draw data and nothing else -- no
     // batcher, no post chain, no pick/outline, no game HUD, no capture.
     //
@@ -5697,10 +5668,10 @@ TEST_CASE("nri graph frame: an imgui-only shape (the editor's chrome) declares c
     // this case GREEN. The editor's four absences are held by the comment block
     // on PresentChromeFrame and by review -- nothing more -- and the `capture`
     // one is the load-bearing member of that set, because the editor's
-    // screenshot/golden semantics capture the VIEWPORT: a capture node on the
-    // CHROME frame would copy a chromed backbuffer and quietly redefine what an
-    // editor golden contains. Whoever gives the editor a golden harness (Task
-    // 13) owes that claim a check that can actually see the editor.
+    // screenshot semantics capture the VIEWPORT: a capture node on the CHROME
+    // frame would copy a chromed backbuffer and quietly redefine what an editor
+    // capture contains. Whoever gives the editor a frame-capture harness owes
+    // that claim a check that can actually see the editor.
     // ========================================================================
     Arcane::RenderGraph graph;
     Arcane::RgFrameShape shape;
@@ -5760,10 +5731,9 @@ TEST_CASE("nri graph frame: an imgui-only shape (the editor's chrome) declares c
 TEST_CASE("nri graph frame: a capture frame copies the backbuffer AFTER the HUD drew on it",
           "[nri]")
 {
-    // The `full` golden baseline was captured from the NVRHI path WITH the HUD
-    // on it, so a capture that ran before the ImGui node would compare a bare
-    // frame against a chromed one -- every run, silently, and only in the
-    // stage that is supposed to include chrome.
+    // A CAPTURE MUST CONTAIN WHAT THE FRAME PRESENTED, host chrome included.
+    // A capture node ordered BEFORE the ImGui node would write a bare frame
+    // while the screen showed a chromed one -- silently, on every run.
     Arcane::RenderGraph graph;
     Arcane::RgFrameShape shape;
     shape.canvasWidth   = 320;
@@ -5801,14 +5771,11 @@ TEST_CASE("nri graph frame: a capture frame copies the backbuffer AFTER the HUD 
 
 TEST_CASE("nri graph frame: --golden-stage batch and post drop the HUD; full keeps it", "[nri]")
 {
-    // The SAME gate RuntimeApp applies today, mirroring the NVRHI block's
-    // rule exactly from back when that block existed (NRI Phase 5a, Task 4
-    // deleted RenderNvrhi outright): both non-Full stages call
-    // ImGui::EndFrameDiscard() instead of rendering. Host chrome sits on top
-    // of every pixel a batch/post golden exists to compare, so if this gate
-    // broke, a stage golden would compare a chromed frame against a bare
-    // baseline -- and the diff would look like a batch-node regression.
-    // A NULL `imgui` IS how a caller asks for the frame without host chrome.
+    // A NULL `imgui` IS how a caller asks for the frame WITHOUT host chrome;
+    // the host calls ImGui::EndFrameDiscard() instead of rendering. Host chrome
+    // sits on top of every pixel, so anything comparing rendered frames needs
+    // that switch -- without it a difference in the chrome reads as a scene
+    // regression.
     const struct { bool imgui; std::size_t nodes; bool hud; } cases[] = {
         { false, 2, false },
         { true,  3, true  },
@@ -5877,7 +5844,7 @@ TEST_CASE("nri graph frame: the HUD composes with the post chain and the outline
 TEST_CASE("nri graph frame: the GAME UI node sits between the tonemap and the outline composite",
           "[nri]")
 {
-    // NRI Phase 3, Task 9. The editor's viewport frame carries a SECOND ImGui
+    // The editor's viewport frame carries a SECOND ImGui
     // node -- the game/plugin HUD -- and where it sits is the whole of what this
     // declaration decides. It is the editor's own compositing order expressed
     // against this recorder: the editor's phase 11 (the game HUD) runs after
@@ -5973,15 +5940,10 @@ TEST_CASE("nri graph frame: the GAME UI node sits between the tonemap and the ou
     }
 
     {
-        // IS STAGE-GATED WHERE THE HOST HUD IS, as of NRI Phase 3 Task 13 --
-        // this block used to pin the opposite (see git history / the task-9
-        // report §9 for Task 9's original ruling and its own note that Task
-        // 13 was expected to re-take it). `--golden-stage` names slices of
-        // the SCENE render; once the EDITOR grew its own stage vocabulary
-        // (Task 13: `full` = +outline/gameui composite), the game HUD became
-        // exactly the kind of overlay a batch/post stage golden must mask --
-        // the same reasoning the host HUD's gate immediately above already
-        // encodes. `full` still draws it; `batch`/`post` now do not.
+        // IS GATED WHERE THE HOST HUD IS, and for the same reason: the game
+        // HUD is an OVERLAY, so a caller that asked for a frame without host
+        // chrome does not want the plugin's chrome either. A NULL `gameUi`
+        // drops it, exactly as a null `imgui` drops the host HUD.
         //
         // BEHAVIOUR-INERT ON THE RUNTIME: RuntimeFrame.cpp never sets
         // FrameDesc::gameUi (only the editor's ArmGraphViewportFrame does),
@@ -6176,10 +6138,10 @@ TEST_CASE("pick geometry: ONE emitter feeds both recorders -- id k+1, back-to-fr
 }
 
 // ======================================================================
-// TEXTURES ARE NOT GRAPH RESOURCES (NRI Phase 3, Task 2), and what that
-// leaves headlessly provable -- READ THIS BEFORE TRUSTING THE CASES BELOW.
+// TEXTURES ARE NOT GRAPH RESOURCES, and what that leaves headlessly provable
+// -- READ THIS BEFORE TRUSTING THE CASES BELOW.
 //
-// A sprite's own texture is now REAL on the graph path: a drained span
+// A sprite's own texture is REAL on the graph path: a drained span
 // carries the image's asset Guid and Batch2DNode binds the shared
 // NriTextureCache's view at t0 through a per-texture descriptor set. The
 // question that raises for the frame graph is whether those textures have to
@@ -6206,7 +6168,7 @@ TEST_CASE("pick geometry: ONE emitter feeds both recorders -- id k+1, back-to-fr
 // passes straight to CreateDescriptorPool). Those are real coverage of real
 // production code, and both carry failures a device cannot show.
 //
-// WHAT HAS NO EXECUTED HEADLESS COVERAGE, AND WHY -- DESK DEBT, OWED AT D3a.
+// WHAT HAS NO EXECUTED HEADLESS COVERAGE, AND WHY -- DESK DEBT.
 // EnsureSpriteSet, EnsureMaterialVariant, WriteMaterialSet and Record's
 // variant scan are NOT executed by any case in the ~[gpu] gate, and cannot be:
 // Batch2DNode::Create fails on the NONE backend by construction, because
@@ -6215,12 +6177,10 @@ TEST_CASE("pick geometry: ONE emitter feeds both recorders -- id k+1, back-to-fr
 // node is a [gpu] path from here down"). Even past that, every NONE
 // DescriptorSet* is the same dummy pointer and UpdateDescriptorRanges is a
 // no-op, so a set-per-texture could not be told from a set-for-everything.
-// Their proof is therefore desk-side and specific: D3a's stage compares on the
-// textured ReferenceProject scene, where a wrong set selection shows up as the
-// wrong image (or the white texel) at t0. BatcherTest.cpp's
-// "[gpu][d3d12] a DEVICE-LESS batcher drains identical spans..." WAS the
-// other half; that file went with the NVRHI device layer at NRI Phase 5a Task
-// 8b, so the desk stage compare is the whole proof now.
+// Their proof is therefore desk-side and specific: a run over the textured
+// ReferenceProject scene, where a wrong set selection shows up as the wrong
+// image (or the white texel) at t0. That desk run is the WHOLE proof -- nothing
+// in the suite executes any of it.
 // ======================================================================
 
 TEST_CASE("nri graph frame: the batch stage declares one canvas transient and nothing else",

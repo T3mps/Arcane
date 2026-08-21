@@ -2,23 +2,15 @@
 // bytes/json loaders, memoized failure on a missing path, and the CPU half of
 // the staging repack.
 //
-// NRI Phase 5a, Task 8b retired this file's three [gpu][d3d12][assets] cases
-// -- SetDevice binding, "texture loads as sRGB and reads back byte-true", and
-// the json loader's incidental use of a real device. All three called
-// Arcane::RenderDevice::Create, and the NVRHI device layer is gone, so no test
-// executable can obtain an nvrhi::IDevice at all.
+// THE FACADE IS DEVICE-FREE. It hands out decoded pixels, bytes and json; it
+// owns no GPU texture and takes no device, so everything here is headless.
 //
-// COVERAGE LOST, named rather than dropped: nothing now proves a PNG reaches
-// the GPU as an sRGB texture that copies back byte-true. The upload half is a
-// Phase 5b item once an NRI texture-upload test vehicle exists;
-// NriTextureCacheTest.cpp is the nearest graph-side neighbour and covers the
-// cache, not the decode-to-sRGB contract.
-//
-// The device-LESS half of that fact used to stand here as a
-// "GetTexture before a render device is set" case. ABI v15 (Task 9.5b-ii)
-// deleted Assets::SetDevice and both GetTexture overloads outright, so that
-// case went too -- see where it stood, below. The decode/memo behaviour it
-// leaned on is covered through PixelsFor (AssetsPixelsTest.cpp).
+// COVERAGE GAP, named rather than left implicit: nothing proves a PNG reaches
+// the GPU as an sRGB texture that copies back byte-true. That needs a
+// texture-upload test vehicle, which does not exist yet; NriTextureCacheTest.cpp
+// is the nearest neighbour and covers the cache, not the decode-to-sRGB
+// contract. The decode/memo behaviour is covered through PixelsFor
+// (AssetsPixelsTest.cpp).
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -204,20 +196,6 @@ TEST_CASE("assets: byteBudget 0 opts out of eviction; default is 256 MiB", "[ass
     std::remove(b.string().c_str());
     std::remove(c.string().c_str());
 }
-
-// DELETED AT ABI v15 (NRI Phase 5a, Task 9.5b-ii): the case
-// "assets: GetTexture before a render device is set returns null (no crash)"
-// -- 1 REQUIRE + 3 CHECKs. It asserted that a device-less facade degraded
-// GetTexture to null instead of dereferencing a null device, on a real PNG and
-// on a missing path. There is no longer a GetTexture, a device, or a device-
-// less state to be in: Assets is unconditionally device-free, so the property
-// is not merely untested but unstateable.
-//
-// NOTHING IS UNCOVERED BY THIS. What the case really pinned -- that a decode
-// failure is memoized and does not retry-storm -- is pinned directly by
-// AssetsPixelsTest's "PixelsFor on a missing or unresolvable Guid returns null,
-// memoized" and "...whose file fails to decode returns null, memoized", which
-// exercise the same PixelsForResolved memo through the surviving entry point.
 
 TEST_CASE("Assets content-root anchors relative loads", "[assets]")
 {
@@ -468,26 +446,13 @@ TEST_CASE("assets: RepackStagingToRgba swizzles BGRA, skips row padding, forces 
 {
     // A 2x2 BGRA source with a PADDED row pitch (12 bytes for 8 of pixels) --
     // the shape a mapped staging texture actually has. Per-texel byte order
-    // is [B,G,R,A]. This was the CPU half of SaveTexturePng, exported exactly
-    // so this contract is testable without a device.
+    // is [B,G,R,A]. This is the CPU half of SaveTexturePng, exported exactly
+    // so the contract is testable without a device.
     //
-    // THIS CASE IS NOW THE ONLY PIN ON THAT BYTE ORDER (NRI Phase 5a, Task
-    // 8b). The GPU-side twin walked down a chain of deletions: Task 4 deleted
-    // OffscreenCanvasTest.cpp, the citation moved to TonemapTest.cpp's
-    // CheckTonemapGolden (whose BGRA8_UNORM readback asserted pixels[0..3] ==
-    // B,G,R,A in that order), and Task 8b deleted THAT file too, because it
-    // built its device with RenderDevice::Create.
-    //
-    // UPDATED AT TASK 9.5a. This block used to end "The Canvas and TonemapPass
-    // classes are still in the tree; they are simply unreachable and now
-    // untested" -- Task 9.5a deleted both classes, so even that consolation is
-    // gone. NOTHING CHANGES FOR THIS CASE: the GPU-side pin was already lost at
-    // 8b with the test, not now with the class, and no code path re-pins it in
-    // the meantime. The graph path's own BGRA handling (NriTextureCache's
-    // Display format, the golden PNG compares in the desk battery) is what
-    // covers the order end-to-end today, and it does so implicitly rather than
-    // by assertion. Re-pinning the swizzle GPU-side, explicitly, is a Phase 5b
-    // item.
+    // THIS CASE IS THE ONLY PIN ON THAT BYTE ORDER. Nothing asserts it
+    // GPU-side: the graph path's own BGRA handling (NriTextureCache's Display
+    // format) exercises the order end-to-end but implicitly, never by
+    // assertion. Re-pinning the swizzle GPU-side, explicitly, is still owed.
     const unsigned char src[2 * 12] = {
         // row 0: pure blue, pure green | 4 padding bytes of garbage
         255, 0, 0, 7,    0, 255, 0, 7,    0xAA, 0xBB, 0xCC, 0xDD,

@@ -284,21 +284,12 @@ namespace Arcane::Editor
                                        : "(none)");
 
         ImGui::Separator();
-        // The texture-preview block that used to sit here (fetch through
-        // Arcane::Assets::GetTexture, draw an ImGui::Image, outline the
-        // resolved sub-rect via ComputeSpriteGeom) is DELETED -- NRI Phase 5a,
-        // Task 9.5b. It was unreachable in every build, not just "both
-        // hosts": NRI Phase 5a, Task 9 deleted Runtime::SetRenderResources,
-        // Assets::SetDevice's last production caller, so GetTexture's own
-        // device guard (Assets.cpp's TextureForResolved, "since NRI Phase 5a,
-        // Task 9 that is the ONLY case: ... device-less for its whole life
-        // outside tests") always returned null -- and AssetsTest.cpp's own
-        // banner confirms even a test executable cannot obtain an
-        // nvrhi::IDevice at all anymore ("the NVRHI device layer is gone").
-        // `tex` was therefore always null, so this always took the else
-        // branch; the TextDisabled call below reproduces that observable
-        // behavior exactly -- not a behavior change, just the dead branch
-        // ahead of it removed.
+        // NO TEXTURE PREVIEW HERE. The Assets facade hands out decoded pixels
+        // (Assets::PixelsFor), not GPU textures, so drawing one would mean
+        // uploading it through this document's own vehicle and owning the
+        // invalidate obligations that come with a chrome-side user texture --
+        // which the sprite inspector has never needed. If that changes,
+        // PixelsFor is the supply.
         ImGui::TextDisabled("(no texture)");
 
         ImGui::End();

@@ -1,5 +1,5 @@
-// PixelsFor: the device-free decoded-pixel supply (NRI Phase 3, Task 1), and
-// since ABI v15 the facade's ONLY image route. Retained, LRU-budgeted beside
+// PixelsFor: the device-free decoded-pixel supply, and the facade's ONLY image
+// route. Retained, LRU-budgeted beside
 // the bytes/json caches, keyed by the resolved Guid -> path: decode-once,
 // cache-hit on repeat access, memoized failure on a bad/unresolvable id or a
 // corrupt file. Headless throughout -- Assets::Create() takes no device and
@@ -214,8 +214,8 @@ TEST_CASE("assets: PixelsFor budget evicts least-recently-used pixel entries",
     // low-fragmentation heap is free to hand the identical address straight
     // back for the replacement -- the same allocator behaviour BatcherTest's
     // ABA case documents and deliberately retries around. A pointer-identity
-    // check here is therefore a coin flip, and it flipped: it failed in the
-    // ~[gpu] gate under NRI Phase 3 Task 2 with `pb2 != pb` expanding to
+    // check here is therefore a coin flip, and it has flipped: it once failed
+    // in the ~[gpu] gate with `pb2 != pb` expanding to
     // `0x21a7cb0ed30 != 0x21a7cb0ed30`. Content is what the cache promises.
     const Arcane::PixelData* pb2 = assets->PixelsFor(b);
     REQUIRE(pb2 != nullptr);

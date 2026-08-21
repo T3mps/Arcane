@@ -130,10 +130,9 @@ TEST_CASE("EditorStages runs editor_fonts/editor_shell ahead of the plugin", "[b
     // other test in this file) cannot catch a reorder that puts these ids
     // back after plugin_load.
     //
-    // Unaffected by Task 8c (2026-07-30, "the splash carries the loading UI,
-    // not the editor window") -- this is a DIFFERENT invariant from
-    // splash_ready's own ordering (see the next TEST_CASE below), for a
-    // different reason, and it does not move: PluginHost::Load -> the
+    // A DIFFERENT invariant from splash_ready's own ordering (see the next
+    // TEST_CASE below), for a different reason, and it does not move:
+    // PluginHost::Load -> the
     // plugin's Init is free to call ImGui::SetCurrentContext(...) and never
     // restore it (Sandbox.cpp:102). editor_fonts/editor_shell install the
     // editor's font atlas, theme, ImGuiConfigFlags_DockingEnable, and
@@ -171,13 +170,11 @@ TEST_CASE("EditorStages runs editor_fonts/editor_shell ahead of the plugin", "[b
 
 TEST_CASE("EditorStages reveals the window only after finalize", "[boot]")
 {
-    // Change-detector BY DESIGN (Task 8c, 2026-07-30 correction: "the splash
-    // carries the loading UI, not the editor window" -- see
-    // docs/superpowers/specs/2026-07-29-async-boot-loading-screen-design.md).
-    // splash_ready used to be pinned ahead of plugin_load/render_bridge
-    // (revealing the window early, to show a loading bar INSIDE it); that
-    // invariant is now backwards. UnrealEdGlobals.cpp:215-236 is the shape we
-    // copy: "Hide the splash screen now that everything is ready to go" ->
+    // Change-detector BY DESIGN. THE SPLASH carries the loading UI, not the
+    // editor window, so splash_ready comes AFTER plugin_load/render_bridge
+    // rather than before -- the window is not revealed until loading has
+    // actually finished. UnrealEdGlobals.cpp:215-236 is the shape we copy:
+    // "Hide the splash screen now that everything is ready to go" ->
     // Hide() -> "Do final set up on the editor frame and show it" ->
     // CreateDefaultMainFrame -- the main window does not exist (in UE's
     // model) / is not revealed (in ours) until loading has actually

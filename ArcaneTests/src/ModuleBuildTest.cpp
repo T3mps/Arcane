@@ -127,9 +127,8 @@ TEST_CASE("ComposeRebuildCommands is one premake-first cmd chain with folded std
     // compares the Debug objects against the Debug link stamp, finds both
     // current, relinks NOTHING, and reports success in a fraction of a second --
     // leaving the WRONG-CONFIG DLL in place for the host to load and refuse.
-    // Observed live at NRI Phase 5a, desk checkpoint D5a-1: a 0.24s "All
-    // outputs are up-to-date" immediately followed by "the rebuilt module still
-    // failed to load".
+    // Observed live at the desk: a 0.24s "All outputs are up-to-date"
+    // immediately followed by "the rebuilt module still failed to load".
     //
     // An incremental build therefore CANNOT be trusted to heal a cross-config
     // module -- the state it reasons about is per-config, the artifact it

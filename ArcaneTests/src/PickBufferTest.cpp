@@ -3,33 +3,21 @@
 // CPU-only ([pick]), no GPU: exercises CollectPickables (sprite + collider
 // emitters) and the id<->entity table (PickEntityForId).
 
-// NRI Phase 5a, Task 4 deleted Arcane::PickBuffer (the NVRHI id-pass +
-// readback object) along with its only callers -- the graph's PickNode
-// (Render/Nri/nodes/PickOutlineNodes.*) is the only pick implementation left,
-// and its structural GPU-free coverage lives in RenderGraphTest.cpp. This
-// file's own former "GPU tests ([gpu][pick])" section (CheckR32UintClearReadback,
-// CheckPickBufferSkeleton, CheckIdPass, CheckPick) is deleted with it, and
-// ALL FOUR are COVERAGE GAPS, named here for the Phase 5b carry list rather
-// than silently dropped:
-//   - CheckIdPass + CheckPick pinned GPU-executed pixel behaviour --
-//     front-most-wins id rasterization, 1-based id encoding, background/
-//     out-of-range handling.
-//   - CheckPickBufferSkeleton pinned PickBuffer's own create/resize
-//     lifecycle. The CONCEPT does not map to the graph (a transient
-//     re-declared every frame has no persistent-object Resize() to test),
-//     so this specific case is not a gap by itself.
-//   - CheckR32UintClearReadback is NOT mere NVRHI groundwork with no graph
-//     relevance, corrected after review: R32_UINT is the graph's pick format
-//     too (PickOutlineNodes.hpp), the integer clear's "0 is background, not
-//     a float zero" semantics are explicitly load-bearing there
-//     (PickOutlineNodes.cpp), and the 1x1 sub-region readback is the same
-//     shape the graph's own readback copy uses, including hand-rolled
-//     alignment math (PickOutlineNodes.cpp). Nothing now tests any of that
-//     against a real device: integer-clear correctness, the 1x1 readback
-//     landing at byte 0, the readback row/stride alignment math, and
-//     PickNode::Create/Release's own validation-clean lifecycle (the
-//     CHECK(RenderErrorCount() == 0) the deleted skeleton case carried) are
-//     all untested GPU-side today.
+// THE GRAPH'S PickNode (Render/Nri/nodes/PickOutlineNodes.*) is the only pick
+// implementation, and its structural, GPU-free coverage lives in
+// RenderGraphTest.cpp. What is in THIS file is the CPU half: the emitter
+// numbering and the id<->entity table.
+//
+// NAMED COVERAGE GAPS, all of them GPU-side and none of them tested anywhere:
+//   - Pixel behaviour of the id pass -- front-most-wins id rasterization,
+//     1-based id encoding, background/out-of-range handling.
+//   - Integer-clear correctness. R32_UINT is the pick format
+//     (PickOutlineNodes.hpp) and "0 is background, not a float zero" is
+//     explicitly load-bearing there (PickOutlineNodes.cpp).
+//   - The 1x1 sub-region readback landing at byte 0, and the hand-rolled
+//     row/stride alignment math around it (PickOutlineNodes.cpp).
+//   - PickNode::Create/Release's own validation-clean lifecycle
+//     (CHECK(RenderErrorCount() == 0) against a real device).
 // RenderGraphTest.cpp's PickNode/OutlineNode coverage is entirely structural
 // (barriers, pool slots, frame composition against a null context), never a
 // real render + readback.

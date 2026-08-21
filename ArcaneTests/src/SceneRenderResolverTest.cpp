@@ -92,9 +92,7 @@ namespace
     // facade's caches, the pixel cache included. So a caller holding the
     // pointer across a second Assets call can be reading freed memory.
     //
-    // THE SECOND CALL USED TO BE GetTexture, whose tail did exactly that; ABI
-    // v15 (NRI Phase 5a, Task 9.5b-ii) deleted GetTexture and the texture cache
-    // with it. GetBytes stands in: it is an inserting, sweeping call on the
+    // GetBytes is the second call here: an inserting, sweeping call on the
     // same shared LRU clock, which is the only property this fake needs from
     // it. What the fake pins is the ORDER: it hands out a stable pointer, then
     // on the second call RESETS the object it pointed at to a default-
@@ -266,27 +264,16 @@ TEST_CASE("SpriteCache::Invalidate forces the next Request to re-read the file",
 TEST_CASE("SpriteCache makes exactly ONE Assets call, so nothing can evict PixelsFor's pointer",
           "[sprite][pixels]")
 {
-    // THE WHOLE-BRANCH REVIEW'S C1, NOW STRUCTURAL. SpriteCache was the only
-    // one of the four PixelsFor callers that held the returned pointer across
-    // another Assets call, and Assets.hpp is explicit that it may not: the
-    // pointer is owned by an LRU-budgeted cache and "callers that need it to
-    // outlive the current call must copy it". The offending second call was a
-    // GetTexture whose tail (`m_textures.Put(...); EnforceBudget();`) swept
-    // cross-cache, with the just-unpinned pixel entry the least recently used
-    // of the pair. C1 was first fixed by COPYING the dimensions out before it.
+    // THE HAZARD IS ABSENT RATHER THAN AVOIDED, and THAT is what this case
+    // pins. Assets.hpp is explicit that a PixelsFor pointer may not be held
+    // across another Assets call: it is owned by an LRU-budgeted cache, and
+    // "callers that need it to outlive the current call must copy it".
+    // SpriteCache::Request makes EXACTLY ONE Assets call, so no interleaved
+    // eviction is reachable at all. Re-add a second Assets call of any name and
+    // this fails, pointing at the paragraph above.
     //
-    // NRI Phase 5a, Task 7 removed the GetTexture call itself: SpriteEntry's
-    // GPU texture and the keep-alive map that pinned it are gone, residency is
-    // NriTextureCache's job, and the sprite is named by Guid alone. So the
-    // hazard is now absent rather than avoided, and THAT is what this case
-    // pins: exactly one Assets call, therefore no interleaved eviction is
-    // reachable at all. Re-add a second Assets call to Request() and this
-    // fails, pointing at the paragraph above -- which is the guard C1 earned.
-    //
-    // The invariant is unchanged by ABI v15 deleting GetTexture outright. What
-    // changed is only which call the fake evicts on (GetBytes now) -- the case
-    // asserts ONE Assets call total, so it would catch a re-added second call
-    // of any name.
+    // Residency is NriTextureCache's job and a sprite is named by Guid alone,
+    // which is why one call is enough.
     //
     // Invisible to every gate before this case: ReferenceProject's marker PNG
     // is 179 bytes against a 256 MiB budget, so the sweep never fires there.
@@ -397,9 +384,8 @@ TEST_CASE("SceneRenderResolver publishes the scene's SpriteTable into the regist
     CHECK(resolver.Globals().viewportHeight == 720.0f);
 
     // No PostProcess entity in the scene -> no chain, which is the plain
-    // canvas->tonemap path rather than a broken one. NRI Phase 5a, Task 4
-    // deleted PostChain() (the NVRHI accessor) along with FullscreenMaterialChain;
-    // PostDesc() is the bytes-only equivalent the graph recorder reads.
+    // canvas->tonemap path rather than a broken one. PostDesc() is the
+    // bytes-only description the graph recorder reads.
     CHECK(resolver.PostInstance() == nullptr);
     CHECK(resolver.PostDesc() == nullptr);
 
