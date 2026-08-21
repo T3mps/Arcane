@@ -65,7 +65,6 @@
 #include <NRI.h>
 
 #include <Arcane/Base/Api.hpp>
-#include <Arcane/Guid.hpp>
 #include <Arcane/Render/MeshBuilder.hpp>      // MeshData / MeshVertex -- the CPU geometry
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
@@ -73,10 +72,10 @@
 
 #include <glm/glm.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
-#include <unordered_map>
 #include <vector>
 
 namespace Arcane
@@ -84,7 +83,6 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
     class NriGraphContext;
-    class NriTextureCache;
 
     // =====================================================================
     // THE CPU-SIDE SCENE, and the whole of what a host has to build.
@@ -109,17 +107,22 @@ namespace Arcane
         // non-uniform scale. See that file's vs_main.
         glm::mat4 model{1.0f};
 
-        // LINEAR, and may exceed 1.0 (the canvas is RGBA16F). Multiplies the
-        // albedo sample, so it is a tint on a textured instance and the whole
-        // colour on an untextured one.
+        // LINEAR, and may exceed 1.0 (the canvas is RGBA16F). It multiplies
+        // the albedo sample, and since t0 is the node's white texel for every
+        // instance today (see NO PER-INSTANCE ALBEDO below), it IS the
+        // instance's colour.
         glm::vec4 baseColor{1.0f, 1.0f, 1.0f, 1.0f};
 
-        // The albedo image's ASSET Guid, resolved through the vehicle's shared
-        // NriTextureCache -- the same cache the 2D batch and the post chain
-        // use, so an image named by several of them is uploaded once. A NIL
-        // Guid (the default) binds this node's 1x1 white texel, which is the
-        // ordinary untextured case and not a degradation.
-        Guid albedo{};
+        // ===== NO PER-INSTANCE ALBEDO FIELD, DELIBERATELY =====
+        // mesh.hlsl samples t0, and this node binds its 1x1 white texel there
+        // for every draw. A `Guid albedo` resolved through the shared
+        // NriTextureCache into per-(image, frame slot) descriptor sets was
+        // written and then REMOVED at Task 7's first fix round: Task 8's
+        // BindlessTable replaces t0, the descriptor ranges and the pipeline
+        // layout outright, so that binding could not survive one more commit,
+        // and nothing in the suite or either host exercised it in the
+        // meantime. Task 8's per-instance MATERIAL INDEX is the field that
+        // belongs here, and it arrives with the table that gives it meaning.
     };
 
     struct MeshSceneDesc
@@ -148,9 +151,17 @@ namespace Arcane
         glm::mat4 view{1.0f};
         glm::mat4 projection{1.0f};
 
-        // THE ONE DIRECTIONAL LIGHT. `lightDirection` points TOWARD the light
-        // (the convention the shader's N.L uses directly); it is normalized in
-        // the shader, so an unnormalized value is a scale, not a bug.
+        // THE ONE DIRECTIONAL LIGHT. `lightDirection` points TOWARD the light.
+        // It does NOT have to be unit length: MeshNode::Record normalizes it
+        // once per frame on the CPU and mesh.hlsl consumes the result directly.
+        //
+        // A ZERO-LENGTH VECTOR IS LEGAL and means "no directional light" --
+        // the pass falls back to the ambient term alone. That is a GUARD, not
+        // a convention: `normalize()` on a zero vector is a division by zero
+        // and yields NaN, which would propagate through N.L into every lit
+        // pixel. Normalizing on the CPU is what lets the zero case be handled
+        // at all (and costs one normalize per frame instead of one per pixel).
+        //
         // `ambient` is a flat term added to every lit surface -- the whole of
         // the indirect lighting model here, deliberately.
         glm::vec3 lightDirection{0.0f, 0.0f, 1.0f};
@@ -180,19 +191,22 @@ namespace Arcane
         // NriPipelineCache::Clear does.
         void Release(Graveyard& graveyard, std::uint64_t fence);
 
-        // Resolves everything one scene needs before a command buffer exists:
-        // every instance's ALBEDO (through the shared NriTextureCache) and its
-        // per-frame-slot descriptor sets, and the PIPELINE for this frame's
-        // attachment formats. Called at DECLARATION time and for the same
-        // three reasons Batch2DNode::Prepare is: a texture upload submits and
-        // waits internally, a descriptor set must never be allocated or
-        // written while the GPU may be reading the pool, and a PSO compile must
-        // not land inside the recording window.
+        // Resolves the PIPELINE for the colour format the frame being declared
+        // will attach. Called at DECLARATION time for the reason
+        // Batch2DNode::Prepare is: a PSO compile must not land inside the
+        // recording window, where a first-frame miss would stall it and a
+        // FAILED miss would latch an error on a frame that is otherwise fine.
         //
-        // Safe to call with an empty scene, and safe to skip entirely --
-        // Record() then binds the white texel and reports the missing pipeline
-        // once.
-        void Prepare(const MeshSceneDesc& scene, nri::Format canvasFormat);
+        // NO SCENE PARAMETER. It took one while instances carried a per-image
+        // albedo Guid that had to be made resident and given descriptor sets
+        // here; with t0 fixed at the node's white texel there is nothing about
+        // the scene left to resolve ahead of recording, and an unread parameter
+        // is only something for a reader to reason about. Task 8's bindless
+        // table is what gives this a scene-dependent job again.
+        //
+        // Safe to skip entirely -- Record() then reports the missing pipeline
+        // once and draws nothing.
+        void Prepare(nri::Format canvasFormat);
 
         // Records one scene's opaque geometry into an ALREADY-OPEN raster pass
         // whose colour attachment is the canvas and whose depth attachment is
@@ -220,15 +234,6 @@ namespace Arcane
         // something for a reader to reason about.
         void Record(RenderGraphNodeContext& context, const MeshSceneDesc& scene,
                     std::uint32_t frameSlot);
-
-        // How many DISTINCT albedo images one run may bind. A descriptor
-        // pool's capacity is fixed at creation and NRI cannot free one set, so
-        // this is decided up front rather than discovered mid-frame; past it an
-        // instance draws with the white texel and one ERROR names this
-        // constant. 16 rather than Batch2DNode's 64 because a mesh scene binds
-        // materials, not sprite atlases -- and because Task 8's BindlessTable
-        // is the answer to a scene that genuinely needs hundreds.
-        static constexpr std::uint32_t kMaxAlbedoTextures = 16;
 
         // The b1 block's region size BEFORE alignment. mesh.hlsl's MeshFrameCB
         // is 112 bytes; 256 is also D3D12's constant-buffer placement
@@ -261,20 +266,16 @@ namespace Arcane
             return (std::uint64_t)frameSlot * regionStride;
         }
 
-        // THE DESCRIPTOR POOL'S CAPACITY, as pure arithmetic over the cap
-        // above. PUBLIC and separated from the creation call for the reason
-        // Batch2DNode::PoolSizes is: a capacity that does not cover what the
-        // cap ALLOWS is not a compile error or a wrong pixel -- it is an
-        // allocation that fails part-way through a frame at the desk.
+        // THE DESCRIPTOR POOL'S CAPACITY, as pure arithmetic over the ONE
+        // dimension this node's sets have (the frame slot). PUBLIC and
+        // separated from the creation call for the reason Batch2DNode::
+        // PoolSizes is: a pool's sizes are fixed at creation and NRI cannot
+        // free a single set, so a capacity that does not cover what the node
+        // allocates is not a compile error and not a wrong pixel -- it is an
+        // AllocateDescriptorSets failure part-way through Create at the desk.
+        // Each set carries exactly three descriptors (b1, t0, s0), so all
+        // three per-type maxima equal the set count.
         [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes() noexcept;
-
-        // How many DISTINCT non-nil albedo Guids `instances` names -- how many
-        // per-albedo set families this scene spends out of kMaxAlbedoTextures.
-        // PURE and public for the same reason Batch2DNode::DistinctTextureCount
-        // is, and Prepare() CALLS THIS, so a case that asserts it asserts the
-        // node's own arithmetic rather than a lookalike.
-        [[nodiscard]] static std::uint32_t DistinctAlbedoCount(
-            std::span<const MeshInstance> instances);
 
     private:
         MeshNode() = default;
@@ -283,22 +284,16 @@ namespace Arcane
         bool CreateWhiteTexel();
         bool CreateBindings();
         bool CreateConstantArena();
+        // Allocates the per-frame-slot descriptor sets and writes each one's
+        // three ranges: that slot's b1 view, the white texel at t0, the
+        // sampler at s0. Written ONCE, at Create, and never again -- which is
+        // what keeps ResetDescriptorPool and its fence discipline out of this
+        // node entirely.
+        bool CreateSets();
 
         // The opaque pipeline for this frame's attachment formats, from the
         // shared cache. Null (already logged) if the cache refused it.
         [[nodiscard]] nri::Pipeline* PipelineFor(nri::Format canvasFormat);
-
-        // The SHADER_RESOURCE view for asset `id` through the vehicle's SHARED
-        // cache. Null -- nil Guid, unresolvable, undecodable, or NRI refused it
-        // -- means "use the white texel".
-        [[nodiscard]] nri::Descriptor* TextureView(const Guid& id);
-
-        // One albedo's descriptor sets, one per frame slot. `set[i]` binds that
-        // frame slot's b1 region, the albedo at t0 and the sampler at s0.
-        struct AlbedoSets
-        {
-            nri::DescriptorSet* set[kSwapchainFramesInFlight]{};
-        };
 
         // ONE distinct MeshData's ring allocation for ONE frame. Record()
         // builds this table so a scene of twenty cubes is one upload and twenty
@@ -324,20 +319,6 @@ namespace Arcane
         // unlike the descriptor-pool caps above, which are hard.
         static constexpr std::size_t kInitialUploadSlots = 16;
 
-        // The sets that bind `id` at t0, allocating and writing them on first
-        // use. Falls back to the white-texel family for a nil id, an image that
-        // is not resident, or a run that has spent kMaxAlbedoTextures.
-        // DECLARATION-TIME ONLY.
-        [[nodiscard]] const AlbedoSets* EnsureAlbedoSets(const Guid& id);
-        // The same as a pure LOOKUP -- record-time only, and deliberately not
-        // the Ensure above: nothing inside the recording window may allocate a
-        // set or upload a texture.
-        [[nodiscard]] const AlbedoSets* AlbedoSetsFor(const Guid& id) const;
-        // Writes one set family's three ranges. Shared by the white-texel path
-        // and the per-albedo path so the two can never disagree about a set's
-        // contents.
-        void WriteSets(AlbedoSets& sets, nri::Descriptor* albedoView);
-
         [[nodiscard]] std::uint64_t ArenaOffset(std::uint32_t frameSlot) const
         {
             return CbRegionOffset(m_arenaStride, frameSlot);
@@ -355,16 +336,15 @@ namespace Arcane
         NriDevice*        m_device       = nullptr;
         NriPipelineCache* m_pipelines    = nullptr;
         // NO m_owner BACK-POINTER, deliberately: everything this node needs
-        // from the vehicle (device, pipeline cache, texture cache, shader
-        // bytecode) is taken at Create, and the two per-frame values it reads
-        // -- the canvas format and the frame slot -- arrive as Record/Prepare
-        // parameters. Batch2DNode carries one that nothing reads; this does not
-        // copy it.
+        // from the vehicle (device, pipeline cache, shader bytecode) is taken
+        // at Create, and the two per-frame values it reads -- the canvas format
+        // and the frame slot -- arrive as Record/Prepare parameters.
+        // Batch2DNode carries one that nothing reads; this does not copy it.
         //
-        // The vehicle's SHARED image residency cache -- borrowed, never owned,
-        // and released by the vehicle AFTER this node (its sets name the
-        // cache's views). See NriTextureCache.hpp.
-        NriTextureCache*  m_textureCache = nullptr;
+        // NO NriTextureCache POINTER EITHER, since the fix round that removed
+        // per-instance albedo: this node's only image is its OWN white texel,
+        // so it borrows nothing from the vehicle's shared residency cache.
+        // Task 8's bindless table is what makes it a consumer of that cache.
 
         // Bytecode is OWNED BY THE VEHICLE (NriGraphContext's bin cache) and
         // outlives this node -- which the pipeline cache's fill contract
@@ -386,12 +366,11 @@ namespace Arcane
         std::uint64_t    m_arenaStride = 0;
         nri::Descriptor* m_frameCbView[kSwapchainFramesInFlight]{};
 
-        // The NIL-albedo family (the white texel), written once at Create.
-        AlbedoSets m_whiteSets{};
-        // ...and one family per distinct albedo Guid, written once each on
-        // first use. A memoized MISS is stored as an empty family so the cache
-        // is not re-asked every frame.
-        std::unordered_map<Guid, AlbedoSets> m_albedoSets;
+        // THE descriptor sets, one per frame slot. Each binds that slot's b1
+        // region, the white texel at t0 and the sampler at s0, and is written
+        // ONCE at Create and never again. One dimension only (the frame slot),
+        // because b1 is the only thing in a set that differs frame to frame.
+        nri::DescriptorSet* m_sets[kSwapchainFramesInFlight]{};
 
         // MEMBERS, not locals, and that is load-bearing:
         // nri::GraphicsPipelineDesc::vertexInput is a POINTER into caller
@@ -412,7 +391,6 @@ namespace Arcane
 
         // One WARN/ERROR each, not one per instance per frame, for the
         // degradations a reader must be able to see.
-        bool m_warnedTextureBudget = false;
         bool m_warnedNoPipeline    = false;
         bool m_warnedRingOverflow  = false;
         bool m_warnedBadCamera     = false;
@@ -431,6 +409,16 @@ namespace Arcane
     // `canvas` is an INPUT (unlike AddBatch2DNode's, which is an output):
     // batch2d already minted and cleared it, and this pass draws on top.
     //
+    // `canvasFormat` IS A PARAMETER AND NOT AN ASSUMPTION. NRI bakes attachment
+    // formats into a graphics pipeline, so binding one inside a
+    // CmdBeginRendering whose colour attachment carries a different format is
+    // undefined on both backends -- and RenderGraph exposes no way to read a
+    // handle's format back, so this function cannot derive it. It must be the
+    // format `canvas` was CREATED with; the caller that minted the handle is
+    // the one that knows. (It was hardcoded to kGraphCanvasFormat until Task
+    // 7's first fix round, which made a differently-formatted canvas a silent
+    // mismatch with no diagnostic.)
+    //
     // `context` is a POINTER because the headless [nri] frame-shape cases drive
     // the real declarations with no device: with a null context every
     // declaration is identical and the exec fn does nothing, which is exactly
@@ -440,6 +428,7 @@ namespace Arcane
     // `scene` is BORROWED at declaration time and its SPAN is copied into the
     // exec fn -- see MeshSceneDesc::instances for the lifetime rule.
     ARCANE_API RgTexture AddMeshNode(RenderGraph& graph, NriGraphContext* context,
-                                      RgTexture canvas, const MeshSceneDesc& scene,
+                                      RgTexture canvas, nri::Format canvasFormat,
+                                      const MeshSceneDesc& scene,
                                       std::uint32_t width, std::uint32_t height);
 }

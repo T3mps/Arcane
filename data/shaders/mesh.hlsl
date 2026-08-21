@@ -44,7 +44,14 @@ cbuffer MeshConstantsCB : register(b0)
 cbuffer MeshFrameCB : register(b1)
 {
     float4x4 g_viewProjection;
-    float4   g_lightDirection;   // xyz: unit vector pointing TOWARD the light
+    // xyz: a UNIT vector pointing TOWARD the light, ALREADY NORMALIZED by
+    // MeshNode::Record -- do NOT normalize it again here. A zero vector is the
+    // legal "no directional light" value, and normalize() on one is a division
+    // by zero whose NaN would propagate through N.L into every lit pixel;
+    // dotting against the zero vector instead gives 0, i.e. ambient only. The
+    // CPU is the only place that case can be checked, and normalizing there
+    // costs one normalize per frame rather than one per pixel here.
+    float4   g_lightDirection;
     float4   g_lightColor;       // rgb: linear radiance
     float4   g_ambient;          // rgb: the constant ambient term
 };
@@ -84,8 +91,10 @@ SamplerState g_Sampler : register(s0);
 float4 ps_main(VSOutput input) : SV_Target0
 {
     const float3 n      = normalize(input.normal);
-    const float3 toLight = normalize(g_lightDirection.xyz);
-    const float  ndotl  = saturate(dot(n, toLight));
+    // NOT normalized here -- see g_lightDirection's comment. The zero vector is
+    // the "no directional light" case and dot() handles it; normalize() would
+    // not.
+    const float  ndotl  = saturate(dot(n, g_lightDirection.xyz));
     const float4 albedo = g_Albedo.Sample(g_Sampler, input.uv) * g_baseColor;
     const float3 lit    = albedo.rgb * (g_ambient.rgb + g_lightColor.rgb * ndotl);
     return float4(lit, albedo.a);

@@ -12,7 +12,6 @@
 
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
-#include <Arcane/Render/Nri/NriTextureCache.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 
 #include <Arcane/Base/Log.hpp>
@@ -86,6 +85,28 @@ namespace Arcane
                         return false;
             return true;
         }
+
+        // glm::normalize divides by the length WITHOUT checking it, so a
+        // zero-length light direction yields NaN in all three components --
+        // which then propagates through N.L into every lit pixel, on a value
+        // MeshSceneDesc explicitly allows a caller to leave at its default and
+        // then zero out. Returning the zero vector instead makes that case mean
+        // "no directional light": saturate(dot(n, 0)) is 0, so the surface
+        // falls back to the ambient term, which is the only sensible reading.
+        //
+        // ON THE CPU, ONCE PER FRAME, rather than in the pixel shader: mesh.hlsl
+        // consumes this value directly, so the guard cannot be bypassed by a
+        // caller and costs one normalize per frame instead of one per pixel.
+        // The epsilon is on the SQUARED length, so it is 1e-12 in length terms
+        // -- far below any direction anyone would author and far above the
+        // denormal range where the division itself misbehaves.
+        [[nodiscard]] glm::vec3 SafeNormalize(const glm::vec3& v) noexcept
+        {
+            const float lengthSquared = glm::dot(v, v);
+            if (!std::isfinite(lengthSquared) || lengthSquared < 1e-12f)
+                return glm::vec3(0.0f);
+            return v / std::sqrt(lengthSquared);
+        }
     }
 
     std::unique_ptr<MeshNode> MeshNode::Create(NriGraphContext& context)
@@ -98,9 +119,8 @@ namespace Arcane
 
     bool MeshNode::Init(NriGraphContext& context)
     {
-        m_device       = &context.Device();
-        m_pipelines    = &context.Pipelines();
-        m_textureCache = context.Textures();
+        m_device    = &context.Device();
+        m_pipelines = &context.Pipelines();
 
         m_vs = context.ShaderBytecode(kMeshVs);
         m_ps = context.ShaderBytecode(kMeshPs);
@@ -142,7 +162,7 @@ namespace Arcane
         // path keeps.
         m_uploads.reserve(kInitialUploadSlots);
 
-        return CreateWhiteTexel() && CreateBindings() && CreateConstantArena();
+        return CreateWhiteTexel() && CreateBindings() && CreateConstantArena() && CreateSets();
     }
 
     bool MeshNode::CreateWhiteTexel()
@@ -214,12 +234,13 @@ namespace Arcane
 
     nri::DescriptorPoolDesc MeshNode::PoolSizes() noexcept
     {
-        // ONE set family per (albedo, frame slot): the nil/white one plus up to
-        // kMaxAlbedoTextures real ones. Each set carries exactly three
-        // descriptors -- b1, t0, s0 -- so the three per-type maxima are all the
-        // same number as the set count.
-        constexpr std::uint32_t kSets =
-            (1 + kMaxAlbedoTextures) * kSwapchainFramesInFlight;
+        // ONE set per frame slot, and that is the whole of it. A set carries
+        // b1 (which is per frame slot), t0 (this node's white texel, the same
+        // one every frame) and s0 (likewise), so the frame slot is the only
+        // dimension a set can vary along. Each set carries exactly three
+        // descriptors -- one of each type -- so the three per-type maxima are
+        // all the same number as the set count.
+        constexpr std::uint32_t kSets = kSwapchainFramesInFlight;
 
         nri::DescriptorPoolDesc poolDesc = {};
         poolDesc.descriptorSetMaxNum  = kSets;
@@ -312,9 +333,11 @@ namespace Arcane
         }
 
         // The pool. NOTHING IN IT IS EVER REWRITTEN WHILE THE GPU MIGHT READ
-        // IT -- every set is written once, on first use of its albedo, and
-        // never again -- which is what keeps ResetDescriptorPool and its fence
-        // discipline out of this file, exactly as in Batch2DNode.
+        // IT -- every set is written once, at Create, and never again -- which
+        // is what keeps ResetDescriptorPool and its fence discipline out of
+        // this file, exactly as in Batch2DNode. Here it is stronger than there:
+        // the sets are allocated and written before the first frame exists, so
+        // there is no window at all.
         const nri::DescriptorPoolDesc poolDesc = PoolSizes();
         if (!ARC_NRI_CHECK(core.CreateDescriptorPool(m_device->Device(), poolDesc, m_pool)) || !m_pool)
         {
@@ -382,23 +405,52 @@ namespace Arcane
             }
         }
 
-        // THE NIL-ALBEDO FAMILY -- the white texel, allocated and written once,
-        // here. It is what an untextured instance binds and the fallback for
-        // every refusal below.
+        return true;
+    }
+
+    bool MeshNode::CreateSets()
+    {
+        const nri::CoreInterface& core = m_device->Core();
         nri::PipelineLayout* layout = m_pipelines->Layout(m_layoutId);
+
         for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
         {
             if (!layout
                 || !ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0,
-                                                               &m_whiteSets.set[slot], 1, 0))
-                || !m_whiteSets.set[slot])
+                                                               &m_sets[slot], 1, 0))
+                || !m_sets[slot])
             {
-                ARC_ERROR("[nri-graph] MeshNode: descriptor-set allocation failed for the white "
-                          "texel (frame slot {})", slot);
+                ARC_ERROR("[nri-graph] MeshNode: descriptor-set allocation failed for frame slot "
+                          "{} -- the pool holds {} sets (PoolSizes)", slot,
+                          PoolSizes().descriptorSetMaxNum);
                 return false;
             }
+
+            // EVERY `descriptors` SOURCE BELOW MUST OUTLIVE THE
+            // UpdateDescriptorRanges CALL: UpdateDescriptorRangeDesc::
+            // descriptors is a POINTER TO AN ARRAY dereferenced inside the
+            // call, so a single descriptor is passed as the address of a
+            // variable that has to still be alive when the call runs. Hence
+            // all three locals are declared in THIS scope.
+            const nri::Descriptor* cb      = m_frameCbView[slot];
+            const nri::Descriptor* texture = m_whiteView;
+            const nri::Descriptor* sampler = m_sampler;
+
+            nri::UpdateDescriptorRangeDesc updates[3] = {};
+            updates[0].descriptorSet = m_sets[slot];
+            updates[0].rangeIndex    = 0;   // b1
+            updates[0].descriptors   = &cb;
+            updates[0].descriptorNum = 1;
+            updates[1].descriptorSet = m_sets[slot];
+            updates[1].rangeIndex    = 1;   // t0
+            updates[1].descriptors   = &texture;
+            updates[1].descriptorNum = 1;
+            updates[2].descriptorSet = m_sets[slot];
+            updates[2].rangeIndex    = 2;   // s0
+            updates[2].descriptors   = &sampler;
+            updates[2].descriptorNum = 1;
+            core.UpdateDescriptorRanges(updates, 3);
         }
-        WriteSets(m_whiteSets, m_whiteView);
         return true;
     }
 
@@ -420,11 +472,10 @@ namespace Arcane
             if (m_arenaCpu) core.UnmapBuffer(*m_arena);
             core.DestroyBuffer(m_arena);
         }
-        // The sets are owned by the pool destroyed above, and the TEXTURES they
-        // view belong to the vehicle's shared NriTextureCache, which releases
-        // its own -- this node owns neither.
-        m_albedoSets.clear();
-        m_whiteSets = AlbedoSets{};
+        // The sets are owned by the pool destroyed above -- NRI has no
+        // per-set destroy, so forgetting the pointers is the whole of it.
+        for (nri::DescriptorSet*& set : m_sets)
+            set = nullptr;
         if (m_sampler)   core.DestroyDescriptor(m_sampler);
         if (m_whiteView) core.DestroyDescriptor(m_whiteView);
         if (m_white)     core.DestroyTexture(m_white);
@@ -447,11 +498,10 @@ namespace Arcane
             graveyard.Bury(fence, [core, p = m_pool] { core->DestroyDescriptorPool(p); });
             m_pool = nullptr;
         }
-        // Sets are owned by the pool buried above; the images behind them
-        // belong to the vehicle's shared NriTextureCache, which the vehicle
-        // releases itself.
-        m_albedoSets.clear();
-        m_whiteSets = AlbedoSets{};
+        // Sets are owned by the pool buried above; NRI has no per-set destroy,
+        // so forgetting the pointers is the whole of it.
+        for (nri::DescriptorSet*& set : m_sets)
+            set = nullptr;
 
         for (nri::Descriptor*& view : m_frameCbView)
         {
@@ -573,176 +623,14 @@ namespace Arcane
         });
     }
 
-    std::uint32_t MeshNode::DistinctAlbedoCount(std::span<const MeshInstance> instances)
+    void MeshNode::Prepare(nri::Format canvasFormat)
     {
-        // Small by construction (a scene's distinct albedo images), so a flat
-        // scan beats a set allocation -- and this runs once per frame, never
-        // per instance.
-        std::vector<Guid> seen;
-        for (const MeshInstance& instance : instances)
-        {
-            if (!instance.albedo.IsValid())
-                continue;
-            bool known = false;
-            for (const Guid& id : seen)
-                known = known || id == instance.albedo;
-            if (!known)
-                seen.push_back(instance.albedo);
-        }
-        return (std::uint32_t)seen.size();
-    }
-
-    nri::Descriptor* MeshNode::TextureView(const Guid& id)
-    {
-        // ONE shared cache on the vehicle, so an image named by this node and
-        // by the 2D batch is uploaded once. The miss warn lives there too -- it
-        // is where the miss happens.
-        if (!m_textureCache || !m_textureCache->Resolve(id))
-            return nullptr;
-        return m_textureCache->View(id);
-    }
-
-    void MeshNode::WriteSets(AlbedoSets& sets, nri::Descriptor* albedoView)
-    {
-        const nri::CoreInterface& core = m_device->Core();
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
-        {
-            if (!sets.set[slot])
-                continue;
-
-            // EVERY `descriptors` SOURCE BELOW MUST OUTLIVE THE
-            // UpdateDescriptorRanges CALL: UpdateDescriptorRangeDesc::
-            // descriptors is a POINTER TO AN ARRAY dereferenced inside the
-            // call, so a single descriptor is passed as the address of a
-            // variable that has to still be alive when the call runs. Hence
-            // all three locals are declared in THIS scope.
-            const nri::Descriptor* cb      = m_frameCbView[slot];
-            const nri::Descriptor* texture = albedoView ? albedoView : m_whiteView;
-            const nri::Descriptor* sampler = m_sampler;
-
-            nri::UpdateDescriptorRangeDesc updates[3] = {};
-            updates[0].descriptorSet = sets.set[slot];
-            updates[0].rangeIndex    = 0;   // b1
-            updates[0].descriptors   = &cb;
-            updates[0].descriptorNum = 1;
-            updates[1].descriptorSet = sets.set[slot];
-            updates[1].rangeIndex    = 1;   // t0
-            updates[1].descriptors   = &texture;
-            updates[1].descriptorNum = 1;
-            updates[2].descriptorSet = sets.set[slot];
-            updates[2].rangeIndex    = 2;   // s0
-            updates[2].descriptors   = &sampler;
-            updates[2].descriptorNum = 1;
-            core.UpdateDescriptorRanges(updates, 3);
-        }
-    }
-
-    const MeshNode::AlbedoSets* MeshNode::EnsureAlbedoSets(const Guid& id)
-    {
-        // A nil id is the untextured case -- the white-texel family, written
-        // once at Create.
-        if (!id.IsValid())
-            return &m_whiteSets;
-
-        const auto known = m_albedoSets.find(id);
-        if (known != m_albedoSets.end())
-            return known->second.set[0] ? &known->second : &m_whiteSets;
-
-        nri::Descriptor* view = TextureView(id);
-        if (!view)
-        {
-            // Not resident (NriTextureCache said why, once). Memoized as an
-            // EMPTY family so this does not re-ask the cache every frame.
-            m_albedoSets[id] = AlbedoSets{};
-            return &m_whiteSets;
-        }
-
-        // Counts LIVE families, not map entries: a memoized miss holds no
-        // descriptor sets, and letting unresolvable images spend the budget
-        // would refuse one that actually resolved.
-        std::size_t live = 0;
-        for (const auto& [key, existing] : m_albedoSets)
-            if (existing.set[0])
-                ++live;
-        if (live >= kMaxAlbedoTextures)
-        {
-            if (!m_warnedTextureBudget)
-            {
-                m_warnedTextureBudget = true;
-                ARC_ERROR("[nri-graph] MeshNode: more than {} distinct albedo images -- the rest "
-                          "draw with the white texel. Raise kMaxAlbedoTextures (it sizes the "
-                          "descriptor pool), or wait for the bindless material table.",
-                          kMaxAlbedoTextures);
-            }
-            m_albedoSets[id] = AlbedoSets{};
-            return &m_whiteSets;
-        }
-
-        const nri::CoreInterface& core = m_device->Core();
-        nri::PipelineLayout* layout = m_pipelines->Layout(m_layoutId);
-        AlbedoSets fresh;
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
-        {
-            if (!layout
-                || !ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0,
-                                                               &fresh.set[slot], 1, 0))
-                || !fresh.set[slot])
-            {
-                ARC_ERROR("[nri-graph] MeshNode: descriptor-set allocation failed for albedo {} -- "
-                          "it draws with the white texel. The pool holds {} sets, sized by "
-                          "kMaxAlbedoTextures.", id.ToString(),
-                          (1 + kMaxAlbedoTextures) * kSwapchainFramesInFlight);
-                // Memoized as a miss for the same reason as above: a pool that
-                // is out of sets will not have more next frame.
-                m_albedoSets[id] = AlbedoSets{};
-                return &m_whiteSets;
-            }
-        }
-
-        // Written ONCE, here, and never again -- the discipline every set in
-        // this node obeys (see the pool comment in CreateBindings), which is
-        // what keeps ResetDescriptorPool and its fence rules out of this file.
-        WriteSets(fresh, view);
-        const auto inserted = m_albedoSets.emplace(id, fresh);
-        return &inserted.first->second;
-    }
-
-    const MeshNode::AlbedoSets* MeshNode::AlbedoSetsFor(const Guid& id) const
-    {
-        // RECORD-TIME ONLY: a pure lookup over what Prepare already built. It
-        // must never allocate or upload -- both would happen inside the frame's
-        // open command buffer. A miss is the white texel, which is also what a
-        // caller that skipped Prepare entirely gets.
-        if (!id.IsValid())
-            return &m_whiteSets;
-        const auto known = m_albedoSets.find(id);
-        return (known != m_albedoSets.end() && known->second.set[0]) ? &known->second : &m_whiteSets;
-    }
-
-    void MeshNode::Prepare(const MeshSceneDesc& scene, nri::Format canvasFormat)
-    {
-        // THE BUDGET, checked ONCE up front from the same pure count the [nri]
-        // cases pin -- so the number in the message is the scene's real
-        // distinct-albedo count rather than "the seventeenth one I happened to
-        // reach". EnsureAlbedoSets still enforces per-image (it is the
-        // allocation point); both share m_warnedTextureBudget, so a scene over
-        // budget says this exactly once.
-        const std::uint32_t distinct = DistinctAlbedoCount(scene.instances);
-        if (distinct > kMaxAlbedoTextures && !m_warnedTextureBudget)
-        {
-            m_warnedTextureBudget = true;
-            ARC_ERROR("[nri-graph] MeshNode: this scene names {} distinct albedo images, over this "
-                      "node's cap of {} -- the ones past the cap draw with the white texel. Raise "
-                      "kMaxAlbedoTextures (it sizes the descriptor pool).", distinct,
-                      kMaxAlbedoTextures);
-        }
-        for (const MeshInstance& instance : scene.instances)
-            (void)EnsureAlbedoSets(instance.albedo);
-
         // The PSO, built HERE so a first-frame pipeline compile does not land
         // inside the recording window. Re-resolved every frame because the
-        // canvas format is the caller's and a cache HIT is a linear scan over a
-        // handful of entries.
+        // canvas format is the CALLER's (AddMeshNode takes it as a parameter,
+        // and a differently-formatted canvas must be a cache MISS rather than
+        // a silent attachment mismatch) and a cache HIT is a linear scan over
+        // a handful of entries.
         m_pipeline = PipelineFor(canvasFormat);
     }
 
@@ -814,7 +702,7 @@ namespace Arcane
         // ---------------------------------------------------------------
         MeshFrameConstants frameConstants;
         frameConstants.viewProjection = scene.projection * scene.view;
-        frameConstants.lightDirection = glm::vec4(scene.lightDirection, 0.0f);
+        frameConstants.lightDirection = glm::vec4(SafeNormalize(scene.lightDirection), 0.0f);
         frameConstants.lightColor     = glm::vec4(scene.lightColor, 0.0f);
         frameConstants.ambient        = glm::vec4(scene.ambient, 0.0f);
         if (auto* arena = static_cast<std::uint8_t*>(m_arenaCpu))
@@ -877,15 +765,34 @@ namespace Arcane
             return fresh;
         };
 
+        // THE ONE SET this pass binds, for this frame slot -- every instance
+        // reads the same b1, the same white texel at t0 and the same sampler,
+        // so there is nothing per-instance in it to rebind. (It was per-albedo
+        // until Task 7's first fix round removed that binding; Task 8's
+        // bindless table keeps it a single set by construction.) A null here
+        // means Create() failed part way and already said so.
+        nri::DescriptorSet* set = frameSlot < kSwapchainFramesInFlight ? m_sets[frameSlot] : nullptr;
+        if (!set)
+        {
+            GraphError("MeshNode: no descriptor set for this frame slot -- nothing recorded");
+            return;
+        }
+
         core.CmdSetDescriptorPool(context.cmd, *m_pool);
         // ONE layout for the whole pass, so this is bound once. CmdSetPipeline
         // Layout invalidates the bound sets and root constants on both
-        // backends, which is exactly why it must not be re-issued per draw.
+        // backends, which is exactly why it must not be re-issued per draw --
+        // and why the set below is bound AFTER it.
         core.CmdSetPipelineLayout(context.cmd, nri::BindPoint::GRAPHICS, *layout);
+
+        nri::SetDescriptorSetDesc setDesc = {};
+        setDesc.setIndex      = 0;
+        setDesc.descriptorSet = set;
+        core.CmdSetDescriptorSet(context.cmd, setDesc);
+
         core.CmdSetPipeline(context.cmd, *m_pipeline);
 
-        const nri::DescriptorSet* lastSet = nullptr;
-        const MeshData*           lastMesh = nullptr;
+        const MeshData* lastMesh = nullptr;
         for (const MeshInstance& instance : scene.instances)
         {
             if (!instance.mesh || instance.mesh->vertices.empty() || instance.mesh->indices.empty())
@@ -894,22 +801,6 @@ namespace Arcane
             const Upload upload = uploadFor(instance.mesh);
             if (!upload.ok)
                 continue;   // the ring said why, once
-
-            // The set family Prepare built for this instance's albedo, or the
-            // white-texel one. A pure lookup: nothing inside the recording
-            // window may allocate a set.
-            const AlbedoSets* sets = AlbedoSetsFor(instance.albedo);
-            nri::DescriptorSet* set = sets ? sets->set[frameSlot] : nullptr;
-            if (!set)
-                continue;   // Create() failed part way; it already said so
-            if (set != lastSet)
-            {
-                lastSet = set;
-                nri::SetDescriptorSetDesc setDesc = {};
-                setDesc.setIndex      = 0;
-                setDesc.descriptorSet = set;
-                core.CmdSetDescriptorSet(context.cmd, setDesc);
-            }
 
             if (instance.mesh != lastMesh)
             {
@@ -940,18 +831,20 @@ namespace Arcane
     }
 
     RgTexture AddMeshNode(RenderGraph& graph, NriGraphContext* context,
-                          RgTexture canvas, const MeshSceneDesc& scene,
+                          RgTexture canvas, nri::Format canvasFormat,
+                          const MeshSceneDesc& scene,
                           std::uint32_t width, std::uint32_t height)
     {
-        // Resolved at DECLARATION time on purpose: making an albedo resident
-        // goes through a helper that submits and waits, allocating a descriptor
-        // set must not happen while a frame's command buffer is open, and a PSO
-        // compile must not land inside the recording window. See
-        // MeshNode::Prepare.
+        // Resolved at DECLARATION time on purpose: a PSO compile must not land
+        // inside the recording window. See MeshNode::Prepare.
+        //
+        // `canvasFormat` is the CALLER's, not kGraphCanvasFormat assumed --
+        // see AddMeshNode's header comment for why this function cannot derive
+        // it and what a wrong one costs.
         if (context)
         {
             if (MeshNode* node = context->Mesh())
-                node->Prepare(scene, kGraphCanvasFormat);
+                node->Prepare(canvasFormat);
         }
 
         // `depth` is captured by reference ([&]) below, not shared_ptr -- safe

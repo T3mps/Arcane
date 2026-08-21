@@ -1186,8 +1186,12 @@ namespace Arcane
         const bool wantsMesh = shape.mesh != nullptr && !shape.mesh->instances.empty();
         if (wantsMesh)
         {
-            handles.depth = AddMeshNode(graph, context, handles.canvas, *shape.mesh,
-                                         shape.canvasWidth, shape.canvasHeight);
+            // kGraphCanvasFormat is passed EXPLICITLY because it is the format
+            // AddBatch2DNode minted `handles.canvas` with, a few lines up.
+            // AddMeshNode cannot read a handle's format back and must not
+            // assume one -- see its header for what a wrong one costs.
+            handles.depth = AddMeshNode(graph, context, handles.canvas, kGraphCanvasFormat,
+                                         *shape.mesh, shape.canvasWidth, shape.canvasHeight);
         }
 
         // ---------------------------------------------------------------

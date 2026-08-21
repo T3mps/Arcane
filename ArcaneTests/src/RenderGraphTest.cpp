@@ -6504,7 +6504,13 @@ TEST_CASE("nri graph frame: (T7P4) the mesh node declares ColorWrite on its colo
         [](Arcane::RenderGraphNodeContext&) {});
     REQUIRE(graph.IsHandleValid(canvas));
 
-    const Arcane::RgTexture depth = Arcane::AddMeshNode(graph, nullptr, canvas, scene, 320, 200);
+    // The format is the one the test-local node above created `canvas` with --
+    // AddMeshNode takes it rather than assuming kGraphCanvasFormat, because
+    // RenderGraph exposes no way to read a handle's format back and a PSO built
+    // for the wrong one is an undefined attachment mismatch on both backends.
+    const Arcane::RgTexture depth = Arcane::AddMeshNode(graph, nullptr, canvas,
+                                                        Arcane::kGraphCanvasFormat,
+                                                        scene, 320, 200);
     REQUIRE(graph.IsHandleValid(depth));
     CHECK(std::string(graph.NodeName(1)) == "mesh");
 
@@ -6542,6 +6548,102 @@ TEST_CASE("nri graph frame: (T7P4) the mesh node declares ColorWrite on its colo
     // other half of "it attached them": NodeHasRequiredAttachments() refuses a
     // Raster node with no attachment at all.
     CHECK(compiled.poolSlotCount == 2);
+}
+
+// ======================================================================
+// MeshNode's pure halves -- the same two cases every other node on this
+// path carries, for the same reason: these carry invariants whose violation
+// is SILENT on a device. A frame-slot region that aliased would let the GPU
+// read one frame's camera while the CPU writes the next one's over it, and a
+// descriptor pool one set short would fail inside Create() at the desk.
+// ======================================================================
+
+TEST_CASE("nri mesh arena: every frame slot owns a distinct, alignment-legal constant region",
+          "[nri]")
+{
+    using Node = Arcane::MeshNode;
+
+    // THE STRIDE. Every alignment a real device reports is a power of two, and
+    // 0/1 are the "no alignment" readings the helper documents.
+    const std::uint64_t alignments[] = { 0, 1, 4, 16, 64, 256, 512 };
+    for (const std::uint64_t alignment : alignments)
+    {
+        const std::uint64_t stride = Node::CbRegionStride(alignment);
+        // A region must hold a whole MeshFrameCB (112 bytes, and
+        // kFrameCbMaxBytes is what the node budgets for it) or the frame
+        // constants spill into the next slot's region -- which would read as
+        // one frame rendering with the other's camera.
+        REQUIRE(stride >= Node::kFrameCbMaxBytes);
+        if (alignment > 1)
+            CHECK(stride % alignment == 0);
+        // ...and it is the SMALLEST such value: no region is wasted.
+        CHECK(stride - (alignment > 1 ? alignment : 1) < Node::kFrameCbMaxBytes);
+    }
+    // A 256-byte alignment is exactly one region -- the D3D12 case
+    // kFrameCbMaxBytes was chosen for.
+    CHECK(Node::CbRegionStride(256) == Node::kFrameCbMaxBytes);
+
+    // THE OFFSET arithmetic, over two stride values -- deliberately including
+    // one (64) no device would produce, because CbRegionOffset must be correct
+    // for whatever stride it is handed rather than only for the one this node
+    // currently computes.
+    const std::uint64_t strides[] = { 256, 64 };
+    for (const std::uint64_t stride : strides)
+    {
+        const std::uint64_t arenaBytes = (std::uint64_t)Arcane::kSwapchainFramesInFlight * stride;
+        std::vector<std::uint64_t> seen;
+        for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+        {
+            const std::uint64_t offset = Node::CbRegionOffset(stride, slot);
+            CHECK(offset % stride == 0);
+            for (const std::uint64_t other : seen)
+                REQUIRE(offset != other);            // no aliasing, ever
+            REQUIRE(offset + stride <= arenaBytes);  // and none escapes the buffer
+            seen.push_back(offset);
+        }
+        // Every region of the buffer MeshNode allocates is claimed exactly once.
+        CHECK(seen.size() == (std::size_t)Arcane::kSwapchainFramesInFlight);
+    }
+
+    // Slot 0 starts the buffer and slot n is n strides in -- the indexing
+    // MeshNode::ArenaOffset and its b1 views agree on, and the thing that makes
+    // the arena DOUBLE-BUFFERED rather than shared.
+    CHECK(Node::CbRegionOffset(256, 0) == 0);
+    CHECK(Node::CbRegionOffset(256, 1) == 256);
+    static_assert(Arcane::kSwapchainFramesInFlight >= 2,
+                  "an arena with one region is not double-buffered against anything");
+}
+
+TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it allocates", "[nri]")
+{
+    // A descriptor pool's sizes are fixed at creation and NRI cannot free a
+    // single set, so a capacity that does not cover what the node allocates is
+    // not a compile error and not a wrong pixel -- it is an
+    // AllocateDescriptorSets failure inside Create() at the desk, which fails
+    // the whole vehicle (MeshNode is built eagerly). No device can show the
+    // numbers agree; this can.
+    //
+    // The expectations are recomputed here from kSwapchainFramesInFlight and
+    // mesh.hlsl's register map rather than copied from the implementation, so a
+    // set that gains a dimension without the pool gaining one fails here.
+    const nri::DescriptorPoolDesc pool = Arcane::MeshNode::PoolSizes();
+
+    // ONE set per frame slot: b1 is the only per-frame thing in a set, and t0
+    // (the node's own white texel) and s0 are the same for every draw.
+    constexpr std::uint32_t kSets = Arcane::kSwapchainFramesInFlight;
+    CHECK(pool.descriptorSetMaxNum == kSets);
+
+    // ...and each set carries exactly one of each type -- b1, t0, s0.
+    CHECK(pool.constantBufferMaxNum == kSets);
+    CHECK(pool.textureMaxNum        == kSets);
+    CHECK(pool.samplerMaxNum        == kSets);
+
+    // Nothing else is claimed: this node binds no storage buffers, no samplers
+    // beyond s0, and no acceleration structures, so a nonzero here would mean
+    // the pool was sized for a shape mesh.hlsl does not declare.
+    CHECK(pool.bufferMaxNum        == 0);
+    CHECK(pool.structuredBufferMaxNum == 0);
+    CHECK(pool.storageTextureMaxNum   == 0);
 }
 
 TEST_CASE("nri pick readback: every frame slot owns a distinct, alignment-legal region", "[nri]")
