@@ -24,6 +24,7 @@
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/RenderDeviceDesc.hpp>
 #include <Arcane/Render/Nri/Graveyard.hpp>
+#include <Arcane/Render/Nri/NriDeviceCaps.hpp>
 
 #include <memory>
 
@@ -131,6 +132,13 @@ namespace Arcane
         [[nodiscard]] const nri::CoreInterface& Core() const { return m_core; }
         [[nodiscard]] GraphicsBackend Backend() const { return m_backend; }
 
+        // Tiers/features snapshot, queried once at wrap time (FinishWrap,
+        // immediately after GetQueue succeeds) so later gates -- bindless
+        // material indexing, ray-tracing bakers -- read a value that was
+        // ALWAYS there, rather than a query someone forgot to add at the
+        // point of first use.
+        [[nodiscard]] const NriDeviceCaps& Caps() const noexcept { return m_caps; }
+
         // The GRAPHICS queue proven reachable at wrap time (contract item 7 /
         // §1.6.3: NRI clamps a declared queueNum against PHYSICAL family
         // capacity, and a failed throwaway-instance probe clamps it to ZERO,
@@ -178,5 +186,6 @@ namespace Arcane
         nri::Device*       m_device        = nullptr;
         nri::Queue*        m_graphicsQueue = nullptr;
         GraphicsBackend    m_backend       = GraphicsBackend::D3D12;
+        NriDeviceCaps      m_caps{};
     };
 }

@@ -391,8 +391,29 @@ namespace Arcane
             return nullptr;
         }
 
+        // Task 1 (Phase 4): snapshot tiers/features once, right here -- the
+        // only place every wrap path (Vulkan, D3D12, and the NONE test
+        // backend) funnels through after GetQueue has proven the device
+        // usable. Populated from the SAME DeviceDesc the six alignment call
+        // sites already read; nothing here re-derives a value, it just keeps
+        // one more of them.
+        {
+            const nri::DeviceDesc& deviceDesc = wrapped->m_core.GetDeviceDesc(*device);
+            wrapped->m_caps.bindlessTier            = deviceDesc.tiers.bindless;
+            wrapped->m_caps.rayTracingTier           = deviceDesc.tiers.rayTracing;
+            wrapped->m_caps.meshShader               = deviceDesc.features.meshShader;
+            wrapped->m_caps.maxDescriptorSetTextures = deviceDesc.descriptorSet.textureMaxNum;
+        }
+
         // Contract item 14, post-wrap assert 3: say what we ended up with.
         LogNriIdentity(*device);
+        // Task 1: one more line, alongside the identity log, stating what
+        // this device CAN DO -- the snapshot just taken above, not a second
+        // query.
+        ARC_INFO("[nri] caps: bindlessTier={} rayTracingTier={} meshShader={} maxDescriptorSetTextures={}",
+                 static_cast<unsigned>(wrapped->m_caps.bindlessTier),
+                 static_cast<unsigned>(wrapped->m_caps.rayTracingTier),
+                 wrapped->m_caps.meshShader, wrapped->m_caps.maxDescriptorSetTextures);
         return wrapped;
     }
 
