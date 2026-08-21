@@ -1,9 +1,9 @@
 #pragma once
 
 // Pure CPU PNG I/O: device-free, headless image codec layer. Split from
-// Assets.hpp so device-free consumers (the golden-image comparator) never
-// transitively include nvrhi. Implements the decode/encode half of the assets
-// facade without tying to the render device or cached texture infrastructure.
+// Assets.hpp so a device-free consumer (an image comparator, a thumbnail
+// writer) can decode and encode without pulling in the cached-asset
+// infrastructure.
 
 #include <Arcane/Base/Api.hpp>
 
@@ -14,11 +14,10 @@
 namespace Arcane
 {
     // Decoded RGBA8 pixels, tight-packed (rowPitch == width*4), retained CPU-side.
-    // This is Assets::PixelsFor's payload (NRI Phase 3, Task 1): the device-free
-    // supply that lets sprite geometry and a future non-NVRHI upload path read
-    // decoded pixels without ever touching a live GPU texture. Default-constructed
-    // == invalid (matches an AssetCache miss/failure); nvrhi-free by this header's
-    // existing charter.
+    // This is Assets::PixelsFor's payload: the device-free supply that lets
+    // sprite geometry and an upload path read decoded pixels without ever
+    // touching a live GPU texture. Default-constructed == invalid (matches an
+    // AssetCache miss/failure).
     struct PixelData
     {
         std::uint32_t width = 0, height = 0;

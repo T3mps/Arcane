@@ -632,7 +632,7 @@ namespace
     }
 
 #if defined(_WIN32)
-    // The D3D12 debug layer's fail-fast (NRI Phase 3, D3b).
+    // The D3D12 debug layer's fail-fast.
     //
     // D3D12SDKLayers.dll reports conditions it considers unrecoverable with
     // RaiseFailFastException, code 0x87D -- the same signature
@@ -744,8 +744,7 @@ namespace
         //   - a wedged GPU that has parked the render path in the swapchain's
         //     frame-slot wait IS this rule's primary case, and the reason the
         //     wait polls instead of blocking (NriSwapChain.cpp's
-        //     PollingWaitForTimelineFence; GpuFrameSlot::WaitAndReset until
-        //     NRI Phase 5a, Task 9.5a deleted it): the
+        //     PollingWaitForTimelineFence): the
         //     loop republishes both beats, so the counter stays visibly frozen
         //     under a visibly live render path for as long as the poll window
         //     lasts. Past that window the wait parks for real and publishing

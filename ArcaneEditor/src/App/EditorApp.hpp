@@ -48,8 +48,8 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only Build -> Diagnostics -> Crash GPU (kPassName only; the injector is NriDiagnostics::FireFault)
-#include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle (chrome + viewport); unconditional as of Phase 5a
-#include <Arcane/Render/PickEmit.hpp>   // PickDrawable -- the graph arm's per-frame pickables
+#include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle (chrome + viewport); unconditional
+#include <Arcane/Render/PickEmit.hpp>   // PickDrawable -- the frame's pickables
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 
@@ -101,11 +101,10 @@ namespace Arcane::Editor
         // ProjectBoot.cpp for why each stage landed where it did. Every method
         // returns false only where the equivalent Init() block used to.
         //
-        // splash_ready IS in this list now (Task 8c, 2026-07-30 correction:
-        // "the splash carries the loading UI, not the editor window") --
-        // revealing the window needs m_presenter, a host-owned member
-        // ProjectBoot.cpp's ctx-only lambda cannot reach, exactly the same
-        // structural reason render_bridge/plugin_load/etc. are host-owned.
+        // splash_ready IS in this list: it touches host-owned splash members
+        // that ProjectBoot.cpp's ctx-only lambda cannot reach, exactly the
+        // same structural reason render_bridge/plugin_load and the rest are
+        // host-owned.
         // EditorStages() installs Make()'s Unpatched(id) sentinel for
         // splash_ready's `run` (empty by default) for the same reason it does
         // for every other host-owned id -- a host that forgets to patch it
@@ -139,22 +138,16 @@ namespace Arcane::Editor
 
         bool       Create();
         InitResult Init();
-        // THE GRAPH VEHICLES' CREATE, run by Main() between boot and the frame
-        // loop. It carried an `!GraphMode()` early return that never fired
-        // (Phase 5a, Task 2b made that predicate unconditional; Task 11a then
-        // deleted it), so this always builds the vehicles. It sits HERE
-        // rather than in a boot stage for
-        // the ordering RuntimeApp::MainLoop proved at three desk checkpoints:
-        // the window is Show()n FIRST and the swapchain built over an
-        // already-mapped window, because a surface created against a window
-        // the compositor has never seen is a backend-specific corner a
-        // desk-only machine cannot pre-clear. The editor's own reveal
-        // (StageSplashReady) is NVRHI-backed and skips itself on this flavor
-        // for the same reason RuntimeApp::StageFinalize does. False = already
-        // logged; Main() turns it into exit 1.
+        // THE RENDER VEHICLES' CREATE, run by Main() between boot and the
+        // frame loop. It sits HERE rather than in a boot stage for an ordering
+        // reason proved at three desk checkpoints: the window is Show()n FIRST
+        // and the swapchain built over an ALREADY-MAPPED window, because a
+        // surface created against a window the compositor has never seen is a
+        // backend-specific corner a desk-only machine cannot pre-clear. False
+        // = already logged; Main() turns it into exit 1.
         bool       CreateGraphVehicles();
-        // The VIEWPORT context and every seam it needs, with TWO callers (NRI
-        // Phase 3, Task 12): CreateGraphVehicles at boot, and SwitchProject's
+        // The VIEWPORT context and every seam it needs, with TWO callers:
+        // CreateGraphVehicles at boot, and SwitchProject's
         // "render_bridge" stage on every project switch -- which rebuilds this
         // context from scratch rather than flushing it (TeardownGraphForSwitch
         // states the kept-vs-torn decision in full). Shared rather than copied
@@ -238,29 +231,20 @@ namespace Arcane::Editor
         void RenderSceneToViewport();
         // The scene's 2D submission plus the two Edit-mode overlays drawn on
         // top of it (the scene-camera rect and the transform gizmo), against
-        // whichever batcher the caller hands in. Extracted VERBATIM from
-        // RenderSceneToViewport's (NVRHI-arm, now deleted -- NRI Phase 5a,
-        // Task 4) OffscreenCanvas::Draw lambda so the NVRHI and graph
-        // recorders drained identical content; the graph arm passes the
-        // device-less GpuContext batcher it Begin()s itself and is the only
-        // caller left. Contains no target, no command list and no device --
-        // that is what made it shareable, and is why the extraction stays
-        // rather than being re-inlined now that only one caller remains.
+        // whichever batcher the caller hands in -- in practice the
+        // device-less GpuContext batcher RenderSceneToViewport Begin()s
+        // itself. Contains no target, no command list and no device, which is
+        // what keeps the ORDER of its statements the whole of its contract.
         void SubmitSceneToBatcher(Arcane::Batcher2D& b);
-        // Phase 11's CPU HALF (NRI Phase 3, Task 9): the game context's
+        // Phase 11's CPU HALF: the game context's
         // per-frame input, and -- in Play, with a plugin that draws one --
         // its BeginFrame + DrawUIAll. Returns true when a game-UI frame was
         // BEGUN and therefore owes exactly one Render / RenderToDrawData /
         // EndFrameDiscard; false when nothing was begun.
         //
-        // Extracted so the NVRHI and graph arms ran the SAME statements in
-        // the same order against the same context, differing only in who
-        // rendered the result: the NVRHI arm blitted through
-        // OffscreenImGuiLayer::Render (phase 11), the graph arm hands
-        // RenderToDrawData()'s output to a graph node (phase 10) and is the
-        // only caller left -- NRI Phase 5a, Task 4 deleted the NVRHI arm's
-        // call site, and the empty phase-11 function it left behind is gone
-        // too. Same discipline, and the same reason, as SubmitSceneToBatcher.
+        // Its own function so the statements and their ORDER are stated in
+        // one place: RenderToDrawData()'s output goes to a graph node in phase
+        // 10. Same discipline, and the same reason, as SubmitSceneToBatcher.
         [[nodiscard]] bool BeginGameUiFrame();
         // The graph arm's FrameDesc arming for the pick + outline chain and the
         // game HUD -- i.e. everything phases 11, 12 and 17 contribute to a frame
@@ -291,25 +275,21 @@ namespace Arcane::Editor
         void HandleViewportPick(const FrameState& fs);
         void DrawSelectionPanels();
         bool PresentFrame();
-        // Phase 19's GRAPH arm (NRI Phase 3, Task 10): the editor's main-window
-        // frame as a graph frame -- clear + one ImGui node over the EDITOR
+        // Phase 19: the editor's main-window frame as a graph frame --
+        // clear + one ImGui node over the EDITOR
         // context's draw data -> the chrome context's backbuffer -> present.
         // Same return contract as PresentFrame (false = nothing was presented,
         // MainLoop skips the rest of the frame). Its own definition carries the
         // frame's declared shape and the four fields deliberately left default.
         bool PresentChromeFrame();
-        // NO CaptureEditorGolden member either, for the same reason and by the
-        // same two steps: it was the NVRHI arm's half of the editor golden
-        // harness (ReadTexturePixels off the canvas output -> Arcane::
-        // GoldenArtifact, Host/GoldenHarness.hpp, pairing what
-        // RuntimeFrame::CaptureTail did for the NVRHI backbuffer). The graph
-        // arm's capture is armed as a NODE inside RenderSceneToViewport's own
-        // FrameDesc and read back there -- that recorder has no separate "read
-        // this texture" entry point, so piggybacking on the already-declared
-        // frame is the only shape that exists.
+        // NO SEPARATE CAPTURE MEMBER: the viewport capture is armed as a NODE
+        // inside RenderSceneToViewport's own FrameDesc and read back there.
+        // The recorder has no standalone "read this texture" entry point, so
+        // piggybacking on the already-declared frame is the only shape that
+        // exists.
         void EndFrame(LoopState& ls);
 
-        // ---- The graph arm's EXIT-CODE FOLD (NRI Phase 3, Task 10) ----------
+        // ---- THE EXIT-CODE FOLD ---------------------------------------------
         // The editor's counterpart of RuntimeApp::m_graphExit + its
         // ShutdownGraphPath, and deliberately the same codes and the same
         // precedence (1 > 2): 1 = a graph frame FAILED (it says WHERE the run
@@ -320,8 +300,7 @@ namespace Arcane::Editor
         // that could not be presented (PresentChromeFrame, phase 19) are the
         // same class of failure and neither was visible in an exit code before.
         void NoteGraphFrameFailure(const char* what);
-        // ---- The project switch's graph teardown (NRI Phase 3, Task 12) -----
-        // The graph-mode stand-in for the NVRHI arm's single `waitForIdle` in
+        // ---- The project switch's render teardown ---------------------------
         // SwitchProject's "switch_teardown" stage: an ordered idle ->
         // invalidate -> release (whose own drain closes the sequence), with
         // the chrome context and m_gameImgui deliberately KEPT and the
@@ -331,15 +310,14 @@ namespace Arcane::Editor
         // definition -- read it before changing either end of the switch.
         // Hands back the outgoing viewport extent so the rebuild in
         // "render_bridge" can recreate at the size the panel is actually
-        // showing; 0/0 means "use the boot default". A no-op on the NVRHI arm
-        // (no chrome context) -- the caller gates on GraphMode() anyway.
+        // showing; 0/0 means "use the boot default".
         void TeardownGraphForSwitch(std::uint32_t& keepWidth, std::uint32_t& keepHeight);
         // Destroys BOTH graph contexts, in the one order that is correct, and
         // then reads the latch back -- which is the whole reason it exists as a
         // function rather than as member destruction: a teardown-only
         // validation error must still fail the run, and member destructors run
         // after Run() has already returned its code. Mirrors
-        // RuntimeApp::ShutdownGraphPath. A no-op on the NVRHI arm.
+        // RuntimeApp::ShutdownGraphPath.
         void ShutdownGraphPath();
 
         HostConfig                        m_config;
@@ -357,8 +335,7 @@ namespace Arcane::Editor
         // use-after-free that only faults once the block has been reused, which
         // is why it surfaced as an INTERMITTENT 0xC0000005 in MultiByteToWideChar
         // at editor teardown -- about one run in twelve -- rather than as a
-        // reliable crash. Found at the NRI Phase 5a D5a-2 desk checkpoint; it
-        // predates that phase.
+        // reliable crash.
         //
         // Same discipline as m_config above, which m_bootCtx borrows
         // projectPath/pluginPath from for exactly the same reason.
@@ -369,35 +346,32 @@ namespace Arcane::Editor
                                                                     // which outlive it BY DESIGN
                                                                     // (see the note above)
 
-        // ---- The graph vehicles (--nri-graph, NRI Phase 3, Task 8) ----------
+        // ---- The render vehicles --------------------------------------------
         // THE CHROME CONTEXT: the host-window NriGraphContext. It owns the
-        // process's ONLY graphics device (GpuContext::CreateForGraph builds no
-        // NVRHI device at all), arms the crash chain, and its swapchain binds
-        // m_gpu's window -- exactly what RuntimeApp::m_graphContext is. LIVE
-        // ON EVERY RUN as of Phase 5a (Task 2b): the graph path is the only
-        // one left, in every configuration including Dist -- this is null
-        // only on a failed boot (CreateGraphVehicles' `if (!m_graphChrome)`
-        // returns false before its caller proceeds).
+        // process's ONLY graphics device (GpuContext::Create builds none),
+        // arms the crash chain, and its swapchain binds m_gpu's window --
+        // exactly what RuntimeApp::m_graphContext is. LIVE ON EVERY RUN, in
+        // every configuration including Dist -- this is null only on a failed
+        // boot (CreateGraphVehicles' `if (!m_graphChrome)` returns false
+        // before its caller proceeds).
         //
-        // MID-PHASE, IT RENDERS NOTHING. Task 10 owns the editor's chrome
-        // frame (clear + one ImGui node over the editor context's draw data ->
-        // backbuffer -> present). Until then this object exists for two
-        // reasons that are already load-bearing:
+        // IT DRAWS THE EDITOR'S CHROME FRAME (clear + one ImGui node over the
+        // editor context's draw data -> backbuffer -> present), and it carries
+        // two further loads:
         //   * it is what CREATES the shared NriDevice the viewport context
         //     below borrows, and
-        //   * ImGuiHud() is the backend that will cache the viewport's output
+        //   * ImGuiHud() is the backend that caches the viewport's output
         //     texture, so it is the node the resize contract's
         //     InvalidateUserTextureNow must be called on -- see
         //     ViewportTargets::ApplyPendingResize.
         //
-        // NOT #if-guarded (never was), for exactly the reason RuntimeApp.hpp
+        // NOT #if-guarded, for exactly the reason RuntimeApp.hpp
         // states for its own member: the type is compiled into the engine DLL
         // in every configuration, and a preprocessor-guarded MEMBER would
         // force every use site in the frame body to grow a guard of its own --
         // which is how a Dist-only compile break gets introduced. The
-        // CREATION is unconditional too now (Phase 5a, Task 2b); there is no
-        // configuration left where this carries a null pointer on an ordinary
-        // run.
+        // CREATION is unconditional too; there is no configuration where this
+        // carries a null pointer on an ordinary run.
         //
         // Declared AFTER m_gpu so it destructs BEFORE it, and that ordering is
         // LOAD-BEARING: this object's swapchain is bound to the window inside
@@ -406,11 +380,10 @@ namespace Arcane::Editor
         // this one owns -- so the borrower (declared later) destructs first.
         //
         // NOT on ResetPerProjectState's list, and neither is the viewport
-        // context below -- the same ruling the NVRHI viewport trio already
-        // carried: these hold DEVICE resources, not project ones, and the
-        // device outlives a project switch.
+        // context below: these hold DEVICE resources, not project ones, and
+        // the device outlives a project switch.
         //
-        // ===== AND THIS ONE SURVIVES A SWITCH OUTRIGHT (Task 12) =====
+        // ===== AND THIS ONE SURVIVES A SWITCH OUTRIGHT =====
         // The decision, made and recorded rather than left implicit: THIS
         // context is window/device/session-scoped and a project switch does
         // not touch it, while the VIEWPORT context below is project-scoped in
@@ -427,9 +400,9 @@ namespace Arcane::Editor
         // the whole sequence and the argument for the split.
         std::unique_ptr<Arcane::NriGraphContext> m_graphChrome;
 
-        // ---- Closed documents' preview vehicles (NRI Phase 3, Task 11) ----
-        // A shader document on the graph arm owns an offscreen
-        // NriGraphContext, and it is destroyed INSIDE the editor's ImGui pass
+        // ---- Closed documents' preview vehicles ------------------------------
+        // A shader document owns an offscreen NriGraphContext, and it is
+        // destroyed INSIDE the editor's ImGui pass
         // (DocumentHost::DrawAll erases the unique_ptr right after its draw
         // loop) -- while this frame's draw lists still name its output texture
         // by raw pointer and the chrome frame that replays them has not been
@@ -456,7 +429,7 @@ namespace Arcane::Editor
         // non-empty vector. The declaration order is what keeps it SAFE rather
         // than merely unreached.
         //
-        // THE PROJECT SWITCH IS THE SECOND CloseAll + drain PAIRING (Task 12):
+        // THE PROJECT SWITCH IS THE SECOND CloseAll + drain PAIRING:
         // ResetPerProjectState's CloseAll fills this list mid-switch, and
         // TeardownGraphForSwitch drains it in the same stage -- not at the next
         // frame's phase 13, which is across a plugin unload and a project open.
@@ -479,20 +452,11 @@ namespace Arcane::Editor
         std::uint64_t m_graphErrorBaseline = 0;
 
 
-        // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
-        // Task 8c: this is now BootSequence::Run's presenter for the WHOLE
-        // boot (via m_splashPresenter below, a MEMBER constructed from this
-        // pointer -- not, as this comment claimed until Task 8d, a local
-        // Run() builds; see that member's own note for why it cannot be a
-        // local) -- not merely a pre-device stand-in. The old LazyBootPresenter nested class that used to live
-        // here is gone: it existed to defer binding a swapchain-backed
-        // presenter until StageEditorShell had installed fonts/theme, which
-        // mattered only because BootSequence used to drive THAT presenter's
-        // Present() automatically after every stage. It no longer does, and
-        // the swapchain-backed presenter it deferred (Arcane::BootPresenter,
-        // held here as an optional m_presenter) is itself gone -- retired with
-        // GpuContext::GraphFlavor(), the predicate whose false arm was its
-        // last construction site. The splash is the only presenter now.
+        // The pre-device splash: non-owning, see the ctor's doc comment. It is
+        // BootSequence::Run's presenter for the WHOLE boot, via
+        // m_splashPresenter below -- a MEMBER constructed from this pointer,
+        // see that member's own note for why it cannot be a local. There is no
+        // swapchain-backed presenter at all: the splash is the only one.
         Arcane::BootSplashWindow*             m_splash = nullptr;
         // A class member, not a Run()-local (2026-07-30 review round 2,
         // finding 2): StageSplashReady needs to call Disarm() on THIS exact
@@ -522,31 +486,27 @@ namespace Arcane::Editor
         // lives inside the Viewport panel, never over the editor chrome. Created
         // in Init after the editor ImGui layer is up; the plugin is pointed at it
         // via Runtime::SetImGui (in place of the editor context). Declared after
-        // m_gpu (destructs BEFORE it -- GpuContext has no Device() any more,
-        // see below for the real reason this ordering matters) and before
+        // m_gpu (destructs BEFORE it -- see below for the real reason this
+        // ordering matters) and before
         // m_runtime/m_plugin (destructs AFTER the
         // plugin -- the plugin holds this ctx via SetImGui and may touch ImGui
         // during Unload/Shutdown, so this must outlive it). Its destructor
         // restores the editor context, so ~GpuContext's ImGuiLayer teardown stays
         // valid. See BeginGameUiFrame, phase 11's surviving CPU half.
         //
-        // NON-NULL UNCONDITIONALLY (NRI Phase 3, Task 9; NRI Phase 5a, Task 5
-        // removed OffscreenImGuiLayer's own flavor split, so the single
-        // Create() call at StageRenderBridge is the only path there ever
-        // was to reach here now). Task 8 left this null on the graph arm
-        // (OffscreenImGuiLayer was an ImGui-NVRHI object then) and the plugin
-        // was handed the EDITOR's context instead -- whose io.IniFilename is
-        // the PER-PROJECT LAYOUT FILE, where this one's is deliberately null.
-        // A plugin window submitted through that fallback would have been
-        // persisted into the user's layout, permanently, and per-id ini state
-        // silently overrides authored UI on every later boot. Every arm builds
-        // the SAME class through OffscreenImGuiLayer::Create -- own context,
-        // own io, own pinning discipline, no NVRHI renderer -- and the graph's
-        // ImGuiNriNode draws its RenderToDrawData() output. The isolation is
-        // structural; nothing is holding it by control flow.
+        // NON-NULL UNCONDITIONALLY: the single OffscreenImGuiLayer::Create
+        // call at StageRenderBridge is the only path here.
         //
-        // ===== AND ITS POSITION IN THIS LIST IS LOAD-BEARING ON THE GRAPH ARM
-        // (Task 9 fix round 1). The viewport context's game ImGuiNriNode ADOPTS
+        // WHY IT IS ITS OWN CONTEXT AT ALL: the EDITOR's context has
+        // io.IniFilename pointed at the PER-PROJECT LAYOUT FILE, where this
+        // one's is deliberately null. A plugin window submitted through the
+        // editor's context would be persisted into the user's layout,
+        // permanently, and per-id ini state silently overrides authored UI on
+        // every later boot. The isolation is structural -- own context, own
+        // io, own pinning discipline -- not held by control flow.
+        //
+        // ===== AND ITS POSITION IN THIS LIST IS LOAD-BEARING =====
+        // The viewport context's game ImGuiNriNode ADOPTS
         // this context, and ImGuiNri::Release PINS the adopted context to walk
         // its platform texture list -- which is a DEREFERENCE. So THIS OBJECT
         // MUST OUTLIVE THAT NODE'S Release. It does, and by construction rather
@@ -555,8 +515,8 @@ namespace Arcane::Editor
         // runs ~NriGraphContext -- and the Release inside it -- while this is
         // still alive. Do not move either declaration past the other.
         //
-        // TASK 12 DISCHARGED THE SAME ORDERING EXPLICITLY, in both halves:
-        // switch_teardown (EditorApp::TeardownGraphForSwitch) destroys the
+        // THE PROJECT SWITCH DISCHARGES THE SAME ORDERING EXPLICITLY, in both
+        // halves: switch_teardown (EditorApp::TeardownGraphForSwitch) destroys the
         // VIEWPORT context -- and therefore that node's Release, which PINS
         // this context -- WITHOUT touching this member, which is why nothing
         // in that function resets it; and the rebuild re-issues
@@ -627,87 +587,52 @@ namespace Arcane::Editor
         // never m_play.IsPlaying() raw, so the predicate has one greppable name.
         [[nodiscard]] bool InPlayMode() const noexcept { return m_play.IsPlaying(); }
 
-        // ---- THE graph/NVRHI predicate: DELETED (NRI Phase 5a, Task 11a) ----
-        // `GraphMode()` -- `m_gpu && m_gpu->GraphFlavor()` -- stood here and
-        // gated 9 call sites across this host. Both of its terms became
-        // unconditional: `gpu_core` is a Fatal boot stage that fails the boot
-        // when GpuContext::Create returns null, so m_gpu is non-null anywhere
-        // Main() can reach; and GpuContext's own flavor flag was set true
-        // before Create's first fallible step, with a private constructor
-        // making it the only way a GpuContext exists. So the predicate was true
-        // at every site and the branches it fed were collapsed to their
-        // surviving arms.
-        //
-        // GpuContext::GraphFlavor() OUTLIVED THIS ONE and is gone too, retired
-        // in the follow-on collapse that took its last five call sites (two
-        // banner ternaries, two dead BootPresenter gates, two ArcaneTests
-        // assertions) along with the BootPresenter class itself. There is no
-        // graph/NVRHI predicate left anywhere in either host.
-
-        // ---- THE HOVER predicate (whole-branch review, C2) -------------------
+        // ---- THE HOVER predicate --------------------------------------------
         // "The pointer is over the Viewport panel AND that fact is allowed to
         // affect what is rendered." The second half is what this exists for:
         // m_gameUi.inViewport is re-derived from the LIVE cursor every frame
-        // (FrameInput, EditorAppFrame.cpp), so a hover-driven outline makes the
-        // frame a function of where the mouse happens to be sitting -- and a
-        // GOLDEN artifact that depends on the mouse is not a baseline. The same
-        // scripted command line otherwise produces `full` with a cyan hover
-        // outline over whatever entity the pointer happens to rest on -- or
-        // none at all when it rests elsewhere.
+        // (FrameInput, EditorAppFrame.cpp), so a hover-driven outline makes
+        // the rendered frame a function of where the mouse happens to be
+        // sitting -- which is exactly what a SCRIPTED run must not be. The
+        // same command line would otherwise produce a cyan hover outline over
+        // whatever entity the pointer rests on, or none at all when it rests
+        // elsewhere.
         //
-        // STILL THE RIGHT PIN after the Task 13 follow-up gave `full` a
-        // scripted SELECTION (PinGoldenViewport): what the outline traces is
-        // now decided by that selection, deterministically, and hover would
-        // only add a second, mouse-shaped source of pixels on top of it. The
-        // two are different inputs to the same chain -- one is pinned OFF, the
-        // other is pinned ON to a stable entity.
+        // "No hover" is already the chain's documented sentinel --
+        // FrameDesc::hoverPixel spells it (-1, -1) -- so suppressing hover
+        // needs no coordinate invented for it, which matters because there is
+        // no honest one to invent: the panel's position is imgui.ini layout
+        // state, saved per project GUID.
         //
-        // Golden mode pins it OFF rather than pinning a coordinate: there is no
-        // honest coordinate to pin (the panel's position is imgui.ini layout
-        // state, saved per project GUID), and "no hover" is already the
-        // chain's documented sentinel -- FrameDesc::hoverPixel spells it
-        // (-1, -1) (the NVRHI arm's SelectionOutline::Params::cursorPx used
-        // the identical sentinel before NRI Phase 5a, Task 4 deleted it).
-        //
-        // READ BY ArmGraphViewportFrame, which carries phase 12's gate on the
-        // only arm there is; the NVRHI cursor derivation this sentinel was
-        // shared with went at Task 4, and phase 12's own function with it.
-        // Ordinary (non-golden) runs are untouched: hover behaves exactly as
-        // before.
+        // READ BY ArmGraphViewportFrame, which carries phase 12's gate.
         [[nodiscard]] bool HoverLive() const noexcept
         { return m_gameUi.inViewport; }
 
-        // ---- THE GIZMO predicate (NRI Phase 3, Task 13 follow-up) -----------
+        // ---- THE GIZMO predicate --------------------------------------------
         // "The transform gizmo may interact and draw." HoverLive()'s sibling,
-        // and it exists for the same reason at one remove: the golden run now
-        // SCRIPTS a selection (PinGoldenViewport), and a selection is exactly
-        // what the gizmo waits for.
-        //
-        // TWO THINGS WOULD OTHERWISE FOLLOW FROM THAT SELECTION, both bad:
-        //   * the gizmo is drawn by SubmitSceneToBatcher -- i.e. into the
-        //     SCENE BATCH -- so it would appear in `batch` and `post` as well
-        //     as `full`, and the scripted selection is only allowed to change
-        //     `full`. There is no stage gate that could confine it: the
-        //     batcher content is the batch stage.
+        // and it exists for the same reason at one remove -- a gizmo needs
+        // only a SELECTION to arm, and once armed it has two mouse-shaped
+        // consequences:
+        //   * it is drawn by SubmitSceneToBatcher -- i.e. into the SCENE BATCH
+        //     -- and there is no downstream gate that could confine it: the
+        //     batcher's content IS the scene;
         //   * m_gizmoHovered comes from a hit-test against the LIVE cursor
         //     (UpdateGizmoInteraction), so which axis is highlighted -- and
         //     whether a stray press starts a drag that MOVES the entity
-        //     mid-run -- would depend on where the mouse was left. That is the
-        //     hover-dependency class HoverLive() closed, arriving by a
+        //     mid-run -- depends on where the mouse was left. That is the
+        //     hover-dependency class HoverLive() closes, arriving by a
         //     different door.
         //
-        // NOT left to "m_gizmoEnabled defaults to false (the Select tool), so
-        // a scripted run has no gizmo anyway". That is true, incidental, and
-        // one W keypress away from false -- and "already false on a scripted
-        // run" is the exact reasoning the whole-branch review's C2 caught being
-        // wrong about the outline chain. Pinned, so it is a property rather
-        // than a coincidence. Ordinary runs are untouched.
+        // A NAMED PREDICATE rather than "m_gizmoEnabled defaults to false (the
+        // Select tool), so a scripted run has no gizmo anyway": that is true,
+        // incidental, and one W keypress away from false. Reasoning of the
+        // form "already false on a scripted run" is exactly what got the
+        // outline chain wrong.
         [[nodiscard]] bool GizmoLive() const noexcept
         { return m_gizmoEnabled; }
 
         // THE VIEWPORT'S EXTENT: the offscreen graph output's surface size
-        // (m_viewportTargets.graph -- NRI Phase 5a, Task 4 deleted the NVRHI
-        // arm's OffscreenCanvas, the other target this used to read from).
+        // (m_viewportTargets.graph).
         // Every phase that needs a viewport size asks HERE, the same way
         // RuntimeFrame's FrameExtent is the runtime's single source of truth,
         // so the resolver's material globals, the scene camera's fit, the
@@ -907,13 +832,6 @@ namespace Arcane::Editor
         // view is never thrown away by an F press that had no target.
         void FrameCamera(bool selectionOnly);
         void FrameSceneIfPending();
-        // GOLDEN MODE'S REPLACEMENT FOR FrameSceneIfPending (NRI Phase 3, Task
-        // 13 follow-up): re-derives the viewport camera AND the selection from
-        // the scene, every frame, so the captured artifact is a pure function
-        // of (scene, viewport extent, command line). See GoldenViewPin.hpp for
-        // the two answers and why each is the one that is stable; see the
-        // definition (EditorAppScene.cpp) for why re-applying beats a one-shot.
-        // Called only under GoldenMode(); ordinary runs never reach it.
         // Set whenever a scene becomes the current one, consumed on the first frame
         // the viewport has a real size. See FrameSceneIfPending for why it cannot
         // be immediate.
@@ -931,21 +849,14 @@ namespace Arcane::Editor
         // remapped through m_viewportRect (see ViewportInput.hpp + FrameInput).
         struct ViewportTargets
         {
-            // THE GRAPH ARM'S WHOLE TRIO, IN ONE OBJECT (--nri-graph, NRI
-            // Phase 3, Task 8). NRI Phase 5a, Task 4 deleted the NVRHI trio
-            // this member used to sit beside -- `canvas` (OffscreenCanvas),
-            // `pick` (PickBuffer), `outline` (SelectionOutline), created and
-            // RESIZED IN LOCKSTEP with this one via ApplyPendingResize -- along
-            // with every consumer of the three. This is the only viewport
-            // vehicle left, non-null once the editor has booted.
+            // THE WHOLE VIEWPORT, IN ONE OBJECT -- non-null once the editor
+            // has booted.
             //
-            // WHY ONE MEMBER RATHER THAN THREE. The plan's "ViewportTargets
-            // grows the graph trio" collapses here, and not by omission: on
-            // the graph path the picker and the selection outline are NODES
-            // INSIDE this same context's frame (PickNode/OutlineNode, armed
-            // per frame through FrameDesc::pickOutline/pickables/selectedIds),
-            // not sibling render targets with their own devices and command
-            // lists. Task 9 arms them; it adds no member here.
+            // WHY ONE MEMBER RATHER THAN THREE: the picker and the selection
+            // outline are NODES INSIDE this same context's frame
+            // (PickNode/OutlineNode, armed per frame through
+            // FrameDesc::pickOutline/pickables/selectedIds), not sibling
+            // render targets with their own devices and command lists.
             //
             // Offscreen mode: no window, no swapchain, one persistent
             // BGRA8_UNORM output the chrome pass samples as an ImGui image.
@@ -955,8 +866,8 @@ namespace Arcane::Editor
             // below, and reverse-order destruction runs this one first).
             //
             // PROJECT-SCOPED, AND THEREFORE REBUILT BY EVERY PROJECT SWITCH
-            // (NRI Phase 3, Task 12) -- unlike the chrome context, which
-            // survives one. Not because the OBJECT belongs to a project (its
+            // -- unlike the chrome context, which survives one. Not because
+            // the OBJECT belongs to a project (its
             // two injected seams re-read CurrentProject per call and would
             // survive fine) but because its CACHES do: NriTextureCache holds
             // uploads keyed by the outgoing project's asset Guids, and
@@ -990,27 +901,20 @@ namespace Arcane::Editor
         };
         GameUiInputHandoff m_gameUi;
 
-        // ---- The graph viewport's pick + outline arming (Task 9) ------------
+        // ---- The viewport's pick + outline arming ---------------------------
         // THIS FRAME's pickable silhouettes and the hit-proxy ids the outline
         // traces, held as MEMBERS because FrameDesc borrows both as spans and a
         // span into a per-frame temporary is a dangling read the moment the
         // declaration outlives the statement. Reused rather than rebuilt, so a
         // steady-state Edit frame allocates nothing.
         //
-        // Produced by CollectPickables, whose k-th entry IS hit-proxy id k+1.
-        // Before NRI Phase 5a, Task 4 deleted PickBuffer, PickBuffer::RenderIdPass
-        // used the SAME emitter on the (now-gone) NVRHI arm, so the two
-        // recorders could never assign ids differently; these members were
-        // empty and unread there, since PickBuffer got its ids its own way.
-        // The graph arm is the only reader left.
+        // Produced by CollectPickables, whose k-th entry IS hit-proxy id k+1
+        // -- the ONE id assignment in the process.
         std::vector<Arcane::PickDrawable> m_pickDrawables;
         std::vector<std::uint32_t>        m_pickSelectedIds;
 
-        // The graph arm's click-pick, which cannot answer in the frame it is
-        // asked -- see DeferredPick.hpp for the three hazards it closes. NRI
-        // Phase 5a, Task 4 deleted the NVRHI arm this was idle on, which used
-        // to resolve a click synchronously inside phase 17 instead
-        // (PickBuffer::Pick); the graph arm is the only path left.
+        // The click-pick, which cannot answer in the frame it is asked -- see
+        // DeferredPick.hpp for the three hazards it closes.
         Arcane::Editor::DeferredPick m_deferredPick;
 
         // WHICH SCENE the entities in flight belong to. Bumped by every path
@@ -1032,14 +936,12 @@ namespace Arcane::Editor
         // Shader-editor services + open documents (Slice 5). The compiler is the
         // app-shared compile service: documents Submit through it, and the
         // resolver's Refresh (phase 9) Polls/Drains it once per frame, offering
-        // each result to the open documents first -- that drain used to be the
-        // ONE place compile results became NVRHI shaders; NRI Phase 5a, Task 4
-        // /9.5b deleted that half, so today the drain only hands documents raw
-        // DXIL/SPIR-V bytecode (see ShaderEditorDocument::BindIfComplete's
-        // severance note: the bytes are retained, never bound to a device, and
-        // the graph arm builds its own NRI pipeline from exactly those bytes).
-        // Documents hold no device-bound resources any more; declared after
-        // m_runtime because they still borrow its Assets.
+        // each result to the open documents first. That drain hands documents
+        // raw DXIL/SPIR-V bytecode and nothing device-shaped (see
+        // ShaderEditorDocument::BindIfComplete: the bytes are retained, never
+        // bound to a device, and the preview builds its own NRI pipeline from
+        // exactly those bytes). Documents hold no device-bound resources;
+        // declared after m_runtime because they still borrow its Assets.
         std::unique_ptr<Arcane::ShaderCompiler> m_shaderCompiler;
         Arcane::ShaderSourceProvider            m_shaderSources;
         // Scene asset resolution (sprite-resolution lift, 2026-07-29): ONE
@@ -1160,14 +1062,6 @@ namespace Arcane::Editor
         // the tonemap and an sRGB view under it decodes a second time and
         // reads dark.
         //
-        // An `nvrhi::TextureHandle m_toolbarLogo` sat above these three until
-        // ABI v15 (NRI Phase 5a, Task 9.5b-ii), holding the NVRHI arm's own
-        // copy of the same image. It could only be filled by
-        // LoadDisplayTexture, which needed a device the editor stopped
-        // creating at Task 6, so it was a default-constructed (null) handle
-        // for its whole life and ToolbarLogoTextureId's fallback branch below
-        // always yielded 0.
-        //
         // The pixels are RETAINED (rather than decoded on demand) because the
         // cache's supply is a callback it may invoke at any Resolve, and this
         // one answers exactly one Guid.
@@ -1182,8 +1076,7 @@ namespace Arcane::Editor
         Arcane::PixelData m_graphLogoPixels;
         std::uint64_t     m_graphLogoTexture = 0;   // ImTextureID (raw nri::Texture*)
         // The toolbar's mark -- 0 = no mark, which DrawSimTimeToolbar already
-        // treats as "skip it". It chose between two arms until ABI v15; the
-        // NVRHI arm's handle is gone, so the graph one is simply it.
+        // treats as "skip it".
         [[nodiscard]] std::uint64_t ToolbarLogoTextureId() const noexcept
         {
             return m_graphLogoTexture;
@@ -1295,16 +1188,11 @@ namespace Arcane::Editor
         // calls this, and everything downstream of the dispatch is the arc's own
         // capture path with nothing special about having been asked for.
         //
-        // NO INJECTOR OBJECT ANY MORE (NRI Phase 5a). A lazily-built
-        // `unique_ptr<Arcane::GpuFaultInjector>` used to live here, holding a
-        // compute pipeline and a UAV between clicks. Task 6 deleted the NVRHI
-        // arm that was its only builder -- leaving the member permanently null
-        // and saying so in its own comment -- and Task 8b deleted the class
-        // with the rest of the NVRHI layer. NriDiagnostics::FireFault is
-        // stateless: it creates and drops its own one-off objects per
-        // dispatch, so there is nothing left to own, nothing to keep off
-        // ResetPerProjectState's list, and no NVRHI handle whose release order
-        // against the device this declaration position had to guarantee.
+        // NO INJECTOR OBJECT: NriDiagnostics::FireFault is stateless -- it
+        // creates and drops its own one-off objects per dispatch -- so there
+        // is nothing to own, nothing to keep off ResetPerProjectState's list,
+        // and no handle whose release order against the device a declaration
+        // position here would have to guarantee.
         void FireDeliberateGpuFault();
         // --crash-gpu N fired already. The menu item is deliberately NOT
         // latched by this -- a user who clicks twice meant it twice; the latch
@@ -1337,18 +1225,17 @@ namespace Arcane::Editor
         // chain (Unreal's model). Called on scene save and on clean
         // shutdown; a no-op without a project, a viewport, or a device.
         void WriteAutoScreenshot();
-        // The graph arm's half of it (NRI Phase 3, Task 11): one extra
-        // VIEWPORT frame with FrameDesc::capture armed, then ReadCapture into
-        // the shared thumbnail writer. NEVER the chrome context -- an editor
-        // cover is a picture of the scene, and see PresentChromeFrame's
-        // absence table for why a chrome capture would redefine a golden.
+        // One extra VIEWPORT frame with FrameDesc::capture armed, then
+        // ReadCapture into the shared thumbnail writer. NEVER the chrome
+        // context -- an editor cover is a picture of the SCENE, and see
+        // PresentChromeFrame's absence table for why a chrome capture would
+        // redefine what a capture means.
         //
         // NOT #if-guarded, for the same reason m_graphChrome is not (see its
         // declaration): a preprocessor-guarded member forces a guard at every
-        // use site. Reachable in EVERY configuration, Dist included, as of
-        // Phase 5a (Task 2b): GraphMode() is unconditional now, so
-        // CreateGraphVehicles' body runs and m_viewportTargets.graph is
-        // populated everywhere -- see GraphMode()'s own comment above.
+        // use site. Reachable in EVERY configuration, Dist included --
+        // CreateGraphVehicles runs unconditionally, so m_viewportTargets.graph
+        // is populated everywhere.
         bool CaptureGraphViewportPng(const std::filesystem::path& file);
 
         // Window title, recomposed from project + scene + dirty state each frame

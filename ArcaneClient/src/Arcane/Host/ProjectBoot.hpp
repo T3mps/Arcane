@@ -374,15 +374,10 @@ namespace Arcane::HostBoot
     // depend on ArcaneEditor.exe. Each host is REQUIRED to overwrite that
     // stage's `.run` by id, after calling EditorStages/RuntimeStages, before
     // constructing a BootSequence (see EditorApp::Run / RuntimeApp::Run).
-    // The editor-only splash_ready is one of these host-owned ids (Task 8c,
-    // 2026-07-30 correction) -- it used to be ctx-only shared logic (plain
-    // Window::Show()/BootSplashWindow::Close()), because it also had to draw
-    // one real frame through a host-owned swapchain-backed presenter this
-    // module cannot reach. That presenter is deleted and the reveal has moved
-    // out of the stage entirely, but the stage stays host-owned: its splash
-    // members are host state as well. See EditorStages' splash_ready
-    // push_back for the reveal-ordering reasoning and
-    // EditorApp::StageSplashReady for the body.
+    // The editor-only splash_ready is one of these host-owned ids: its
+    // splash members are host state. See EditorStages' splash_ready push_back
+    // for the reveal-ordering reasoning and EditorApp::StageSplashReady for
+    // the body.
     //
     // An id with no host override left empty is NOT tolerated silently: Make()
     // substitutes a sentinel body that logs ARC_ERROR naming the exact id and

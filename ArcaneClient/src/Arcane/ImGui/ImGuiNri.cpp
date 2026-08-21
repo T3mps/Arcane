@@ -53,9 +53,9 @@ namespace Arcane
 
         // ImDrawVert is float2 pos, float2 uv, ImU32 col = 20 bytes; the
         // vertex input below depends on it exactly. ImDrawIdx is 16-bit ->
-        // IndexType::UINT16. Same two asserts the NVRHI backend carries, and
-        // they are also NRIImgui's documented requirements (§7.4) -- so a
-        // future switch would not silently change meaning.
+        // IndexType::UINT16. These are also NRIImgui's documented
+        // requirements (§7.4), so a future switch to it would not silently
+        // change meaning.
         static_assert(sizeof(ImDrawVert) == 20,
                       "ImDrawVert layout assumed by the imgui vertex input");
         static_assert(sizeof(ImDrawIdx) == 2,
@@ -86,10 +86,9 @@ namespace Arcane
                       "RingLayout::Allocate requires a power-of-two alignment");
 
         // Clamps an ImGui clip edge into the attachment and into nri::Rect's
-        // int16_t/Dim_t fields. The NVRHI backend passed the floats straight
-        // into nvrhi::Rect's ints; nri::Rect is narrower AND unsigned in its
-        // extent half, so a negative left edge (an ImGui window dragged off
-        // the left of the surface) would wrap into a colossal width.
+        // int16_t/Dim_t fields. nri::Rect is narrow AND unsigned in its extent
+        // half, so a negative left edge (an ImGui window dragged off the left
+        // of the surface) would wrap into a colossal width.
         std::uint32_t ClampEdge(float value, std::uint32_t limit) noexcept
         {
             if (!(value > 0.0f))
@@ -250,10 +249,9 @@ namespace Arcane
         // descriptor-set entry rather than a root (static) sampler.
         //
         // VERTEX only for the root constants: imgui.hlsl reads g_scale/
-        // g_translate in vs_main and nowhere else. (The NVRHI layout said
-        // ShaderType::All; on D3D12 visibility is a hard root-signature
-        // property, and narrowing it here is free because the fragment stage
-        // genuinely never reads the block.)
+        // g_translate in vs_main and nowhere else. On D3D12 visibility is a
+        // hard root-signature property, and narrowing it is free because the
+        // fragment stage genuinely never reads the block.
         nri::RootConstantDesc rootConstant = {};
         rootConstant.registerIndex = 0;
         rootConstant.size          = sizeof(ImGuiRootConstants);
@@ -473,9 +471,8 @@ namespace Arcane
 
     void ImGuiNri::DestroyTexture(ImTextureData* tex, Graveyard& graveyard, std::uint64_t fence)
     {
-        // Evict the cache entry BEFORE the texture is buried -- the ABA rule
-        // ImGuiNvrhiRenderer::DestroyTexture states, and it is load-bearing
-        // here for a reason NVRHI did not have: NRI does not ref-count, so
+        // Evict the cache entry BEFORE the texture is buried -- an ABA rule,
+        // and load-bearing: NRI does not ref-count, so
         // once the burial runs NRI is free to hand the vacated address to a
         // replacement, and a pointer-keyed cache would report a HIT on a
         // descriptor naming freed memory.
@@ -724,10 +721,8 @@ namespace Arcane
                     graveyard.Bury(fence, [c, texture] { c->DestroyTexture(texture); });
                     return;   // already reported
                 }
-                // THE ImTextureID CONVENTION (§7.3): the raw backend texture
-                // handle, cast through intptr_t -- the NVRHI backend writes
-                // `(ImTextureID)(intptr_t)handle.Get()` and this is the same
-                // shape with nri::Texture* in place of nvrhi::ITexture*.
+                // THE ImTextureID CONVENTION (§7.3): the raw backend
+                // texture handle, cast through intptr_t.
                 tex->SetTexID((ImTextureID)(intptr_t)texture);
             }
             tex->SetStatus(ImTextureStatus_OK);
@@ -968,16 +963,15 @@ namespace Arcane
         if (!m_device)
             return;
 
-        // Mirror ImGuiNvrhiRenderer::Shutdown, including its reason for
-        // walking the PLATFORM texture list rather than only our own: that is
-        // what catches an ImTextureData we never serviced -- a stuck
+        // WALK THE PLATFORM TEXTURE LIST, not merely our own: that is what
+        // catches an ImTextureData we never serviced -- a stuck
         // WantCreate that arrived after the last frame, or a WantDestroy with
         // UnusedFrames == 0 -- and leaves its status Destroyed so a later
         // re-Init is clean. The RefCount == 1 guard is the dx11 reference's
         // "only the platform list holds a ref", i.e. only destroy what this
         // backend owns.
         //
-        // PINNED TO THE CONTEXT THIS BACKEND ADOPTED (NRI Phase 3, Task 9), not
+        // PINNED TO THE CONTEXT THIS BACKEND ADOPTED, not
         // to whatever happens to be current. The walk DISOWNS an ImTextureData
         // -- invalid TexID, plus a Destroyed request ImGui bounces back to
         // WantCreate while the CPU pixels are live -- so run against a FOREIGN

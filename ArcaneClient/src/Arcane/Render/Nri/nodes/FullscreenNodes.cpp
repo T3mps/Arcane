@@ -70,8 +70,8 @@ namespace Arcane
     void FullscreenMaterialLayout::Build(std::uint32_t cbSize, std::uint32_t textureCount,
                                          std::uint32_t chainInputs)
     {
-        // Both stages, exactly as the NVRHI layout's setVisibility(All): a
-        // merged template's %{VERTEX_BODY} may read its params and sample its
+        // Both stages: a merged template's %{VERTEX_BODY} may read its
+        // params and sample its
         // textures, and on D3D12 visibility is a hard root-signature property,
         // so narrowing to FRAGMENT would break a displacing post material.
         constexpr nri::StageBits kBothStages =
@@ -528,13 +528,12 @@ namespace Arcane
     {
         if (!m_device)
             return;
-        // THE GRAPH'S LANE, not the device's (NRI Phase 3, Task 8-pre): an
-        // exec fn runs inside that graph's Execute, so its lane is where the
-        // views it is about to bury belong -- and it is the same lane the pool
-        // retirement that moved the epoch stages into, which is what keeps the
-        // two in one ordered sequence. The owner's declaration-time call
-        // (whole-branch review, I1) names the same graph and therefore the same
-        // lane, one step EARLIER in that sequence.
+        // THE GRAPH'S LANE, not the device's: an exec fn runs inside that
+        // graph's Execute, so its lane is where the views it is about to bury
+        // belong -- and it is the same lane the pool retirement that moved the
+        // epoch stages into, which is what keeps the two in one ordered
+        // sequence. The owner's declaration-time call names the same graph and
+        // therefore the same lane, one step EARLIER in that sequence.
         Graveyard* graves = graph.Graves();
         if (!graves)
             return;   // from an exec fn: unreachable (Execute latches the lane before recording).
@@ -660,14 +659,12 @@ namespace Arcane
         m_targetFormat = targetFormat;
         m_packed.assign(cbSize, 0);
 
-        // THE POST TEXTURE GAP IS CLOSED (NRI Phase 3, Task 2). A post
-        // material's DECLARED texture params are resolved HERE -- at
+        // A POST MATERIAL'S DECLARED TEXTURE PARAMS are resolved HERE -- at
         // declaration time, because the upload submits and waits -- through
-        // the vehicle's SHARED NriTextureCache, which is the very machinery
-        // this used to say lived in Batch2DNode and was not extracted. An
-        // unbound, unresolvable or undecodable param still falls back to the
-        // white texel (the cache says why, once). Chain INPUTS are unaffected:
-        // those are graph transients and were always bound for real.
+        // the vehicle's SHARED NriTextureCache, the same one Batch2DNode
+        // uses. An unbound, unresolvable or undecodable param falls back to
+        // the white texel (the cache says why, once). Chain INPUTS are
+        // unaffected: those are graph transients, always bound for real.
         for (nri::Texture*& texture : m_paramTextures)
             texture = nullptr;
         for (nri::Descriptor*& view : m_paramViews)
@@ -774,8 +771,8 @@ namespace Arcane
             key.colorCount      = 1;
             key.depthFormat     = nri::Format::UNKNOWN;
             key.topology        = nri::Topology::TRIANGLE_LIST;
-            // OPAQUE, matching the NVRHI chain: a fullscreen pass overwrites
-            // every pixel of its target (which is also why no pass clears one).
+            // OPAQUE: a fullscreen pass overwrites every pixel of its target
+            // (which is also why no pass clears one).
             key.blend           = NriPipelineCache::GraphicsKey::Blend::Opaque;
 
             // `stages` lives in THIS frame, which encloses GetGraphics -- the
@@ -818,8 +815,7 @@ namespace Arcane
         // PostChainDesc (PostChainCache::Bind), so every pointer below moves
         // with it; the sizes are folded in so a same-address reallocation of
         // different blobs is caught too. VALUES are deliberately NOT in it --
-        // PackCB runs every frame, exactly as the NVRHI chain does, so a live
-        // param edit needs no rebuild.
+        // PackCB runs every frame, so a live param edit needs no rebuild.
         std::uint64_t stamp = HashValue((std::uint64_t)(std::uintptr_t)desc.templ.get(), kFnvOffset);
         stamp = HashValue((std::uint64_t)(std::uintptr_t)desc.instance.get(), stamp);
         stamp = HashValue(desc.chainInputSlots, stamp);
@@ -1266,7 +1262,7 @@ namespace Arcane
         if (!m_device)
             return;
         // The GRAPH's lane rather than the device's -- see
-        // PostChainNode::SyncPoolEpoch above for why (NRI Phase 3, Task 8-pre).
+        // PostChainNode::SyncPoolEpoch above for why.
         Graveyard* graves = graph.Graves();
         if (!graves)
             return;   // from an exec fn: unreachable (Execute latches the lane before recording).
@@ -1443,7 +1439,7 @@ namespace Arcane
     RgTexture AddTonemapNode(RenderGraph& graph, NriGraphContext* context, RgTexture source,
                              nri::Texture* offscreenOutput)
     {
-        // The offscreen import's entry/exit pair (NRI Phase 3, Task 7). Stated
+        // The offscreen import's entry/exit pair. Stated
         // here, beside the one call that uses them, rather than on
         // NriGraphContext: they describe how THE TONEMAP treats its target, and
         // the swapchain's equivalents live in RenderGraphBuilder::

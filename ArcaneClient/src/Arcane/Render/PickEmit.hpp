@@ -144,8 +144,8 @@ namespace Arcane
     // id buffer is supersampled by `ss` (center subsample), clamped to [0, dim).
     ARCANE_API glm::ivec2 PickSampleTexel(glm::vec2 pixel1x, uint32_t ss, uint32_t idW, uint32_t idH);
 
-    // THE VIEWPORT ID PASS'S SUPERSAMPLE FACTOR -- ONE number for BOTH recorders
-    // (NRI Phase 3, D3c). The id target is sized ss*width x ss*height while the
+    // THE VIEWPORT ID PASS'S SUPERSAMPLE FACTOR -- ONE number, read by
+    // everything that depends on it. The id target is sized ss*width x ss*height while the
     // world->clip map stays LOGICAL, so the same silhouettes rasterise at ss x
     // density; outline_seed.hlsl then averages the ss*ss subsamples of each 1x
     // pixel into a SUB-PIXEL edge centroid (its `ctr`), which is the seed
@@ -154,33 +154,28 @@ namespace Arcane
     // That makes this factor PIXEL-VISIBLE, not a quality knob: at ss=1 every
     // seed sits at its pixel centre, at ss=2 it sits up to a quarter-pixel off
     // it, and the composite's AA ramp is only 1 px wide -- so the two produce
-    // visibly different outline edges. It used to be a literal 2 at
-    // EditorApp's PickBuffer::Create and a literal 1 at PickNode::kSuperSample,
-    // and the editor's `full` golden compare across the two arms is exactly
-    // what found it. Both now read THIS, so they cannot drift apart again.
+    // visibly different outline edges. It is a named constant, not a literal
+    // at each site, for exactly that reason: two copies would drift and the
+    // symptom would be a subtly different outline.
     inline constexpr uint32_t kPickSupersample = 2;
 
     // =====================================================================
-    // THE ID PASS'S GEOMETRY -- one emitter, two recorders (NRI Phase 2,
-    // Task 11).
+    // THE ID PASS'S GEOMETRY -- ONE emitter.
     //
-    // This used to be a file-local block inside PickBuffer.cpp. It moved here
-    // when the NRI graph path grew its own pick node (Render/Nri/nodes/
-    // PickOutlineNodes.cpp): both recorders MUST build the same vertices from
-    // the same drawables in the same order, because the 1-based id a vertex
-    // carries IS the id<->entity mapping every consumer inverts
-    // (PickEntityForId). Two independent copies of this loop would be two id
-    // assignments that agree until one of them is edited -- the same reasoning
-    // that keeps ONE Batcher2D feeding both 2D recorders.
+    // A recorder MUST build these vertices from these drawables in this
+    // order, because the 1-based id a vertex carries IS the id<->entity
+    // mapping every consumer inverts (PickEntityForId). A second copy of this
+    // loop would be a second id assignment that agrees until one of them is
+    // edited -- the same reasoning that keeps ONE Batcher2D feeding the 2D
+    // path.
     //
-    // Pure and headless: no render device, no nvrhi, no nri.
+    // Pure and headless: no render device, no graphics API at all.
     // =====================================================================
 
     // Per-vertex data for the id pass, matching entity_id.hlsl's VSInput. The
-    // C++ attribute array order at EITHER recorder MUST match that struct's
-    // member order (nvrhi assigns Vulkan input locations by declaration order;
-    // NRI takes an explicit vk.location, and D3D matches the custom semantic
-    // name at SemanticIndex 0).
+    // C++ attribute array order at the recorder MUST match that struct's
+    // member order (NRI takes an explicit vk.location, and D3D matches the
+    // custom semantic name at SemanticIndex 0).
     struct PickIdVertex
     {
         glm::vec2 pos;      // canvas px: the rotated bounding-quad corner

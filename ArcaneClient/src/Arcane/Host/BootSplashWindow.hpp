@@ -7,9 +7,9 @@
 // Windows-only; a no-op elsewhere. It must NEVER be able to fail boot -- every
 // failure path degrades to "no splash" silently.
 //
-// Task 8c (2026-07-30 correction, "the splash carries the loading UI, not the
-// editor window"): this is now where BootProgress is actually RENDERED for the
-// whole boot -- see BootSplashPresenter below. UE's shape, which we copy:
+// THE SPLASH CARRIES THE LOADING UI, not the editor window: this is where
+// BootProgress is RENDERED for the whole boot -- see BootSplashPresenter
+// below. UE's shape, which we copy:
 // engine init/module-plugin-load/startup-map-load all run with the splash up
 // and report into it (UnrealEdGlobals.cpp:167-194, FeedbackContextEditor.cpp:
 // 668-669), and the main window is not revealed until loading is finished
@@ -34,13 +34,11 @@ namespace Arcane
     public:
         // Never throws. IsOpen() reflects ONLY whether the OS window itself was
         // created -- a missing, unreadable, or corrupt image never affects it.
-        // (An earlier revision of this comment claimed a bad image made
-        // IsOpen() false; that was never actually true, and became doubly
-        // wrong once Task 8c started reading imagePath at all -- the image is
-        // loaded best-effort, AFTER the window exists, and a failure there
-        // just leaves the class background brush as the whole splash. See
-        // SetStatusText/SetProgress below for the same always-degrade,
-        // never-fail contract on the live status/progress updates.)
+        // The image is loaded best-effort, AFTER the window exists, and a
+        // failure there just leaves the class background brush as the whole
+        // splash. See SetStatusText/SetProgress below for the same
+        // always-degrade, never-fail contract on the live status/progress
+        // updates.
         explicit BootSplashWindow(const char* imagePath) noexcept;
         ~BootSplashWindow();
 
@@ -131,24 +129,15 @@ namespace Arcane
 
     // BootSplashPresenter: the pre-device IBootPresenter. Forwards every
     // BootProgress update to the splash window's SetStatusText/SetProgress
-    // instead of drawing a swapchain frame (Task 8c). Wired as BootSequence::
-    // Run's ONE presenter for the WHOLE boot, from runtime_create through
-    // finalize -- and, since the GraphFlavor() collapse, the ONLY presenter
-    // there is. A swapchain-backed Arcane::BootPresenter used to be drawn once
-    // more, explicitly, by the LAST stage's own body
-    // (EditorApp::StageSplashReady / RuntimeApp::StageFinalize) and never
-    // through this per-stage pump; both hosts reveal their window from the
-    // graph vehicle's creation now instead, and that class is deleted. See the
-    // design doc's Task 8c correction
-    // (docs/specs/2026-07-29-async-boot-loading-screen-design.md) for the
-    // original "who draws what, when" picture -- it predates the deletion.
+    // rather than drawing a frame. Wired as BootSequence::Run's ONE presenter
+    // for the WHOLE boot, from runtime_create through finalize -- and the ONLY
+    // presenter there is. Both hosts reveal their window from the render
+    // vehicle's creation instead.
     //
     // Header-only and deliberately NOT ARCANE_API: it derives from the
     // exported IBootPresenter interface but is compiled straight into each
-    // host's own TU (EditorApp.cpp / RuntimeApp.cpp), replacing the
-    // per-host LazyBootPresenter nested class those files used to hand-roll
-    // for the same "one stable IBootPresenter& for the whole Run() call"
-    // reason -- this is that same shape, shared instead of duplicated.
+    // host's own TU (EditorApp.cpp / RuntimeApp.cpp), which is what gives each
+    // one stable IBootPresenter& for the whole Run() call.
     class BootSplashPresenter final : public IBootPresenter
     {
     public:

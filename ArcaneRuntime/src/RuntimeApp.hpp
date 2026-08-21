@@ -19,7 +19,7 @@
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only --crash-gpu N (kPassName only; the injector is NriDiagnostics::FireFault)
-#include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle; unconditional as of Phase 5a
+#include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle; unconditional
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 namespace Astra { class TypeContext; }
@@ -27,7 +27,7 @@ class RuntimeApp
 {
 public:
     // `splash` is a NON-OWNING pointer to main()'s stack-local
-    // Arcane::BootSplashWindow (Task 8, async-boot arc) -- same ordering
+    // Arcane::BootSplashWindow -- same ordering
     // contract as EditorApp's ctor: main constructs and ultimately closes it;
     // RuntimeApp only reads it during Run()'s boot sequence. Null tolerated.
     explicit RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash = nullptr);
@@ -35,16 +35,13 @@ public:
 
     // Pushes the scene's ACTIVE Camera entity into the plugin's stored camera,
     // with the once-only diagnostics for "no usable camera" / "several".
-    // Extracted verbatim from MainLoop's NVRHI block by NRI Phase 2 Task 8 so
-    // the graph path -- which now also drives the plugin's render submission --
-    // gets the same view instead of a second copy of this reasoning.
+    // ONE copy of this reasoning, shared: it is the view the plugin's render
+    // submission is driven with.
     //
-    // Public since NRI Phase 3 Task 4: MainLoop's frame body moved to free
-    // functions in namespace Arcane::RuntimeFrame (RuntimeFrame.hpp/.cpp), and
-    // RenderGraph calls this through FrameIo::app -- a free function cannot
-    // reach a private RuntimeApp member. See RuntimeFrame.hpp's header
-    // comment. (RenderNvrhi called it too until NRI Phase 5a, Task 4 deleted
-    // that arm; RenderGraph is the only caller left.)
+    // PUBLIC because MainLoop's frame body lives in free functions in
+    // namespace Arcane::RuntimeFrame (RuntimeFrame.hpp/.cpp): RenderGraph
+    // calls this through FrameIo::app, and a free function cannot reach a
+    // private RuntimeApp member. See RuntimeFrame.hpp's header comment.
     void PushSceneCamera(float viewportWidth, float viewportHeight);
 private:
     // ---- Boot (RuntimeApp.cpp) -------------------------------------------
@@ -56,10 +53,8 @@ private:
     // type_context_install/project_open/input_config are NOT in this list --
     // their RuntimeStages/CoreStages body is genuinely shared and used as-is
     // (project_open's Fatal-ABI-refusal override lives IN RuntimeStages
-    // itself, not here -- see ProjectBoot.cpp). StageFinalize joined this
-    // list in Task 8c (2026-07-30 correction): it now performs the window
-    // reveal (see its own comment), which RuntimeStages' "finalize" id used
-    // to have patched to an explicit no-op.
+    // itself, not here -- see ProjectBoot.cpp). StageFinalize is in this
+    // list because it performs the window reveal -- see its own comment.
     bool StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx);
     bool StageGpuCore(Arcane::HostBoot::BootContext& ctx);
     bool StageRenderBridge(Arcane::HostBoot::BootContext& ctx);
@@ -70,45 +65,39 @@ private:
     void MainLoop();
     void Shutdown();
 
-    // The graph path (NRI Phase 2, Task 7): destroy the vehicle and fold a
-    // grown RenderErrorCount into m_graphExit. Idempotent, and a no-op only if
-    // m_graphContext was never created (a boot failure before it) -- as of
-    // Phase 5a (Task 2b) that is the sole reason, not whether --nri-graph was
-    // given. MainLoop calls it on EVERY exit path (including the golden
-    // warm-up's early returns), because the latch must be read after the
+    // Destroy the render vehicle and fold a grown RenderErrorCount into
+    // m_graphExit. Idempotent, and a no-op only if m_graphContext was never
+    // created (a boot failure before it) -- that is the sole reason. MainLoop
+    // calls it on EVERY exit path, because the latch must be read after the
     // last NRI object is gone.
     void ShutdownGraphPath();
 
     Arcane::HostConfig                  m_config;
     std::unique_ptr<Arcane::GpuContext> m_gpu;          // destructs LAST among engine state
 
-    // --nri-graph's whole render half: the native device, NRI wrap, swapchain
-    // (over the HOST's window, borrowed -- NRI Phase 3, Task 6), upload ring,
-    // pipeline cache and RenderGraph. LIVE ON EVERY RUN as of Phase 5a
-    // (Task 2b): the NRI frame graph is the only render path now,
-    // unconditionally, in every configuration including Dist -- this is null
-    // only on a failed boot (MainLoop's `if (!m_graphContext)` returns before
-    // the loop starts).
+    // THE WHOLE RENDER HALF: the native device, NRI wrap, swapchain (over
+    // the HOST's window, borrowed), upload ring, pipeline cache and
+    // RenderGraph. LIVE ON EVERY RUN, in every configuration including Dist
+    // -- this is null only on a failed boot (MainLoop's
+    // `if (!m_graphContext)` returns before the loop starts).
     //
-    // NOT #if-guarded (never was): the type is compiled into the engine DLL
-    // in every configuration (it is ordinary Render/Nri source), and a
+    // NOT #if-guarded: the type is compiled into the engine DLL in every
+    // configuration (it is ordinary Render/Nri source), and a
     // preprocessor-guarded MEMBER would force every use site in MainLoop's
     // frame body to grow a guard of its own -- which is exactly how a
     // Dist-only compile break gets introduced. The CREATION is unconditional
-    // too now (Phase 5a, Task 2b); there is no configuration left where this
-    // carries a null pointer on an ordinary run.
+    // too; there is no configuration where this carries a null pointer on an
+    // ordinary run.
     //
-    // Declared AFTER m_gpu so it destructs BEFORE it, and since Task 6 that
-    // ordering is LOAD-BEARING rather than merely tidy: this object's
-    // swapchain is bound to the window inside m_gpu (NriGraphContext.hpp, THE
-    // BORROWED WINDOW), so it must be gone before that window is.
+    // Declared AFTER m_gpu so it destructs BEFORE it, and that ordering is
+    // LOAD-BEARING rather than merely tidy: this object's swapchain is bound
+    // to the window inside m_gpu (NriGraphContext.hpp, THE BORROWED WINDOW),
+    // so it must be gone before that window is.
     std::unique_ptr<Arcane::NriGraphContext> m_graphContext;
 
-    // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
-    // Task 8c: this is now BootSequence::Run's presenter for the WHOLE boot,
-    // not merely a pre-device stand-in. The old LazyBootPresenter nested
-    // class that used to live here is gone -- see EditorApp.hpp's matching
-    // comment for why it is no longer needed by either host.
+    // The boot splash: non-owning, see the ctor's doc comment. It is
+    // BootSequence::Run's presenter for the WHOLE boot, not merely a
+    // pre-device stand-in -- see EditorApp.hpp's matching comment.
     Arcane::BootSplashWindow*             m_splash = nullptr;
     // A class member, not a Run()-local (2026-07-30 review round 2, finding
     // 2): StageFinalize needs to call Disarm() on THIS exact instance right
@@ -133,7 +122,7 @@ private:
     int                                  m_graphExit  = 0;
     std::uint64_t                        m_graphErrorBaseline = 0;
 
-    // --pick-probe (NRI Phase 2, Task 11). THIS is the id<->entity table: the
+    // --pick-probe. THIS is the id<->entity table: the
     // k-th drawable's hit-proxy id is k+1 (CollectPickables' ordering
     // contract), so the vector the graph's pick node rasterised is the same one
     // PickEntityForId inverts when the readback lands. Rebuilt every frame of a
@@ -152,11 +141,9 @@ private:
     // item-2 trigger -- the same deliberate fault the editor's Build ->
     // Diagnostics menu item fires, on the host that has no menu.
     //
-    // ONLY THE FIRED-ONCE LATCH IS LEFT. A `unique_ptr<GpuFaultInjector>` sat
-    // beside it until NRI Phase 5a: Task 4 deleted RenderNvrhi, the one thing
-    // that ever built it, and Task 8b deleted the class. RenderGraph's arm
-    // calls the stateless NriDiagnostics::FireFault, which owns its objects for
-    // the length of one dispatch, so nothing is held between frames.
+    // ONLY THE FIRED-ONCE LATCH IS NEEDED: RenderGraph calls the stateless
+    // NriDiagnostics::FireFault, which owns its objects for the length of one
+    // dispatch, so nothing is held between frames.
     bool                                      m_gpuFaultFired = false;
 #endif
 
@@ -172,12 +159,11 @@ private:
     //
     // DECLARED LAST = DESTRUCTS FIRST, which the resolver's header requires: the
     // registry inside m_runtime holds non-owning pointers to its tables, so
-    // the resolver must un-publish them before ~Runtime runs. (The matching
-    // "before the render device" half of this rule died with the nvrhi
-    // keep-alive texture map it referred to -- NRI Phase 5a, Task 7, see
-    // SpriteCache.cpp's own note -- the resolver holds no device-bound handle
-    // any more.) The compile service + template source roots feed it and are
-    // declared before it for the same reason.
+    // the resolver must un-publish them before ~Runtime runs. There is no
+    // "before the render device" half to this rule: the resolver holds no
+    // device-bound handle at all (see SpriteCache.cpp's own note). The
+    // compile service + template source roots feed it and are declared
+    // before it for the same reason.
     Arcane::ShaderCompiler       m_shaderCompiler;
     Arcane::ShaderSourceProvider m_shaderSources;
     std::optional<Arcane::SceneRenderResolver> m_resolver;

@@ -120,10 +120,9 @@ namespace Arcane
             try
             {
                 // VulkanDeviceCreation's loader member throws when
-                // vulkan-1.dll is absent -- the same throw the NVRHI factory
-                // caught at make_unique<DeviceVulkan>() until Task 8b deleted
-                // it. Caught here for the same reason, and now the only place
-                // it is caught (null on a Vulkan-less host, never an escape).
+                // vulkan-1.dll is absent. Caught HERE, and this is the only
+                // place it is caught: null on a Vulkan-less host, never an
+                // escape.
                 owner->m_impl->vulkan = std::make_unique<VulkanDeviceCreation>();
                 if (!CreateVulkanNativeDevice(desc, *owner->m_impl->vulkan))
                     return nullptr;
@@ -403,7 +402,7 @@ namespace Arcane
             return;
 
         // ==============================================================
-        // LOST D3D12 DEVICE: STOP HERE AND LEAK. (NRI Phase 3, D3b teardown.)
+        // LOST D3D12 DEVICE: STOP HERE AND LEAK.
         // ==============================================================
         // Only when the loss has actually been OBSERVED, and only on D3D12.
         // The healthy path below is untouched and stays the only path any

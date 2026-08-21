@@ -14,31 +14,14 @@
 // reorder.
 //
 // =====================================================================
-// ONE FLAVOR (NRI Phase 5a, Task 6)
+// ONE FLAVOR, AND NO FLAVOR PREDICATE
 // =====================================================================
-// This class briefly carried two flavors (NRI Phase 3, Task 6): a default
-// NVRHI half (RenderDevice/Swapchain/ShaderLibrary/Canvas/TonemapPass/command
-// list/GpuFrameProgress) and a device-less "graph" half (this one). The NVRHI
-// factory had zero callers anywhere in the tree by the time this task landed
-// -- every host went through CreateForGraph -- so the split promised to
-// resolve "at Phase 5" is discharged here: the NVRHI half is deleted outright
-// rather than ported, and CreateForGraph is renamed to Create, the one
-// factory left.
-//
 // Create() builds the window (which the caller's NRI render vehicle then
 // binds: ONE window per process, DXGI permits one flip-model swapchain per
-// HWND), a DEVICE-LESS Batcher2D, ImGuiLayer, and the input stack. Nothing
-// else -- there is no RenderDevice, Swapchain, ShaderLibrary, Canvas or
-// command list anywhere in this object.
-//
-// THERE IS NO FLAVOR PREDICATE ANY MORE. This class carried a GraphFlavor()
-// accessor over a m_graphFlavor member through the whole NRI port; Create()
-// set it true before its first fallible step and the constructor is private,
-// so it had answered true unconditionally since the Phase 5a flip. It was
-// retired in the follow-on collapse that also deleted BootPresenter (its two
-// `!GraphFlavor()` gates were that class's only remaining construction
-// sites), because retiring it MOVES the test gate -- ArcaneTests asserted on
-// it twice -- which the phase's own tasks were forbidden to do.
+// HWND), a DEVICE-LESS Batcher2D, ImGuiLayer, and the input stack. NOTHING
+// ELSE -- there is no render device, swapchain, shader library, canvas or
+// command list anywhere in this object, so there is nothing for a flavor
+// predicate to select between.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/ImGui/ImGuiLayer.hpp>

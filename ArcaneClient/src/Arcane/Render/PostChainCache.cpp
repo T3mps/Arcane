@@ -55,7 +55,7 @@ namespace Arcane
         struct Entry
         {
             std::shared_ptr<MaterialInstance> instance;
-            // The SAME bind, as bytes (NRI Phase 2, Task 10). Filled beside
+            // The SAME bind, as bytes. Filled beside
             // `instance` so the two can never disagree about which compile is
             // live -- see PostChainCache::Desc.
             PostChainDesc desc;
@@ -95,10 +95,8 @@ namespace Arcane
     void PostChainCache::Invalidate(const Guid& id)
     {
         // Keep the bound entry: it stays rendering (last-good) until the
-        // fresh compile lands and Bind() overwrites e.desc.passes wholesale.
-        // (Before NRI Phase 5a, Task 4 deleted FullscreenMaterialChain, an
-        // NVRHI SetChain call did the equivalent atomic swap on the device
-        // side too; Bind()'s publish is the only swap left.)
+        // fresh compile lands and Bind() overwrites e.desc.passes wholesale
+        // -- that publish is the only swap there is.
         m_impl->pending.erase(id);
         m_impl->failed.erase(id);
         if (m_impl->bound.contains(id))
@@ -265,16 +263,10 @@ namespace Arcane
     {
         Impl& im = *this;
 
-        // The compiled blobs for the graph recorder's PostChainNode (NRI Phase
-        // 2, Task 10 -- PostChainDesc). MOVED out of the pending jobs rather
-        // than copied, so nothing is duplicated and nothing is compiled twice.
-        //
-        // NRI Phase 5a, Task 4: this used to ALSO build an NVRHI
-        // FullscreenMaterialChain here, device-gated (the severance from NRI
-        // Phase 3, Task 2 -- SpriteMaterialCache::Bind's twin). Both that
-        // chain's only callers (OffscreenCanvas::SetPostChain, RenderNvrhi)
-        // are deleted, so the gated half is deleted with them; `passBytes` is
-        // all this loop collects now.
+        // The compiled blobs for the graph recorder's PostChainNode
+        // (PostChainDesc). MOVED out of the pending jobs rather than copied,
+        // so nothing is duplicated and nothing is compiled twice.
+        // `passBytes` is all this loop collects.
         std::vector<PostChainPassDesc> passBytes;
         passBytes.reserve(p.jobs.size());
         for (std::size_t i = 0; i < p.jobs.size(); ++i)
@@ -300,12 +292,8 @@ namespace Arcane
         }
         ApplyMaterialParams(p.data, *inst);
 
-        // NRI Phase 5a, Task 4: this used to gate an NVRHI chain rebuild
-        // (FullscreenMaterialChain::Create + SetChain) on `im.services.device`
-        // before reaching the publish below, so a device-less run (the graph
-        // arm) skipped straight to it. With that chain deleted there is
-        // nothing left to gate -- the publish below is unconditional now,
-        // which is exactly the device-less run's old behaviour.
+        // THE PUBLISH IS UNCONDITIONAL: there is no device-side chain to
+        // rebuild first, so nothing gates it.
         Entry& e = im.bound[p.id];
         e.instance = std::move(inst);
 
@@ -319,10 +307,8 @@ namespace Arcane
         e.desc.chainInputSlots = p.chainInputSlots;
         e.desc.passes          = std::move(passBytes);
 
-        // A texture-param WARM used to sit here, gated on Services::device --
-        // never reachable, because that field was null on every run since the
-        // Phase 5a flip. It went with the field at Task 9.5a. Residency for the
-        // same Guids is the graph recorder's job on its OWN device, through
+        // NO TEXTURE-PARAM WARM HAPPENS HERE. Residency for these Guids is
+        // the graph recorder's job, on its OWN device, through
         // NriTextureCache; there was never a second place for it to happen.
     }
 }

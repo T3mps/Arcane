@@ -46,27 +46,20 @@ namespace Arcane
     // own objects -- VMA allocator, queues, render-pass caches -- against it,
     // while our VkDevice/ID3D12Device is left untouched).
     //
-    // For the engine's own device that owner used to be `DeviceVulkan`/
-    // `DeviceD3D12` (they held their creation half as a member) before NRI
-    // Phase 5a, Task 8b deleted both; today NativeDeviceOwner (this class)
-    // owns the creation half for every device in the process, including the
-    // engine's own -- there is no other owner left.
+    // NativeDeviceOwner (this class) owns the creation half for EVERY device
+    // in the process -- there is no other owner.
     class ARCANE_API NativeDeviceOwner
     {
     public:
-        // Runs the SAME creation half the (deleted) NVRHI RenderDevice path
-        // used to run -- literally the same function -- so what gets wrapped
-        // is what the engine boots with. Returns null on failure (reason
-        // already logged).
+        // Runs the creation half (DeviceCreation{D3D12,Vulkan}) and wraps
+        // what it produced. Returns null on failure (reason already logged).
         //
-        // One live Vulkan device per process: the Vulkan-Hpp default
+        // ONE LIVE VULKAN DEVICE PER PROCESS: the Vulkan-Hpp default
         // dispatcher binds ONE VkDevice (see VulkanDispatchStorage.cpp), so
         // do not hold one of these alongside another live Vulkan device
-        // wrapper. (Through Phase 2 that meant `RenderDevice`; RenderDevice
-        // is deleted as of Task 8b, so this NativeDeviceOwner is now the only
-        // such wrapper in the process -- the rule is unreachable rather than
-        // active, but the underlying one-VkDevice-per-process fact still
-        // holds.)
+        // wrapper. Nothing in the tree does today -- this is the only such
+        // wrapper -- but the underlying constraint is the dispatcher's, not
+        // ours.
         static std::unique_ptr<NativeDeviceOwner> Create(const RenderDeviceDesc& desc);
 
         ~NativeDeviceOwner();

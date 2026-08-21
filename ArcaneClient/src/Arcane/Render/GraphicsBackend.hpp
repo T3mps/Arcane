@@ -2,12 +2,10 @@
 
 // Render module: WHICH graphics API this process is running on.
 //
-// NRI Phase 5a, Task 8a: the enum used to sit at the top of
-// Render/Device.hpp, the NVRHI device interface Task 8b deleted -- so
-// every consumer of "which backend?" pulled <nvrhi/nvrhi.h> transitively,
-// including Render/ShaderPaths.hpp (whose whole job is picking dxil-or-spirv)
-// and the host's own HostConfig. It has no NVRHI dependency of its own and
-// never had one, so it moved to a header that has none either.
+// It lives in a header of its own, with no graphics-API dependency at all,
+// so a consumer that only needs to know "which backend?" -- ShaderPaths (whose
+// whole job is picking dxil-or-spirv), the host's HostConfig -- pulls in
+// nothing else.
 //
 // Deliberately NOT an "RHI backend" enum with a NONE/Null member: the value
 // answers "dxil or spirv, D3D12 or Vulkan" for shader paths, golden-image

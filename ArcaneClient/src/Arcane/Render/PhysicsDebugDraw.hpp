@@ -15,7 +15,7 @@
 //
 // PRESENTATION BOUNDARY: this file lives in Arcane.dll (Render/).  It includes
 // PhysicsWorld.hpp (Core) and Batcher2D.hpp.  Core never includes Render --
-// the boundary is one-way.  No Astra / SDL3 / NVRHI headers in the options
+// the boundary is one-way.  No Astra / SDL3 / graphics headers in the options
 // struct itself; only Batcher2D.hpp is included here.
 
 #include <Arcane/Base/Api.hpp>

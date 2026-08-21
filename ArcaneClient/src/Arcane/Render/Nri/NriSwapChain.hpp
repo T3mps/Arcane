@@ -1,6 +1,6 @@
 #pragma once
 
-// NRI substrate (Phase 1, Task 8): NRISwapChain over our SDL window, plus
+// NRISwapChain over our SDL window, plus
 // kSwapchainFramesInFlight-deep frame pacing on ONE timeline nri::Fence.
 //
 // Adapted from .example/NRISamples (MIT -- see that tree's LICENSE.txt):
@@ -35,18 +35,15 @@
 // An OUT_OF_DATE-only auto-recreate would therefore "fix" the hard VK error
 // but never the soft one, silently continuing to present into a suboptimal
 // surface until a genuinely fatal acquire forced a recreate. The window's
-// resize EVENT (driven externally into Resize(), the same shape
-// GpuContext::OnResize drove for the NVRHI swapchains before NRI Phase 5a,
-// Task 6 deleted it) is complete and covers both backends uniformly, so it is
-// the only trigger this class listens to.
+// resize EVENT, driven externally into Resize(), is complete and covers both
+// backends uniformly, so it is the only trigger this class listens to.
 // AcquireNextTexture()/Present() still handle a stray OUT_OF_DATE (the one
 // VK CAN report) as an ordinary, non-latching skip -- see the .cpp.
 //
 // -------------------------------------------------------------------------
-// Frame pacing vs GpuFrameSlot (Render/GpuInstrumentation.hpp)
+// Frame pacing
 // -------------------------------------------------------------------------
-// Same shape as the NVRHI swapchains' GpuFrameSlot pacing, replumbed onto
-// NRI's fence model: ONE timeline nri::Fence, kSwapchainFramesInFlight slots
+// ONE timeline nri::Fence, kSwapchainFramesInFlight slots
 // (Render/FramePacing.hpp -- reused, not reinvented), signalled with an
 // increasing value at the tail of Present() and waited on at the top of
 // AcquireNextTexture() once frameCounter >= kSwapchainFramesInFlight (so the
@@ -60,12 +57,8 @@
 // discards its VkResult; FenceD3D12::Wait either busy-waits or blocks on
 // WaitForSingleObjectEx for the same 5s. Calling either directly from the
 // pacing wait would park the render thread for up to 5s publishing nothing,
-// which is exactly the trap GpuFrameSlot's header comment described for
-// nvrhi's waitEventQuery -- a hung GPU must not look like a hung process.
-// (That class and its PollingWaitForStampedQuery were deleted at NRI Phase
-// 5a, Task 9.5a. The NVRHI swapchains they served were already gone by then --
-// deleted one task earlier, at Task 8b; the RULE outlived both and is
-// enforced here.) So the wait here is our own poll loop --
+// which is exactly the trap this wait exists to avoid: A HUNG GPU MUST NOT
+// LOOK LIKE A HUNG PROCESS. So the wait here is our own poll loop --
 // GetFenceValue(fence) >= value, SDL_DelayNS(1ms), Diagnostics::Heartbeat() +
 // Diagnostics::GpuHeartbeatRefresh() every iteration, over a 15s window --
 // falling back to the blocking Core().Wait() only once that window has
@@ -74,14 +67,13 @@
 // -------------------------------------------------------------------------
 // What this exposes, and what it deliberately does not
 // -------------------------------------------------------------------------
-// Phase 2's frame graph presents THROUGH this class -- it is not scaffolding
-// and carries no deletion comment. It exposes exactly what Task 9's smoke and
-// Phase 2 need: the acquired nri::Texture*, its acquire/release fences (so
+// The frame graph presents THROUGH this class. It exposes exactly what a
+// graph recorder needs: the acquired nri::Texture*, its acquire/release fences (so
 // the caller's OWN command-buffer submission can wait/signal them -- see
 // AcquireNextTexture()), the resolved format, and the texture count. It does
 // NOT create texture views/descriptors (NRISamples' CreateTextureView calls
-// are deliberately not replicated here) -- that is frame-graph machinery and
-// belongs to Phase 2, not the swapchain wrapper.
+// are deliberately not replicated here) -- that is frame-graph machinery,
+// not the swapchain wrapper's.
 
 #include <NRI.h>
 #include <Extensions/NRISwapChain.h>
@@ -101,9 +93,7 @@ namespace Arcane
     class ARCANE_API NriSwapChain
     {
     public:
-        // `device` and `window` must outlive this object (same contract the
-        // NVRHI swapchains carried, back when Render/Device.hpp's
-        // CreateSwapchain comment stated it -- that file is deleted).
+        // `device` and `window` must outlive this object.
         // Window must have been created with a valid native handle (HWND on
         // Windows -- Window::NativeHandle()). Returns null on failure, reason
         // already logged.
@@ -157,10 +147,8 @@ namespace Arcane
         // leaves the caller holding a silently dangling pointer. There is no
         // cheap structurally-safe alternative (deferring the free until a
         // Present() that a resize may have already made impossible is frame-
-        // graph machinery, not this class's job) -- the reference NVRHI
-        // Vulkan swapchain had the identical gap (SwapchainVulkan::Resize, in
-        // the deleted DeviceVulkan.cpp, also unconditional). Task 9's frame loop (and
-        // every later caller) MUST sequence Resize() -- driven by the
+        // graph machinery, not this class's job). EVERY caller MUST
+        // sequence Resize() -- driven by the
         // window's resize event -- at frame boundaries only, never between
         // Acquire and Present. Debug builds ARC_ASSERT this; release builds
         // ARC_WARN loudly and proceed (see the .cpp) -- there is no safe
@@ -171,28 +159,24 @@ namespace Arcane
         // the first swapchain texture, same as the samples) -- NOT assumed.
         // NRI's SwapChainFormat is an abstract BT709/BT2020 classification,
         // not a channel-order pin: D3D12's own concrete mapping table
-        // hardcodes BT709_G22_8BIT -> DXGI_FORMAT_R8G8B8A8_UNORM (RGBA, not
-        // NVRHI's BGRA -- its own SwapChainD3D12.hpp, no longer in the tree),
-        // and VK's format-priority sort
-        // also prefers R8G8B8A8_UNORM over B8G8R8A8_UNORM when both are
-        // available (SwapChainVK.hpp). Callers that need to compare against
-        // NVRHI's BGRA8_UNORM must read this, not assume it.
+        // hardcodes BT709_G22_8BIT -> DXGI_FORMAT_R8G8B8A8_UNORM (RGBA), and
+        // VK's format-priority sort also prefers R8G8B8A8_UNORM over
+        // B8G8R8A8_UNORM when both are available (SwapChainVK.hpp). A caller
+        // that needs to know the channel order must READ this, never assume
+        // it.
         [[nodiscard]] nri::Format Format() const { return m_format; }
         [[nodiscard]] uint32_t Width() const { return m_width; }
         [[nodiscard]] uint32_t Height() const { return m_height; }
         [[nodiscard]] uint32_t TextureCount() const { return (uint32_t)m_textures.size(); }
 
-        // THE GPU-PROGRESS COUNTER for this path (NRI Phase 3, Task 5): how
+        // THE GPU-PROGRESS COUNTER for this path: how
         // many of this swapchain's pacing signals the device has actually
         // passed, i.e. GetFenceValue on the timeline fence Present() signals
         // with `frameCounter + 1`.
         //
-        // It was `GpuFrameProgress`'s 1:1 replacement, not an approximation
-        // of one, and since NRI Phase 5a Task 9.5a deleted that class it is
-        // simply THE GPU-progress source. GpuFrameProgress existed because
-        // nvrhi exposed no cross-backend completed-instance query and had to
-        // stamp its OWN event-query chain to get one; NRI's timeline fence IS
-        // that query, already stamped once per present by the pacing signal, and
+        // THE GPU-progress source, and honest by construction rather than by
+        // approximation: NRI's timeline fence IS the completed-instance
+        // query, already stamped once per present by the pacing signal and
         // already read non-blockingly by the pacing wait. So the graph path
         // publishes THIS to Diagnostics::GpuHeartbeat (via
         // NriDiagnostics::PublishHeartbeat) instead of building a second

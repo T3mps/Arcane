@@ -72,23 +72,17 @@ namespace Arcane::Diag
     void FreezeBreadcrumbsOnDeviceLoss(GpuBreadcrumbs& breadcrumbs, const Envelope& envelope)
     {
         // "device-alive" is the one healthy verdict a crash backend can
-        // report. The two GPU-API backends that historically produced it
-        // (GpuCrashD3D12's RemovedReasonKind, GpuCrashVulkan's lost-probe)
-        // were BOTH DELETED at NRI Phase 5a, Task 9.5a -- but the branch is
-        // NOT dead: NriGraphCrashBackend::CollectFault (Nri/NriDiagnostics.cpp)
-        // is the one live crash backend today, and it sets fault.type to
-        // "device-alive" for every gpu-stall report (the watchdog's verdict on
-        // a device that is merely slow, not lost). So this branch is reached
-        // through that non-empty, `!= "device-alive"` path on every gpu-stall
-        // report, not only through the EMPTY case below -- it is load-bearing,
-        // not vestigial: treating the guard as dead and deleting it would make
-        // the ring freeze on every gpu-stall, destroying the crash-time
-        // breadcrumb ring on a device that never actually died. The string is
-        // also the envelope's published contract (DiagEnvelopeTest pins
-        // fault.type's round-trip shape). Restoring the readback the two
-        // deleted backends used to provide belongs to Phase 4's native
-        // marker layer (see IGpuCrashBackend.hpp's matching note) -- that
-        // layer has not landed, so nothing re-supplies it yet.
+        // report, and this guard is LOAD-BEARING, not vestigial:
+        // NriGraphCrashBackend::CollectFault (Nri/NriDiagnostics.cpp) sets
+        // fault.type to "device-alive" for every gpu-stall report -- the
+        // watchdog's verdict on a device that is merely slow, not lost. So
+        // this branch is reached through the non-empty `!= "device-alive"`
+        // path on every gpu-stall report, not only through the EMPTY case
+        // below. Treating it as dead and deleting it would freeze the ring on
+        // every gpu-stall, destroying the crash-time breadcrumb ring on a
+        // device that never actually died. The string is also the envelope's
+        // published contract (DiagEnvelopeTest pins fault.type's round-trip
+        // shape).
         // An EMPTY type means no backend classified anything -- also not a
         // loss. Everything else (device-removed/-hung/-reset, page-fault
         // kinds, driver-internal-error) means the device is gone and the

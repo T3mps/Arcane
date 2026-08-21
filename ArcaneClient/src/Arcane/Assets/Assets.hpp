@@ -42,27 +42,10 @@ namespace Arcane
         uint64_t byteBudget = 256ull * 1024 * 1024;
     };
 
-    // THE FACADE IS DEVICE-FREE as of ABI v15 (NRI Phase 5a, Task 9.5b-ii).
-    // It used to own a render device and upload textures through it; three
-    // members went when NVRHI did, and each was independently dead first:
-    //   Create(nvrhi::IDevice*, ...) -- every call site tree-wide passed
-    //     nullptr, so the parameter is gone rather than retyped.
-    //   SetDevice(nvrhi::IDevice*)   -- zero callers anywhere, production or
-    //     test. Its last production caller was Runtime.cpp's
-    //     `m_impl->assets->SetDevice(device)` inside SetRenderResources,
-    //     removed with that method at Task 9 (5960e980).
-    //   GetTexture(path)/GetTexture(AssetId) -> nvrhi::TextureHandle -- zero
-    //     PRODUCTION callers, and null unconditionally for every call once
-    //     nothing set a device. NOT because of an opening guard: the body
-    //     began with a texture-cache lookup, then ran the full decode through
-    //     PixelsForResolved, and only THEN reached `if (!m_device)`, which
-    //     WARNed, memoized a cache FAILURE for the key, and returned null. The
-    //     decode preceding the device check is the ordering a prior task
-    //     corrected explicitly; it is restated here so the correction survives
-    //     the deletion of the case that carried it.
-    // WHAT REPLACES THE UPLOAD PATH: nothing here. PixelsFor(Guid) below is
-    // the device-free supply, and the graph path's NriTextureCache is what
-    // puts those pixels on a device.
+    // THE FACADE IS DEVICE-FREE. It owns no render device, uploads nothing,
+    // and hands out no texture object: PixelsFor(Guid) below is the
+    // device-free supply, and the graph path's NriTextureCache is what puts
+    // those pixels on a device.
     class ARCANE_API Assets
     {
     public:
@@ -124,27 +107,12 @@ namespace Arcane
         virtual AssetStats Stats() const = 0;
     };
 
-    // THE THREE NVRHI FREE FUNCTIONS ARE GONE at ABI v15 (NRI Phase 5a, Task
-    // 9.5b-ii). All three took a device or a texture object, all three had
-    // ZERO callers left, and in each case the CPU half that survives below is
-    // the one both arms already shared:
-    //   LoadDisplayTexture(IDevice*, path, maxSize) -- decoded a UI image and
-    //     uploaded it display-referred (RGBA8_UNORM, not GetTexture's sRGB, so
-    //     ImGui does not double-decode). LoadDisplayPixels is its CPU half and
-    //     the editor's only remaining route (EditorApp's toolbar logo).
-    //   ReadTexturePixels(IDevice*, ITexture*, ...) -- staging copy +
-    //     waitForIdle + map into tight RGBA8. Its last caller was
-    //     SaveTexturePng; the graph path reads its image through
-    //     NriGraphContext::ReadCapture instead.
-    //   SaveTexturePng(IDevice*, ITexture*, path, maxWidth) -- the two above
-    //     joined to WriteThumbnailPngRgba, which is what both arms call now.
-    // RepackStagingToRgba below outlives ReadTexturePixels, its last caller:
-    // it is an exported, unit-tested byte-order contract, and deleting a
-    // tested pure function is not this task's to do.
+    // NOTHING BELOW TAKES A DEVICE OR A TEXTURE OBJECT. Reading a rendered
+    // image back is NriGraphContext::ReadCapture's job; everything here is
+    // the CPU half -- resolve, decode, repack, write.
 
-    // THE CPU HALF OF THE OLD LoadDisplayTexture (NRI Phase 3, Task 11): the
-    // exe-relative resolve, the decode and the maxSize area-average downscale,
-    // with NO device.
+    // THE UI-IMAGE LOADER: the exe-relative resolve, the decode and the
+    // maxSize area-average downscale, with NO device.
     //
     // It exists because the graph path uploads through a different route: an
     // editor chrome image (the toolbar logo) reaches the GPU through
@@ -172,13 +140,12 @@ namespace Arcane
         const unsigned char* src, size_t rowPitch, uint32_t width, uint32_t height,
         bool bgraSource, std::vector<unsigned char>& out);
 
-    // THE WHOLE OF "WRITE THIS IMAGE AS A COVER THUMBNAIL" (NRI Phase 3, Task
-    // 11) -- the width cap, the area-average downscale, the opaque-alpha rule
-    // and the PNG write. Exported for the same reason RepackStagingToRgba
-    // above is, and since ABI v15 it is the ONLY cover writer: the graph path
-    // reads its image through NriGraphContext::ReadCapture (already tight,
-    // already BGRA-normalized) and lands here, and the NVRHI arm that used to
-    // land here through SaveTexturePng is deleted.
+    // THE WHOLE OF "WRITE THIS IMAGE AS A COVER THUMBNAIL" -- the width cap,
+    // the area-average downscale, the opaque-alpha rule and the PNG write.
+    // Exported for the same reason RepackStagingToRgba above is, and it is
+    // the ONLY cover writer: a rendered image arrives through
+    // NriGraphContext::ReadCapture (already tight, already BGRA-normalized)
+    // and lands here.
     //
     // `rgba` is TIGHT RGBA8 (no row padding), `width` x `height`. maxWidth
     // (0 = off) caps the WIDTH -- not the larger dimension, unlike the loader

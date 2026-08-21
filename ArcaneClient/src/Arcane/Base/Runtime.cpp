@@ -105,10 +105,6 @@ namespace Arcane
         void* imguiFree     = nullptr;
         void* imguiUserData = nullptr;
 
-        // The render-resources bridge (a non-owning nvrhi::IDevice* + ShaderLibrary*)
-        // used to sit here. Deleted at NRI Phase 5a, Task 9 with the three Runtime
-        // accessors that read it -- see Runtime.hpp for why.
-
         explicit Impl(Astra::TypeContext* external, bool enableAudioDevice) : jobs(), sched(jobs.WorkScheduler())
         {
             if (external) { context = external; }

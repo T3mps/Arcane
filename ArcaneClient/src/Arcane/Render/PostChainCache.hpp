@@ -2,7 +2,7 @@
 
 // PostChainCache (post arc, slice 2): resolves SAVED .arcmat material assets
 // into a bound scene post chain, published as PostChainDesc bytes for the
-// `--nri-graph` recorder's PostChainNode (Render/Nri/nodes/FullscreenNodes.*).
+// graph recorder's PostChainNode (Render/Nri/nodes/FullscreenNodes.*).
 // It is SpriteMaterialCache's twin -- same Services, same Request / Invalidate
 // / ConsumeResult / Clear lifecycle, same SAVED-asset + parent-chain
 // resolution -- but the build is BuildMaterialChainSource in POST mode
@@ -11,13 +11,6 @@
 // completed set binds atomically, so a failed RE-compile keeps the previous
 // bytes published (last-good). Unresolved / failed materials simply never
 // expose a chain.
-//
-// NRI Phase 5a, Task 4: this cache used to ALSO build an NVRHI
-// FullscreenMaterialChain (Chain()/Instance() fed OffscreenCanvas::SetPostChain
-// on the editor's NVRHI arm and ArcaneRuntime's RenderNvrhi). Both callers are
-// gone -- the graph recorder is the only render path left -- so that half was
-// deleted; Desc()/Instance() below are what remains, and what every caller
-// already used on the graph arm.
 //
 // The host sweep (slice 3) Request()s the assigned material every frame and
 // reads Desc()/Instance() AFTER the drain site runs -- a consumed result may
@@ -46,21 +39,18 @@ namespace Arcane
     struct ShaderCompileResult;
 
     // =====================================================================
-    // THE COMPILED CHAIN AS BYTES (NRI Phase 2, Task 10) -- the twin of
-    // Material2DDesc::vsBytes/psBytes (Batcher2D.hpp, Task 9), and it exists
-    // for the identical reason: a SECOND graphics device in the same process
-    // cannot use an nvrhi::ShaderHandle, only the bytecode behind it. The
-    // graph vehicle's PostChainNode builds its own NRI pipelines from exactly
-    // these bytes, so both recorders run the SAME stitched shaders rather
-    // than two independently compiled ones.
+    // THE COMPILED CHAIN AS BYTES -- the twin of Material2DDesc::vsBytes/
+    // psBytes (Batcher2D.hpp), and it exists for the identical reason: a
+    // device can build a pipeline from bytecode but cannot adopt a compiled
+    // shader OBJECT it did not create. The graph's PostChainNode builds its
+    // own NRI pipelines from exactly these bytes, so a recompile and a render
+    // always agree about which shader ran.
     //
     // ONE target, not both: the producer already picks dxil-or-spirv by the
-    // process's GraphicsBackend and the graph vehicle runs on that same
+    // process's GraphicsBackend and the render vehicle runs on that same
     // backend (RuntimeApp builds both from one HostConfig).
     //
-    // NRI Phase 5a, Task 4: this is now the ONLY compiled form PostChainCache
-    // publishes -- the NVRHI FullscreenMaterialChain it used to build BESIDE
-    // these bytes is gone, along with both its callers.
+    // THE ONLY COMPILED FORM this cache publishes.
     // =====================================================================
     struct PostChainPassDesc
     {
@@ -101,18 +91,11 @@ namespace Arcane
         {
             ShaderCompiler*       compiler = nullptr;
             ShaderSourceProvider* sources = nullptr;   // fullscreen template text
-            // `assets` is itself vestigial now: an `nvrhi::IDevice* device`
-            // sat below it and GATED the texture warm-up this comment used to
-            // name (Assets::GetTexture at bind time). That field was always
-            // null after NRI Phase 5a, Task 2b's flip -- both hosts passed
-            // nullptr once the graph recorder became the only render path --
-            // so the warm-up never ran, and Task 4 had already deleted the
-            // NVRHI chain the same field also gated. Task 9.5a deleted the
-            // field AND the unreachable warm-up with it (see Bind()); the
-            // graph makes the same Guids resident on its own device through
-            // NriTextureCache, which is where residency has actually lived
-            // throughout. `assets` is left in place because Bind() may yet
-            // want a device-free asset read; nothing reads it today.
+            // `assets` is VESTIGIAL: there is no bind-time texture warm-up
+            // for it to serve -- the graph makes the same Guids resident on
+            // its own device through NriTextureCache, which is where
+            // residency belongs. Left in place because Bind() may yet want a
+            // device-free asset read; nothing reads it today.
             Assets*               assets = nullptr;    // (unused)
             GraphicsBackend       backend{};
             ResolveAssetFn        resolveAsset;        // Guid -> path (project registry)
@@ -137,12 +120,9 @@ namespace Arcane
 
         // The merged instance for `id` -- null until the first successful
         // bind. Valid until the next mutating call (a drain may swap the
-        // instance); re-fetch every frame before handing it to a caller. Bind
-        // time no longer warms the instance's texture params through Assets:
-        // that warm-up was gated on `Services::device`, and NRI Phase 5a,
-        // Task 9.5a deleted both the field and the (already unreachable) warm
-        // loop with it -- see Impl::Bind's own comment, in the .cpp. Texture
-        // residency for the chain is the graph recorder's job now, on its own
+        // instance); re-fetch every frame before handing it to a caller.
+        // Bind time does NOT warm the instance's texture params: texture
+        // residency for the chain is the graph recorder's job, on its own
         // device, through NriTextureCache.
         const MaterialInstance*  Instance(const Guid& id) const;
 

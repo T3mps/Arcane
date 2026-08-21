@@ -39,11 +39,9 @@ namespace Arcane
             RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
 
-        // The engine's canvas clear, verbatim from RuntimeApp::MainLoop's
-        // clearTextureFloat call on the (now-deleted) NVRHI path. It lives
-        // HERE, in the only node that clears the canvas at all now that the
-        // NVRHI path is gone -- originally chosen so the two paths could not
-        // drift into different backgrounds; today it's simply the sole clear.
+        // The engine's canvas clear. It lives HERE, in the only node that
+        // clears the canvas at all, so there is exactly one background
+        // colour in the process.
         constexpr float kCanvasClear[4] = { 0.02f, 0.02f, 0.04f, 1.0f };
 
         // The canvas is RGBA16F. Since Task 10 the constant lives beside the
@@ -66,11 +64,10 @@ namespace Arcane
         };
         static_assert(sizeof(BatchRootConstants) == 16, "must match sprite.hlsl's BatchConstants");
 
-        // The built-in shader pairs, in Batcher2D::kMaterial* order -- the SAME
-        // offline bins Batcher2D's material table names by string
-        // (Batcher2D.cpp's InitMaterialTable). The NVRHI batcher used to load
-        // them through ShaderLibrary; both were deleted at ABI v15, and this
-        // node is the only loader of them left.
+        // The built-in shader pairs, in Batcher2D::kMaterial* order -- the
+        // SAME offline bins Batcher2D's material table names by string
+        // (Batcher2D.cpp's InitMaterialTable). This node is their only
+        // loader.
         constexpr const char* kBuiltInVs[] = { "sprite_vs", "circle_vs", "msdf_vs" };
         constexpr const char* kBuiltInPs[] = { "sprite_ps", "circle_ps", "msdf_ps" };
 
@@ -259,9 +256,8 @@ namespace Arcane
     {
         const nri::CoreInterface& core = m_device->Core();
 
-        // Linear + clamp, exactly the NVRHI batcher's sampler
-        // (Batcher2D::Init's setAllFilters(true) / Clamp): sprites scale
-        // smoothly, and a clamped atlas edge does not bleed.
+        // Linear + clamp: sprites scale smoothly, and a clamped atlas edge
+        // does not bleed.
         nri::SamplerDesc samplerDesc = {};
         samplerDesc.filters.min   = nri::Filter::LINEAR;
         samplerDesc.filters.mag   = nri::Filter::LINEAR;
@@ -400,8 +396,7 @@ namespace Arcane
         // Both stages: a material template's VERTEX_BODY may sample its declared
         // textures and read its params (sprite_material.hlsl's displace()), so
         // narrowing these to FRAGMENT would break a displacing material on
-        // D3D12, where visibility is a hard root-signature property. Mirrors the
-        // NVRHI layout's setVisibility(ShaderType::All).
+        // D3D12, where visibility is a hard root-signature property.
         constexpr nri::StageBits kBothStages =
             nri::StageBits::VERTEX_SHADER | nri::StageBits::FRAGMENT_SHADER;
 
@@ -675,9 +670,8 @@ namespace Arcane
         key.colorCount      = 1;
         key.depthFormat     = nri::Format::UNKNOWN;
         key.topology        = nri::Topology::TRIANGLE_LIST;
-        // Straight (non-premultiplied) alpha -- byte-for-byte the NVRHI
-        // batcher's blend state (Batcher2D::GetPipeline: SrcAlpha/InvSrcAlpha
-        // colour, One/InvSrcAlpha alpha).
+        // Straight (non-premultiplied) alpha: SrcAlpha/InvSrcAlpha colour,
+        // One/InvSrcAlpha alpha.
         key.blend           = NriPipelineCache::GraphicsKey::Blend::AlphaOver;
 
         // `stages` lives in THIS frame, which encloses the GetGraphics call --
@@ -1017,9 +1011,8 @@ namespace Arcane
         // The DECLARED param views (t1..), resolved through the vehicle's SHARED
         // NriTextureCache and kept on the slot so every later texture VARIANT
         // writes the same ones without re-resolving. An unbound, unresolvable
-        // or undecodable param stays null and WriteMaterialSet substitutes the
-        // white texel -- the same fallback the NVRHI path makes for a null
-        // handle (Batcher2D::GetBindingSet).
+        // or undecodable param stays null and WriteMaterialSet substitutes
+        // the white texel.
         const std::vector<Guid> textureIds = desc.instance->ResolveTextures();
         slot.textureCount = textureCount;
         for (nri::Descriptor*& view : slot.paramViews)
@@ -1401,9 +1394,9 @@ namespace Arcane
             }
         }
 
-        // Projection: canvas pixels (y down) -> clip space, exactly the
-        // PushConstants the NVRHI End() set. The SAME block for every pipeline
-        // here -- sprite.hlsl and sprite_material.hlsl declare an identical b0.
+        // Projection: canvas pixels (y down) -> clip space. The SAME block
+        // for every pipeline here -- sprite.hlsl and sprite_material.hlsl
+        // declare an identical b0.
         BatchRootConstants push;
         push.invHalfViewportX = batch.viewport.x > 0.0f ? 2.0f / batch.viewport.x : 0.0f;
         push.invHalfViewportY = batch.viewport.y > 0.0f ? 2.0f / batch.viewport.y : 0.0f;

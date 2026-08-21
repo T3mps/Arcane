@@ -2,15 +2,10 @@
 
 // Render module: how deep the CPU may run ahead of the GPU.
 //
-// NRI Phase 5a, Task 8a: this constant used to live in Render/Swapchain.hpp,
-// the NVRHI presentation interface Task 8b then deleted. Most of that header's
-// includers wanted only this line: the graph's command-buffer slots,
-// upload-ring slots, descriptor-set arrays, pick readback regions and pacing
-// fence depth are ALL this one number, and NriSwapChain.hpp's own header
-// comment calls it out as "reused, not reinvented". So it moved to a home
-// with no nvrhi dependency, ahead of the deletion rather than during it.
-//
-// The value and its meaning are unchanged.
+// ONE NUMBER, REUSED RATHER THAN REINVENTED: the graph's command-buffer
+// slots, upload-ring slots, descriptor-set arrays, pick readback regions and
+// pacing-fence depth are ALL this constant. It lives in a header of its own so
+// a consumer that needs only the depth pulls in nothing else.
 
 #include <cstdint>
 

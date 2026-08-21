@@ -166,10 +166,8 @@ namespace Arcane
         // A non-null Desc() IS "bound and ready": PostChainCache only ever
         // publishes one once ConsumeResult's compile succeeded (Bind), and it
         // keeps a previously-bound one alive across a failed RE-compile
-        // (last-good) rather than clearing it. NRI Phase 5a, Task 4: this used
-        // to test an NVRHI FullscreenMaterialChain's Ready() instead -- that
-        // chain, and every consumer that read it, is deleted, so Desc() is now
-        // the only "is the post chain bound" signal there is.
+        // (last-good) rather than clearing it. Desc() is the ONLY "is the post
+        // chain bound" signal there is.
         census.postBound = postId.IsValid() && im.post->Desc(postId) != nullptr;
         return census;
     }
@@ -302,7 +300,7 @@ namespace Arcane
             im.post->Request(postId, frame.now);
 
         // (3) The ONE drain site in the process: this is where a completed
-        // compile becomes an NVRHI shader (ShaderCompiler.hpp:9-13). Results are
+        // compile is taken up (ShaderCompiler.hpp:9-13). Results are
         // offered to the host first (the editor's open shader documents), then
         // the two material caches. The ordering is safe because cache-owned
         // compiles use coalesce keys disjoint from a document's for the same

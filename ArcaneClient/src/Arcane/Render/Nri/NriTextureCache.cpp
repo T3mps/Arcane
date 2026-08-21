@@ -85,11 +85,10 @@ namespace Arcane
 
     std::size_t NriTextureCache::ResidentCount() const noexcept
     {
-        // Counted on the VIEW, for the same reason Resolve's hit is gated on it
-        // (whole-branch review, M2): counting textures over-reported by one for
-        // every entry whose upload or view creation failed after the texture
-        // itself was created -- entries that are memoized FAILURES, not
-        // residents.
+        // Counted on the VIEW, for the same reason Resolve's hit is gated on
+        // it: counting TEXTURES over-reports by one for every entry whose
+        // upload or view creation failed after the texture itself was created
+        // -- entries that are memoized FAILURES, not residents.
         std::size_t count = 0;
         for (const auto& [key, resident] : m_textures)
             if (resident.view)
@@ -172,23 +171,20 @@ namespace Arcane
         nri::TextureDesc textureDesc = {};
         textureDesc.type      = nri::TextureType::TEXTURE_2D;
         textureDesc.usage     = nri::TextureUsageBits::SHADER_RESOURCE;
-        // THE SPACE DECIDES THE FORMAT, and both halves were inherited from
-        // the NVRHI rules rather than re-decided here (see ColorSpace; both
-        // sources were deleted at ABI v15):
-        //   Srgb    -> Assets::GetTexture's nvrhi::Format::SRGBA8_UNORM. The
-        //              canvas is linear and the hardware does the decode, so a
-        //              UNORM here would render the same asset visibly brighter
-        //              than the NVRHI path did.
-        //   Display -> LoadDisplayTexture's nvrhi::Format::RGBA8_UNORM. The
-        //              sampled texel composites directly into a
-        //              display-referred target (ImGui draws post-tonemap), and
-        //              an SRGB view there decodes a second time and reads dark.
+        // THE SPACE DECIDES THE FORMAT (see ColorSpace):
+        //   Srgb    -> RGBA8_SRGB. The canvas is LINEAR and the hardware does
+        //              the decode, so a UNORM view here renders the same asset
+        //              visibly brighter.
+        //   Display -> RGBA8_UNORM. The sampled texel composites directly into
+        //              a display-referred target (ImGui draws post-tonemap),
+        //              and an SRGB view there decodes a second time and reads
+        //              dark.
         textureDesc.format    = space == ColorSpace::Display ? nri::Format::RGBA8_UNORM
                                                              : nri::Format::RGBA8_SRGB;
         textureDesc.width     = (nri::Dim_t)pixels->width;
         textureDesc.height    = (nri::Dim_t)pixels->height;
         textureDesc.depth     = 1;
-        textureDesc.mipNum    = 1;   // the (deleted) NVRHI path uploaded mip 0 only too
+        textureDesc.mipNum    = 1;   // mip 0 only
         textureDesc.layerNum  = 1;
         textureDesc.sampleNum = 1;
         if (!ARC_NRI_CHECK(core.CreateCommittedTexture(m_device->Device(), nri::MemoryLocation::DEVICE,

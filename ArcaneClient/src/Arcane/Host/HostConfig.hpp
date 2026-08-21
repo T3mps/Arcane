@@ -59,24 +59,14 @@ namespace Arcane
         // that one host parses and silently ignores is a trap, and scripting the
         // editor's battery items beats clicking them.
         //
-        // HONOURED ON BOTH RENDER PATHS as of NRI Phase 3, Task 5, and as of
-        // Phase 5a (Task 2b) `--crash-gpu N` ALONE reaches the graph dispatch
-        // -- the NRI frame graph is the only render path now, so it no longer
-        // takes a second flag to select it. `--crash-gpu N` fires
-        // NriDiagnostics::FireFault -- the SAME data/shaders/gpu_fault.hlsl
-        // TDR loop, as a one-off NRI compute dispatch -- under the same gate,
-        // once, with the same `pass:gpu-fault` breadcrumb and the same ERROR
-        // text when the injector is unavailable. See RuntimeFrame.cpp's graph
-        // arm for the two topology-forced differences (own command buffer;
-        // fired before the frame is declared rather than inside it), neither
-        // of which is observable in the report. (RenderNvrhi's own
-        // --crash-gpu block -- the OTHER arm this paragraph used to describe
-        // -- is unreachable now: see RuntimeFrame.cpp's RenderNvrhi.)
-        //
-        // HISTORY, because a reader may have the old wording in mind: through
-        // Phase 2 this flag was a DOCUMENTED NO-OP on `--nri-graph` -- it
-        // parsed, never fired, and a run exited 0 having proven nothing. That
-        // gap is closed; the deliberate-no-op ruling it carried is history.
+        // `--crash-gpu N` ALONE reaches the dispatch -- the NRI frame graph
+        // is the only render path, so it takes no second flag to select. It
+        // fires NriDiagnostics::FireFault (the data/shaders/gpu_fault.hlsl TDR
+        // loop, as a one-off NRI compute dispatch) once, with a
+        // `pass:gpu-fault` breadcrumb and an ERROR when the injector is
+        // unavailable. See RuntimeFrame.cpp's RenderGraph for the two
+        // topology-forced properties -- own command buffer, fired before the
+        // frame is declared -- neither of which is observable in the report.
         std::uint64_t   crashGpuFrame = 0;
 
         // DEV ONLY: `--pick-probe x,y` -- the SCRIPTED desk check for the
@@ -97,10 +87,9 @@ namespace Arcane
         //
         // Refused at parse time without --frames N (the readback lands with
         // frames-in-flight latency, so an open-ended run would never report
-        // and would exit on a window close instead). Used to also be refused
-        // without --nri-graph -- that guard is gone as of Phase 5a (the NRI
-        // frame graph is the only render path, so the pick/outline nodes are
-        // always present; the flag itself is retired to a no-op, see below).
+        // and would exit on a window close instead). The pick/outline nodes
+        // themselves are always available: the NRI frame graph is the only
+        // render path.
         bool            pickProbe  = false;
         std::int32_t    pickProbeX = 0;   // canvas px, y-down; only read when pickProbe
         std::int32_t    pickProbeY = 0;

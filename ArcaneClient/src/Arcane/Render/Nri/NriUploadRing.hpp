@@ -1,8 +1,8 @@
 #pragma once
 
-// NRI substrate (Phase 2, Task 5): per-frame-slot upload arenas. Replaces
-// every volatile-CB / writeBuffer-in-open-command-list idiom on the graph
-// path -- per-frame data (constant buffers, sprite VB/IB) becomes a ring
+// Per-frame-slot upload arenas. There is no volatile-CB or
+// writeBuffer-in-an-open-command-list idiom on the render
+// path -- per-frame data (constant buffers, sprite VB/IB) is a ring
 // allocation, bound to a draw via a root-descriptor OFFSET into one
 // persistent, mapped UPLOAD-heap buffer per queued frame slot. Ring buffers
 // are NOT render-graph resources: they bypass RenderGraph's barrier
@@ -15,8 +15,8 @@
 //
 //   - RingLayout: pure bump-allocator math over ONE frame slot's byte
 //     range. No NRI, no device -- fully unit-testable headless, in
-//     RenderGraphTest.cpp's "[nri]" cases alongside the rest of Phase 2's
-//     graph coverage. This is what gets driven directly by every test.
+//     RenderGraphTest.cpp's "[nri]" cases. This is what every test drives
+//     directly.
 //   - NriUploadRing: the thin NRI-facing wrapper. Owns
 //     kSwapchainFramesInFlight RingLayouts plus one persistent-mapped
 //     UPLOAD-heap nri::Buffer per slot.

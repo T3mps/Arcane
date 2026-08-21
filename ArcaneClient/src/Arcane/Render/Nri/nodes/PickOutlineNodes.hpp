@@ -1,25 +1,20 @@
 #pragma once
 
 // PickOutlineNodes -- the graph's ENTITY-ID pass (PickNode) and its JUMP-FLOOD
-// SELECTION OUTLINE (OutlineNode), NRI Phase 2 Task 11.
+// SELECTION OUTLINE (OutlineNode).
 //
 // The frame's tail grows, when and only when the driver asks for it:
 //
 //   batch2d -> [post..] -> tonemap -> pick -> pickreadback -> outlineseed
 //           -> outlinejfa0 .. outlinejfaN-1 -> outlinecomposite -> [capture]
 //
-// EDITOR WIRING IS PHASE 3. What landed here in Phase 2 was the NODES, driven by
-// `--nri-graph --pick-probe x,y` and a SCRIPTED selection, so they render real
-// ReferenceProject content; through Phase 3 they were desk-comparable against
-// the NVRHI twins (Render/PickBuffer.cpp and Render/SelectionOutline.cpp),
-// both deleted at NRI Phase 5a, Task 4 -- this is the only implementation
-// left. TWO THINGS can arm
-// them now: that flag (RuntimeFrame.cpp, the ONLY arming on the runtime host)
-// and NodeSet::pickOutline (EditorApp's viewport context, per-frame). With
-// NEITHER, nothing below is declared, created or recorded and the frame is
-// byte-for-byte Task 10's -- which is what keeps the runtime's frozen `main-*`
-// goldens untouchable from this file, and the batch/post/full stage goldens the
-// compare targets they are.
+// THIS IS THE ONLY PICK/OUTLINE IMPLEMENTATION. TWO THINGS can arm it:
+// `--pick-probe x,y` (RuntimeFrame.cpp, the ONLY arming on the runtime host,
+// against a SCRIPTED selection) and NodeSet::pickOutline (EditorApp's viewport
+// context, per-frame). With NEITHER, nothing below is declared, created or
+// recorded and the frame is byte-for-byte the frame without it -- which is
+// what keeps this file unable to perturb a capture that did not ask for an
+// outline.
 //
 // ===================================================================
 // ONE EMITTER, TWO RECORDERS -- where the entity ids come from.
@@ -78,11 +73,8 @@
 //     SPIR-V build shifts b0 to set-0 binding 256 (compile-shaders.bat's
 //     `-fvk-b-shift 256 0`). A root constant lowers to a VK push-constant
 //     block, which those shaders do not declare -- binding one would leave the
-//     uniform block unwritten on Vulkan. Changing the HLSL was not an option
-//     either while SelectionOutline.cpp (deleted at Task 4) bound real
-//     constant buffers there and the NVRHI path was the compatibility floor;
-//     the shape stays pinned today for the shader/HLSL contract reasons
-//     above, independent of NVRHI.
+//     uniform block unwritten on Vulkan. The shape is pinned by the HLSL, so
+//     changing it means changing the shaders first.
 //     => the three outline passes take DESCRIPTOR-SET constant buffers out of
 //     a per-frame-slot HOST_UPLOAD arena, the idiom Batch2DNode and
 //     PostChainNode already carry (and which the same carry names as the
@@ -149,23 +141,19 @@ namespace Arcane
     // whose jumps sum to 2^N - 1 >= maxThicknessPx - 1), PLUS one TRAILING
     // jump == 1 refinement pass. Always at least 2.
     //
-    // THIS IS SelectionOutline's SCHEDULE, NOT A SECOND OPINION (NRI Phase 3,
-    // D3c). It used to be extent-derived -- ceil(log2(max(width, height))),
-    // starting at a jump that spans the whole field -- on the reasoning that a
-    // COMPLETE field is a superset of a near-silhouette one and the two
-    // therefore composite the same picture. The second half of that is FALSE:
-    // JFA is an APPROXIMATION whose result depends on the jump sequence, so a
-    // different schedule assigns different nearest-seeds a few px from an edge,
-    // which is precisely where the composite's 1-px AA ramp lives. The editor's
-    // `full` golden compare across the two arms is what proved it. The NVRHI
-    // arm is the authored look and the captured baseline, so the graph follows
-    // it exactly -- including the trailing jump == 1 pass, whose whole job is to
-    // sand off the errors the halving schedule leaves.
+    // THE SCHEDULE IS THICKNESS-DERIVED, NOT EXTENT-DERIVED, and the
+    // difference is visible: JFA is an APPROXIMATION whose result depends on
+    // the jump sequence, so a different schedule assigns different
+    // nearest-seeds a few px from an edge -- precisely where the composite's
+    // 1-px AA ramp lives. An extent-derived schedule (ceil(log2(max(width,
+    // height))), starting at a jump spanning the whole field) therefore
+    // renders a DIFFERENT picture, not merely a slower one. The trailing
+    // jump == 1 pass is part of the look: its whole job is to sand off the
+    // errors the halving schedule leaves.
     //
     // Cost: 7 fullscreen triangles over the viewport, once per editor frame
-    // that has a selection -- and FEWER than the extent-derived count it
-    // replaces (10 at the D3c golden's 654x330), because the schedule now
-    // starts at 32 rather than at 512.
+    // that has a selection -- fewer than an extent-derived count, because the
+    // schedule starts at 32 rather than at the surface's long edge.
     [[nodiscard]] ARCANE_API std::uint32_t OutlineJfaStepCount(std::uint32_t maxThicknessPx) noexcept;
 
     // The jump for step `step` of a `steps`-step schedule: 2^(steps-2-step)
@@ -229,7 +217,7 @@ namespace Arcane
         // rendering around it.
         //
         // `ticket` RIDES WITH THE COPY and comes back beside the id when this
-        // slot is next drained (NRI Phase 3, Task 9). It exists because the
+        // slot is next drained. It exists because the
         // latency makes an unlabelled value ambiguous: a host that probes a
         // DIFFERENT pixel every frame -- the editor, whose probe is the cursor
         // between clicks and the click pixel on a click -- cannot otherwise
@@ -273,14 +261,11 @@ namespace Arcane
         // target's extent, the seed CB and the readback texel cannot disagree
         // about it.
         //
-        // It was 1 through Phase 2 -- the vehicle's job was to prove the NODES
-        // and the probe run had no NVRHI twin in the same process to match. In
-        // Phase 3 the editor drove BOTH arms over one scene and its NVRHI arm
-        // supersampled (EditorApp's PickBuffer::Create, since deleted at Task
-        // 4), so 1 here was a quarter-pixel shift in every seed position and a
-        // visibly different outline edge in the `full` golden. Both arms read
-        // Arcane::kPickSupersample at the time; the NVRHI arm and PickBuffer
-        // are gone and this node is the only reader left -- see PickEmit.hpp.
+        // IT MUST NOT BE 1. At 1 every seed position shifts by a quarter
+        // pixel and the outline edge visibly changes, because the seed shader
+        // averages the supersampled silhouettes into a sub-pixel centroid.
+        // The value is Arcane::kPickSupersample and this node is its only
+        // reader -- see PickEmit.hpp.
         static constexpr std::uint32_t kSuperSample = kPickSupersample;
 
         // data/shaders/entity_id.hlsl's BatchConstants: float2 invHalfViewport

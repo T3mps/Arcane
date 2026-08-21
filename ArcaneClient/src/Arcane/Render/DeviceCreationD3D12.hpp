@@ -1,14 +1,14 @@
 #pragma once
 
-// The D3D12 CREATION HALF (NRI Phase 1, Task 7). Sibling of
-// DeviceCreationVulkan.hpp -- read its header comment first; the same
-// extract-don't-redesign rule and the same two-consumer shape apply here.
+// The D3D12 CREATION HALF. Sibling of DeviceCreationVulkan.hpp -- read its
+// header comment first; the same shape applies here.
 //
-//   (a) the existing NVRHI device path (`DeviceD3D12`), byte-identically.
-//   (b) `Nri/NriDevice.cpp`, which fills `nri::DeviceCreationD3D12Desc` and
-//       wraps via `nriCreateDeviceFromD3D12Device`.
+// ONE CONSUMER: `Nri/NriDevice.cpp`, which fills
+// `nri::DeviceCreationD3D12Desc` and wraps via
+// `nriCreateDeviceFromD3D12Device`.
 //
-// Render-internal, not exported: both consumers compile into ArcaneClient.dll.
+// Render-internal, not exported: that consumer compiles into
+// ArcaneClient.dll.
 
 #include <Arcane/Render/RenderDeviceDesc.hpp>
 
@@ -20,10 +20,9 @@
 
 namespace Arcane
 {
-    // Member order mirrors `DeviceD3D12`'s former declaration order exactly,
-    // because declaration order is COM release order in reverse and the NVRHI
-    // path's teardown must not shift: graphics queue, then info queue, then
-    // device, then adapter, then factory.
+    // MEMBER ORDER IS COM RELEASE ORDER IN REVERSE, and it is load-bearing:
+    // graphics queue, then info queue, then device, then adapter, then
+    // factory.
     struct D3D12DeviceCreation
     {
         Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
@@ -58,10 +57,9 @@ namespace Arcane
     bool CreateD3D12NativeDevice(const RenderDeviceDesc& desc, D3D12DeviceCreation& out);
 
     // Contract item 12's teardown half, idempotent. Separate from the release
-    // below because the NVRHI path must unregister at ONE specific point --
-    // before the NVRHI device is released, so teardown messages behave exactly
-    // as they did before this refactor -- while the COM references go with the
-    // member, after it.
+    // below because the callback must be unregistered BEFORE the device it
+    // names is released, while the COM references go with the member, after
+    // it.
     void UnregisterD3D12DebugCallback(D3D12DeviceCreation& creation);
 
     // Owner teardown: unregister, then drop every COM reference in the order

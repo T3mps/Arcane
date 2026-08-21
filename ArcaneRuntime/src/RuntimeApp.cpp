@@ -5,7 +5,7 @@
 // CONTRACT is encoded in the RuntimeApp member declaration order -- see RuntimeApp.hpp.
 
 #include "RuntimeApp.hpp"
-#include "RuntimeFrame.hpp"   // NRI Phase 3, Task 4: MainLoop's frame body
+#include "RuntimeFrame.hpp"   // MainLoop's frame body
 
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Assets/Assets.hpp>      // Arcane::Assets (AssetsFacade().PixelsFor -- the pre-loop SetPixelSupply lambda)
@@ -19,7 +19,7 @@
 #include <Arcane/Render/RenderErrorLatch.hpp>  // RenderErrorCount (the graph latch fold)
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved (Run()'s exit-code tail)
 #include <Arcane/Render/PickEmit.hpp>    // PickEntityForId (ShutdownGraphPath's --pick-probe report)
-#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (PushSceneCamera; RenderGraph calls it via FrameIo::app -- the only arm left, NRI Phase 5a Task 4)
+#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (PushSceneCamera; RenderGraph calls it via FrameIo::app)
 // Assets.hpp/AudioDevice.hpp/InputActions.hpp/InputSnapshot.hpp/Batcher2D.hpp
 // live in RuntimeFrame.cpp instead: every symbol they are needed for (the
 // audio voice reap, input sampling, Batch2DStats) belongs to MainLoop's frame
@@ -102,22 +102,15 @@ bool RuntimeApp::StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx)
 
 bool RuntimeApp::StageGpuCore(Arcane::HostBoot::BootContext& ctx)
 {
-    // The whole platform/render/input stack, booted in order. Owned by m_gpu and
-    // declared BEFORE m_runtime/m_plugin in RuntimeApp -- so it destructs AFTER them:
-    // the render resources it owns (window/batcher/imgui/input -- the NVRHI
-    // half of this list, device/swapchain/shaders/canvas/tonemap/commandList/
-    // framebuffers, is gone as of NRI Phase 5a, Task 6) must outlive runtime +
-    // plugin.
+    // The whole platform/render/input stack, booted in order. Owned by m_gpu
+    // and declared BEFORE m_runtime/m_plugin in RuntimeApp -- so it destructs
+    // AFTER them: the render resources it owns (window, batcher, imgui, input)
+    // must outlive runtime + plugin.
     //
-    // THE BOOT-PATH SPLIT (NRI Phase 3, Task 6). As of Phase 5a (Task 2b) the
-    // NRI frame graph is the ONLY render path, unconditionally, in every
-    // configuration including Dist: NO NVRHI DEVICE IS EVER CREATED.
-    // GpuContext::Create builds the window, a device-less Batcher2D, the
-    // ImGuiLayer and the input stack, and MainLoop then builds the
-    // NriGraphContext that owns the process's ONLY graphics device over that
-    // same window. GpuContext has had no NVRHI arm at all since NRI Phase 5a,
-    // Task 6 collapsed it (the factory was called CreateForGraph before that
-    // task renamed it).
+    // THE BOOT-PATH SPLIT. GpuContext::Create builds the window, a device-less
+    // Batcher2D, the ImGuiLayer and the input stack -- AND NO GRAPHICS DEVICE.
+    // MainLoop then builds the NriGraphContext that owns the process's ONLY
+    // graphics device, over that same window.
     m_gpu = Arcane::GpuContext::Create(m_config);
     if (!m_gpu)
     {
@@ -129,30 +122,23 @@ bool RuntimeApp::StageGpuCore(Arcane::HostBoot::BootContext& ctx)
              Arcane::ToString(m_config.backend));
     ctx.gpu = m_gpu.get();
 
-    // Constructs NO presenter here (Task 8c, 2026-07-30 correction): the
-    // swapchain-backed BootPresenter this used to defer was needed exactly
-    // once, for the single reveal frame StageFinalize drew right before
-    // Show()/Close(), and it is deleted now along with that reveal --
-    // BootSequence's per-stage pump is driven by the pre-device splash
-    // (Arcane::BootSplashPresenter, bound for the whole Run() call in Run()
-    // below) for the ENTIRE boot instead. m_presenter is emplaced lazily
-    // inside StageFinalize, the one place it is used.
+    // NO PRESENTER IS CONSTRUCTED HERE. BootSequence's per-stage pump is
+    // driven by the pre-device splash (Arcane::BootSplashPresenter, bound for
+    // the whole Run() call below) for the ENTIRE boot -- this host has no
+    // swapchain-backed presenter at all.
     return true;
 }
 
 bool RuntimeApp::StageRenderBridge(Arcane::HostBoot::BootContext&)
 {
-    // THERE IS NO RENDER-RESOURCES BRIDGE ANY MORE. This stage used to hand the
-    // Runtime a host-owned nvrhi::IDevice + ShaderLibrary so a plugin could build
-    // its own engine render objects; since NRI Phase 3, Task 6 it passed
-    // (nullptr, nullptr), because GpuContext builds no NVRHI device at all. NRI
-    // Phase 5a, Task 9 deleted Runtime::SetRenderResources/Device()/Shaders()
-    // outright -- that is one of the two things ABI 14 gates.
+    // THERE IS NO RENDER-RESOURCES BRIDGE. A plugin is handed no graphics
+    // device and no ShaderLibrary -- Runtime has no SetRenderResources at all,
+    // and a plugin therefore builds no engine render objects of its own.
     //
-    // What survives the removal is the part that actually mattered: the Assets
-    // facade stays device-less, and Assets::PixelsFor (Task 1) is the retained,
-    // device-FREE decode the graph's NriTextureCache uploads from, so a textured
-    // sprite still renders. The stage itself is kept for the ImGui handoff below.
+    // What matters is that the Assets facade stays device-less:
+    // Assets::PixelsFor is the retained, device-FREE decode the graph's
+    // NriTextureCache uploads from, so a textured sprite still renders. This
+    // stage is kept for the ImGui handoff below.
 
     // ABI v2: install the host's ImGui context + allocators on the Runtime BEFORE
     // the plugin loads. PluginHost::RefreshContext copies these into the EngineContext
@@ -167,12 +153,8 @@ bool RuntimeApp::StageRenderBridge(Arcane::HostBoot::BootContext&)
                             ud);
     }
 
-    // Window reveal used to fold in HERE (Show() then Close() the splash),
-    // right after gpu_core, matching the pre-Task-8c design where the editor
-    // window carried the loading bar. Task 8c (2026-07-30 correction) moves
-    // that to StageFinalize instead -- see that method's comment for the
-    // reveal-ordering reasoning, which now needs to run dead last, not right
-    // after gpu_core.
+    // THE WINDOW REVEAL IS NOT HERE. It runs dead last rather than right
+    // after gpu_core -- see StageFinalize's comment for the reveal ordering.
     return true;
 }
 
@@ -289,18 +271,11 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
     Arcane::SceneRenderResolver::Services rs;
     rs.runtime  = &*m_runtime;
     rs.batcher  = &m_gpu->Batch();
-    // Device-less (NRI Phase 3, Task 2's severance): SpriteMaterialCache
-    // registers BYTES-ONLY materials with the device-less batcher, and
-    // PostChainCache publishes its PostChainDesc without building the NVRHI
-    // FullscreenMaterialChain. The BACKEND -- which selects the shader flavor
-    // the compiles target -- comes from the config, since there is no device
-    // to ask; GpuContext has built none since NRI Phase 5a, Task 6 deleted
-    // Device() along with the rest of its NVRHI half. This used to be a
-    // GraphFlavor() ternary against m_gpu->Device().Backend() so the NVRHI
-    // arm kept the literal statement its frozen baselines were captured
-    // with; that arm went, so the ternary went, and at Task 9.5a the
-    // `rs.device = nullptr` that survived it went too -- Services no longer
-    // has the field.
+    // DEVICE-LESS: SpriteMaterialCache registers BYTES-ONLY materials with
+    // the device-less batcher, and PostChainCache publishes its PostChainDesc
+    // without building any device-side chain. The BACKEND -- which selects
+    // the shader flavor the compiles target -- comes from the config, since
+    // there is no device to ask.
     rs.backend  = m_config.backend;
     rs.compiler = &m_shaderCompiler;
     rs.sources  = &m_shaderSources;
@@ -312,29 +287,18 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
 
 bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
 {
-    // Task 8c (2026-07-30 correction, "the splash carries the loading UI,
-    // not the editor window"): the window reveal moved here from
-    // StageRenderBridge (see that method's comment) -- RuntimeStages appends
-    // nothing (BootStageParityTest pins that), so there is no dedicated
-    // splash_ready id to hang this on the way the editor has one; "finalize"
-    // is the LAST core stage both hosts run, matching where the editor's own
-    // splash_ready now sits (it depends on "finalize" -- see ProjectBoot.cpp).
+    // THE SPLASH CLOSES HERE, and "finalize" is where that belongs:
+    // RuntimeStages appends nothing (BootStageParityTest pins that), so there
+    // is no dedicated splash_ready id to hang it on the way the editor has
+    // one, and "finalize" is the LAST core stage both hosts run -- matching
+    // where the editor's own splash_ready sits (it depends on "finalize" --
+    // see ProjectBoot.cpp).
     //
-    // THE REVEAL IS NOT IN THIS STAGE, and the editor's StageSplashReady
-    // carries the same history in full. It used to sit here behind an
-    // `if (!m_gpu->GraphFlavor())` gate: Present() one terminal frame
-    // (fraction=1.0) through the swapchain-backed BootPresenter, refuse to
-    // Show() a window nothing drew into, then Show() before Close()ing the
-    // splash. That gate has been unconditionally false since the Phase 5a
-    // flip, and the follow-on GraphFlavor() collapse retired the predicate,
-    // the BootPresenter class and the dead block as one unit.
-    //
-    // MainLoop reveals the window instead, as soon as the graph vehicle that
-    // owns its only swapchain has been created -- see the reveal comment there
-    // for why that is the same "never show a window nothing can draw into"
-    // rule expressed against a different device. Both constraints the old
-    // block existed to satisfy still hold; they are met by the one object that
-    // can actually draw a frame here.
+    // THE WINDOW REVEAL IS NOT IN THIS STAGE. MainLoop reveals the window, as
+    // soon as the graph vehicle that owns its only swapchain has been created
+    // -- see the reveal comment there for why that is the "never show a
+    // window nothing can draw into" rule expressed against the one object in
+    // this process that can actually draw a frame.
     //
     // Disarm BEFORE Close() -- see EditorApp::StageSplashReady's matching
     // comment for why this specific ordering is required.
@@ -364,20 +328,9 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
 
 void RuntimeApp::MainLoop()
 {
-    // The reused NVRHI command list and the lazy backbuffer-framebuffer cache
-    // this comment used to describe are gone (NRI Phase 5a, Task 6:
-    // GpuContext::Cmd()/FramebufferFor() no longer exist) -- there is no
-    // NVRHI device left in this process for them to release handles before.
-
     auto simPrev       = std::chrono::steady_clock::now();
     auto lastFrameTime = simPrev;
     auto lastShaderPoll = simPrev;
-    // An `nvrhi::ITexture* backbuffer` was hoisted out of the loop body here
-    // (NRI Phase 3, Task 4) so it could survive one iteration between
-    // PrepareFrame, which acquired it, and CaptureTail, which read it. Task 4
-    // deleted RenderNvrhi, Task 6 deleted the acquire and Task 4 the read, so
-    // by Task 9.5a it was a variable passed by reference into RuntimeFrame.io
-    // and reset to null every frame for nobody. Gone with the io field.
     bool running = true;
 
     // THE RENDER HALF: one graph frame per iteration, built here.
@@ -392,10 +345,8 @@ void RuntimeApp::MainLoop()
     // belong to the boot, and everything from this point until the vehicle is
     // destroyed belongs to the graph. ShutdownGraphPath() reads it back after
     // the last NRI object is gone -- a teardown-only validation error must
-    // still fail the run. This whole vehicle boot is unconditional as of
-    // Phase 5a (Task 2b): the NRI frame graph is the only render path, in
-    // every configuration including Dist, so there is no longer a plain-NVRHI
-    // arm for it to be skipped in favour of.
+    // still fail the run. This whole vehicle boot is unconditional, in every
+    // configuration including Dist.
     m_graphErrorBaseline = Arcane::RenderErrorCount();
     Arcane::Diagnostics::SetPhase("nri graph vehicle boot");
 
@@ -436,13 +387,10 @@ void RuntimeApp::MainLoop()
             return project ? project->ResolveAsset(Arcane::AssetId::FromGuid(id))
                            : std::nullopt;
         });
-    // ...and the SAME seam extended to PIXELS (NRI Phase 3, Task 2): the
-    // graph device cannot sample a texture on the engine's NVRHI device,
-    // so its NriTextureCache uploads its own from the engine's RETAINED
-    // decode (Assets::PixelsFor, Task 1) -- one decode, two devices. This
-    // is what makes a textured sprite render on the graph path at all, and
-    // it works with no NVRHI device present at all, which is what Task 6
-    // needs.
+    // ...and the SAME seam extended to PIXELS: NriTextureCache uploads its
+    // own textures from the engine's RETAINED, device-free decode
+    // (Assets::PixelsFor). That is what makes a textured sprite render
+    // without the asset layer ever holding a device handle.
     m_graphContext->SetPixelSupply(
         [rt = &*m_runtime](const Arcane::Guid& id) -> const Arcane::PixelData*
         {
@@ -502,21 +450,15 @@ void RuntimeApp::MainLoop()
 
         // ImGui BeginFrame + the host HUD + DrawUIAll...
         Arcane::RuntimeFrame::BuildHud(io);
-        // ...then (NVRHI path only, unreachable since NRI Phase 5a Task 2b)
-        // backbuffer acquisition + the shader hot-reload poll, and the scene
-        // resolver's Refresh -- the prep the render half below needs. Split
-        // out of BuildHud at NRI Phase 3 Task 6 (its name never covered the
-        // acquisition); the statement order across the two calls is exactly
-        // what it was. Called "both render arms" needed this prep until NRI
-        // Phase 5a, Task 4 deleted RenderNvrhi -- RenderGraph is the only
-        // arm left to need it now.
+        // ...then the scene resolver's Refresh -- the prep the render half
+        // below needs. Kept separate from BuildHud so each call says what it
+        // does.
         Arcane::RuntimeFrame::PrepareFrame(io);
         if (io.skipFrame) continue;
 
         // =============================================================
-        // THE RENDER HALF. RenderGraph's body moved to RuntimeFrame.cpp
-        // verbatim at NRI Phase 3 Task 4; the call stays here because only
-        // MainLoop's own loop can break/continue.
+        // THE RENDER HALF. RenderGraph's body lives in RuntimeFrame.cpp; the
+        // call stays here because only MainLoop's own loop can break/continue.
         // =============================================================
         const Arcane::NriGraphContext::FrameOutcome outcome = Arcane::RuntimeFrame::RenderGraph(io);
         if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)  break;
@@ -629,11 +571,11 @@ void RuntimeApp::ShutdownGraphPath()
     // the class of mistake a validation layer exists to catch -- so the latch
     // is sampled strictly after it, never from inside a still-live vehicle.
     //
-    // The WINDOW is not in that list any more (NRI Phase 3, Task 6): the
-    // vehicle borrows the host's, and this reset is precisely what guarantees
-    // the swapchain naming its HWND/surface dies while it is still alive --
-    // MainLoop calls this on every exit path, and m_gpu outlives it regardless
-    // (member order).
+    // The WINDOW is NOT in that list: the vehicle borrows the host's, and
+    // this reset is precisely what guarantees the swapchain naming its
+    // HWND/surface dies while that window is still alive -- MainLoop calls
+    // this on every exit path, and m_gpu outlives it regardless (member
+    // order).
     m_graphContext.reset();
 
     const std::uint64_t errorsNow = Arcane::RenderErrorCount();
@@ -653,12 +595,9 @@ void RuntimeApp::ShutdownGraphPath()
 
 void RuntimeApp::Shutdown()
 {
-    // NVRHI ARM DELETED (NRI Phase 5a, Task 6: GpuContext::Device() is gone).
-    // This used to idle the NVRHI device on a defensive `!m_gpu->GraphFlavor()`
-    // guard that was already unconditionally false (GpuContext builds no
-    // NVRHI device at all); ~NriGraphContext already idled the one device
-    // this process had (and drained its graveyard) before MainLoop returned,
-    // so there is nothing left for this call to do.
+    // NO DEVICE IDLE IS OWED HERE: ~NriGraphContext already idled the one
+    // device this process has, and drained its graveyard, before MainLoop
+    // returned.
     ARC_INFO("ArcaneRuntime exiting after {} frames", m_frameCount);
 
     // The member destructors then run (after Run returns + ~RuntimeApp), in reverse
@@ -666,17 +605,13 @@ void RuntimeApp::Shutdown()
     //   m_resolver -> ~SceneRenderResolver: un-publishes the registry's sprite
     //                tables (whose pointers are non-owning). Declared LAST so
     //                it runs FIRST, while the runtime it publishes through is
-    //                still alive. (It no longer drops any nvrhi keep-alive
-    //                texture handle -- that map died at NRI Phase 5a, Task 7;
-    //                see SceneRenderResolver.hpp's own destructor contract.)
+    //                still alive. It drops no device-bound handle of its own
+    //                -- see SceneRenderResolver.hpp's destructor contract.
     //   m_plugin  -> ~PluginHost: Unload (TeardownLive -> ClearSystems +
     //                ResetRegistry) while the plugin DLL is STILL mapped.
     //   m_runtime -> ~Runtime: destroys JobSystem + the now-empty Registry.
-    //   m_gpu     -> ~GpuContext: the render/input stack, window LAST (there is
-    //                no command list or framebuffer cache to release any more --
-    //                NRI Phase 5a, Task 6 deleted GpuContext's NVRHI half). So
-    //                gpu outlives runtime + plugin exactly as the old
-    //                outer/inner main scopes did. See GpuContext's header.
+    //   m_gpu     -> ~GpuContext: the render/input stack, window LAST. So gpu
+    //                outlives runtime + plugin. See GpuContext's header.
     // m_typeContext is intentionally NOT freed (heap-leaked, see Init).
 }
 
@@ -719,14 +654,11 @@ int RuntimeApp::Run()
         else if (stage.id == "render_bridge")    stage.run = [this, &ctx] { return StageRenderBridge(ctx); };
         else if (stage.id == "sprite_tables")    stage.run = [this, &ctx] { return StageSpriteTables(ctx); };
         else if (stage.id == "plugin_load")      stage.run = [this, &ctx] { return StagePluginLoad(ctx); };
-        // "finalize" USED to be DELIBERATELY left as an explicit no-op --
-        // RuntimeApp had no window title to recompute and no scene session
-        // to adopt (editor-only concepts). Task 8c (2026-07-30 correction)
-        // gives it real work: the window reveal, which used to live in
-        // StageRenderBridge -- see StageFinalize's own comment for why it
-        // moved here specifically (RuntimeStages appends nothing, so
-        // "finalize", the last core stage, is where the editor's own
-        // splash_ready now points too).
+        // "finalize" carries real work in this host -- closing the boot
+        // splash. See StageFinalize's own comment for why this stage
+        // specifically (RuntimeStages appends nothing, so "finalize", the
+        // last core stage, is where the editor's own splash_ready points
+        // too).
         else if (stage.id == "finalize")         stage.run = [this, &ctx] { return StageFinalize(ctx); };
         // "edit_core" (2026-07-30 review, Fix 5): the editor's undo/redo
         // history and structural-edit binding have no runtime analog -- the
@@ -737,8 +669,8 @@ int RuntimeApp::Run()
     }
 
     Arcane::BootSequence seq(std::move(stages));
-    // m_splashPresenter is BootSequence's presenter for the WHOLE run (Task
-    // 8c) -- from runtime_create through finalize, every per-stage present()
+    // m_splashPresenter is BootSequence's presenter for the WHOLE run --
+    // from runtime_create through finalize, every per-stage present()
     // call reports into m_splash's status text + taskbar progress rather
     // than the swapchain, AND (2026-07-30 review round 2, finding 2)
     // arms/checks the splash's own open/closed state so IBootPresenter's
@@ -748,9 +680,9 @@ int RuntimeApp::Run()
     // nullptr, same never-fail contract as BootSplashWindow itself. It is a
     // class member, not constructed here, so StageFinalize can Disarm() it
     // before closing the splash intentionally -- see that method. It is also
-    // the ONLY presenter this host has now: the swapchain-backed BootPresenter
-    // StageFinalize used to draw exactly one frame through is deleted, and the
-    // window reveal moved to MainLoop's graph-vehicle creation.
+    // the ONLY presenter this host has: there is no swapchain-backed
+    // presenter, and the window reveal belongs to MainLoop's graph-vehicle
+    // creation.
     const Arcane::BootResult boot = seq.Run(&m_splashPresenter);
     if (!boot.ok)
         return boot.quitRequested ? 0 : 1;
@@ -760,13 +692,11 @@ int RuntimeApp::Run()
     // A device-loss exit is an abnormal end even though it was orderly: the
     // report exists, but the session did not do what it was asked to.
     if (Arcane::GpuDeviceLostObserved()) return 1;
-    // The graph path's own codes, ahead of the golden one: 1 = the graph run
-    // FAILED (it says WHERE the run died), 2 = RenderErrorCount GREW (a
-    // validation error fired, which explains a bad capture rather than the
-    // reverse). Precedence 1 > 2 > 3, the smoke's -- see ShutdownGraphPath.
-    // As of Phase 5a (Task 2b) these can fire on ANY run -- the graph path is
-    // unconditional, not gated on --nri-graph anymore -- so 0 here means no
-    // graph failure occurred, not "the flag was not given".
+    // The render path's own codes: 1 = the graph run FAILED (it says WHERE
+    // the run died), 2 = RenderErrorCount GREW (a validation error fired,
+    // which explains a bad capture rather than the reverse). The lower number
+    // wins -- see ShutdownGraphPath. They can fire on ANY run, the render
+    // path being unconditional, so 0 here means no graph failure occurred.
     if (m_graphExit != 0) return m_graphExit;
     return 0;
 }

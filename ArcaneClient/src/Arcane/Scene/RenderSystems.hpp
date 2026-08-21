@@ -143,13 +143,6 @@ namespace Arcane
                     // ComputeSpriteGeom). No asset, or an asset whose source
                     // texture is nil: a nil Guid and the full-range UVs a
                     // full-texture sprite would have anyway.
-                    //
-                    // An `nvrhi::ITexture* tex` was read from the same entry
-                    // and passed alongside until ABI v15 (NRI Phase 5a, Task
-                    // 9.5b-ii). It was null for EVERY sprite -- no NVRHI
-                    // device is created in any configuration -- so it could
-                    // not tell "untextured" from "textured on a device that
-                    // does not exist". The Guid can, and is now the only key.
                     const Guid texId = entry ? entry->textureId : Guid::Nil();
                     const glm::vec2 uvMin = entry ? entry->uvMin : glm::vec2(0.0f, 0.0f);
                     const glm::vec2 uvMax = entry ? entry->uvMax : glm::vec2(1.0f, 1.0f);

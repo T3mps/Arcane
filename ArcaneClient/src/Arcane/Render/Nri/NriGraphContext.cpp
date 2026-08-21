@@ -59,11 +59,10 @@ namespace Arcane
         // (128 B of vertices + 24 B of indices each).
         constexpr std::uint64_t kUploadRingBytesPerFrame = 4ull * 1024 * 1024;
 
-        // Where the offline shader artifacts live, relative to the executable.
-        // The SAME literal the deleted NVRHI shader loader was handed, and
-        // still resolved through the same function (ShaderPaths::
-        // ResolveFlavorDir) -- so a desk user pointing ARCANE_SHADER_DIR at a
-        // live recompile moves every shader consumer together.
+        // Where the offline shader artifacts live, relative to the
+        // executable. Resolved through ShaderPaths::ResolveFlavorDir, so a
+        // desk user pointing ARCANE_SHADER_DIR at a live recompile moves
+        // every shader consumer together.
         constexpr const char* kShaderDir = "data/shaders";
 
         // WritePngRgba wants RGBA; NRI resolves the swapchain's channel order
@@ -81,7 +80,7 @@ namespace Arcane
         }
 
         // ---------------------------------------------------------------
-        // THE OFFSCREEN PACING WAIT (NRI Phase 3, Task 7).
+        // THE OFFSCREEN PACING WAIT.
         //
         // A DELIBERATE TWIN of NriSwapChain.cpp's PollingWaitForTimelineFence:
         // same constants, same two heartbeat beats in the same order, same
@@ -91,12 +90,9 @@ namespace Arcane
         // internally for up to NRI_TIMEOUT_FENCE = 5s publishing nothing, so a
         // hung GPU would look like a hung process).
         //
-        // DUPLICATED RATHER THAN EXTRACTED, on purpose and for one reason: the
-        // shared version would have to be called from NriSwapChain.cpp too, and
-        // that file is the host-window present path desk checkpoint D3b is
-        // currently pinning -- a behaviour-preserving refactor is still a diff
-        // through the exact code under test. The extraction is a follow-up, not
-        // a decision (Task 7 report).
+        // DUPLICATED RATHER THAN EXTRACTED, and the extraction is still
+        // owed: a shared version would have to be called from
+        // NriSwapChain.cpp too, which is the host-window present path.
         // ---------------------------------------------------------------
         constexpr Uint64 kFencePollSleepNs = 1'000'000;         // 1ms, matching NriSwapChain.cpp
         constexpr std::chrono::seconds kFencePollWindow{ 15 };  // ...and its 15s window
@@ -142,12 +138,10 @@ namespace Arcane
         ARC_INFO("[nri-graph] starting the graph render half: backend={} vsync={} frames={}",
                  ToString(config.backend), config.vsync ? "on" : "off", config.maxFrames);
 
-        // NO WINDOW IS CREATED HERE (NRI Phase 3, Task 6). The swapchain below
-        // binds the HOST's window -- the one GpuContext::CreateForGraph built
-        // with the same 1280x720 resizable defaults every golden baseline was
-        // captured at, and (on Vulkan) with SDL_WINDOW_VULKAN set. See the
-        // header's THE BORROWED WINDOW for why the second window could not be
-        // removed before the NVRHI device was.
+        // NO WINDOW IS CREATED HERE. The swapchain below binds the HOST's
+        // window -- the one GpuContext::Create built, with 1280x720 resizable
+        // defaults and (on Vulkan) SDL_WINDOW_VULKAN set. See the header's
+        // THE BORROWED WINDOW for why it is borrowed rather than owned.
         if (!window.NativeHandle())
         {
             ARC_ERROR("[nri-graph] the borrowed host window has no native handle -- nothing to "
@@ -214,40 +208,33 @@ namespace Arcane
         // flavor's borrowed case -- see the member declarations.
         m_device = m_ownedDevice.get();
 
-        // THE CRASH CHAIN, armed by whichever device exists (Task 5). Since
-        // Task 6 this is the ONLY arming call in the process -- there is no
-        // NVRHI device to have filled the slot during boot -- so Arm() takes
-        // its full-arm path: the device-removed hook, the graph GPU-section
-        // provider, the active-backend slot and both latch resets. (It still
-        // infers the topology from the slot rather than being told, which is
-        // what keeps the editor's transition tasks working with the same call.)
+        // THE CRASH CHAIN, armed on the one device this process has. This is
+        // the ONLY arming call in the process, so Arm() takes its full-arm
+        // path: the device-removed hook, the graph GPU-section provider, the
+        // active-backend slot and both latch resets. (It infers the topology
+        // from the slot rather than being told, so a second context on the
+        // same device works through the same call.)
         //
         // Immediately after the wrap and BEFORE the swapchain, so a failure
         // anywhere below is already covered by a live device-removed
         // observation point and a live GPU-section provider. Disarmed in
         // ~NriGraphContext, before the device it names goes away.
         //
-        // THE RETURN VALUE IS NOW KEPT (NRI Phase 3, Task 7) and it is what
-        // gates the Disarm in the destructor. Behaviour here is unchanged in
-        // every existing topology -- one device means Arm() returns true and
-        // the destructor disarms exactly as before; the two-device transition
-        // means it returns false and Disarm() was already a no-op. What it buys
-        // is the topology this task introduces: a SECOND context on this same
+        // THE RETURN VALUE IS KEPT, and it is what gates the Disarm in the
+        // destructor. That matters because a SECOND context on this same
         // device must not be able to disarm the chain THIS one installed, and
-        // NriDiagnostics keeps one process-wide slot with no owner identity, so
-        // the ownership has to be remembered here.
+        // NriDiagnostics keeps one process-wide slot with no owner identity --
+        // so the ownership has to be remembered here.
         m_armedDiagnostics = NriDiagnostics::Arm(*m_device);
 
         m_swap = NriSwapChain::Create(*m_device, window, m_vsync);
         if (!m_swap)
         {
-            // On dx12 the one cause worth naming stays worth naming even
-            // though the topology that made it routine is gone: DXGI allows
-            // only one flip-model swap chain per HWND at a time. Nothing else
-            // in the process owns one on this window now, so if this fires it
-            // is a real defect (a second graph context over the same window,
-            // or an NVRHI swapchain that should not exist) -- see the header's
-            // THE BORROWED WINDOW.
+            // On dx12 the one cause worth naming: DXGI allows only one
+            // flip-model swap chain per HWND at a time. Nothing else in the
+            // process owns one on this window, so if this fires it is a real
+            // defect -- a second graph context over the same window -- see
+            // the header's THE BORROWED WINDOW.
             ARC_ERROR("[nri-graph] swapchain create failed over the host window (dx12: is another "
                       "flip-model swapchain already associated with this HWND?)");
             return false;
@@ -286,7 +273,7 @@ namespace Arcane
     }
 
     // =====================================================================
-    // THE OFFSCREEN FLAVOR (NRI Phase 3, Task 7) -- see the header's OFFSCREEN
+    // THE OFFSCREEN FLAVOR -- see the header's OFFSCREEN
     // MODE for the contract, and CALLER CONTRACT: TWO CONTEXTS, ONE GRAVEYARD
     // for what a second live context on one device owes.
     // =====================================================================
@@ -661,7 +648,7 @@ namespace Arcane
         // anything it referenced -- ~NriDevice idles again before draining,
         // which is harmless.
         //
-        // SKIPPED ON A LOST DEVICE (NRI Phase 3, D3b teardown). Once the loss
+        // SKIPPED ON A LOST DEVICE. Once the loss
         // has been observed this call cannot idle anything that is not already
         // stopped; all it can do is fail. On VK it returns DEVICE_LOST
         // immediately; on D3D12 it burns NRI_TIMEOUT_FENCE (5 s, SharedExternal
@@ -683,12 +670,10 @@ namespace Arcane
         // ==============================================================
         // WHICH GRAVEYARD -- THIS CONTEXT'S OWN, ALWAYS AND ONLY.
         // ==============================================================
-        // One mechanism, no special cases (NRI Phase 3, Task 8-pre). m_graves
-        // is a member of this object, it starts empty, only this context's
-        // graph/nodes/caches bury into it, and only this context's graph reaps
-        // it -- with the one fence that describes those burials. Every window
-        // the Task-7 local-graveyard branch used to cover, and the three it
-        // could not, are closed by that alone:
+        // ONE MECHANISM, NO SPECIAL CASES. m_graves is a member of this
+        // object, it starts empty, only this context's graph/nodes/caches bury
+        // into it, and only this context's graph reaps it -- with the one
+        // fence that describes those burials. That alone closes every window:
         //
         //   (b1) EXECUTE NEVER ENTERED -- burials key at fence 0, and 0 is
         //        nondecreasing against an EMPTY lane. (RenderGraph in fact
@@ -705,13 +690,9 @@ namespace Arcane
         //        lane nothing revisits. m_graph is therefore destroyed
         //        EXPLICITLY below, inside this body, ahead of that drain.
         //
-        // HOST-WINDOW MODE IS NOT AN EXCEPTION and deliberately so: the
-        // objects, their fence values and their burial ORDER are identical to
-        // what the device graveyard used to receive -- the only change is which
-        // object holds them, plus the graph's tail now being drained here
-        // instead of by ~NriDevice a few members later, behind the same
-        // DeviceWaitIdle. That is what keeps desk checkpoint D3b's path
-        // behaviour-equivalent.
+        // HOST-WINDOW MODE IS NOT AN EXCEPTION, deliberately: both modes
+        // bury the same objects, at the same fence values, in the same order,
+        // into this same lane.
         Graveyard& graves = m_graves;
 
         if (m_capture)
@@ -755,7 +736,7 @@ namespace Arcane
         m_pipelines.Clear(graves, fence);
 
         // DESTROYED HERE, EXPLICITLY, not left to the member destructor --
-        // which is the closure of header window (a) (NRI Phase 3, Task 8-pre).
+        // which is the closure of header window (a).
         //
         // ~RenderGraph buries EVERYTHING it owns at its own last submitted
         // fence value: the transient pool and every cached attachment view
@@ -767,11 +748,9 @@ namespace Arcane
         // Debug ~Graveyard makes that fatal, and in Release it runs those
         // thunks from a destructor with no fence-completion guarantee.
         //
-        // Doing it here puts the whole graph in one lane and one sweep. The
-        // objects and their fence values are exactly what the shared graveyard
-        // used to receive; only the sweep's SITE moves -- from ~NriDevice, a
-        // few members later, to this line -- and both sit behind the same
-        // DeviceWaitIdle above, with the swapchain still alive.
+        // Doing it here puts the whole graph in ONE lane and ONE sweep,
+        // behind the DeviceWaitIdle above and with the swapchain still
+        // alive.
         m_graph.reset();
 
         // ---- offscreen mode's own two objects (Task 7) -------------------
@@ -1189,14 +1168,10 @@ namespace Arcane
         // allocator's doing, not a declaration here (FullscreenNodes.hpp, THE
         // PING-PONG IS DERIVED).
         //
-        // STAGE GATING, and it is no longer a no-op: `batch` means "batcher +
-        // tonemap and nothing else", so it drops the chain even when the scene
-        // binds one -- the SAME bypass RuntimeApp used to apply to the
-        // (now-deleted) NVRHI path, which is what let a batch-stage golden
-        // compare the same content on both recorders back when there were
-        // two. Since Task 12 `post` and `full` differ too -- the HUD node
-        // below is declared under `full` only, again matching what RuntimeApp
-        // did on the NVRHI path before it was deleted.
+        // THE CHAIN IS DROPPED when the caller passes no post desc, even if
+        // the scene binds one -- "batcher + tonemap and nothing else" is
+        // asked for by nulling `post`, not by a mode flag. The HUD node below
+        // works the same way, off FrameDesc::imgui.
         // ---------------------------------------------------------------
         RgTexture sceneColor = handles.canvas;
         if (shape.post && !shape.post->passes.empty())
@@ -1271,22 +1246,21 @@ namespace Arcane
             AddImGuiNode(graph, context, handles.backbuffer, ImGuiNodeSlot::GameUi);
 
         // ---------------------------------------------------------------
-        // THE PICK + OUTLINE CHAIN (Task 11), declared BETWEEN the tonemap and
+        // THE PICK + OUTLINE CHAIN, declared BETWEEN the tonemap and
         // the capture, which is both halves of the ordering contract:
         //
         //   * AFTER the tonemap, because the composite blends over the
-        //     DISPLAY-REFERRED backbuffer -- exactly what the editor's phase 12
-        //     did on the NVRHI arm (composite into the canvas's post-tonemap
-        //     OUTPUT framebuffer, after the scene render and before the ImGui
-        //     pass);
+        //     DISPLAY-REFERRED backbuffer -- which is also where the editor's
+        //     phase 12 composites: after the scene render, before the ImGui
+        //     pass;
         //   * BEFORE the capture, because the capture node copies the
         //     backbuffer and must see the outline. Declaration order IS
         //     execution order on this graph, so this placement is the whole
         //     mechanism -- there is nothing else to get right.
         //
-        // The pick pass itself does not depend on the tonemap at all and could
-        // sit anywhere; keeping the chain contiguous here is what makes "the
-        // flag off leaves Task 10's frame byte for byte" obvious by reading.
+        // The pick pass itself does not depend on the tonemap at all and
+        // could sit anywhere; keeping the chain contiguous here is what makes
+        // "the flag off leaves the frame byte for byte" obvious by reading.
         // ---------------------------------------------------------------
         if (shape.pickOutline)
         {
@@ -1303,21 +1277,16 @@ namespace Arcane
         }
 
         // ---------------------------------------------------------------
-        // THE HUD (Task 12), the LAST visual writer of the frame -- after the
-        // tonemap (host chrome is display-referred and must not be graded),
-        // after the outline composite when a probe run armed one, and BEFORE
-        // the capture, because a `full` golden's baseline was captured from
-        // the (now-deleted) NVRHI path WITH the HUD on it. Declaration order
-        // is execution order here, so this placement is the whole mechanism;
-        // it is the same order RuntimeApp recorded on the NVRHI path before
-        // it was deleted (pass:tone, then pass:imgui, then the readback).
+        // THE HUD, the LAST visual writer of the frame -- after the tonemap
+        // (host chrome is display-referred and must not be graded), after the
+        // outline composite when a probe run armed one, and BEFORE the
+        // capture, so a capture carries the chrome that was actually shown.
+        // Declaration order is execution order here, so this placement is the
+        // whole mechanism: pass:tone, then pass:imgui, then the readback.
         //
-        // STAGE GATED, and it is the same gate RuntimeApp used to apply to
-        // the NVRHI path: `batch` and `post` end the ImGui frame without rendering it,
-        // because the HUD would sit on top of every stage golden and mask
-        // exactly the pixels a node-by-node cutover needs to compare. The
-        // driver expresses that by passing no draw data at all, and this
-        // re-checks the stage so the two cannot drift apart.
+        // A CALLER THAT WANTS NO CHROME passes no draw data at all, and this
+        // node is simply not declared -- there is no separate mode to keep in
+        // step with the pointer.
         // ---------------------------------------------------------------
         if (shape.imgui)
             AddImGuiNode(graph, context, handles.backbuffer);
@@ -1401,7 +1370,7 @@ namespace Arcane
     void NriGraphContext::BuildFrame(const FrameDesc& frame)
     {
         // ===== EVERY OWNED NODE SYNCS ITS POOL EPOCH, IN FRAME OR NOT =======
-        // (whole-branch review, I1.) The three nodes below cache descriptors
+        // The three nodes below cache descriptors
         // over RenderGraph POOL textures, and the epoch is the only signal that
         // one of those textures has been retired (RenderGraph::PoolEpoch's
         // contract). Each already syncs from its own exec fn -- but an exec fn
@@ -1515,9 +1484,8 @@ namespace Arcane
         // A capture frame needs its staging buffer sized to the CURRENT extent
         // before the graph is declared (the node imports the buffer, so it has
         // to exist first). A failure here degrades to an uncaptured frame
-        // rather than a failed one -- the run's pixels are still valid, only
-        // the artifact is lost, which is the same exit-3 class the
-        // (now-deleted) NVRHI path's own capture failure used to report.
+        // rather than a failed one -- the run's pixels are still valid and
+        // only the artifact is lost.
         FrameDesc effective = frame;
         if (effective.capture && !EnsureCaptureBuffer())
             effective.capture = false;
@@ -1607,14 +1575,12 @@ namespace Arcane
 
         ++m_frameIndex;
 
-        // THE GPU-PROGRESS HEARTBEAT (Task 5), after the frame's present and
-        // therefore after its last submit -- the same rule GpuFrameProgress::
-        // EndFrame carried on the NVRHI path before Task 9.5a deleted it ("a
-        // stamp placed before the frame's work would retire early and report
-        // progress the GPU had not made"). Presented frames only: a skipped
-        // frame submitted nothing,
-        // so republishing here would say "the GPU is fine" about a frame the
-        // GPU never saw.
+        // THE GPU-PROGRESS HEARTBEAT, after the frame's present and
+        // therefore after its last submit: a stamp placed before the frame's
+        // work would retire early and report progress the GPU had not made.
+        // Presented frames only -- a skipped frame submitted nothing, so
+        // republishing here would say "the GPU is fine" about a frame the GPU
+        // never saw.
         //
         // The value is the pacing fence's COMPLETED value, not the frame
         // index: m_frameIndex is what the CPU has SUBMITTED and advances
@@ -1823,8 +1789,8 @@ namespace Arcane
 
         // The copy was recorded into the frame that was just submitted and
         // presented; it has to have LANDED before the mapped bytes mean
-        // anything. Same stall the (now-deleted) NVRHI path's own capture
-        // used to pay, on a frame the process is about to exit after.
+        // anything. A stall paid on a frame the process is about to exit
+        // after.
         (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
 
         const auto* mapped = static_cast<const std::uint8_t*>(
@@ -1835,11 +1801,10 @@ namespace Arcane
             return false;
         }
 
-        // Tight RGBA8 out, whatever came in: the row pitch is dropped and BGRA
-        // is swizzled. THIS is the Format()-aware half of the golden rule --
-        // NRI cannot be told to give us BGRA8, so the normalization has to
-        // happen here, and then the byte-wise comparator can hold a graph
-        // capture against an NVRHI baseline.
+        // Tight RGBA8 out, whatever came in: the row pitch is dropped and
+        // BGRA is swizzled. NRI cannot be told which channel order to
+        // resolve, so the normalization has to happen HERE -- and then a
+        // capture's bytes mean the same thing on every backend.
         const bool swizzle = IsBgraFormat(m_format);
         rgba.resize(static_cast<std::size_t>(m_captureWidth) * m_captureHeight * 4);
         for (std::uint32_t y = 0; y < m_captureHeight; ++y)

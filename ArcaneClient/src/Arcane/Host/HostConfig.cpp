@@ -15,10 +15,10 @@ namespace Arcane
         cli.Option("scene",   "", "asset Guid to boot instead of the manifest's bootScene (empty = follow the manifest)");
         cli.Option("screenshot", "", "write the last rendered frame to this PNG before exiting (pairs with --frames)");
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
-        // NOT Dist-guarded (Phase 5a, Task 2b): the NRI frame graph is the
-        // ONLY render path in every configuration now, so the flag that used
-        // to select it has nothing left to select. Kept registered and
-        // parsed-and-ignored rather than deleted or refused outright --
+        // NOT Dist-guarded: the NRI frame graph is the ONLY render path in
+        // every configuration, so the flag that used to select it has nothing
+        // left to select. Kept registered and parsed-and-ignored rather than
+        // deleted or refused outright --
         // scripts, the Hub's saved launch args, and the desk batteries all
         // still pass it, and a hard "unknown argument" refusal would turn a
         // harmless no-op into a boot failure at the worst moment (a shipped
@@ -29,9 +29,8 @@ namespace Arcane
 #if !defined(ARCANE_DIST)
         cli.Option("crash-gpu", "0", "DEV: deliberately fault the GPU on frame N (0 = off) -- "
                                      "the crash-diagnostics desk trigger").Type(CliType::Uint);
-        // Registered beside the other Dist-guarded dev flags. --nri-graph is
-        // no longer this flag's prerequisite (Phase 5a: the graph path is
-        // unconditional), so the help text no longer names it.
+        // Registered beside the other Dist-guarded dev flags. The render path
+        // is unconditional, so this flag has no prerequisite to name.
         cli.Option("pick-probe", "",  "DEV: add the pick + JFA outline nodes, scripted "
                                       "onto the scene's first pickable entity, and print the entity id "
                                       "read back at canvas pixel x,y -- exit 0 on a hit, 1 on a miss");
@@ -69,7 +68,7 @@ namespace Arcane
         }
 
 #if !defined(ARCANE_DIST)
-        // --pick-probe x,y (NRI Phase 2, Task 11). Parsed HERE rather than at
+        // --pick-probe x,y. Parsed HERE rather than at
         // the use site, and refused rather than clamped, because the whole
         // value of the flag is being scriptable: a probe whose coordinate was
         // silently reinterpreted would report a confident id for a pixel
@@ -114,13 +113,10 @@ namespace Arcane
                     return { std::nullopt, 2 };
                 }
 
-                // Silent-no-op refusal, the same class as --golden-stage
-                // outside golden mode: the readback lands with frames-in-flight
-                // latency so an open-ended run never reports. Used to also
-                // refuse without --nri-graph (the pick/outline nodes lived
-                // only on that path) -- that guard is gone as of Phase 5a:
-                // the NRI frame graph is the only render path, so the nodes
-                // are always present.
+                // Refused rather than silently no-op'd: the readback lands
+                // with frames-in-flight latency, so an open-ended run never
+                // reports. The nodes themselves are always available -- the
+                // NRI frame graph is the only render path.
                 if (cfg.maxFrames == 0)
                 {
                     std::fprintf(stderr, "error: --pick-probe requires --frames N (the readback "

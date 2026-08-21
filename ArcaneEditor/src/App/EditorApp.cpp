@@ -287,22 +287,15 @@ namespace Arcane::Editor
     {
         // The whole platform/render/input stack, booted in order. Owned by m_gpu and
         // declared BEFORE m_runtime/m_plugin in EditorApp -- so it destructs AFTER
-        // them: the render resources it owns (window/batcher/imgui/input -- the
-        // NVRHI half of this list, device/swapchain/shaders/canvas/tonemap/
-        // commandList/framebuffers, is gone as of NRI Phase 5a, Task 6) must
-        // outlive runtime + plugin.
+        // them: the render resources it owns (window, batcher, imgui, input)
+        // must outlive runtime + plugin.
         //
-        // THE BOOT-PATH SPLIT (NRI Phase 3, Task 8), mirroring
-        // RuntimeApp::StageGpuCore line for line. As of Phase 5a (Task 2b) the
-        // NRI frame graph is the ONLY render path, unconditionally, in every
-        // configuration including Dist: NO NVRHI DEVICE IS EVER CREATED in
-        // this host. GpuContext::Create builds the window, a device-less
-        // Batcher2D, the ImGuiLayer and the input stack, and Main() then
-        // builds the NriGraphContext pair that owns the process's ONLY
-        // graphics device -- the chrome one over this same window, the
-        // viewport one offscreen on its device. GpuContext has had no NVRHI
-        // arm at all since NRI Phase 5a, Task 6 collapsed it (the factory was
-        // called CreateForGraph before that task renamed it).
+        // THE BOOT-PATH SPLIT, mirroring RuntimeApp::StageGpuCore line for
+        // line. GpuContext::Create builds the window, a device-less Batcher2D,
+        // the ImGuiLayer and the input stack -- AND NO GRAPHICS DEVICE. Main()
+        // then builds the NriGraphContext PAIR that owns the process's ONLY
+        // graphics device: the chrome one over this same window, the viewport
+        // one offscreen on that same device.
         m_gpu = GpuContext::Create(m_config);
         if (!m_gpu)
         {
@@ -320,17 +313,11 @@ namespace Arcane::Editor
         // against this, see its own body).
         m_editorImguiContext = ImGui::GetCurrentContext();
 
-        // Constructs NO presenter here (Task 8c, 2026-07-30
-        // correction): the swapchain-backed BootPresenter this used to defer
-        // was needed exactly once, for the single reveal frame StageSplashReady
-        // drew right before Show()/Close(), and it is deleted now along with
-        // that reveal -- there is no more "next automatic
-        // present() call" to worry about landing on an unready ImGui context,
-        // because BootSequence's per-stage pump is driven by the pre-device
-        // splash (Arcane::BootSplashPresenter, bound for the whole Run() call
-        // in Run() below) for the ENTIRE boot, never by this swapchain
-        // presenter. m_presenter is emplaced lazily inside StageSplashReady,
-        // the one place it is used.
+        // NO PRESENTER IS CONSTRUCTED HERE. BootSequence's per-stage pump is
+        // driven by the pre-device splash (Arcane::BootSplashPresenter, bound
+        // for the whole Run() call below) for the ENTIRE boot -- this host has
+        // no swapchain-backed presenter at all, so there is no "next automatic
+        // present()" that could land on an unready ImGui context.
         return true;
     }
 
@@ -400,20 +387,14 @@ namespace Arcane::Editor
         // ~2x (a clean box). A much larger texture would leave ImGui doing a >2x single-tap
         // minify -> the aliased outline the raw 550px source produced.
         //
-        // NOT SET HERE. This used to be an NVRHI-only LoadDisplayTexture call,
-        // gated `if (!GraphFlavor())`; GpuContext has had no NVRHI device to
-        // build that texture on since NRI Phase 5a, Task 6, so the call is
-        // gone rather than ported to an accessor that no longer exists.
-        //
-        // THE MARK COMES FROM ELSEWHERE INSTEAD (NRI Phase 3, Task 11) --
+        // THE TOOLBAR MARK IS NOT SET HERE, because no device exists yet --
         // CreateGraphVehicles decodes the same PNG at the same maxSize
         // through LoadDisplayPixels and uploads it through the chrome
         // context's NriTextureCache. It cannot happen HERE because that
         // context does not exist yet: this stage runs inside boot, and the
         // graph vehicles are built strictly after it (Main -> CreateGraphVehicles).
-        // The toolbar reads whichever of the two is set (ToolbarLogoTextureId),
-        // and 0 -- neither -- is still the degraded-but-never-broken "no mark"
-        // path a missing PNG takes.
+        // The toolbar reads ToolbarLogoTextureId, and 0 is the
+        // degraded-but-never-broken "no mark" path a missing PNG takes.
 
         // Editor shell: enable ImGui docking (the placeholder single window becomes
         // a dockspace + panels in MainLoop) and route the engine logger into the
@@ -450,13 +431,10 @@ namespace Arcane::Editor
 
     bool EditorApp::StageRenderBridge(Arcane::HostBoot::BootContext&)
     {
-        // THERE IS NO RENDER-RESOURCES BRIDGE ANY MORE -- same removal as
-        // RuntimeApp::StageRenderBridge states. This stage used to hand the
-        // Runtime a host-owned nvrhi::IDevice + ShaderLibrary; since NRI Phase 3,
-        // Task 8 it passed (nullptr, nullptr), because GpuContext builds no NVRHI
-        // device at all. NRI Phase 5a, Task 9 deleted
-        // Runtime::SetRenderResources/Device()/Shaders() outright -- one of the
-        // two things ABI 14 gates.
+        // THERE IS NO RENDER-RESOURCES BRIDGE -- same as
+        // RuntimeApp::StageRenderBridge states. A plugin is handed no graphics
+        // device and no shader library; Runtime has no SetRenderResources at
+        // all.
         //
         // The Assets facade stays device-less either way, and Assets::PixelsFor
         // is the retained, device-FREE decode the graph's NriTextureCache uploads
@@ -467,23 +445,17 @@ namespace Arcane::Editor
         // composited INTO the viewport texture (see MainLoop), instead of the
         // editor context where a HUD would float over the editor chrome. Created
         // here, AFTER the editor ImGui layer is up (StageGpuCore) and BEFORE
-        // the plugin is loaded/adopts it in StagePluginLoad. Uses the SAME GPU
-        // device + ShaderLibrary the editor ImGui layer was built from. (Create
-        // leaves the current ImGui context null; harmless -- the editor's
-        // ImGuiLayer re-pins its own context on every BeginFrame/WantCapture*.)
+        // the plugin is loaded/adopts it in StagePluginLoad. (Create leaves
+        // the current ImGui context null; harmless -- the editor's ImGuiLayer
+        // re-pins its own context on every BeginFrame/WantCapture*.)
         //
-        // ONE FACTORY (NRI Phase 5a, Task 5): OffscreenImGuiLayer's own
-        // NVRHI/graph flavor split -- which used to make this an
-        // m_gpu->GraphFlavor() ternary between an ImGui-NVRHI renderer over
-        // m_gpu->Device() and a bare CONTEXT (own atlas, io.IniFilename =
-        // nullptr, the same pinning discipline in every entry point) -- is
-        // gone. OffscreenImGuiLayer::Create() always builds the bare context;
-        // the renderer is always a node inside the viewport's frame graph
-        // (ImGuiNriNode over FrameDesc::gameUi).
+        // ONE FACTORY: OffscreenImGuiLayer::Create() builds a bare CONTEXT --
+        // own atlas, io.IniFilename = nullptr, the same pinning discipline in
+        // every entry point -- and no renderer. The renderer is a node inside
+        // the viewport's frame graph (ImGuiNriNode over FrameDesc::gameUi).
         //
-        // Task 8 left this NULL on the graph arm and the plugin took the
-        // editor's context as a fallback; see the SetImGui block below for what
-        // that cost and why restoring this is not optional.
+        // NON-OPTIONAL: see the SetImGui block below for what handing the
+        // plugin the EDITOR's context instead would cost.
         m_gameImgui = Arcane::OffscreenImGuiLayer::Create();
         if (!m_gameImgui)
         {
@@ -502,16 +474,12 @@ namespace Arcane::Editor
             // pointer differs from the editor redirect.
             ImGuiMemAllocFunc allocFn = nullptr; ImGuiMemFreeFunc freeFn = nullptr; void* ud = nullptr;
             ImGui::GetAllocatorFunctions(&allocFn, &freeFn, &ud);
-            // ===== THE GAME CONTEXT, UNCONDITIONALLY, ON BOTH ARMS =====
-            // (NRI Phase 3, Task 9. This line WAS
-            // `m_gameImgui ? Context() : m_editorImguiContext`, and closing
-            // that fallback is one third of a single change -- the other two
-            // thirds are FrameInput's fs.gameUiClaims and phase 11's DrawUIAll
-            // call site. Task 8's fix round 1 named them as ONE change for the
-            // reason below, and they landed as one.)
+            // ===== THE GAME CONTEXT, UNCONDITIONALLY =====
+            // There is deliberately NO `m_gameImgui ? Context() :
+            // m_editorImguiContext` fallback here.
             //
-            // WHAT THE FALLBACK COST. The isolation it gave up was NOT only
-            // "the HUD draws over the chrome". OffscreenImGuiLayer sets
+            // WHAT SUCH A FALLBACK WOULD COST -- and it is NOT only "the HUD
+            // draws over the chrome". OffscreenImGuiLayer sets
             // io.IniFilename = nullptr on the game context ("no imgui.ini for
             // the game context", OffscreenImGuiLayer.cpp) -- while the EDITOR
             // context's IniFilename is the PER-PROJECT LAYOUT FILE
@@ -522,12 +490,10 @@ namespace Arcane::Editor
             // the imgui.ini veto class, which is the worst kind of bug this
             // file can produce because it survives a rebuild.
             //
-            // What HELD the line until Task 9 was phase 11's GraphMode() gate:
-            // nothing submitted plugin windows on that arm, so DrawUIAll never
-            // ran. Control flow is a weaker guarantee than structure, which is
-            // exactly why the rule was "restore the context IN THE SAME CHANGE
-            // that lets DrawUIAll run". It is structure again now: there is no
-            // arm on which the plugin sees m_editorImguiContext.
+            // Holding that line by CONTROL FLOW -- gating the call site that
+            // submits plugin windows -- is a weaker guarantee than holding it
+            // by STRUCTURE. It is structural here: there is no path on which
+            // the plugin sees m_editorImguiContext.
             m_runtime->SetImGui(m_gameImgui->Context(),
                                 reinterpret_cast<void*>(allocFn),
                                 reinterpret_cast<void*>(freeFn),
@@ -538,7 +504,7 @@ namespace Arcane::Editor
         // the interactive host and a headless `--frames N` run (which only
         // differs in the audio backend).
         //
-        // THE GRAPH ARM CREATES NOTHING HERE (NRI Phase 3, Task 8). The
+        // THIS STAGE CREATES NOTHING. The
         // offscreen NriGraphContext that is the viewport vehicle
         // (ViewportTargets::graph) borrows the NriDevice the CHROME context
         // owns, and that context cannot exist yet: its swapchain must be
@@ -547,27 +513,16 @@ namespace Arcane::Editor
         // the first frame. Nothing between here and there renders, so the gap
         // is not observable.
         //
-        // sprite_tables (the one stage that used to depend on an NVRHI canvas
-        // existing by now) is unaffected: its batcher is m_gpu->Batch() -- the
-        // device-less Batcher2D GpuContext::Create built -- exactly as
+        // sprite_tables is unaffected by that: its batcher is m_gpu->Batch()
+        // -- the device-less Batcher2D GpuContext::Create built -- exactly as
         // RuntimeApp::StageSpriteTables does it.
         //
-        // NRI Phase 5a, Task 4 deleted the NVRHI trio this stage used to build
-        // behind an `if (!m_gpu->GraphFlavor())` guard (OffscreenCanvas +
-        // PickBuffer + SelectionOutline, in that dependency order) --
-        // GraphFlavor() is unconditional, so that construction was already
-        // unreachable. This stage does nothing at all now, and is still
-        // INSTALLED as a boot stage.
-        //
-        // NOT waiting on Task 11 any more, which is what this used to say.
-        // Task 11a ran that GraphMode() collapse and did not delete this: the
-        // body carries no GraphMode() call, so a predicate collapse never
-        // reached it. Removing it is its own change with its own blast radius:
+        // THE STAGE IS STILL INSTALLED even though its body creates nothing,
+        // and removing it is its own change with its own blast radius:
         // "render_bridge" is pinned by name in ArcaneTests/src/
         // BootStageParityTest.cpp's id list (:118), and BOTH sprite_tables and
         // plugin_load declare a dependsOn edge to it (ProjectBoot.cpp:238,
-        // :239), so deleting the stage re-parents them. It needs its own
-        // owner rather than a task that has already come and gone.
+        // :239), so deleting the stage re-parents them.
         return true;
     }
 
@@ -607,27 +562,15 @@ namespace Arcane::Editor
     {
         // Shader-editor services (Slice 5): the shared compile service, the
         // template source root, and the .arcmat -> ShaderEditorDocument routing.
-        // A missing dxcompiler.dll degrades to a warn (documents show status)
-        // OUTSIDE golden mode -- see the golden branch below for why that
-        // degradation is wrong there.
+        // A missing dxcompiler.dll degrades to a warn (documents show
+        // status).
         //
-        // NRI Phase 3, Task 13 fix round 1 (CRITICAL, review finding 1): the
-        // debounce is zeroed under golden mode, mirroring
-        // RuntimeApp::StageSpriteTables verbatim (RuntimeApp.cpp:305-313) --
-        // this line was the ONE golden-mode statement that call site has and
-        // this one did not have, and its absence made every editor golden
-        // run hang for the full warm-up timeout and then refuse. The chain:
-        // DrainSceneCompiles (Host/GoldenHarness.cpp) holds `frame.now` at a
-        // constant 0.0 every iteration by design (a golden run's pinned
-        // clock -- see that function's own comment); against the
-        // INTERACTIVE 0.2s debounce this Initialize call used to hardcode,
-        // ShaderCompiler::Submit stamps `readyAt = 0.2`, so `Poll(0.0)` can
-        // never cross it, `IsIdle()` never returns true, and the drain spins
-        // for the full kGoldenWarmupTimeoutSeconds (60s) before refusing --
-        // "did not settle", exit 3, with ZERO frames ever rendered. There is
-        // no escape from inside the loop: the editor's only Refresh call
-        // site is RefreshSceneResolution (phase 9), reached only once the
-        // warm-up has already returned true.
+        // THE DEBOUNCE IS A LIVE CLOCK DEPENDENCY, worth knowing before any
+        // caller pins `frame.now`: ShaderCompiler::Submit stamps `readyAt =
+        // now + debounce`, so a driver that holds `now` CONSTANT can never
+        // cross it, IsIdle() never returns true, and anything waiting for the
+        // compile service to settle spins until its own timeout. A caller that
+        // pins the clock must zero the debounce too.
         m_shaderCompiler = std::make_unique<Arcane::ShaderCompiler>();
         if (!m_shaderCompiler->Initialize(/*debounceSeconds=*/0.2))
         {
@@ -736,25 +679,17 @@ namespace Arcane::Editor
         {
             Arcane::SceneRenderResolver::Services rs;
             rs.runtime  = &*m_runtime;
-            // THE SCENE BATCHER (material binds + texture eviction): the
-            // device-less GpuContext one, the only one left since NRI Phase
-            // 5a, Task 4 deleted the NVRHI arm's canvas-owned alternative.
-            // The lines below are RuntimeApp::StageSpriteTables' gates
-            // verbatim, and for its stated reasons: SpriteMaterialCache
-            // registers BYTES-ONLY materials with a device-less batcher,
-            // PostChainCache publishes its PostChainDesc without building an
-            // NVRHI chain, and the BACKEND -- which selects the shader flavor
-            // the compiles target -- comes from the config because there is
-            // no device to ask (GpuContext::Create passes exactly this config
-            // field into RenderDeviceDesc::backend, so the two values were
-            // always equal anyway).
+            // THE SCENE BATCHER (material binds): the device-less GpuContext
+            // one, the only one there is. The lines below are
+            // RuntimeApp::StageSpriteTables' gates verbatim, and for its
+            // stated reasons: SpriteMaterialCache registers BYTES-ONLY
+            // materials with a device-less batcher, PostChainCache publishes
+            // its PostChainDesc without building any device-side chain, and
+            // the BACKEND -- which selects the shader flavor the compiles
+            // target -- comes from the config because there is no device to
+            // ask.
             rs.batcher  = &m_gpu->Batch();
-            // No NVRHI device to ask for either value any more: GpuContext
-            // has built none since NRI Phase 5a, Task 6 deleted Device(),
-            // so the GraphFlavor() ternaries this used to be are gone --
-            // there is no NVRHI arm left for them to choose between. Task
-            // 9.5a then deleted SceneRenderResolver::Services::device
-            // itself, so only the backend is set here now.
+            // Only the backend is set: Services carries no device field.
             rs.backend  = m_config.backend;
             rs.compiler = m_shaderCompiler.get();
             rs.sources  = &m_shaderSources;
@@ -1000,33 +935,23 @@ namespace Arcane::Editor
 
     bool EditorApp::StageSplashReady(Arcane::HostBoot::BootContext&)
     {
-        // Task 8c (2026-07-30 correction, "the splash carries the loading UI,
-        // not the editor window"): depends on "finalize" (ProjectBoot.cpp's
-        // EditorStages), so this is the LAST stage the editor runs -- the
+        // THE SPLASH CARRIES THE LOADING UI, not the editor window. This
+        // stage depends on "finalize" (ProjectBoot.cpp's
+        // EditorStages), so it is the LAST stage the editor runs -- the
         // window is revealed only once boot is actually finished, matching
         // UnrealEdGlobals.cpp:215-236 ("Hide the splash screen now that
         // everything is ready to go" -> Hide() -> "Do final set up on the
         // editor frame and show it" -> CreateDefaultMainFrame).
         //
-        // THE REVEAL IS NOT IN THIS STAGE. It used to be, behind an
-        // `if (!m_gpu->GraphFlavor())` gate: construct the swapchain-backed
-        // BootPresenter (its first and only use), Present() one terminal frame
-        // at fraction=1.0, check HasPresentedFrame() so a window nothing drew
-        // into is never shown, then Show() the real window before Close()ing
-        // the splash. That gate has been unconditionally false since the Phase
-        // 5a flip, and the follow-on GraphFlavor() collapse retired the
-        // predicate, the BootPresenter class and the dead block as one unit.
+        // THE REVEAL IS NOT IN THIS STAGE. CreateGraphVehicles() reveals the
+        // window, immediately before building the vehicle that owns its only
+        // swapchain -- which satisfies both constraints at once: never show a
+        // window nothing can draw into, and never build a surface against a
+        // window the compositor has not mapped (the Show()-then-create
+        // ordering three desk checkpoints proved).
         //
-        // CreateGraphVehicles() reveals the window instead, immediately before
-        // building the graph vehicle that owns its only swapchain -- the same
-        // "never show a window nothing can draw into" rule expressed against a
-        // different device, and the same Show()-then-create ordering the
-        // runtime's three desk checkpoints proved. Both constraints the old
-        // block existed to satisfy are therefore still met; they are just met
-        // by the one object that can actually draw a frame here.
-        //
-        // What remains in this stage is the splash Disarm/Close below, which
-        // always ran on both arms: it is the end of boot either way.
+        // What this stage does is the splash Disarm/Close below: the end of
+        // boot.
 
         // Disarm BEFORE Close(): m_splashPresenter's own quit detection
         // (Run()'s comment / BootSplashPresenter::Present) would otherwise
@@ -1043,14 +968,10 @@ namespace Arcane::Editor
         // m_undo is built later in Init than the first title push; a session with no
         // command stack yet has nothing authored, so it reads as clean.
         const bool dirty = m_undo && m_scene.IsDirty(*m_undo);
-        // THE BACKEND NAME: there is no RenderDevice to ask -- GpuContext has
-        // built none since NRI Phase 5a, Task 6 deleted Device() -- so this
-        // reads the config, the same substitution RuntimeApp::
-        // StageSpriteTables makes for the resolver's shader flavor. This used
-        // to be a `GraphMode() ? ... : Arcane::ToString(m_gpu->Device().
-        // Backend())` ternary kept so the NVRHI arm's own statement was
-        // literally the one the title text had always had; that arm is gone,
-        // so the ternary is too (the two values were always equal anyway).
+        // THE BACKEND NAME: there is no RenderDevice to ask -- GpuContext
+        // builds none -- so this reads the config, the same substitution
+        // RuntimeApp::StageSpriteTables makes for the resolver's shader
+        // flavor.
         std::string title = EditorTitle(m_runtime ? m_runtime->CurrentProject() : nullptr,
                                         m_scene.DisplayName(), dirty,
                                         !m_gpu ? "" : Arcane::ToString(m_config.backend));
@@ -1160,18 +1081,14 @@ namespace Arcane::Editor
 
         const std::filesystem::path file = proj->Root() / "Saved" / "AutoScreenshot.png";
 
-        // ===== THE GRAPH ARM (NRI Phase 3, Task 11) ==========================
-        // Task 8 left this NVRHI-only and named the route: the vehicle's own
-        // capture path, FrameDesc::capture + ReadCapture. It is taken on the
-        // VIEWPORT context and never on the chrome one -- an editor cover is a
-        // picture of the SCENE, and a capture node on the chrome frame would
-        // copy a CHROMED backbuffer and silently redefine what an editor
-        // golden contains (PresentChromeFrame's four absences; Task 10 §8).
-        // NRI Phase 5a, Task 4 deleted the NVRHI arm this used to fall through
-        // to when `m_viewportTargets.graph` was null NOT because of a vehicle
-        // failure but because the run was on the NVRHI arm in the first place
-        // (TextureId() off m_viewportTargets.canvas, SaveTexturePng). A null
-        // `graph` now means only a vehicle that failed to build (a project
+        // ===== THE COVER CAPTURE =============================================
+        // The vehicle's own capture path, FrameDesc::capture + ReadCapture,
+        // taken on the VIEWPORT context and NEVER on the chrome one -- an
+        // editor cover is a picture of the SCENE, and a capture node on the
+        // chrome frame would copy a CHROMED backbuffer and silently redefine
+        // what a cover contains (see PresentChromeFrame's four absences).
+        //
+        // A null `graph` means a vehicle that failed to build (a project
         // switch's rebuild failure): such a session simply writes no cover,
         // and the Hub keeps the previous one -- the same degradation a failed
         // PNG encode already takes.
@@ -1236,8 +1153,7 @@ namespace Arcane::Editor
             return false;
 
         // 512 wide, and every other rule about what a cover is, through the
-        // one shared definition the NVRHI arm's SaveTexturePng also routes
-        // through (Arcane::WriteThumbnailPngRgba).
+        // ONE shared definition (Arcane::WriteThumbnailPngRgba).
         return Arcane::WriteThumbnailPngRgba(file, w, h, std::move(rgba), 512);
     }
 
@@ -1358,7 +1274,7 @@ namespace Arcane::Editor
         ARC_ASSERT(m_bootSeq.has_value(), "EditorApp::Init called before Create()");
 
         // m_splashPresenter is BootSequence's presenter for the WHOLE run
-        // (Task 8c) -- from runtime_create through finalize, every per-stage
+        // -- from runtime_create through finalize, every per-stage
         // present() call reports into m_splash's status text + taskbar
         // progress rather than the swapchain, AND (2026-07-30 review round 2,
         // finding 2) arms/checks the splash's own open/closed state so
@@ -1391,7 +1307,7 @@ namespace Arcane::Editor
         return boot.quitRequested ? InitResult::Quit : InitResult::Failed;
     }
 
-    // ---- The graph vehicles (--nri-graph, NRI Phase 3, Task 8) --------------
+    // ---- The render vehicles ------------------------------------------------
     // The editor's counterpart of the block at the top of RuntimeApp::MainLoop,
     // and deliberately the same shape: reveal the window, then build the
     // host-window ("chrome") context that owns this process's ONLY graphics
@@ -1407,41 +1323,21 @@ namespace Arcane::Editor
     // BORROWS the device the chrome context creates.
     bool EditorApp::CreateGraphVehicles()
     {
-        // Task 11a removed an `if (!GraphMode()) return true;` guard that stood
-        // here. GraphMode() was unconditionally true from Phase 5a Task 2b, so
-        // the early return never fired and the whole body below is what always
-        // ran. NRI Phase 5a, Task 4: the guard's comment used to read "the
-        // NVRHI arm builds its trio in StageRenderBridge" -- that trio
-        // (OffscreenCanvas/PickBuffer/SelectionOutline) and StageRenderBridge's
-        // construction of it are both deleted; StageRenderBridge does nothing
-        // at all now (see its own comment).
-        //
-        // Formerly `#if !defined(ARCANE_DIST)` here (NRI Phase 5a, Task 2a):
-        // that guard existed only because the graph path was opt-in dev
-        // scaffolding, and at the time GraphMode() was structurally false in
-        // Dist (EditorApp.cpp:306 still chose the NVRHI arm there), so this
-        // body was dead code in Dist either way -- removing the redundant
-        // preprocessor guard changed no behaviour yet. Phase 5a Task 2b
-        // removed that structural guarantee: EditorApp.cpp:306 took the graph
-        // factory (GpuContext::CreateForGraph then; renamed to Create by NRI
-        // Phase 5a, Task 6) unconditionally, so GraphMode() reports TRUE in
-        // Dist too, and this body runs there for the first time ever. Had
-        // Task 2a not already removed the preprocessor guard here, Task 2b's
-        // flip would have reproduced exactly the silent Dist-only
-        // null-dereference class Task 2a's own commit message exists to
-        // describe -- GraphMode() true, m_graphChrome and
-        // m_viewportTargets.graph never built.
+        // UNCONDITIONAL, AND NOT #if-GUARDED. This body runs in every
+        // configuration, Dist included: a preprocessor guard here would leave
+        // Dist with m_graphChrome and m_viewportTargets.graph never built
+        // while every use site still dereferenced them -- a silent, Dist-only
+        // null dereference, which is exactly the failure class an
+        // unconditional body forecloses.
         Arcane::Diagnostics::SetPhase("nri graph vehicle boot");
 
-        // THE REVEAL, which StageSplashReady could never do: it drew through a
-        // BootPresenter over an NVRHI swapchain + ImGui renderer, neither of
-        // which exists here -- and both that presenter and the predicate
-        // gating it are now deleted. BEFORE the create, per the ordering above.
-        // Show() also RAISES, which is the launch reveal this host owes exactly
-        // once.
+        // THE REVEAL, which no boot stage can do: it has to precede the
+        // swapchain create (per the ordering above) and follow everything
+        // else. Show() also RAISES, which is the launch reveal this host owes
+        // exactly once.
         m_gpu->Win().Show();
 
-        // THE LATCH BASELINE (NRI Phase 3, Task 10), taken HERE rather than at
+        // THE LATCH BASELINE, taken HERE rather than at
         // process start for the reason RuntimeApp::MainLoop states for its own:
         // boot-time errors belong to the boot, and everything from this point
         // until the last NRI object is gone belongs to the graph.
@@ -1487,12 +1383,10 @@ namespace Arcane::Editor
         if (Arcane::ImGuiNriNode* chromeNode = m_graphChrome->ImGuiHud())
             chromeNode->AdoptImGuiContext(m_editorImguiContext);
 
-        // ===== THE TOOLBAR MARK, ON THIS ARM (NRI Phase 3, Task 11) =========
-        // StageEditorShell had no nvrhi device to upload the logo through, so
-        // the logo took the "missing PNG" path and the toolbar showed no mark.
-        // The graph route is the one the plan names: the CHROME context's
-        // NriTextureCache, which is the only uploader there is (the NVRHI
-        // loader it replaced, LoadDisplayTexture, went at ABI v15).
+        // ===== THE TOOLBAR MARK ==============================================
+        // Uploaded through the CHROME context's NriTextureCache, which is the
+        // only uploader there is. It cannot happen in StageEditorShell,
+        // because no device exists during boot.
         //
         // A SYNTHETIC PER-RUN GUID, because this image is not a project asset
         // -- it is a file beside the exe -- and the cache's whole vocabulary is
@@ -1533,7 +1427,7 @@ namespace Arcane::Editor
     }
 
     // THE VIEWPORT CONTEXT AND EVERY SEAM IT NEEDS, in one body with TWO
-    // callers (NRI Phase 3, Task 12): CreateGraphVehicles above, at boot, and
+    // callers: CreateGraphVehicles above, at boot, and
     // SwitchProject's "render_bridge" stage, which rebuilds this context from
     // scratch on every project switch (see TeardownGraphForSwitch for why the
     // outgoing one cannot be kept).
@@ -1547,10 +1441,8 @@ namespace Arcane::Editor
     //
     // NOT #if-guarded, for the reason m_graphChrome's declaration states: a
     // preprocessor-guarded definition forces a guard at every call site, and
-    // SwitchProject compiles in every configuration. Reachable in EVERY
-    // configuration, Dist included, as of Phase 5a (Task 2b): GraphMode() is
-    // unconditional now (StageGpuCore), so both callers (CreateGraphVehicles
-    // and SwitchProject's render_bridge stage) reach this body everywhere.
+    // SwitchProject compiles in every configuration. Both callers reach this
+    // body in EVERY configuration, Dist included.
     bool EditorApp::BuildGraphViewportContext(std::uint32_t width, std::uint32_t height)
     {
         if (!m_graphChrome)
@@ -1561,12 +1453,10 @@ namespace Arcane::Editor
 
         // THE BOOT EXTENT, named ONCE, here, because both callers can want it:
         // boot has no measurement to offer and a switch may have had no
-        // outgoing context to measure. 1280x720 was also the NVRHI arm's
-        // OffscreenCanvas size (StageRenderBridge, before NRI Phase 5a, Task 4
-        // deleted it), for the identical reason -- the panel's real extent is
-        // not known until it has drawn once, and phase 8's deferred resize
-        // adopts it on the next frame, so the number decides one frame's
-        // worth of picture and nothing else.
+        // outgoing context to measure. The panel's real extent is not known
+        // until it has drawn once, and phase 8's deferred resize adopts it on
+        // the next frame -- so this number decides one frame's worth of
+        // picture and nothing else.
         if (width == 0 || height == 0)
         {
             width  = 1280;
@@ -1574,20 +1464,19 @@ namespace Arcane::Editor
         }
 
 
-        // BOTH OPTIONAL NODE SETS (NRI Phase 3, Task 9). This context is the
-        // one that stands in for the NVRHI arm's WHOLE viewport trio, so it
-        // needs the two nodes that trio's other two members are:
-        //   * pickOutline -- PickNode + OutlineNode, the graph twins of
-        //     PickBuffer and SelectionOutline. Asked for here rather than
-        //     inferred from --pick-probe because the editor's probe pixel is a
-        //     click that has not happened yet and its hover cursor moves every
-        //     frame; the flag arms a FIXED pixel and is a different question.
+        // BOTH OPTIONAL NODE SETS. This context is the whole viewport, so it
+        // needs both:
+        //   * pickOutline -- PickNode + OutlineNode. Asked for here rather
+        //     than inferred from --pick-probe because the editor's probe pixel
+        //     is a click that has not happened yet and its hover cursor moves
+        //     every frame; that flag arms a FIXED pixel and is a different
+        //     question.
         //   * gameUi -- the second ImGuiNriNode, which draws the plugin HUD's
-        //     ImDrawData between the tonemap and the outline composite. That is
-        //     phase 11 then phase 12's order against this recorder.
-        // The CHROME context asks for neither: it draws chrome (Task 10), and
-        // a node it never declares is a readback buffer and a descriptor pool
-        // nobody reads.
+        //     ImDrawData between the tonemap and the outline composite. That
+        //     is phase 11 then phase 12's order against this recorder.
+        // The CHROME context asks for neither: it draws chrome, and a node it
+        // never declares is a readback buffer and a descriptor pool nobody
+        // reads.
         Arcane::NriGraphContext::NodeSet viewportNodes;
         viewportNodes.pickOutline = true;
         viewportNodes.gameUi      = true;
@@ -1638,9 +1527,8 @@ namespace Arcane::Editor
                 return project ? project->ResolveAsset(Arcane::AssetId::FromGuid(id))
                                : std::nullopt;
             });
-        // ...and the same seam extended to PIXELS: the graph device cannot
-        // sample a texture on an NVRHI device (there is none), so its
-        // NriTextureCache uploads its own from the engine's RETAINED decode.
+        // ...and the same seam extended to PIXELS: NriTextureCache uploads
+        // its own textures from the engine's RETAINED, device-free decode.
         m_viewportTargets.graph->SetPixelSupply(
             [rt = &*m_runtime](const Arcane::Guid& id) -> const Arcane::PixelData*
             {
@@ -1651,10 +1539,6 @@ namespace Arcane::Editor
 
     int EditorApp::Main()
     {
-        // Unconditional as of Phase 5a (Task 2b), and structurally so since
-        // Task 11a: CreateGraphVehicles carried an `if (!GraphMode()) return
-        // true;` early return that never fired, and that guard is now gone
-        // outright -- so this line always builds the vehicles.
         if (!CreateGraphVehicles())
             return 1;
         MainLoop();
@@ -1663,10 +1547,8 @@ namespace Arcane::Editor
 
     std::uint32_t EditorApp::ViewportWidth() const noexcept
     {
-        // NRI Phase 5a, Task 4 deleted the NVRHI fallback this used to carry
-        // (`m_viewportTargets.canvas ? canvas->Width() : 0u`) -- 0 is exactly
-        // the value that produced on the graph arm (no `canvas` ever existed
-        // there), so a null `graph` (a failed vehicle) still answers 0.
+        // A null `graph` (a vehicle that failed to build) answers 0, which
+        // every caller already tolerates.
         return m_viewportTargets.graph ? m_viewportTargets.graph->SurfaceWidth() : 0u;
     }
 
@@ -1733,9 +1615,8 @@ namespace Arcane::Editor
     }
 
     // ===================================================================
-    // THE PROJECT SWITCH'S GRAPH TEARDOWN (NRI Phase 3, Task 12) -- the
-    // graph-mode equivalent of the NVRHI arm's one `waitForIdle` line in
-    // SwitchProject's "switch_teardown" stage, and it is deliberately the
+    // THE PROJECT SWITCH'S RENDER TEARDOWN -- SwitchProject's
+    // "switch_teardown" stage, and it is deliberately the
     // sibling of ShutdownGraphPath below rather than a body inside
     // EditorAppProject.cpp: the two sequences must be read against each other,
     // and every clause one of them gets right is a clause the other owes.
@@ -1818,8 +1699,7 @@ namespace Arcane::Editor
     // while the context is ALIVE, i.e. why obligation (a) exists.
     //
     // ================= THE ORDER, WHICH IS THE POINT =================
-    //   1. IDLE. Explicit and unconditional -- it stands where the NVRHI arm's
-    //      `waitForIdle` stands and it is owed for the same reason: the stage
+    //   1. IDLE. Explicit and unconditional, and owed for one reason: the stage
     //      that runs immediately after this one unloads the plugin, and a
     //      plugin torn down under a GPU still reading resources is the hazard
     //      that line has always existed to prevent. Not folded into the
@@ -1912,10 +1792,10 @@ namespace Arcane::Editor
     void EditorApp::ShutdownGraphPath()
     {
         if (!m_graphChrome && !m_viewportTargets.graph)
-            return;   // the NVRHI arm, or a graph run that never built a vehicle
+            return;   // a run that never built a vehicle
 
-        // ===== OPEN DOCUMENTS FIRST (NRI Phase 3, Task 11) ===================
-        // A shader document on this arm owns its OWN offscreen context, built
+        // ===== OPEN DOCUMENTS FIRST ==========================================
+        // A shader document owns its OWN offscreen context, built
         // over the device m_graphChrome owns, and holds m_graphChrome's
         // ImGuiNriNode to invalidate against on the way out. Both of those are
         // gone the moment the two resets below run.
@@ -1931,9 +1811,7 @@ namespace Arcane::Editor
         //
         // CloseAll is the document host's own teardown (it is what a project
         // switch runs), so this is not a special exit path -- it is the
-        // ordinary one, moved earlier. Graph arm only: on the NVRHI arm
-        // documents keep dying through member destruction exactly as they
-        // always have.
+        // ordinary one, moved earlier.
         m_documents.CloseAll();
         // ...which hands their preview vehicles to the retire list rather than
         // destroying them inline, so the list has to be drained HERE, while
@@ -1943,7 +1821,7 @@ namespace Arcane::Editor
         DrainRetiredDocPreviews();
 
         // ===== THE TEARDOWN HALF OF THE VIEW-BEFORE-TEXTURE RULE =============
-        // (NRI Phase 3, Task 8, fix round 1.) A RESIZE is not the only moment
+        // A RESIZE is not the only moment
         // the viewport's output texture dies -- PROCESS EXIT is the other, and
         // unlike a resize it happens on every single run.
         //
@@ -2054,19 +1932,14 @@ namespace Arcane::Editor
             }
         }
 
-        // The graph arm's whole teardown -- the view-before-texture invalidate,
+        // The whole render teardown -- the view-before-texture invalidate,
         // both contexts, and the latch read-back -- in the one order that is
-        // correct. See ShutdownGraphPath. A no-op on the NVRHI arm.
+        // correct. See ShutdownGraphPath.
         ShutdownGraphPath();
 
-        // NVRHI ARM DELETED (NRI Phase 5a, Task 6: GpuContext::Device() is
-        // gone). This used to idle the NVRHI device on a defensive
-        // `!m_gpu->GraphFlavor()` guard that was already unconditionally
-        // false (GpuContext builds no NVRHI device at all) -- the same gate
-        // RuntimeApp::Shutdown carried, for the same reason. ShutdownGraphPath
-        // above has already destroyed both contexts (each idles the shared
-        // device and drains its own lane on the way out), so there is nothing
-        // left for this call to do.
+        // NO DEVICE IDLE IS OWED HERE: ShutdownGraphPath above has already
+        // destroyed both contexts, and each idles the shared device and drains
+        // its own lane on the way out.
         ARC_INFO("Arcane Editor exiting after {} frames", m_frameCount);
 
         // The member destructors then run (after Run returns + ~EditorApp), in
@@ -2074,11 +1947,9 @@ namespace Arcane::Editor
         //   m_plugin  -> ~PluginHost: Unload (TeardownLive -> ClearSystems +
         //                ResetRegistry) while the plugin DLL is STILL mapped.
         //   m_runtime -> ~Runtime: destroys JobSystem + the now-empty Registry.
-        //   m_gpu     -> ~GpuContext: the render/input stack, window LAST (there
-        //                is no command list or framebuffer cache to release any
-        //                more -- NRI Phase 5a, Task 6 deleted GpuContext's NVRHI
-        //                half). So gpu outlives runtime + plugin exactly as
-        //                ArcaneRuntime's did. See GpuContext's header.
+        //   m_gpu     -> ~GpuContext: the render/input stack, window LAST. So
+        //                gpu outlives runtime + plugin exactly as
+        //                ArcaneRuntime's does. See GpuContext's header.
         // m_typeContext is intentionally NOT freed (heap-leaked, see Init).
     }
 
@@ -2120,12 +1991,11 @@ namespace Arcane::Editor
         Shutdown();
         Destroy();
 
-        // ===== THE EXIT-CODE FOLD (NRI Phase 3, Task 10) ======================
+        // ===== THE EXIT-CODE FOLD ============================================
         // Mirrors RuntimeApp::Run's tail, code for code, so one desk battery
         // item reads the same against either host. Everything below is 0 on an
-        // ordinary run -- the contract this fold has always kept ("0 clean, 1
-        // boot/init failed"), unconditionally now that the graph is the only
-        // render path (Phase 5a, Task 2b).
+        // ordinary run -- the contract this fold keeps ("0 clean, 1 boot/init
+        // failed").
         //
         // A device-loss exit is an abnormal end even though it was orderly: the
         // crash report exists, but the session did not do what it was asked to.
@@ -2143,23 +2013,12 @@ namespace Arcane::Editor
         // -- the viewport's, phase 10, or the chrome's, phase 19), 2 =
         // RenderErrorCount GREW across the run, teardown included. Precedence
         // 1 > 2, set at the two sites that produce them (NoteGraphFrameFailure
-        // and ShutdownGraphPath). As of Phase 5a (Task 2b) these can fire on
-        // ANY run -- the graph path is unconditional, not gated on
-        // --nri-graph anymore -- so 0 here means no graph failure occurred,
-        // not "the flag was not given".
+        // and ShutdownGraphPath). They can fire on ANY run -- the render path
+        // is unconditional -- so 0 here means no graph failure occurred.
         if (m_graphExit != 0)
             return m_graphExit;
-        // The golden harness's own code (NRI Phase 3, Task 13), OUTRANKED by
-        // everything above it for the same reason RuntimeApp::Run's tail
-        // orders 1 > 2 > 3: a run failure says WHERE the run died, and a
-        // validation error explains a bad capture rather than the reverse, so
-        // both outrank a golden mismatch. 0 on every run that did not pass
-        // --golden-capture/--golden-compare (HostConfig::Parse refuses the
-        // combination without --frames, so a golden run always terminates
-        // through EndFrame's own maxFrames check rather than a live quit).
         // See ArcaneEditor/src/main.cpp's exit-code table (right above `int
-        // main`) for this code's collision with the pre-boot exit 3 the Hub's
-        // launch.rs decodes differently, and m_goldenExit's own comment.
+        // main`) for how the Hub's launch.rs decodes these.
         return 0;
     }
 }

@@ -8,7 +8,7 @@
 #include "Widgets/IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
 #include "Widgets/MaterialParamWidgets.hpp"
 
-// The graph arm's preview vehicle (NRI Phase 3, Task 11). Include-order note
+// The preview vehicle. Include-order note
 // for anything moved above it: this header reaches <NRI.h> and
 // Extensions/NRIDeviceCreation.h, whose nri::Message enumerator is literally
 // named ERROR -- the same collision every file under Render/Nri documents. It
@@ -109,10 +109,6 @@ namespace Arcane::Editor
             return (id.hi ^ (id.lo * 1099511628211ull)) ^ (vertex ? 0x1u : 0x2u) ^
                    (static_cast<std::uint64_t>(pass) << 8);
         }
-
-        // NodePreviewKey (coalesce key for per-node thumbnail compiles) is
-        // deleted with its only callers, RefreshNodePreviews (NRI Phase 5a,
-        // Task 9.5b).
 
         // ---- Graph canvas plumbing (Slice 9) ----
         namespace ed = ax::NodeEditor;
@@ -511,9 +507,7 @@ namespace Arcane::Editor
             ed::Style& s = ed::GetStyle();
             // The vendored grid AND background fill are switched off; our own
             // lattice is drawn underneath instead -- DrawGraphGridFallback
-            // (Widgets/GraphGridPhase.hpp), via ImDrawList. It was a BLITTED
-            // shader backdrop (graph_grid.hlsl) until NRI Phase 5a Task 9.5a
-            // deleted GraphGridPass; the shader itself went with the fix wave.
+            // (Widgets/GraphGridPhase.hpp), via ImDrawList.
             // Wholesale replacement is the only option available: the built-in
             // grid's 32 px spacing is a hardcoded local with no StyleVar and no
             // LOD fade (imgui_node_editor.cpp:1506-1517).
@@ -1037,7 +1031,7 @@ namespace Arcane::Editor
         // editor owns separately: the chrome context's ImGuiNri holds a view
         // over this document's preview output, so that view has to be
         // destroyed before the texture is. DestroyGraphPreview carries the
-        // ordering and the reason; a no-op on the NVRHI arm.
+        // ordering and the reason.
         //
         // AFTER the node-editor contexts rather than before, deliberately:
         // ed::DestroyEditor touches only ImGui/CPU state, so nothing between
@@ -1225,11 +1219,6 @@ namespace Arcane::Editor
 
     bool ShaderEditorDocument::ConsumeResult(const Arcane::ShaderCompileResult& result)
     {
-        // Node-preview job routing (m_nodePreviewVsJob / per-node m_nodePreviews
-        // psJob) is deleted along with the whole per-node-thumbnail feature
-        // (NRI Phase 5a, Task 9.5b) -- neither job kind is submitted anywhere
-        // anymore, so there is nothing left for this function to claim on
-        // their behalf.
         // Chain-mode jobs first (mutually exclusive with the single-path ids --
         // Rebuild clears whichever set is not in play).
         for (std::size_t p = 0; p < m_passJobs.size(); ++p)
@@ -1290,22 +1279,16 @@ namespace Arcane::Editor
             return;
         }
         const bool sprite = m_surface == 1;
-        // THE READINESS TEST IS THE BLOBS + THE TEMPLATE. NRI Phase 5a, Task 4
-        // deleted the NVRHI half of this function outright (OffscreenCanvas /
-        // FullscreenMaterialPass and the createShader pair that fed them) --
-        // DocServices::device was always null (both hosts render through the
-        // graph, never the NVRHI arm), so that half was dead code kept only as
-        // the pre-flip regression floor; Task 9.5b deleted the field itself.
-        // The bytes below are the whole product of this function now, on the
-        // only arm left.
+        // THE READINESS TEST IS THE BLOBS + THE TEMPLATE. The bytes below are
+        // the whole product of this function: it builds no device object.
         if (m_vsBytes.empty() || m_psBytes.empty() || !m_pendingTemplate)
             return;
 
-        // ---- THE SEVERANCE, same shape as Task 2's caches ----
-        // The stitched blobs are RETAINED rather than consumed: a SECOND
-        // graphics device in this process cannot use an nvrhi::ShaderHandle,
-        // only the bytecode behind it, and the graph arm's preview builds its
-        // own NRI pipeline from exactly these bytes.
+        // ---- THE SEVERANCE ----
+        // The stitched blobs are RETAINED rather than consumed: a device can
+        // build a pipeline from bytecode but cannot adopt a compiled shader
+        // OBJECT it did not create, and the preview builds its own NRI
+        // pipeline from exactly these bytes.
         auto vsBlob = std::make_shared<const std::vector<std::uint8_t>>(std::move(m_vsBytes));
         auto psBlob = std::make_shared<const std::vector<std::uint8_t>>(std::move(m_psBytes));
         // The members are the IN-FLIGHT accumulators, not storage: the moves
@@ -1320,9 +1303,7 @@ namespace Arcane::Editor
         // The device-free publication, AFTER the promote: the desc has to
         // name the instance the pipelines were just built against, or a live
         // param edit would be written into one and read from the other.
-        // (Both arms shared this ordering requirement before NRI Phase 5a,
-        // Task 4 deleted the NVRHI one; the graph arm's publish is the only
-        // one left.) A non-chain fullscreen material declares NO InputTexture
+        // A non-chain fullscreen material declares NO InputTexture
         // (BuildMaterialShaderSource's chainInputs defaults to 0), so its
         // graph description is a one-pass chain with zero input slots -- which
         // is layout-identical, because both the source generator and
@@ -1382,12 +1363,8 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::BindChainIfComplete()
     {
-        // NRI Phase 5a, Task 4: the NVRHI half of this function (a
-        // FullscreenMaterialChain, its createShader pair, and SetChain) is
-        // deleted -- DocServices::device was always null, so it was dead code
-        // kept only as the pre-flip regression floor; Task 9.5b deleted the
-        // field itself. The DESCRIPTION below is the whole product of this
-        // function now.
+        // THE DESCRIPTION BELOW IS THE WHOLE PRODUCT of this function: it
+        // builds no device object.
         if (!m_pendingTemplate || m_passJobs.empty())
             return;
         for (const PassJobs& pj : m_passJobs)
@@ -1415,8 +1392,7 @@ namespace Arcane::Editor
         PromotePendingInstance();
 
         // ...and the device-free twin, published after the promote for the
-        // reason BindIfComplete states (both arms shared that requirement
-        // before NRI Phase 5a, Task 4 deleted the NVRHI one).
+        // reason BindIfComplete states.
         m_graphSpriteBlobs = SpriteBlobs{};
         m_graphPost.templ           = m_boundTemplate;
         m_graphPost.instance        = m_instance;
@@ -1426,43 +1402,28 @@ namespace Arcane::Editor
     }
 
     // =====================================================================
-    // THE GRAPH ARM'S PREVIEW
+    // THE PREVIEW
     // =====================================================================
-    // NRI Phase 5a, Task 4: this used to be titled "THE GRAPH ARM'S PREVIEW
-    // (NRI Phase 3, Task 11)" and open with a paragraph contrasting it against
-    // the NVRHI arm's preview (an OffscreenCanvas plus a FullscreenMaterialPass
-    // /Chain) -- that arm, and RefreshSpritePreviewBinding (its sprite-material
-    // registration function, which used to sit just above this banner), are
-    // deleted; this is the only preview implementation left. It is declared
-    // against the SAME machinery the runtime already renders a scene with:
+    // Declared against the SAME machinery the runtime renders a scene with:
     //
     //   * the checkerboard backdrop and the sprite quad -> a DEVICE-LESS
-    //     Batcher2D (Task 2's severance) drained by Batch2DNode;
+    //     Batcher2D drained by Batch2DNode;
     //   * the fullscreen material / pass chain -> FrameDesc::post, i.e. the
-    //     PostChainDesc this document now publishes, run by PostChainNode --
-    //     byte-identical bytecode to what the NVRHI arm's createShader pair
-    //     consumed;
+    //     PostChainDesc this document publishes, run by PostChainNode;
     //   * kSceneInput -> the batch node's CANVAS, which is where the
-    //     checkerboard lands. That was the graph twin of SceneStandIn(): the
-    //     NVRHI arm used to sample a 64x64 checker texture stretched over the
-    //     pass, this one samples the canvas the same checker was drawn into.
-    //     Same picture, one fewer texture. (SceneStandIn() itself, and the
-    //     per-node thumbnail machinery below, are deleted -- NRI Phase 5a,
-    //     Task 9.5b.)
+    //     checkerboard lands -- so the pass samples the canvas the checker was
+    //     drawn into rather than a separate stand-in texture. One fewer
+    //     texture, same picture.
     //
-    // WHAT REMAINS DELIBERATELY ABSENT, so the gap stays named rather than
-    // discovered: per-node THUMBNAILS on the graph canvas. That would need
-    // one render target and one pass PER GRAPH NODE, and a graph frame
-    // declares exactly one canvas and one output -- N thumbnails is N frames
-    // or N contexts, neither of which is a preview. The per-node compile/
-    // record machinery that used to sit mode-gated off (RefreshNodePreviews,
-    // RenderNodePreviews, and the NodePreview struct) is deleted outright
-    // rather than left as a dead stub -- NRI Phase 5a, Task 9.5b.
+    // WHAT IS DELIBERATELY ABSENT, so the gap stays named rather than
+    // discovered: per-node THUMBNAILS on the graph canvas. That would need one
+    // render target and one pass PER GRAPH NODE, and a graph frame declares
+    // exactly one canvas and one output -- N thumbnails is N frames or N
+    // contexts, neither of which is a preview.
     void ShaderEditorDocument::EnsureGraphPreviewContext()
     {
         // The seam is null in every headless test (no EditorApp at all),
-        // which is the whole gate: this function is a no-op there. (Also
-        // null on the since-deleted NVRHI arm, before NRI Phase 5a, Task 4.)
+        // which is the whole gate: this function is a no-op there.
         if (m_graphPreview || !m_services.nriDevice || !m_services.hostConfig)
             return;
 
@@ -1485,9 +1446,8 @@ namespace Arcane::Editor
 
         // The two injected seams, copied from EditorApp::CreateGraphVehicles'
         // viewport block and for the same reason: a material's texture params
-        // are Guids, and the graph device cannot sample an NVRHI texture (there
-        // is none). Both re-read CurrentProject() per call, so they survive a
-        // project switch.
+        // are Guids, and this device has to resolve them itself. Both re-read
+        // CurrentProject() per call, so they survive a project switch.
         if (m_services.runtime)
         {
             m_graphPreview->SetAssetResolver(
@@ -1520,23 +1480,20 @@ namespace Arcane::Editor
     void ShaderEditorDocument::PublishGraphPreview()
     {
         // Called from both bind sites (BindIfComplete, BindChainIfComplete).
-        // Before NRI Phase 5a, Task 4 deleted the NVRHI arm, every call below
-        // was a no-op there too (the seam was null), which is what kept this
-        // one line at each bind site rather than a mode branch -- still true
-        // now, just with one fewer arm to be a no-op on.
+        // Every call below is a no-op when the preview seam is null, which is
+        // what keeps this one line at each bind site rather than a branch.
         EnsureGraphPreviewContext();
         RefreshGraphSpriteBinding();
     }
 
     void ShaderEditorDocument::RefreshGraphSpriteBinding()
     {
-        // The graph twin of RefreshSpritePreviewBinding: same shared instance
-        // pointer (so live param edits keep flowing through PackCB), same
-        // register-then-update shape. The material is registered from BYTES --
-        // Batch2DNode builds its own NRI pipeline from them -- and the texture
-        // params resolve by Guid through this context's NriTextureCache. Since
-        // NRI Phase 5a, Task 7 that is the ONLY shape a registration has:
-        // Material2DDesc carries no device objects at all.
+        // The shared instance pointer (so live param edits keep flowing
+        // through PackCB), and a register-then-update shape. The material is
+        // registered from BYTES -- Batch2DNode builds its own NRI pipeline
+        // from them -- and the texture params resolve by Guid through this
+        // context's NriTextureCache. That is the ONLY shape a registration
+        // has: Material2DDesc carries no device objects at all.
         if (!m_graphBatch || m_surface != 1 || !m_graphSpriteBlobs.vs ||
             !m_graphSpriteBlobs.ps || !m_instance || !m_boundTemplate)
             return;
@@ -1552,10 +1509,9 @@ namespace Arcane::Editor
         desc.instance = m_instance;
         desc.vsBytes  = m_graphSpriteBlobs.vs;
         desc.psBytes  = m_graphSpriteBlobs.ps;
-        // No texture table to size: Material2DDesc::paramTextures is gone (NRI
-        // Phase 5a, Task 7). The t1.. WIDTH comes from `templ->TextureCount()`,
-        // which is where it always came from, and the graph recorder resolves
-        // the declared Guids off `instance` itself.
+        // No texture table to size: the t1.. WIDTH comes from
+        // `templ->TextureCount()`, and the recorder resolves the declared
+        // Guids off `instance` itself.
 
         if (m_graphSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId)
         {
@@ -1588,8 +1544,7 @@ namespace Arcane::Editor
         // output to the checkerboard and then show it as "the preview", which
         // is the blank-but-labeled failure this phase refuses; the panel draws
         // no image instead (DrawPreviewPanel gates on the same predicate,
-        // PreviewReady() -- the one gate left since NRI Phase 5a, Task 4
-        // deleted the NVRHI arm PreviewReady() used to also cover).
+        // PreviewReady()).
         if (!haveSprite && !haveFullscreen)
             return;
 
@@ -1606,14 +1561,10 @@ namespace Arcane::Editor
         b.Begin(kGraphPreviewSize, kGraphPreviewSize);
         // AFTER Begin, matching SubmitSceneToBatcher's own SetGlobals call --
         // so a future change to what Begin resets cannot silently drop this.
-        // (Before NRI Phase 5a, Task 4 deleted it, Tick's NVRHI arm matched
-        // the identical placement in its own OffscreenCanvas::Draw lambda.)
         b.SetGlobals(globals);
 
-        // The checkerboard, cell for cell and colour for colour the deleted
-        // NVRHI arm's own sprite-surface checkerboard was (Tick's sprite
-        // branch, before NRI Phase 5a, Task 4). On the fullscreen arm it is
-        // ALSO what kSceneInput samples, which is what makes it the stand-in.
+        // The checkerboard. On the fullscreen surface it is ALSO what
+        // kSceneInput samples, which is what makes it the scene stand-in.
         constexpr float kCell = 32.0f;
         const float extent = static_cast<float>(kGraphPreviewSize);
         const glm::vec4 light(0.16f, 0.16f, 0.19f, 1.0f);
@@ -1635,9 +1586,8 @@ namespace Arcane::Editor
         vp.batch   = &b;
         vp.globals = &globals;
 
-        // VIEW-ANY-INTERMEDIATE, the graph spelling of the NVRHI arm's
-        // `m_chain->Render(..., view, ...)`: the chain is TRUNCATED at the
-        // viewed pass, so the last declared pass writes the output. The copy
+        // VIEW-ANY-INTERMEDIATE: the chain is TRUNCATED at the viewed pass,
+        // so the last declared pass writes the output. The copy
         // is free of a rebuild -- PostChainNode's chain stamp is built from
         // the blob POINTERS, the sizes and the input lists, so a truncation
         // that does not move re-stamps identically and hits the cache.
@@ -1820,21 +1770,15 @@ namespace Arcane::Editor
             m_instance->Set(nameHash, value);
         else
             m_instance->ClearOverride(nameHash);
-        // NRI Phase 5a, Task 4: this used to re-bind the NVRHI sprite preview
-        // on a TEXTURE param undo/redo (Material2DDesc resolves its texture
-        // handles once, at registration). The graph arm's RefreshGraphSpriteBinding
-        // has no equivalent need -- its texture params resolve by Guid, fresh,
-        // every frame through NriTextureCache -- so there is nothing left to
-        // trigger here.
+        // NO RE-BIND IS OWED on a TEXTURE param undo/redo: the preview's
+        // texture params resolve by Guid, fresh, every frame through
+        // NriTextureCache.
     }
 
     bool ShaderEditorDocument::PreviewReady() const
     {
-        // Gated on the VEHICLE: without one (no seam, or the graph context
-        // failed to create) there is nothing to be ready. NRI Phase 5a, Task 4
-        // deleted the NVRHI fallback this used to fall through to (three
-        // now-nonexistent NVRHI objects, none of which could ever be reached
-        // once DocServices::nriDevice is always set).
+        // Gated on the VEHICLE: without one (no seam, or the context failed
+        // to create) there is nothing to be ready.
         if (!m_graphPreview)
             return false;
         return m_surface == 1
@@ -1873,15 +1817,8 @@ namespace Arcane::Editor
         // is exactly the case that has something to say).
         PublishDiagnostics();
         m_animTime += dt;
-        // Per-node thumbnail retirement + record (m_nodePreviewRetired.clear(),
-        // RenderNodePreviews) is deleted along with the whole per-node-thumbnail
-        // feature -- NRI Phase 5a, Task 9.5b.
-
-        // THE GRAPH ARM'S WHOLE RENDER PHASE. NRI Phase 5a, Task 4 deleted the
-        // NVRHI fallback this used to fall through to when the vehicle was
-        // null (a document opened before an nvrhi device existed) -- there is
-        // no device left to fall back to, so a missing vehicle now simply
-        // means no preview this Tick, same as any other degraded-not-fatal
+        // THE WHOLE RENDER PHASE. A missing vehicle simply means no preview
+        // this Tick -- the same degraded-not-fatal outcome as any other
         // vehicle failure (see EnsureGraphPreviewContext).
         if (m_graphPreview)
             RenderGraphPreview(dt);
@@ -2140,19 +2077,11 @@ namespace Arcane::Editor
                 ImGui::SameLine();
                 ImGui::Checkbox("HLSL", &m_showGeneratedText);
                 ImGui::SameLine();
-                // RESTORED (NRI Phase 5a, Task 9.5b, fix round 1): this task's
-                // first pass deleted the checkbox on the premise that it only
-                // toggled a guaranteed early-return; that premise was wrong --
-                // m_showNodePreviews also gates DrawNodePreviewImage's
-                // Output-node branch, the ONE live thumbnail on this canvas
-                // (the material's real preview, drawn on the Output node).
-                // The checkbox is honest about that one job, so it stays. What
-                // it no longer does: the per-node compile/record machinery
-                // (RefreshNodePreviews and everything it fed) is deleted
-                // outright, not toggled -- there is nothing left to resubmit
-                // on a flip, so this is a plain Checkbox with no on-change
-                // action, unlike the pre-Task-9.5b version that called
-                // RefreshNodePreviews().
+                // m_showNodePreviews gates DrawNodePreviewImage's Output-node
+                // branch -- the ONE live thumbnail on this canvas (the
+                // material's real preview). That is its whole job, which is
+                // why this is a plain Checkbox with no on-change action:
+                // there is nothing to resubmit on a flip.
                 ImGui::Checkbox("Thumbs", &m_showNodePreviews);
             }
             // The vertex stage (%{VERTEX_BODY}): graph-owned materials author
@@ -2726,14 +2655,9 @@ namespace Arcane::Editor
                 ed::EndPin();
             }
 
-            // Live thumbnail: pass 0 (the base) shows the tonemapped preview
-            // (Task 11). NRI Phase 5a, Task 4 deleted
-            // the NVRHI chain that used to supply a live per-pass intermediate
-            // for passes 1+ (FullscreenMaterialChain::PassOutput) -- the graph
-            // arm never grew an equivalent (NriGraphContext has no per-pass
-            // intermediate readback), so this was already always null in
-            // practice since Phase 5a Task 2b's flip; a multi-pass chain's
-            // non-base passes show no live thumbnail on either arm today.
+            // Live thumbnail: pass 0 (the base) shows the tonemapped
+            // preview. Passes 1+ show none -- NriGraphContext has no per-pass
+            // intermediate readback, so there is nothing to draw for them.
             ImTextureID thumbId = c == 0 ? PreviewImageOf().id : 0;
             if (thumbId)
                 ImGui::Image(thumbId, ImVec2(72.0f, 72.0f));
@@ -2778,14 +2702,9 @@ namespace Arcane::Editor
             if (fill > 0.0f)
                 ImGui::Dummy(ImVec2(0.0f, fill));
         }
-        // SceneStandIn() (the 64x64 NVRHI checkerboard this used to sample) is
-        // deleted -- NRI Phase 5a, Task 9.5b. It was already unreachable in
-        // practice: its own guard returned null unconditionally, gated on
-        // DocServices::device, always null since Phase 5a Task 2b's flip. So
-        // this node already drew no checkerboard before this task touched it;
-        // preserved as a no-op rather than wired to anything live, the same
-        // treatment the pass-canvas Output node below already carries for the
-        // same reason.
+        // THIS NODE DRAWS NO IMAGE. It is a pin and a label; wiring it to
+        // something live would be a behaviour change, not a fix -- the same
+        // treatment the pass-canvas Output node below carries.
         ed::BeginPin(OutPin(kPassSceneNodeId, 0), ed::PinKind::Output);
         ImGui::TextUnformatted("scene");
         ImGui::SameLine();
@@ -2826,17 +2745,9 @@ namespace Arcane::Editor
         ImGui::SameLine();
         ImGui::TextUnformatted("final");
         ed::EndPin();
-        // NRI Phase 5a, Task 4 deleted FullscreenMaterialChain -- this used to
-        // read the bound NVRHI chain's last pass output directly
-        // (`chain ? chain->PassOutput(total - 1) : nullptr`), but `chain` was
-        // already unconditionally null in practice since Phase 5a Task 2b's
-        // flip (it was only ever built device-carrying, and DocServices::device
-        // was null on every real run since that flip -- Task 9.5b deleted the
-        // field itself), so this node already drew no thumbnail before this
-        // task touched it. Preserved as
-        // a no-op rather than wired to PreviewImageOf() -- that would be a
-        // behavior change riding along inside a deletion task, unverified at
-        // the desk, which is out of scope here.
+        // THIS NODE DRAWS NO THUMBNAIL. There is no per-pass intermediate
+        // to read; wiring it to PreviewImageOf() would be a behaviour change
+        // rather than a fix, and is deliberately not done here.
         ed::EndNode();
         DrawNodeTitleBand(kPassOutputNodeId, outHeaderY);
 
@@ -3341,10 +3252,9 @@ namespace Arcane::Editor
         return "material:" + m_data.id.ToString();
     }
 
-    // The preview image: the graph arm's offscreen output, and 0 for "nothing
+    // The preview image: the document's offscreen output, and 0 for "nothing
     // to draw" (no vehicle, or PreviewReady() says there is nothing bound
-    // yet). NRI Phase 5a, Task 4 deleted the NVRHI arm's OffscreenCanvas
-    // fallback this used to carry -- this is the only preview left.
+    // yet).
     ShaderEditorDocument::PreviewImage ShaderEditorDocument::PreviewImageOf() const
     {
         if (!PreviewReady() || !m_graphPreview)
@@ -3421,10 +3331,6 @@ namespace Arcane::Editor
         }
         if (!anyError)
             Rebuild();   // any codegen error keeps last-good bound; badges show why
-        // The RefreshNodePreviews() call that used to ride every regeneration
-        // is deleted with the per-node-thumbnail feature (NRI Phase 5a, Task
-        // 9.5b) -- it was always a no-op (see the banner above
-        // DrawNodePreviewImage).
     }
 
     void ShaderEditorDocument::ApplyGraphState(std::size_t pass,
@@ -3710,30 +3616,14 @@ namespace Arcane::Editor
         }
     }
 
-    // ---------------------------------- node preview thumbnails: DELETED ----
-    // NRI Phase 5a, Task 9.5b deletes the per-node COMPILE/RECORD machinery:
-    // RefreshNodePreviews (per-node compile submission, gated on
-    // `m_services.device` and therefore ALWAYS early-returning through the
-    // `!eligible` branch -- device was unconditionally null since Phase 5a
-    // Task 2b's flip), the already-deleted BindNodePreview (Task 4) and its
-    // caller sites, RenderNodePreviews (a guard whose every condition already
-    // included `!m_services.device`, so it always returned before doing
-    // anything), SceneStandIn (the pass-canvas Scene node's 64x64 NVRHI
-    // checkerboard, same always-null guard), and the NodePreview struct.
-    // Confirmed dead by grep, not inference: NodePreviewKey, m_nodePreviews,
-    // m_nodePreviewsPass, m_nodePreviewVs(Job), m_sceneStandIn and
-    // m_nodePreviewRetired had zero readers/writers left tree-wide once these
-    // functions and ConsumeResult's node-preview branch were removed (see the
-    // task report's per-file grep).
+    // ---------------------------------- node preview thumbnails ------------
+    // THERE ARE NONE, and the gap is named rather than left to be discovered:
+    // the shader graph canvas draws no per-node thumbnail. Doing so would need
+    // one render target and one pass PER NODE (see THE PREVIEW above).
     //
-    // WHAT THE USER LOSES, stated so the gap is named rather than silently
-    // closed: per-node thumbnails on the shader graph canvas (they were
-    // already permanently absent on both hosts, since Phase 5a Task 2b -- this
-    // deletion removes the dead machinery, not a working feature). The
-    // MATERIAL's own preview -- the Material panel image, the pass-canvas base
-    // thumbnail, and the Output node's own image below -- all render for real
-    // through the document's offscreen graph context (see THE GRAPH ARM'S
-    // PREVIEW above) and are UNCHANGED by this deletion.
+    // The MATERIAL's own preview -- the Material panel image, the pass-canvas
+    // base thumbnail, and the Output node's own image below -- all render for
+    // real through the document's offscreen graph context.
     //
     // WHAT SURVIVES, UNCHANGED FROM BEFORE THIS TASK (fix round 1 restored
     // the toggle a first pass wrongly deleted): DrawNodePreviewImage below,

@@ -87,16 +87,10 @@ namespace Arcane
         glm::vec2 sizeMeters{1.0f, 1.0f};
         glm::vec2 pivot{0.5f, 0.5f};
         // The SOURCE TEXTURE's asset Guid (.arcsprite's `texture` field), and
-        // since ABI v15 the record's only texture identity. Device-free by
-        // construction: RenderSubmissionSystem hands it to
-        // Batcher2D::QuadTextured, it travels into the drained span, and the
-        // NRI recorder resolves it through NriTextureCache. Nil when the
-        // sprite declares no texture.
-        //
-        // An `nvrhi::ITexture* texture` was the FIRST field here from Task 8
-        // until ABI v15 (NRI Phase 5a, Task 9.5b-ii). SpriteCache stopped
-        // setting it at Task 7 -- residency became NriTextureCache's job -- so
-        // it was null in every entry, and it was deleted rather than retyped.
+        // the record's ONLY texture identity. Device-free by construction:
+        // RenderSubmissionSystem hands it to Batcher2D::QuadTextured, it
+        // travels into the drained span, and the NRI recorder resolves it
+        // through NriTextureCache. Nil when the sprite declares no texture.
         Guid textureId{};
     };
 

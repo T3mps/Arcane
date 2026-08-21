@@ -1,30 +1,19 @@
-// GPU crash diagnostics arc (Task 5), reduced to its ONE surviving layer at
-// NRI Phase 5a, Task 9.5a: the DRED policy tier.
+// GPU crash diagnostics on D3D12, reduced to its ONE layer: the DRED policy
+// tier.
 //
-// WHAT THIS FILE WAS. Three independent layers, each degrading to "off" with
-// exactly one WARN rather than failing device creation: (1) MARKERS (F-1), a
-// per-scope begin/end value the GPU wrote into process-owned system memory
-// via ID3D12GraphicsCommandList2::WriteBufferImmediate; (2) DRED (F-2), below;
-// (3) the `.gpudump` container's D3D12 sections -- raw marker bytes plus a
-// flattening of DRED's pointer-linked breadcrumb/page-fault output.
-//
-// WHAT SURVIVES, AND WHY ONLY THIS. Layers 1 and 3 lived inside
-// D3D12CrashBackend, which took an nvrhi::IDevice* and reached the native
-// ID3D12Device/ID3D12GraphicsCommandList through getNativeObject. Its only
-// constructor, MakeD3D12CrashBackend, was called by the NVRHI device layer
-// alone -- deleted at Task 8b -- so the whole backend had been unreachable
-// since. It is deleted here rather than left as unreachable NVRHI-typed code;
-// git history is the reference copy, and IGpuCrashBackend.hpp carries the
-// named capability loss (no DRED breadcrumb or page-fault READBACK exists on
-// the NRI path; Phase 4's native marker layer inherits it).
+// THERE IS NO MARKER BUFFER AND NO `.gpudump` D3D12 SECTION HERE. Both
+// belonged to a device-scoped crash backend this tree does not have --
+// IGpuCrashBackend.hpp carries the named capability loss (no DRED breadcrumb
+// or page-fault READBACK exists on the NRI path; the native marker layer
+// inherits it).
 //
 // EnableD3D12Dred() below is NOT part of that loss and must not be confused
 // with it. It is armed unconditionally by DeviceCreationD3D12.cpp before
-// D3D12CreateDevice, is process-global rather than device-scoped, touches no
-// NVRHI type, and its tier choice is pinned by DiagnosticsTest's `[diag]`
-// case in all three configs. Task 1's Dist correction -- full auto-breadcrumbs
-// instead of markers-only, because markers-only with no marker producer yields
-// an EMPTY breadcrumb list -- lives in its #if below, byte-unchanged here.
+// D3D12CreateDevice, is process-global rather than device-scoped, and its
+// tier choice is pinned by DiagnosticsTest's `[diag]` case in all three
+// configs. The Dist arm takes full auto-breadcrumbs rather than markers-only,
+// because markers-only with no marker producer yields an EMPTY breadcrumb
+// list -- see its #if below.
 
 #include <Arcane/Render/IGpuCrashBackend.hpp>
 
@@ -110,13 +99,11 @@ namespace Arcane
             }
 
 #if defined(ARCANE_DIST)
-            // F-2c (lightweight tier) is SUSPENDED as of Phase 5a. Its
-            // markers-only auto-breadcrumbs are only worth anything if pass
-            // scopes also emit nvrhi::ICommandList::beginMarker/endMarker
-            // (F-2c-bis, GpuInstrumentation.hpp) -- and after the NVRHI
-            // deletion there is no nvrhi command list to emit them on, while
-            // the NRI path's WriteMarkerNative is still the stub at
-            // NriDiagnostics.cpp:76. Selecting markers-only here would produce
+            // F-2c (the lightweight tier) is SUSPENDED. Its markers-only
+            // auto-breadcrumbs are only worth anything if pass scopes also
+            // emit GPU markers (F-2c-bis, GpuInstrumentation.hpp), and
+            // WriteMarkerNative is still a stub on the graph backend
+            // (NriDiagnostics.cpp). Selecting markers-only here would produce
             // an EMPTY breadcrumb list, which the header calls strictly worse
             // than no DRED at all -- and it would do it silently, in the one
             // config nobody runs interactively.

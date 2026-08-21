@@ -32,15 +32,13 @@ namespace Arcane
             }
 
             // The context, the SDL3 platform backend, and the event tap --
-            // ONE FLAVOR (NRI Phase 5a, Task 5). The tap used to be withheld
-            // on one of two flavors (a time-boxed stance from NRI Phase 3
-            // Task 6 step 3, closed at D3 exit 2026-08-18); that whole axis
-            // of variation is gone now, along with the flavor it could rot
-            // on unseen. See the Phase 3 milestone record for what leaving it
-            // one checkpoint too long cost: an entire desk checkpoint's worth
-            // of unclickable editor, found by one human click after 1015
-            // green test cases, 12 golden compares and the NVRHI floor all
-            // missed it, because no scripted host run drives real input.
+            // ONE FLAVOR, ALWAYS INSTALLED. The tap was once withheld under a
+            // time-boxed stance, and the cost of leaving that stance standing
+            // one checkpoint too long was an entire checkpoint's worth of
+            // UNCLICKABLE EDITOR -- found by one human click, after a green
+            // test suite and a dozen image compares all missed it, because no
+            // scripted host run drives real input. Withholding input from a
+            // path no test exercises is not a safe default.
             bool Init()
             {
                 IMGUI_CHECKVERSION();

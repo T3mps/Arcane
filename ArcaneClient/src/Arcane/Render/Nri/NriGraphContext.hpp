@@ -1,70 +1,50 @@
 #pragma once
 
-// NriGraphContext -- the `--nri-graph` render half (NRI Phase 2, Task 7;
-// LANDED on one device and one window at NRI Phase 3, Task 6).
+// NriGraphContext -- the render half, on one device and one window.
 //
-// Everything the graph path needs to put a frame on screen, in one object:
-// the HOST's window (borrowed, see below), the wrapper-path native device +
-// its NRI wrap, an NriSwapChain, the Task 5 upload ring, the Task 7 pipeline
-// cache, and ONE RenderGraph that is Reset/declared/compiled/executed every
-// frame. The frame's nodes hang off BuildFrame() below: batch2d -> [post
-// chain] -> tonemap -> [pick/outline] -> [imgui] -> [capture] -> present.
-//
-// NOT SCAFFOLDING in the sense the Phase-1 triangle smoke was. That was a
-// straight-line proof with no reusable abstraction, deleted at Task 13; this
-// class is the shape Phase 3 grows into -- GpuContext's render internals move
-// ONTO it as the hosts flip.
+// Everything needed to put a frame on screen, in one object: the HOST's
+// window (borrowed, see below), the wrapper-path native device + its NRI
+// wrap, an NriSwapChain, the upload ring, the pipeline cache, and ONE
+// RenderGraph that is Reset/declared/compiled/executed every frame. The
+// frame's nodes hang off BuildFrame() below: batch2d -> [post chain] ->
+// tonemap -> [pick/outline] -> [imgui] -> [capture] -> present.
 //
 // -------------------------------------------------------------------------
 // DESK COMMANDS (GPU/windowed runs are desk-only on the dev box):
 //
-//   ArcaneRuntime --nri-graph --project ..\..\..\ReferenceProject --backend dx12 \
-//                 --frames 120 --no-vsync --screenshot nri-graph-dx12.png
-//   ArcaneRuntime --nri-graph --project ..\..\..\ReferenceProject --backend vulkan \
-//                 --frames 120 --no-vsync --screenshot nri-graph-vulkan.png
-//   ArcaneRuntime --nri-graph --project ..\..\..\ReferenceProject --backend dx12 \
-//                 --frames 120 --no-vsync --golden-compare <repo>\ReferenceProject\Goldens \
-//                 --golden-stage batch
+//   ArcaneRuntime --project ..\..\..\ReferenceProject --backend dx12 \
+//                 --frames 120 --no-vsync --screenshot nri-dx12.png
+//   ArcaneRuntime --project ..\..\..\ReferenceProject --backend vulkan \
+//                 --frames 120 --no-vsync --screenshot nri-vulkan.png
 //
-// The first two are the direct --nri-graph equivalents of the two commands
-// Phase 1's triangle smoke carried on its own header, one per backend --
-// migrated here at Task 13, which deleted that file. LIKE the smoke, and
-// unlike this vehicle through the whole of Phase 2, THIS DEVICE IS NOW THE
-// FIRST AND ONLY GRAPHICS DEVICE IN THE PROCESS: GpuContext::CreateForGraph
-// builds no NVRHI device at all. Two consequences a desk user sees:
-//   * dx12 Debug genuinely gets the D3D12 CPU debug layer. EnableDebugLayer is
-//     a before-any-device call, and through Phase 2 it was DECLINED here
-//     because the engine's NVRHI device already existed
-//     (DeviceCreationD3D12.cpp's g_d3d12DeviceCreated). Nothing is declined now, so D3D12 validation
-//     messages reach D3D12DebugLayerCallback and therefore the
-//     RenderErrorCount latch -- for the first time on this path.
-//   * Vulkan's two-VkDevice dispatcher hazard is GONE by construction: there
-//     is one VkDevice, so the Vulkan-Hpp default dispatcher binds the only one
-//     there is.
+// Both boot the REAL engine (project, plugin, scene, material compiles).
+// THIS DEVICE IS THE FIRST AND ONLY GRAPHICS DEVICE IN THE PROCESS, and a
+// desk user sees two consequences of that:
+//   * dx12 Debug genuinely gets the D3D12 CPU debug layer. EnableDebugLayer
+//     is a before-any-device call and nothing declines it here, so D3D12
+//     validation messages reach D3D12DebugLayerCallback and therefore the
+//     RenderErrorCount latch.
+//   * Vulkan's two-VkDevice dispatcher hazard is impossible by construction:
+//     there is one VkDevice, so the Vulkan-Hpp default dispatcher binds the
+//     only one there is.
 //
-// Both boot the REAL engine (project, plugin, scene, material compiles) and
-// swap only the render half. Exit codes follow the host's existing contract:
-// 0 clean, 1 the graph run failed or the device was lost, 2 RenderErrorCount
-// GREW during the run (a validation error fired -- Debug turns the D3D12 debug
-// layer and VK sync validation ON for exactly this), 3 a golden/screenshot
-// capture or compare failure. Precedence 1 > 2 > 3.
+// Exit codes follow the host's contract: 0 clean, 1 the graph run failed or
+// the device was lost, 2 RenderErrorCount GREW during the run (a validation
+// error fired -- Debug turns the D3D12 debug layer and VK sync validation ON
+// for exactly this). The lower number wins.
 // -------------------------------------------------------------------------
 //
 // THE BORROWED WINDOW (read before changing where the graph renders).
 // This object does NOT own a window. Create() takes the host's -- the same
-// Window GpuContext::CreateForGraph built and the same one the host's
-// ImGuiLayer, InputDevices and event pump use.
+// Window GpuContext::Create built and the same one the host's ImGuiLayer,
+// InputDevices and event pump use.
 //
-// WHY BORROWED RATHER THAN OWNED, and why the flip had to be one landing:
-// DXGI allows only ONE flip-model swap chain per HWND at a time
-// (IDXGIFactory2::CreateSwapChainForHwnd's own remark), and both this
-// swapchain (NRI SwapChainD3D12 -> DXGI_SWAP_EFFECT_FLIP_DISCARD) and the
-// engine's NVRHI one (same swap effect, deleted at Task 8b) were both
-// flip-model. So, through Phase 2, while an NVRHI swapchain still existed on
-// the host window, this class had to create its OWN second window and
-// present there. Removing the NVRHI device and binding this swapchain to the
-// host window is therefore a single, indivisible change -- plan
-// reconciliation 1.
+// WHY BORROWED RATHER THAN OWNED: DXGI allows only ONE flip-model swap chain
+// per HWND at a time (IDXGIFactory2::CreateSwapChainForHwnd's own remark),
+// and this swapchain (NRI SwapChainD3D12 -> DXGI_SWAP_EFFECT_FLIP_DISCARD) is
+// flip-model. A SECOND presentation surface in this process would therefore
+// need a second WINDOW -- and a second window is exactly what borrowing this
+// one avoids.
 //
 // WHAT THE CALLER OWES: the borrowed window must OUTLIVE this object. The
 // runtime host guarantees that by declaring m_graphContext AFTER m_gpu, so it
@@ -72,27 +52,13 @@
 // class destroys, resizes or re-titles the window -- it only reads its native
 // handle at swapchain create, and Resize() is driven by the host's pump.
 //
-// THE HUD IS INTERACTIVE AGAIN on a --nri-graph run (D3 exit, 2026-08-18).
-// Through Phase 2 its non-interactivity was an accident of the two-window
-// topology (the ImGui event tap sat on the host window while the user's events
-// went to the vehicle's). One window made it a CHOICE, time-boxed to "until
-// desk checkpoint D3b's compares are done" for the load-bearing half of the old
-// reason: an interactive HUD can be DRAGGED, ImGui persists window placement
-// per exe dir in imgui.ini, and the graph path and the NVRHI path share that
-// file -- so one drag on a graph run would move the HUD on the NVRHI path too,
-// i.e. would change the very `full` baseline D3b compares against. D3b closed
-// green and both golden sets are frozen (@c131692f, @db648b4f), so the box
-// closed and ImGuiLayer::InitForGraph installs the tap again -- read the block
-// there for what leaving it one checkpoint too long actually cost.
-//
-// The HUD's DISPLAY SIZE now needs no lockstep at all, which is the other half
-// of the landing: ImGui_ImplSDL3_NewFrame reads the window the platform
-// backend was initialised with, and that is the same window this swapchain
-// binds. One surface, one extent. It defaults to 1280x720, the size every
-// golden was captured at.
+// THE HUD'S DISPLAY SIZE NEEDS NO LOCKSTEP: ImGui_ImplSDL3_NewFrame reads the
+// window the platform backend was initialised with, and that is the same
+// window this swapchain binds. One surface, one extent. It defaults to
+// 1280x720.
 //
 // -------------------------------------------------------------------------
-// OFFSCREEN MODE (NRI Phase 3, Task 7) -- the SECOND way to run one of these.
+// OFFSCREEN MODE -- the SECOND way to run one of these.
 //
 // CreateOffscreen() builds a vehicle with NO WINDOW and NO SWAPCHAIN that
 // renders the same frame into a persistent, sampled texture it owns, and
@@ -100,9 +66,8 @@
 // ImGui::Image over a texture, not a surface, so the frame has to end in a
 // SHADER_RESOURCE the chrome pass can sample rather than in a PRESENT.
 //
-// IT IS ADDITIVE. The host-window mode above is untouched -- same Create(),
-// same RenderFrame(), same Resize(), same barriers, same goldens. What the two
-// modes share is EVERYTHING except the final target: DeclareGraphFrame builds
+// WHAT THE TWO MODES SHARE IS EVERYTHING EXCEPT THE FINAL TARGET -- same
+// Create(), same RenderFrame(), same Resize(), same barriers. DeclareGraphFrame builds
 // one frame shape and the tonemap writes either the acquired backbuffer or the
 // imported output (RgFrameShape::offscreenOutput). A node census over the two
 // is identical, which is what the [nri] cases pin.
@@ -126,12 +91,11 @@
 // ONE NriDevice: the host-window one creates and owns it, the offscreen one
 // BORROWS it. That is not a convenience -- Vulkan-Hpp's default dispatcher
 // binds one VkDevice per process and DXGI allows one flip-model swapchain per
-// HWND, so a second device is exactly the topology Task 6 removed.
+// HWND, so a second device is exactly the topology this design excludes.
 //
-// ===== TWO CONTEXTS, TWO LANES -- WHAT A SECOND CONTEXT OWES (Task 8-pre) ==
-// The two prerequisites this header used to list as OPEN are BOTH CLOSED, by
-// the enabler dispatched ahead of Task 8. What survives is not a warning list
-// but a RULE, and it is the rule a third context would have to obey too.
+// ===== TWO CONTEXTS, TWO LANES -- WHAT A SECOND CONTEXT OWES ==============
+// This is a RULE, not a warning list, and it is the rule a THIRD context
+// would have to obey too.
 //
 // ---- (1) ONE GRAVEYARD LANE PER CONTEXT ------------------------------
 // EVERY NRI object a context owns is buried in THAT CONTEXT'S OWN Graveyard
@@ -166,8 +130,7 @@
 //   (b1) EXECUTE WAS NEVER ENTERED -- a failed InitOffscreen, or a context
 //       created and dropped without a frame. Every burial would key at fence 0.
 //       CLOSED by the lane, which starts EMPTY: 0 is nondecreasing against
-//       nothing. The Task-7 local-graveyard special case that used to cover
-//       only this window is GONE -- one mechanism, not two.
+//       nothing. ONE mechanism covers this, not a special case beside it.
 //   (b2) EXECUTE WAS ENTERED AND NEVER SUCCEEDED -- the first frame reached
 //       RenderGraph::Execute and failed inside it (a first-frame device loss on
 //       the viewport is the realistic shape). CLOSED by the lane, and it is the
@@ -218,8 +181,8 @@
 // output, which the CHROME backend owns, must be destroyed first too. Opposite
 // orders; no declaration order satisfies both, which is why the owner's last
 // living moment is the only place this can close. EditorApp::Shutdown is that
-// site (NRI Phase 3, Task 8); a project switch is the other one --
-// EditorApp::TeardownGraphForSwitch (Task 12), which destroys and rebuilds the
+// site; a project switch is the other one --
+// EditorApp::TeardownGraphForSwitch, which destroys and rebuilds the
 // OFFSCREEN context and deliberately KEEPS the host-window one, so the backend
 // holding the view provably outlives the texture's owner and this call is the
 // only thing that can order the two. Unconditional and idempotent there too:
@@ -251,9 +214,7 @@
 //
 // Adapted, where marked, from .example/NRISamples (MIT -- see that tree's
 // LICENSE.txt): the readback shape (Source/Readback.cpp's COPY_SOURCE ->
-// CmdReadbackTextureToBuffer -> map, and its BGRA-vs-RGBA channel check),
-// originally adapted by the Phase-1 triangle smoke (deleted, Task 13) and
-// carried forward here.
+// CmdReadbackTextureToBuffer -> map, and its BGRA-vs-RGBA channel check).
 //
 // Include order: NRI headers first, ALWAYS (see NriCommon.hpp) --
 // Extensions/NRIDeviceCreation.h (via NriDevice.hpp) declares
@@ -301,8 +262,7 @@ namespace Arcane
     struct PostChainDesc;
 
     // THE LINEAR CANVAS FORMAT every node on this path renders into: the batch
-    // node's canvas, and every post-chain pass's target. RGBA16F, matching
-    // the deleted Canvas.cpp's kCanvasFormat (nvrhi::Format::RGBA16_FLOAT) -- colours are
+    // node's canvas, and every post-chain pass's target. RGBA16F -- colours are
     // LINEAR and may exceed 1.0, and the tonemap node is what turns them
     // display-referred. It lives HERE, next to the frame's shape, because two
     // nodes now have to agree on it: a post target that did not match the
@@ -310,19 +270,12 @@ namespace Arcane
     // of another.
     inline constexpr nri::Format kGraphCanvasFormat = nri::Format::RGBA16_SFLOAT;
 
-    // THE OFFSCREEN OUTPUT FORMAT (NRI Phase 3, Task 7). The NVRHI twin's
-    // rationale carries over verbatim -- OffscreenCanvas.cpp:22, quoted:
-    //
-    //     "Display-referred output. BGRA8_UNORM is exactly the engine
-    //      backbuffer format (see DeviceD3D12/DeviceVulkan kSwapchainFormat):
-    //      the tonemap already gamma-2.2 encodes, so a plain UNORM target
-    //      matches what a real backbuffer shows AND lets the ImGui-NVRHI
-    //      backend sample it without any extra sRGB conversion. A `_SRGB`
-    //      format would double-apply gamma on the ImGui sample."
-    //
-    // Every clause holds on this path with one word changed: the sampler is
-    // ImGuiNri's rather than ImGui-NVRHI's, and it samples the raw
-    // nri::Texture* this class hands out (OffscreenTextureId). It is stated as
+    // THE OFFSCREEN OUTPUT FORMAT. Display-referred: BGRA8_UNORM is exactly
+    // the swapchain's own format, and the tonemap already gamma-2.2 encodes,
+    // so a plain UNORM target matches what a real backbuffer shows AND lets
+    // ImGuiNri sample the raw nri::Texture* this class hands out
+    // (OffscreenTextureId) with no extra sRGB conversion -- a `_SRGB` format
+    // would double-apply gamma on that sample. It is stated as
     // a CONCRETE format rather than resolved the way NriSwapChain::Format() is,
     // and that is the difference between an output we create and a surface the
     // driver hands us: nothing here is free to pick a channel order.
@@ -336,7 +289,7 @@ namespace Arcane
         // decides which of the RenderFrame/Resize pairs is legal to call.
         enum class Mode : std::uint8_t { HostWindow, Offscreen };
 
-        // WHICH OPTIONAL NODES THIS VEHICLE BUILDS (NRI Phase 3, Task 9).
+        // WHICH OPTIONAL NODES THIS VEHICLE BUILDS.
         //
         // The three core nodes (batch, post, tonemap) are built on every run;
         // the three below are not, and the gate is not laziness. Each costs
@@ -352,8 +305,8 @@ namespace Arcane
         // graph.
         //
         // ===== AND IT IS WHAT MAKES "ONE ImGuiNri PER ImGui CONTEXT" TRUE =====
-        // (NRI Phase 3, Task 9 fix round 1.) That is an INVARIANT, not a
-        // tidiness claim: ImGuiNri::Release walks its adopted context's
+        // That is an INVARIANT, not a tidiness claim: ImGuiNri::Release walks
+        // its adopted context's
         // platform texture list and DISOWNS every RefCount==1 ImTextureData
         // (invalid TexID, and a Destroyed request ImGui bounces to WantCreate
         // while the CPU pixels live). Correct for THE backend of that context;
@@ -397,19 +350,17 @@ namespace Arcane
         struct FrameDesc
         {
             // ===== THERE IS NO `stage` ORDINAL. SLICE THE FRAME BY NULLING ===
-            // A GoldenStage {Full, Batch, Post} field stood here and gated the
-            // post chain, the game HUD and the host HUD. It was REDUNDANT:
-            // every one of those three is already switched off by passing the
-            // corresponding field below as null, per that field's own
-            // documented meaning. `post = nullptr` is "no chain", `gameUi =
-            // nullptr` is "no game HUD", `imgui = nullptr` is "no HUD".
+            // Each optional stage is switched off by passing the field that
+            // carries it as null, per that field's own documented meaning:
+            // `post = nullptr` is "no chain", `gameUi = nullptr` is "no game
+            // HUD", `imgui = nullptr` is "no HUD".
             //
             //   batch slice  ->  post, gameUi, imgui all null
             //   post slice   ->  gameUi, imgui null
             //   full         ->  pass everything
             //
-            // AND THE FLAGS ARE STRICTLY MORE EXPRESSIVE than the ordinal was.
-            // An ordinal imposes a TOTAL ORDER on passes, so it cannot say
+            // AND FLAGS ARE STRICTLY MORE EXPRESSIVE than an ordinal would
+            // be. An ordinal imposes a TOTAL ORDER on passes, so it cannot say
             // "post chain on, game HUD off, chrome on" -- a combination this
             // shape gets for free. That matters as the pass count grows: a
             // renderer's passes are a DAG, not a chain, and the moment shadows,
@@ -425,8 +376,7 @@ namespace Arcane
 
             // Add the readback node to THIS frame's graph, so the presented
             // backbuffer can be read back afterwards through ReadCapture().
-            // Set on the last frame of a --screenshot / --golden-* run, the
-            // same timing the NVRHI path uses.
+            // Set on the last frame of a --screenshot run.
             bool capture = false;
 
             // This frame's 2D content, ALREADY SUBMITTED into the batcher by
@@ -437,8 +387,7 @@ namespace Arcane
             Batcher2D* batch = nullptr;
 
             // This frame's scene POST CHAIN as bytecode + layout + values --
-            // SceneRenderResolver::PostDesc(), the same bind its NVRHI twin
-            // renders through. Borrowed for the duration of the RenderFrame
+            // SceneRenderResolver::PostDesc(). Borrowed for the duration of the RenderFrame
             // call (the resolver is not Refreshed inside one) and never
             // stored; null means "no chain", i.e. canvas -> tonemap.
             const PostChainDesc* post = nullptr;
@@ -517,14 +466,11 @@ namespace Arcane
             // NewFrame). Null means "no game HUD this frame", which is what
             // Edit mode passes.
             //
-            // NOT the same field as `imgui` -- `imgui` is HOST CHROME, this is
-            // CONTENT inside the rendered image -- but AS OF NRI PHASE 3 TASK
-            // 13 IT IS STAGE-GATED THE SAME WAY: DeclareGraphFrame now
-            // declares this node under `stage == GoldenStage::Full` only,
-            // reversing Task 9's original "not stage-gated" ruling once the
-            // editor's own stage vocabulary made its premise false (see
-            // RgFrameShape::gameUi). Ignored unless the vehicle was created
-            // with NodeSet::gameUi.
+            // NOT the same field as `imgui` -- `imgui` is HOST CHROME, this
+            // is CONTENT inside the rendered image -- but it is gated the same
+            // way: DeclareGraphFrame declares the node only when this pointer
+            // is non-null (see RgFrameShape::gameUi). Ignored unless the
+            // vehicle was created with NodeSet::gameUi.
             ImDrawData* gameUi = nullptr;
 
             // ---- the HUD (Task 12) --------------------------------------
@@ -566,9 +512,9 @@ namespace Arcane
         // Runtime and must not grow one -- it is a RENDER vehicle.
         using AssetResolveFn = std::function<std::optional<std::filesystem::path>(const Guid&)>;
 
-        // THE SAME SEAM, EXTENDED TO PIXELS (NRI Phase 3, Task 2). Guid ->
-        // decoded RGBA8, i.e. `Assets::PixelsFor` -- the engine's retained,
-        // DEVICE-FREE decode cache (Task 1). Injected for exactly the reason
+        // THE SAME SEAM, EXTENDED TO PIXELS. Guid -> decoded RGBA8, i.e.
+        // `Assets::PixelsFor` -- the engine's retained, DEVICE-FREE decode
+        // cache. Injected for exactly the reason
         // AssetResolveFn is: this class owns no Runtime and no Assets facade
         // and must not grow either. It feeds NriTextureCache, which is what
         // turns a drained span's texture Guid into something t0 can bind.
@@ -591,12 +537,12 @@ namespace Arcane
         // the process, so the D3D12 debug-layer request is no longer declined.
         static std::unique_ptr<NriGraphContext> Create(const HostConfig& config, Window& window);
 
-        // THE OFFSCREEN FLAVOR (NRI Phase 3, Task 7) -- see OFFSCREEN MODE in
-        // the file header for the full contract.
+        // THE OFFSCREEN FLAVOR -- see OFFSCREEN MODE in the file header for
+        // the full contract.
         //
         // ============ RUNNING THIS ALONGSIDE A LIVE HOST-WINDOW CONTEXT is
-        // SUPPORTED as of Task 8-pre, and it costs the caller exactly one
-        // obligation, because the other one is now structural:
+        // SUPPORTED, and it costs the caller exactly one obligation, because
+        // the other one is structural:
         //   1. THE GRAVEYARD is no longer shared. This context owns its own
         //      lane (Graves()) and reaps it with its own fence, so the two
         //      contexts' independent fence timelines never meet. Nothing to do
@@ -623,7 +569,7 @@ namespace Arcane
         //
         // `shared` is BORROWED and must OUTLIVE this object. It is deliberately
         // the whole device rather than a backend enum: one process holds one
-        // graphics device (Task 6), and the host-window context is what creates
+        // graphics device, and the host-window context is what creates
         // and owns it. `config` is read for the same knobs Create() reads
         // EXCEPT the ones a surface owns -- vsync is meaningless with nothing to
         // present to, and the open-ended drag-storm heartbeat is a windowed
@@ -636,7 +582,7 @@ namespace Arcane
         // this borrows is already covered by whoever created it; see
         // ~NriGraphContext.
         // `nodes` names the OPTIONAL nodes this context may declare -- see
-        // NodeSet. Defaulted to none, which is exactly Task 7/8's vehicle.
+        // NodeSet. Defaulted to none.
         static std::unique_ptr<NriGraphContext> CreateOffscreen(const HostConfig& config,
                                                                 NriDevice& shared,
                                                                 std::uint32_t width,
@@ -651,11 +597,9 @@ namespace Arcane
         [[nodiscard]] Mode Kind()        const noexcept { return m_mode; }
         [[nodiscard]] bool IsOffscreen() const noexcept { return m_mode == Mode::Offscreen; }
 
-        // NO Win() ACCESSOR (whole-branch review, M3). One existed here through
-        // Phase 2, kept on the expectation that the editor tasks would consume
-        // it; every one of them has now landed and none did -- both hosts reach
-        // the window through their own GpuContext::Win(), which is the object
-        // that actually owns it. A null-dereferencing accessor (an offscreen
+        // NO Win() ACCESSOR, deliberately: both hosts reach the window
+        // through their own GpuContext::Win(), which is the object that
+        // actually owns it. A null-dereferencing accessor (an offscreen
         // context borrows no window) with no caller is a trap, not an
         // affordance. m_borrowedWindow stays: Init/Resize use it.
 
@@ -691,7 +635,7 @@ namespace Arcane
         FrameOutcome RenderFrame(const FrameDesc& frame);
 
         // ------------------------------------------------------------------
-        // THE OFFSCREEN HALF (NRI Phase 3, Task 7). Everything below is
+        // THE OFFSCREEN HALF. Everything below is
         // OFFSCREEN MODE ONLY and refuses (loudly, latched) on a host-window
         // context, exactly as RenderFrame/Resize refuse on an offscreen one --
         // a vehicle that quietly did the wrong thing for its mode would be a
@@ -865,13 +809,14 @@ namespace Arcane
         // hands back TIGHT RGBA8 -- swizzled from BGRA when that is what the
         // swapchain resolved to, so the bytes are display-referred RGBA
         // whatever NRI picked (NriSwapChain::Format() is resolved, never
-        // pinned). That normalization is what lets the byte-wise golden
-        // comparator compare a graph capture against an NVRHI baseline at all.
+        // pinned). That normalization is what makes a capture's bytes
+        // comparable at all, whichever channel order the swapchain resolved
+        // to.
         //
         // Idles the device first (the copy has to have landed). False, already
         // logged, if no capture frame was recorded or the map failed. Callers
-        // MUST NOT treat a false here as a run failure -- it is the same exit-3
-        // "capture failed" class the NVRHI path reports.
+        // MUST NOT treat a false here as a run failure -- a capture that could
+        // not be read is not a bad frame.
         [[nodiscard]] bool ReadCapture(std::uint32_t& width, std::uint32_t& height,
                                        std::vector<unsigned char>& rgba);
 
@@ -1008,8 +953,8 @@ namespace Arcane
         // FrameDesc::globals for the frame currently being declared, COPIED so
         // it stays readable for the whole RenderFrame call (the post chain's
         // b1 is written at record time). All-zero on a frame the driver
-        // supplied none for -- which is what a material reads when nobody sets
-        // them on the NVRHI path either.
+        // supplied none for -- which is what a material reads when nobody
+        // sets them at all.
         [[nodiscard]] const GlobalParams& CurrentGlobals() const noexcept { return m_currentGlobals; }
 
         // The raw bytecode of the offline shader artifact `name` -- the SAME
@@ -1155,7 +1100,7 @@ namespace Arcane
         std::unique_ptr<NativeDeviceOwner> m_native;
         std::unique_ptr<NriDevice>         m_ownedDevice;
         NriDevice*                         m_device = nullptr;
-        // ---- THIS CONTEXT'S GRAVEYARD LANE (NRI Phase 3, Task 8-pre) -------
+        // ---- THIS CONTEXT'S GRAVEYARD LANE --------------------------------
         // Everything this context, its graph, its nodes and its caches destroy
         // goes in HERE, keyed to m_graph's own submission fence -- see Graves()
         // and the TWO CONTEXTS, TWO LANES block in the file header.
@@ -1271,7 +1216,7 @@ namespace Arcane
         // See SetAssetResolver. Empty until the frame driver installs one.
         AssetResolveFn m_resolveAsset;
 
-        // ---- offscreen mode (NRI Phase 3, Task 7) --------------------------
+        // ---- offscreen mode -----------------------------------------------
         // The persistent output, and the pacing timeline that bounds frames in
         // flight without a swapchain to do it. Both null/absent in host-window
         // mode; both buried/destroyed in ~NriGraphContext, before the drain,
@@ -1346,10 +1291,9 @@ namespace Arcane
         nri::Buffer*  captureBuffer = nullptr;
         std::uint64_t captureBytes  = 0;
 
-        // OFFSCREEN MODE (NRI Phase 3, Task 7). The persistent, sampled
-        // texture the tonemap renders into INSTEAD of a swapchain backbuffer;
-        // null means "present mode", i.e. the tonemap calls
-        // ImportSwapChainTexture as it always did.
+        // OFFSCREEN MODE. The persistent, sampled texture the tonemap renders
+        // into INSTEAD of a swapchain backbuffer; null means "present mode",
+        // i.e. the tonemap calls ImportSwapChainTexture instead.
         //
         // IT IS THE ONLY DIFFERENCE BETWEEN THE TWO MODES' FRAMES. Everything
         // downstream of the tonemap -- the outline composite, the HUD, the
@@ -1383,15 +1327,16 @@ namespace Arcane
         // NriGraphContext -- which is exactly what lets the headless [nri]
         // cases drive the real shape with a null context.
         //
-        // Stage-independent, deliberately: --golden-stage names slices of the
-        // SCENE render (batch / post / full), and the outline is not one of
-        // them. A stage golden is taken without the probe, so the two never
-        // meet in practice.
+        // Independent of how the scene is sliced, deliberately: nulling
+        // `post` or the HUD pointers slices the SCENE render, and the outline
+        // is not part of that -- it is asked for by its own flag or not at
+        // all.
         bool pickOutline = false;
 
-        // Declare the HUD node after the tonemap (Task 12). Unlike
-        // `pickOutline` this IS stage-gated -- `full` alone draws host chrome
-        // -- and the declarations depend on this flag and on nothing else: the
+        // Declare the HUD node after the tonemap. Unlike `pickOutline` this
+        // follows the CALLER'S POINTER -- host chrome is drawn only when
+        // FrameDesc::imgui is non-null -- and the declarations depend on this
+        // flag and on nothing else: the
         // ImDrawData itself is RECORD-time data that travels through
         // NriGraphContext, which is what lets the headless [nri] cases drive
         // the real shape with a null context.

@@ -1,22 +1,13 @@
 #pragma once
 
-// The Vulkan CREATION HALF (NRI Phase 1, Task 7).
+// The Vulkan CREATION HALF.
 //
-// Everything `DeviceVulkan::Init` used to produce before it started talking
-// to NVRHI -- loader, instance, debug messenger, physical device, logical
-// device, the one graphics queue, and the choices made along the way -- lifted
-// out of that class into a struct with TWO consumers:
-//
-//   (a) the existing NVRHI device path (`DeviceVulkan`), byte-identically:
-//       same call order, same parameters, same logging, same failure paths.
-//       The extraction is textual -- `m_x` became `out.x` and nothing else.
-//   (b) `Nri/NriDevice.cpp`, which fills `nri::DeviceCreationVKDesc` from it
-//       and wraps the device via `nriCreateDeviceFromVKDevice`.
-//
-// EXTRACT, DON'T REDESIGN: this header adds no behavior. If a field here
-// looks like it wants a better shape, that is a Phase 2 conversation -- the
-// Phase 0 goldens are this phase's regression floor and the NVRHI path may
-// not shift a pixel.
+// Everything that has to exist before NRI can be handed a device -- loader,
+// instance, debug messenger, physical device, logical device, the one
+// graphics queue, and the choices made along the way -- in ONE struct, for
+// ONE consumer: `Nri/NriDevice.cpp`, which fills
+// `nri::DeviceCreationVKDesc` from it and wraps the device via
+// `nriCreateDeviceFromVKDevice`.
 //
 // Render-internal, exactly like `DeviceRemovedObservers.hpp`: not part of the
 // engine's public API surface, and deliberately NOT exported -- both
@@ -36,17 +27,15 @@
 
 namespace Arcane
 {
-    // Every field is either read by the NVRHI path today or required by
-    // nri::DeviceCreationVKDesc (capability contract 1.1). Nothing else.
+    // Every field is required by nri::DeviceCreationVKDesc (capability
+    // contract 1.1). Nothing else.
     struct VulkanDeviceCreation
     {
         // FIRST, because it must outlive every handle below -- it owns
         // vulkan-1.dll's module handle, and the default dispatcher's function
-        // pointers are resolved through it. (It was `DeviceVulkan::m_loader`,
-        // declared first for this exact reason.) Its constructor THROWS when
-        // the loader is absent: the same throw the NVRHI factory's try/catch
-        // caught at `make_unique<DeviceVulkan>()` until Task 8b deleted it,
-        // and that `NativeDeviceOwner::Create` catches now.
+        // pointers are resolved through it. Its constructor THROWS when the
+        // loader is absent; `NativeDeviceOwner::Create` is what catches
+        // that.
         vk::detail::DynamicLoader loader;
 
         vk::Instance               instance;
@@ -92,7 +81,7 @@ namespace Arcane
 
         std::string adapterName;
 
-        // The GPU-crash record the NVRHI path feeds into VulkanCrashDesc.
+        // The GPU-crash record that feeds VulkanCrashDesc.
         // Inert to NRI (it names none of the three extensions -- contract
         // §1.3's last row), but part of what this device was created with.
         VulkanCrashDesc::DeviceFault deviceFault  = VulkanCrashDesc::DeviceFault::None;

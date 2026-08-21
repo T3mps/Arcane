@@ -3,25 +3,14 @@
 // THE RENDER-LAYER ERROR LATCH -- the 0/0 gate's one counter, and the one
 // device-removed hook slot.
 //
-// NRI Phase 5a, Task 8a: this was `NvrhiMessageCallback` (storage) plus five
-// exported accessors in `Render/Device.{hpp,cpp}`. Both of those files
-// belonged to the NVRHI device layer the phase deleted (Task 8b), and this
-// latch does not: it is the instrument every host, every GPU test and every
-// desk battery in the phase reads (`RenderErrorCount B -> N`), and every graph-side producer --
+// It is the instrument every host, every GPU test and every desk battery
+// reads (`RenderErrorCount B -> N`), and every render-side producer --
 // ARC_NRI_CHECK, the executor, the nodes, the pipeline cache, the ImGui
-// layer -- bumps it. So it moved to a home with NO nvrhi dependency, ahead of
-// the deletion rather than during it.
+// layer -- bumps it.
 //
-// Nothing about the storage changed in that move. It is still a header-only
-// function-local-static singleton, driven only from inside ArcaneClient.dll,
-// with the same two atomics and the same public seams -- which is why the
-// exported *ForTest shims below still exist and still say what they always
-// said.
-//
-// `NvrhiMessageCallback` survived Task 8a as a thin, stateless
-// nvrhi::IMessageCallback adapter over this class; Task 8b deleted it with the
-// rest of the NVRHI device layer, because the only thing that ever installed
-// it was the nvrhi device desc. Nothing else about this file changed.
+// A header-only function-local-static singleton, driven only from inside
+// ArcaneClient.dll, with two atomics and the public seams below -- which is
+// why the exported *ForTest shims exist.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Base/Log.hpp>
@@ -41,14 +30,10 @@ namespace Arcane
         // backend installs a hook here rather than inventing a second,
         // backend-shaped detection path.
         //
-        // NVRHI was the original producer: it caught the loss on submit and
-        // reported the literal text "Device Removed!"
-        // (ThirdParty/nvrhi/src/d3d12/d3d12-device.cpp:630 and
-        // .../vulkan/vulkan-queue.cpp:200), which is the string
-        // NotifyIfDeviceRemoved below still scans for. Since Task 8b deleted
-        // that layer the producers are NRI's own: ARC_NRI_CHECK's typed
-        // DEVICE_LOST branch (NoteDeviceLost, which does not depend on message
-        // text at all) and the substring scan, still fed by RouteNriError.
+        // THE PRODUCERS are NRI's own: ARC_NRI_CHECK's typed DEVICE_LOST
+        // branch (NoteDeviceLost, which does not depend on message text at
+        // all), and the "Device Removed" substring scan below, fed by
+        // RouteNriError.
         //
         // Raw function pointer + last-writer-wins, mirroring the diagnostics
         // Sink slot. The hook must be cleared by whoever installed it, before
@@ -83,11 +68,10 @@ namespace Arcane
 
         // What the slot currently holds, or null. Read-only and side-effect
         // free -- it never invokes the hook. Exists because the slot is
-        // last-writer-wins. It had TWO writers between Phase 3 and Phase 5a
-        // (the NVRHI device layer and Render/Nri/NriDiagnostics); Task 8b left
-        // NriDiagnostics as the only one. "Did arming actually install one,
-        // and did a second arm leave it alone" stays a property worth
-        // pinning, and it is unobservable without a reader.
+        // last-writer-wins and Render/Nri/NriDiagnostics is its one writer:
+        // "did arming actually install one, and did a second arm leave it
+        // alone" is a property worth pinning, and it is unobservable without
+        // a reader.
         // (Named Current* because a member called `DeviceRemovedHook` would
         // shadow the type alias above inside this class.)
         [[nodiscard]] DeviceRemovedHook CurrentDeviceRemovedHook() const noexcept
@@ -95,8 +79,8 @@ namespace Arcane
             return m_deviceRemovedHook.load(std::memory_order_acquire);
         }
 
-        // Phase 2, Task 1: the TAGGED error seam, for every producer that is
-        // not the substring path below -- the D3D12 debug layer's InfoQueue1
+        // THE TAGGED ERROR SEAM, for every producer that is not the
+        // substring path below -- the D3D12 debug layer's InfoQueue1
         // callback, and the frame graph's `NoteError("nri-graph", ...)`. It
         // gives such a producer the two things it needs and withholds the one
         // it must not have:
@@ -104,12 +88,12 @@ namespace Arcane
         //   - It bumps the SAME atomic RenderErrorCount() reads, so a D3D12
         //     VUID or a graph refusal fails the 0/0 gate exactly like any
         //     other render-layer error. That is the whole point of the latch.
-        //   - It logs under the producer's OWN tag. The D3D12 callback used
-        //     to reach the latch by calling the substring seam below, which
-        //     printed debug-layer text as "[nvrhi] ..." -- a lie about the
-        //     message's origin, and the first thing to mislead whoever reads
-        //     the log. (That seam is NoteNriError now, and tags "[nri]"; see
-        //     its own comment for the tag-honesty caveat that remains.)
+        //   - It logs under the producer's OWN tag, rather than borrowing
+        //     whatever tag the seam it reached the latch through happens to
+        //     print -- a tag that names the wrong origin is the first thing
+        //     to mislead whoever reads the log. (See NoteNriError's
+        //     tag-honesty caveat for what that costs a producer which cannot
+        //     have its own.)
         //   - It deliberately does NOT run NotifyIfDeviceRemoved. That hook
         //     writes a diagnostic report and a minidump; the D3D12 debug
         //     layer invokes its message callback on whatever thread tripped
@@ -124,7 +108,7 @@ namespace Arcane
             ARC_ERROR("[{}] {}", tag ? tag : "?", text ? text : "");
         }
 
-        // Phase 2, Task 6: the TYPED device-lost seam. NoteError above
+        // THE TYPED DEVICE-LOST SEAM. NoteError above
         // deliberately withholds the removal hook because its producer (the
         // D3D12 debug layer) reports from inside a D3D12 call on whatever
         // thread tripped the error. This one is for the opposite case: a
@@ -134,11 +118,11 @@ namespace Arcane
         // hook is both safe and the whole point.
         //
         // It exists because the substring path cannot serve that producer:
-        // NotifyIfDeviceRemoved matches NVRHI's literal "Device Removed!"
-        // text, and NRI's failure text says "DEVICE_LOST", so before this an
-        // NRI-path device loss reached the latch but NEVER
-        // ObserveDeviceRemoved -- i.e. no .arcdiag, no .gpudump, no host
-        // shutdown latch. Same counter, same hook, one honest tag.
+        // NotifyIfDeviceRemoved matches on "Device Removed" and NRI's failure
+        // text says "DEVICE_LOST", so without this seam an NRI device loss
+        // would reach the latch but NEVER ObserveDeviceRemoved -- no
+        // .arcdiag, no .gpudump, no host shutdown latch. Same counter, same
+        // hook, one honest tag.
         void NoteDeviceLost(const char* tag, const char* text) noexcept
         {
             ++m_errorCount;
@@ -147,34 +131,20 @@ namespace Arcane
                 hook();
         }
 
-        // THE SUBSTRING SEAM -- what nvrhi::IMessageCallback::message()'s
-        // Error/Fatal branches WERE, lifted out of NvrhiMessageCallback (Task
-        // 8a) so that a caller with no nvrhi types can still reach it.
+        // THE SUBSTRING SEAM -- the message-TEXT path into the latch, for a
+        // producer that reports an error as a string rather than as a typed
+        // result.
         //
-        // TWO producers route here now. NriCommon's RouteNriError -- what
-        // every ARC_NRI_CHECK failure funnels into, and which has called this
-        // exact code path since the substrate landed (@81754283) precisely so
-        // the NRI arm and the NVRHI arm shared one counter and one removal
-        // scan; and DeviceCreationVulkan's VkDebugCallback, which reached it
-        // through the nvrhi adapter until Task 8b deleted that adapter and
-        // repointed the one call. NVRHI's own message callback was the third
-        // and went with the device layer.
-        //
-        // RETAGGED "[nvrhi]" -> "[nri]", AND RENAMED, at NRI Phase 5a Task 11a.
-        // Tasks 8a and 8b deliberately left both alone (a relocation must move
-        // zero observables; deleting a layer is not a reason to rewrite log
-        // text), deferring the vocabulary change to Task 11. NVRHI is gone from
-        // the tree entirely by then, so the old name and tag pointed at a layer
-        // that does not exist. Nothing automated consumed the tag: the D5a-1
-        // battery matches only `RenderErrorCount N -> N`, no ArcaneTests case
-        // asserts on the tag text, and no in-repo script greps it.
+        // TWO producers route here: NriCommon's RouteNriError, which every
+        // ARC_NRI_CHECK failure funnels into, and DeviceCreationVulkan's
+        // VkDebugCallback. Both share this one counter and this one removal
+        // scan.
         //
         // TAG-HONESTY CAVEAT, stated rather than hidden: of the two producers
         // that route here, RouteNriError IS NRI, but DeviceCreationVulkan's
         // VkDebugCallback is the VULKAN VALIDATION LAYER reporting on a device
         // NRI created. "[nri]" names the render path rather than the exact
-        // producer -- strictly better than "[nvrhi]", which named neither. It
-        // also splits that one callback's output: its warning branch already
+        // producer. It also splits that one callback's output: its warning branch already
         // logs ARC_WARN("[vk] ...") (DeviceCreationVulkan.cpp:183) while its
         // errors leave here tagged "[nri]".
         //
@@ -193,28 +163,21 @@ namespace Arcane
             NotifyIfDeviceRemoved(messageText);
         }
 
-        // A NoteNriFatal Fatal twin of the seam above used to sit here. NVRHI's
-        // message callback was its only caller and went with the device layer
-        // at Task 8b, leaving it with none; Task 11a flagged it as a deletion
-        // candidate rather than deleting it, because that task was a retag.
-        // Deleted in the follow-on collapse, and NRI's own vocabulary is why it
-        // is not coming back on its own: nri::Message has exactly INFO,
-        // WARNING and ERROR (Extensions/NRIDeviceCreation.h) -- no fatal
-        // severity at all -- and NriMessageCallback routes only ERROR here,
-        // logging the other two straight to ARC_INFO/ARC_WARN
-        // (NriCommon.cpp:84-101). There is no producer that could reach a Fatal
-        // twin, so restoring one means inventing a caller, not just declaring
-        // the function.
+        // THERE IS NO FATAL TWIN of the seam above, and NRI's own vocabulary
+        // is why none is owed: nri::Message has exactly INFO, WARNING and
+        // ERROR (Extensions/NRIDeviceCreation.h) -- no fatal severity at all
+        // -- and NriMessageCallback routes only ERROR here, logging the other
+        // two straight to ARC_INFO/ARC_WARN (NriCommon.cpp:84-101). No
+        // producer could reach a Fatal twin, so adding one means inventing a
+        // caller, not just declaring the function.
 
     private:
         void NotifyIfDeviceRemoved(const char* messageText)
         {
-            // Substring, not equality: NVRHI (fully removed from the tree
-            // now) used to report exactly "Device Removed!"; today's NRI
-            // callback interface, the D3D12 debug layer and the Vulkan
-            // validation messenger all wrap that same phrase with their own
-            // prefixes and context, so an exact-equality match would miss
-            // every producer left standing.
+            // Substring, not equality: NRI's callback interface, the D3D12
+            // debug layer and the Vulkan validation messenger each wrap the
+            // phrase in their own prefixes and context, so an exact-equality
+            // match would miss every one of them.
             if (!messageText || std::strstr(messageText, "Device Removed") == nullptr)
                 return;
             if (const DeviceRemovedHook hook = m_deviceRemovedHook.load(std::memory_order_acquire))
@@ -226,7 +189,7 @@ namespace Arcane
     };
 
     // Total render-layer Error/Fatal diagnostics since process start, across
-    // all devices and EVERY producer -- not just NVRHI's own message callback:
+    // all devices and EVERY producer:
     // the Vulkan debug messenger, the D3D12 debug layer's InfoQueue1 callback,
     // NRI's callback interface and ARC_NRI_CHECK, and anything else reporting
     // through RenderErrorLatch::NoteError all land in this one counter.
@@ -265,12 +228,11 @@ namespace Arcane
 
     // Reads the same DLL-side slot back, without ever invoking the hook.
     // Test support ONLY, and for the same header-only-singleton reason as the
-    // setter above. The slot is last-writer-wins, and had TWO writers between
-    // Phase 3's one-device flip and Phase 5a Task 8b -- the NVRHI device
-    // layer's Init/dtor, and Render/Nri/NriDiagnostics::Arm/Disarm. Only the
-    // latter is left, but "arming installed one" and "a second arm left it
-    // alone" are still properties a headless case can only state if it can
-    // read the slot (NriDiagnosticsTest pins both). Production code has no business reading
+    // setter above. The slot is last-writer-wins and
+    // Render/Nri/NriDiagnostics::Arm/Disarm is its one writer, so "arming
+    // installed one" and "a second arm left it alone" are properties a
+    // headless case can only state if it can read the slot
+    // (NriDiagnosticsTest pins both). Production code has no business reading
     // it: the hook exists to be CALLED by RenderErrorLatch, by nobody
     // else.
     [[nodiscard]] ARCANE_API void (*RenderDeviceRemovedHookForTest() noexcept)();

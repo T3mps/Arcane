@@ -10,9 +10,6 @@
 
 namespace Arcane::ShaderPaths
 {
-    // MOVED VERBATIM from ShaderLibrary::ResolveFlavorDir (NRI Phase 5a,
-    // Task 7) -- same statements in the same order, so the directory a build
-    // resolves to cannot have changed with the move.
     std::filesystem::path ResolveFlavorDir(
         GraphicsBackend backend, const std::filesystem::path& shaderDir)
     {

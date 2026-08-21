@@ -229,21 +229,15 @@ namespace Arcane
             if (g_backend)
                 return false;   // idempotence: a second Arm touches nothing
 
-            // THE FOREIGN-BACKEND TEST, inferred rather than configured. A
-            // full slot used to mean the NVRHI device had armed during boot --
-            // the two-device transition topology -- and displacing it would
-            // have pointed the Diagnostics provider at a backend with no DRED,
-            // no device-fault query and no marker buffer while the device that
-            // HAD all three was still the one rendering. Task 8b deleted that
-            // other writer, so today the only way to reach this branch is a
-            // caller (or a test) installing a backend of its own. The check
-            // stays: last-writer-wins makes displacement trivially possible and
-            // silently wrong, and refusing is still the right answer for ANY
-            // owner we did not install. NriDiagnosticsTest drives it with a
-            // stub. The log line below names no backend VENDOR, only the fact
-            // that the slot is occupied by an owner we did not install -- which
-            // is all that is knowable here now that the NVRHI writer this test
-            // was originally written for is gone.
+            // THE FOREIGN-BACKEND TEST, inferred rather than configured. The
+            // only way to reach this branch is a caller (or a test) installing
+            // a backend of its own. The check stays because last-writer-wins
+            // makes displacement trivially possible and silently wrong, and
+            // refusing is the right answer for ANY owner we did not install.
+            // NriDiagnosticsTest drives it with a stub. The log line below
+            // names no backend VENDOR, only the fact that the slot is occupied
+            // by an owner we did not install -- which is all that is knowable
+            // here.
             if (ActiveGpuCrashBackend() != nullptr)
             {
                 ARC_INFO("[nri] diagnostics: a GPU crash backend we did not install is already "
@@ -255,10 +249,8 @@ namespace Arcane
 
             auto backend = std::make_unique<NriGraphCrashBackend>(device);
 
-            // BOTH latches a new device invalidates, cleared as the PAIR the
-            // NVRHI device TUs cleared them as (DeviceD3D12::Init and
-            // DeviceVulkan::Init made these two calls, adjacent, in this
-            // order, until Task 8b deleted both files):
+            // BOTH latches a new device invalidates, cleared as a PAIR, in
+            // this order:
             //
             //   * the observer's once-only removal latch -- it says "this
             //     process already reported ITS device loss", which was true of
@@ -266,8 +258,8 @@ namespace Arcane
             //     set, the observer this Arm is about to install would swallow
             //     the next removal entirely: no report, no `.gpudump`, no
             //     NoteGpuDeviceLost for the host to quit on. (Reachable the
-            //     moment a host survives a loss and rebuilds its graph context
-            //     -- and after Task 6 this is the only site that clears it.)
+            //     moment a host survives a loss and rebuilds its graph
+            //     context, and this is the ONLY site that clears it.)
             //   * the process-wide device-lost latch -- a stale one would quit
             //     the host the moment this healthy device started presenting.
             ResetRemovalLatchFor(device.Backend());
@@ -275,14 +267,13 @@ namespace Arcane
 
             if (hook)
                 RenderErrorLatch::Instance().SetDeviceRemovedHook(hook);
-            // THE UPCAST IS EXPLICIT (whole-branch review, T5). The provider
-            // recovers `user` as an IGpuCrashBackend* before down-casting, and
-            // says so in its own comment -- but this call used to hand it a
-            // NriGraphCrashBackend* that decayed straight to void*, so that
-            // round trip was true only by the accident of a single non-virtual
-            // base sharing the derived object's address. Stated in the code
-            // rather than relied on; D3b's fault injector drives this provider,
-            // so the path is live rather than decorative.
+            // THE UPCAST IS EXPLICIT. The provider recovers `user` as an
+            // IGpuCrashBackend* before down-casting, so handing it a
+            // NriGraphCrashBackend* that decayed straight to void* would be
+            // true only by the accident of a single non-virtual base sharing
+            // the derived object's address. Stated in the code rather than
+            // relied on; the fault injector drives this provider, so the path
+            // is live rather than decorative.
             Diagnostics::SetGpuSectionProvider(&NriGraphGpuSectionProvider,
                                                static_cast<IGpuCrashBackend*>(backend.get()));
             SetActiveGpuCrashBackend(backend.get());
@@ -355,13 +346,8 @@ namespace Arcane
     namespace
     {
         // -------------------------------------------------------------
-        // The fault injector's constants. They were IDENTICAL to the nvrhi
-        // injector's (Render/GpuFaultInjector.cpp), deliberately: the desk
-        // battery compared the two arms' behaviour, and a twin that dispatched
-        // a different workload would have been measuring a different fault.
-        // Task 8b deleted that file -- these are now the ONLY copy, and the
-        // reasoning that used to live over there is restated here where each
-        // value needs it.
+        // The fault injector's constants -- the ONLY copy, with the reasoning
+        // stated at each value that needs it.
         // -------------------------------------------------------------
         struct FaultCB
         {
@@ -429,7 +415,6 @@ namespace Arcane
             nri::PipelineLayout*   layout    = nullptr;
 
             // "THE GPU NEVER FINISHED WITH THESE -- DO NOT FREE THEM."
-            // (NRI Phase 3, D3b 0x87D closeout.)
             //
             // FireFault's tail says it plainly: the objects below "may not be
             // freed while the GPU is still reading them", and the QueueWaitIdle
@@ -679,11 +664,10 @@ namespace Arcane
                 return false;
             }
 
-            // Loud and unconditional, kept verbatim from the nvrhi twin Task
-            // 8b deleted: this is the one log line that will be in the console
-            // when the session dies, and the difference between "the
-            // diagnostics arc works" and "the runtime crashed" is whether a
-            // reader can find it.
+            // Loud and unconditional: this is the one log line that will be
+            // in the console when the session dies, and the difference between
+            // "the diagnostics arc works" and "the runtime crashed" is whether
+            // a reader can find it.
             ARC_WARN("[nri] --crash-gpu: dispatching a DELIBERATE GPU fault "
                      "({} groups x 64 threads, {} iterations, OOB element {}). "
                      "The device is expected to be lost.",

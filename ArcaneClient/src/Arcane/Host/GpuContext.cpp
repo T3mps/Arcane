@@ -1,9 +1,5 @@
 // GpuContext: the ordered engine boot extracted from main.cpp. See the header
-// for the teardown contract and for what NRI Phase 5a, Task 6 collapsed.
-// Create() below is CreateForGraph, renamed -- the NVRHI factory this file
-// used to also define had zero callers anywhere in the tree (confirmed before
-// deleting it), so this is not a merge of two boot sequences, only the one
-// that was ever reached.
+// for the teardown contract. Create() below is the ONE factory.
 
 #include <Arcane/Host/GpuContext.hpp>
 
@@ -45,19 +41,17 @@ namespace Arcane
             return nullptr;
         }
 
-        // A CPU BATCHER, and at ABI v15 there is no other kind: Batcher2D
-        // stopped taking an (nvrhi::IDevice*, ShaderLibrary*) pair once every
-        // call site in the tree had been passing (nullptr, nullptr) for two
-        // tasks. Begin/SetLayer/Quad*/Drain/RegisterMaterial/SetGlobals/
-        // MaterialDesc/Stats are the whole data-supply side of the frame; the
+        // A CPU BATCHER, and there is no other kind: it takes no device and
+        // creates no GPU object. Begin/SetLayer/Quad*/Drain/RegisterMaterial/
+        // SetGlobals/MaterialDesc/Stats are the whole data-supply side of the
+        // frame; the
         // caller's Batch2DNode DRAINS this instance and issues the draws
         // through NRI. One batcher, one batching algorithm.
         ctx->m_batcher = Batcher2D::Create();
         if (!ctx->m_batcher) { ARC_ERROR("GpuContext: batcher create failed"); return nullptr; }
 
-        // ImGuiLayer has one flavor since NRI Phase 5a, Task 5: context + SDL3
-        // platform backend + event tap, no renderer (a graph node is the
-        // renderer).
+        // ImGuiLayer has ONE flavor: context + SDL3 platform backend + event
+        // tap, and no renderer -- a graph node is the renderer.
         ctx->m_imgui = ImGuiLayer::Create(ctx->m_window);
         if (!ctx->m_imgui) { ARC_ERROR("GpuContext: imgui create failed"); return nullptr; }
 

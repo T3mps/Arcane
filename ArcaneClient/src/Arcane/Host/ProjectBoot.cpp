@@ -453,15 +453,11 @@ namespace Arcane::HostBoot
         // stages ready once gpu_core completes, regardless of how fast the
         // project_open worker finishes.
         //
-        // Task 8c (2026-07-30 correction, "the splash carries the loading UI,
-        // not the editor window") does NOT touch this insertion point -- it
-        // is a DIFFERENT invariant from splash_ready's (see that stage's own
-        // comment below) and stays exactly here: fonts/theme/docking-flag/
-        // settings-handlers still have to land on the editor's OWN ImGui
-        // context before plugin_load can steal GImGui, regardless of when the
-        // window is revealed. What DID change is what StageEditorShell does
-        // at its own end -- it no longer binds a live swapchain presenter
-        // there at all (see StageEditorShell's comment in EditorApp.cpp).
+        // THIS INSERTION POINT IS INDEPENDENT of when the window is revealed
+        // -- a DIFFERENT invariant from splash_ready's (see that stage's own
+        // comment below). Fonts/theme/docking-flag/settings-handlers have to
+        // land on the editor's OWN ImGui context before plugin_load can steal
+        // GImGui, whatever the reveal does.
         {
             std::vector<BootStage> editorEarly;
             editorEarly.push_back(Make("editor_fonts", {"gpu_core"},      BootThread::Main, BootPolicy::Fatal, 5));
@@ -503,14 +499,10 @@ namespace Arcane::HostBoot
         }));
 
         // splash_ready: pushed LAST, and depends on "finalize" -- NOT
-        // "editor_fonts"/"editor_shell" (Task 8c, 2026-07-30 correction,
-        // superseding the second and third 2026-07-30 review fixes' shape,
-        // which revealed the window right after editor_shell instead). The
-        // human ruling: today's boot UX was backwards relative to Unreal --
-        // the pre-device splash was a mute rectangle and the real editor
-        // window was revealed early to show a loading bar inside IT. UE does
-        // the opposite: engine init, module/plugin load, and the startup-map
-        // load all run with the SPLASH up and reporting into it
+        // "editor_fonts"/"editor_shell". Revealing the editor window early to
+        // show a loading bar inside IT is backwards relative to Unreal, which
+        // does the opposite: engine init, module/plugin load, and the
+        // startup-map load all run with the SPLASH up and reporting into it
         // (UnrealEdGlobals.cpp:167-194), and the main editor window is not
         // even created until loading is finished (UnrealEdGlobals.cpp:
         // 215-236: "Hide the splash screen now that everything is ready to
@@ -522,14 +514,10 @@ namespace Arcane::HostBoot
         // window early -- doing so was always in service of showing that bar
         // to the user, and the bar has moved.
         //
-        // Depends on `run` being a HOST override, not a ctx-only shared
-        // lambda like it was before this task: revealing the window needed
-        // host-owned state this module cannot reach -- the same structural
-        // reason render_bridge/plugin_load/etc. are host overrides. (The
-        // specific object was a swapchain-backed BootPresenter the stage drew
-        // one frame through; that class is deleted and the reveal has moved to
-        // the graph vehicle's creation, but splash_ready stays a host override
-        // because m_splash/m_splashPresenter are host state too.)
+        // `run` is a HOST override, not a ctx-only shared lambda: this stage
+        // touches m_splash/m_splashPresenter, which are host state this module
+        // cannot reach -- the same structural reason render_bridge/plugin_load
+        // and the rest are host overrides.
         // `Make(...)` below is therefore called with NO trailing
         // `run` argument, which installs Make's Unpatched(id) sentinel (see
         // this file's top) -- EditorApp::Run() is REQUIRED to overwrite it
@@ -538,15 +526,12 @@ namespace Arcane::HostBoot
         // Two constraints still bind even though the reveal moved to the
         // end, and they are in tension:
         //   1. Never reveal an undrawn window. Nothing has presented a frame
-        //      into the swapchain by this point -- BootSequence's per-stage
-        //      pump has been driven by the pre-device splash presenter for
-        //      the ENTIRE run, and that presenter never touches the
-        //      swapchain. StageSplashReady resolved this by Present()-ing ONE
-        //      real frame through a swapchain-backed BootPresenter
-        //      (Fullscreen, fraction=1.0) BEFORE calling Show(). That class is
-        //      deleted; the constraint is met instead by revealing the window
-        //      from the graph vehicle's creation, which is the first moment
-        //      anything CAN draw into it -- see EditorApp::StageSplashReady.
+        //      by this point -- BootSequence's per-stage pump is driven by the
+        //      pre-device splash presenter for the ENTIRE run, and that
+        //      presenter touches no swapchain. The constraint is met by
+        //      revealing the window from the render vehicle's creation, which
+        //      is the first moment anything CAN draw into it -- see
+        //      EditorApp::StageSplashReady.
         //   2. Never leave a gap with neither window on screen. Show() the
         //      real window (now holding that just-drawn frame) BEFORE
         //      Close()ing the pre-device splash -- reversing these two still

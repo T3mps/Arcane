@@ -1,34 +1,17 @@
 // The Vulkan CREATION HALF: loader, instance, debug messenger, physical
 // device, logical device, the one graphics queue, and the F-3 device-removed
-// observation point that belongs beside them. No NVRHI: everything here is
-// native Vulkan.
+// observation point that belongs beside them. Everything here is native
+// Vulkan.
 //
-// NRI Phase 5a, Task 8b moved this out of DeviceVulkan.cpp verbatim -- the
-// Vulkan mirror of what Task 8a did for D3D12 (DeviceCreationD3D12.cpp), and
-// the tree is symmetric again. That file was the NVRHI device wrapper the
-// phase deletes, and this code is not about NVRHI at all: both consumers of
-// CreateVulkanNativeDevice (the NVRHI device, and Nri/NriDevice.cpp's wrapper
-// path) called the SAME function, so only its address was wrong.
-//
-// Nothing below changed except its file and ONE line: VkDebugCallback now
-// names RenderErrorLatch::NoteNriError directly instead of reaching it
-// through NvrhiMessageCallback::message(Error, ...), which was deleted with
-// the NVRHI layer. Same counter, same removal scan -- NvrhiMessageCallback's
-// Error branch WAS that call since Task 8a. (The tag it logs under was
-// "[nvrhi]" through Task 8b and is "[nri]" since Task 11a.)
-//
-// THE DEVICE-REMOVED OBSERVER MOVED WITH IT, in one step, on purpose. Its
-// once-only latch is file-local per backend and the installer that used to
-// sit beside it (DeviceVulkan::Init) is gone, so leaving the observer behind
-// in a deleted file was not an option and moving it earlier would have
-// changed which function pointer lands in the hook slot. The two functions
-// stay DISTINCT -- the file-local ObserveDeviceRemoved and the namespace-scope
+// THE DEVICE-REMOVED OBSERVER LIVES HERE, beside the device it observes, and
+// its once-only latch is file-local per backend. The two functions stay
+// DISTINCT -- the file-local ObserveDeviceRemoved and the namespace-scope
 // ObserveDeviceRemovedVulkan forwarder -- because NriDiagnostics::Disarm
-// compares the slot against the address it installed, and collapsing them
-// would change that address.
+// compares the hook slot against the address it installed, and collapsing
+// them would change that address.
 //
-// See DeviceCreationVulkan.hpp for the two-consumer shape and what each field
-// of the creation half is for.
+// See DeviceCreationVulkan.hpp for the consumer shape and what each field of
+// the creation half is for.
 
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Render/DeviceCreationVulkan.hpp>
@@ -126,11 +109,6 @@ namespace Arcane
         // off a QueueSubmit/AcquireNextTexture/QueuePresent gets here without
         // depending on message text at all.
         //
-        // NRI Phase 5a, Task 8b: the two observables this paragraph used to
-        // name -- F-3b's NVRHI submit-time message hook and F-3d's NVRHI
-        // swapchain sites -- are both gone with the NVRHI layer. The
-        // observation point itself did not change; only who feeds it did.
-        //
         // Once-only per armed device: a lost device keeps reporting loss on
         // every submit and every present, and the second report is worthless
         // -- the marker buffer and fault state belong to the FIRST one. Reset
@@ -161,15 +139,6 @@ namespace Arcane
         // Typed vk:: signature (vk::PFN_DebugUtilsMessengerCallbackEXT), not the
         // raw C PFN_vkDebugUtilsMessengerCallbackEXT: setPfnUserCallback's
         // C-signature overload is deprecated in favor of this one.
-        //
-        // The call below is the ONE line Task 8b changed in this file. It was
-        // NvrhiMessageCallback::Instance().message(MessageSeverity::Error,
-        // text), and that adapter's Error branch had been exactly this call
-        // since Task 8a -- so the counter and the "Device Removed" removal scan
-        // are unchanged. Task 8b left the tag alone deliberately (renaming it
-        // is a log-text change, and that task moved code rather than
-        // observables); Task 11a then took the vocabulary sweep and retagged it
-        // "[nvrhi]" -> "[nri]", renaming the seam to NoteNriError with it.
         VKAPI_ATTR vk::Bool32 VKAPI_CALL VkDebugCallback(
             vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
             vk::DebugUtilsMessageTypeFlagsEXT /*types*/,
@@ -186,30 +155,23 @@ namespace Arcane
     }
 
     // ----------------------------------------------------------------
-    // The CREATION HALF (NRI Phase 1, Task 7).
+    // The CREATION HALF.
     // ----------------------------------------------------------------
-    // This function WAS the prologue of DeviceVulkan::Init (Phase 1, Task 7
-    // moved it out whole so the NRI wrapper could reuse it; Phase 5a, Task 8b
-    // deleted the class that kept the other half). It is unchanged by either
-    // move: the same calls in the same order with the same parameters, the
-    // same log lines, and the same early returns.
-    //
     // It sits at namespace scope (outside the anonymous namespace above)
-    // because DeviceCreationVulkan.hpp declares it for its consumers --
-    // today the ONE consumer, Nri/NriDevice.cpp's NativeDeviceOwner.
+    // because DeviceCreationVulkan.hpp declares it for its one consumer,
+    // Nri/NriDevice.cpp's NativeDeviceOwner.
     //
     // Failure leaves `out` holding whatever was created; the caller's teardown
     // (DestroyVulkanNativeDevice, reached through ~NativeDeviceOwner) releases
-    // it, exactly as ~DeviceVulkan did when Init bailed. Exceptions still
-    // propagate: VulkanDeviceCreation's loader member throws when vulkan-1.dll
-    // is absent, and NativeDeviceOwner::Create's try/catch is the one that
-    // reports it -- the same catch DeviceVulkan's factory used to own.
+    // it. Exceptions still propagate: VulkanDeviceCreation's loader member
+    // throws when vulkan-1.dll is absent, and NativeDeviceOwner::Create's
+    // try/catch is what reports it.
     bool CreateVulkanNativeDevice(const RenderDeviceDesc& desc, VulkanDeviceCreation& out)
     {
         // Recorded, not acted on: NRI's own validation layer is available in
         // wrapper mode (contract 1.1) and keys off the same switch the
         // instance's VK_LAYER_KHRONOS_validation below does. Pure member
-        // write -- no call, no branch, nothing the NVRHI path can observe.
+        // write -- no call, no branch.
         out.enableValidation = desc.enableValidation;
 
         auto vkGetInstanceProcAddr =
@@ -280,16 +242,13 @@ namespace Arcane
             debugUtils = true;
         }
 
-        // OPT-IN, DEFAULT OFF, AND INERT TO THE NVRHI BOOT: synchronization
-        // validation. `RenderDeviceDesc::enableSyncValidation` is false for
-        // every engine path -- RenderDevice::Create's callers all leave it
-        // defaulted -- so with the flag off this block is one false branch
-        // and the instance is created byte-identically to before
-        // (`syncFeatures` stays unreferenced and `instanceInfo.pNext` stays
-        // null). Its one caller is the `--nri-graph` frame-graph vehicle,
-        // which needs the hazard checks core validation does not perform:
-        // catching a missing or misplaced barrier on the graph's derived
-        // barrier chain, which is silent to core validation.
+        // OPT-IN, DEFAULT OFF: synchronization validation.
+        // `RenderDeviceDesc::enableSyncValidation` defaults false, so with the
+        // flag off this block is one false branch (`syncFeatures` stays
+        // unreferenced and `instanceInfo.pNext` stays null). It is asked for
+        // by the frame-graph vehicle, which needs the hazard checks core
+        // validation does not perform: a missing or misplaced barrier on the
+        // graph's derived barrier chain is silent to core validation.
         //
         // Mechanism: VK_EXT_validation_features + a VkValidationFeaturesEXT
         // chained onto VkInstanceCreateInfo, the layer-configuration path the
@@ -631,16 +590,15 @@ namespace Arcane
         // unconditionally, invalid Vulkan usage on the first call. Enabling
         // exactly the supported set is the only shape that cannot lie.
         //
-        // This replaces the previous hand-picked pair of structs, which
-        // enabled three bits and left the whole core-1.0 block VK_FALSE
-        // while NRI would have reported the physically-supported ones as
-        // available. It subsumes their reasoning, which still holds for
-        // NVRHI and is worth keeping: NVRHI's queue submits with
-        // vk::TimelineSemaphoreSubmitInfo (timelineSemaphore), calls
-        // vkCmdPipelineBarrier2 (synchronization2) and builds pipelines
-        // with VkPipelineRenderingCreateInfo instead of a VkRenderPass
-        // (dynamicRendering, or vkCreateGraphicsPipelines fails
-        // VUID-06576) -- all three are in the hard set asserted below.
+        // This replaces a hand-picked pair of structs, which enabled three
+        // bits and left the whole core-1.0 block VK_FALSE while NRI would
+        // have reported the physically-supported ones as available. Those
+        // three bits are still load-bearing and are in the hard set asserted
+        // below: timelineSemaphore (queue submits chain
+        // vk::TimelineSemaphoreSubmitInfo), synchronization2
+        // (vkCmdPipelineBarrier2), and dynamicRendering (pipelines are built
+        // with VkPipelineRenderingCreateInfo instead of a VkRenderPass, or
+        // vkCreateGraphicsPipelines fails VUID-06576).
         vk::PhysicalDeviceFeatures2        enabledFeatures2;
         vk::PhysicalDeviceVulkan11Features vulkan11Features;
         vk::PhysicalDeviceVulkan12Features vulkan12Features;
@@ -777,10 +735,8 @@ namespace Arcane
         // {sRegister, tRegister, bRegister, uRegister} and ours must equal
         // the dxc -fvk-*-shift values in ShaderConventions.hpp's
         // kSpirvArgs, i.e. {s=128, t=0, b=256, u=384} -- NOT NRI's
-        // reference {0, 128, 32, 64}. Those shifts are also
-        // nvrhi::VulkanBindingOffsets' defaults, which is why the SPIR-V
-        // half of every shader works today; change them in
-        // ShaderConventions.hpp first and fan out, as that header says.
+        // reference {0, 128, 32, 64}. Change them in ShaderConventions.hpp
+        // first and fan out, as that header says.
         out.enabledInstanceExtensions = instanceExtensions;
         out.enabledDeviceExtensions   = deviceExtensions;
         // The GPU-crash record travels with the rest of "what this device was
@@ -817,14 +773,14 @@ namespace Arcane
         }
     }
 
-    // The narrow export (DeviceRemovedObservers.hpp, NRI Phase 3 Task 5): the
-    // SAME observer above, reachable BY ADDRESS from the Render module's
-    // installer. One line, no state, no second observation point -- the
-    // once-only `g_deviceRemovedReported` latch, the "gpu-crash: device
-    // removed" wording and the NoteGpuDeviceLost ordering all stay in
-    // ObserveDeviceRemoved, unchanged and file-local.
+    // The narrow export (DeviceRemovedObservers.hpp): the SAME observer
+    // above, reachable BY ADDRESS from the Render module's installer. One
+    // line, no state, no second observation point -- the once-only
+    // `g_deviceRemovedReported` latch, the "gpu-crash: device removed" wording
+    // and the NoteGpuDeviceLost ordering all stay in ObserveDeviceRemoved,
+    // file-local.
     //
-    // IT STAYS A SEPARATE FUNCTION FROM THE OBSERVER (Task 8b). Folding the
+    // IT STAYS A SEPARATE FUNCTION FROM THE OBSERVER. Folding the
     // body up into this name would be a behaviour change, not a cleanup:
     // NriDiagnostics::Disarm clears the hook slot only when it still holds
     // the address Arm installed, and that address is THIS function's.

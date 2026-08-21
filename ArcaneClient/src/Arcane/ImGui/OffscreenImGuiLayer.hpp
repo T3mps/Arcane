@@ -8,11 +8,9 @@
 // game-agnostic. Sibling of ImGuiLayer (which owns the OS-window, SDL3-backed
 // context).
 //
-// ONE FLAVOR (NRI Phase 5a, Task 5 -- the two-flavor split that used to live
-// here, mirroring ImGuiLayer's, is gone). Context and NO renderer at all --
-// the frame graph's ImGuiNriNode is the renderer, and it consumes the
-// ImDrawData RenderToDrawData() hands back. The prior NVRHI flavor's own
-// renderer (ImGuiNvrhiRenderer) is deleted along with it.
+// ONE FLAVOR: a context and NO renderer at all -- the frame graph's
+// ImGuiNriNode is the renderer, and it consumes the ImDrawData
+// RenderToDrawData() hands back.
 //
 // THE CONTEXT DISCIPLINE is the point, not an implementation detail:
 // io.IniFilename is null (a game/plugin HUD must never persist into the

@@ -17,12 +17,10 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry / kPsEntry
-// This file used to justify NOT including Render/SelectionOutline.hpp, which
-// pulled nvrhi in; that header was deleted at NRI Phase 5a Task 4 and this is
-// the only outline recorder left. What survives the note is the arrangement it
-// described: the seed CB's id capacity -- and every other CB layout here -- is
-// pinned against the SHADER (the static_asserts below) rather than against a
-// second C++ declaration, so the pin still has a counterparty.
+// EVERY CB LAYOUT HERE -- the seed CB's id capacity above all -- is pinned
+// against the SHADER (the static_asserts below) rather than against a second
+// C++ declaration, so the pin has a counterparty that cannot drift from what
+// the GPU actually reads.
 
 #undef ERROR
 
@@ -95,11 +93,10 @@ namespace Arcane
         static_assert(sizeof(CompositeCB) == 64, "CompositeCB must match outline_composite.hlsl");
         static_assert(offsetof(CompositeCB, selectColor) == 32, "selectColor at offset 32");
 
-        // SelectionOutline::Params' defaults, verbatim: amber selected, cyan
-        // hovered, a 3 px outline CENTERED on the silhouette edge with a 1 px
-        // AA ramp. Display-referred -- the composite writes straight into the
-        // tonemapped backbuffer with no sRGB conversion, exactly as the
-        // (now-deleted) NVRHI twin did into the post-tonemap output texture.
+        // The authored look: amber selected, cyan hovered, a 3 px outline
+        // CENTERED on the silhouette edge with a 1 px AA ramp.
+        // Display-referred -- the composite writes straight into the
+        // tonemapped backbuffer with no sRGB conversion.
         constexpr float kSelectColor[4] = { 1.0f, 0.65f, 0.10f, 1.0f };
         constexpr float kHoverColor[4]  = { 0.25f, 0.70f, 1.00f, 1.0f };
         constexpr float kSelectThickPx  = 3.0f;
@@ -114,16 +111,9 @@ namespace Arcane
 
     std::uint32_t OutlineJfaStepCount(std::uint32_t maxThicknessPx) noexcept
     {
-        // Originally SelectionOutline.cpp's JfaPassCount, character for
-        // character -- the halving schedule's length -- and then the +1 for
-        // the trailing jump==1 pass its Render loop ran (`for (i = 0; i <=
-        // passes; ++i)`). Copied rather than called because SelectionOutline
-        // was an NVRHI type and this file's whole point is the NRI recorder;
-        // RenderGraphTest's "outline jfa" case used to assert the two agreed,
-        // which was the seam that made the copy safe. NRI Phase 5a, Task 4
-        // deleted SelectionOutline.{hpp,cpp} -- this is the only
-        // implementation left, and the test now pins its output directly
-        // against the literal schedule instead of cross-checking a twin.
+        // The halving schedule's length, plus one for the trailing jump==1
+        // refinement pass. RenderGraphTest's "outline jfa" case pins this
+        // output directly against the literal schedule.
         std::uint32_t passes = 1;
         if (maxThicknessPx > 1u)
         {
@@ -818,12 +808,12 @@ namespace Arcane
     {
         if (!m_device)
             return;
-        // The GRAPH's lane rather than the device's (NRI Phase 3, Task 8-pre):
-        // an exec fn runs inside that graph's Execute, so its lane is where
-        // these views belong -- the same lane the pool retirement that moved
-        // the epoch stages into. The owner's declaration-time call
-        // (whole-branch review, I1) names the same graph and the same lane, one
-        // step earlier -- which is what covers the frames this node is NOT in.
+        // The GRAPH's lane rather than the device's: an exec fn runs inside
+        // that graph's Execute, so its lane is where these views belong -- the
+        // same lane the pool retirement that moved the epoch stages into. The
+        // owner's declaration-time call names the same graph and the same
+        // lane, one step earlier, which is what covers the frames this node is
+        // NOT in.
         Graveyard* graves = graph.Graves();
         if (!graves)
             return;   // from an exec fn: unreachable (Execute latches the lane before recording).
@@ -1207,9 +1197,9 @@ namespace Arcane
                                       width, height, context->FrameSlot());
             });
 
-        // EXTENT-INDEPENDENT since D3c: the schedule is derived from the
-        // outline's max thickness, which is what makes it identical to the
-        // NVRHI twin's on every surface size. See OutlineJfaStepCount.
+        // EXTENT-INDEPENDENT: the schedule is derived from the outline's max
+        // thickness, so it is identical on every surface size. See
+        // OutlineJfaStepCount.
         const std::uint32_t steps =
             std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx), OutlineNode::kMaxJfaSteps);
 
@@ -1269,10 +1259,9 @@ namespace Arcane
                 builder.Read(field, RgUsage::ShaderRead);
                 // The target is the imported backbuffer the tonemap has already
                 // written, and this declares the SAME ColorWrite state -- so the
-                // compile derives no transition between the two nodes, which is
-                // both correct and what NVRHI's own state tracker does
-                // (CommandListResourceStateTracker::requireTextureState skips a
-                // barrier when before == after for a non-UAV state). The blend
+                // compile derives no transition between the two nodes, which
+                // is correct: a barrier between equal non-UAV states is a
+                // no-op. The blend
                 // reads the destination through the ROP, which
                 // AccessBits::COLOR_ATTACHMENT already covers (it is the
                 // _READ|_WRITE umbrella -- RenderGraph.cpp's usage table).

@@ -1,27 +1,12 @@
 // The D3D12 CREATION HALF: DXGI factory + adapter + device + direct queue,
 // the process-global debug-layer sequencing around them, DRED enablement, and
 // the InfoQueue arming that gives the D3D12 debug layer a channel into our log
-// and the error latch. No NVRHI: everything here is native D3D12.
+// and the error latch. Everything here is native D3D12.
 //
-// NRI Phase 5a, Task 8a moved this out of DeviceD3D12.cpp verbatim. That file
-// is the NVRHI device wrapper the phase deletes, and this code is not about
-// NVRHI at all -- both consumers of CreateD3D12NativeDevice (the NVRHI device,
-// and Nri/NriDevice.cpp's wrapper path) call the SAME function, so the D3D12
-// debug/DRED story was already shared since Phase 1 Task 7; only its address
-// was wrong. Nothing below changed except its file and the two lines that now
-// name RenderErrorLatch instead of NvrhiMessageCallback: same calls, same
-// order, same log lines, same early returns.
-//
-// NRI Phase 5a, Task 8b then deleted DeviceD3D12.cpp and moved the F-3
-// device-removed observer down here too -- it had to travel WITH the deletion
-// of the installer that used to sit beside it, because moving it earlier
-// would have changed the function-pointer value in the hook slot that
-// NriDiagnostics::Disarm compares against.
-//
-// See DeviceCreationD3D12.hpp for the two-consumer shape and the member-order
+// See DeviceCreationD3D12.hpp for the consumer shape and the member-order
 // rule. The Vulkan twin (CreateVulkanNativeDevice, and the VkDebugCallback
-// that is this file's messenger analogue) got the same treatment in the same
-// task and now lives in DeviceCreationVulkan.cpp -- the tree is symmetric.
+// that is this file's messenger analogue) lives in DeviceCreationVulkan.cpp
+// -- the tree is symmetric.
 
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
@@ -47,7 +32,7 @@ namespace Arcane
     namespace
     {
         // ------------------------------------------------------------------
-        // Process-global D3D12 debug-layer state (NRI Phase 2, D1 shakedown).
+        // Process-global D3D12 debug-layer state.
         // ------------------------------------------------------------------
         // ID3D12Debug::EnableDebugLayer is a BEFORE-ANY-DEVICE call, and the
         // documentation is explicit about what happens otherwise: "To enable
@@ -56,30 +41,25 @@ namespace Arcane
         // will cause the D3D12 runtime to remove the device."
         // (learn.microsoft.com, ID3D12Debug::EnableDebugLayer, Remarks.)
         //
-        // That is exactly what the `--nri-graph` vehicle did on its first desk
-        // run, back when the engine still booted an NVRHI device of its own:
-        // that device came up with the layer OFF (the flag defaults false --
-        // RenderDeviceDesc.hpp, the Nahimic-OSD fail-fast hazard), then the
-        // vehicle ran THIS SAME creation half a second time with
-        // enableD3D12DebugLayer forced true, so EnableDebugLayer landed on a
-        // process that already owned a live device. Every dx12 vehicle run then
-        // failed at D3D12CreateDevice and exited 1 after 0 frames.
+        // A process that creates a device with the layer OFF (the flag
+        // defaults false -- RenderDeviceDesc.hpp, the Nahimic-OSD fail-fast
+        // hazard) and only THEN runs this creation half again with
+        // enableD3D12DebugLayer true lands EnableDebugLayer on a process that
+        // already owns a live device: D3D12CreateDevice fails and the run
+        // exits after 0 frames. That is observed behaviour, not a worry.
         //
         // These two flags make the sequencing structural rather than a rule
         // somebody has to remember at each new call site.
         //
         // MONOTONE ON PURPOSE, and the conservative direction:
-        // `g_d3d12DeviceCreated` is never cleared. It was never cleared because
-        // the NVRHI owner released its device through MEMBER DESTRUCTION rather
-        // than DestroyD3D12NativeDevice; that owner is gone as of Phase 5a Task
-        // 8b and every remaining owner (NativeDeviceOwner) does route teardown
-        // through DestroyD3D12NativeDevice, so a decrement is now expressible
-        // -- but it is deliberately still not done, because the failure mode of
-        // being wrong here is asymmetric. Skipping an enable that would have
+        // `g_d3d12DeviceCreated` is never cleared. Every owner
+        // (NativeDeviceOwner) routes teardown through
+        // DestroyD3D12NativeDevice, so a decrement IS expressible -- it is
+        // deliberately not done, because the failure mode of being wrong here
+        // is asymmetric. Skipping an enable that would have
         // been legal costs one diagnostic channel; making the call when it is
-        // NOT legal removes a live device. Nothing in the tree creates a second
-        // D3D12 device at all since the one-device flip, so today this costs
-        // nothing.
+        // NOT legal removes a live device. Nothing in the tree creates a
+        // second D3D12 device at all, so today this costs nothing.
         std::atomic<bool> g_d3d12DeviceCreated{ false };
         std::atomic<bool> g_d3d12DebugLayerEnabled{ false };
 
@@ -91,13 +71,6 @@ namespace Arcane
         // funnels every ARC_NRI_CHECK failure into), and its TYPED seam
         // NoteDeviceLost, which is what NriDiagnostics' `--crash-gpu`
         // removal poll calls once GetDeviceRemovedReason answers.
-        //
-        // NRI Phase 5a, Task 8b: this observer moved here FROM DeviceD3D12.cpp
-        // with that file's deletion, in one step -- moving it earlier would
-        // have changed which function pointer the hook slot holds, which
-        // NriDiagnostics::Disarm compares against. The two observables the
-        // old paragraph here named -- F-3b's NVRHI submit-time message hook,
-        // and F-3c's DXGI Present -- are both gone with the NVRHI layer.
         //
         // Once-only per armed device: a removed device keeps reporting removal
         // on every submit, and the second report is worthless -- the marker
@@ -122,7 +95,7 @@ namespace Arcane
             NoteGpuDeviceLost();
         }
 
-        // Phase 2, Task 1 instrumentation. WHICH d3d12SDKLayers.dll is
+        // WHICH d3d12SDKLayers.dll is
         // servicing the debug layer is the one fact that separates the two
         // ways ID3D12InfoQueue1 can be missing, and it is observable only in
         // a live run -- hence logged at the failure site rather than assumed.
@@ -205,28 +178,23 @@ namespace Arcane
     }
 
     // ----------------------------------------------------------------
-    // The CREATION HALF (NRI Phase 1, Task 7).
+    // The CREATION HALF.
     // ----------------------------------------------------------------
-    // This function WAS the prologue of DeviceD3D12::Init (Phase 1, Task 7
-    // moved it out whole so the NRI wrapper could reuse it; Phase 5a, Task 8b
-    // deleted the class that kept the other half). It is unchanged by either
-    // move: the same calls in the same order with the same parameters, the
-    // same log lines, and the same early returns. The member ORDER inside
-    // D3D12DeviceCreation still reproduces the COM release order that class
-    // had, which is why teardown did not shift either.
+    // The member ORDER inside D3D12DeviceCreation is COM release order in
+    // reverse, which is what keeps teardown correct -- see the header's
+    // member-order rule.
     //
     // It sits at namespace scope (outside the anonymous namespace above)
-    // because DeviceCreationD3D12.hpp declares it for its consumers -- today
-    // the ONE consumer, Nri/NriDevice.cpp's NativeDeviceOwner.
+    // because DeviceCreationD3D12.hpp declares it for its one consumer,
+    // Nri/NriDevice.cpp's NativeDeviceOwner.
     //
     // Failure leaves `out` holding whatever was created; the caller's teardown
-    // releases it, exactly as ~DeviceD3D12 did when Init bailed.
+    // releases it.
     bool CreateD3D12NativeDevice(const RenderDeviceDesc& desc, D3D12DeviceCreation& out)
     {
         // Recorded, not acted on: NRI's own validation layer is available in
-        // wrapper mode (contract 2.1) and keys off the same switch the NVRHI
-        // validation layer does. Pure member write -- no call, no branch,
-        // nothing the NVRHI path can observe.
+        // wrapper mode (contract 2.1) and keys off this same switch. Pure
+        // member write -- no call, no branch.
         out.enableValidation = desc.enableValidation;
 
         // The debug layer is PROCESS-GLOBAL state with a one-shot window (see
@@ -254,25 +222,18 @@ namespace Arcane
             {
                 // THE SECOND-DEVICE CASE, and the tradeoff stated out loud.
                 //
-                // NRI PHASE 3, TASK 6 UPDATE: this is no longer the
-                // `--nri-graph` case. That path now creates NO NVRHI device at
-                // all (GpuContext::CreateForGraph), so the graph's device is
-                // the FIRST in the process and takes the else-branch below --
-                // it gets the debug layer, which is exactly the "HOW TO GET IT
-                // BACK" note further down, arrived at by removing the other
-                // device rather than by enabling the layer earlier. This
-                // branch stays because the guard is general (any second device
-                // that requests the layer) -- the editor's own flip
-                // (EditorApp::GraphMode(), collapsed at NRI Phase 5a, Task 11a)
-                // is long since complete, so nothing in the tree creates a
-                // second D3D12 device today, but the branch remains reachable
-                // by anything that does.
+                // NOTHING IN THE TREE REACHES THIS TODAY: the one graphics
+                // device this process creates is the FIRST, so it takes the
+                // else-branch below and does get the debug layer. The guard is
+                // general -- ANY second device that requests the layer lands
+                // here -- so the branch stays reachable by anything that adds
+                // one.
                 //
-                // This device gets NO D3D12 debug layer: enabling it now would
-                // remove the engine's live NVRHI device (and, observed at the
-                // desk, makes the D3D12CreateDevice below fail outright), so
-                // the choice is "one device short of a validation channel" vs
-                // "no working device at all".
+                // Such a device gets NO D3D12 debug layer: enabling it would
+                // remove the live first device (and, observed at the desk,
+                // makes the D3D12CreateDevice below fail outright), so the
+                // choice is "one device short of a validation channel" vs "no
+                // working device at all".
                 //
                 // WHAT IS LOST: D3D12 CPU validation messages for THIS device
                 // cannot reach D3D12DebugLayerCallback and therefore cannot fail
@@ -283,17 +244,12 @@ namespace Arcane
                 // no ID3D12InfoQueue1, so those messages reach nothing anyway
                 // (see the WARN further down).
                 //
-                // HOW TO GET IT BACK, when it is worth having: the FIRST device
-                // in the process has to be the one that turns the layer on --
-                // i.e. the host would set RenderDeviceDesc::enableD3D12DebugLayer
-                // on its own boot device when a --nri-graph run is requested,
-                // and this branch would then never be reached (the first branch
-                // above would take it instead). Deliberately NOT done as part of
-                // this fix: it would newly subject the engine's NVRHI half to a
-                // debug layer it has never run under, which can only ADD ways
-                // for the vehicle run to exit nonzero for reasons that have
-                // nothing to do with the graph. Phase 3's one-device flip
-                // dissolves the question entirely.
+                // HOW TO GET IT BACK, if a second device is ever added: the
+                // FIRST device in the process has to be the one that turns the
+                // layer on, i.e. its creator sets
+                // RenderDeviceDesc::enableD3D12DebugLayer -- and this branch
+                // would then never be reached, the first branch above taking
+                // it instead.
                 ARC_WARN("D3D12 debug layer NOT enabled for this device: a D3D12 device already "
                          "exists in this process and EnableDebugLayer is documented to remove it "
                          "when called after device creation. This device's D3D12 validation "
@@ -412,8 +368,7 @@ namespace Arcane
                 infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, FALSE);
                 infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
 
-                // Phase 2, Task 1 (Phase 1 Task 6's deferred minor): deny
-                // INFO/MESSAGE at the info queue instead of dropping them in
+                // Deny INFO/MESSAGE at the info queue instead of dropping them in
                 // the callback. The debug layer emits one of each per resource
                 // create and destroy; filtering here means they are never
                 // stored and never cross into D3D12DebugLayerCallback at all.
@@ -502,12 +457,9 @@ namespace Arcane
     }
 
     // Contract item 12's teardown half, idempotent: the debug layer holds a
-    // raw pointer to a function in THIS module and must not outlive it. Split
-    // out of the release below because the NVRHI path had to unregister at one
-    // specific point -- before its nvrhi device was released, which is exactly
-    // where ~DeviceD3D12 called it. That caller is gone as of Phase 5a Task 8b;
-    // the split stays because DestroyD3D12NativeDevice below is written on top
-    // of it and idempotence makes the pair safe either way.
+    // raw pointer to a function in THIS module and must not outlive it. Kept
+    // separate from the release below because DestroyD3D12NativeDevice is
+    // written on top of it, and idempotence makes the pair safe either way.
     void UnregisterD3D12DebugCallback(D3D12DeviceCreation& creation)
     {
         if (creation.infoQueue && creation.infoQueueCookie != 0)
@@ -531,14 +483,14 @@ namespace Arcane
         creation.factory.Reset();
     }
 
-    // The narrow export (DeviceRemovedObservers.hpp, NRI Phase 3 Task 5): the
-    // SAME observer above, reachable BY ADDRESS from the Render module's
-    // installer. One line, no state, no second observation point -- the
-    // once-only `g_deviceRemovedReported` latch, the "gpu-crash: device
-    // removed" wording and the NoteGpuDeviceLost ordering all stay in
-    // ObserveDeviceRemoved, unchanged and file-local.
+    // The narrow export (DeviceRemovedObservers.hpp): the SAME observer
+    // above, reachable BY ADDRESS from the Render module's installer. One
+    // line, no state, no second observation point -- the once-only
+    // `g_deviceRemovedReported` latch, the "gpu-crash: device removed" wording
+    // and the NoteGpuDeviceLost ordering all stay in ObserveDeviceRemoved,
+    // file-local.
     //
-    // IT STAYS A SEPARATE FUNCTION FROM THE OBSERVER (Task 8b). Folding the
+    // IT STAYS A SEPARATE FUNCTION FROM THE OBSERVER. Folding the
     // body up into this name would be a behaviour change, not a cleanup:
     // NriDiagnostics::Disarm clears the hook slot only when it still holds
     // the address Arm installed, and that address is THIS function's.

@@ -30,20 +30,14 @@ namespace Arcane
     namespace
     {
         // ---------------------------------------------------------------
-        // The pacing wait. It was written as nri::Fence's analogue of
-        // GpuInstrumentation.cpp's PollingWaitForStampedQuery -- same shape,
-        // same constants, same reasoning -- and it is now the ONLY one: that
-        // function and the GpuFrameSlot it served were deleted at NRI Phase
-        // 5a, Task 9.5a. The two NVRHI swapchains that drove them were
-        // already gone by then -- deleted one task earlier, at Task 8b.
-        // See NriSwapChain.hpp's header comment for why a bare Core().Wait()
-        // cannot be used here. File-local for the reason its predecessor was:
-        // it is a leaf detail of the pacing wait, not a general-purpose fence
+        // The pacing wait. See NriSwapChain.hpp's header comment for why a
+        // bare Core().Wait() cannot be used here. File-local deliberately: it
+        // is a leaf detail of the pacing wait, not a general-purpose fence
         // helper.
         // ---------------------------------------------------------------
 
-        constexpr Uint64 kFencePollSleepNs = 1'000'000;         // 1ms -- was matched to GpuInstrumentation.cpp's kSlotPollSleepNs before Task 9.5a deleted it (SDL's high-resolution waitable timer, not std::this_thread::sleep_for's ~15.6ms Windows quantum)
-        constexpr std::chrono::seconds kFencePollWindow{ 15 };  // was matched to GpuInstrumentation.cpp's kSlotPollWindow: comfortably above Config::gpuStallSeconds' 8s default
+        constexpr Uint64 kFencePollSleepNs = 1'000'000;         // 1ms, via SDL's high-resolution waitable timer -- NOT std::this_thread::sleep_for's ~15.6ms Windows quantum
+        constexpr std::chrono::seconds kFencePollWindow{ 15 };  // comfortably above Config::gpuStallSeconds' 8s default
 
         void PollingWaitForTimelineFence(const nri::CoreInterface& core, nri::Fence* fence, uint64_t value)
         {
@@ -128,34 +122,26 @@ namespace Arcane
         desc.queue               = m_device->GraphicsQueue();
         desc.width               = (nri::Dim_t)m_width;
         desc.height              = (nri::Dim_t)m_height;
-        // kSwapchainFramesInFlight + 1: the same textureNum shape the deleted
-        // NVRHI swapchains used (kBackbufferCount == 3 in both the now-deleted
-        // Render/DeviceD3D12.cpp and Render/DeviceVulkan.cpp) and the one
-        // NRISamples' NRIFramework recommends
+        // kSwapchainFramesInFlight + 1: the textureNum shape NRISamples'
+        // NRIFramework recommends
         // (GetOptimalSwapChainTextureNum() == GetQueuedFrameNum() + 1) --
         // texture count strictly greater than frames-in-flight is also what
         // makes the recycled-by-frame-index acquire-fence indexing below
         // valid (NRISwapChain.h's usage comment: "valid if the number of
         // swap chain images >= queued frames").
         desc.textureNum = kSwapchainFramesInFlight + 1;
-        // BT709_G22_8BIT: the closest NRI SwapChainFormat to NVRHI's swapchain
-        // (BGRA8_UNORM presented through an sRGB-nonlinear color space) -- 8
-        // bits/channel, gamma ~2.2, LDR, no HDR reinterpretation. See
+        // BT709_G22_8BIT: 8 bits/channel, gamma ~2.2, LDR, no HDR
+        // reinterpretation -- an sRGB-nonlinear presentation class. See
         // Format()'s comment: NRI does not let a wrapper pin exact channel
         // order, only this abstract class -- the concrete nri::Format is
         // queried after creation, not assumed.
         desc.format = nri::SwapChainFormat::BT709_G22_8BIT;
-        // No ALLOW_TEARING: mirrors what the deleted NVRHI D3D12 path did
-        // exactly (DXGI_SWAP_EFFECT_FLIP_DISCARD, and Present() never passed
-        // DXGI_PRESENT_ALLOW_TEARING -- Render/DeviceD3D12.cpp, no longer in
-        // the tree). On Vulkan, leaving ALLOW_TEARING unset means NRI's own
-        // present-mode search (SwapChainVK.hpp) tries MAILBOX first when not
-        // syncing (matching what NVRHI's Vulkan path did too, which also
-        // preferred Mailbox over Immediate), falling back to FIFO_LATEST_READY
-        // or FIFO if Mailbox is unavailable -- NVRHI would have fallen back to
-        // Immediate instead in that case. Documented, minor, VK-only gap: we
-        // do not chase NVRHI's old present-mode selection past what the VSYNC
-        // bit alone controls (task scope: no speculative mailbox-mode logic).
+        // No ALLOW_TEARING: on D3D12 that means FLIP_DISCARD with
+        // DXGI_PRESENT_ALLOW_TEARING never passed. On Vulkan, leaving it unset
+        // means NRI's own present-mode search (SwapChainVK.hpp) tries MAILBOX
+        // first when not syncing, falling back to FIFO_LATEST_READY or FIFO if
+        // Mailbox is unavailable. Present-mode selection past what the VSYNC
+        // bit alone controls is deliberately not chased.
         desc.flags = m_vsync ? nri::SwapChainBits::VSYNC : nri::SwapChainBits::NONE;
         // aka "frames in flight" per NRISwapChain.h -- keep DXGI's own
         // frame-latency machinery (SetMaximumFrameLatency, D3D12 non-WAITABLE
@@ -203,19 +189,17 @@ namespace Arcane
     {
         // Idle the queue before touching anything the GPU might still be
         // reading -- the swapchain's textures and per-image fences included.
-        // Mirrors NRISamples' ResizeSwapChain() (Source/Resize.cpp) and the
-        // NVRHI swapchains' ReleaseBackbufferHandles(), which call
-        // waitForIdle() for the identical reason.
+        // Mirrors NRISamples' ResizeSwapChain() (Source/Resize.cpp), which
+        // calls waitForIdle() for the identical reason.
         //
-        // SKIPPED ON A LOST DEVICE (NRI Phase 3, D3b teardown). Same rule as
+        // SKIPPED ON A LOST DEVICE. Same rule as
         // NriGraphContext's and ~NriDevice's: after an observed loss the idle
         // cannot make anything idle that is not already stopped -- it returns
         // DEVICE_LOST on VK and burns NRI_TIMEOUT_FENCE (5 s, SharedExternal.h
         // :53) on D3D12 before reporting SUCCESS regardless. NOTE this
         // function is also the RESIZE path, and resize runs on a healthy
         // device, where GpuDeviceLostObserved() is false and the idle happens
-        // exactly as before -- the two-VkDevice resize hazard D2 closed is
-        // untouched.
+        // exactly as before -- the resize path is untouched.
         if (m_device && m_device->GraphicsQueue() && !GpuDeviceLostObserved())
             (void)ARC_NRI_CHECK(m_device->Core().QueueWaitIdle(m_device->GraphicsQueue()));
 
@@ -255,9 +239,7 @@ namespace Arcane
         // method): a resize landing between a successful AcquireNextTexture()
         // and its Present() would free the nri::Texture* already handed to
         // the caller inside DestroySwapChain below, with no API signal --
-        // a silent dangling pointer. No cheap structurally-safe fix exists
-        // (the reference NVRHI Vulkan swapchain had the identical gap --
-        // SwapchainVulkan::Resize, in the deleted Render/DeviceVulkan.cpp),
+        // a silent dangling pointer. No cheap structurally-safe fix exists,
         // so this is a loud
         // contract violation rather than a handled case: fatal in debug
         // (ARC_ASSERT, compiled out in release -- Mosaic/Assert.hpp), and an
@@ -333,11 +315,9 @@ namespace Arcane
             return m_textures[m_currentTextureIndex].texture;
 
         // Pacing wait: skip entirely (no call at all, not even a trivially-
-        // true one) for the first kSwapchainFramesInFlight frames -- matching
-        // the Arcane convention both NVRHI swapchains already use (their
-        // `if (m_frameCounter >= kSwapchainFramesInFlight)` guard around
-        // GpuFrameSlot::WaitAndReset), rather than NRISamples' literal shape
-        // of always calling Wait() with a value of 0 for early frames.
+        // true one) for the first kSwapchainFramesInFlight frames, rather than
+        // NRISamples' literal shape of always calling Wait() with a value of 0
+        // for early frames.
         if (m_frameCounter >= kSwapchainFramesInFlight)
         {
             const uint64_t waitValue = m_frameCounter - kSwapchainFramesInFlight + 1;

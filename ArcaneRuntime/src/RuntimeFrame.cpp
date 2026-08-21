@@ -1,11 +1,10 @@
-// RuntimeFrame: RuntimeApp::MainLoop's frame body, extracted verbatim at NRI
-// Phase 3 Task 4 and unified at Task 6 (the one-device landing). See
-// RuntimeFrame.hpp's header comment for the contract.
+// RuntimeFrame: RuntimeApp::MainLoop's frame body. See RuntimeFrame.hpp's
+// header comment for the contract.
 
 #include "RuntimeFrame.hpp"
 #include "RuntimeApp.hpp"   // FrameIo::app.PushSceneCamera -- see that method's comment
 
-#include <Arcane/Assets/Assets.hpp>       // Arcane::WritePngRgba (CaptureTail's screenshot write), reached via Assets.hpp -> ImageIo.hpp. ReadTexturePixels was the old justification here; it was deleted at ABI v15.
+#include <Arcane/Assets/Assets.hpp>       // Arcane::WritePngRgba (CaptureTail's screenshot write), reached via Assets.hpp -> ImageIo.hpp
 #include <Arcane/Audio/AudioDevice.hpp>   // complete type for AudioSystem().Update (AdvanceSim's voice reap)
 #include <Arcane/Base/Assert.hpp>         // ARC_ASSERT (FrameExtent's io.graph invariant)
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (PumpAndResize)
@@ -15,7 +14,7 @@
 #include <Arcane/Render/Batcher2D.hpp>              // Arcane::Batch2DStats (BuildHud's HUD text, CaptureTail's perf tick)
 #include <Arcane/Render/GraphicsBackend.hpp>                 // Arcane::GraphicsBackend / ToString (BuildHud's HUD text)
 #include <Arcane/Render/GpuInstrumentation.hpp>     // Arcane::GpuDeviceLostObserved (PumpAndResize)
-#include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N on the graph arm (RenderGraph)
+#include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N (RenderGraph)
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
 
 #include <imgui.h>
@@ -29,35 +28,27 @@
 namespace
 {
     // =============================================================
-    // THE FRAME'S EXTENT (NRI Phase 3, Task 6).
+    // THE FRAME'S EXTENT.
     // =============================================================
     // Everything that needs a viewport size this frame -- the resolver's
     // material globals, the scene camera's fit, the batcher's Begin -- asks
-    // HERE, so the two recorders cannot end up fitted to two different
-    // rectangles. It is one rectangle by construction now: there is ONE
-    // window, and the graph swapchain is its one presentation surface. There
-    // is no NVRHI canvas at all on this path, and the graph's own canvas is a
+    // HERE, so no two of them can end up fitted to different rectangles. It is
+    // one rectangle by construction: there is ONE window, and the graph
+    // swapchain is its one presentation surface. The graph's own canvas is a
     // TRANSIENT sized to this swapchain inside BuildFrame -- so the swapchain
     // is the single source of truth, not a proxy for one.
     //
     // ASSERT-THEN-READ, not `if (io.graph) ... else fail`. `io.graph` is
-    // unconditional as of Phase 5a Task 2b: MainLoop refuses to reach the frame
-    // loop at all if NriGraphContext::Create failed (RuntimeApp.cpp,
-    // ShutdownGraphPath runs and MainLoop returns first), so every call into
-    // RuntimeFrame's functions has a live vehicle -- which is why RenderGraph
-    // and CaptureTail in this same file already dereference it with no guard.
-    // The guard that used to stand here was the last two-path scaffolding on
-    // this predicate, and it went with GpuContext::GraphFlavor() in the
-    // follow-on collapse; the fail-loud it protected is KEPT, hoisted above the
-    // read rather than left as an unreachable tail.
+    // unconditional: MainLoop refuses to reach the frame loop at all if
+    // NriGraphContext::Create failed (RuntimeApp.cpp, ShutdownGraphPath runs
+    // and MainLoop returns first), so every call into RuntimeFrame's functions
+    // has a live vehicle -- which is why RenderGraph and CaptureTail in this
+    // same file dereference it with no guard. The fail-loud stands hoisted
+    // above the read rather than left as an unreachable tail.
     //
     // The assert is not decoration. A 0x0 frame would propagate into the
     // resolver's material globals and the batcher's viewport as a quiet
-    // wrong-answer instead of a loud one, which is exactly the defect class
-    // this whole phase exists to avoid. (What NRI Phase 5a, Task 6 forced here
-    // was narrower: the dead NVRHI tail this function used to fall through to,
-    // `io.gpu->Cnv()`, stopped compiling when Cnv() went with the rest of
-    // GpuContext's NVRHI half, so it was deleted rather than ported.)
+    // wrong-answer instead of a loud one.
     void FrameExtent(const Arcane::RuntimeFrame::FrameIo& io,
                      std::uint32_t& width, std::uint32_t& height)
     {
@@ -88,21 +79,19 @@ bool PumpAndResize(FrameIo& io)
         return true;
     }
 
-    // EXACTLY ONE PUMP PER FRAME, OF THE ONE WINDOW THIS PROCESS HAS
-    // (NRI Phase 3, Task 6). Before the landing the graph path owned a
-    // SECOND window and this line chose between them -- forced, because
-    // DXGI allows only one flip-model swapchain per HWND and an NVRHI
-    // swapchain already owned the host's. With no NVRHI device there is
-    // no second swapchain and therefore no second window: the graph's
-    // swapchain binds THIS one. SDL's event queue is process-wide and
-    // Window::PumpEvents drains all of it, so "exactly one pump" was
-    // always the rule; now there is only one window it can name.
+    // EXACTLY ONE PUMP PER FRAME, OF THE ONE WINDOW THIS PROCESS HAS.
+    // There is one graphics device and one swapchain, and that swapchain
+    // binds THIS window -- DXGI allows only one flip-model swapchain per
+    // HWND, so a second presentation surface would force a second window
+    // and this line would have to choose between them. SDL's event queue
+    // is process-wide and Window::PumpEvents drains all of it, so
+    // "exactly one pump" is the rule, and there is one window to name.
     Arcane::Window& eventWindow = io.gpu->Win();
     const Arcane::WindowEvents events = eventWindow.PumpEvents();
     if (events.quitRequested) return true;
     if (events.resized)
     {
-        // ONE resize, to whichever presentation surface this run has.
+        // ONE resize, to this run's one presentation surface.
         //
         // Strictly BETWEEN frames -- never between the graph's acquire and
         // its present, which both live inside one Execute() call
@@ -110,20 +99,10 @@ bool PumpAndResize(FrameIo& io)
         // top of its loop satisfies that structurally, and owes nothing
         // else: the graph rebuilds imported-texture views every Execute.
         //
-        // TWO RESIDUALS DIED WITH THE SECOND WINDOW. The hidden host
-        // window's SetSize lockstep (kept so ImGui_ImplSDL3_NewFrame
-        // reported the right DisplaySize) is unnecessary now that the
-        // platform backend reads the same window the swapchain binds --
-        // one surface, one extent. And GpuContext::OnResize on the graph
-        // path resized a hidden NVRHI swapchain that no longer exists; it
-        // was the heaviest device-level burst in the frame and it was
-        // aimed at a device this process does not create. The `else` arm
-        // that used to call it is deleted outright now (NRI Phase 5a,
-        // Task 6): GpuContext::OnResize itself is gone, along with the rest
-        // of the NVRHI half. The `if (io.graph)` that guarded this one call
-        // went with the follow-on GraphFlavor() collapse -- see FrameExtent
-        // above for why the field is unconditional and where the one
-        // remaining fail-loud on it lives.
+        // NOTHING ELSE NEEDS RESIZING ALONGSIDE IT. The ImGui platform
+        // backend reads the same window the swapchain binds, so this one
+        // call leaves every consumer on one extent -- there is no second
+        // surface to hold in lockstep and no device-level resize burst.
         //
         // ===== A RESIZE IS NEVER SILENT =====================================
         // This host CAPTURES ITS SWAPCHAIN, so a --screenshot artifact carries
@@ -212,17 +191,8 @@ void BuildHud(FrameIo& io)
     io.gpu->Imgui().BeginFrame();
     {
         ImGui::Begin("ArcaneRuntime");
-        // The graph flavor has no RenderDevice to ask (NRI Phase 3, Task 6),
-        // so it reads the config instead. This used to be a `io.graph ? ... :
-        // io.gpu->Device().Backend()` ternary kept so the NVRHI arm's own
-        // statement was literally the one the `full` golden's baseline HUD
-        // pixels were captured with; GpuContext has built no RenderDevice at
-        // all since NRI Phase 5a, Task 6 deleted Device(), so there is no
-        // NVRHI arm left for that ternary to keep faith with, and the string
-        // is unchanged either way (the two always agreed -- GpuContext::
-        // Create passed exactly this config value into RenderDeviceDesc::
-        // backend, and each RenderDevice subclass returned the constant it
-        // was selected for).
+        // There is no RenderDevice to ask -- GpuContext builds none -- so
+        // the HUD reads the backend out of the config it was selected with.
         ImGui::Text("Backend: %s", Arcane::ToString(io.config.backend));
         ImGui::Text("Plugin gen: %u", io.plugin->Generation());
         const Arcane::Batch2DStats s = io.gpu->Batch().Stats();
@@ -237,22 +207,6 @@ void BuildHud(FrameIo& io)
 
 void PrepareFrame(FrameIo& io)
 {
-    // THE NVRHI BACKBUFFER ACQUIRE AND THE SHADERLIBRARY HOT-RELOAD POLL ARE
-    // BOTH DELETED, NOT PORTED (NRI Phase 5a, Task 6). Both used to live
-    // inside an `if (!io.graph)` block -- unreachable since `io.graph` became
-    // unconditional at Phase 5a Task 2b, and left standing through Tasks 2b-5
-    // because nothing yet forced their deletion (Swapchain and ShaderLibrary
-    // both still existed). GpuContext has built neither a Swapchain nor a
-    // ShaderLibrary since this task deleted Swap()/Shaders() along with the
-    // rest of its NVRHI half, so the two blocks no longer compile and are
-    // gone, and at Task 9.5a so is io.backbuffer itself -- it had no reader
-    // left (CaptureTail only ever read it on the NVRHI arm, which is gone
-    // too), so a field reset to null every frame for nobody went with the
-    // rest. The two `if (io.graph)` guards this comment used to carry forward
-    // are gone as well, collapsed alongside GpuContext::GraphFlavor() -- every
-    // read of the field in this file is unconditional now, over the single
-    // fail-loud in FrameExtent.
-
     // Scene asset resolution, BEFORE the batcher's Begin and before
     // SubmitRender: the drain inside registers compiled materials with the
     // batcher (a pipeline/binding-set table mutation that does not belong
@@ -280,57 +234,39 @@ void PrepareFrame(FrameIo& io)
 }
 
 // =============================================================
-// The GRAPH half (--nri-graph), and since NRI Phase 3 Task 6 the ONLY
-// recorder in the process when it runs -- there is no NVRHI device.
+// THE RENDER HALF -- the only recorder in the process.
 // One RenderGraph frame: Reset, declare, Compile, Execute -- and
 // Execute is what acquires the backbuffer, records every node, submits
 // and presents. The frame is batch2d -> [post chain] -> tonemap ->
 // [pick/outline] -> [imgui] -> [capture] -> present, declared inside
-// DeclareGraphFrame and gated by the same --golden-stage vocabulary
-// passed here.
+// DeclareGraphFrame; each bracketed stage is dropped by passing the
+// FrameDesc field that carries it as null (see that struct).
 //
-// The plugin's RENDER submission runs on BOTH paths as of Task 8: the
-// batcher is Begin()'d with the canvas extent alone (it took a command
-// list and a framebuffer until ABI v15, and both were always null),
-// SubmitRender fills it exactly as it does above, and the graph's
+// The plugin's RENDER submission: the batcher is Begin()'d with the
+// canvas extent alone, SubmitRender fills it, and the graph's
 // Batch2DNode DRAINS it -- one batcher, one batching algorithm, one
-// recorder. End() is deliberately NOT called on this path: it WAS the
-// NVRHI recorder and now records nothing at all. Since Task 6 that batcher is DEVICE-LESS by construction
-// (GpuContext::Create, renamed from CreateForGraph at NRI Phase 5a,
-// Task 6, once it became GpuContext's only factory), so End() would
-// refuse anyway.
+// recorder. End() is deliberately NOT called: that batcher is
+// DEVICE-LESS by construction (GpuContext::Create builds no render
+// device), so End() would refuse anyway and records nothing.
 //
-// The scene POST CHAIN runs here too as of Task 10, from the same
-// compiled bytes the NVRHI chain was built from -- one node per pass,
-// between the canvas and the tonemap.
+// The scene POST CHAIN runs here too -- one node per pass, between the
+// canvas and the tonemap. So does the HUD, from the same ImGui frame
+// BuildHud left current -- see the block below.
 //
-// The HUD runs here too as of Task 12, from the same ImGui frame the
-// NVRHI path renders -- see the block below.
-//
-// ImGui INPUT WORKS ON THIS PATH AGAIN (D3 exit, 2026-08-18). It was a
-// named gap through the landing: ImGuiLayer::CreateForGraph withheld the
-// SDL event tap so a drag could not move the HUD and silently rewrite
-// the shared imgui.ini the NVRHI baselines were captured under. That
-// stance was time-boxed to desk checkpoint D3b's compares; D3b closed
-// green with both golden sets frozen, so InitForGraph installs the tap
-// again and the HUD responds. See ImGuiLayer.cpp for the full account.
-// (The Phase-2 texture gaps are CLOSED: NriTextureCache makes a span's
-// and a material's declared images resident on this device -- Task 2.)
-// The SIM half (FixedUpdate/Update) is untouched and runs identically.
+// NriTextureCache makes a span's and a material's declared images
+// resident on this device, so sprites and materials sample the textures
+// they name rather than a fallback.
+// The SIM half (FixedUpdate/Update) runs above, in AdvanceSim.
 // =============================================================
 Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
 {
     Arcane::NriGraphContext::FrameDesc graphFrame;
 
 #if !defined(ARCANE_DIST)
-    // --crash-gpu N ON THE GRAPH ARM (NRI Phase 3, Task 5). The same gate,
-    // the same "fires exactly once", the same fired-FIRST ordering (a failed
-    // build must not retry every frame) and the same ERROR text as the NVRHI
-    // arm above -- so `--crash-gpu 30` means one thing on both paths and the
-    // desk battery's items read the same either way. It was a documented
-    // no-op through Phase 2 (HostConfig.hpp said so); it is live now.
+    // --crash-gpu N. Fires exactly once, and the latch is set FIRST -- a
+    // failed build must not retry the injection every frame.
     //
-    // TWO things differ, both forced by the recording topology and neither
+    // TWO properties, both forced by the recording topology and neither
     // observable in the report:
     //   * the fault goes out on its OWN one-off command buffer rather than
     //     nested inside this frame's recording -- the graph's command buffers
@@ -339,13 +275,9 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     //     through the very machinery the crash report has to survive to
     //     describe;
     //   * it therefore fires BEFORE the frame is declared rather than inside
-    //     it, which keeps `pass:gpu-fault` the last scope the GPU begins --
-    //     exactly what the NVRHI arm achieved by recording it first into a
-    //     list submitted at the end of the frame.
+    //     it, which keeps `pass:gpu-fault` the last scope the GPU begins.
     // FireFault is stateless -- it owns its objects for the length of one
-    // dispatch -- which is why the nvrhi injector this arm never built is gone
-    // from FrameIo entirely (NRI Phase 5a, Task 8b). Only the fired latch was
-    // ever shared, and it is all that is left here.
+    // dispatch -- so FrameIo carries nothing for it but the fired latch.
     if (io.config.crashGpuFrame != 0 && !io.gpuFaultFired &&
         io.frameCount >= io.config.crashGpuFrame)
     {
@@ -357,28 +289,16 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
 #endif
 
     // ============================================================
-    // THE HUD (Task 12) -- and this block is THE parity mechanism,
-    // not a convenience. The `full` golden's baseline was captured
-    // from the NVRHI path WITH the HUD on it, so the vehicle must
-    // draw the SAME content through the SAME code that feeds the
-    // NVRHI HUD. It does, structurally: the "ArcaneRuntime" window
-    // and the plugin's DrawUIAll are recorded ABOVE this branch, into
-    // one ImGui frame both render paths share. Nothing graph-specific
-    // is added here -- no "NRI" marker, no extra line -- because any
-    // text difference is a golden diff, and nothing on the NVRHI side
-    // changed either.
+    // THE HUD. The "ArcaneRuntime" window and the plugin's DrawUIAll
+    // are recorded ABOVE, into the one ImGui frame this host builds;
+    // this line only hands the finished draw data to the graph.
     //
-    // The stage split mirrored the NVRHI block's exactly, back when that
-    // block existed (NRI Phase 5a, Task 4 deleted RenderNvrhi outright): both
-    // non-Full golden stages END the frame without rendering it (host chrome
-    // would mask the pixels a stage golden compares), and Full renders it and
-    // hands the draw data to the graph. Both go THROUGH THE LAYER rather than
-    // calling ImGui::Render()/EndFrame() bare, which is Task 6 closing the
-    // Phase-2 carry: ImGuiLayer pins its own context in every entry point,
-    // and a bare call here would end whatever context an editor document or
-    // a plugin last left current. Either way the frame IS ended, so
-    // ImGuiLayer's "every BeginFrame is paired exactly once" contract holds
-    // here regardless.
+    // It goes THROUGH THE LAYER rather than calling ImGui::Render()/
+    // EndFrame() bare: ImGuiLayer pins its own context in every entry
+    // point, and a bare call here would end whatever context an editor
+    // document or a plugin last left current. The frame IS ended either
+    // way, so ImGuiLayer's "every BeginFrame is paired exactly once"
+    // contract holds here regardless.
     //
     // The draw data lives in the ImGui context until the next
     // NewFrame, i.e. for the whole of the RenderFrame call below --
@@ -394,10 +314,8 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     std::uint32_t frameWidth = 0, frameHeight = 0;
     FrameExtent(io, frameWidth, frameHeight);
 
-    // The 2D submission. Begin takes only the canvas extent since ABI v15 --
-    // the null command list / null framebuffer that used to lead it were read
-    // by End() alone, and End() records nothing. This batch reaches the GPU
-    // through the graph's Batch2DNode, which drains it.
+    // The 2D submission. Begin takes only the canvas extent (ABI v15). This
+    // batch reaches the GPU through the graph's Batch2DNode, which drains it.
     io.gpu->Batch().Begin(frameWidth, frameHeight);
     io.gpu->Batch().SetGlobals(io.frameGlobals);
     io.app.PushSceneCamera((float)frameWidth, (float)frameHeight);
@@ -409,7 +327,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     }
 
 #if !defined(ARCANE_DIST)
-    // --pick-probe (NRI Phase 2, Task 11). THE ONE PLACE the entity ids
+    // --pick-probe. THE ONE PLACE the entity ids
     // are produced: CollectPickables is a pure walk of the registry and
     // the k-th drawable it appends IS hit-proxy id k+1, which is what
     // the graph's pick node rasterises and what RuntimeApp::
@@ -420,21 +338,19 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     //
     // The view is the SCENE camera PushSceneCamera just installed, so
     // the id pass rasterises the same silhouettes the batch node drew.
-    // Since Task 6 they cannot even disagree in principle: both were
-    // fitted to frameWidth/frameHeight above, which IS the graph
-    // swapchain's extent.
+    // They cannot disagree even in principle: both are fitted to
+    // frameWidth/frameHeight above, which IS the graph swapchain's
+    // extent.
     if (io.config.pickProbe)
     {
         const Arcane::PickView view{ io.runtime->CameraOffset(), io.runtime->CameraZoom() };
         io.pickDrawables.clear();
         Arcane::CollectPickables(io.runtime->Registry(), view, io.pickDrawables);
 
-        // THE SCRIPTED SELECTION -- Task 11's stand-in for an editor
-        // selection this host does not have: the FIRST pickable entity
-        // in the scene, whose hit-proxy id is 1 by CollectPickables'
-        // own ordering contract. Phase 3 replaces exactly these three
-        // lines with the editor's real selection and nothing inside the
-        // vehicle or the nodes changes.
+        // THE SCRIPTED SELECTION -- a stand-in for the editor selection
+        // this host does not have: the FIRST pickable entity in the
+        // scene, whose hit-proxy id is 1 by CollectPickables' own
+        // ordering contract.
         io.pickSelectedIds.clear();
         if (!io.pickDrawables.empty())
             io.pickSelectedIds.push_back(1u);
@@ -445,17 +361,15 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     }
 #endif
     graphFrame.batch = &io.gpu->Batch();
-    // The scene post chain, as the BYTES its NVRHI twin was built
-    // from (SceneRenderResolver::PostDesc -- NRI Phase 2, Task 10).
+    // The scene post chain as BYTES (SceneRenderResolver::PostDesc).
     // Re-read every frame for the same reason PostChain() is above:
     // a drain may swap the bound instance under an asset re-save.
     // Null (no PostProcess assignment, or the compile has not landed
     // yet) simply renders canvas -> tonemap -- which is also how a caller
     // asks for the frame WITHOUT a post chain at all (see FrameDesc).
     graphFrame.post    = io.resolver ? io.resolver->PostDesc() : nullptr;
-    // The same GlobalParams the batcher got via SetGlobals, and the
-    // same ones the NVRHI post hook passes to the chain -- so the two
-    // recorders cannot bind different b1 contents.
+    // The same GlobalParams the batcher got via SetGlobals, so the post
+    // chain and the batch cannot bind different b1 contents.
     graphFrame.globals = &io.frameGlobals;
     // The capture is taken on the LAST frame, which has to be known
     // BEFORE the frame is declared (the readback is a graph NODE, not
@@ -471,10 +385,10 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // AcquireNextTexture, which is inside this call). It is the whole
     // record + submit + present cost, not just the present: Execute()
     // does all three, and splitting one call across three
-    // accumulators would be a fiction. accRec IS real on this path
-    // (the submission above is the same work), but accEnd/accTone stay
-    // 0 -- the batcher's NVRHI flush and the NVRHI tonemap did not run;
-    // their graph counterparts are inside this one call.
+    // accumulators would be a fiction. accRec IS real (the submission
+    // above is the work it names), but accEnd/accTone stay 0 -- there is
+    // no separate flush or tonemap step left to time, both being inside
+    // this one call.
     const auto graphT0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
     const Arcane::NriGraphContext::FrameOutcome outcome =
         io.graph->RenderFrame(graphFrame);
@@ -519,12 +433,9 @@ bool CaptureTail(FrameIo& io)
     ++io.frameCount;
     const bool lastFrame = io.config.maxFrames != 0 && io.frameCount >= io.config.maxFrames;
 
-    // The capture tail. Both render paths reach it, on the final frame
-    // only, AFTER the present -- so the pixels are the ones that were
-    // actually shown and the capture cannot race the recording that
-    // produced it. The ONLY difference between the paths is where the
-    // pixels come from; everything downstream (artifact naming, the
-    // comparator, the tolerances, the exit code) is shared.
+    // The capture tail. Reached on the final frame only, AFTER the
+    // present -- so the pixels are the ones that were actually shown and
+    // the capture cannot race the recording that produced it.
     if (lastFrame && !io.config.screenshotPath.empty())
     {
         std::uint32_t w = 0, h = 0;
@@ -533,11 +444,7 @@ bool CaptureTail(FrameIo& io)
         // buffer (declared up front, because a graph capture is a node and
         // not an afterthought) -- ReadCapture maps it and normalizes
         // BGRA -> RGBA, since NRI resolves the swapchain's channel order
-        // rather than letting us pin it. This used to be a `io.graph ? ... :
-        // Arcane::ReadTexturePixels(io.gpu->Device().Nvrhi(), ...)` ternary;
-        // GpuContext has built no RenderDevice to read from since NRI Phase
-        // 5a, Task 6 deleted Device(), so there is no NVRHI arm left for the
-        // ternary to choose between.
+        // rather than letting us pin it.
         const bool read = io.graph->ReadCapture(w, h, actual);
 
         if (!read)

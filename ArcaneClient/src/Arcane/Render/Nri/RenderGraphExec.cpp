@@ -1,4 +1,4 @@
-// RenderGraph, EXECUTION half (Phase 2, Task 6). The declaration and
+// RenderGraph, EXECUTION half. The declaration and
 // compile halves live in RenderGraph.cpp and are PURE -- see RenderGraph.hpp's
 // header for why the class is split across two TUs and why it must stay that
 // way.
@@ -11,9 +11,9 @@
 // THE ONE CmdBarrier CALL SITE. Every barrier on the graph path is emitted by
 // EmitBarriers() below, from an RgBarrier list Compile() derived. Nothing in
 // this file synthesizes, reorders, drops or coalesces a barrier, and no other
-// file on the graph path may call CmdBarrier at all (spec ratification 1; the
-// only other hand-written barriers in the tree belonged to the Phase-1
-// triangle smoke, retired in Task 13).
+// file on the graph path may call CmdBarrier at all (spec ratification 1;
+// the one hand-written exemption in the tree is NriDiagnostics' fault
+// dispatch, which states its own terms).
 // The `before` triples Compile() hands over already account for pool-slot
 // handover between transients, so replaying them verbatim is not laziness --
 // re-deriving anything here would silently diverge from the derivation Task
@@ -64,61 +64,50 @@ namespace Arcane
         // NodeScope -- one graph node, both marker channels.
         // ---------------------------------------------------------------
         // The NRI-side twin of Render/GpuInstrumentation.hpp's GpuPassScope,
-        // deliberately the same SHAPE (F-2c-bis is binding here too: markers-
-        // only DRED with no annotation markers yields an EMPTY breadcrumb
-        // list, strictly worse than no DRED at all) with each of its two
-        // channels re-plumbed onto NRI:
+        // deliberately the same SHAPE (F-2c-bis is binding here too:
+        // markers-only DRED with no annotation markers yields an EMPTY
+        // breadcrumb list, strictly worse than no DRED at all), over TWO
+        // channels:
         //
-        //   nvrhi beginMarker/endMarker  ->  CmdBeginAnnotation/CmdEndAnnotation
-        //   backend->WriteMarker(list)   ->  backend->WriteMarkerNative(native)
-        //                                    with the native list from
-        //                                    GetCommandBufferNativeObject
+        //   CmdBeginAnnotation / CmdEndAnnotation  (PIX/RenderDoc/DRED)
+        //   backend->WriteMarkerNative(native)     (the marker buffer), with
+        //                                          the native list from
+        //                                          GetCommandBufferNativeObject
         //
         // It is not a GpuPassScope subclass or a template over the two: the
         // classes share no member and no branch once the two calls differ.
         //
-        // The crash backend is the SAME process-wide slot the NVRHI passes
-        // used to write into (installed, through Phase 2, by the device layer
-        // over the nvrhi device); today NriDiagnostics::Arm installs it over
-        // whichever NRI device exists, and there is no other writer left.
+        // The crash backend comes from the process-wide slot
+        // NriDiagnostics::Arm installs, and there is no other writer.
         // Every step degrades independently: no backend, an unarmed backend, a
         // backend that hands back no native command list, or a backend whose
         // marker buffer lives on ANOTHER DEVICE each disable exactly their own
         // channel and nothing else.
         //
-        // THE CROSS-DEVICE RULE (D1 shakedown, finding B). Writing a native
-        // marker means recording, into THIS command buffer, a write to the
-        // backend's marker buffer -- and both APIs require the two to share one
-        // device. Through Phase 2 that is NOT guaranteed: `--nri-graph` boots
-        // the real engine first, so the installed backend was built over the
-        // ENGINE's device while the graph records on its own. The first desk
-        // run proved it, 20 errors deep:
+        // THE CROSS-DEVICE RULE. Writing a native marker means recording,
+        // into THIS command buffer, a write to the backend's marker buffer --
+        // and both APIs require the two to share ONE device. A backend built
+        // over a different device than the one recording produces, on Vulkan:
         //
         //   vkCmdWriteBufferMarkerAMD(): dstBuffer (VkBuffer ...) was created
         //   ... from VkDevice A, but command is using ... VkDevice B
         //   VUID-vkCmdWriteBufferMarkerAMD-commonparent
         //
-        // dx12 carried the identical bug (WriteBufferImmediate against a GPU
-        // virtual address minted by another device) and was merely mute about
-        // it -- its debug layer could not even load on that path (see
-        // DeviceCreationD3D12.cpp's g_d3d12DeviceCreated).
+        // and on dx12 the identical bug, mutely (WriteBufferImmediate against
+        // a GPU virtual address minted by another device).
         //
-        // So the marker is gated on device IDENTITY rather than switched off
-        // for the phase: `nativeDevice` is the graph device's own native handle
-        // and the write happens only when the backend's marker buffer lives on
-        // that same device. Today, on the vehicle, that is false and native
-        // markers are silently off; after Phase 3's one-device flip it becomes
-        // true and they come back with no edit here. A TODO would have needed
-        // somebody to remember; this cannot be forgotten and cannot be wrong in
-        // the unsafe direction.
+        // So the marker is GATED ON DEVICE IDENTITY rather than assumed:
+        // `nativeDevice` is this graph device's own native handle, and the
+        // write happens only when the backend's marker buffer lives on that
+        // same device. The gate cannot be forgotten and cannot be wrong in the
+        // unsafe direction.
         //
-        // WHAT IS NOT LOST while the gate is closed: the CPU-side breadcrumb
+        // WHAT IS NOT LOST if the gate ever closes: the CPU-side breadcrumb
         // ring (Breadcrumbs().BeginScope/EndScope) and the PIX/RenderDoc/DRED
         // annotation are both device-agnostic and both still emitted -- and the
         // ring is the half today's hang and crash reports are actually built
-        // from. What is lost is the GPU-written marker VALUE, i.e. how far into
-        // the frame the GPU got, on a run whose graph device has no crash
-        // backend of its own to collect it with anyway.
+        // from. What would be lost is the GPU-written marker VALUE, i.e. how
+        // far into the frame the GPU got.
         std::atomic<bool> g_crossDeviceMarkersNoted{ false };
 
         class NodeScope
@@ -687,15 +676,15 @@ namespace Arcane
         // at the top of the next Execute().
         //
         // THE TWO HALVES ARE DELIBERATELY ASYMMETRIC, and that asymmetry IS
-        // the ordering rule (whole-branch review, I1 -- see m_retiredPool for
-        // the full statement). A Graveyard replays its due prefix in BURIAL
-        // ORDER, so "a view must never be destroyed after the texture it
-        // views" means "a view must never be buried after it". The graph's own
-        // views go in RIGHT HERE, ahead of everything; the texture goes into
-        // the staging area, i.e. behind every burial any node makes for the
-        // rest of this frame AND at this frame's declaration-time sync. Burying
-        // the texture here (what this did through Phase 2) put it AHEAD of the
-        // node views that follow inside the very same Execute.
+        // the ordering rule (see m_retiredPool for the full statement). A
+        // Graveyard replays its due prefix in BURIAL ORDER, so "a view must
+        // never be destroyed after the texture it views" means "a view must
+        // never be buried after it". The graph's own views go in RIGHT HERE,
+        // ahead of everything; the texture goes into the staging area, i.e.
+        // behind every burial any node makes for the rest of this frame AND at
+        // this frame's declaration-time sync. Burying the texture here would
+        // put it AHEAD of the node views that follow inside the very same
+        // Execute.
         //
         // It also bumps the POOL EPOCH (RenderGraph.hpp), which is the ONLY
         // way a NODE caching its own views over pool textures can learn that
@@ -1142,7 +1131,7 @@ namespace Arcane
         m_graves->Reap(core.GetFenceValue(*m_fence));
 
         // Whatever a PREVIOUS Execute() retired out of the pool, buried now
-        // (whole-branch review, I1 -- see m_retiredPool). It has to be here,
+        // (see m_retiredPool). It has to be here,
         // at the top of a LATER Execute: by this point every view any node
         // cached over those textures has already been buried -- by the exec
         // fns of the frame that retired them, and, for a node that skipped

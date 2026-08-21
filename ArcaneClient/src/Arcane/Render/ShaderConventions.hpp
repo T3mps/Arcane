@@ -3,9 +3,9 @@
 // Shader toolchain conventions -- THE single source of truth shared by the
 // runtime compile service (ShaderCompiler) and referenced by the offline AOT
 // script (Arcane/data/shaders/compile-shaders.bat; it cannot include this header,
-// so its lines carry a pointer back here). The SPIR-V register shifts MUST
-// match nvrhi::VulkanBindingOffsets defaults (t=0, s=128, b=256, u=384;
-// DeviceVulkan does not override them) -- if either side changes, change it
+// so its lines carry a pointer back here). The SPIR-V register shifts are
+// t=0, s=128, b=256, u=384, and they MUST match what the render path binds
+// (Nri/NriDevice's VKBindingOffsets) -- if either side changes, change it
 // HERE first and fan out.
 
 #include <cstddef>
@@ -25,7 +25,7 @@ namespace Arcane
     // Extra dxc argv for the SPIR-V target (the DXIL target adds nothing).
     // Mirrors compile-shaders.bat's SPIRV_FLAGS exactly: every HLSL source
     // dual-compiles via `#if SPIRV` push-constant/cbuffer blocks, and the
-    // -fvk-*-shift values are nvrhi::VulkanBindingOffsets.
+    // -fvk-*-shift values are the register shifts named above.
     inline constexpr const char* kSpirvArgs[] = {
         "-spirv",
         "-D", "SPIRV=1",

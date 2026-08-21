@@ -175,13 +175,6 @@ namespace Arcane
             // themselves: the anchoring decision is made exactly once, by the
             // caller, which is what makes the id route's "already load-ready"
             // contract structural instead of incidental.
-            // TextureForResolved -- the sRGB upload GetTexture rode -- is
-            // deleted at ABI v15 with GetTexture itself. It had reached its
-            // `m_device->createTexture` line exactly never since NRI Phase 5a,
-            // Task 9: that task removed Runtime::SetRenderResources, which was
-            // SetDevice's last production caller, so `if (!m_device)` short-
-            // circuited every call. Its decode half survives untouched as
-            // PixelsForResolved below, which is what it already delegated to.
 
             BytesPtr BytesForResolved(const std::filesystem::path& resolved)
             {
@@ -455,9 +448,7 @@ namespace Arcane
             // ONE recency clock across the three caches (declared first: the
             // caches capture its address) so the budget sweep can compare LRU
             // candidates cross-cache. See AssetCache's shared-clock ctor.
-            // A fourth, AssetCache<nvrhi::TextureHandle> m_textures, went with
-            // GetTexture at ABI v15 -- nothing had inserted into it since NRI
-            // Phase 5a, Task 9.
+            // THERE IS NO TEXTURE CACHE HERE: this facade holds no device.
             uint64_t m_lruClock = 0;
             AssetCache<BytesPtr>                 m_bytes{&m_lruClock};
             AssetCache<JsonPtr>                  m_json{&m_lruClock};
@@ -523,7 +514,7 @@ namespace Arcane
         if (!data || w <= 0 || h <= 0)
         {
             // ARC_WARN (not ARC_ERROR): a missing UI image must not trip the GPU test's
-            // RenderErrorCount()==0 assertion (that counter tracks NVRHI validation only).
+            // RenderErrorCount()==0 assertion (that counter tracks render-layer validation).
             ARC_WARN("LoadDisplayPixels: not found or decode failed: {}", resolved.string());
             if (data) stbi_image_free(data);
             return false;
@@ -552,12 +543,6 @@ namespace Arcane
         out.height = (uint32_t)h;
         return out.Valid();
     }
-
-    // LoadDisplayTexture's body -- LoadDisplayPixels plus an RGBA8_UNORM
-    // createTexture and a transient upload command list -- is deleted at ABI
-    // v15 with its declaration. It had no callers: the editor's toolbar logo,
-    // its last one, moved to LoadDisplayPixels + NriTextureCache at NRI Phase
-    // 3, Task 11.
 
     void RepackStagingToRgba(const unsigned char* src, size_t rowPitch,
                              uint32_t width, uint32_t height, bool bgraSource,
@@ -611,10 +596,8 @@ namespace Arcane
         // OPAQUE, before the downscale so the box filter cannot average a
         // transparent texel back in: a screenshot is a picture of the screen,
         // and whatever coverage math left in the source's alpha channel must
-        // not punch holes in it. Byte-identical to RepackStagingToRgba's rule,
-        // which is why the NVRHI arm (ReadTexturePixels -> SaveTexturePng,
-        // both deleted at ABI v15) could route through here without changing
-        // what it wrote.
+        // not punch holes in it. The same rule RepackStagingToRgba states, so
+        // every route into a PNG writes the same alpha.
         for (std::size_t i = 3; i < rgba.size(); i += 4)
             rgba[i] = 0xFF;
 

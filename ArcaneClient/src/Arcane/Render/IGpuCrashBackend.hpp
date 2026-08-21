@@ -1,16 +1,13 @@
 #pragma once
 
-// GPU crash diagnostics arc (Task 3): the seam a GPU backend implements.
-// It was implemented twice -- Task 5 = D3D12 via WriteBufferImmediate + DRED,
-// Task 6 = Vulkan via the AMD buffer-marker / device-fault extensions -- and
-// BOTH of those implementations are DELETED as of NRI Phase 5a, Task 9.5a
-// (see the block below EnableD3D12Dred/DredTier for what that cost). The one
-// live implementation today is NriGraphCrashBackend, in
-// Nri/NriDiagnostics.cpp. Pure interface -- no GPU calls live in THIS header,
-// only shape. WriteMarkerNative passes the raw native command-list pointer
-// straight through to the backend, nothing more.
+// GPU crash diagnostics: the seam a GPU backend implements. The ONE live
+// implementation is NriGraphCrashBackend, in Nri/NriDiagnostics.cpp -- see
+// the block below EnableD3D12Dred/DredTier for what the tree does NOT have.
+// Pure interface -- no GPU calls live in THIS header, only shape.
+// WriteMarkerNative passes the raw native command-list pointer straight
+// through to the backend, nothing more.
 //
-// Task 5 also parks the `.gpudump` container here (Diag::GpuDumpWriter +
+// The `.gpudump` container is parked here too (Diag::GpuDumpWriter +
 // ParseGpuDump/ReadGpuDump): it is the RAW-capture sibling every backend
 // writes, so it belongs next to the seam rather than inside either
 // backend's TU. Deliberately header-only -- it is pure byte shuffling with
@@ -257,17 +254,10 @@ namespace Arcane
         // as the NRI frame graph gets it from
         // nri::CoreInterface::GetCommandBufferNativeObject.
         //
-        // There was a SECOND entry point here until NRI Phase 5a, Task 9.5a:
-        // WriteMarker(nvrhi::ICommandList*), which resolved its native
-        // pointer through nvrhi::ICommandList::getNativeObject and then
-        // called straight into this one. Its only producer was the NVRHI
-        // recorder, deleted at Task 8b; every surviving implementation
-        // returned false unconditionally. Deleted rather than kept as a stub
-        // -- this is now the ONLY marker entry point, and there is exactly
-        // one marker layer behind it. Passing the wrong backend's native
-        // pointer is undefined (there is nothing to type-check it against),
-        // which is what NativeDevice() below exists to let a producer check
-        // for first.
+        // THE ONLY MARKER ENTRY POINT, with exactly one marker layer behind
+        // it. Passing the wrong backend's native pointer is undefined (there
+        // is nothing to type-check it against), which is what NativeDevice()
+        // below exists to let a producer check for first.
         virtual bool WriteMarkerNative(void* nativeCommandList, std::uint32_t id, bool begin) = 0;
 
         // The native device this backend's marker buffer lives on
@@ -277,17 +267,16 @@ namespace Arcane
         // producer holding an NRI device can tell whether WriteMarkerNative
         // above is legal for it.
         //
-        // WHY THIS IS ON THE SEAM AT ALL (NRI Phase 2, D1 shakedown): a GPU
-        // marker is a WRITE, from a command buffer, into the backend's marker
-        // buffer -- and both APIs require the two to belong to ONE device
-        // (Vulkan: VUID-vkCmdWriteBufferMarkerAMD-commonparent; D3D12:
+        // WHY THIS IS ON THE SEAM AT ALL: a GPU marker is a WRITE, from a
+        // command buffer, into the backend's marker buffer -- and both APIs
+        // require the two to belong to ONE device (Vulkan:
+        // VUID-vkCmdWriteBufferMarkerAMD-commonparent; D3D12:
         // WriteBufferImmediate takes a GPU virtual address, which is
-        // meaningless on another device's address space). Phase 2's
-        // `--nri-graph` vehicle holds two devices at once -- the engine's NVRHI
-        // device, which is the one this backend was built over, and the graph's
-        // NRI device -- so the graph path MUST check before it writes. The
-        // first desk run fired 20 validation errors doing exactly this write
-        // across the boundary; D3D12 had the same bug and was merely mute.
+        // meaningless on another device's address space). A producer holding
+        // a device this backend was NOT built over MUST check before it
+        // writes: doing that write across a device boundary fired 20
+        // validation errors on the run that found it, and D3D12 had the same
+        // bug and was merely mute.
         //
         // A null answer, or two devices that differ, means "no native markers
         // for you" -- never an error. The CPU-side breadcrumb ring
@@ -305,9 +294,8 @@ namespace Arcane
         // owned by the backend, per GpuBreadcrumbs.hpp ("a backend calls
         // BeginScope/EndScope around each render pass"). A pass-scope
         // helper takes its token from BeginScope here and hands the same
-        // token to WriteMarkerNative (it was WriteMarker until Task 9.5a
-        // deleted that overload); CollectFault turns observed marker values
-        // back into NAMED queue timelines through it.
+        // token to WriteMarkerNative; CollectFault turns observed marker
+        // values back into NAMED queue timelines through it.
         virtual GpuBreadcrumbs& Breadcrumbs() = 0;
 
         // Short identifying label ("D3D12", "Vulkan") for logs and the
@@ -316,13 +304,10 @@ namespace Arcane
     };
 
     // ---------------------------------------------------------------------
-    // The D3D12 DRED tier -- all that is left of GpuCrashD3D12.cpp
+    // The D3D12 DRED tier -- the whole of GpuCrashD3D12.cpp
     // ---------------------------------------------------------------------
-    // Named for what it is rather than "the D3D12 backend (Task 5)", which is
-    // what this banner said until NRI Phase 5a, Task 9.5a: the backend it
-    // headed is deleted, and these two free functions are the survivors. They
-    // never went through a backend object -- DRED settings are process-global
-    // and are armed before any device exists.
+    // Two free functions, and neither goes through a backend object: DRED
+    // settings are process-global and are armed before any device exists.
 
     // Applies the build-config DRED policy tier down the F-2d QueryInterface
     // ladder. MUST be called BEFORE D3D12CreateDevice -- DRED settings are
@@ -330,50 +315,40 @@ namespace Arcane
     // per process; every failure is one WARN plus a degraded tier, never
     // fatal.
     //
-    // THE TIER, CURRENT AS OF NRI PHASE 5a, TASK 1: full auto-breadcrumbs in
-    // ALL THREE configs. F-2's original split -- full in Debug/Release,
-    // markers-only in Dist -- is SUSPENDED, and this comment asserted the old
-    // split until Task 9.5a corrected it. Markers-only auto-breadcrumbs are
-    // worth something only if pass scopes also emit GPU markers, and no marker
-    // producer exists while WriteMarkerNative is a stub on the graph backend;
-    // selecting markers-only would therefore yield an EMPTY breadcrumb list,
-    // silently, in the one config nobody runs interactively. DiagnosticsTest's
-    // "dred tier never selects markers-only while WriteMarkerNative is a stub"
-    // case now FORBIDS the old behaviour in every config. The lighter tier is
-    // re-earnable when the native NRI marker layer lands (F-2c-bis) -- in that
-    // order, and only in that order. The Dist arm still differs in one respect
-    // Task 1 did not touch: SetPageFaultEnablement(FORCED_OFF).
+    // THE TIER: full auto-breadcrumbs in ALL THREE configs. F-2's original
+    // split -- full in Debug/Release, markers-only in Dist -- is SUSPENDED.
+    // Markers-only auto-breadcrumbs are worth something only if pass scopes
+    // also emit GPU markers, and no marker producer exists while
+    // WriteMarkerNative is a stub on the graph backend; selecting
+    // markers-only would therefore yield an EMPTY breadcrumb list, silently,
+    // in the one config nobody runs interactively. DiagnosticsTest's "dred
+    // tier never selects markers-only while WriteMarkerNative is a stub" case
+    // FORBIDS it in every config. The lighter tier is re-earnable when the
+    // native NRI marker layer lands (F-2c-bis) -- in that order, and only in
+    // that order. The Dist arm still differs in one respect:
+    // SetPageFaultEnablement(FORCED_OFF).
     ARCANE_API void EnableD3D12Dred();
 
     // The DRED tier EnableD3D12Dred() actually selected (e.g. "dred:full",
-    // "dred:markers-only" -- reserved, unreachable in all three configs as
-    // of NRI Phase 5a Task 1, see EnableD3D12Dred()'s comment above --,
+    // "dred:markers-only" -- reserved, unreachable in all three configs;
+    // see EnableD3D12Dred()'s comment above --,
     // "dred:off", or a "-nocontext" variant of any of those) -- otherwise
     // only observable in a log line. Exposed so tests can pin the
     // build-config policy tier (F-2c-bis) rather than trusting it by
     // inspection. "dred:off" before EnableD3D12Dred() has run.
     ARCANE_API const char* DredTier();
 
-    // BOTH GPU-API CRASH BACKENDS ARE GONE (NRI Phase 5a, Task 9.5a).
-    // MakeD3D12CrashBackend(nvrhi::IDevice*) and MakeVulkanCrashBackend
-    // (VulkanCrashDesc) each took an NVRHI device and resolved the native one
-    // through getNativeObject; the NVRHI device layer that was their ONLY
-    // caller was deleted at Task 8b (NriDiagnostics.hpp says exactly that),
-    // so both had been unreachable since. GpuCrashVulkan.cpp is deleted
-    // outright -- MakeVulkanCrashBackend and VulkanGpuSectionProvider were
-    // its only two namespace-scope exports. GpuCrashD3D12.cpp survives for
-    // EnableD3D12Dred/DredTier above, which ARE live (DeviceCreationD3D12.cpp
-    // arms the tier before D3D12CreateDevice; DiagnosticsTest pins it).
+    // THERE IS NO GPU-API CRASH BACKEND IN THE TREE, and the gap is named
+    // rather than left to be discovered: nothing reads DRED breadcrumbs or
+    // page-fault state back on D3D12, and nothing reads
+    // VK_EXT/KHR_device_fault or writes VK_AMD_buffer_marker on Vulkan.
+    // GpuCrashD3D12.cpp survives only for EnableD3D12Dred/DredTier above,
+    // which ARE live (DeviceCreationD3D12.cpp arms the tier before
+    // D3D12CreateDevice; DiagnosticsTest pins it).
     //
-    // WHAT WENT WITH THEM, named rather than dropped: the D3D12 backend held
-    // the only DRED breadcrumb + page-fault READBACK in the tree, and the
-    // Vulkan backend the only VK_EXT/KHR_device_fault readback and
-    // VK_AMD_buffer_marker layer. The live crash path today is
-    // NriGraphCrashBackend (Nri/NriDiagnostics.cpp), whose payload is the
-    // CPU-side GpuBreadcrumbs ring plus the marker-buffer replay -- it reads
-    // no DRED and no device-fault info. That readback was ALREADY unreachable
-    // (nothing could construct either backend), so this deletes a latent loss
-    // rather than causing one; restoring it belongs to Phase 4's native NRI
+    // The live crash path is NriGraphCrashBackend (Nri/NriDiagnostics.cpp),
+    // whose payload is the CPU-side GpuBreadcrumbs ring plus the
+    // marker-buffer replay. Restoring the readback belongs to the native NRI
     // marker layer, beside the F-2c-bis obligation that same layer carries.
 
     // ---------------------------------------------------------------------
@@ -396,16 +371,11 @@ namespace Arcane
         // spelling was enabled therefore has to travel with the flag.
         enum class DeviceFault : std::uint8_t { None, Ext, Khr };
 
-        // The NVRHI-typed members that used to sit here -- `device`
-        // (nvrhi::IDevice*), `backendDevice` (the unwrapped
-        // nvrhi::vulkan::IDevice* the fence-progress degrade path read
-        // queueGetCompletedInstance off) and the `bufferMarker` flag passed
-        // alongside them -- went with MakeVulkanCrashBackend at NRI Phase 5a,
-        // Task 9.5a. What survives is the DeviceFault spelling above and the
+        // ALL THIS STRUCT CARRIES is the DeviceFault spelling above and the
         // field below, because DeviceCreationVulkan RECORDS which
         // device-fault surface it managed to enable (DeviceCreationVulkan.cpp
         // :593-602, .hpp:98) independently of whether anything consumes it
-        // yet. The struct is kept, rather than the enum being hoisted to
+        // yet. It is kept as a struct, rather than the enum being hoisted to
         // namespace scope, so those call sites keep spelling it
         // VulkanCrashDesc::DeviceFault.
         DeviceFault deviceFault = DeviceFault::None;

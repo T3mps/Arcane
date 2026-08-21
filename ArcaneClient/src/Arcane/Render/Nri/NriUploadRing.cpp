@@ -204,7 +204,7 @@ namespace Arcane
         // sentinel could violate that invariant and fatally assert in debug.
         // Idle-then-destroy sidesteps the question entirely.
         //
-        // SKIPPED ON A LOST DEVICE (NRI Phase 3, D3b teardown). Same rule as
+        // SKIPPED ON A LOST DEVICE. Same rule as
         // NriGraphContext's and ~NriDevice's: once the loss is observed this
         // call can only fail, and the destroys below happen anyway -- on VK
         // they are REQUIRED (vkDestroyDevice's valid usage, and VMA asserts on

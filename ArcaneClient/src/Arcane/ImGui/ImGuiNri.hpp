@@ -2,31 +2,29 @@
 
 // ImGuiNri -- the first-party Dear ImGui renderer backend on RAW NRI.
 //
-// THE PORT OF ImGuiNvrhi, decided by the capability contract's §7 ruling
-// (docs/plans/2026-08-12-nri-capability-contract.md, "PORT OURS"): NRI ships
-// an NRIImgui extension, but it hard-requires the NRI Streamer, which the
-// adoption spec has already deferred -- and its ImTextureID protocol keys off
-// an nri::Descriptor* where ours keys off the raw texture handle (§7.3), a
-// convention nine live editor call sites depend on. So this file is the
-// NVRHI backend's 365-line surface re-expressed in NRI calls, and NOTHING
-// ELSE changes: same shaders (data/shaders/imgui.hlsl), same 1.92
-// ImGuiBackendFlags_RendererHasTextures protocol, same blend, same
-// display-referred (non-sRGB) atlas, same per-draw scissor, same
-// ImTextureID convention.
+// FIRST-PARTY RATHER THAN NRI'S OWN, per the capability contract's §7
+// ruling (docs/plans/2026-08-12-nri-capability-contract.md, "PORT OURS"): NRI
+// ships an NRIImgui extension, but it hard-requires the NRI Streamer, which
+// the adoption spec has already deferred -- and its ImTextureID protocol keys
+// off an nri::Descriptor* where ours keys off the raw texture handle
+// (§7.3), a convention nine live editor call sites depend on. Shaders are
+// data/shaders/imgui.hlsl; the protocol is 1.92's
+// ImGuiBackendFlags_RendererHasTextures; the atlas is display-referred
+// (non-sRGB); scissor is per-draw.
 //
 // ================= THE ImTextureID CONVENTION (§7.3) =================
 // An ImTextureID IS THE BACKEND'S RAW TEXTURE HANDLE, cast through intptr_t.
-// On NVRHI that is `nvrhi::ITexture*`; here it is `nri::Texture*`. The SHAPE
-// is what §7.3 pins, not the type -- "a raw resource handle, not a
+// Here that handle is `nri::Texture*`. The SHAPE is what §7.3 pins,
+// not the type -- "a raw resource handle, not a
 // descriptor" -- so a host that hands ImGui a texture it owns keeps writing
 // `ImGui::Image((ImTextureID)(uintptr_t)tex, ...)` and the backend is what
 // maps it onto its own binding. That is why the descriptor SET is looked up
 // per texture pointer below rather than being handed in by the caller.
 //
-// ONE HAZARD THE NVRHI BACKEND DOES NOT HAVE, stated because Phase 3 is what
-// makes it reachable: NVRHI ref-counts, so a cached binding set PINNED its
-// texture and a live `ITexture*` key was therefore unique. NRI does not
-// ref-count. For textures WE own (every ImTextureData) that is closed
+// ONE HAZARD, stated because it is reachable: NRI DOES NOT REF-COUNT, so a
+// cached binding set does not pin its texture and a live `nri::Texture*` key
+// is not guaranteed unique over time. For textures WE own (every
+// ImTextureData) that is closed
 // structurally -- DestroyTexture evicts the cache entry before it buries the
 // texture. For a USER texture (case b of the convention: a raw handle the
 // host passed straight to ImGui::Image) the key is a bare pointer this class
@@ -34,9 +32,9 @@
 // address to a replacement would get a cache HIT on a descriptor naming the
 // old resource.
 //
-// THE CLOSURE IS THE InvalidateUserTexture PAIR below (NRI Phase 3,
-// Task 8-pre) -- the explicit hook this header used to owe, and deliberately
-// not a heuristic: there is no observable a heuristic could key on, because the
+// THE CLOSURE IS THE InvalidateUserTexture PAIR below -- an explicit hook,
+// and deliberately not a heuristic: there is no observable a heuristic could
+// key on, because the
 // replacement's pointer may compare EQUAL to the destroyed one's.
 //
 // THE CALLER CONTRACT, IN FULL, AND IT IS THE PAIR'S DECLARATIONS THAT GOVERN
@@ -61,18 +59,18 @@
 //     NriGraphContext::ResizeOffscreen carries the exact sequence, the reason
 //     the order is load-bearing, and the adjacency rule that goes with it.
 //   * A DESTRUCTION -- the owner going away, which for a host means PROCESS
-//     TEARDOWN and (Task 12) a project switch. Easy to miss because it looks
+//     TEARDOWN and a project switch. Easy to miss because it looks
 //     like something member ordering should handle, and it is NOT: when the two
 //     contexts share a device, the borrower must be destroyed FIRST (for the
 //     device) while its texture's VIEW, held by the other context's backend,
 //     must be destroyed first too (for this rule) -- opposite orders, so no
 //     declaration order satisfies both. The owner's last living moment is the
-//     only place it can be closed, explicitly. EditorApp::Shutdown (NRI Phase 3,
-//     Task 8) is that call for the editor's viewport output, and it is
+//     only place it can be closed, explicitly. EditorApp::Shutdown is that
+//     call for the editor's viewport output, and it is
 //     unconditional and idempotent: a miss is routine and a null is an
 //     early-out, so a host that is not sure whether anything ever drew the
 //     texture should simply make the call.
-//     A PROJECT SWITCH IS THE SAME CALLER KIND (Task 12), and the one that
+//     A PROJECT SWITCH IS THE SAME CALLER KIND, and the one that
 //     shows why this is a KIND rather than a synonym for "shutdown":
 //     EditorApp::TeardownGraphForSwitch destroys the viewport context AND
 //     every closed document's preview context mid-session, while the backend
@@ -80,17 +78,6 @@
 //     afterwards. So the eviction is not tidiness before exit; skipping it
 //     leaves a live cache entry that the very next frame can hit on a
 //     recycled address.
-//
-// A SECOND HAZARD FROM THE SAME CONVENTION -- HISTORY, kept only because a
-// reader may have the old wording in mind. Through Phase 2 `--nri-graph` held
-// TWO devices at once, so an ImTextureID (a raw pointer, carrying no evidence
-// of which device it belongs to) could be an NVRHI handle that this backend
-// would dereference as an nri::Texture*. Both of that hazard's referents are
-// gone: NriGraphContext's two-device window was deleted at 53a71201, and
-// Batch2DNode.hpp's THE TEXTURE GAP now reads IS CLOSED (Phase 3, Task 2 --
-// spans carry the image's device-independent asset Guid). There is ONE device
-// on this path now and the convention is sound again; nothing here needs to
-// refuse or sniff an id.
 //
 // ================= WHAT IT OWNS =================
 //   * one LINEAR/clamp sampler (ImGui's default filtering);
@@ -178,7 +165,7 @@ namespace Arcane
         // OffscreenImGuiLayer::Context). Pins it for the call and restores
         // whatever was current. Idempotent and null-safe.
         //
-        // WHY IT EXISTS (NRI Phase 3, Task 9). Init above sets those flags on
+        // WHY IT EXISTS. Init above sets those flags on
         // whatever context is CURRENT, which is exactly right for a host whose
         // ONE ImGui context is the one it just created and left pinned -- both
         // hosts' primary context. It is WRONG for a SECOND context: the
@@ -210,14 +197,13 @@ namespace Arcane
         // ordering across two graveyards is undefined, while ordering WITHIN
         // one is the contract (a view must die before the texture it views).
         //
-        // This is ImGuiNvrhiRenderer's inline texture loop lifted out of
-        // RenderDrawData, and the lift is forced rather than stylistic: the
-        // NVRHI version could write a texture into the SAME open command list
-        // it was about to draw with, and NRI's helper cannot.
+        // THE LIFT OUT OF RenderDrawData IS FORCED, not stylistic: the helper
+        // submits and waits, so a texture upload cannot share the open command
+        // list the draw is about to use.
         void NewFrameTexUpdates(ImDrawData* drawData, Graveyard& graveyard, std::uint64_t fence);
 
         // ============ THE USER-TEXTURE INVALIDATION HOOK ============
-        // (NRI Phase 3, Task 8-pre -- the closure named under ONE HAZARD above.)
+        // (The closure named under ONE HAZARD above.)
         //
         // TWO VARIANTS, AND PICKING THE WRONG ONE INVERTS AN ORDERING. Both
         // drop this backend's cached binding for `texture` and RETIRE its
@@ -426,7 +412,7 @@ namespace Arcane
         // only after a cast in the .cpp). Recorded by InstallBackendIdentity,
         // i.e. at Init or at AdoptContext, whichever named the context.
         //
-        // WHY IT IS WORTH A MEMBER (NRI Phase 3, Task 9). Release walks
+        // WHY IT IS WORTH A MEMBER. Release walks
         // ImGui::GetPlatformIO().Textures to catch ImTextureData this backend
         // never serviced, and that walk read WHATEVER CONTEXT WAS CURRENT. With
         // one backend per process that was right by luck. With TWO -- the
@@ -442,9 +428,9 @@ namespace Arcane
         // is left WANTCREATE WITH AN INVALID TexID -- ImGui asking the OWNING
         // backend to create a SECOND texture for an ImTextureData it still
         // holds a live cache Entry for, with the id its draw commands carried
-        // gone. At process exit that is invisible; across Task 12's project
-        // switch, where the ImGui contexts OUTLIVE the graph contexts, it is
-        // live. Pinned by the "Release stamps the ADOPTED context's atlas"
+        // gone. At process exit that is invisible; across a PROJECT SWITCH,
+        // where the ImGui contexts OUTLIVE the graph contexts, it is live.
+        // Pinned by the "Release stamps the ADOPTED context's atlas"
         // [nri] case, which asserts on TexID for exactly that reason.
         //
         // THE INVARIANT THIS RESTS ON is ONE ImGuiNri PER ImGui CONTEXT, and it
@@ -459,8 +445,8 @@ namespace Arcane
         // m_viewportTargets, so it destructs after it -- stated at that member
         // too); a PROJECT SWITCH states the same ordering explicitly instead,
         // because it destroys a backend while every ImGui context in the
-        // process survives -- EditorApp::TeardownGraphForSwitch (Task 12),
-        // which keeps m_gameImgui untouched across the release and re-adopts
+        // process survives -- EditorApp::TeardownGraphForSwitch, which keeps
+        // m_gameImgui untouched across the release and re-adopts
         // it on the rebuilt node.
         void* m_imguiContext = nullptr;
 

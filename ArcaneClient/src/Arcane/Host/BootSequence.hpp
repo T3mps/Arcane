@@ -3,8 +3,8 @@
 // BootSequence: the boot-stage DAG both hosts run. A pure scheduler over
 // callables plus a progress model -- ZERO GPU, window, and ImGui dependency, by
 // design (all presentation lives behind IBootPresenter). Keeping it that way is
-// what makes it headless-testable and promotable to Core later; do not add an
-// NVRHI, SDL, or ImGui include to this header.
+// what makes it headless-testable and promotable to Core later; do not add a
+// graphics, SDL, or ImGui include to this header.
 //
 // Ordering is a stable Kahn topological sort, the same shape as TopoSortPasses
 // in the material pass chain.

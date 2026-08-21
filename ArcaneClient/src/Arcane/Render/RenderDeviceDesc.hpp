@@ -5,14 +5,10 @@
 // created separately against a Window, so tools and tests can run
 // compute/offscreen work without any window.
 //
-// NRI Phase 5a, Task 8b: this struct used to sit in Render/Device.hpp, the
-// NVRHI device interface the phase deletes. It is the sixth non-NVRHI thing
-// stranded there (Task 8a relocated the other five) and it is on the graph's
-// critical path -- Nri/NriDevice's NativeDeviceOwner::Create takes one, and
-// both creation halves (DeviceCreationD3D12.hpp / DeviceCreationVulkan.hpp)
-// take one -- so it moved to a header with no nvrhi dependency rather than
-// dying with its old home. Nothing about the struct changed; the comments
-// below were repaired only where the deletion falsified them.
+// It lives in a header of its own, with no graphics-API dependency, because
+// it is on the render path's critical route: Nri/NriDevice's
+// NativeDeviceOwner::Create takes one, and so do both creation halves
+// (DeviceCreationD3D12.hpp / DeviceCreationVulkan.hpp).
 
 #include <Arcane/Render/GraphicsBackend.hpp>
 

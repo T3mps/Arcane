@@ -8,14 +8,10 @@
 
 namespace Arcane
 {
-    // THE KEEP-ALIVE MAP IS GONE (NRI Phase 5a, Task 7). A second map held a
-    // reference to every resolved GPU texture, because SpriteEntry::texture was
-    // a BARE pointer and the Assets facade's own LRU could evict the last
-    // reference out from under it. Residency is NriTextureCache's job
-    // exclusively now -- it keys off SpriteEntry::textureId -- so there is no
-    // engine-side GPU texture for this cache to pin. `texture` itself was
-    // deleted from SpriteEntry at ABI v15 (Task 9.5b-ii), which is why this
-    // file no longer includes Batcher2D.hpp at all.
+    // THERE IS NO KEEP-ALIVE MAP, because there is nothing to keep alive:
+    // residency is NriTextureCache's job exclusively, keyed off
+    // SpriteEntry::textureId, and no SpriteEntry carries a GPU texture for
+    // this cache to pin. That is also why this file includes no Batcher2D.hpp.
     struct SpriteCache::Impl
     {
         Services services;
@@ -75,10 +71,10 @@ namespace Arcane
         // untextured case needs no special-case geometry of its own.
         SpriteEntry entry;
         entry.pivot = data->pivot;
-        // The DEVICE-FREE key (NRI Phase 3, Task 2), and since Task 7 the ONLY
-        // key: it names the asset the graph path's NriTextureCache uploads onto
-        // its own device. Set unconditionally, including when the image has no
-        // decodable pixels -- the record must still say WHICH image it wanted.
+        // The DEVICE-FREE key, and the ONLY key: it names the asset the
+        // render path's NriTextureCache uploads onto its own device. Set
+        // unconditionally, including when the image has no decodable pixels --
+        // the record must still say WHICH image it wanted.
         entry.textureId = data->texture;
 
         std::uint32_t texWidth = 0, texHeight = 0;
@@ -94,16 +90,14 @@ namespace Arcane
             // copy it, not hold the pointer"). PixelsFor returns a BARE pointer
             // into the facade's LRU-budgeted pixel cache and drops its own pin
             // before returning, so ANY later Assets call may free it and read
-            // it back as garbage. This function used to make exactly such a
-            // call -- a GetTexture whose trailing EnforceBudget() could evict
-            // the globally least-recently-used entry across every cache in the
-            // facade, the pixel cache included (there were four then; the
-            // texture cache went with GetTexture at ABI v15, leaving three) --
-            // and reading pixels->width after it was a
-            // real use-after-free, fixed by copying first. That second call is
-            // gone (NRI Phase 5a, Task 7), so the hazard is now structurally
-            // absent rather than merely avoided; the copy stays anyway, because
-            // it costs nothing and it is what keeps the next Assets call added
+            // it back as garbage. This was a REAL use-after-free once: a
+            // second Assets call in this function, whose trailing
+            // EnforceBudget() could evict the globally least-recently-used
+            // entry across every cache in the facade -- the pixel cache
+            // included -- and then `pixels->width` was read after it. There is
+            // no second call today, so the hazard is structurally absent
+            // rather than merely avoided; the copy stays anyway, because it
+            // costs nothing and it is what keeps the NEXT Assets call added
             // here from being a bug.
             const PixelData* pixels = m_impl->services.assets->PixelsFor(data->texture);
             if (pixels)
@@ -113,15 +107,10 @@ namespace Arcane
             }
         }
 
-        // THERE IS NO entry.texture TO RESOLVE (deleted at ABI v15, Task
-        // 9.5b-ii; nothing had filled it since NRI Phase 5a, Task 7). It held
-        // an Assets::GetTexture result pinned alive by a second map in Impl:
-        // the pointer named an object on an engine-owned NVRHI device, no such
-        // device is created in any configuration, and GetTexture accordingly
-        // returned null for every sprite -- so GetTexture, the map, the field
-        // and the PixelsFor/GetTexture dimension cross-check are all gone.
-        // `entry.textureId` above is what the graph path resolves through
-        // NriTextureCache, and PixelsFor is the one dimension source.
+        // THERE IS NO entry.texture TO RESOLVE: a SpriteEntry carries no GPU
+        // texture at all. `entry.textureId` above is what the render path
+        // resolves through NriTextureCache, and PixelsFor is the one dimension
+        // source.
         const ResolvedSpriteGeom g = ComputeSpriteGeom(*data, texWidth, texHeight);
         entry.uvMin = g.uvMin;
         entry.uvMax = g.uvMax;
@@ -130,13 +119,9 @@ namespace Arcane
         m_impl->table.emplace(id, entry);
     }
 
-    // THE EVICT-BEFORE-RELEASE HOOK IS GONE (NRI Phase 5a, Task 9.5b-ii, ABI
-    // v15), which is what the previous task's comment here promised would
-    // happen "when RemoveTexture goes". Both guards were already inert --
-    // `entry.texture` had not been set since Task 7 -- and all four pieces
-    // (the field, the two guards, Batcher2D::RemoveTexture and the
-    // binding-set cache it swept) were deleted together. `Services::batcher`
-    // went with them: nothing else in this file ever used it.
+    // NO EVICT-BEFORE-RELEASE HOOK IS OWED: this cache holds no GPU object,
+    // so an invalidation is exactly the one erase below. (`Services::batcher`
+    // went with that hook -- nothing else in this file ever used it.)
     void SpriteCache::Invalidate(const Guid& id)
     {
         m_impl->table.erase(id);

@@ -18,10 +18,10 @@ namespace Arcane
         // impossible for a pointer-width atomic.
         std::atomic<IGpuCrashBackend*> g_activeBackend{ nullptr };
 
-        // Set from ProjectBoot.hpp's config load every boot. Used to be read
-        // once per DRAW by GpuDrawScope's constructor; that reader is deleted
-        // (NRI Phase 5a, Task 9.5b -- see GpuInstrumentation.hpp's banner),
-        // so this is currently write-only. Relaxed ordering, kept as-is: a
+        // Set from ProjectBoot.hpp's config load every boot. There is no
+        // draw-granular marker scope to read it, so this is currently
+        // write-only -- see GpuInstrumentation.hpp's banner. Relaxed
+        // ordering, kept as-is: a
         // toggle observed one frame late was never meaningful and this must
         // not fence the render path if a future reader arrives.
         std::atomic<bool> g_drawMarkers{ false };
@@ -112,14 +112,9 @@ namespace Arcane
         if (!m_commandList || !name)
             return;
 
-        // THE NVRHI CHANNEL WAS HERE (NRI Phase 5a, Task 8b). The constructor
-        // used to open with m_commandList->beginMarker(name) before touching
-        // the backend at all -- deliberately, because that marker is what a
-        // PIX/RenderDoc capture and D3D12 DRED's markers-only tier read, and
-        // DRED enablement is process-global and independent of whether a
-        // backend object exists. There is no nvrhi command list left to call
-        // it on; see the header's F-2c-bis paragraph for why that does not
-        // strand the Dist tier, and what restores both channels.
+        // ONE CHANNEL: the backend's marker buffer. There is no annotation
+        // channel here -- see the header's F-2c-bis paragraph for why that
+        // does not strand the Dist DRED tier, and what restores it.
         //
         // Latched, not re-read in the destructor: a teardown that cleared the
         // slot mid-scope must not leave a BeginScope without its EndScope, nor
@@ -149,6 +144,4 @@ namespace Arcane
         }
     }
 
-    // GpuDrawScope's implementation is deleted -- NRI Phase 5a, Task 9.5b.
-    // See GpuInstrumentation.hpp's file banner for the full account.
 }

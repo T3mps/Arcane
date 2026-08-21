@@ -21,16 +21,11 @@ namespace Arcane
         // alias keeps every use site below spelled exactly as it was.
         using Vertex = Batch2DVertex;
 
-        // PushConstants (the per-draw viewport-scale push block End() used to
-        // build and bind) is deleted with End()'s recording body -- NRI
-        // Phase 5a, Task 9.5b. Nothing else in this file constructed one.
-
         constexpr uint16_t kBuiltInMaterialCount = 3;   // sprite / circle / text
 
         // One recorded draw (a quad: 4 vertices already in m_vertices).
         // DrainInternal stable-sorts records by key, then builds index data
-        // and batch runs in sorted order (End() did this before Task 9.5b
-        // gutted it). This is the v1 "compile" -- batcher
+        // and batch runs in sorted order. This is the v1 "compile" -- batcher
         // v2 compiles the same records into per-instance data instead.
         struct DrawRecord
         {
@@ -38,9 +33,7 @@ namespace Arcane
             uint32_t firstVertex = 0;
             uint16_t material = 0;   // Batcher2D::kMaterialSprite..
             // The image ASSET this quad samples, nil for the untextured
-            // primitives -- Batch2DDrawSpan::textureId's source. An
-            // `nvrhi::ITexture*` sat beside it until ABI v15; it was null in
-            // every record this process ever built (see Batcher2D::Create).
+            // primitives -- Batch2DDrawSpan::textureId's source.
             Guid textureId{};
         };
 
@@ -50,16 +43,12 @@ namespace Arcane
         using BatchRun = Batch2DDrawSpan;
 
         // One material-table entry. Built-ins (0..2) name their shader
-        // artifacts by STRING -- the graph path's Batch2DNode loads those bins
-        // itself; registered entries own `desc`, the retained shader bytecode
-        // + template + instance MaterialDesc(id) hands the graph path. The
-        // dedicated binding layout / volatile CB / CPU pack buffer a
-        // registered entry used to also own (layout, materialCb, packBuffer,
-        // packedThisBatch) are DELETED outright -- NRI Phase 5a, Task 9.5b --
-        // rather than left dead: they existed only to feed GetPipeline/
-        // GetBindingSet/End()'s registered-material upload, all deleted with
-        // them, and GetPipeline had already refused every registered material
-        // since Task 7 regardless.
+        // artifacts by STRING -- Batch2DNode loads those bins itself;
+        // registered entries own `desc`, the retained shader bytecode +
+        // template + instance that MaterialDesc(id) hands the recorder.
+        // An entry owns NO GPU state -- no binding layout, no constant
+        // buffer, no pack buffer -- because the recorder builds all of that
+        // from `desc` itself.
         struct MaterialEntry
         {
             bool builtIn = true;
@@ -75,14 +64,9 @@ namespace Arcane
 
             bool Init()
             {
-                // The whole of construction. m_device/m_shaders and the
-                // HasDevice() check over them are GONE at ABI v15 (NRI Phase
-                // 5a, Task 9.5b-ii) along with Create's parameters: every call
-                // site passed (nullptr, nullptr), so the device-carrying
-                // construction this used to gate -- the white texel (create +
-                // upload), sampler, binding layout, vertex attribute descs /
-                // input layout, and the built-in shader fetch/validation --
-                // could never run, and Task 9.5b had already deleted it.
+                // The whole of construction, and it is CPU-only: with no
+                // device there is no white texel, sampler, binding layout or
+                // input layout to create, and no built-in shader to fetch.
                 //
                 // Kept as an Init() returning bool rather than folded into the
                 // constructor because Create's contract is a factory that can
@@ -124,13 +108,10 @@ namespace Arcane
                 if (!BuildEntry(entry, std::move(desc)))
                     return false;
                 m_materials[id] = std::move(entry);
-                // The two cache-eviction loops that ran here -- dropping the
-                // slot's NVRHI pipelines and binding sets -- are gone with the
-                // maps themselves at ABI v15. Their populator (GetPipeline/
-                // GetBindingSet) was deleted at Task 9.5b, so both maps had
-                // been permanently empty and both loops permanently no-ops.
-                // A consumer that rebuilds its own pipelines from
-                // MaterialDesc(id) sees the new `desc` on its next read.
+                // NOTHING TO EVICT: this class caches no pipeline and no
+                // binding set. A consumer that rebuilds its own pipelines
+                // from MaterialDesc(id) sees the new `desc` on its next
+                // read.
                 return true;
             }
 
@@ -194,11 +175,9 @@ namespace Arcane
             {
                 // A glyph atlas is a RUNTIME texture (SkylinePacker output), not
                 // an asset -- there is no Guid that names it, so the span keeps
-                // a nil id and the graph path binds its white texel. Text on the
-                // graph path is THE remaining texture gap, and it is a font-atlas
-                // residency problem, not a cache one. The `nvrhi::ITexture* atlas`
-                // parameter that used to come in here was consumed by End(); it
-                // never reached a span, and it went with End()'s body.
+                // a nil id and the recorder binds its white texel. Text is THE
+                // remaining texture gap, and it is a font-atlas residency
+                // problem, not a cache one.
                 PushQuad(kMaterialText, Guid::Nil(),
                          dstPos, dstSize, uvMin, uvMax, color);
             }
@@ -257,17 +236,13 @@ namespace Arcane
             void End() override
             {
                 m_stats = {};
-                // THE LOUD REFUSAL (NRI Phase 3, Task 2). End() WAS the NVRHI
-                // recorder -- every line it used to run below this point
-                // created or bound an NVRHI object. Task 9.5b deleted that
-                // body once every Batcher2D in the process proved device-less;
-                // ABI v15 (Task 9.5b-ii) then removed NVRHI from the class
-                // outright, so there is no longer a device to be missing and
-                // nothing here left to record. Said ONCE: a host that got here
-                // is calling it every frame, and the second thousand copies of
+                // THE LOUD REFUSAL. End() records nothing: this class holds
+                // no device and creates no GPU object, so there is nothing
+                // here left to record. Said ONCE -- a host that got here is
+                // calling it every frame, and the second thousand copies of
                 // the message would bury the first. The batch is left
-                // drainable, which is the whole point: the graph path's
-                // recorder reads it through Drain().
+                // drainable, which is the whole point: the recorder reads it
+                // through Drain().
                 if (!m_warnedDevicelessEnd)
                 {
                     m_warnedDevicelessEnd = true;
@@ -282,24 +257,15 @@ namespace Arcane
             {
                 DrainInternal();
 
-                // HUD PARITY (NRI Phase 2, Task 12). m_stats is what Stats()
-                // reports and what BOTH hosts print as "Quads: %u  Draws: %u";
-                // End() used to be the only thing that wrote it. The graph
-                // path never calls End() -- End() WAS the NVRHI recorder -- so
-                // the HUD it draws would have read a permanent 0/0 while the
-                // NVRHI path read real numbers. That is a TEXT difference in
-                // the `full` stage golden, in the one HUD line that exists to
-                // say what the frame drew.
+                // THE HUD'S NUMBERS. m_stats is what Stats() reports and
+                // what both hosts print as "Quads: %u  Draws: %u". Written
+                // HERE, in Drain(), rather than in the recorder: this is the
+                // object that owns the numbers, and nothing else writes them.
                 //
-                // Written HERE rather than in the graph's node for two
-                // reasons: this is the object that owns the numbers, and the
-                // TIMING then matches exactly -- both hosts build the HUD
-                // BEFORE the render half, so on both paths frame N's HUD
-                // reports frame N-1's counts. The counts are End()'s own: one
-                // draw call per run, one quad per record.
-                //
-                // Drain() has exactly one caller (the graph's Batch2DNode), so
-                // this cannot perturb the NVRHI path.
+                // The TIMING follows from where the hosts build their HUD --
+                // both build it BEFORE the render half, so frame N's HUD
+                // reports frame N-1's counts. One draw call per run, one quad
+                // per record.
                 m_stats.drawCalls = (uint32_t)m_runs.size();
                 m_stats.quads     = (uint32_t)m_records.size();
 
@@ -310,11 +276,7 @@ namespace Arcane
                 out.viewport = m_viewport;
                 // The one SetGlobals() sets, handed over by address rather
                 // than re-fetched, so this frame's consumer reads exactly
-                // what was set for it. (End() used to also write this same
-                // value into an NVRHI globals CB for registered materials;
-                // that write is deleted with the rest of End()'s recording
-                // body -- NRI Phase 5a, Task 9.5b -- m_globals itself is
-                // unaffected, it was always the graph path's own copy.)
+                // what was set for it.
                 out.globals  = &m_globals;
                 return out;
             }
@@ -329,28 +291,19 @@ namespace Arcane
                 return &m_materials[id].desc;
             }
 
-            // RemoveTexture(nvrhi::ITexture*) is deleted at ABI v15 with the
-            // binding-set cache it swept -- see the header. Nothing replaces
-            // it: the batcher holds no GPU object to evict, and the graph
-            // path's texture residency is NriTextureCache's business.
+            // The batcher holds no GPU object to evict; texture residency
+            // is NriTextureCache's business -- see the header.
 
             Batch2DStats Stats() const override { return m_stats; }
 
         private:
-            // THE v1 "COMPILE" -- lifted verbatim out of End() by the NRI
-            // Phase 2 read-interface extraction (Task 8) so both consumers
-            // could run the SAME batching. Nothing here touches a device, a
-            // command list or a target; it is pure CPU work over m_records.
+            // THE v1 "COMPILE". Nothing here touches a device, a command
+            // list or a target; it is pure CPU work over m_records.
             //
-            // Drain() (the graph path's Batch2DNode) is its only caller now
-            // -- NRI Phase 5a, Task 9.5b deleted End()'s call alongside the
-            // rest of its recording body, since End() itself was always
-            // unreachable (see End()'s own comment). The idempotency guard
-            // (m_drained) stays: it is still correct and still load-bearing
-            // for Drain() alone (declaration-time vs render-time re-entry
-            // within one Begin() bracket would otherwise append a second
-            // copy of every index and every run), it is just no longer
-            // shared between two callers.
+            // Drain() is its only caller. The idempotency guard (m_drained)
+            // is load-bearing for it: declaration-time vs render-time
+            // re-entry within one Begin() bracket would otherwise append a
+            // second copy of every index and every run.
             void DrainInternal()
             {
                 if (m_drained)
@@ -380,10 +333,6 @@ namespace Arcane
                         run.firstIndex = (uint32_t)m_indices.size();
                         m_runs.push_back(run);
                     }
-                    // The m_anyRegistered accumulation that used to run here
-                    // is deleted -- NRI Phase 5a, Task 9.5b. Its one reader
-                    // was End()'s registered-material CB-upload guard, itself
-                    // deleted; nothing else ever read the flag.
                     const uint32_t base = record.firstVertex;
                     const uint32_t quadIndices[6] = { base, base + 1, base + 2,
                                                       base, base + 2, base + 3 };
@@ -444,23 +393,15 @@ namespace Arcane
                     { p[3], { uvMin.x, uvMax.y }, color });
             }
 
-            // EnsureBuffers (the NVRHI vertex/index buffer grow-on-demand this
-            // used to sit beside) is deleted with End(), its only caller --
-            // NRI Phase 5a, Task 9.5b. m_vertexBuffer/m_indexBuffer go with it
-            // below (see the field list at the end of this class).
-
-            // Build a registered entry's GPU objects into `out` (create-into-
-            // locals: a failure leaves the table untouched).
+            // Build a registered entry into `out` (create-into-locals: a
+            // failure leaves the table untouched).
             bool BuildEntry(MaterialEntry& out, Material2DDesc desc)
             {
-                // THE BLOB RELAXATION (NRI Phase 3, Task 2) CLOSED (NRI Phase
-                // 5a, Task 7). It let a registration carry compiled HANDLES or
-                // retained BLOBS, because a device-less producer
-                // (SpriteMaterialCache with no device) could only make the
-                // second. The handles are gone from Material2DDesc, so "either"
-                // has collapsed to the one that was always the general case:
-                // the BYTES. `templ`/`instance` stay mandatory -- they are the
-                // layout and the values, and no recorder can bind without them.
+                // A REGISTRATION IS BYTES -- there is no compiled-handle
+                // alternative, because a device-less producer could not make
+                // one. `templ`/`instance` are mandatory too: they are the
+                // layout and the values, and no recorder can bind without
+                // them.
                 const bool haveBytes = desc.vsBytes && desc.psBytes
                                     && !desc.vsBytes->empty() && !desc.psBytes->empty();
                 if (!haveBytes || !desc.templ || !desc.instance)
@@ -478,55 +419,23 @@ namespace Arcane
 
                 MaterialEntry entry;
                 entry.builtIn = false;
-                // The GPU half (entry.layout, entry.materialCb, m_globalsCb)
-                // that used to build here, gated on a HasDevice() check, is
-                // deleted -- NRI Phase 5a, Task 9.5b; the class kept no device
-                // at all from 9.5b-ii. It was unreachable twice over even
-                // before that deletion: no Batcher2D::Create call site
-                // anywhere passed a real device, and even hypothetically it
-                // would have built objects nothing consumed -- GetPipeline
-                // (deleted with End(), its only caller) already refused every
-                // registered material outright since NRI Phase 5a, Task 7.
-                // What survives is `desc` -- the product, since MaterialDesc(id)
-                // is how the graph path builds its own pipeline and bindings
-                // from the same bytes. (The packBuffer.assign call that used
-                // to sit here fed End()'s registered-material CB pack, also
-                // deleted.)
+                // `desc` IS THE PRODUCT, and the whole of it: there is no
+                // GPU half to build here, because MaterialDesc(id) is how the
+                // recorder builds its own pipeline and bindings from these
+                // same bytes.
                 entry.desc = std::move(desc);
                 out = std::move(entry);
                 return true;
             }
 
-            // GetBindingSet and GetPipeline are deleted -- NRI Phase 5a, Task
-            // 9.5b. End() (their only caller) is gutted above; GetPipeline
-            // already refused every REGISTERED material outright since Task
-            // 7, and both only ever populated m_bindingSets/m_pipelines. Those
-            // two maps outlived them by one task, permanently empty, only
-            // because UpdateMaterial and RemoveTexture still swept them; both
-            // sweeps and both maps are gone at ABI v15 (Task 9.5b-ii).
-
-            // NO GPU STATE LIVES HERE, and at ABI v15 none can: this class
-            // holds no NVRHI type at all. Deleted across Task 9.5b and
-            // 9.5b-ii, in the order their readers died --
-            //   m_sampler/m_bindingLayout/m_inputLayout/m_vertexBuffer/
-            //   m_indexBuffer/m_pipelineGeneration (9.5b: written only by
-            //   Init()/EnsureBuffers/GetPipeline, read only by GetBindingSet/
-            //   GetPipeline, all deleted together),
-            //   m_bindingSets/m_pipelines (9.5b-ii: permanently empty once
-            //   their populator went, so UpdateMaterial's and RemoveTexture's
-            //   sweeps over them were no-ops),
-            //   m_device/m_shaders/m_whiteTexture (9.5b-ii, with Create's
-            //   parameters -- every call site passed nulls),
-            //   m_commandList/m_target (9.5b-ii, with Begin's parameters --
-            //   only End()'s recording body ever read them).
+            // NO GPU STATE LIVES HERE: this class holds no device, no
+            // sampler, no binding layout, no buffer, no pipeline and no
+            // binding set. Everything below is CPU-side batching state.
 
             // The material table: 0..2 built-ins, registered entries after.
             std::vector<MaterialEntry> m_materials;
-            // m_globalsCb (the NVRHI globals CB End() used to write into for
-            // registered materials) is DELETED with it -- Task 9.5b. m_globals
-            // itself stays: SetGlobals/Drain() are both live (Drain() hands
-            // its address out as Batch2DDrained::globals for the graph
-            // recorder to read).
+            // Sticky globals: SetGlobals writes them and Drain() hands
+            // their address out as Batch2DDrained::globals for the recorder.
             GlobalParams m_globals{};          // sticky, host-set per frame
 
             glm::vec2 m_viewport{ 0.0f };
@@ -535,17 +444,12 @@ namespace Arcane
             std::vector<DrawRecord> m_records;
             std::vector<BatchRun> m_runs;
             // Asset Guid -> slot index, first-use order, cleared every
-            // Begin(). The parallel std::vector<nvrhi::ITexture*> that held
-            // the slot's texture object is gone at ABI v15: its elements were
-            // never read (only its size, as the next index), and every one of
-            // them was null.
+            // Begin().
             std::unordered_map<Guid, uint16_t> m_textureSlotLookup;
             uint16_t m_layer = 0;
             uint16_t m_order = 0;
             // End()'s records-nothing refusal, said once for the whole run.
             bool m_warnedDevicelessEnd = false;
-            // m_warnedRegisteredPipeline (GetPipeline's registered-material
-            // refusal warn-once flag) is deleted with GetPipeline -- Task 9.5b.
             // DrainInternal's once-per-Begin() guard.
             bool m_drained = false;
             Batch2DStats m_stats;

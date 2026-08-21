@@ -33,36 +33,28 @@ namespace Arcane
     // plus the layout/values pair. The instance is the SAVED asset's values --
     // scene sprites never render a document's working copy.
     //
-    // NO GPU OBJECTS LIVE HERE (NRI Phase 5a, Task 7). This struct used to
-    // carry `nvrhi::ShaderHandle vs/ps` and a
-    // `std::vector<nvrhi::TextureHandle> paramTextures` beside the bytes
-    // below. Those three were BINDING STATE FOR A BINDER THAT NO LONGER
-    // EXISTS: the only code that ever read them through a Material2DDesc was
-    // the NVRHI recorder inside Batcher2D.cpp, and the graph's Batch2DNode --
-    // the one recorder left -- has always resolved its own shaders from
-    // `vsBytes`/`psBytes` and its own textures from the instance's Guids
-    // through NriTextureCache. They were deleted rather than retyped: a
-    // backend-neutral restatement of them would have had no reader.
+    // NO GPU OBJECTS LIVE HERE, deliberately. The one recorder -- the graph's
+    // Batch2DNode -- resolves its own shaders from `vsBytes`/`psBytes` and its
+    // own textures from the instance's Guids through NriTextureCache, so
+    // binding state parked on this struct would have no reader at all.
     //
-    // The DECLARED TEXTURE COUNT, which `paramTextures` used to carry
-    // implicitly as its size, was never the authority -- `templ->TextureCount()`
-    // is, and is what sized the vector. Consumers that need the t1.. width ask
-    // the template.
+    // The DECLARED TEXTURE COUNT is `templ->TextureCount()`; that is the
+    // authority for the t1.. width, and consumers that need it ask the
+    // template.
     struct Material2DDesc
     {
         std::shared_ptr<const MaterialTemplate> templ;
         std::shared_ptr<const MaterialInstance> instance;
 
-        // The STITCHED, COMPILED shader blobs -- retained (NRI Phase 2,
-        // Task 9) because a SECOND graphics device in the same process cannot
-        // use a compiled shader OBJECT, only the bytecode behind it. The graph
-        // path's Batch2DNode builds its NRI pipelines from exactly these
-        // bytes, so a recompile and a render always agree about which shader
-        // ran.
+        // The STITCHED, COMPILED shader blobs -- retained as BYTES, because
+        // a device can build a pipeline from bytecode but cannot adopt a
+        // compiled shader OBJECT it did not create. Batch2DNode builds its NRI
+        // pipelines from exactly these bytes, so a recompile and a render
+        // always agree about which shader ran.
         //
         // ONE target, not both: the producer (SpriteMaterialCache) already
-        // picks dxil-or-spirv by the process's GraphicsBackend, and the graph
-        // vehicle runs on that same backend (RuntimeApp builds both from one
+        // picks dxil-or-spirv by the process's GraphicsBackend, and the
+        // render vehicle runs on that same backend (RuntimeApp builds both from one
         // HostConfig). shared_ptr so a Material2DDesc stays cheap to copy and
         // so a RE-compile is observable as a new pointer.
         // Null on a material registered without them -- which is now a REFUSED
@@ -108,23 +100,13 @@ namespace Arcane
     };
 
     // =====================================================================
-    // THE DRAINED BATCH -- the batcher's READ interface (NRI Phase 2,
-    // Task 8).
+    // THE DRAINED BATCH -- the batcher's READ interface, and its only
+    // output.
     //
-    // Everything below is what End() used to compute privately and then
-    // immediately record: the interleaved vertex stream, the index stream,
-    // and the sorted draw spans. It was named by that task so the NRI graph
-    // path's Batch2DNode could consume the SAME CPU batching this class has
-    // always done rather than growing a second copy of it beside this one
-    // (the homogenized-submission mandate at the top of this file, applied
-    // to the second backend).
-    //
-    // It began as an EXTRACTION, not a redesign -- the two recorders ran the
-    // same three lists through the same code, which is what made the NVRHI
-    // path a regression floor for the graph path. That floor did its job and
-    // is gone: End()'s recording body was deleted at NRI Phase 5a, Task 9.5b
-    // and NVRHI left this header entirely at ABI v15 (Task 9.5b-ii). This is
-    // now simply the batcher's only output.
+    // The interleaved vertex stream, the index stream and the sorted draw
+    // spans: everything the CPU batching produces, named so that a recorder
+    // consumes THIS batching instead of growing a second copy of it beside
+    // this one (the homogenized-submission mandate at the top of this file).
     // =====================================================================
 
     // One vertex of the batch stream. THE WIRE FORMAT: it is what the
@@ -147,20 +129,13 @@ namespace Arcane
         uint16_t material = 0;
         uint32_t firstIndex = 0;
         uint32_t indexCount = 0;
-        // THE TEXTURE KEY, and since ABI v15 the ONLY one. The image ASSET
-        // this run samples at t0, independent of any device: the recorder
+        // THE TEXTURE KEY, and the ONLY one. The image ASSET this
+        // run samples at t0, independent of any device: the recorder
         // (Batch2DNode) resolves this Guid through the shared NriTextureCache.
         // Nil means "untextured": Rect/Line/Circle/Triangle, an atlas glyph,
         // and any texture that is not an asset (a render target, the editor's
         // checkerboard) all record nil and bind the white texel. Runs split on
         // it, so two distinct assets are two draws and one shared asset is one.
-        //
-        // An `nvrhi::ITexture* texture` sat above it from Task 8 until ABI v15
-        // (NRI Phase 5a, Task 9.5b-ii), naming the same image as an object on
-        // the engine's NVRHI device. It was deleted, not retyped: no such
-        // device is created in any configuration, so it was null in every span
-        // this process ever built, and the recorder that bound it (End()) went
-        // with it.
         Guid textureId{};
     };
 
@@ -194,14 +169,8 @@ namespace Arcane
     class ARCANE_API Batcher2D
     {
     public:
-        // Never returns null. It took an `(nvrhi::IDevice*, ShaderLibrary*)`
-        // pair from NRI Phase 3, Task 2 until ABI v15 (Phase 5a, Task
-        // 9.5b-ii), where null in either argument meant a DEVICE-LESS batcher
-        // that skipped every GPU creation in Init. Every call site tree-wide
-        // passed (nullptr, nullptr), so device-less was the only state that
-        // ever existed; the parameters and the GPU half they selected are gone
-        // together, and ShaderLibrary -- which nothing but this signature
-        // pinned -- was deleted with them.
+        // Never returns null. A Batcher2D IS DEVICE-LESS: it takes no
+        // device, creates no GPU object, and records nothing itself.
         //
         // WHAT A BATCHER DOES, all of it CPU: Begin, SetLayer, every
         // Quad*/Rect/Line/Circle/Triangle/Glyph, RegisterMaterial/
@@ -232,18 +201,14 @@ namespace Arcane
         // Engine-global shader constants (Time/DeltaTime/ViewportSize) for
         // registered materials. Sticky -- the host sets them once per frame
         // before recording, and they leave through Drain() as
-        // Batch2DDrained::globals for the recorder to bind. (End() used to
-        // upload them into an NVRHI constant buffer; it uploads nothing now.)
-        // Built-ins ignore them.
+        // Batch2DDrained::globals for the recorder to bind. Nothing is
+        // uploaded here. Built-ins ignore them.
         virtual void SetGlobals(const GlobalParams&) {}
 
         // Opens one batch against a canvas of the given extent: clears the
         // recorded streams and resets (layer, order). The batch is read back
-        // with Drain(). Took a leading (nvrhi::ICommandList*,
-        // nvrhi::IFramebuffer*) pair until ABI v15 -- every caller passed
-        // (nullptr, nullptr), and the only thing that read them was End()'s
-        // recording body, deleted at Task 9.5b. (End() itself is still a
-        // vtable slot -- see its declaration below -- it just does nothing.)
+        // with Drain(). Begin() .. Drain() IS the bracket, and it names no
+        // command list and no target because nothing in this class records.
         virtual void Begin(uint32_t viewportWidth,
                            uint32_t viewportHeight) = 0;
 
@@ -263,11 +228,9 @@ namespace Arcane
         // [0,1]. `rotation` (radians) spins the quad about its CENTER
         // (default 0 == axis-aligned, the legacy path).
         //
-        // NAMES NO IMAGE, and since ABI v15 it cannot: it carried an
-        // `nvrhi::ITexture*` between uvs and size, and that pointer was the
-        // only thing that made it "textured". Its span records a nil Guid, so
-        // the recorder binds the white texel and the UVs ride the vertices.
-        // QuadTextured below is the one that names an asset.
+        // NAMES NO IMAGE. Its span records a nil Guid, so the recorder binds
+        // the white texel and the UVs ride the vertices. QuadTextured below is
+        // the one that names an asset.
         virtual void Quad(glm::vec2 dstPos, glm::vec2 dstSize,
                           glm::vec2 uvMin, glm::vec2 uvMax,
                           glm::vec4 color, float rotation = 0.0f) = 0;
@@ -290,12 +253,10 @@ namespace Arcane
         // msdf material (median-of-3 distance + screen-space AA). Text
         // stays on the single submission path.
         //
-        // THE ATLAS IS NOT A PARAMETER any more (ABI v15): it was an
-        // `nvrhi::ITexture*`, and a glyph atlas is a RUNTIME texture
+        // THE ATLAS IS NOT A PARAMETER: a glyph atlas is a RUNTIME texture
         // (SkylinePacker output) that no asset Guid names, so the span records
-        // nil either way. Atlas residency on the graph path is an open gap,
-        // not something this signature ever solved -- see the Batcher2D.cpp
-        // Glyph body.
+        // nil. Atlas residency is an OPEN GAP -- see the Batcher2D.cpp Glyph
+        // body.
         virtual void Glyph(glm::vec2 dstPos, glm::vec2 dstSize,
                            glm::vec2 uvMin, glm::vec2 uvMax,
                            glm::vec4 color) = 0;
@@ -318,33 +279,21 @@ namespace Arcane
         // ===== THE SINGLE SOURCE OF TRUTH ON End(). Anything elsewhere in the
         // tree that disagrees with this paragraph is stale; fix it here first.
         //
-        // End() IS A LIVE VTABLE SLOT THAT DOES NOTHING. It was the NVRHI
-        // recorder. NRI Phase 5a, Task 9.5b deleted its recording body once
-        // every Batcher2D in the process proved device-less, and ABI v15 (Task
-        // 9.5b-ii) took the NVRHI types out of the class around it. What is
-        // left refuses once, loudly, and returns.
+        // End() IS A LIVE VTABLE SLOT THAT DOES NOTHING. It refuses once,
+        // loudly, and returns.
         //
         // NOTHING CALLS IT, and nothing should: no host, no node, no system
         // brackets a batch with it. THE BRACKET IS Begin() .. Drain() --
         // Drain() is what sorts, builds the index stream, publishes Stats()
         // and hands the batch to the graph's Batch2DNode. A comment that tells
-        // a caller to "bracket Begin()/End()" is describing a bracket that no
-        // longer closes anything; the only End() call in the tree is the one
+        // a caller to "bracket Begin()/End()" is describing a bracket that
+        // closes nothing; the only End() call in the tree is the one
         // SeveranceTest makes to prove it records nothing.
         //
-        // KEPT DELIBERATELY, and it is an ABI-relevant keep: it is not itself
-        // an NVRHI signature, so the exit condition did not force it, and
-        // removing a live vtable slot is a second ABI-visible decision on top
-        // of v15's. A future task may delete it; that task owns the bump.
+        // KEPT DELIBERATELY, and the keep is ABI-relevant: removing a live
+        // vtable slot is an ABI-visible decision in its own right. A future
+        // task may delete it; that task owns the bump.
         virtual void End() = 0;
-
-        // RemoveTexture(nvrhi::ITexture*) is GONE at ABI v15. It evicted a
-        // cached texture->binding-set entry before the caller released the
-        // texture; the binding-set cache went with the recorder at Task 9.5b,
-        // so its loop had been running over a permanently empty map, and its
-        // only two callers (SpriteCache::Invalidate/Clear) were guarded on a
-        // SpriteEntry::texture that nothing had set since Task 7. All four
-        // pieces are deleted together.
 
         // Stats for the most recently drained batch.
         // Valid after Drain() until the next Begin(); an empty batch reports all-zero.
@@ -380,10 +329,9 @@ namespace Arcane
 
         // The registration data behind a REGISTERED material id -- shaders,
         // template layout, values instance -- for a consumer that has to build
-        // its OWN pipeline and bindings from it. The NRI graph path's
-        // Batch2DNode is that consumer (Phase 2, Task 9): a drained span names
-        // a material id, and this is the only way back from the id to what the
-        // id means.
+        // its OWN pipeline and bindings from it. Batch2DNode is that
+        // consumer: a drained span names a material id, and this is the only
+        // way back from the id to what the id means.
         //
         // Null for a built-in id (0..2), an id this batcher never issued, and
         // on a test double that registers nothing. The returned pointer is
@@ -394,8 +342,8 @@ namespace Arcane
         // why every new virtual goes at the end of this class. ABI v12.
         virtual const Material2DDesc* MaterialDesc(uint16_t /*id*/) const { return nullptr; }
 
-        // THE ASSET-IDENTITY SUBMISSION (NRI Phase 3, Task 2), and since ABI
-        // v15 the ONLY way to draw an image. Identical to QuadMaterial in
+        // THE ASSET-IDENTITY SUBMISSION, and the ONLY way to draw an image.
+        // Identical to QuadMaterial in
         // every respect -- same geometry, same stream, same material dispatch
         // (pass kMaterialSprite for the plain path) -- with ONE addition:
         // `textureId` names the image ASSET, and it travels into the drained
@@ -407,13 +355,6 @@ namespace Arcane
         // (physics debug draw, gizmos, the editor's own overlays) or they would
         // inherit the last sprite's identity and sample the wrong image. There
         // is no such failure mode when the id rides the call that uses it.
-        //
-        // IT USED TO CARRY BOTH KEYS. An `nvrhi::ITexture*` sat beside the
-        // Guid from Task 2 until v15, because the batcher then had an NVRHI
-        // recorder to feed. No NVRHI device is created in any configuration,
-        // so that pointer was null at every call; the Guid always was the one
-        // that could tell "untextured" from "textured on a device that is not
-        // there", and now it is the only one.
         //
         // Interface DEFAULT (not pure), like QuadMaterial: a geometry-recording
         // test double records the same quad, minus an identity it has nowhere

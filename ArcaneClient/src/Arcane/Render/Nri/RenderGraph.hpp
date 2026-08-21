@@ -234,7 +234,7 @@ namespace Arcane
         // device is refused, not silently adopted).
         NriDevice& device;
 
-        // ============ THE GRAVEYARD LANE (NRI Phase 3, Task 8-pre) ==========
+        // ============ THE GRAVEYARD LANE ==================================
         // WHERE EVERYTHING THIS GRAPH DESTROYS GOES -- the pool, the cached
         // attachment views, the per-execute imported views, the per-frame-slot
         // command buffers and allocators, and the submission fence. It is a
@@ -1008,7 +1008,7 @@ namespace Arcane
         // then a descriptor over it, which is the use-after-free this file's
         // teardown comments and PoolEpoch's own contract call out.
         //
-        // The inversion, concretely (whole-branch review, I1): RealizePool runs
+        // The inversion, concretely: RealizePool runs
         // mid-Execute, after the declarations and before the exec fns. It
         // buried at m_submitValue; the exec fns that follow call their node's
         // SyncPoolEpoch, which buries THAT node's cached views at

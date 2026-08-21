@@ -166,18 +166,13 @@ namespace Arcane
         // falls back to the untextured 1x1 m quad.
         void SetSpriteTable(const std::unordered_map<Guid, SpriteEntry>* sprites);
 
-        // NO render-resources bridge lives here any more. SetRenderResources /
-        // Device() / Shaders() handed a plugin the host's raw nvrhi::IDevice and
-        // ShaderLibrary so it could build its OWN engine render objects (the
-        // documented example was an OffscreenCanvas for a Minkowski-inset
-        // inspector). NRI Phase 5a deleted both of those classes along with the
-        // whole NVRHI device layer (Task 8b), and both hosts had already been
-        // passing (nullptr, nullptr) since Task 6 -- so the accessors could only
-        // ever return null. Removed at Task 9; that is what ABI 14 gates.
+        // NO RENDER-RESOURCES BRIDGE LIVES HERE. A plugin is handed no
+        // graphics device and no shader library, so it builds no engine
+        // render objects of its own.
         //
-        // If a plugin ever needs graph-side GPU resources again, that is a new,
-        // deliberate API over the render graph -- not a resurrected backend
-        // pointer handed across the plugin boundary.
+        // If a plugin ever needs GPU resources, that is a new, deliberate API
+        // over the render graph -- not a backend pointer handed across the
+        // plugin boundary.
 
         // --- camera bridge: the plugin drives the 2D camera; the render bridge reads it ---
         // CANONICAL transform (matches Sandbox::Camera::WorldToScreen): screen = world * zoom + offset.

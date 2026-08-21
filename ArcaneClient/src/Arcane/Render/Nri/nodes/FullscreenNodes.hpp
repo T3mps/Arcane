@@ -237,8 +237,8 @@ namespace Arcane
         // Records pass `pass` into an ALREADY-OPEN raster pass whose single
         // colour attachment is `target`. `sources` is chainInputSlots long, in
         // InputTexture slot order; an invalid handle (a slot this pass wired
-        // nothing into) binds the black texel, exactly as the NVRHI chain
-        // does. Emits no barrier: the executor derives them.
+        // nothing into) binds the black texel. Emits no barrier: the
+        // executor derives them.
         void Record(RenderGraphNodeContext& context, std::uint32_t pass,
                     std::span<const RgTexture> sources, RgTexture target,
                     std::uint32_t frameSlot);
@@ -284,7 +284,7 @@ namespace Arcane
             return ((std::uint64_t)frameSlot * kCbRegionsPerFrame + region) * regionStride;
         }
 
-        // ===== THE OWNER'S DECLARATION-TIME POOL SYNC (whole-branch review, I1)
+        // ===== THE OWNER'S DECLARATION-TIME POOL SYNC =====================
         // Same operation as the private, exec-fn-driven SyncPoolEpoch below --
         // "if the graph's pool epoch moved, bury every cached view and start
         // over" -- reachable by the object that OWNS this node, from OUTSIDE a
@@ -357,11 +357,10 @@ namespace Arcane
 
         NriDevice*        m_device    = nullptr;
         NriPipelineCache* m_pipelines = nullptr;
-        // The vehicle's SHARED image residency cache (NRI Phase 3, Task 2) --
-        // borrowed, never owned. This is what closed THE POST TEXTURE GAP: a
-        // declared texture param is now made resident through the same cache
-        // Batch2DNode uses, so a post pass and a sprite naming one image share
-        // one upload.
+        // The vehicle's SHARED image residency cache -- borrowed, never
+        // owned. A declared texture param is made resident through the same
+        // cache Batch2DNode uses, so a post pass and a sprite naming one image
+        // share one upload.
         NriTextureCache*  m_textures  = nullptr;
 
         nri::Texture*    m_white     = nullptr;
@@ -526,7 +525,7 @@ namespace Arcane
     // HUD, capture). `context` may be null -- see AddBatch2DNode's signature
     // note.
     //
-    // `offscreenOutput` chooses which target (NRI Phase 3, Task 7):
+    // `offscreenOutput` chooses which target:
     //   * NULL -- the swapchain backbuffer, via ImportSwapChainTexture: no
     //     nri::Texture* exists at declaration time because the graph owns
     //     acquire/present, and the fixed PRESENT exit state is what makes "the

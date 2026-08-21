@@ -63,12 +63,9 @@ namespace Arcane::Diagnostics
         // is a host that is not rendering (minimized), not a stalled GPU. The
         // case that makes it reachable is the swapchain's frame-slot wait,
         // which polls and republishes rather than blocking (see
-        // Render/Nri/NriSwapChain.cpp's PollingWaitForTimelineFence -- it was
-        // GpuInstrumentation.hpp's GpuFrameSlot until NRI Phase 5a, Task 9.5a
-        // deleted that class; the two NVRHI swapchains that were GpuFrameSlot's
-        // only users were already gone by then, deleted one task earlier at
-        // Task 8b) precisely so a wedged GPU is visible as "still waiting,
-        // still not retiring".
+        // Render/Nri/NriSwapChain.cpp's PollingWaitForTimelineFence)
+        // precisely so a wedged GPU is visible as "still waiting, still not
+        // retiring".
         //
         // TIGHTER than hangSeconds on purpose, and this is the whole reason
         // both numbers exist -- though NOT as a race between two live rules.
@@ -171,10 +168,8 @@ namespace Arcane::Diagnostics
     // per frame by the render path with a MONOTONE count of GPU-side sync
     // points the device has actually passed. The graph path publishes
     // NriSwapChain::CompletedFrameValue() -- its pacing timeline fence's
-    // completed value -- from NriGraphContext::RenderFrame. (Arcane::
-    // GpuFrameProgress derived the same count from an nvrhi event-query chain
-    // until NRI Phase 5a, Task 9.5a deleted it; NriSwapChain.hpp explains why
-    // the fence is a 1:1 replacement and not an approximation.)
+    // completed value -- from NriGraphContext::RenderFrame. NriSwapChain.hpp
+    // explains why that fence is an exact count and not an approximation.
     //
     // Deliberately NOT folded into Heartbeat(): that one says only that the
     // main thread is alive, which is exactly what a GPU hang can leave true.
@@ -243,9 +238,9 @@ namespace Arcane::Diagnostics
     // -------------------------------------------------------------------
     // GPU-section provider seam (GPU crash diagnostics arc, Task 4)
     // -------------------------------------------------------------------
-    // Installed by a GPU crash backend (Task 5 = D3D12, Task 6 = Vulkan) so
-    // WriteReport can fill an .arcdiag envelope's gpu-side fields without
-    // Base/Diagnostics knowing anything about NVRHI/D3D12/Vulkan. Called at
+    // Installed by a GPU crash backend so WriteReport can fill an .arcdiag
+    // envelope's gpu-side fields without Base/Diagnostics knowing anything
+    // about D3D12 or Vulkan. Called at
     // most once per report, with an envelope that already carries
     // guid/kind/timestamp/appName/phase/buildInfo/cpuThreadSummary: the
     // provider fills `envelope`'s queues/fault/activeLayers (and, if it

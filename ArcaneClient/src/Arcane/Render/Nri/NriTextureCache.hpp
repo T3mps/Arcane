@@ -1,41 +1,25 @@
 #pragma once
 
 // NriTextureCache -- ONE Guid -> nri::Texture residency cache for the whole
-// graph path (NRI Phase 3, Task 2).
+// render path.
 //
-// PROMOTED, not invented: this is Batch2DNode::EnsureTexture's private cache,
-// lifted out whole. Phase 2 gave that node a per-Guid upload so a registered
-// material's DECLARED texture params (t1..) could be sampled for real, and
-// left two things open which this class closes together:
-//
-//   1. THE TEXTURE GAP. A Batch2DDrawSpan named an `nvrhi::ITexture*` -- an
-//      object on the ENGINE's device, which the graph's device cannot sample
-//      -- so the SPRITE's own texture (t0) was the white texel on every span
-//      and a textured sprite rendered as its vertex tint alone. Since Task 2 a
-//      span also carries the image's ASSET Guid (Batch2DDrawSpan::textureId),
-//      which is device-independent, and THIS is what turns that Guid into
-//      something t0 can bind.
-//   2. THE POST TEXTURE GAP. PostChainNode bound the white texel for a post
-//      material's declared params for want of exactly this machinery, which
-//      "lives in Batch2DNode::EnsureTexture" (its own comment). Both nodes now
-//      share one cache, so a sprite and a post pass that name the same image
-//      get ONE upload rather than two.
+// IT IS SHARED BY EVERY NODE THAT SAMPLES AN ASSET, and that sharing is the
+// point: a sprite's own texture (t0, from Batch2DDrawSpan::textureId), a
+// registered material's DECLARED params (t1..), and a post material's
+// declared params all resolve through THIS cache -- so an image named by a
+// sprite and by a post pass gets ONE upload rather than two.
 //
 // WHERE THE PIXELS COME FROM, and why this class does not decode. The bytes
 // arrive through an injected `PixelSupplyFn` -- in production
-// `Assets::PixelsFor(Guid)` (Phase 3, Task 1), the engine's retained
-// decode-once pixel cache, which is DEVICE-FREE by charter. So the same decode
-// serves the NVRHI upload and this one, and this class owns no file I/O, no
-// stb call and no knowledge of the project registry. It is the same injection
-// shape (and the same reasoning) as NriGraphContext::AssetResolveFn: a RENDER
-// object must not grow a Runtime.
+// `Assets::PixelsFor(Guid)`, the engine's retained decode-once pixel cache,
+// which is DEVICE-FREE by charter. So this class owns no file I/O, no stb call
+// and no knowledge of the project registry. It is the same injection shape
+// (and the same reasoning) as NriGraphContext::AssetResolveFn: a RENDER object
+// must not grow a Runtime.
 //
-// THE SRGB RULE was inherited from Assets::GetTexture rather than re-decided:
-// that path uploaded `nvrhi::Format::SRGBA8_UNORM`, the canvas is LINEAR, and
-// the hardware does the decode -- so a UNORM view here would render the same
-// asset visibly brighter and turn a golden compare into a hunt. RGBA8_SRGB is
-// that format's NRI spelling. (GetTexture itself was deleted at ABI v15; this
-// cache is the only uploader left, so the rule now lives here alone.)
+// THE SRGB RULE: scene content uploads RGBA8_SRGB, because the canvas is
+// LINEAR and the hardware does the decode -- a UNORM view would render the
+// same asset visibly brighter. See ColorSpace below for the other half.
 //
 // FAILURES ARE MEMOIZED, exactly once each: an entry is inserted BEFORE the
 // first early return, with null members, so an unresolvable or undecodable
@@ -83,17 +67,15 @@ namespace Arcane
         // the buffer's lifetime and may evict it afterwards.
         using PixelSupplyFn = std::function<const PixelData*(const Guid&)>;
 
-        // ===== WHICH COLOUR SPACE THE VIEW SAMPLES IN (NRI Phase 3, Task 11)
-        // Inherited from the split the NVRHI side had between
-        // Assets::GetTexture and LoadDisplayTexture (both deleted at ABI v15),
-        // and kept for exactly the reason they had it -- the two have
-        // DIFFERENT consumers and there is no format that serves both:
+        // ===== WHICH COLOUR SPACE THE VIEW SAMPLES IN ====================
+        // TWO SPACES, because the two have DIFFERENT consumers and there is no
+        // one format that serves both:
         //
         //   Srgb    -- the SCENE. Uploads RGBA8_SRGB, so the sampler decodes
         //              to linear for the linear canvas and the hardware does
-        //              the work. THE SEVERANCE'S DEFAULT and what every
-        //              existing caller (Batch2DNode's sprites, PostChainNode's
-        //              declared params) gets without asking.
+        //              the work. THE DEFAULT, and what every existing caller
+        //              (Batch2DNode's sprites, PostChainNode's declared
+        //              params) gets without asking.
         //   Display -- ImGui. Uploads RGBA8_UNORM, so the sampled texel goes
         //              STRAIGHT to a display-referred target. ImGuiNri draws
         //              after the tonemap and its own font atlas is UNORM for

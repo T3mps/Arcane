@@ -1,7 +1,7 @@
 #pragma once
 
 // ImGuiNriNode -- the graph node that draws the HUD, and the LAST visual
-// writer of the `--nri-graph` frame (NRI Phase 2, Task 12).
+// writer of the frame.
 //
 // The frame's tail is
 //
@@ -10,14 +10,12 @@
 // and that ORDER IS THE MECHANISM: declaration order is execution order on
 // this graph, so ImGui composites onto the display-referred backbuffer after
 // the tonemap (and after the selection outline, when a probe run armed it)
-// and before the capture node reads it. It mirrors what the NVRHI host used
-// to do -- RuntimeApp recorded `pass:imgui` after `pass:tone`, into the same
-// backbuffer framebuffer, and the screenshot/golden readback happened after
-// both, before the NVRHI path was deleted.
+// and before the capture node reads it -- which is why a screenshot carries
+// the chrome that was actually shown.
 //
 // THE OBJECT HERE OWNS ALMOST NOTHING. Everything with a GPU lifetime lives
-// in ImGuiNri (Arcane/ImGui/ImGuiNri.hpp) -- the §7 "PORT OURS" backend that
-// mirrors ImGuiNvrhi's surface. This class is the graph glue: it holds one
+// in ImGuiNri (Arcane/ImGui/ImGuiNri.hpp) -- the §7 "PORT OURS" first-party
+// backend. This class is the graph glue: it holds one
 // ImGuiNri, resolves the vehicle's imgui_vs/imgui_ps bins into it at Create,
 // and splits the backend's work across the two phases the graph has:
 //
@@ -91,8 +89,8 @@ namespace Arcane
         // (NriGraphContext::Graves()) and its graph's own last submitted value.
         void PrepareFrame(ImDrawData* drawData, Graveyard& graveyard, std::uint64_t fence);
 
-        // THE USER-TEXTURE INVALIDATION HOOK, both variants forwarded (NRI
-        // Phase 3, Task 8-pre). Call one whenever a texture this backend may
+        // THE USER-TEXTURE INVALIDATION HOOK, both variants forwarded. Call
+        // one whenever a texture this backend may
         // have drawn is about to be destroyed -- the editor's offscreen
         // viewport output above all, whose replacement NRI may hand the address
         // the destroyed one just vacated.
@@ -130,7 +128,7 @@ namespace Arcane
     };
 
     // WHICH ImGui node a declaration means, and therefore which backend and
-    // which of the frame's two ImDrawData it draws (NRI Phase 3, Task 9).
+    // which of the frame's two ImDrawData it draws.
     //
     // They are TWO NODES over TWO BACKENDS rather than one node drawn twice,
     // and that is structural rather than tidy: an ImGuiNri caches the 1.92
@@ -157,9 +155,8 @@ namespace Arcane
     // Declares the ImGui node into `graph`: reads nothing, writes `target`
     // (the imported backbuffer the tonemap has already written) with the SAME
     // ColorWrite state -- so the compile derives no transition between them,
-    // which is both correct and what NVRHI's own state tracker does
-    // (requireTextureState skips a barrier when before == after for a non-UAV
-    // state). The blend reads the destination through the ROP, which
+    // which is correct: a barrier between equal non-UAV states is a no-op.
+    // The blend reads the destination through the ROP, which
     // AccessBits::COLOR_ATTACHMENT already covers.
     //
     // Also runs the node's DECLARATION-time texture prepare, for the same

@@ -24,14 +24,12 @@
 // a bound post chain, published as PostChainDesc bytes for the graph
 // recorder). They share one compile drain site, which is why they belong to
 // one owner: splitting them would mean a second Drain(), and
-// ShaderCompiler::Drain is the ONE place a compile result may become an NVRHI
-// shader (ShaderCompiler.hpp:9-13).
+// ShaderCompiler::Drain is the ONE place a compile result is taken up
+// (ShaderCompiler.hpp:9-13).
 //
-// WHAT IT DOES NOT OWN. The camera (a pure sweep -- Scene/SceneCamera.hpp), the
-// batcher, and the compile service: all injected. It never renders. (An
-// `nvrhi::IDevice* device` field lived in Services too, forwarded alongside
-// `backend` to both sub-caches, until NRI Phase 5a, Task 9.5a deleted it --
-// see Services::backend's own comment.)
+// WHAT IT DOES NOT OWN. The camera (a pure sweep -- Scene/SceneCamera.hpp),
+// the batcher, and the compile service: all injected. It never renders, and
+// it holds no graphics device at all.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
@@ -62,19 +60,14 @@ namespace Arcane
 
             // The frame batcher registered materials bind into. Null (a
             // headless host or a test) disables material binding; sprite
-            // resolution still works. It was ALSO forwarded to SpriteCache for
-            // a texture-eviction hook -- that hook went inert at NRI Phase 5a,
-            // Task 7 when SpriteEntry stopped naming a device object, and was
-            // deleted at ABI v15 with Batcher2D::RemoveTexture, so material
-            // binding is the whole of what this field does now.
+            // resolution still works. Material binding is the whole of what
+            // this field does: there is no texture-eviction hook, because
+            // nothing here holds a device object to evict.
             Batcher2D* batcher = nullptr;
 
-            // Forwarded to both sub-caches as the shader-compile target
-            // profile. SpriteMaterialCache stopped using it at NRI Phase 5a,
-            // Task 7 -- see its Services. An `nvrhi::IDevice* device` was
-            // forwarded to both alongside it until Task 9.5a; neither builds
-            // device objects any more, so the field and both forwards are
-            // gone (SceneRenderResolver.cpp).
+            // The shader-compile target profile, forwarded to the sub-caches
+            // that need one. No device travels beside it: none of the caches
+            // builds device objects.
             GraphicsBackend backend{};
 
             // The app-shared compile service. Null, or an unavailable one (no
@@ -110,12 +103,10 @@ namespace Arcane
         // NON-OWNING pointers to this object's maps (SceneResources.hpp:96-99).
         // CONTRACT for every host: declare the resolver so it destructs BEFORE
         // the Runtime (whose registry would otherwise be left pointing at freed
-        // maps). The matching "before the render device" half of this
-        // contract died with the nvrhi keep-alive texture map it referred to
-        // (NRI Phase 5a, Task 7 -- see SpriteCache.cpp's own note): none of
-        // the three caches this class owns holds a device-bound handle any
-        // more, so the Runtime-registry ordering above is the whole contract
-        // today.
+        // maps). There is no "before the render device" half to this
+        // contract: none of the three caches this class owns holds a
+        // device-bound handle (see SpriteCache.cpp's own note), so the
+        // Runtime-registry ordering above is the whole of it.
         ~SceneRenderResolver();
 
         SceneRenderResolver(const SceneRenderResolver&) = delete;
@@ -141,38 +132,34 @@ namespace Arcane
         // instance under an asset re-save.
         const MaterialInstance*  PostInstance() const;
 
-        // The bound chain as bytecode + layout + values, for the `--nri-graph`
-        // vehicle's post nodes (NRI Phase 2, Task 10; see PostChainDesc in
+        // The bound chain as bytecode + layout + values, for the graph's
+        // post nodes (see PostChainDesc in
         // Render/PostChainCache.hpp). Null for "no chain", and latched beside
         // PostInstance() in the same Refresh step, so both describe one
         // compile. Re-read every frame AFTER Refresh, for the same reason
         // PostInstance() is.
         //
-        // NRI Phase 5a, Task 4: this used to have an NVRHI sibling, PostChain()
-        // (an nvrhi FullscreenMaterialChain*), consumed by the editor's NVRHI
-        // arm and ArcaneRuntime's RenderNvrhi. Both are deleted -- the graph
-        // recorder is the only render path left -- so PostChain() is gone;
-        // this is the only bound-chain accessor now.
+        // THE ONLY BOUND-CHAIN ACCESSOR: the graph recorder is the only
+        // render path, and it binds from exactly these bytes.
         const PostChainDesc* PostDesc() const;
 
-        // What the scene REFERENCES versus what is bound right now (NRI Phase 2).
+        // What the scene REFERENCES versus what is bound right now.
         //
         // Materials bind asynchronously -- Refresh submits the compiles and a
         // LATER Refresh drains whatever the compile worker finished in the
         // meantime -- so "the scene declares a material" and "this frame can
         // draw it" are different facts, separated by WALL-CLOCK time. For an
         // interactive host that gap is invisible (a material appears a few
-        // frames in and nobody minds). For the golden harness it is the whole
+        // frames in and nobody minds). For a CAPTURE it is the whole
         // ballgame: a captured frame missing its materials is not a slower
-        // frame, it is a picture of DIFFERENT CONTENT, and freezing that as a
-        // baseline poisons every compare made against it afterwards.
+        // frame, it is a picture of DIFFERENT CONTENT.
         //
         // So this is the probe a host uses to answer "is what I am about to
         // capture actually the scene?" -- read it AFTER draining the compile
         // service to idle. Deliberately computed on demand (it re-walks the
         // SpriteRenderer and PostProcess views) rather than accumulated every
-        // Refresh: only the golden path calls it, and no ordinary frame should
-        // pay for it. Both halves read the LIVE registry against the LIVE
+        // Refresh: only a capture or probe path calls it, and no ordinary
+        // frame should pay for it. Both halves read the LIVE registry against the LIVE
         // caches, so the answer never depends on whether a Refresh has run --
         // a resolver that has never swept simply reports everything unbound.
         //
@@ -186,16 +173,8 @@ namespace Arcane
             int  spriteBound      = 0;       // ...whose material is registered with the batcher
             bool postReferenced   = false;   // a PostProcess assignment was found
             // ...and its chain is bound and ready -- computed from Desc()
-            // != nullptr (see Materials()'s own comment). NRI Phase 5a, Task
-            // 4 deleted FullscreenMaterialChain and the Ready() this used to
-            // read; the SEMANTICS moved too, not just the accessor name: the
-            // old check was device-gated and therefore constant-false on
-            // every device-less (graph-arm) run, while Desc() is not
-            // device-gated at all. Benign in practice -- every caller of this
-            // field overrides it on the graph arm anyway (both RuntimeApp.cpp
-            // and EditorAppFrame.cpp read PostDesc() directly instead, since
-            // m_graphContext/GraphMode() is unconditional) -- but it is a
-            // changed computation, not a renamed one.
+            // != nullptr (see Materials()'s own comment), which is NOT
+            // device-gated: a chain counts as bound once its bytes exist.
             bool postBound        = false;
         };
         MaterialCensus Materials() const;

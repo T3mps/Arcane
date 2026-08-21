@@ -1,22 +1,19 @@
 #pragma once
 
-// Batch2DNode -- the 2D batch as a RENDER GRAPH NODE (NRI Phase 2, Task 8).
+// Batch2DNode -- the 2D batch as a RENDER GRAPH NODE.
 //
 // The CPU half of the 2D path is NOT rewritten here. `Batcher2D` still does
 // all of it -- Quad/Rect/Line/Circle/Glyph accumulation, the (layer, order,
 // material, texture) sort key, the index stream and the draw spans -- and
 // this node consumes the result through `Batcher2D::Drain()`
 // (Batch2DDrained, Batcher2D.hpp). One batcher, one batching algorithm, and
-// since ABI v15 ONE recorder: this node. It landed beside a second one
-// (NVRHI's `Batcher2D::End()`), which is what let the phase's NVRHI golden
-// floor stay bit-green while this was proven; that floor did its job and
-// End() now records nothing. The homogenized-submission mandate is why both
-// ever shared the one batching algorithm.
+// ONE recorder: this node. The homogenized-submission mandate is why the
+// batching algorithm lives in the batcher rather than here.
 //
 // WHAT THIS NODE OWNS (all persistent, all created once at Create()):
 //   * the 1x1 white texel + its SHADER_RESOURCE view -- the untextured path,
 //     mirroring Batcher2D::Init;
-//   * one linear/clamp sampler, matching the NVRHI batcher's;
+//   * one linear/clamp sampler;
 //   * the BUILT-IN pipeline layout, registered in the vehicle's
 //     NriPipelineCache: root constants b0 (the 16-byte BatchConstants from
 //     data/shaders/sprite.hlsl) plus descriptor set space0 = { t0 texture,
@@ -36,11 +33,11 @@
 // so a setup-time allocation would land in the PREVIOUS frame's slot. Ring
 // buffers are deliberately not graph resources (NriUploadRing.hpp).
 //
-// REGISTERED SPRITE MATERIALS (Task 9) are drawn too, not only the built-ins.
-// A drained span whose `material` is >= 3 names a material the host registered
+// REGISTERED SPRITE MATERIALS are drawn too, not only the built-ins. A
+// drained span whose `material` is >= 3 names a material the host registered
 // with the batcher (SpriteMaterialCache -> Batcher2D::RegisterMaterial), and
-// this node builds its NRI half from the SAME registration the NVRHI path
-// uses -- reached through `Batcher2D::MaterialDesc(id)`:
+// this node builds its NRI half from that registration -- reached through
+// `Batcher2D::MaterialDesc(id)`:
 //   * the PSO from the retained stitched blobs (Material2DDesc::vsBytes/
 //     psBytes), keyed in the shared cache by their CONTENT hash, so a material
 //     recompile is a cache miss rather than a stale pipeline;
@@ -51,7 +48,7 @@
 //     below for why b1/b2 are set entries and not root descriptors;
 //   * both constant buffers out of this node's OWN per-frame-slot arena (see
 //     THE CONSTANT-BUFFER ARENA below), packed with MaterialInstance::PackCB
-//     once per material per frame -- the same dedup Batcher2D::End does;
+//     once per material per frame;
 //   * the material's declared TEXTURES, made resident on this device.
 //
 // THE REGISTER-SPACE RULE (verified against NRI's own validation sources, not
@@ -61,13 +58,11 @@
 // `if (rootDescriptorNum || rootSamplerNum)` guard; root CONSTANTS are exempt
 // because VK lowers them to push constants, which live outside the set-space
 // entirely -- Source/VK/PipelineLayoutVK.hpp). Every register in
-// sprite_material.hlsl is in the implicit space0, and the NVRHI path is the
-// format-compatibility floor so the shaders cannot move, which means the
-// texture/sampler set MUST be space0 and therefore rootRegisterSpace must be 0
-// too. Adding root descriptors for b1/b2 would collide -- so the constant
-// buffers are ordinary CONSTANT_BUFFER ranges in that one space-0 set. Root
-// CONSTANTS (b0) stay, exactly as Task 8 left them, for exactly the reason the
-// guard exempts them.
+// sprite_material.hlsl is in the implicit space0, so the texture/sampler set
+// MUST be space0 and therefore rootRegisterSpace must be 0 too. Adding root
+// descriptors for b1/b2 would collide -- so the constant buffers are ordinary
+// CONSTANT_BUFFER ranges in that one space-0 set. Root CONSTANTS (b0) stay,
+// for exactly the reason the guard exempts them.
 //
 // THE CONSTANT-BUFFER ARENA, and why the Task 5 upload ring does not back it.
 // An NRI descriptor-set constant buffer is bound through an `nri::Descriptor`
@@ -83,26 +78,19 @@
 // created once and the CPU only memcpys. The ring still carries the vertex and
 // index streams, which have no descriptor and therefore no such constraint.
 //
-// THE TEXTURE GAP IS CLOSED (Phase 3, Task 2 -- read before debugging a
-// golden). It used to be that a Batch2DDrawSpan named only an
-// `nvrhi::ITexture*` -- an object on the ENGINE's device, which this node's NRI
-// device cannot sample -- so the SPRITE's own texture (t0) was the white texel
-// on every span and a textured sprite rendered as its vertex tint alone.
-// A span now ALSO carries the image's asset Guid (Batch2DDrawSpan::textureId),
-// which is device-independent, and this node resolves it through the vehicle's
-// shared NriTextureCache -- the same cache the post chain uses, so an image
-// named by both is uploaded once. Task 9's machinery for a material's DECLARED
-// params (t1..) is unchanged in shape; it now reads that shared cache instead
-// of a private one.
+// HOW A SPRITE'S OWN TEXTURE REACHES t0. A span carries the image's asset
+// Guid (Batch2DDrawSpan::textureId), which is DEVICE-INDEPENDENT, and this
+// node resolves it through the vehicle's shared NriTextureCache -- the same
+// cache the post chain uses, so an image named by both is uploaded once. A
+// material's DECLARED params (t1..) read that same shared cache.
 //
 // A span whose id is NIL keeps the white texel, and that is the ordinary
 // untextured case, not a degradation: Rect/Line/Circle/Triangle and every
 // colored quad record nil. So does a GLYPH -- a font atlas is a runtime
-// texture with no asset Guid, which is the one texture gap this task leaves
-// open and names.
+// texture with no asset Guid, and that is the ONE texture gap left open.
 //
-// THE PER-TEXTURE DESCRIPTOR SETS this needs are the same shape Task 9 built
-// for materials: a set is written ONCE, at declaration time, and never
+// THE PER-TEXTURE DESCRIPTOR SETS follow the same shape as a material's: a
+// set is written ONCE, at declaration time, and never
 // rewritten while a frame is in flight. A built-in span's set is
 // per (texture), because its contents (t0 + s0) carry nothing per-frame; a
 // registered material's is per (material, texture, frame slot), because its
@@ -260,19 +248,16 @@ namespace Arcane
         static constexpr std::uint32_t kMaxMaterialSlots    = 8;
         static constexpr std::uint32_t kMaxMaterialTextures = 8;
         // How many DISTINCT sprite textures one run may bind at t0 -- the
-        // third pool-sizing cap, and the one Task 2 added. Past it a span
-        // degrades to the white texel with one ERROR naming this constant,
-        // exactly as the other two caps degrade.
+        // third pool-sizing cap. Past it a span degrades to the white texel
+        // with one ERROR naming this constant, exactly as the other two caps
+        // degrade.
         //
-        // RAISED 8 -> 64 (whole-branch review, M6). 8 was chosen while the only
-        // content on this path was ReferenceProject's handful of markers, with
-        // the deferral stated as "revisit before the editor tasks land content".
-        // Those tasks have landed and the editor opens ARBITRARY projects, where
-        // a tileset plus a few characters plus UI art passes 8 without anything
-        // unusual happening -- and the failure is quiet in the way that matters:
-        // the sprites draw as flat tint, the ERROR is one log line, and
-        // RenderErrorCount (the --nri-graph exit-code gate) does not move, so a
-        // scripted run still exits 0.
+        // 64, NOT 8, because the editor opens ARBITRARY projects: a tileset
+        // plus a few characters plus UI art passes 8 without anything unusual
+        // happening -- and the failure is quiet in the way that matters. The
+        // sprites draw as flat tint, the ERROR is one log line, and
+        // RenderErrorCount (the exit-code gate) does not move, so a scripted
+        // run still exits 0.
         //
         // 64 rather than higher because the cost is NOT linear: PoolSizes()
         // spends (1 + kMaxSpriteTextures) descriptor sets per material slot per
@@ -409,8 +394,7 @@ namespace Arcane
             // declared params.
             std::uint32_t textureCount = 0;
             // The declared params' views (t1..), in ordinal order. Null means
-            // "the white texel", the same substitution the NVRHI path makes
-            // for an unbound handle.
+            // "the white texel".
             nri::Descriptor* paramViews[kMaxMaterialTextures]{};
         };
 
@@ -422,7 +406,7 @@ namespace Arcane
         // The SHADER_RESOURCE view for asset `id`, through the vehicle's
         // SHARED cache (which uploads it on first sight). Null -- nil Guid,
         // unresolvable, undecodable, or NRI refused it -- means "use the white
-        // texel", which is what the NVRHI path does for a null handle.
+        // texel".
         [[nodiscard]] nri::Descriptor* TextureView(const Guid& id);
 
         // The BUILT-IN descriptor set that binds `id` at t0, allocating and

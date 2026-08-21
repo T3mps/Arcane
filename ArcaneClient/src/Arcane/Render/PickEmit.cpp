@@ -178,9 +178,8 @@ namespace Arcane
     }
 
     // ------------------------------------------------------------------
-    // The id pass's geometry. Moved here VERBATIM from PickBuffer.cpp's
-    // anonymous namespace (NRI Phase 2, Task 11) so the NVRHI recorder and the
-    // graph's pick node share ONE emitter -- see the header's block comment.
+    // The id pass's geometry -- ONE emitter, so no recorder can assign ids a
+    // different way. See the header's block comment.
     // ------------------------------------------------------------------
 
     uint32_t PickKindCode(PickDrawable::Kind kind)

@@ -4,16 +4,13 @@
 // imgui_impl_sdl3, via Window's native event tap). Renders POST-tonemap into
 // the display-referred backbuffer framebuffer the caller provides.
 //
-// ONE FLAVOR (NRI Phase 5a, Task 5 -- the two-flavor split that used to live
-// here is gone). Context + SDL3 platform backend + the event tap.
-// RenderToDrawData() is the only renderer entry point: this facade never
-// draws its own output, the frame graph's ImGuiNriNode does, consuming the
-// ImDrawData handed back below. The prior NVRHI flavor's own renderer
-// (ImGuiNvrhiRenderer) and its Render(cmd, fb) entry point are deleted along
-// with it -- see NRI Phase 5a, Task 4 for the render passes this follows.
+// ONE FLAVOR: context + SDL3 platform backend + the event tap.
+// RenderToDrawData() is the only renderer entry point -- this facade never
+// draws its own output; the frame graph's ImGuiNriNode does, consuming the
+// ImDrawData handed back below.
 //
 // EVERY entry point pins its own context with ImGui::SetCurrentContext before
-// touching ImGui state. That pin is the whole reason the graph render arm must
+// touching ImGui state. That pin is the whole reason a render path must
 // route its ImGui::Render()/EndFrame() through this facade instead of calling
 // them bare: a second (offscreen) context -- an editor document, a plugin that
 // adopted its own -- may be current, and a bare call would end the wrong

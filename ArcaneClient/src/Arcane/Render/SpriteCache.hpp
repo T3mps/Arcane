@@ -68,10 +68,8 @@ namespace Arcane
         void Request(const Guid& id);
 
         // Asset re-saved / removed: drop the table entry so the next Request
-        // re-resolves from disk. It is now exactly that one erase -- the
-        // keep-alive map it also cleared went at NRI Phase 5a, Task 7, and the
-        // Batcher2D::RemoveTexture eviction it performed first went at ABI v15
-        // (Task 9.5b-ii), because no SpriteEntry carries a texture object.
+        // re-resolves from disk. It is exactly that one erase: no SpriteEntry
+        // carries a texture object, so there is nothing to evict first.
         void Invalidate(const Guid& id);
 
         // Forget everything (project switch): a Guid resolves through the
