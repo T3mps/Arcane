@@ -120,10 +120,28 @@ namespace Arcane
     // One scene, one active camera: the FIRST active one wins and >1 warns once,
     // exactly as PostProcess above resolves. `active` lets a scene keep alternates
     // (a cutscene angle, a debug wide shot) without deleting them.
+    //
+    // Task 5 (Phase 4): `projection` selects which of the two lens models below
+    // applies. Orthographic is the default so every scene authored before this
+    // field existed (every serialized Camera predating it) loads unchanged --
+    // the 2D path (ActiveSceneCamera, SceneCamera.hpp) is gated on this default
+    // and stays byte-identical. `fovYDegrees`/`nearZ`/`farZ` are Perspective-only
+    // and, per the engine's MKS decision, `nearZ`/`farZ` are METERS (not an
+    // arbitrary clip-space unit).
+    enum class CameraProjection : std::uint8_t
+    {
+        Orthographic = 0,
+        Perspective  = 1,
+    };
+
     struct Camera
     {
         float orthographicSize = 5.0f;   // half-height of the view, in meters
         bool  active = true;
+        CameraProjection projection = CameraProjection::Orthographic;
+        float fovYDegrees = 60.0f;       // vertical field of view, degrees (Perspective only)
+        float nearZ = 0.1f;              // meters (MKS); Perspective only
+        float farZ  = 1000.0f;           // meters (MKS); Perspective only
     };
 
     // The editor-facing identity (Outliner arc): a STABLE Guid + display name.
@@ -238,16 +256,41 @@ namespace Arcane
         ASTRA_REFLECT_FIELD(PostProcess, material)
     ASTRA_END_REFLECT_TYPE()
 
-    // Two fields of one concern, so no Category (same rule as PostProcess above).
-    // The Range floor is deliberately above zero: a zero or negative half-height
-    // has no view to derive, and ActiveSceneCamera treats it as "no camera" rather
-    // than dividing by it.
+    ASTRA_REFLECT_ENUM(CameraProjection)
+        ASTRA_REFLECT_ENUM_VALUE(CameraProjection, Orthographic)
+        ASTRA_REFLECT_ENUM_VALUE(CameraProjection, Perspective)
+    ASTRA_END_REFLECT_ENUM()
+
+    // The Range floor on orthographicSize is deliberately above zero: a zero or
+    // negative half-height has no view to derive, and ActiveSceneCamera treats
+    // it as "no camera" rather than dividing by it. Field order matches the
+    // struct's own (every other reflect block in this file does the same).
+    // Categorized now that the component has two lens models worth of fields
+    // (Task 5, Phase 4) -- `active`/`projection` are uncategorized (apply to
+    // either lens), and each model's own fields group together so the
+    // Inspector doesn't interleave a Perspective-only field between two
+    // Orthographic-only ones.
     ASTRA_REFLECT_TYPE(Camera)
         ASTRA_REFLECT_FIELD(Camera, orthographicSize)
+            ASTRA_REFLECT_ATTR(Category, "Orthographic")
             ASTRA_REFLECT_ATTR(Tooltip, "Half-height of the visible world, in meters. Resolution-independent: each host derives its zoom from the viewport height, so the framing holds at any window size.")
             ASTRA_REFLECT_ATTR(Range, 0.01, 10000.0, 0.1)
         ASTRA_REFLECT_FIELD(Camera, active)
             ASTRA_REFLECT_ATTR(Tooltip, "Only active cameras are considered; the first one found renders the scene.")
+        ASTRA_REFLECT_FIELD(Camera, projection)
+            ASTRA_REFLECT_ATTR(Tooltip, "Orthographic (the default) preserves every 2D scene. Perspective is the 3D lens (Phase 4's mesh slice).")
+        ASTRA_REFLECT_FIELD(Camera, fovYDegrees)
+            ASTRA_REFLECT_ATTR(Category, "Perspective")
+            ASTRA_REFLECT_ATTR(Tooltip, "Vertical field of view, in degrees.")
+            ASTRA_REFLECT_ATTR(Range, 1.0, 179.0, 1.0)
+        ASTRA_REFLECT_FIELD(Camera, nearZ)
+            ASTRA_REFLECT_ATTR(Category, "Perspective")
+            ASTRA_REFLECT_ATTR(Tooltip, "Near clip plane distance, in meters (MKS).")
+            ASTRA_REFLECT_ATTR(Range, 0.001, 10000.0, 0.01)
+        ASTRA_REFLECT_FIELD(Camera, farZ)
+            ASTRA_REFLECT_ATTR(Category, "Perspective")
+            ASTRA_REFLECT_ATTR(Tooltip, "Far clip plane distance, in meters (MKS).")
+            ASTRA_REFLECT_ATTR(Range, 0.01, 1000000.0, 1.0)
     ASTRA_END_REFLECT_TYPE()
 
     ASTRA_REFLECT_TYPE(Identity)

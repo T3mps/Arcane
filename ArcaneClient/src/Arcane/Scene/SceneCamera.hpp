@@ -16,6 +16,7 @@
 #include <Astra/Registry/Registry.hpp>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>   // perspectiveRH_ZO, lookAtRH
 
 #include <optional>
 
@@ -63,7 +64,14 @@ namespace Arcane
         reg.CreateView<Camera>().ForEach(
             [&](Astra::Entity e, Camera& cam)
         {
-            if (!cam.active || cam.orthographicSize <= 0.0f)
+            // Task 5 (Phase 4): the projection guard is a no-op for every scene
+            // that predates the field (Camera::projection defaults to
+            // Orthographic), which is what keeps this function's output
+            // byte-identical for all of those. It exists so a Perspective camera
+            // -- whose orthographicSize is just whatever default it never
+            // touched -- cannot be swept up here and turned into a bogus 2D
+            // offset+zoom view; it is ActivePerspectiveSceneCamera's below.
+            if (!cam.active || cam.projection != CameraProjection::Orthographic || cam.orthographicSize <= 0.0f)
                 return;
             if (found++ != 0)
                 return;   // first active wins; keep counting for the caller's warning
@@ -87,6 +95,112 @@ namespace Arcane
         // The camera's world position lands at the viewport CENTRE, which is what
         // makes zoom resolution-independent: screen = world * zoom + offset.
         v.offset      = glm::vec2(viewW, viewH) * 0.5f - center * v.zoom;
+        return v;
+    }
+
+    // Task 5 (Phase 4): the perspective sibling. SceneCameraView above is
+    // glm::vec2-shaped end to end (a 2D screen = world * zoom + offset
+    // transform) and none of that math means anything to a lens, so a
+    // Perspective camera gets its own return type -- a 4x4 view and a 4x4
+    // projection -- rather than growing matrix fields no ortho caller reads.
+    //
+    // DEPTH CONVENTION: [0,1], not [-1,1] and not reverse-Z. glm defaults to
+    // OpenGL's [-1,1] convention, and GLM_FORCE_DEPTH_ZERO_TO_ONE is not
+    // defined anywhere in this tree, so PerspectiveProjection states [0,1] at
+    // the call site via glm's explicit *_ZO entry point instead -- a tree-wide
+    // define would also silently change every OTHER glm projection call,
+    // ortho included, the moment one is added. Reverse-Z is a distinct,
+    // separately-decided-against choice (it would additionally flip which of
+    // near/far maps to NDC z=0 and swap the depth compare op); PerspectiveCameraTest.cpp
+    // pins today's [0,1], forward-Z mapping explicitly so a future reverse-Z
+    // switch is a deliberate decision, not a silent drift.
+    //
+    // HANDEDNESS: right-handed (the camera looks down -Z; +X is right, +Y is
+    // up), matching glm's own RH family (perspectiveRH_*/lookAtRH). There is
+    // no PRE-EXISTING 3D handedness to inherit from the ortho path: Transform/
+    // WorldTransform are 2D-only throughout today's tree (Components.hpp --
+    // glm::vec2 position, glm::mat3 world matrix) and sprite.hlsl hardcodes
+    // clip.z = 0.0, so nothing upstream of this task fixes a convention. RH is
+    // instead FORCED by this task's own pinned property (PerspectiveCameraTest.cpp,
+    // the 90-degree-fov case): a view-space point (z, 0, -z) lands exactly on
+    // the RIGHT clip plane at fovY=90 deg/aspect=1 only if points in front of the
+    // camera have NEGATIVE view-space Z, i.e. the camera looks down -Z (RH).
+    // Under a LH camera (looking down +Z), that same point -- Z = -z < 0 --
+    // would be BEHIND the camera and could not land on any clip plane of the
+    // visible frustum at all.
+    struct PerspectiveCameraView
+    {
+        glm::mat4 view{1.0f};
+        glm::mat4 projection{1.0f};
+    };
+
+    // The projection half in isolation: a pure numeric function of the lens
+    // parameters alone (no Registry, no Camera, no WorldTransform), so its
+    // properties can be pinned directly -- aspect ratio's effect on x only,
+    // the near/far -> NDC-z mapping, and the 90-degree-fov clip-plane identity
+    // above -- without any ECS scaffolding.
+    [[nodiscard]] inline glm::mat4 PerspectiveProjection(float fovYDegrees, float aspectRatio,
+                                                          float nearZ, float farZ) noexcept
+    {
+        return glm::perspectiveRH_ZO(glm::radians(fovYDegrees), aspectRatio, nearZ, farZ);
+    }
+
+    // The active PERSPECTIVE camera's view for an aspectRatio viewport, or
+    // nullopt under the same "leave the stored camera ALONE" contract
+    // ActiveSceneCamera documents above. Perspective cameras are swept
+    // SEPARATELY from ActiveSceneCamera (which now skips any camera whose
+    // projection is not Orthographic -- see its guard above), so a scene never
+    // has to answer "which mode is the ambiguous first camera" -- each mode
+    // resolves its own first-active-wins independently.
+    //
+    // VIEW: eye is the entity's world position, resolved by the exact same
+    // WorldTransform-then-Transform-fallback rule ActiveSceneCamera uses
+    // above (so moving a camera entity moves both lenses the same way),
+    // extended into 3D at Z=0. Orientation is fixed at forward=(0,0,-1),
+    // up=(0,1,0): Transform carries no 3D orientation yet (2D-only,
+    // Components.hpp) so a perspective camera's FACING is future work --
+    // authoring a full 3D pose is out of THIS task's scope (no new Transform,
+    // no new Camera fields beyond the interface above). Today it always looks
+    // straight down -Z from its authored 2D position, which is a real,
+    // narrow, and explicit contract: enough for a GPU consumer to have a
+    // working camera without this task inventing a 3D transform its own file
+    // list does not include.
+    inline std::optional<PerspectiveCameraView> ActivePerspectiveSceneCamera(Astra::Registry& reg,
+                                                                              float aspectRatio,
+                                                                              int* outCount = nullptr)
+    {
+        int       found = 0;
+        glm::vec2 center{0.0f, 0.0f};
+        float     fovYDegrees = 60.0f;
+        float     nearZ = 0.1f;
+        float     farZ  = 1000.0f;
+
+        reg.CreateView<Camera>().ForEach(
+            [&](Astra::Entity e, Camera& cam)
+        {
+            if (!cam.active || cam.projection != CameraProjection::Perspective)
+                return;
+            if (found++ != 0)
+                return;   // first active wins; keep counting for the caller's warning
+
+            fovYDegrees = cam.fovYDegrees;
+            nearZ       = cam.nearZ;
+            farZ        = cam.farZ;
+            if (const WorldTransform* wt = reg.GetComponent<WorldTransform>(e))
+                center = glm::vec2(wt->matrix[2].x, wt->matrix[2].y);   // translation column
+            else if (const Transform* lt = reg.GetComponent<Transform>(e))
+                center = lt->position;   // not propagated yet: local IS world for a root
+        });
+
+        if (outCount)
+            *outCount = found;
+        if (found == 0 || aspectRatio <= 0.0f || nearZ <= 0.0f || farZ <= nearZ)
+            return std::nullopt;
+
+        PerspectiveCameraView v;
+        const glm::vec3 eye(center, 0.0f);
+        v.view       = glm::lookAtRH(eye, eye + glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        v.projection = PerspectiveProjection(fovYDegrees, aspectRatio, nearZ, farZ);
         return v;
     }
 }
