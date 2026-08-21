@@ -284,11 +284,10 @@ namespace Arcane
         // and the platform-texture walk is harmless to repeat (a second pass
         // finds nothing left matching RefCount == 1). m_device itself is
         // NEVER cleared, so the `!m_device` early-out only guards an object
-        // that was never Release()'d at all, not a repeat call. Mirrors
-        // ImGuiNvrhiRenderer::Shutdown, including its
-        // walk of the PLATFORM texture list rather than only our own map --
-        // that is what catches an ImTextureData whose WantCreate arrived
-        // after the last frame, so a later re-Init is clean.
+        // that was never Release()'d at all, not a repeat call. It walks the
+        // PLATFORM texture list rather than only our own map -- that is what
+        // catches an ImTextureData whose WantCreate arrived after the last
+        // frame, so a later re-Init is clean.
         void Release(Graveyard& graveyard, std::uint64_t fence);
 
         // How many distinct textures one context may have in flight here. A

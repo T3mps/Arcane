@@ -227,8 +227,9 @@ TEST_CASE("nri landing: the graph ImGuiLayer pins its own context across Begin/R
     REQUIRE(drawData != nullptr);
     CHECK(drawData->Valid);                    // Render() ran on a context that HAD a frame
 
-    // The discard half of the pair (both non-Full golden stages take it) also
-    // pins, and leaves the frame balanced so the next BeginFrame is legal.
+    // The discard half of the pair -- what a caller takes when it wants no HUD
+    // -- also pins, and leaves the frame balanced so the next BeginFrame is
+    // legal.
     ImGui::SetCurrentContext(foreign);
     layer->BeginFrame();
     CHECK(ImGui::GetCurrentContext() == owned);

@@ -41,8 +41,7 @@ namespace Arcane
         }
 
         // 16-byte root-constant block matching imgui.hlsl's ImGuiConstants
-        // (scale + translate). Byte-identical to ImGuiNvrhi.cpp's
-        // ImGuiPushConstants -- both recorders feed the SAME shader.
+        // (scale + translate). The layout is the shader's, not this file's.
         struct ImGuiRootConstants
         {
             float scale[2];
@@ -104,8 +103,8 @@ namespace Arcane
         // one moment this class can know which context it serves.
         m_imguiContext = ImGui::GetCurrentContext();
 
-        // Exactly ImGuiNvrhiRenderer::Init's three lines, on the context the
-        // caller has already pinned. HasTextures is the 1.92 protocol
+        // The backend flags, on the context the caller has already pinned.
+        // HasTextures is the 1.92 protocol
         // NewFrameTexUpdates implements; HasVtxOffset is what lets one
         // concatenated vertex buffer serve every draw list
         // (DrawIndexedDesc::baseVertex). Both flags are idempotent and the name
@@ -153,10 +152,9 @@ namespace Arcane
             return false;
         }
 
-        // Sets the same three flags the deleted ImGuiNvrhiRenderer::Init used
-        // to, on whatever context is CURRENT. HasTextures is the 1.92
-        // protocol NewFrameTexUpdates implements; HasVtxOffset is what lets
-        // one concatenated vertex buffer serve every draw list
+        // Sets the backend flags on whatever context is CURRENT. HasTextures
+        // is the 1.92 protocol NewFrameTexUpdates implements; HasVtxOffset is
+        // what lets one concatenated vertex buffer serve every draw list
         // (DrawIndexedDesc::baseVertex).
         //
         // The host's ImGuiLayer has already created and pinned its context by
@@ -215,9 +213,8 @@ namespace Arcane
     {
         const nri::CoreInterface& core = m_device->Core();
 
-        // LINEAR + clamp, exactly ImGuiNvrhiRenderer::Init's
-        // setAllFilters(true) / Clamp -- ImGui's own default, and what keeps
-        // the font atlas from bleeding at its edges.
+        // LINEAR + clamp -- ImGui's own default, and what keeps the font atlas
+        // from bleeding at its edges.
         nri::SamplerDesc samplerDesc = {};
         samplerDesc.filters.min  = nri::Filter::LINEAR;
         samplerDesc.filters.mag  = nri::Filter::LINEAR;
@@ -614,11 +611,9 @@ namespace Arcane
 
         if (tex->Status == ImTextureStatus_WantCreate || tex->Status == ImTextureStatus_WantUpdates)
         {
-            // ImGuiNvrhiRenderer uploads the whole subresource on BOTH paths
-            // (writeTexture is whole-subresource; region staging was left as a
-            // later optimisation). The helper is whole-subresource too, so the
-            // two recorders upload identical bytes -- a WantUpdates here is a
-            // full re-upload, not a partial one, and that is deliberate parity
+            // THE HELPER IS WHOLE-SUBRESOURCE, so a WantUpdates here is a full
+            // re-upload rather than a partial one. Region staging is a later
+            // optimisation, and skipping it is deliberate
             // rather than an oversight.
             if (tex->BytesPerPixel != 4)
             {
@@ -648,8 +643,7 @@ namespace Arcane
             if (!texture)
             {
                 // RGBA8_UNORM (NOT sRGB): ImGui colours are display-referred
-                // and the target is the display-referred backbuffer. Same
-                // choice, and the same reason, as ImGuiNvrhi's.
+                // and the target is the display-referred backbuffer.
                 nri::TextureDesc textureDesc = {};
                 textureDesc.type      = nri::TextureType::TEXTURE_2D;
                 textureDesc.usage     = nri::TextureUsageBits::SHADER_RESOURCE;
@@ -728,8 +722,8 @@ namespace Arcane
             tex->SetStatus(ImTextureStatus_OK);
         }
 
-        // ImGuiNvrhiRenderer's guard, kept verbatim: ImGui only means it once
-        // the texture has gone unused for a frame.
+        // THE UnusedFrames GUARD: ImGui only means a WantDestroy once the
+        // texture has gone unused for a frame.
         if (tex->Status == ImTextureStatus_WantDestroy && tex->UnusedFrames > 0)
             DestroyTexture(tex, graveyard, fence);
     }
@@ -824,9 +818,8 @@ namespace Arcane
 
         // Root constants: the VS outputs pos*scale + translate directly, so
         // scale.y is NEGATIVE (ImGui's y-down -> clip y-up). DisplayPos is
-        // (0,0) for single-viewport apps but handled for generality. Copied
-        // verbatim from ImGuiNvrhiRenderer -- the two recorders feed the same
-        // shader and must produce the same transform.
+        // (0,0) for single-viewport apps but handled for generality. The
+        // transform is imgui.hlsl's contract, not a choice made here.
         const float L = drawData->DisplayPos.x;
         const float T = drawData->DisplayPos.y;
         ImGuiRootConstants push{};
@@ -846,8 +839,7 @@ namespace Arcane
         key.colorCount      = 1;
         key.depthFormat     = nri::Format::UNKNOWN;
         key.topology        = nri::Topology::TRIANGLE_LIST;
-        // SrcAlpha/InvSrcAlpha + One/InvSrcAlpha -- byte-for-byte
-        // ImGuiNvrhiRenderer::GetPipeline's blend state.
+        // SrcAlpha/InvSrcAlpha + One/InvSrcAlpha -- ImGui's own blend state.
         key.blend           = NriPipelineCache::GraphicsKey::Blend::AlphaOver;
 
         // `stages` lives in THIS frame, which encloses GetGraphics -- the fill
@@ -896,8 +888,8 @@ namespace Arcane
         const ImVec2 clipOff   = drawData->DisplayPos;
         const ImVec2 clipScale = drawData->FramebufferScale;
 
-        // Per ImDrawList, per ImDrawCmd -- the same walk ImGuiNvrhiRenderer
-        // runs. The executor already set a full-attachment VIEWPORT and
+        // Per ImDrawList, per ImDrawCmd, which is the walk ImGui's draw data
+        // calls for. The executor already set a full-attachment VIEWPORT and
         // SCISSOR for this pass; the viewport is kept and the scissor is
         // re-set per command. CmdSetScissors is not a barrier, so a node is
         // allowed to issue it, and nothing is restored afterwards -- every

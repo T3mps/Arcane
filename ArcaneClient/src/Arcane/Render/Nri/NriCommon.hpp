@@ -3,11 +3,9 @@
 // NRI substrate (Phase 1, Task 4): result-check discipline, callback-to-
 // latch wiring, and one-line device identity logging. Every later NRI task
 // in ArcaneClient/src/Arcane/Render/Nri/ builds on these three symbols, so
-// the signatures here are load-bearing. (The Phase 1 task brief this used to
-// cite was an EPHEMERAL SDD artifact -- gitignored and deleted at that phase's
-// close -- so the citation is dropped rather than left dangling; the surviving
-// account of each NRI phase is the milestone record at the tail of its own
-// plan under docs/plans/.)
+// the signatures here are load-bearing. (The surviving account of how the NRI
+// layer was built is the milestone record at the tail of each plan under
+// docs/plans/.)
 //
 // Include order: NRIDeviceCreation.h declares nri::Message with an
 // enumerator literally named ERROR, and <windows.h> (dragged in

@@ -451,12 +451,11 @@ namespace Arcane
         if (!m_tonemap)
             return false;   // already logged
         // ---------------------------------------------------------------
-        // THE TWO HUD NODES (the host chrome's is Task 12's, the game's is Task
-        // 9's), each built ONLY when the caller asks for it. Either way the
-        // node declares nothing unless the driver hands that frame draw data,
-        // so an ordinary run and a stage-golden run still differ only in what
-        // the frame ASKS for -- carry 8's "the flag off leaves the previous
-        // task's frame byte for byte" holds for both HUDs.
+        // THE TWO HUD NODES -- the host chrome's and the game's -- each built
+        // ONLY when the caller asks for it. Either way the node declares
+        // nothing unless the driver hands that frame draw data, so two runs
+        // differ only in what the frame ASKS for: not asking for a HUD leaves
+        // the rest of the frame byte for byte identical.
         //
         // ASKING IS NOT BOOKKEEPING (Task 9 fix round 1). Each node ADOPTS an
         // ImGui context, and its Release walks THAT context's platform texture
@@ -485,12 +484,12 @@ namespace Arcane
         }
 
         // ---------------------------------------------------------------
-        // The pick + outline pair (Task 11) is built ONLY when something asks
-        // for it, and that gate is not laziness -- it is what makes carry 8
-        // structural. An ordinary --nri-graph run (every stage-golden run) then
-        // creates NO readback buffer, NO descriptor pool, NO pipeline layout
-        // and NO arena for this chain, so nothing about it can perturb a
-        // baseline. Asked for, it is built EAGERLY like the other three: a node
+        // The pick + outline pair is built ONLY when something asks for it, and
+        // that gate is not laziness -- it is what makes "not asking costs
+        // nothing" structural. A run that does not ask creates NO readback
+        // buffer, NO descriptor pool, NO pipeline layout and NO arena for this
+        // chain, so nothing about it can perturb the frame. Asked for, it is
+        // built EAGERLY like the other three: a node
         // that cannot be created must fail the vehicle at boot rather than
         // render a probe frame that silently draws nothing.
         //
@@ -1223,24 +1222,16 @@ namespace Arcane
         // AFTER the tonemap for the same reason the outline composite is: a HUD
         // is display-referred and must not be graded.
         //
-        // STAGE-GATED AS OF NRI PHASE 3, TASK 13 -- re-taking Task 9's
-        // "not stage-gated (unlike the host HUD below)" ruling, which was
-        // written when the editor's viewport frame carried no stage
-        // vocabulary at all. Task 13 gives it one, and states the editor's
-        // stage semantics explicitly: `full` = +outline/gameui composite,
-        // i.e. the game HUD is `full`-only overlay content, exactly like
-        // the host HUD immediately below. Same reasoning either way -- an
-        // overlay drawn on top of the scene would sit on top of a
-        // batch/post stage golden and mask exactly the pixels a
-        // node-by-node comparison needs.
+        // GATED LIKE THE HOST HUD IMMEDIATELY BELOW, and for the same reason:
+        // the game HUD is OVERLAY content. An overlay drawn on top of the scene
+        // masks exactly the pixels a frame-to-frame comparison needs, so a
+        // caller that asked for the scene without host chrome does not want the
+        // plugin's chrome either.
         //
         // BEHAVIOUR-INERT ON THE RUNTIME: RuntimeFrame.cpp never sets
         // FrameDesc::gameUi (only EditorApp::ArmGraphViewportFrame does),
         // so this gate is reachable only through the editor. See
-        // RgFrameShape::gameUi and FrameDesc::gameUi for the full account,
-        // and RenderGraphTest.cpp's "NOT stage-gated" case (now "IS
-        // stage-gated, matching the host HUD, as of Task 13") for the
-        // pinning the report says to re-take honestly rather than inherit.
+        // RgFrameShape::gameUi and FrameDesc::gameUi for the full account.
         // ---------------------------------------------------------------
         if (shape.gameUi)
             AddImGuiNode(graph, context, handles.backbuffer, ImGuiNodeSlot::GameUi);

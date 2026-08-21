@@ -2430,10 +2430,9 @@ namespace Arcane::Editor
 
         Arcane::NriGraphContext::FrameDesc frame;
         frame.imgui = chrome;
-        // stage stays Full -- the ONE stage that declares a HUD node at all
-        // (DeclareGraphFrame gates the host HUD on it). The editor's golden
-        // harness and its stage semantics are Task 13's; Full is what an
-        // ordinary run means on both hosts.
+        // A non-null `imgui` is what declares the HUD node at all
+        // (DeclareGraphFrame gates the host HUD on exactly that), and the
+        // chrome frame always wants one.
         const Arcane::NriGraphContext::FrameOutcome outcome =
             m_graphChrome->RenderFrame(frame);
 

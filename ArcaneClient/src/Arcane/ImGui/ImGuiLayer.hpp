@@ -49,9 +49,9 @@ namespace Arcane
         // record time.
         virtual ImDrawData* RenderToDrawData() = 0;
 
-        // Ends this frame and DROPS it: the balancing move for a frame that
-        // was begun and must not be drawn (the two non-Full golden stages,
-        // where host chrome would mask the pixels a stage golden compares).
+        // Ends this frame and DROPS it: the balancing move for a frame that was
+        // begun and must not be drawn -- a caller that asked for the scene
+        // WITHOUT host chrome, where the HUD would mask the pixels it wants.
         virtual void EndFrameDiscard() = 0;
 
         // ImGui capture state for the input layer: pass these into

@@ -1146,8 +1146,7 @@ namespace Arcane::Editor
         std::uint32_t w = 0, h = 0;
         std::vector<unsigned char> rgba;
         // ReadCapture hands back TIGHT RGBA8, already swizzled out of the
-        // output's BGRA -- the same normalization the golden comparator
-        // relies on, so these bytes are directly the ones a PNG wants.
+        // output's BGRA, so these bytes are directly the ones a PNG wants.
         // A false here is NOT a run failure (its own contract says so).
         if (!graph->ReadCapture(w, h, rgba))
             return false;

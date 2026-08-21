@@ -227,8 +227,8 @@ TEST_CASE("pixel: an offscreen graph frame captures at the requested extent (vul
 
 // ---------------------------------------------------------------------------
 // 2. ReadCapture REFUSES A FRAME THAT DID NOT ASK TO BE CAPTURED. This is the
-//    contract that keeps a golden run from silently comparing a stale buffer --
-//    the accessor's own comment states it, and nothing pinned it.
+//    contract that keeps a capture consumer from silently reading a stale
+//    buffer -- the accessor's own comment states it, and nothing pinned it.
 // ---------------------------------------------------------------------------
 namespace
 {
@@ -610,10 +610,9 @@ TEST_CASE("outline: the JFA traces the selected silhouette and nothing when the 
 //    a re-run of the same frame reproduces itself exactly.
 //
 //    IT ALSO PINS THE FLAG SURFACE. `post`, `gameUi` and `imgui` are null here,
-//    which is how a caller asks for the frame WITHOUT those passes -- the
-//    mechanism that replaced the old GoldenStage ordinal (see FrameDesc). If
-//    nulling them ever stopped meaning "omit the node", this frame would grow
-//    passes and stop matching itself.
+//    which is how a caller asks for the frame WITHOUT those passes (see
+//    FrameDesc). If nulling them ever stopped meaning "omit the node", this
+//    frame would grow passes and stop matching itself.
 // ---------------------------------------------------------------------------
 namespace
 {

@@ -11,10 +11,10 @@ namespace Arcane
     {
         // The window shape: hidden until the first presented frame (the
         // caller reveals it via Window::Show once the render vehicle that
-        // owns this window's only swapchain exists). The 1280x720 default
-        // matters: every golden baseline was captured at this size, so a
-        // different default here would make every stage compare a dimension
-        // mismatch rather than a pixel one.
+        // owns this window's only swapchain exists). The 1280x720 default is
+        // load-bearing for anything that compares captured frames: change it
+        // and two captures differ in DIMENSION rather than in pixels, which
+        // reads as a renderer change and is not one.
         WindowDesc HostWindowDesc(const HostConfig& cfg)
         {
             WindowDesc wd;

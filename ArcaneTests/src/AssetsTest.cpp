@@ -305,8 +305,8 @@ TEST_CASE("Assets resolves AssetId loads through the installed resolver", "[asse
 // through untouched, so a second anchoring step on the id route was
 // unobservable. With a relative project root it is anything but: contentRoot /
 // <resolver result> yields "Proj/Content/Proj/Content/textures/marker.png" --
-// the desk-observed LoadPngRgba failure that left the D3a goldens untextured on
-// both render paths and both backends.
+// the desk-observed LoadPngRgba failure that left the reference scene
+// untextured on both backends.
 //
 // A DECOY is planted at exactly that doubled location so a regression names the
 // MECHANISM rather than reporting a missing file: against the pre-fix facade

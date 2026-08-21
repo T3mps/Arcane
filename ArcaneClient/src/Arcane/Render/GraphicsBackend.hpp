@@ -8,8 +8,8 @@
 // nothing else.
 //
 // Deliberately NOT an "RHI backend" enum with a NONE/Null member: the value
-// answers "dxil or spirv, D3D12 or Vulkan" for shader paths, golden-image
-// directory names, launch arguments and log banners. NriDevice::
+// answers "dxil or spirv, D3D12 or Vulkan" for shader paths, launch arguments
+// and log banners. NriDevice::
 // CreateNoneForTests states the other half of that rule -- it reports D3D12
 // for a NONE device, because "GraphicsBackend has no NONE value and inventing
 // one would leak a test-only concept into every backend switch in the tree"

@@ -584,10 +584,8 @@ void RuntimeApp::ShutdownGraphPath()
     {
         ARC_ERROR("[nri-graph] FAILED: {} validation/render error(s) fired during the run "
                   "(teardown included)", errorsNow - m_graphErrorBaseline);
-        // Precedence 1 > 2 > 3: a run failure says WHERE the run died and
-        // outranks the errors it produced on the way out; a validation error
-        // explains a bad capture rather than the reverse, so it outranks the
-        // golden exit.
+        // Precedence 1 > 2: a run failure says WHERE the run died and outranks
+        // the errors it produced on the way out.
         if (m_graphExit == 0)
             m_graphExit = 2;
     }

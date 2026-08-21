@@ -210,7 +210,7 @@ namespace Arcane::Editor
     // not a render pass. Two routes were available: render the grid through a
     // tiny offscreen graph frame, or draw it with ImGui primitives. The grid is
     // CHROME -- a backdrop for a node canvas, never captured, never compared
-    // against a golden, and its only job is to tell the eye that the canvas
+    // against anything, and its only job is to tell the eye that the canvas
     // panned. An offscreen graph context per canvas (and there are two per
     // document: the graph canvas and the pass canvas) is a whole RenderGraph,
     // command-buffer set, descriptor pool and graveyard lane, plus a

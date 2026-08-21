@@ -427,8 +427,7 @@ namespace Arcane
 
             // Add the pick node, the readback and the JFA outline chain to
             // this frame's graph. Off on every ordinary run, which is what
-            // keeps the frame's shape -- and therefore the batch/post/full
-            // stage goldens -- byte-for-byte Task 10's.
+            // keeps an ordinary frame's shape free of the whole chain.
             bool pickOutline = false;
 
             // ---- the pick chain's PER-FRAME coordinates (Task 9) ---------
@@ -473,12 +472,12 @@ namespace Arcane
             // vehicle was created with NodeSet::gameUi.
             ImDrawData* gameUi = nullptr;
 
-            // ---- the HUD (Task 12) --------------------------------------
+            // ---- the HUD ------------------------------------------------
             // THIS FRAME'S ImGui DRAW DATA, already built by the frame driver
             // (ImGui::Render() -> ImGui::GetDrawData()) before RenderFrame was
-            // called. Null means "no HUD this frame", which is what the two
-            // non-Full golden stages pass and what makes the frame's shape
-            // bit-identical to Task 11's on those runs.
+            // called. Null means "no HUD this frame" -- how a caller asks for
+            // the scene without host chrome, and what leaves the rest of the
+            // frame's shape untouched.
             //
             // BORROWED, and unlike `pickables`/`selectedIds` it is NOT fully
             // consumed at declaration time: the vertex/index copy happens at
@@ -1346,15 +1345,11 @@ namespace Arcane
         // chain (Task 9) -- the editor's phase 11 then phase 12 order against
         // this recorder.
         //
-        // AS OF NRI PHASE 3, TASK 13 THIS IS STAGE-GATED LIKE `imgui`,
-        // reversing Task 9's original ruling: that ruling's premise -- "the
-        // editor's viewport frame is not a golden stage at all" -- stopped
-        // being true the moment the editor's own stage vocabulary landed.
-        // The editor's stage semantics (`full` = +outline/gameui composite)
-        // treat the game HUD as `full`-only overlay content, the same class
-        // `imgui` already was: both would sit on top of a batch/post stage
-        // golden and mask exactly the pixels a node-by-node comparison
-        // needs. See DeclareGraphFrame's gate for the full account.
+        // GATED LIKE `imgui`, and for the same reason: the game HUD is OVERLAY
+        // content. Both HUDs sit on top of the scene and mask exactly the
+        // pixels a frame-to-frame comparison needs, so a caller that asked for
+        // the scene without host chrome does not want the plugin's either. See
+        // DeclareGraphFrame's gate for the full account.
         bool gameUi = false;
     };
 

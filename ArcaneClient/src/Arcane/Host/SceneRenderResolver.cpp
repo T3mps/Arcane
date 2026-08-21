@@ -130,8 +130,8 @@ namespace Arcane
         // CURRENT caches -- deliberately not a replay of what the last Refresh
         // latched. A half-live census would answer differently depending on
         // whether a Refresh had run yet, and the caller most in need of this
-        // (the golden warm-up, which polls it around Refresh calls) is exactly
-        // the caller that would trip over that ordering.
+        // (anything polling it around Refresh calls, waiting on a fully-bound
+        // frame) is exactly the caller that would trip over that ordering.
         MaterialCensus census;
         Impl& im = *m_impl;
         if (!im.services.runtime)

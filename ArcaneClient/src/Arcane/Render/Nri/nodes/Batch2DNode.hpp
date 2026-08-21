@@ -311,7 +311,8 @@ namespace Arcane
         // per-texture descriptor sets this node must have written before it can
         // record them, and therefore how much of kMaxSpriteTextures the frame
         // spends. PURE and public for the same reason the two above are: it
-        // carries an invariant no device can show and no golden can fail on.
+        // carries an invariant no device can show and no rendered frame can
+        // fail on.
         // Spans repeat ids freely (the sort splits a run whenever the layer or
         // the material changes), so this is a COUNT OF DISTINCT ids, not of
         // spans. Prepare() CALLS THIS (it is the frame's up-front budget

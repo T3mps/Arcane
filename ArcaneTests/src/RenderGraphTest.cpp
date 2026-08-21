@@ -4102,7 +4102,7 @@ TEST_CASE("nri graph frame: the offscreen frame's node census is the presenting 
 TEST_CASE("nri graph frame: an offscreen capture frame copies the output BEFORE restoring it to "
           "SHADER_RESOURCE", "[nri]")
 {
-    // Task 13's harness reads its goldens back off the offscreen target, so the
+    // A capture consumer reads pixels back off the offscreen target, so the
     // capture node has to compose with the import the same way it composes with
     // the swapchain: copy while the frame still owns the texture, then let the
     // graph restore the exit state.
@@ -5580,10 +5580,9 @@ TEST_CASE("nri graph frame: the pick + outline chain composes with a post chain"
 
 TEST_CASE("nri graph frame: the HUD node is absent unless the frame carries draw data", "[nri]")
 {
-    // Task 12's half of "the stage baselines stay the compare targets". The HUD
-    // node is built on EVERY run (unlike the pick pair, which is --pick-probe
-    // gated), so the only thing that can keep a batch/post golden's frame
-    // byte-for-byte Task 11's is this declaration gate. Pinned both ways.
+    // The HUD node is built on EVERY run (unlike the pick pair, which is
+    // --pick-probe gated), so this DECLARATION gate is the only thing that keeps
+    // a no-HUD frame free of it. Pinned both ways.
     {
         Arcane::RenderGraph graph;
         Arcane::RgFrameShape shape;
@@ -6190,8 +6189,8 @@ TEST_CASE("nri graph frame: the batch stage declares one canvas transient and no
     // drive has no vehicle and therefore no span to be textured -- and that is
     // the point: the census is where a future change that DID make a sprite
     // texture a graph resource (an import per sprite, say) would land, instead
-    // of in a desk golden. It does not exercise the texture path; see the
-    // block comment above for what does and what is owed at D3a.
+    // of at a desk. It does not exercise the texture path; see the block
+    // comment above for what does and what is owed.
     Arcane::RenderGraph graph;
     Arcane::RgFrameShape shape;
     shape.canvasWidth  = 320;

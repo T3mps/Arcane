@@ -1,6 +1,6 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>
-#include <Arcane/Host/SceneRenderResolver.hpp>   // MaterialCensus -- the golden warm-up's probe
+#include <Arcane/Host/SceneRenderResolver.hpp>   // MaterialCensus -- the binding-readiness probe
 
 #include <Arcane/Base/Engine.hpp>        // ExecutablePathUtf8 (the argv[0] replacement)
 #include <Arcane/Base/Runtime.hpp>
@@ -687,10 +687,10 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
 // which of them are BOUND -- the fact a caller waiting on a fully-rendered
 // frame polls. The gate cannot exercise the binding half (that needs a device
 // and a compile service) -- but the REFERENCED half is pure scene data, and it
-// is the half
-// that decays silently: drop the PostProcess component or repoint the sprite's
-// material Guid and the stage goldens keep passing while quietly covering less.
-// Pinning it here means such an edit fails the gate instead.
+// is the half that decays silently: drop the PostProcess component or repoint
+// the sprite's material Guid and everything that runs over this fixture keeps
+// passing while quietly covering less. Pinning it here means such an edit fails
+// the gate instead.
 
 TEST_CASE("ReferenceProject's scene reports the materials the golden warm-up waits on",
           "[host][project]")
@@ -736,7 +736,7 @@ TEST_CASE("ReferenceProject's scene reports the materials the golden warm-up wai
         CHECK(census.spriteReferenced == 1);
         CHECK(census.postReferenced);            // the scene root's PostProcess
         // Nothing can bind without a compiler + batcher -- which is precisely
-        // the state ArcaneRuntime now refuses to capture a golden from.
+        // the state this case wants: referenced, and provably not yet bound.
         CHECK(census.spriteBound == 0);
         CHECK_FALSE(census.postBound);
     }
@@ -766,7 +766,8 @@ TEST_CASE("ReferenceProject's golden materials stitch and compile on both target
 
     // Both stages, both targets -- the sprite/post caches submit exactly this
     // pair per pass, and a source that compiles as DXIL but not SPIR-V binds on
-    // one backend only (which reads as "the vulkan golden is wrong").
+    // one backend only -- which reads as a vulkan-specific renderer bug and is
+    // not one.
     auto compileBoth = [&sc](const std::string& name, const std::string& hlsl)
     {
         for (const char* entry : { Arcane::kPsEntry, Arcane::kVsEntry })
@@ -804,7 +805,7 @@ TEST_CASE("ReferenceProject's golden materials stitch and compile on both target
         // texture is what puts the extra Texture_SRV(t1) into both the binding
         // layout and the per-(texture, material) binding-set cache. A snippet
         // that lost either decl would still compile and still draw -- and would
-        // stop covering the seam the Phase 2 goldens exist to watch.
+        // stop covering the seam this fixture exists to exercise.
         CHECK(build.templ.CbSize() > 0);
         CHECK(build.templ.TextureCount() == 1);
 
