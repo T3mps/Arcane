@@ -31,7 +31,9 @@
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/nodes/Batch2DNode.hpp>   // SpriteMaterialLayout / the arena region math
 #include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>  // FullscreenMaterialLayout / PostChainNode
+#include <Arcane/Render/Nri/nodes/MeshNode.hpp>       // AddMeshNode / MeshSceneDesc -- the opaque pass
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp> // OutlineJfaStepCount / PickNode / OutlineNode
+#include <Arcane/Render/MeshBuilder.hpp>       // BuildCube -- the opaque pass's geometry
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/Batcher2D.hpp>         // a device-less batcher drains the spans a node counts
@@ -6227,12 +6229,16 @@ TEST_CASE("nri graph frame: the GAME UI node sits between the tonemap and the ou
 // RenderGraph::SetDepthAttachment and the barrier mapping all landed in an
 // earlier phase with no production node ever consuming them -- these three
 // cases give RgFrameShape::depth a consumer for the RESOURCE half of that
-// (DeclareGraphFrame creates the transient) while MeshNode, the real
-// consumer, is still Task 7. The third case below stands a test-local node
-// in for it -- the same idiom "a Raster node with only a depth attachment
-// also satisfies the attachment requirement" above already uses -- pointed
-// at the REAL depth transient DeclareGraphFrame declares, so the barrier
-// derivation is proven honestly rather than merely asserted to exist.
+// (DeclareGraphFrame creates the transient).
+//
+// STILL LIVE AFTER TASK 7, and testing a DIFFERENT code path from the (T7P4)
+// cases below it. Task 7's MeshNode created its own depth target inside its
+// own Setup, so `shape.depth` on its own became the `else` branch of that --
+// "the resource declared with no pass consuming it" -- and these three are
+// what pin that branch. The third case's test-local `test-depth-consumer`
+// node stays for the same reason: it proves the PLACEHOLDER-created transient
+// is consumable by an arbitrary node, where the (T7P4) cases prove the
+// MeshNode-created one is consumed by MeshNode.
 // =========================================================================
 
 TEST_CASE("nri graph frame: (T4P4) depth=false leaves the frame byte-for-byte the current one",
@@ -6278,8 +6284,9 @@ TEST_CASE("nri graph frame: (T4P4) depth=true declares a D32_SFLOAT depth transi
     REQUIRE(graph.IsHandleValid(handles.depth));
     CHECK(graph.IsTransient(handles.depth));
     CHECK(std::string(graph.NameOf(handles.depth)) == "depth");
-    // Nothing wrote it: DeclareGraphFrame only creates the resource here --
-    // Task 7's MeshNode is the first Write().
+    // Nothing wrote it: on THIS branch DeclareGraphFrame only creates the
+    // resource. (A frame that carries a mesh scene takes the other branch,
+    // where MeshNode both creates and writes it -- see the (T7P4) cases.)
     CHECK_FALSE(graph.WasWritten(handles.depth));
 
     const Arcane::RgCompiled compiled = CompileOk(graph);
@@ -6309,9 +6316,10 @@ TEST_CASE("nri graph frame: (T4P4) a node that declares DepthWrite against the f
     const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
     REQUIRE(graph.IsHandleValid(handles.depth));
 
-    // Stands in for MeshNode (Task 7), which does not exist yet -- see the
-    // section banner above for why this is the file's own established
-    // test-local-node idiom rather than a fabricated production node.
+    // NOT a stand-in for MeshNode any more (it exists, and the (T7P4) cases
+    // below drive it directly): this is an ARBITRARY consumer, which is
+    // exactly what makes the assertion about the PLACEHOLDER transient rather
+    // than about the mesh pass. See the section banner above.
     graph.AddNode("test-depth-consumer", Arcane::RenderGraph::NodeKind::Raster,
         [&](Arcane::RenderGraphBuilder& builder)
         {
@@ -6336,6 +6344,203 @@ TEST_CASE("nri graph frame: (T4P4) a node that declares DepthWrite against the f
     // for the canvas, one for depth (disjoint desc: different format and
     // depthStencil, so descsMatch refuses to share them regardless of
     // lifetime).
+    CHECK(compiled.poolSlotCount == 2);
+}
+
+// =========================================================================
+// Task 7 (Phase 4): THE OPAQUE MESH PASS in a real frame -- MeshNode, the
+// consumer Task 4's depth transient was declared for.
+//
+// THE HANDOVER FROM TASK 4, stated here because these cases are what pins it:
+// a frame that carries a MESH SCENE declares "mesh" (a Raster node) which
+// CREATES the depth transient, Writes the canvas as ColorWrite and the depth
+// as DepthWrite, and attaches both -- the same create-and-consume shape
+// AddBatch2DNode already uses for the canvas. Task 4's placeholder "depth"
+// node (a Compute node that only calls CreateTexture) survives ONLY for the
+// case it was written for: `shape.depth` asked for with NO mesh scene. The two
+// branches are mutually exclusive, so no graph ever carries two
+// CreateTexture("depth") calls.
+//
+// The first case below is the "not asking costs nothing" half -- with no mesh
+// scene the frame is byte for byte the one Task 4 shipped, both with and
+// without `depth`.
+// =========================================================================
+
+TEST_CASE("nri graph frame: (T7P4) a frame with no mesh scene is byte-for-byte Task 4's", "[nri]")
+{
+    SECTION("no mesh, no depth -- batch2d + tonemap and nothing else")
+    {
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 320;
+        shape.canvasHeight = 200;
+
+        const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+        REQUIRE(graph.NodeCount() == 2);
+        CHECK(std::string(graph.NodeName(0)) == "batch2d");
+        CHECK(std::string(graph.NodeName(1)) == "tonemap");
+        CHECK_FALSE(graph.IsHandleValid(handles.depth));
+
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        CHECK(compiled.transients.size() == 1);   // the canvas, and nothing else
+        CHECK(compiled.poolSlotCount == 1);
+    }
+
+    SECTION("depth asked for on its own -- Task 4's placeholder node, unmoved")
+    {
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 320;
+        shape.canvasHeight = 200;
+        shape.depth        = true;
+
+        const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+        REQUIRE(graph.NodeCount() == 3);
+        CHECK(std::string(graph.NodeName(0)) == "batch2d");
+        CHECK(std::string(graph.NodeName(1)) == "depth");
+        CHECK(std::string(graph.NodeName(2)) == "tonemap");
+        REQUIRE(graph.IsHandleValid(handles.depth));
+        // Still unconsumed: the placeholder creates the resource and nothing
+        // else, exactly as Task 4 left it.
+        CHECK_FALSE(graph.WasWritten(handles.depth));
+
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        CHECK(compiled.transients.size() == 2);
+        CHECK(compiled.poolSlotCount == 1);       // canvas only -- depth realizes nothing unconsumed
+    }
+}
+
+TEST_CASE("nri graph frame: (T7P4) a mesh scene declares 'mesh' between the canvas and the "
+          "tonemap, and that node owns the depth target", "[nri]")
+{
+    // BORROWED BY THE SHAPE, so both live in this frame -- exactly the
+    // lifetime rule MeshSceneDesc::instances documents.
+    const Arcane::MeshData cube = Arcane::BuildCube(1.0f);
+    Arcane::MeshInstance one;
+    one.mesh = &cube;
+    const Arcane::MeshInstance instances[] = { one };
+
+    Arcane::MeshSceneDesc scene;
+    scene.instances = instances;
+
+    Arcane::RenderGraph graph;
+    Arcane::RgFrameShape shape;
+    shape.canvasWidth  = 320;
+    shape.canvasHeight = 200;
+    shape.mesh         = &scene;
+
+    const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+    REQUIRE(graph.NodeCount() == 3);
+    CHECK(std::string(graph.NodeName(0)) == "batch2d");
+    CHECK(std::string(graph.NodeName(1)) == "mesh");
+    CHECK(std::string(graph.NodeName(2)) == "tonemap");
+
+    // ONE "depth" texture in the graph, minted by the mesh node itself -- not
+    // by Task 4's placeholder, which is not declared at all on this frame
+    // (there is no third node between batch2d and mesh).
+    REQUIRE(graph.IsHandleValid(handles.depth));
+    CHECK(graph.IsTransient(handles.depth));
+    CHECK(std::string(graph.NameOf(handles.depth)) == "depth");
+    CHECK(graph.WasWritten(handles.depth));
+    CHECK(graph.WasWritten(handles.canvas));
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.nodes.size() == 3);
+
+    // THE DERIVED CHAIN. batch2d took the canvas UNDEFINED ->
+    // COLOR_ATTACHMENT; the mesh node declares the SAME state for it, and
+    // consecutive same-state declarations produce no barrier (RenderGraph.cpp)
+    // -- so the mesh node's ONE barrier is the depth target's first use. A
+    // mesh node that declared the canvas as ShaderRead instead would carry two.
+    REQUIRE(compiled.nodes[1].preBarriers.size() == 1);
+    const Arcane::RgBarrier& depthBarrier = compiled.nodes[1].preBarriers[0];
+    CHECK(depthBarrier.isTexture);
+    CheckState(depthBarrier.before, kUnknownState);
+    CheckState(depthBarrier.after, nri::AccessBits::DEPTH_STENCIL_ATTACHMENT,
+               nri::Layout::DEPTH_STENCIL_ATTACHMENT, nri::StageBits::DEPTH_STENCIL_ATTACHMENT);
+
+    // Both targets are now REALIZED -- the depth transient has a consumer, so
+    // unlike Task 4's placeholder frame it earns a pool slot of its own (a
+    // disjoint desc: different format, and depthStencil).
+    CHECK(compiled.transients.size() == 2);
+    CHECK(compiled.poolSlotCount == 2);
+}
+
+TEST_CASE("nri graph frame: (T7P4) the mesh node declares ColorWrite on its colour target and "
+          "DepthWrite on the depth target it creates", "[nri]")
+{
+    // DRIVEN DIRECTLY, not through DeclareGraphFrame, for one reason: inside a
+    // real frame the canvas is ALREADY a colour attachment by the time the mesh
+    // node runs (batch2d put it there), so the ColorWrite declaration derives no
+    // barrier and its absence proves nothing. Here the mesh node is the canvas's
+    // FIRST toucher, so both declarations show up as barriers and both can be
+    // asserted outright.
+    const Arcane::MeshData cube = Arcane::BuildCube(1.0f);
+    Arcane::MeshInstance one;
+    one.mesh = &cube;
+    const Arcane::MeshInstance instances[] = { one };
+
+    Arcane::MeshSceneDesc scene;
+    scene.instances = instances;
+
+    Arcane::RenderGraph graph;
+
+    // A transient the mesh node can render into. CreateTexture is only
+    // reachable from inside a node's Setup, so minting one needs a node -- the
+    // same test-local-node idiom this file already uses.
+    Arcane::RgTexture canvas{};
+    graph.AddNode("test-canvas", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            Arcane::RgTextureDesc desc;
+            desc.format = Arcane::kGraphCanvasFormat;
+            desc.width  = 320;
+            desc.height = 200;
+            canvas = builder.CreateTexture("canvas", desc);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+    REQUIRE(graph.IsHandleValid(canvas));
+
+    const Arcane::RgTexture depth = Arcane::AddMeshNode(graph, nullptr, canvas, scene, 320, 200);
+    REQUIRE(graph.IsHandleValid(depth));
+    CHECK(std::string(graph.NodeName(1)) == "mesh");
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.nodes.size() == 2);
+
+    // TWO barriers, one per declared access. Looked up by resource rather than
+    // by position: the order inside one node's batch is the declaration order,
+    // which is not a contract this case has any business pinning.
+    const std::vector<Arcane::RgBarrier>& barriers = compiled.nodes[1].preBarriers;
+    REQUIRE(barriers.size() == 2);
+
+    const auto barrierFor = [&](std::uint32_t resourceIndex) -> const Arcane::RgBarrier*
+    {
+        for (const Arcane::RgBarrier& barrier : barriers)
+            if (barrier.isTexture && barrier.resourceIndex == resourceIndex)
+                return &barrier;
+        return nullptr;
+    };
+
+    // Texture slots are assigned in creation order: canvas is 0, depth is 1.
+    const Arcane::RgBarrier* colorBarrier = barrierFor(0u);
+    const Arcane::RgBarrier* depthBarrier = barrierFor(1u);
+    REQUIRE(colorBarrier != nullptr);
+    REQUIRE(depthBarrier != nullptr);
+
+    CheckState(colorBarrier->before, kUnknownState);
+    CheckState(colorBarrier->after, nri::AccessBits::COLOR_ATTACHMENT,
+               nri::Layout::COLOR_ATTACHMENT, nri::StageBits::COLOR_ATTACHMENT);
+    CheckState(depthBarrier->before, kUnknownState);
+    CheckState(depthBarrier->after, nri::AccessBits::DEPTH_STENCIL_ATTACHMENT,
+               nri::Layout::DEPTH_STENCIL_ATTACHMENT, nri::StageBits::DEPTH_STENCIL_ATTACHMENT);
+
+    // ...and the node is a RASTER node that Compile() accepted, which is the
+    // other half of "it attached them": NodeHasRequiredAttachments() refuses a
+    // Raster node with no attachment at all.
     CHECK(compiled.poolSlotCount == 2);
 }
 

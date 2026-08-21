@@ -444,6 +444,10 @@ namespace Arcane
         m_batch2D = Batch2DNode::Create(*this);
         if (!m_batch2D)
             return false;   // already logged
+        // The opaque 3D pass (Task 7), eagerly like the rest -- see Mesh().
+        m_mesh = MeshNode::Create(*this);
+        if (!m_mesh)
+            return false;   // already logged
         m_post = PostChainNode::Create(*this);
         if (!m_post)
             return false;   // already logged
@@ -720,6 +724,8 @@ namespace Arcane
             m_tonemap->Release(graves, fence);
         if (m_post)
             m_post->Release(graves, fence);
+        if (m_mesh)
+            m_mesh->Release(graves, fence);
         if (m_batch2D)
             m_batch2D->Release(graves, fence);
 
@@ -1160,30 +1166,57 @@ namespace Arcane
         handles.canvas = AddBatch2DNode(graph, context, shape.canvasWidth, shape.canvasHeight);
 
         // ---------------------------------------------------------------
-        // THE DEPTH TRANSIENT (Task 4, Phase 4). Closes gap F: RgUsage::
-        // DepthWrite, RenderGraph::SetDepthAttachment and the barrier mapping
-        // (RenderGraph.cpp's StateFor) all landed in an earlier phase with no
-        // production node ever calling any of them. This is that resource --
-        // NOT a consumer of it.
+        // THE OPAQUE 3D PASS (Task 4 declared its depth target; Task 7 is the
+        // pass itself). MeshNode CREATES the depth transient, Writes the canvas
+        // as ColorWrite and the depth as DepthWrite, and attaches both -- all
+        // in its own Setup, which is the same create-then-write-then-attach
+        // shape AddBatch2DNode uses for the canvas one line above.
         //
-        // D32_SFLOAT, canvas-sized, so it can pair with `handles.canvas` as a
-        // Raster node's colour + depth attachments the moment something wants
-        // to. Nothing in this function is that something yet: no Read(), no
-        // Write(), no SetDepthAttachment() -- those three calls are what a
-        // real opaque-geometry pass does with a depth target, and writing them
-        // here ahead of that pass existing would be inventing one. The first
-        // real consumer is MeshNode (Task 7), which will Write(handles.depth,
-        // RgUsage::DepthWrite) + SetDepthAttachment(handles.depth) in ITS OWN
-        // Setup -- exactly the CreateTexture-then-Write-then-attach shape
-        // AddBatch2DNode already uses for `canvas` above, just split across
-        // two tasks because Task 7 does not exist yet.
+        // POSITIONED AFTER batch2d, BEFORE the post chain and the tonemap.
+        // After batch2d because the canvas is MINTED AND CLEARED there and this
+        // pass draws on top of it (MeshNode::Record clears the DEPTH plane and
+        // deliberately not the colour one); before the tonemap because the
+        // canvas is linear and the mesh pass writes linear colour.
+        //
+        // GATED ON A NON-EMPTY SCENE, and an empty span reads exactly like a
+        // null pointer -- the same "slice the frame by nulling" rule
+        // FrameDesc's own banner states. A frame that asks for no mesh pass is
+        // byte for byte the frame this function built before Task 7 existed.
+        // ---------------------------------------------------------------
+        const bool wantsMesh = shape.mesh != nullptr && !shape.mesh->instances.empty();
+        if (wantsMesh)
+        {
+            handles.depth = AddMeshNode(graph, context, handles.canvas, *shape.mesh,
+                                         shape.canvasWidth, shape.canvasHeight);
+        }
+
+        // ---------------------------------------------------------------
+        // THE DEPTH TRANSIENT ON ITS OWN (Task 4, Phase 4). Closes gap F:
+        // RgUsage::DepthWrite, RenderGraph::SetDepthAttachment and the barrier
+        // mapping (RenderGraph.cpp's StateFor) all landed in an earlier phase
+        // with no production node ever calling any of them. This is that
+        // resource -- NOT a consumer of it.
+        //
+        // SINCE TASK 7 IT IS THE `else` OF THE MESH BLOCK ABOVE, and reachable
+        // only for `shape.depth` asked for with NO mesh scene -- the exact case
+        // Task 4 shipped and pinned. Kept rather than deleted because that case
+        // is a real, tested contract (a frame may want the resource declared
+        // without a pass consuming it) and because the two branches being
+        // mutually exclusive is what guarantees no graph ever carries two
+        // CreateTexture("depth") calls. A frame carrying a mesh scene gets its
+        // depth target from MeshNode and never reaches here.
+        //
+        // kGraphDepthFormat, canvas-sized, so it can pair with `handles.canvas`
+        // as a Raster node's colour + depth attachments the moment something
+        // wants to. Nothing on THIS branch is that something: no Read(), no
+        // Write(), no SetDepthAttachment().
         //
         // CreateTexture() is only callable from inside a node's Setup (the
         // RenderGraphBuilder that exposes it is constructed by AddNode() and
         // by nothing else), so declaring the resource at all -- even
         // unconsumed -- needs a node. NodeKind::Compute, not Raster: this node
-        // declares no attachment (that is Task 7's job), and a Raster node
-        // with none would fail NodeHasRequiredAttachments() at Compile().
+        // declares no attachment, and a Raster node with none would fail
+        // NodeHasRequiredAttachments() at Compile().
         //
         // GATED LIKE EVERY OTHER OPTIONAL PIECE OF THIS FRAME: shape.depth ==
         // false adds NO node and creates NO resource, so "not asking costs
@@ -1194,23 +1227,14 @@ namespace Arcane
         // an untouched transient gets no lifetime and no pool slot ("a
         // transient no node touches has no lifetime and no pool slot",
         // RenderGraph.hpp), so RealizePool never allocates it.
-        //
-        // POSITIONED RIGHT AFTER THE CANVAS, before the post chain and the
-        // tonemap -- Task 7's own test brief already requires "mesh before
-        // tonemap", and declaring the resource this early makes
-        // `handles.depth` available to every node declared after this point,
-        // the same way `handles.canvas` is. Task 7 is free to move or replace
-        // this block outright when MeshNode lands; nothing downstream in this
-        // function depends on ITS position, only on `handles.depth` being
-        // valid once shape.depth is true.
         // ---------------------------------------------------------------
-        if (shape.depth)
+        else if (shape.depth)
         {
             graph.AddNode("depth", RenderGraph::NodeKind::Compute,
                 [&handles, &shape](RenderGraphBuilder& builder)
                 {
                     RgTextureDesc desc;
-                    desc.format       = nri::Format::D32_SFLOAT;
+                    desc.format       = kGraphDepthFormat;
                     desc.width        = shape.canvasWidth;
                     desc.height       = shape.canvasHeight;
                     desc.depthStencil = true;
@@ -1458,6 +1482,12 @@ namespace Arcane
         shape.captureBuffer = m_capture;
         shape.captureBytes  = m_captureSlicePitch;
         shape.post          = frame.post;
+        // The opaque 3D pass (Task 7). Belt-and-braces the same way
+        // `pickOutline` and the two HUDs are: a scene for THIS frame and a node
+        // that was actually built, so a driver handing a mesh scene to a
+        // vehicle whose MeshNode failed to build declares nothing rather than
+        // declaring a node that does not exist.
+        shape.mesh          = m_mesh ? frame.mesh : nullptr;
         // THE ONE LINE THAT MAKES A FRAME OFFSCREEN (Task 7). Null in
         // host-window mode, so the tonemap imports the swapchain exactly as it
         // always has; the vehicle's output texture otherwise. Nothing else in

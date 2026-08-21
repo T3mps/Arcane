@@ -241,6 +241,7 @@
 #include <Arcane/Render/Nri/nodes/Batch2DNode.hpp>
 #include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>
 #include <Arcane/Render/Nri/nodes/ImGuiNriNode.hpp>
+#include <Arcane/Render/Nri/nodes/MeshNode.hpp>
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 
 #include <chrono>
@@ -269,6 +270,16 @@ namespace Arcane
     // canvas would be a pipeline built for one format bound to an attachment
     // of another.
     inline constexpr nri::Format kGraphCanvasFormat = nri::Format::RGBA16_SFLOAT;
+
+    // THE FRAME'S DEPTH FORMAT (Task 4 chose it; Task 7 gave it a consumer).
+    // D32_SFLOAT -- depth only, no stencil, and no packed-stencil variant until
+    // something actually needs one. It lives HERE, beside the canvas format,
+    // for exactly the same reason that one does: two places now have to agree
+    // on it -- whoever CREATES the depth transient and whoever keys a PSO on it
+    // (NriPipelineCache::GraphicsKey::depthFormat) -- and a pipeline built for
+    // one format bound to an attachment of another is undefined on both
+    // backends.
+    inline constexpr nri::Format kGraphDepthFormat = nri::Format::D32_SFLOAT;
 
     // THE OFFSCREEN OUTPUT FORMAT. Display-referred: BGRA8_UNORM is exactly
     // the swapchain's own format, and the tonemap already gamma-2.2 encodes,
@@ -385,6 +396,24 @@ namespace Arcane
             // the duration of the RenderFrame call and never stored; null
             // renders a cleared canvas.
             Batcher2D* batch = nullptr;
+
+            // ---- the opaque 3D pass (Task 7) ----------------------------
+            // THIS FRAME'S MESH SCENE -- geometry, per-instance transforms,
+            // the camera and the one directional light. Null (the default) is
+            // how a caller asks for the frame WITHOUT the opaque pass, exactly
+            // as `post = nullptr` asks for it without the chain; an EMPTY
+            // instance span means the same thing.
+            //
+            // BORROWED for the duration of the RenderFrame call and never
+            // stored -- the same rule `pickables` carries, and for the same
+            // reason: MeshNode copies the vertex/index streams into the upload
+            // ring at RECORD time, which is inside this call.
+            //
+            // TASK 7 ADDED THIS FIELD EARLY, because the [gpu][pixel] case that
+            // proves the opaque pass draws anything at all reaches the vehicle
+            // only through RenderFrameOffscreen(FrameDesc). Task 9 is what
+            // teaches the two HOSTS to fill it in from a real scene.
+            const MeshSceneDesc* mesh = nullptr;
 
             // This frame's scene POST CHAIN as bytecode + layout + values --
             // SceneRenderResolver::PostDesc(). Borrowed for the duration of the RenderFrame
@@ -850,6 +879,14 @@ namespace Arcane
         [[nodiscard]] TonemapNode*   Tonemap()   noexcept { return m_tonemap.get(); }
         [[nodiscard]] PostChainNode* PostChain() noexcept { return m_post.get(); }
 
+        // The opaque 3D pass (Task 7). Built EAGERLY like the three above
+        // rather than behind a NodeSet flag: opaque geometry is part of what
+        // this renderer IS, not optional host chrome, and a frame that carries
+        // no mesh scene declares no node either way -- so the cost of having it
+        // is one small descriptor pool and a two-region constant arena, not a
+        // pass.
+        [[nodiscard]] MeshNode*      Mesh()      noexcept { return m_mesh.get(); }
+
         // The pick + outline pair (Task 11). NULL on every run that neither
         // passed --pick-probe nor asked for them through NodeSet::pickOutline:
         // an ordinary --nri-graph run creates no readback buffer, no descriptor
@@ -1127,6 +1164,7 @@ namespace Arcane
         // objects are RELEASED explicitly in ~NriGraphContext, before the drain
         // -- these destructors are the safety net, not the path.
         std::unique_ptr<Batch2DNode>       m_batch2D;
+        std::unique_ptr<MeshNode>          m_mesh;
         std::unique_ptr<PostChainNode>     m_post;
         std::unique_ptr<TonemapNode>       m_tonemap;
         // Built only under --pick-probe or NodeSet::pickOutline (see
@@ -1362,7 +1400,29 @@ namespace Arcane
         // DeclareGraphFrame's own comment at the depth block for the full
         // account of what "declared but unconsumed" costs (nothing: Compile()
         // gives an untouched transient no lifetime and no pool slot).
+        //
+        // SINCE TASK 7 THIS IS THE "DEPTH WITHOUT A MESH PASS" CASE ONLY. A
+        // frame that carries `mesh` below gets its depth target from MeshNode,
+        // which creates, writes and attaches it in one node -- and then this
+        // placeholder is not declared at all. The two are mutually exclusive by
+        // construction (DeclareGraphFrame's own `else`), so no graph ever
+        // carries two CreateTexture("depth") calls.
         bool depth = false;
+
+        // Task 7 (Phase 4): THE OPAQUE 3D PASS's scene, or null for none.
+        // Read for its INSTANCE COUNT here (an empty scene declares nothing,
+        // exactly as a null one does) and for nothing else -- the geometry, the
+        // camera, the light and the albedo Guids are all consumed by MeshNode
+        // at Prepare/Record time.
+        //
+        // A headless drive can point this at a MeshSceneDesc carrying one
+        // instance with a null `mesh`: the DECLARATIONS depend on the scene
+        // being non-empty and on nothing else, which is what lets the [nri]
+        // frame-shape cases exercise the real mesh pass with no device.
+        //
+        // BORROWED for the duration of the RenderFrame call -- see
+        // MeshSceneDesc::instances.
+        const MeshSceneDesc* mesh = nullptr;
     };
 
     struct RgFrameHandles
@@ -1391,15 +1451,17 @@ namespace Arcane
         // OutlineJfaStepCount(kOutlineMaxThicknessPx), clamped to kMaxJfaSteps.
         std::uint32_t jfaStepCount = 0;
 
-        // Task 4 (Phase 4): the depth transient RgFrameShape::depth asked for,
-        // or an invalid handle when it did not. DECLARED, NOT CONSUMED here --
-        // no node in DeclareGraphFrame Writes or attaches it, so it carries no
-        // lifetime and no pool slot until a later node does (Task 7's MeshNode:
-        // Write(handles.depth, RgUsage::DepthWrite) + SetDepthAttachment(
-        // handles.depth), in ITS OWN Setup -- the same split AddBatch2DNode
-        // does NOT use for `canvas`, which it both creates and writes itself;
-        // depth is split across two tasks instead of two lines because Task 7
-        // does not exist yet).
+        // THE FRAME'S DEPTH TARGET, or an invalid handle on a frame that asked
+        // for neither a mesh scene nor `depth`. WHICH OF THE TWO IT CAME FROM
+        // is visible here and matters to a reader:
+        //
+        //   * a MESH SCENE (Task 7) -- MeshNode created, wrote and attached it,
+        //     so it carries a real lifetime and its own pool slot;
+        //   * RgFrameShape::depth ALONE (Task 4) -- the placeholder node
+        //     created the resource and nothing consumes it, so it carries no
+        //     lifetime and no pool slot and RealizePool never allocates it.
+        //
+        // The two are mutually exclusive (DeclareGraphFrame's own if/else).
         RgTexture depth{};
     };
 

@@ -64,10 +64,14 @@
 #include <Arcane/Render/FramePacing.hpp>          // kSwapchainFramesInFlight -- the probe latency
 #include <Arcane/Render/PickEmit.hpp>             // PickDrawable -- the id pass's input
 #include <Arcane/Render/RenderErrorLatch.hpp>     // the shared 0/0 latch every case guards
+#include <Arcane/Render/MeshBuilder.hpp>          // BuildCube -- the opaque pass's geometry
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
+#include <Arcane/Render/Nri/nodes/MeshNode.hpp>   // MeshInstance / MeshSceneDesc
+#include <Arcane/Scene/SceneCamera.hpp>           // PerspectiveProjection -- the camera under test
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>           // lookAtRH, translate
 
 #include <cstdint>
 #include <cstdlib>      // std::abs over the integer luma difference
@@ -661,4 +665,244 @@ TEST_CASE("pixel: the same declared frame reproduces itself byte-for-byte (vulka
           "[gpu][pixel][nri][vulkan]")
 {
     CheckFrameIsByteDeterministic(Arcane::GraphicsBackend::Vulkan);
+}
+
+// ---------------------------------------------------------------------------
+// 8. THE OPAQUE MESH PASS (NRI Phase 4, Task 7) -- the first 3D content this
+//    suite has ever put a pixel assertion on, and the ONLY place the DEPTH
+//    TEST can be proven at all.
+//
+//    Everything below is structural, per the file header: the cubes are pure
+//    single-channel colours under a white light, so "red dominates green" and
+//    "the lit sample is far brighter than the ambient-only one" survive any
+//    sane tonemap curve where a literal byte would be pinning it.
+//
+//    THE CAMERA is built here rather than through a Registry because
+//    ActivePerspectiveSceneCamera needs one and these cases have no scene.
+//    SceneCamera::PerspectiveProjection is an UNVALIDATED pure function (a zero
+//    fov, aspectRatio <= 0 or nearZ >= farZ all silently produce NaN), so the
+//    three preconditions it does not check are REQUIREd here before it is
+//    called -- which is the same guard ActivePerspectiveSceneCamera applies,
+//    stated at the only other call site in the tree.
+// ---------------------------------------------------------------------------
+namespace
+{
+    // Eye on +Z looking at the origin down -Z with +Y up -- the engine's
+    // right-handed convention (SceneCamera.hpp, Task 5), and the vantage
+    // MeshBuilder's CCW-from-outside winding is stated against.
+    constexpr float kEyeZ        = 4.0f;
+    constexpr float kFovYDegrees = 60.0f;
+    constexpr float kNearZ       = 0.1f;
+    constexpr float kFarZ        = 100.0f;
+
+    // A flat ambient term big enough that an UNLIT surface is still clearly
+    // above the canvas clear -- which is what lets the light's contribution be
+    // asserted as a difference rather than as "the cube appeared".
+    constexpr float kAmbient = 0.08f;
+
+    void FillCamera(Arcane::MeshSceneDesc& scene)
+    {
+        const float aspect = static_cast<float>(kW) / static_cast<float>(kH);
+        REQUIRE(aspect > 0.0f);
+        REQUIRE(kNearZ > 0.0f);
+        REQUIRE(kFarZ > kNearZ);
+        REQUIRE(kFovYDegrees > 0.0f);
+
+        scene.view = glm::lookAtRH(glm::vec3(0.0f, 0.0f, kEyeZ),
+                                   glm::vec3(0.0f, 0.0f, 0.0f),
+                                   glm::vec3(0.0f, 1.0f, 0.0f));
+        scene.projection = Arcane::PerspectiveProjection(kFovYDegrees, aspect, kNearZ, kFarZ);
+
+        // Pointing TOWARD the camera, so a cube's +Z face -- the one facing the
+        // lens -- has N.L == 1 exactly. That makes the lit sample's value a
+        // property of the lighting model rather than of the cube's orientation.
+        scene.lightDirection = glm::vec3(0.0f, 0.0f, 1.0f);
+        scene.lightColor     = glm::vec3(1.0f, 1.0f, 1.0f);
+        scene.ambient        = glm::vec3(kAmbient);
+    }
+
+    std::vector<unsigned char> CaptureMesh(Arcane::GraphicsBackend backend,
+                                           const Arcane::MeshSceneDesc& scene,
+                                           std::uint32_t& w, std::uint32_t& h)
+    {
+        PixelVehicle v = MakeVehicle(backend);
+
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.capture = true;
+        frame.mesh    = &scene;
+        RenderOne(*v.ctx, frame);
+
+        std::vector<unsigned char> rgba;
+        REQUIRE(v.ctx->ReadCapture(w, h, rgba));
+        return rgba;
+    }
+
+    // ---- 8a: a lit cube covers the centre and the corners stay background ---
+    void CheckMeshCubeCoversTheCentre(Arcane::GraphicsBackend backend)
+    {
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        // 2 m on a side at the origin, seen from 4 m away through a 60-degree
+        // lens: the visible height at the origin plane is 2*tan(30)*4 = 4.6 m,
+        // so the cube covers the middle ~43% of the frame and leaves every
+        // corner untouched.
+        const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+
+        Arcane::MeshInstance one;
+        one.mesh      = &cube;
+        one.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);   // pure red, so channels separate cleanly
+        const Arcane::MeshInstance instances[] = { one };
+
+        Arcane::MeshSceneDesc scene;
+        scene.instances = instances;
+        FillCamera(scene);
+
+        std::uint32_t w = 0, h = 0;
+        const std::vector<unsigned char> lit = CaptureMesh(backend, scene, w, h);
+
+        // The SAME scene with the directional light switched off. Only
+        // `lightColor` differs, so every difference below IS the light.
+        Arcane::MeshSceneDesc unlitScene = scene;
+        unlitScene.lightColor = glm::vec3(0.0f);
+        std::uint32_t uw = 0, uh = 0;
+        const std::vector<unsigned char> unlit = CaptureMesh(backend, unlitScene, uw, uh);
+        REQUIRE(w == uw);
+        REQUIRE(h == uh);
+
+        const Rgba centre = At(lit,   w, w / 2u, h / 2u);
+        const Rgba unlitC = At(unlit, w, w / 2u, h / 2u);
+        const Rgba corner = At(lit,   w, 10u, 10u);
+        // NOT named `far`: <windows.h> still #defines that (and `near`) to
+        // nothing, so a local by either name is a syntax error here.
+        const Rgba opposite = At(lit, w, w - 10u, h - 10u);
+
+        // THE CUBE IS THERE, AND IT IS RED. Asserting the channel separation
+        // as well as the brightness is what rules out "the whole canvas got
+        // brighter" -- a clear-colour change would move all three together.
+        CHECK(centre.r > centre.g + 60);
+        CHECK(centre.r > centre.b + 60);
+        CHECK(centre.r > corner.r + 120);
+        CHECK(Luma(centre) > Luma(corner));
+
+        // THE CORNERS ARE BACKGROUND, both of them -- the canvas clear, which
+        // is near-black and blue-leaning (Batch2DNode's kCanvasClear).
+        CHECK(corner.r < 96);
+        CHECK(opposite.r < 96);
+        CHECK(std::abs(Luma(corner) - Luma(opposite)) < 24);
+
+        // THE LIGHT ACTUALLY LIT IT. Ambient alone still shows the cube (so
+        // this is not "the mesh only renders when lit"), and the directional
+        // term is a large addition on top -- which is the whole of the Lambert
+        // model this pass implements.
+        CHECK(unlitC.r > corner.r + 20);
+        CHECK(centre.r > unlitC.r + 40);
+
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+
+    // ---- 8b: THE DEPTH TEST -------------------------------------------------
+    // The assertion nothing else in this suite can make. Two cubes, one NEARER
+    // the camera and smaller on screen, one FARTHER and larger, in two
+    // different submission orders:
+    //
+    //   * the centre pixel is the NEAR cube's colour in BOTH orders. Without a
+    //     depth test the last-submitted instance wins, so one of the two orders
+    //     would come back the far cube's colour -- which is exactly the failure
+    //     this case exists to catch, and exactly what painter's order cannot
+    //     be talked out of;
+    //   * a pixel outside the near cube's silhouette but inside the far one's
+    //     is the FAR cube's colour, which rules out the degenerate pass where
+    //     the far cube simply never drew.
+    //
+    // Back-face culling cannot produce this result on its own: both cubes are
+    // separate closed opaque solids, so culling says nothing about which of
+    // the two owns a shared pixel.
+    void CheckNearMeshOccludesFar(Arcane::GraphicsBackend backend)
+    {
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        // Geometry chosen so the two silhouettes are nested with room to spare
+        // at 160x96 (worked out against the projection above, in canvas px):
+        //   near cube front face at z = +1.3 (2.7 m out) -> x in [71, 89]
+        //   far  cube front face at z =  0.0 (4.0 m out) -> x in [49, 111]
+        // so x = 96 on the centre row is unambiguously far-only, 7 px clear of
+        // the near cube's edge and 15 px clear of the far cube's.
+        const Arcane::MeshData nearCube = Arcane::BuildCube(0.6f);
+        const Arcane::MeshData farCube  = Arcane::BuildCube(3.0f);
+
+        Arcane::MeshInstance nearInstance;
+        nearInstance.mesh      = &nearCube;
+        nearInstance.model     = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        nearInstance.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);   // RED = near
+
+        Arcane::MeshInstance farInstance;
+        farInstance.mesh      = &farCube;
+        farInstance.model     = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -1.5f));
+        farInstance.baseColor = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);    // GREEN = far
+
+        const Arcane::MeshInstance nearFirst[] = { nearInstance, farInstance };
+        const Arcane::MeshInstance farFirst[]  = { farInstance, nearInstance };
+
+        Arcane::MeshSceneDesc nearFirstScene;
+        nearFirstScene.instances = nearFirst;
+        FillCamera(nearFirstScene);
+
+        Arcane::MeshSceneDesc farFirstScene;
+        farFirstScene.instances = farFirst;
+        FillCamera(farFirstScene);
+
+        std::uint32_t w0 = 0, h0 = 0, w1 = 0, h1 = 0;
+        const std::vector<unsigned char> nearFirstPixels =
+            CaptureMesh(backend, nearFirstScene, w0, h0);
+        const std::vector<unsigned char> farFirstPixels =
+            CaptureMesh(backend, farFirstScene, w1, h1);
+        REQUIRE(w0 == w1);
+        REQUIRE(h0 == h1);
+
+        for (const std::vector<unsigned char>* pixels : { &nearFirstPixels, &farFirstPixels })
+        {
+            const Rgba centre = At(*pixels, w0, w0 / 2u, h0 / 2u);
+            const Rgba onlyFar = At(*pixels, w0, 96u, h0 / 2u);
+            const Rgba corner  = At(*pixels, w0, 10u, 10u);
+
+            // THE OCCLUSION. Red wins the centre whichever order the two were
+            // submitted in -- which is depth, and only depth.
+            CHECK(centre.r > centre.g + 60);
+            CHECK(centre.r > centre.b + 60);
+
+            // ...and the far cube DID draw, outside the near one's silhouette.
+            CHECK(onlyFar.g > onlyFar.r + 60);
+            CHECK(onlyFar.g > onlyFar.b + 60);
+
+            // ...and neither of them reached the corner.
+            CHECK(corner.r < 96);
+            CHECK(corner.g < 96);
+        }
+
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+}
+
+TEST_CASE("mesh: a lit cube covers the centre pixel and the corners stay background (d3d12)",
+          "[gpu][pixel][mesh][nri][d3d12]")
+{
+    CheckMeshCubeCoversTheCentre(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("mesh: a lit cube covers the centre pixel and the corners stay background (vulkan)",
+          "[gpu][pixel][mesh][nri][vulkan]")
+{
+    CheckMeshCubeCoversTheCentre(Arcane::GraphicsBackend::Vulkan);
+}
+
+TEST_CASE("mesh: the nearer cube occludes the farther one whichever order they are submitted in "
+          "(d3d12)", "[gpu][pixel][mesh][nri][d3d12]")
+{
+    CheckNearMeshOccludesFar(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("mesh: the nearer cube occludes the farther one whichever order they are submitted in "
+          "(vulkan)", "[gpu][pixel][mesh][nri][vulkan]")
+{
+    CheckNearMeshOccludesFar(Arcane::GraphicsBackend::Vulkan);
 }
