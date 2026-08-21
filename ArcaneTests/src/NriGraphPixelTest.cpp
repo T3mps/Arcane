@@ -9,12 +9,10 @@
 // NriSubstrateTest.cpp, and both device-WRAP smokes: they prove a native device
 // survives the trip into NRI and say nothing whatsoever about pixels.
 //
-// The 12 frozen golden PNGs cover COMPOSITE output -- one image per
-// (host, backend, stage). They are a real floor and they catch a whole-frame
-// regression, but they cannot localize one: a golden that moves tells you the
-// frame changed, not which node changed it. Node-level cases are what turn a
-// pixel regression from a desk session into a test run, and that difference
-// compounds with every pass the renderer gains.
+// A whole-frame image comparison could only say THAT the frame changed, never
+// WHICH node changed it. Node-level cases are what turn a pixel regression from
+// a desk session into a test run, and that difference compounds with every pass
+// the renderer gains.
 //
 // ===== WHAT IS ASSERTED EXACTLY, AND WHAT IS ASSERTED STRUCTURALLY ===========
 // This distinction is deliberate and load-bearing, so it is stated up front.
@@ -31,8 +29,8 @@
 //     would be pinning the tonemap curve by accident. These cases assert
 //     relations that survive any sane curve -- "the drawn rect is far brighter
 //     than the background", "red dominates green and blue there", "the pixel
-//     outside the rect matches the pixel in the far corner". A case that wants
-//     to pin the curve itself belongs in the goldens, which already do.
+//     outside the rect matches the pixel in the far corner". Pinning the curve
+//     itself is a different job and does not belong in these cases.
 //
 // ===== WHY AN OFFSCREEN VEHICLE ==============================================
 // NriGraphContext::CreateOffscreen builds the real graph -- same nodes, same
@@ -61,8 +59,7 @@
 //     ArcaneTests.exe "[pixel][d3d12]"          # one backend
 //
 // A first run that fails is far more likely to be a wrong expectation here than
-// a renderer defect -- read the failure before believing it, and prefer fixing
-// the expectation to re-baselining anything.
+// a renderer defect -- read the failure before believing it.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -200,7 +197,6 @@ namespace
         PixelVehicle v = MakeVehicle(backend);
 
         Arcane::NriGraphContext::FrameDesc frame;
-        frame.stage   = Arcane::GoldenStage::Batch;   // no post chain, no HUD
         frame.capture = true;
         RenderOne(*v.ctx, frame);
 
@@ -245,7 +241,6 @@ namespace
         PixelVehicle v = MakeVehicle(backend);
 
         Arcane::NriGraphContext::FrameDesc frame;
-        frame.stage   = Arcane::GoldenStage::Batch;
         frame.capture = false;                       // the whole point
         RenderOne(*v.ctx, frame);
 
@@ -294,7 +289,6 @@ namespace
                                     glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
 
         Arcane::NriGraphContext::FrameDesc frame;
-        frame.stage   = Arcane::GoldenStage::Batch;   // isolate the batcher: no post chain, no HUD
         frame.capture = true;
         frame.batch   = batcher.get();
         RenderOne(*v.ctx, frame);
@@ -362,7 +356,6 @@ namespace
                                          std::uint64_t ticket = 0)
     {
         Arcane::NriGraphContext::FrameDesc frame;
-        frame.stage       = Arcane::GoldenStage::Batch;
         frame.pickOutline = true;          // declares the pick node + readback + JFA chain
         frame.pickables   = drawables;
         frame.pickPixel   = pixel;
@@ -511,7 +504,6 @@ namespace
         std::uint32_t& w, std::uint32_t& h)
     {
         Arcane::NriGraphContext::FrameDesc frame;
-        frame.stage       = Arcane::GoldenStage::Batch;
         frame.capture     = true;
         frame.pickOutline = true;
         frame.pickables   = drawables;
@@ -616,62 +608,62 @@ TEST_CASE("outline: the JFA traces the selected silhouette and nothing when the 
 }
 
 // ---------------------------------------------------------------------------
-// 7. STAGE GATING IS REAL AT THE PIXEL LEVEL. `batch` drops the post chain and
-//    `full` is the only stage that draws a HUD -- the same gates RuntimeApp
-//    applies, and the reason a batch golden and a full golden of one scene are
-//    different images. PostChainGpuTest covered the post half; nothing does now.
+// 7. THE SAME DECLARED FRAME IS BYTE-DETERMINISTIC. Two vehicles, same content,
+//    same nodes -> identical pixels. Cheap, and it is the invariant every other
+//    case in this file silently depends on: a comparison is only meaningful if
+//    a re-run of the same frame reproduces itself exactly.
 //
-//    With no post chain and no HUD supplied, batch and full must agree EXACTLY:
-//    same nodes reached, same pixels. That is a cheap, strong invariant -- it
-//    catches a stage gate that accidentally changes the frame's shape when
-//    there is no stage-gated content to add.
+//    IT ALSO PINS THE FLAG SURFACE. `post`, `gameUi` and `imgui` are null here,
+//    which is how a caller asks for the frame WITHOUT those passes -- the
+//    mechanism that replaced the old GoldenStage ordinal (see FrameDesc). If
+//    nulling them ever stopped meaning "omit the node", this frame would grow
+//    passes and stop matching itself.
 // ---------------------------------------------------------------------------
 namespace
 {
-    void CheckStagesAgreeWithNoStageGatedContent(Arcane::GraphicsBackend backend)
+    void CheckFrameIsByteDeterministic(Arcane::GraphicsBackend backend)
     {
         const std::uint64_t before = Arcane::RenderErrorCount();
 
-        auto capture = [&](Arcane::GoldenStage stage, std::uint32_t& w, std::uint32_t& h)
+        auto capture = [&](std::uint32_t& w, std::uint32_t& h)
         {
             PixelVehicle v = MakeVehicle(backend);
             auto batcher = BatchOneRect(glm::vec2(30.0f, 20.0f), glm::vec2(50.0f, 30.0f),
                                         glm::vec4(0.2f, 0.8f, 0.3f, 1.0f));
             Arcane::NriGraphContext::FrameDesc frame;
-            frame.stage   = stage;
             frame.capture = true;
             frame.batch   = batcher.get();
-            // post = null ("no chain"), imgui = null, gameUi = null: nothing
-            // that either stage would gate differently.
+            // post / gameUi / imgui all left null: no chain, no game HUD, no
+            // host chrome. That IS the "batch slice" now.
             RenderOne(*v.ctx, frame);
             std::vector<unsigned char> rgba;
             REQUIRE(v.ctx->ReadCapture(w, h, rgba));
             return rgba;
         };
 
-        std::uint32_t wb = 0, hb = 0, wf = 0, hf = 0;
-        const std::vector<unsigned char> batch = capture(Arcane::GoldenStage::Batch, wb, hb);
-        const std::vector<unsigned char> full  = capture(Arcane::GoldenStage::Full,  wf, hf);
+        std::uint32_t w0 = 0, h0 = 0, w1 = 0, h1 = 0;
+        const std::vector<unsigned char> first  = capture(w0, h0);
+        const std::vector<unsigned char> second = capture(w1, h1);
 
-        REQUIRE(wb == wf);
-        REQUIRE(hb == hf);
+        REQUIRE(w0 == w1);
+        REQUIRE(h0 == h1);
         // EXACT, not tolerant: two runs of the same nodes over the same content
         // on the same device are deterministic. A tolerance here would hide the
         // very drift the case exists to catch.
-        CHECK(batch == full);
+        CHECK(first == second);
 
         CHECK(Arcane::RenderErrorCount() == before);
     }
 }
 
-TEST_CASE("pixel: batch and full stages agree when no stage-gated content is supplied (d3d12)",
+TEST_CASE("pixel: the same declared frame reproduces itself byte-for-byte (d3d12)",
           "[gpu][pixel][nri][d3d12]")
 {
-    CheckStagesAgreeWithNoStageGatedContent(Arcane::GraphicsBackend::D3D12);
+    CheckFrameIsByteDeterministic(Arcane::GraphicsBackend::D3D12);
 }
 
-TEST_CASE("pixel: batch and full stages agree when no stage-gated content is supplied (vulkan)",
+TEST_CASE("pixel: the same declared frame reproduces itself byte-for-byte (vulkan)",
           "[gpu][pixel][nri][vulkan]")
 {
-    CheckStagesAgreeWithNoStageGatedContent(Arcane::GraphicsBackend::Vulkan);
+    CheckFrameIsByteDeterministic(Arcane::GraphicsBackend::Vulkan);
 }

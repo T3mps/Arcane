@@ -9,35 +9,6 @@
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend
 namespace Arcane
 {
-    // WHICH SLICE OF THE FRAME a golden capture/compare covers (NRI Phase 2).
-    // The 2D cutover is verified node by node, and a whole-frame golden cannot
-    // say WHICH stage regressed: a batch-node bug and a post-node bug both show
-    // up as "main-dx12.png differs". Capturing the frame truncated after each
-    // stage gives one golden per seam, so the first stage whose golden breaks
-    // names the node.
-    //
-    // Semantics in the runtime frame (RuntimeApp::MainLoop):
-    //   Full  -- everything (the pre-Phase-2 frame, byte for byte)
-    //   Batch -- batcher + tonemap only: the post chain and the ImGui pass are
-    //            both bypassed
-    //   Post  -- batcher + post chain + tonemap: only the ImGui pass is bypassed
-    //
-    // TWO HOSTS READ THIS ENUM NOW (NRI Phase 3, Task 13), and their `Full` is
-    // NOT the same picture -- said here because this is shared vocabulary and
-    // the difference is otherwise only discoverable in the editor's frame.
-    // ArcaneEditor captures the VIEWPORT PANEL, not its window: the editor
-    // chrome (dockspace, menus, panels) is excluded by construction, and the
-    // plugin's HUD is Play-mode only there. What the editor's `Full` carries
-    // INSTEAD of that HUD is the Edit-mode selection outline: its golden run
-    // scripts a selection (the same hit-proxy id 1 `--pick-probe` fabricates
-    // below -- ArcaneEditor/src/Viewport/GoldenViewPin.hpp) precisely so the
-    // stage has content its predecessor does not. `Batch`/`Post` mean the same
-    // thing on both -- the same seams, truncated the same way.
-    //
-    // Honoured ONLY in golden mode (see HostConfig::GoldenMode) -- an ordinary
-    // run always draws the whole frame, whatever this says.
-    enum class GoldenStage : std::uint8_t { Full, Batch, Post };
-
     struct ARCANE_API HostConfig
     {
         GraphicsBackend backend   = GraphicsBackend::D3D12;
@@ -64,36 +35,6 @@ namespace Arcane
         // Captures the BACKBUFFER, after tonemap and ImGui -- the actual pixels a
         // player sees, not an intermediate the eye never gets.
         std::string     screenshotPath = "";
-
-        // Golden image testing (Task 4 of NRI Phase 0 harness).
-        std::string     goldenCapturePath = "";   // --golden-capture <dir>: write <dir>/<name>.png on the last frame
-        std::string     goldenComparePath = "";   // --golden-compare <dir>: compare last frame vs <dir>/<name>.png; exit 3 on mismatch
-        std::string     goldenName        = "";   // --golden-name <name>: artifact stem (default "main-<backend>" at use site)
-
-        // --golden-stage full|batch|post (NRI Phase 2). Default Full = the
-        // pre-Phase-2 behaviour exactly. Only read when GoldenMode() is true;
-        // HostConfig::Parse refuses a non-Full stage without golden mode rather
-        // than let it be a silent no-op.
-        //
-        // ARTIFACT NAMING (the stem a host derives from this + goldenName).
-        // The PREFIX is the host's, not this enum's: ArcaneRuntime's is "main-"
-        // and ArcaneEditor's is "editor-" (GoldenHarness.hpp's
-        // kEditorGoldenNamePrefix), so the two hosts' artifacts can never
-        // overwrite each other and `main-*.png` still means what it always did.
-        // Shown here with the runtime's prefix:
-        //   Full  -> "main-<backend>"          (unchanged -- Phase 0's goldens
-        //                                       keep their filenames)
-        //   Batch -> "main-batch-<backend>"
-        //   Post  -> "main-post-<backend>"
-        // An explicit --golden-name is the WHOLE stem (the cross-backend
-        // compare passes the other backend's stem there), so a non-Full stage
-        // appends "-<stage>" to it instead -- enough that the three stages of
-        // one scripted run cannot overwrite each other's file.
-        GoldenStage     goldenStage = GoldenStage::Full;
-
-        // True if either capture or compare mode is active.
-        [[nodiscard]] bool GoldenMode() const noexcept
-        { return !goldenCapturePath.empty() || !goldenComparePath.empty(); }
 
         // Print one line of engine-identity JSON to stdout and exit, without creating
         // a window or device. The Arcane Hub probes this to learn the plugin ABI it
@@ -138,18 +79,18 @@ namespace Arcane
         // gap is closed; the deliberate-no-op ruling it carried is history.
         std::uint64_t   crashGpuFrame = 0;
 
-        // DEV ONLY (NRI Phase 2, Task 11): `--pick-probe x,y` -- the SCRIPTED
-        // desk check for the graph path's pick + JFA outline nodes.
+        // DEV ONLY: `--pick-probe x,y` -- the SCRIPTED desk check for the
+        // graph's pick + JFA outline nodes.
         //
         // Turning it on does three things, and all three are the point:
         //   1. the frame grows the pick node (an R32_UINT entity-id target +
         //      a 1-pixel readback) and the outline chain (seed -> N jump-flood
         //      steps -> a composite over the tonemapped backbuffer). With the
-        //      flag ABSENT the frame's shape is byte-for-byte Task 10's, which
-        //      is what keeps the batch/post/full stage goldens comparable;
+        //      flag ABSENT the frame's shape is unchanged, so the probe cannot
+        //      perturb what an ordinary run renders;
         //   2. the SELECTION is scripted -- the first pickable drawable in the
-        //      scene (hit-proxy id 1) -- because there is no editor selection
-        //      on this host and Phase 3 owns the real wiring;
+        //      scene (hit-proxy id 1) -- because this host has no editor
+        //      selection to read;
         //   3. the run prints the id read back at (x, y) and exits 0 on a HIT
         //      (a non-zero id) or 1 on a MISS, so a desk battery item is one
         //      scriptable line instead of an eyeball.

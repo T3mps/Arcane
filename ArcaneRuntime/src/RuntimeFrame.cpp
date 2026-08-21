@@ -1,12 +1,6 @@
 // RuntimeFrame: RuntimeApp::MainLoop's frame body, extracted verbatim at NRI
 // Phase 3 Task 4 and unified at Task 6 (the one-device landing). See
 // RuntimeFrame.hpp's header comment for the contract.
-//
-// RenderNvrhi -- the NVRHI arm this file used to carry beside RenderGraph,
-// kept through Phase 5a as the regression floor stage-golden comparisons
-// were measured against -- was deleted at NRI Phase 5a, Task 4: the frame
-// graph is the only render path left, so there was no floor left to protect.
-// RenderGraph below is now the ONLY per-frame render function in this file.
 
 #include "RuntimeFrame.hpp"
 #include "RuntimeApp.hpp"   // FrameIo::app.PushSceneCamera -- see that method's comment
@@ -16,7 +10,6 @@
 #include <Arcane/Base/Assert.hpp>         // ARC_ASSERT (FrameExtent's io.graph invariant)
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (PumpAndResize)
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Host/GoldenHarness.hpp>  // Arcane::GoldenArtifact (NRI Phase 3, Task 13: shared with ArcaneEditor -- moved out of this file's anonymous namespace)
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Render/Batcher2D.hpp>              // Arcane::Batch2DStats (BuildHud's HUD text, CaptureTail's perf tick)
@@ -35,17 +28,6 @@
 
 namespace
 {
-    // GoldenArtifact (the golden capture/compare tail shared by both render
-    // paths) moved to the shared Arcane::Host seam at NRI Phase 3 Task 13
-    // (Arcane/Host/GoldenHarness.hpp/.cpp): ArcaneEditor's own golden mode
-    // needed the identical machinery, and an anonymous-namespace helper has
-    // internal linkage -- it cannot be called across translation units, let
-    // alone a second executable. See that header's extraction history and
-    // the task-13 report for the diff-match; CaptureTail's call site below
-    // needed no change beyond the include (unqualified `GoldenArtifact`
-    // still resolves -- ordinary unqualified lookup finds Arcane::
-    // GoldenArtifact from this enclosing Arcane::RuntimeFrame namespace).
-
     // =============================================================
     // THE FRAME'S EXTENT (NRI Phase 3, Task 6).
     // =============================================================
@@ -143,34 +125,25 @@ bool PumpAndResize(FrameIo& io)
         // above for why the field is unconditional and where the one
         // remaining fail-loud on it lives.
         //
-        // ===== A RESIZE IS NEVER SILENT, AND IN A GOLDEN RUN IT IS LOUD =====
-        // This host CAPTURES ITS SWAPCHAIN, so the golden's dimensions are the
-        // window's client extent -- which the OS owns, not us. Following a
-        // resize without saying so is how a run that started at 1280x720 came
-        // back 1280x712 and reported a bare "dims MISMATCH" indistinguishable
-        // from a pixel regression; the actual extents were recoverable only by
-        // reading the IHDR of the .actual.png the comparator drops.
+        // ===== A RESIZE IS NEVER SILENT =====================================
+        // This host CAPTURES ITS SWAPCHAIN, so a --screenshot artifact carries
+        // the window's client extent -- which the OS owns, not us. Following a
+        // resize without saying so once produced a run that started at 1280x720
+        // and wrote a 1280x712 image with nothing in the log to explain it.
         //
-        // NOT PINNED, DELIBERATELY, and this is the difference from the
-        // EDITOR's golden extent (Host/GoldenHarness.hpp,
-        // kEditorGoldenViewportW/H). The editor captures an OFFSCREEN target it
-        // owns outright, so its size is ours to fix. A window-backed swapchain
-        // is not: Vulkan's surface currentExtent is authoritative and refusing
-        // to follow it produces a surface/swapchain mismatch, which trades a
-        // legible failure for an illegible one. So the rule here is HONESTY,
-        // not control -- report it, let the compare fail, and make the reason
-        // unmissable in the log.
+        // The extent is deliberately NOT pinned: Vulkan's surface currentExtent
+        // is authoritative, and refusing to follow it produces a
+        // surface/swapchain mismatch -- trading a legible outcome for an
+        // illegible one. Report it instead.
         const std::uint32_t wasW = io.graph->SurfaceWidth();
         const std::uint32_t wasH = io.graph->SurfaceHeight();
         io.graph->Resize(events.width, events.height);
         if (wasW != events.width || wasH != events.height)
         {
-            if (io.config.GoldenMode() || !io.config.screenshotPath.empty())
+            if (!io.config.screenshotPath.empty())
             {
                 ARC_WARN("[nri-graph] the window was RESIZED mid-run: {}x{} -> {}x{}. This run "
-                         "captures its swapchain, so the artifact will carry the NEW extent and "
-                         "any golden compare against the old one will fail on dimensions -- that "
-                         "is a window event, NOT a rendering regression.",
+                         "captures its swapchain, so the screenshot will carry the NEW extent.",
                          wasW, wasH, events.width, events.height);
             }
             else
@@ -200,10 +173,7 @@ void AdvanceSim(FrameIo& io)
         const auto now = std::chrono::steady_clock::now();
         const double wallDt = std::chrono::duration<double>(now - io.lastFrameTime).count();
         io.lastFrameTime = now;
-        // Golden runs pin the frame clock too, before m_lastFrameDt/m_hostClock
-        // consume it -- see the sim-advance block below for why (deterministic
-        // shader inputs).
-        const double frameDt = io.config.GoldenMode() ? 1.0 / 60.0 : wallDt;
+        const double frameDt = wallDt;
         // The host clock the compile service debounces against + the frame dt
         // the material globals report. Advanced exactly once per frame, here,
         // because this is where the frame's wall-clock delta is measured (the
@@ -226,11 +196,6 @@ void AdvanceSim(FrameIo& io)
         double simDt = std::chrono::duration<double>(now - io.simPrev).count();
         io.simPrev = now;
         if (simDt > 0.25) simDt = 0.25;
-        // Golden runs are deterministic by construction: wall-clock dt would make
-        // every animated/timed shader input a per-run variable. One fixed 60 Hz
-        // step per rendered frame; --frames N gives N identical steps.
-        if (io.config.GoldenMode())
-            simDt = 1.0 / 60.0;
         const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
         io.runtime->Loop().Advance(simDt,
             [&](double dt)          { io.plugin->FixedUpdateAll(dt); },
@@ -419,15 +384,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // NewFrame, i.e. for the whole of the RenderFrame call below --
     // which is what lets the node copy the vertices at RECORD time.
     // ============================================================
-    if (io.config.GoldenMode() &&
-        io.config.goldenStage != Arcane::GoldenStage::Full)
-    {
-        io.gpu->Imgui().EndFrameDiscard();
-    }
-    else
-    {
-        graphFrame.imgui = io.gpu->Imgui().RenderToDrawData();
-    }
+    graphFrame.imgui = io.gpu->Imgui().RenderToDrawData();
 
     // THE FRAME'S EXTENT, from the one surface this run has (see
     // FrameExtent): the graph swapchain's. Read once and used for the
@@ -487,21 +444,14 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         graphFrame.selectedIds = io.pickSelectedIds;
     }
 #endif
-    // Only read in golden mode (Parse refuses a non-Full stage
-    // outside it). Every stage renders the same frame today, because
-    // the nodes the other two would add do not exist on this path yet.
-    graphFrame.stage = io.config.goldenStage;
     graphFrame.batch = &io.gpu->Batch();
     // The scene post chain, as the BYTES its NVRHI twin was built
     // from (SceneRenderResolver::PostDesc -- NRI Phase 2, Task 10).
     // Re-read every frame for the same reason PostChain() is above:
     // a drain may swap the bound instance under an asset re-save.
     // Null (no PostProcess assignment, or the compile has not landed
-    // yet) simply renders canvas -> tonemap.
-    //
-    // NOT stage-gated here: DeclareGraphFrame applies the same
-    // `--golden-stage batch` bypass the NVRHI block above does, so
-    // the two paths drop the chain on identical terms.
+    // yet) simply renders canvas -> tonemap -- which is also how a caller
+    // asks for the frame WITHOUT a post chain at all (see FrameDesc).
     graphFrame.post    = io.resolver ? io.resolver->PostDesc() : nullptr;
     // The same GlobalParams the batcher got via SetGlobals, and the
     // same ones the NVRHI post hook passes to the chain -- so the two
@@ -513,8 +463,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // CaptureTail, i.e. after this arm returns Presented.
     const bool willBeLastFrame =
         io.config.maxFrames != 0 && (io.frameCount + 1) >= io.config.maxFrames;
-    graphFrame.capture = willBeLastFrame &&
-                         (io.config.GoldenMode() || !io.config.screenshotPath.empty());
+    graphFrame.capture = willBeLastFrame && !io.config.screenshotPath.empty();
 
     // Timed into accPresent rather than left unmeasured, so `--perf`
     // reports something real on this path too (the spec's waiting-
@@ -576,21 +525,8 @@ bool CaptureTail(FrameIo& io)
     // produced it. The ONLY difference between the paths is where the
     // pixels come from; everything downstream (artifact naming, the
     // comparator, the tolerances, the exit code) is shared.
-    if (lastFrame && (!io.config.screenshotPath.empty() || io.config.GoldenMode()))
+    if (lastFrame && !io.config.screenshotPath.empty())
     {
-        // LATCHED BEFORE THE READBACK, not after (whole-branch review, I2;
-        // exactly the editor's rule in RenderSceneToViewport's capture block,
-        // which is where its golden capture lives now): this is the
-        // "did the run ever reach a real capture" signal MainLoop's post-loop
-        // check reads, and it must be true even when the readback then fails
-        // -- that failure sets goldenExit = 3 itself, below, and the two are
-        // independent facts. Every path out of the loop that never reaches
-        // here (a window close, the quit action, a --frames count the run
-        // never got to) therefore leaves it false, which is precisely the
-        // "PASS that compared nothing" this closes.
-        if (io.config.GoldenMode())
-            io.goldenCaptured = true;
-
         std::uint32_t w = 0, h = 0;
         std::vector<unsigned char> actual;
         // The graph's readback NODE ran inside this frame's own command
@@ -606,38 +542,17 @@ bool CaptureTail(FrameIo& io)
 
         if (!read)
         {
-            // Only a GOLDEN run fails on this. A --screenshot-only run has
-            // always degraded to a warning (a screenshot that cannot be
-            // written must not trip the GPU tests' RenderErrorCount()==0
-            // gate -- the rule SaveTexturePng carried, now
-            // WriteThumbnailPngRgba's), and folding the two
-            // readbacks into one must not quietly change that.
-            if (io.config.GoldenMode())
-            {
-                ARC_ERROR("golden: backbuffer readback failed");
-                io.goldenExit = 3;
-            }
-            else
-            {
-                ARC_WARN("screenshot FAILED: {} (backbuffer readback)", io.config.screenshotPath);
-            }
+            // A WARN, never an exit code: a screenshot that cannot be written
+            // must not trip the GPU tests' RenderErrorCount()==0 gate.
+            ARC_WARN("screenshot FAILED: {} (backbuffer readback)", io.config.screenshotPath);
         }
         else
         {
-            // --screenshot: the exact pixels a player sees (post-tonemap,
-            // post-ImGui). Kept a WARN rather than an exit code, exactly
-            // as before -- only the golden harness fails a run.
-            if (!io.config.screenshotPath.empty())
-            {
-                if (Arcane::WritePngRgba(io.config.screenshotPath, w, h, actual.data()))
-                    ARC_INFO("screenshot written: {}", io.config.screenshotPath);
-                else
-                    ARC_WARN("screenshot FAILED: {}", io.config.screenshotPath);
-            }
-            // NRI Phase 0 golden harness, unchanged in behaviour and now
-            // shared by both paths -- see GoldenArtifact.
-            if (io.config.GoldenMode() && GoldenArtifact(io.config, w, h, actual) != 0)
-                io.goldenExit = 3;
+            // The exact pixels a player sees (post-tonemap, post-ImGui).
+            if (Arcane::WritePngRgba(io.config.screenshotPath, w, h, actual.data()))
+                ARC_INFO("screenshot written: {}", io.config.screenshotPath);
+            else
+                ARC_WARN("screenshot FAILED: {}", io.config.screenshotPath);
         }
     }
 

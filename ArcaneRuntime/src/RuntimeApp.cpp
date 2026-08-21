@@ -7,7 +7,6 @@
 #include "RuntimeApp.hpp"
 #include "RuntimeFrame.hpp"   // NRI Phase 3, Task 4: MainLoop's frame body
 
-#include <Arcane/Host/GoldenHarness.hpp>  // Arcane::DrainSceneCompiles/kGoldenWarmupTimeoutSeconds (NRI Phase 3, Task 13: shared with ArcaneEditor -- see that header's extraction history)
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Assets/Assets.hpp>      // Arcane::Assets (AssetsFacade().PixelsFor -- the pre-loop SetPixelSupply lambda)
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat/SetPhase (pre-loop phase markers)
@@ -21,16 +20,13 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved (Run()'s exit-code tail)
 #include <Arcane/Render/PickEmit.hpp>    // PickEntityForId (ShutdownGraphPath's --pick-probe report)
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (PushSceneCamera; RenderGraph calls it via FrameIo::app -- the only arm left, NRI Phase 5a Task 4)
-// Assets.hpp/GoldenImage.hpp/AudioDevice.hpp/InputActions.hpp/InputSnapshot.hpp/
-// Batcher2D.hpp moved to RuntimeFrame.cpp at NRI Phase 3 Task 4: every symbol
-// they were here for (GoldenArtifact, the audio voice reap, input sampling,
-// Batch2DStats) moved with MainLoop's frame body -- see that file.
-// FullscreenMaterialChain.hpp moved there too at the same time, for the
-// post-chain hook; NRI Phase 5a, Task 4 later deleted the class outright
-// along with RenderNvrhi, its only caller in this codebase.
+// Assets.hpp/AudioDevice.hpp/InputActions.hpp/InputSnapshot.hpp/Batcher2D.hpp
+// live in RuntimeFrame.cpp instead: every symbol they are needed for (the
+// audio voice reap, input sampling, Batch2DStats) belongs to MainLoop's frame
+// body, which is that file.
 // NriGraphContext (the graph vehicle) is NOT Dist-guarded here: RuntimeApp.hpp
-// holds the member unconditionally, and as of Phase 5a (Task 2b) the CREATION
-// is unconditional too, in every configuration -- see that header's comment.
+// holds the member unconditionally and its creation is unconditional too, in
+// every configuration -- see that header's comment.
 
 #include <Astra/Core/TypeContext.hpp>
 
@@ -44,16 +40,6 @@
 #include <thread>
 #include <vector>
 
-// DrainSceneCompiles (the golden warm-up drain) and GoldenArtifact (the
-// capture/compare tail RuntimeFrame.cpp's CaptureTail calls) both moved to
-// the shared Arcane::Host seam at NRI Phase 3 Task 13
-// (Arcane/Host/GoldenHarness.hpp/.cpp) -- ArcaneEditor's own golden mode
-// needed the identical machinery, and an anonymous-namespace helper has
-// internal linkage: it cannot be called across translation units, let alone
-// a second executable. GoldenArtifact made this same hop once before, from
-// here to RuntimeFrame.cpp's anonymous namespace at Task 4 -- see that
-// file's own history comment. Both moves are VERBATIM; see the task-13
-// report for the diff-match.
 
 RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
     : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash),
@@ -290,28 +276,11 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
     // chain simply stay unbound.
     //
     // Debounce is a HOT-RELOAD nicety: a 0.2 s quiet window keeps a designer
-    // holding Ctrl+S from firing a compile per keystroke. A golden run has no
-    // designer and no re-saves -- there the window is pure latency between "the
-    // scene declared a material" and "a frame that gets captured can contain
-    // it", and Poll measures it against the PINNED clock (1/60 per frame), so
-    // it spends a fixed 12 frames of the run's budget for nothing. Zero it, and
-    // let MainLoop's warm-up drain the compiles to quiescence before frame 1
-    // rather than racing them (see DrainSceneCompiles).
-    const bool golden = m_config.GoldenMode();
-    if (!m_shaderCompiler.Initialize(/*debounceSeconds=*/golden ? 0.0 : 0.2))
+    // holding Ctrl+S from firing a compile per keystroke.
+    if (!m_shaderCompiler.Initialize(/*debounceSeconds=*/0.2))
     {
-        // A golden run whose materials CANNOT bind would capture a frame
-        // missing half its content and still exit 0 -- and that frame becomes
-        // the frozen baseline the rest of the phase is compared against.
-        // Refuse the boot instead. An interactive run keeps degrading to a
-        // warning, where the missing material is on screen and recoverable.
-        if (golden)
-        {
-            ARC_ERROR("ArcaneRuntime: dxcompiler.dll unavailable -- a golden run cannot bind "
-                      "sprite materials or the scene post chain, and would capture or compare "
-                      "a frame that is missing them");
-            return false;
-        }
+        // Degrades to a warning rather than refusing the boot: the missing
+        // material is on screen and recoverable.
         ARC_WARN("ArcaneRuntime: dxcompiler.dll unavailable -- sprite materials "
                  "and the scene post chain will not bind");
     }
@@ -411,25 +380,13 @@ void RuntimeApp::MainLoop()
     // and reset to null every frame for nobody. Gone with the io field.
     bool running = true;
 
-    // --nri-graph (NRI Phase 2, Task 7): THE RENDER HALF SWAPS, HERE.
+    // THE RENDER HALF: one graph frame per iteration, built here.
     //
-    // Not a pre-boot early-return: everything above this line already ran --
-    // project, plugin, boot scene, the scene resolver and its compile service
-    // -- and everything below it still runs, except that the
-    // NVRHI record/submit/present half is replaced by one graph frame. That is
-    // what makes a stage-golden comparison against the NVRHI baselines mean
-    // anything: both paths render THE SAME booted scene.
-    //
-    // SINCE NRI PHASE 3 TASK 6 THIS IS ALSO THE PROCESS'S ONLY DEVICE: the
-    // boot above ran GpuContext::Create (CreateForGraph, before NRI Phase 5a,
-    // Task 6 renamed it), which built no NVRHI device at all, so the vehicle
-    // below wraps the first and only one -- over the
-    // HOST's window, which it borrows and must not outlive (m_graphContext is
-    // declared after m_gpu, so it is destroyed first).
-    //
-    // Built before the golden warm-up on purpose -- the warm-up can take
-    // seconds on a cold toolchain, and a vehicle that cannot even create a
-    // device should say so first.
+    // THIS VEHICLE OWNS THE PROCESS'S ONLY DEVICE. The boot above ran
+    // GpuContext::Create, which builds no graphics device at all, so the
+    // vehicle below creates the first and only one -- over the HOST's window,
+    // which it borrows and must not outlive (m_graphContext is declared after
+    // m_gpu, so it is destroyed first).
     //
     // The latch baseline is taken HERE, not at process start: boot-time errors
     // belong to the boot, and everything from this point until the vehicle is
@@ -492,87 +449,6 @@ void RuntimeApp::MainLoop()
             return rt ? rt->AssetsFacade().PixelsFor(id) : nullptr;
         });
 
-    // Golden warm-up (NRI Phase 2): settle the scene's material compiles BEFORE
-    // the frame counter starts, so what the captured/compared frame contains is
-    // a function of the scene, not of how fast this machine is. See
-    // DrainSceneCompiles for the failure this closes. Golden-mode-gated: an
-    // ordinary run keeps binding materials opportunistically a few frames in,
-    // exactly as before.
-    //
-    // UNCHANGED on the --nri-graph path, deliberately and by construction: the
-    // warm-up drives the RESOLVER (compile -> drain -> bind), which is engine
-    // state the graph path boots exactly like the NVRHI path, and the census
-    // it refuses on counts resolver-level binding rather than anything drawn.
-    // So a graph golden run is held to the same "the scene's materials all
-    // bound before frame 1" bar even though Task 7's clear-only frame draws
-    // none of them -- which is the point: the bar must already hold when Task
-    // 8's node starts drawing them.
-    if (m_config.GoldenMode() && m_resolver)
-    {
-        Arcane::Diagnostics::SetPhase("golden compile warm-up");
-        // THE FRAME'S EXTENT: the graph swapchain's. There is no NVRHI canvas
-        // to fall back to -- GpuContext has built none since NRI Phase 5a,
-        // Task 6 deleted Cnv() along with the rest of its NVRHI half -- and
-        // m_graphContext is unconditionally non-null by this point (the
-        // `if (!m_graphContext)` refusal a few lines above already returned
-        // otherwise), so this is not a GraphFlavor()/GraphMode() branch to
-        // leave for Task 11: it is a plain null check on a local that is
-        // already proven non-null here.
-        const float warmupW = (float)m_graphContext->Swap().Width();
-        const float warmupH = (float)m_graphContext->Swap().Height();
-        if (!Arcane::DrainSceneCompiles(*m_resolver, m_shaderCompiler, warmupW, warmupH))
-        {
-            ARC_ERROR("golden: shader compiles did not settle within {:.0f}s -- refusing to "
-                      "capture or compare a frame whose content is not bound yet",
-                      Arcane::kGoldenWarmupTimeoutSeconds);
-            m_goldenExit = 3;
-            ShutdownGraphPath();
-            return;
-        }
-
-        // Quiescent is not the same as complete: a compile that FAILED also
-        // leaves the service idle. Check what the scene actually got, because
-        // the whole point of the warm-up is that the artifact contains the
-        // scene -- and a golden is the one place where "it rendered something"
-        // is not good enough.
-        const Arcane::SceneRenderResolver::MaterialCensus census = m_resolver->Materials();
-        // WHAT "the post chain bound" MEANS used to depend on which recorder
-        // this run had, and getting that wrong would refuse every graph
-        // golden (NRI Phase 3, Task 6). Originally, MaterialCensus::postBound
-        // asked whether a FullscreenMaterialChain -- an NVRHI object -- was
-        // Ready(), which was structurally false with no device; the graph
-        // recorder never consumed that chain at all, building its own
-        // pipelines from the PostChainDesc BYTES the same cache publishes
-        // device-lessly instead (Task 2's severance), so this ternary read
-        // PostDesc() on that arm to ask the question the graph recorder
-        // actually answers. NRI Phase 5a, Task 4 deleted FullscreenMaterialChain
-        // and rebuilt postBound's own computation on Desc() -- see
-        // SceneRenderResolver.cpp's Materials() -- so both sides of this
-        // ternary now agree, and m_graphContext being unconditional (Task 2b)
-        // means only the PostDesc() arm is ever actually taken. The ternary is
-        // left standing rather than collapsed, since that collapse is Task
-        // 11's GraphMode()-style predicate sweep, not this one's. Sprite
-        // materials need no such split -- their census reads the batcher's
-        // registration table, which the bytes-only path fills either way.
-        const bool postBound = m_graphContext ? (m_resolver->PostDesc() != nullptr)
-                                              : census.postBound;
-        if (census.spriteBound != census.spriteReferenced ||
-            (census.postReferenced && !postBound))
-        {
-            ARC_ERROR("golden: the scene's materials did not all bind ({}/{} sprite material(s), "
-                      "post chain {}) -- refusing rather than freezing an incomplete frame as "
-                      "the baseline; the compile failures are logged above",
-                      census.spriteBound, census.spriteReferenced,
-                      census.postReferenced ? (postBound ? "bound" : "UNBOUND") : "none");
-            m_goldenExit = 3;
-            ShutdownGraphPath();
-            return;
-        }
-        ARC_INFO("golden: scene materials settled before frame 1 -- {} sprite material(s), "
-                 "post chain {}", census.spriteBound,
-                 census.postReferenced ? "bound" : "none");
-    }
-
     // Boot is over; anything the watchdog reports from here on belongs to the
     // frame loop, not to a stale boot stage.
     Arcane::Diagnostics::SetPhase("runtime frame loop");
@@ -595,8 +471,6 @@ void RuntimeApp::MainLoop()
         .config          = m_config,
         .perf            = m_perf,
         .frameCount      = m_frameCount,
-        .goldenExit      = m_goldenExit,
-        .goldenCaptured  = m_goldenCaptured,
         .graphExit       = m_graphExit,
         .frameGlobals    = m_frameGlobals,
         .hostClock       = m_hostClock,
@@ -643,46 +517,16 @@ void RuntimeApp::MainLoop()
         // THE RENDER HALF. RenderGraph's body moved to RuntimeFrame.cpp
         // verbatim at NRI Phase 3 Task 4; the call stays here because only
         // MainLoop's own loop can break/continue.
-        //
-        // NRI Phase 5a, Task 4: this used to be an if/else against
-        // `m_graphContext`, with RenderNvrhi as the NVRHI arm -- unreachable
-        // since Phase 5a Task 2b's vehicle boot made m_graphContext
-        // unconditional, but kept as the REGRESSION FLOOR stage-golden
-        // comparisons were measured against. RenderNvrhi is deleted (its
-        // FullscreenMaterialChain dependency no longer exists), so there is
-        // no arm left to branch on; this call is unconditional now.
         // =============================================================
         const Arcane::NriGraphContext::FrameOutcome outcome = Arcane::RuntimeFrame::RenderGraph(io);
         if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)  break;
         if (outcome == Arcane::NriGraphContext::FrameOutcome::Skipped) continue;
 
         // The shared tail: the plugin's hot-reload poll, the perf tick, the
-        // frame counter, and the capture/screenshot/golden bookkeeping on the
-        // final frame. `stop` mirrors the original `if (lastFrame) running =
-        // false;` -- the while condition above ends the loop, not a break.
+        // frame counter, and the screenshot bookkeeping on the final frame.
+        // The while condition above ends the loop, not a break.
         if (Arcane::RuntimeFrame::CaptureTail(io))
             running = false;
-    }
-
-    // A WHOLE-RUN property, checked once here rather than per frame
-    // (whole-branch review, I2) -- the mirror of EditorApp::MainLoop's own
-    // post-loop check, which 38b94b76 added to the EDITOR while leaving the
-    // host that IS the frozen floor without it. CaptureTail's capture block
-    // fires only on `lastFrame`, so every early break above that is not
-    // device-loss (exit 1) or a graph failure (exit 1) -- a window close, the
-    // "quit" input action, a Skipped-frame loop that never reached --frames N
-    // -- would otherwise reach here with m_goldenExit still 0 and Run() would
-    // report a clean PASS having compared nothing at all.
-    //
-    // Skipped when GoldenMode() is off (the member stays false and unread on
-    // every ordinary run) and after a warm-up refusal (both of those paths
-    // return before the loop, with m_goldenExit already 3).
-    if (m_config.GoldenMode() && !m_goldenCaptured)
-    {
-        ARC_ERROR("golden: the run finished without ever capturing a frame to compare or "
-                  "write -- it ended before reaching frame {} (a window close, the quit "
-                  "action, or a frame loop that never presented)", m_config.maxFrames);
-        m_goldenExit = 3;
     }
 
     // Destroys the vehicle and folds a grown RenderErrorCount into the exit
@@ -924,5 +768,5 @@ int RuntimeApp::Run()
     // unconditional, not gated on --nri-graph anymore -- so 0 here means no
     // graph failure occurred, not "the flag was not given".
     if (m_graphExit != 0) return m_graphExit;
-    return m_goldenExit;   // 0 ordinarily; 3 = golden capture/compare failure
+    return 0;
 }

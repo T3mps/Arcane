@@ -14,22 +14,6 @@ namespace Arcane
         cli.Option("project", "", "project folder or .arcproj to open (empty = data/-next-to-exe)");
         cli.Option("scene",   "", "asset Guid to boot instead of the manifest's bootScene (empty = follow the manifest)");
         cli.Option("screenshot", "", "write the last rendered frame to this PNG before exiting (pairs with --frames)");
-        cli.Option("golden-capture", "", "write the last rendered frame to <dir>/<name>.png (pairs with --frames)");
-        cli.Option("golden-compare", "", "compare the last rendered frame against <dir>/<name>.png; exit 3 on mismatch");
-        cli.Option("golden-name",    "", "golden artifact stem (default: main-<backend>)");
-        // Registered NEXT TO the other golden flags and, like them, NOT
-        // Dist-guarded: --golden-capture/--golden-compare/--golden-name all
-        // exist in every configuration, and a vocabulary where a Dist build
-        // accepts --golden-capture but rejects --golden-stage would be a worse
-        // trap than the shipped flag itself. (--crash-gpu stays Dist-guarded
-        // because it is DEV scaffolding with no golden peer; --nri-graph USED
-        // TO be Dist-guarded for the same reason, but as of Phase 5a the NRI
-        // frame graph is the only render path, so it is registered here,
-        // unconditionally, as a deprecated no-op -- see below.)
-        cli.Option("golden-stage", "full",
-                   "which slice of the frame the golden covers: full|batch|post "
-                   "(batch = no post chain and no ImGui, post = no ImGui)")
-            .Choices({ "full", "batch", "post" });
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
         // NOT Dist-guarded (Phase 5a, Task 2b): the NRI frame graph is the
         // ONLY render path in every configuration now, so the flag that used
@@ -65,18 +49,6 @@ namespace Arcane
         cfg.projectPath = r.Get("project");
         cfg.sceneOverride = r.Get("scene");
         cfg.screenshotPath = r.Get("screenshot");
-        cfg.goldenCapturePath = r.Get("golden-capture");
-        cfg.goldenComparePath = r.Get("golden-compare");
-        cfg.goldenName        = r.Get("golden-name");
-        // Cli::Choices already refused anything outside the set at parse time
-        // (stderr + exit 2), so this mapping only ever sees the three legal
-        // spellings -- "full" is both the default and the else branch.
-        {
-            const std::string stage = r.Get("golden-stage");
-            cfg.goldenStage = stage == "batch" ? GoldenStage::Batch
-                            : stage == "post"  ? GoldenStage::Post
-                                               : GoldenStage::Full;
-        }
         cfg.printEngineInfo = r.Flag("print-engine-info");
         // "nri-graph" is intentionally never read here: it is registered
         // above (unconditionally) purely so a command line that still passes
@@ -86,28 +58,13 @@ namespace Arcane
         cfg.crashGpuFrame = r.GetAs<std::uint64_t>("crash-gpu");
 #endif
 
-        // Golden capture/compare only ever runs at the last frame (RuntimeApp
-        // gates it on `lastFrame`, which requires maxFrames != 0). Without
-        // --frames, --golden-capture/--golden-compare would silently exit 0
-        // having captured/compared nothing -- refuse at parse time instead,
-        // matching Cli's own error idiom (stderr + exit 2).
-        if (cfg.GoldenMode() && cfg.maxFrames == 0)
+        // --screenshot only ever fires on the last frame (both hosts gate it on
+        // `lastFrame`, which requires maxFrames != 0). Without --frames it
+        // would silently exit 0 having written nothing -- refuse at parse time
+        // instead, matching Cli's own error idiom (stderr + exit 2).
+        if (!cfg.screenshotPath.empty() && cfg.maxFrames == 0)
         {
-            std::fprintf(stderr, "error: golden capture/compare requires --frames N\n");
-            return { std::nullopt, 2 };
-        }
-
-        // Same silent-no-op reasoning as the --frames rule above: the stage
-        // semantics are read ONLY inside RuntimeApp's `GoldenMode()` guard, so
-        // `--golden-stage batch` on an ordinary run would draw the full frame
-        // anyway and exit 0, looking exactly like a batch-only run that
-        // happened to include the post chain and the HUD. Refuse it here
-        // instead. (`--golden-stage full` is the default and stays legal
-        // everywhere -- it asks for nothing that does not already happen.)
-        if (cfg.goldenStage != GoldenStage::Full && !cfg.GoldenMode())
-        {
-            std::fprintf(stderr, "error: --golden-stage batch|post only applies to a golden run; "
-                                 "pass --golden-capture or --golden-compare\n");
+            std::fprintf(stderr, "error: --screenshot requires --frames N\n");
             return { std::nullopt, 2 };
         }
 

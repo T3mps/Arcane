@@ -4054,7 +4054,6 @@ TEST_CASE("nri graph frame: the offscreen frame's node census is the presenting 
         Arcane::RgFrameShape shape;
         shape.canvasWidth     = 320;
         shape.canvasHeight    = 200;
-        shape.stage           = Arcane::GoldenStage::Full;
         shape.post            = &post;
         shape.pickOutline     = true;
         shape.imgui           = true;
@@ -4408,10 +4407,11 @@ TEST_CASE("nri graph frame: --golden-stage batch drops the post chain; post and 
     // against an ungraded one.
     const Arcane::PostChainDesc chain = MakeLinearChain(2);
 
-    const struct { Arcane::GoldenStage stage; std::size_t nodes; std::uint32_t passes; } cases[] = {
-        { Arcane::GoldenStage::Batch, 2, 0 },
-        { Arcane::GoldenStage::Post,  4, 2 },
-        { Arcane::GoldenStage::Full,  4, 2 },
+    // A NULL `post` IS how a caller asks for the frame without a chain -- the
+    // mechanism that replaced the GoldenStage ordinal (see FrameDesc).
+    const struct { const Arcane::PostChainDesc* post; std::size_t nodes; std::uint32_t passes; } cases[] = {
+        { nullptr, 2, 0 },
+        { &chain,  4, 2 },
     };
 
     for (const auto& expected : cases)
@@ -4420,8 +4420,7 @@ TEST_CASE("nri graph frame: --golden-stage batch drops the post chain; post and 
         Arcane::RgFrameShape shape;
         shape.canvasWidth  = 320;
         shape.canvasHeight = 200;
-        shape.post         = &chain;
-        shape.stage        = expected.stage;
+        shape.post         = expected.post;
 
         const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
         CHECK(graph.NodeCount() == expected.nodes);
@@ -4432,8 +4431,7 @@ TEST_CASE("nri graph frame: --golden-stage batch drops the post chain; post and 
         CHECK(std::string(graph.NodeName(graph.NodeCount() - 1)) == "tonemap");
     }
 
-    // ...and a frame with no chain at all is byte-for-byte Task 8's, whatever
-    // the stage: nothing above may make the no-post path grow a node.
+    // ...and a frame with no chain at all grows no node for one.
     Arcane::RenderGraph graph;
     Arcane::RgFrameShape shape;
     shape.canvasWidth  = 320;
@@ -5810,10 +5808,10 @@ TEST_CASE("nri graph frame: --golden-stage batch and post drop the HUD; full kee
     // of every pixel a batch/post golden exists to compare, so if this gate
     // broke, a stage golden would compare a chromed frame against a bare
     // baseline -- and the diff would look like a batch-node regression.
-    const struct { Arcane::GoldenStage stage; std::size_t nodes; bool hud; } cases[] = {
-        { Arcane::GoldenStage::Batch, 2, false },
-        { Arcane::GoldenStage::Post,  2, false },
-        { Arcane::GoldenStage::Full,  3, true  },
+    // A NULL `imgui` IS how a caller asks for the frame without host chrome.
+    const struct { bool imgui; std::size_t nodes; bool hud; } cases[] = {
+        { false, 2, false },
+        { true,  3, true  },
     };
 
     for (const auto& expected : cases)
@@ -5822,11 +5820,7 @@ TEST_CASE("nri graph frame: --golden-stage batch and post drop the HUD; full kee
         Arcane::RgFrameShape shape;
         shape.canvasWidth  = 320;
         shape.canvasHeight = 200;
-        shape.stage        = expected.stage;
-        // The driver would not even build draw data on a non-Full stage; this
-        // sets it anyway, so what is pinned is the GATE and not the driver's
-        // politeness.
-        shape.imgui        = true;
+        shape.imgui        = expected.imgui;
 
         Arcane::DeclareGraphFrame(graph, shape, nullptr);
         REQUIRE(graph.NodeCount() == expected.nodes);
@@ -5996,14 +5990,12 @@ TEST_CASE("nri graph frame: the GAME UI node sits between the tonemap and the ou
         // not the editor's own call site, which ArcaneTests cannot compile
         // (EditorApp*.cpp is not a test TU -- see the standing "a green gate
         // proves nothing about either host" rule).
-        for (const Arcane::GoldenStage stage : { Arcane::GoldenStage::Batch, Arcane::GoldenStage::Post })
         {
             Arcane::RenderGraph graph;
             Arcane::RgFrameShape shape;
             shape.canvasWidth  = 320;
             shape.canvasHeight = 200;
-            shape.stage        = stage;
-            shape.gameUi       = true;
+            shape.gameUi       = false;   // no game HUD this frame
 
             Arcane::DeclareGraphFrame(graph, shape, nullptr);
             REQUIRE(graph.NodeCount() == 2);   // batch2d + tonemap only -- no gameui node
@@ -6014,7 +6006,6 @@ TEST_CASE("nri graph frame: the GAME UI node sits between the tonemap and the ou
         Arcane::RgFrameShape shape;
         shape.canvasWidth  = 320;
         shape.canvasHeight = 200;
-        shape.stage        = Arcane::GoldenStage::Full;
         shape.gameUi       = true;
 
         Arcane::DeclareGraphFrame(graph, shape, nullptr);
@@ -6243,7 +6234,6 @@ TEST_CASE("nri graph frame: the batch stage declares one canvas transient and no
     // block comment above for what does and what is owed at D3a.
     Arcane::RenderGraph graph;
     Arcane::RgFrameShape shape;
-    shape.stage        = Arcane::GoldenStage::Batch;
     shape.canvasWidth  = 320;
     shape.canvasHeight = 200;
 

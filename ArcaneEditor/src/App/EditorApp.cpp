@@ -28,7 +28,6 @@
 #include "Documents/CrashReportDocument.hpp"
 #include "Documents/SpriteDocument.hpp"
 
-#include <Arcane/Host/GoldenHarness.hpp>   // kEditorGoldenViewportW/H -- the pinned golden boot extent
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Base/Assert.hpp>   // ARC_ASSERT (StageEditorShell's context tripwire)
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::ReadFile (crashReportFactory/Peek, beside materialFactory)
@@ -629,32 +628,9 @@ namespace Arcane::Editor
         // no escape from inside the loop: the editor's only Refresh call
         // site is RefreshSceneResolution (phase 9), reached only once the
         // warm-up has already returned true.
-        const bool golden = m_config.GoldenMode();
         m_shaderCompiler = std::make_unique<Arcane::ShaderCompiler>();
-        if (!m_shaderCompiler->Initialize(/*debounceSeconds=*/golden ? 0.0 : 0.2))
+        if (!m_shaderCompiler->Initialize(/*debounceSeconds=*/0.2))
         {
-            // Loudness parity with the runtime (review finding 1's
-            // secondary): a golden run whose materials CANNOT bind must
-            // refuse the boot outright, the same rule
-            // RuntimeApp::StageSpriteTables states for itself -- a golden
-            // run that captured or compared a frame missing every sprite
-            // material and the post chain, and still exited 0, would freeze
-            // that hole into the baseline. Without this branch the ONLY
-            // thing catching a missing dxcompiler under golden mode was the
-            // warm-up's downstream census refusal (MainLoop) -- which does
-            // reach the same exit 3, but only after burning the full 60s
-            // warm-up timeout first, and with a message about materials not
-            // settling rather than the compiler being the actual cause.
-            // "sprite_tables" is BootPolicy::Fatal for both hosts
-            // (ProjectBoot.cpp), so `return false` here aborts the boot
-            // exactly the way it does on the runtime.
-            if (golden)
-            {
-                ARC_ERROR("Arcane Editor: dxcompiler.dll unavailable -- a golden run cannot bind "
-                          "sprite materials or the scene post chain, and would capture or compare "
-                          "a frame that is missing them");
-                return false;
-            }
             ARC_WARN("Arcane Editor: dxcompiler.dll unavailable -- material editing disabled");
         }
         m_shaderSources.AddRoot("data/shaders");
@@ -1597,20 +1573,6 @@ namespace Arcane::Editor
             height = 720;
         }
 
-        // A GOLDEN RUN PINS THE EXTENT FROM FRAME ONE. Phase 16's assignment is
-        // what actually holds the size for the run (see it for the why), and it
-        // lands on the SECOND frame at the earliest -- the panel has to draw
-        // once before anything measures it. Applying the same pin to the boot
-        // extent removes that dependency entirely: the target is the golden
-        // extent from the first recorded frame, a `--frames 1` golden run works,
-        // and no run spends a ResizeOffscreen (two full device idles) walking
-        // 1280x720 down to it. Ordinary sessions are untouched and keep the
-        // boot extent above.
-        if (m_config.GoldenMode())
-        {
-            width  = Arcane::kEditorGoldenViewportW;
-            height = Arcane::kEditorGoldenViewportH;
-        }
 
         // BOTH OPTIONAL NODE SETS (NRI Phase 3, Task 9). This context is the
         // one that stands in for the NVRHI arm's WHOLE viewport trio, so it
@@ -2198,6 +2160,6 @@ namespace Arcane::Editor
         // See ArcaneEditor/src/main.cpp's exit-code table (right above `int
         // main`) for this code's collision with the pre-boot exit 3 the Hub's
         // launch.rs decodes differently, and m_goldenExit's own comment.
-        return m_goldenExit;
+        return 0;
     }
 }

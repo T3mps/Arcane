@@ -22,7 +22,6 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
-#include <Arcane/Host/GoldenHarness.hpp>   // Arcane::DrainSceneCompiles/GoldenArtifact/kEditorGoldenNamePrefix (NRI Phase 3, Task 13)
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
@@ -181,65 +180,6 @@ namespace Arcane::Editor
         ls.simPrev       = std::chrono::steady_clock::now();
         ls.lastFrameTime = ls.simPrev;
 
-        // ===== THE GOLDEN WARM-UP (NRI Phase 3, Task 13) =====================
-        // The editor's counterpart of RuntimeApp::MainLoop's warm-up block,
-        // reusing Arcane::DrainSceneCompiles VERBATIM (Host/GoldenHarness.hpp)
-        // -- see that function's own comment for the failure it closes: a
-        // pinned frame clock (below, FrameInput/AdvanceSim) makes Time a pure
-        // function of the frame index, but does NOT pin what the frame
-        // CONTAINS, and a golden captured before the scene's materials have
-        // bound would freeze an unshaded sprite as the baseline.
-        //
-        // Runs BEFORE the while loop -- zero frames render on a warm-up
-        // failure, exactly like the runtime's early return, rather than
-        // letting the loop start and asking a later phase to notice. m_resolver
-        // is already built by here (StageSpriteTables, a boot stage that ran
-        // before Main()/MainLoop()); ViewportWidth/Height read whatever extent
-        // the viewport targets have at boot (1280x720 by default -- see
-        // BuildGraphViewportContext), the same "boot-time extent" the runtime
-        // warm-up uses before its own first frame.
-        if (m_config.GoldenMode() && m_resolver)
-        {
-            Arcane::Diagnostics::SetPhase("golden compile warm-up");
-            const float warmupW = (float)ViewportWidth();
-            const float warmupH = (float)ViewportHeight();
-            if (!Arcane::DrainSceneCompiles(*m_resolver, *m_shaderCompiler, warmupW, warmupH))
-            {
-                ARC_ERROR("golden: shader compiles did not settle within {:.0f}s -- refusing to "
-                          "capture or compare a frame whose content is not bound yet",
-                          Arcane::kGoldenWarmupTimeoutSeconds);
-                m_goldenExit = 3;
-                return;
-            }
-
-            // Quiescent is not the same as complete: a compile that FAILED
-            // also leaves the service idle. Same census RuntimeApp::MainLoop
-            // reads. `postBound` used to split between the NVRHI and graph
-            // recorders (the graph arm's post chain is bytes with no NVRHI
-            // object to ask Ready() of); NRI Phase 5a, Task 4 deleted that
-            // NVRHI object and rebuilt census.postBound's own computation on
-            // the same bytes the graph arm already read (see
-            // SceneRenderResolver.cpp's Materials()), so both sides of the
-            // ternary this used to be agreed. Task 11a collapsed it to the
-            // surviving arm: PostDesc() read directly.
-            const Arcane::SceneRenderResolver::MaterialCensus census = m_resolver->Materials();
-            const bool postBound = (m_resolver->PostDesc() != nullptr);
-            if (census.spriteBound != census.spriteReferenced ||
-                (census.postReferenced && !postBound))
-            {
-                ARC_ERROR("golden: the scene's materials did not all bind ({}/{} sprite material(s), "
-                          "post chain {}) -- refusing rather than freezing an incomplete frame as "
-                          "the baseline; the compile failures are logged above",
-                          census.spriteBound, census.spriteReferenced,
-                          census.postReferenced ? (postBound ? "bound" : "UNBOUND") : "none");
-                m_goldenExit = 3;
-                return;
-            }
-            ARC_INFO("golden: scene materials settled before frame 1 -- {} sprite material(s), "
-                     "post chain {}", census.spriteBound,
-                     census.postReferenced ? "bound" : "none");
-        }
-
         // Boot is over; anything the watchdog reports from here on belongs to
         // the frame loop, not to a stale boot stage.
         Arcane::Diagnostics::SetPhase("editor frame loop");
@@ -372,13 +312,6 @@ namespace Arcane::Editor
         // member stays false and unread on every ordinary run) and after a
         // warm-up refusal (that path already returns before the loop, with
         // m_goldenExit already 3).
-        if (m_config.GoldenMode() && !m_goldenCaptured)
-        {
-            ARC_ERROR("golden: the run finished without ever capturing a frame to compare or "
-                      "write -- the viewport had nothing to capture on every attempt (a collapsed "
-                      "panel, a lost viewport context, or the run ended before reaching one)");
-            m_goldenExit = 3;
-        }
     }
 
     // Phase 1: pump the window/OS event queue. Must stay first -- everything
@@ -595,7 +528,7 @@ namespace Arcane::Editor
         // the editor's frame is not laid out the way RuntimeApp::MainLoop's
         // was before Task 4 extracted it -- so both need the identical pin;
         // see AdvanceSim's own comment for its half.
-        const double frameDt = m_config.GoldenMode() ? 1.0 / 60.0 : wallDt;
+        const double frameDt = wallDt;
         const Arcane::InputSnapshot snap = m_gpu->InDevices().Sample(m_gpu->Imgui().WantCaptureKeyboard(), m_gpu->Imgui().WantCaptureMouse());
 
         // The plugin only sees scene-relevant input when the Viewport panel
@@ -1107,8 +1040,6 @@ namespace Arcane::Editor
         // the runtime's half of the same rule. One fixed 60 Hz step per
         // rendered frame, so --frames N gives N identical steps regardless of
         // how fast this desk is running.
-        if (m_config.GoldenMode())
-            simDt = 1.0 / 60.0;
         m_runtime->Loop().Advance(simDt,
             [&](double dt)          { if (m_plugin) m_plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ if (m_plugin) m_plugin->UpdateAll(dt, a); });
@@ -1260,10 +1191,7 @@ namespace Arcane::Editor
             // ApplyPendingViewportResize, so the fit sees THIS frame's viewport
             // extent, and it is before the SetCamera push below -- the one
             // every render path on both arms reads. See PinGoldenViewport.
-            if (m_config.GoldenMode())
-                PinGoldenViewport();
-            else
-                FrameSceneIfPending();
+            FrameSceneIfPending();
         }
 
         // Editor camera -> the Runtime slot SetRenderContext reads, for
@@ -1377,7 +1305,6 @@ namespace Arcane::Editor
             // header comment above.
             vp.post    = m_resolver ? m_resolver->PostDesc() : nullptr;
             vp.globals = &globals;
-            vp.stage   = m_config.goldenStage;
             // Phases 11, 12 and 17's contribution to THIS declaration. Strictly
             // AFTER SubmitSceneToBatcher above, which is not incidental: it runs
             // the plugin's DrawUI, and on the NVRHI arm that call also lands
@@ -1408,7 +1335,7 @@ namespace Arcane::Editor
             // last frame.
             const bool isCaptureLastFrame = m_config.maxFrames != 0 &&
                                             (m_frameCount + 1) >= m_config.maxFrames &&
-                                            (m_config.GoldenMode() || !m_config.screenshotPath.empty());
+                                            !m_config.screenshotPath.empty();
             vp.capture = isCaptureLastFrame;
 
             const Arcane::NriGraphContext::FrameOutcome outcome =
@@ -1476,43 +1403,21 @@ namespace Arcane::Editor
             // just-presented target.
             if (isCaptureLastFrame && outcome == Arcane::NriGraphContext::FrameOutcome::Presented)
             {
-                if (m_config.GoldenMode())
-                    m_goldenCaptured = true;
                 std::uint32_t cw = 0, ch = 0;
                 std::vector<unsigned char> actual;
                 if (!m_viewportTargets.graph->ReadCapture(cw, ch, actual))
                 {
-                    // --screenshot has always degraded to a WARN and never an
-                    // exit code (SaveTexturePng's contract, mirrored by
-                    // RuntimeFrame::CaptureTail); only a golden run fails on a
-                    // readback. Folding the two arms into one predicate must
-                    // not quietly change that.
-                    if (m_config.GoldenMode())
-                    {
-                        ARC_ERROR("golden: viewport capture readback failed");
-                        m_goldenExit = 3;
-                    }
-                    else
-                    {
-                        ARC_WARN("screenshot FAILED: {} (viewport capture readback)",
-                                 m_config.screenshotPath);
-                    }
+                    // A WARN, never an exit code -- the same contract
+                    // RuntimeFrame::CaptureTail keeps.
+                    ARC_WARN("screenshot FAILED: {} (viewport capture readback)",
+                             m_config.screenshotPath);
                 }
                 else
                 {
-                    if (!m_config.screenshotPath.empty())
-                    {
-                        if (Arcane::WritePngRgba(m_config.screenshotPath, cw, ch, actual.data()))
-                            ARC_INFO("screenshot written: {}", m_config.screenshotPath);
-                        else
-                            ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
-                    }
-                    if (m_config.GoldenMode()
-                        && Arcane::GoldenArtifact(m_config, cw, ch, actual,
-                                                  Arcane::kEditorGoldenNamePrefix) != 0)
-                    {
-                        m_goldenExit = 3;
-                    }
+                    if (Arcane::WritePngRgba(m_config.screenshotPath, cw, ch, actual.data()))
+                        ARC_INFO("screenshot written: {}", m_config.screenshotPath);
+                    else
+                        ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
                 }
             }
             return;
@@ -1694,8 +1599,6 @@ namespace Arcane::Editor
         // for why gating it HERE, at the call site, rather than in the shared
         // engine declaration (the way gameUi now is) is the correct, narrower
         // choice for THAT one.
-        const bool goldenNonFull = m_config.GoldenMode() &&
-                                   m_config.goldenStage != Arcane::GoldenStage::Full;
 
         // ---- phase 11's content: the game HUD ---------------------------
         // Play-mode only, exactly as that phase is, and through the SAME
@@ -1704,19 +1607,11 @@ namespace Arcane::Editor
         // the node copy the geometry at record time (FrameDesc::gameUi).
         if (BeginGameUiFrame())
         {
-            // Same discard-vs-render split RuntimeFrame::RenderGraph applies
-            // to the HOST HUD: `full` hands the draw data to the graph;
-            // batch/post end the ImGui frame without rendering it, so a stage
-            // golden is never masked by overlay content. This call site gates
-            // TOO rather than leaning solely on DeclareGraphFrame's own
-            // belt-and-braces recheck (RgFrameShape::gameUi, stage-gated as
-            // of this task) -- the same "re-check so the two cannot drift
-            // apart" reasoning the engine's own comment states for the host
-            // HUD gate.
-            if (goldenNonFull)
-                m_gameImgui->EndFrameDiscard();
-            else
-                vp.gameUi = m_gameImgui->RenderToDrawData();
+            // The draw data goes to the graph, which declares the GameUi
+            // node for it. A caller that wants the frame WITHOUT the game HUD
+            // leaves vp.gameUi null instead -- that is the whole mechanism
+            // now, and it lives in FrameDesc rather than in a stage ordinal.
+            vp.gameUi = m_gameImgui->RenderToDrawData();
         }
 
         // ---- phases 12 + 17's content: the pick + outline chain ----------
@@ -1785,7 +1680,7 @@ namespace Arcane::Editor
         // ONLY. Its one other rendered consequence -- the transform gizmo,
         // which draws into the scene batch and would therefore have leaked into
         // `batch`/`post` -- is pinned off by GizmoLive() (EditorApp.hpp).
-        if (goldenNonFull || (!wantOutline && !wantPick))
+        if (!wantOutline && !wantPick)
         {
             // Cleared rather than left stale: these are the spans the NEXT
             // armed frame will publish, and a leftover from three frames ago is
@@ -2467,28 +2362,8 @@ namespace Arcane::Editor
                                             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
                                             /*showToolOverlay=*/!InPlayMode());
         m_viewportDockId = fs.vp.dockId;
-        // A GOLDEN RUN DOES NOT LET THE LAYOUT SIZE THE CAPTURE. The editor's
-        // goldens are viewport-only and therefore layout-sized, so without this
-        // the image's dimensions are a function of the saved per-project ImGui
-        // layout -- and D5a-1's own drive session proved that is not stable
-        // across a checkpoint: it persisted a taller panel and left all six
-        // editor goldens comparing 654x330 against 654x354 at maxDelta 0, a
-        // pure-geometry failure with zero pixel differences. See
-        // kEditorGoldenViewportW/H for the full account and why the fix is
-        // pinning rather than re-baselining.
-        //
-        // COHERENT BY CONSTRUCTION, which is the reason this one assignment is
-        // the whole change: ViewportWidth()/ViewportHeight() report the
-        // offscreen TARGET's extent (graph->SurfaceWidth/Height), not the
-        // panel's, so pinning the target pins the camera fit, the pick
-        // projection and the capture together. The panel keeps measuring and
-        // keeps drawing; its ImGui::Image is simply scaled, and no golden
-        // reads the panel.
-        const bool pinGoldenExtent = m_config.GoldenMode();
-        m_viewportTargets.pendingW = pinGoldenExtent ? Arcane::kEditorGoldenViewportW
-                                                     : fs.vp.desiredW;
-        m_viewportTargets.pendingH = pinGoldenExtent ? Arcane::kEditorGoldenViewportH
-                                                     : fs.vp.desiredH;
+        m_viewportTargets.pendingW = fs.vp.desiredW;
+        m_viewportTargets.pendingH = fs.vp.desiredH;
         m_viewportRect     = fs.vp.imageRect;
         m_viewportActive   = Arcane::Editor::SceneInputActive(fs.vp.hovered, fs.vp.focused);
     }

@@ -1199,7 +1199,7 @@ namespace Arcane
         // did on the NVRHI path before it was deleted.
         // ---------------------------------------------------------------
         RgTexture sceneColor = handles.canvas;
-        if (shape.stage != GoldenStage::Batch && shape.post && !shape.post->passes.empty())
+        if (shape.post && !shape.post->passes.empty())
         {
             // With a context the NODE decides: PrepareChain builds the
             // pipelines, the descriptor sets and the packed constants, and
@@ -1267,7 +1267,7 @@ namespace Arcane
         // stage-gated, matching the host HUD, as of Task 13") for the
         // pinning the report says to re-take honestly rather than inherit.
         // ---------------------------------------------------------------
-        if (shape.gameUi && shape.stage == GoldenStage::Full)
+        if (shape.gameUi)
             AddImGuiNode(graph, context, handles.backbuffer, ImGuiNodeSlot::GameUi);
 
         // ---------------------------------------------------------------
@@ -1319,7 +1319,7 @@ namespace Arcane
         // driver expresses that by passing no draw data at all, and this
         // re-checks the stage so the two cannot drift apart.
         // ---------------------------------------------------------------
-        if (shape.imgui && shape.stage == GoldenStage::Full)
+        if (shape.imgui)
             AddImGuiNode(graph, context, handles.backbuffer);
 
         if (!shape.capture)
@@ -1432,7 +1432,6 @@ namespace Arcane
         // captured what it needs -- so nothing here holds a per-frame handle
         // that would go stale on the next Reset().
         RgFrameShape shape;
-        shape.stage         = frame.stage;
         shape.capture       = frame.capture;
         shape.canvasWidth   = SurfaceWidth();
         shape.canvasHeight  = SurfaceHeight();

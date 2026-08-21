@@ -262,7 +262,7 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
-#include <Arcane/Host/HostConfig.hpp>          // HostConfig, GoldenStage
+#include <Arcane/Host/HostConfig.hpp>          // HostConfig
 #include <Arcane/Material/GlobalParams.hpp>    // GlobalParams (held by value)
 #include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
@@ -396,21 +396,32 @@ namespace Arcane
         // vehicle was not built with (NodeSet) is ignored rather than declared.
         struct FrameDesc
         {
-            // The --golden-stage vocabulary, reused verbatim rather than
-            // re-invented: `batch` = the batcher + tonemap only, `post` = plus
-            // the post chain, `full` = plus the HUD. Tasks 8-12 attach their
-            // nodes under the stages that include them.
+            // ===== THERE IS NO `stage` ORDINAL. SLICE THE FRAME BY NULLING ===
+            // A GoldenStage {Full, Batch, Post} field stood here and gated the
+            // post chain, the game HUD and the host HUD. It was REDUNDANT:
+            // every one of those three is already switched off by passing the
+            // corresponding field below as null, per that field's own
+            // documented meaning. `post = nullptr` is "no chain", `gameUi =
+            // nullptr` is "no game HUD", `imgui = nullptr` is "no HUD".
             //
-            // AS OF TASK 10 `batch` genuinely differs: it drops the post chain
-            // (the same bypass RuntimeApp applies to the NVRHI path, so a batch
-            // golden compares the same content on both). AS OF TASK 12 `full`
-            // differs too: it is the only stage that draws the HUD, which is
-            // again the same gate RuntimeApp applies to the NVRHI path (both
-            // non-Full stages end the ImGui frame without rendering it,
-            // because host chrome would sit on top of every stage golden and
-            // mask exactly the pixels a node-by-node cutover compares). All
-            // three stages now mean what they say.
-            GoldenStage stage = GoldenStage::Full;
+            //   batch slice  ->  post, gameUi, imgui all null
+            //   post slice   ->  gameUi, imgui null
+            //   full         ->  pass everything
+            //
+            // AND THE FLAGS ARE STRICTLY MORE EXPRESSIVE than the ordinal was.
+            // An ordinal imposes a TOTAL ORDER on passes, so it cannot say
+            // "post chain on, game HUD off, chrome on" -- a combination this
+            // shape gets for free. That matters as the pass count grows: a
+            // renderer's passes are a DAG, not a chain, and the moment shadows,
+            // GI, SSAO, SSR and TAA exist, "truncate at stage N" stops being a
+            // meaningful question. It is also the shape the industry settled
+            // on -- Unreal drives per-pass FEngineShowFlags bits and layers
+            // named ViewModes ON TOP of them, and Frostbite's frame graph culls
+            // a pass whose output nothing consumes. Neither uses an ordinal.
+            //
+            // If named presets are ever wanted ("give me the batch slice"),
+            // that is a helper ABOVE this struct that sets these fields -- the
+            // ViewMode layer -- never a field inside it.
 
             // Add the readback node to THIS frame's graph, so the presented
             // backbuffer can be read back afterwards through ReadCapture().
@@ -1322,7 +1333,6 @@ namespace Arcane
     // =====================================================================
     struct RgFrameShape
     {
-        GoldenStage   stage        = GoldenStage::Full;
         bool          capture      = false;
         // The canvas transient's extent -- the swapchain's, so the tonemap
         // samples 1:1.

@@ -7,8 +7,8 @@
 // surviving account is the milestone record at the tail of
 // docs/plans/2026-08-14-nri-phase3-host-integration.md.
 //
-// MainLoop keeps: the pre-loop setup (locals, the --nri-graph render-half
-// boot + window reveal, the golden warm-up), the while/if-else SKELETON that
+// MainLoop keeps: the pre-loop setup (locals, the render-half boot + window
+// reveal), the while/if-else SKELETON that
 // calls the functions below in order, and the post-loop ShutdownGraphPath()
 // call. Everything else lives here.
 //
@@ -85,16 +85,10 @@ namespace Arcane::RuntimeFrame
         // public for exactly this (see RuntimeApp.hpp's comment on it).
         RuntimeApp&                  app;
 
-        // ---- HostConfig& + the perf/golden locals ---------------------------
+        // ---- HostConfig& + the perf locals ----------------------------------
         Arcane::HostConfig&    config;
         Arcane::FramePerf&     perf;
         std::uint64_t&         frameCount;
-        int&                   goldenExit;
-        // "Did this golden run ever actually reach a capture" -- latched by
-        // CaptureTail on the one frame that attempts one, read ONCE by MainLoop
-        // after the loop (whole-branch review, I2). See RuntimeApp::
-        // m_goldenCaptured for what the two facts are and why they are separate.
-        bool&                  goldenCaptured;
         int&                   graphExit;
         Arcane::GlobalParams&  frameGlobals;
         double&                hostClock;

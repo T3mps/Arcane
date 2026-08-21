@@ -477,44 +477,7 @@ namespace Arcane::Editor
         // watch item ("the count must not grow across a clean exit") is legible
         // rather than inferred.
         std::uint64_t m_graphErrorBaseline = 0;
-
-        // ---- The editor's golden harness (NRI Phase 3, Task 13) -------------
-        // The editor's counterpart of RuntimeApp::m_goldenExit: 0 ordinarily;
-        // set to 3 by the golden warm-up's census refusal (MainLoop, before
-        // the frame loop starts) or by a capture/compare failure on the last
-        // frame (RenderSceneToViewport's capture block, the one capture path
-        // left) -- the SAME exit code RuntimeApp::Run reports for
-        // the identical failure, and the same Arcane::GoldenArtifact call
-        // produces it on both hosts. Read by Run()'s tail, OUTRANKED by
-        // m_graphExit (precedence 1 > 2 > 3, matching RuntimeApp::Run's own
-        // 1 > 2 > 3 -- a run failure says WHERE the run died and a validation
-        // error explains a bad capture rather than the reverse, so both
-        // outrank a golden mismatch). Not #if-guarded, for the same reason
-        // m_graphExit is not: a preprocessor-guarded member forces a guard at
-        // every use site.
-        //
-        // EXIT CODE 3 COLLIDES WITH main.cpp's PRE-BOOT "rival editor" exit
-        // 3 from ArcaneHub's launch.rs's point of view (its boot watchdog
-        // reads any exit inside 2s as the pre-boot meaning) -- see the full
-        // exit-code table and reconciliation in ArcaneEditor/src/main.cpp,
-        // right above `int main`. Kept identical to RuntimeApp's own golden
-        // exit code deliberately (this task's contract); not a defect to fix
-        // here.
-        int m_goldenExit = 0;
-        // NRI Phase 3, Task 13 fix round 1 (IMPORTANT, review finding 2):
-        // latches "a capture was genuinely ATTEMPTED", set by
-        // RenderSceneToViewport's capture block (the NVRHI arm had a second
-        // path; it went with its canvas) the moment it confirms this
-        // is the run's last frame AND has a real target to read -- NOT
-        // merely that the last-frame arithmetic fired. Without this, a
-        // golden run whose last iteration's viewport frame came back
-        // Skipped (graph arm, a collapsed/zero-sized panel) or whose canvas
-        // was already gone (NVRHI arm, a lost viewport context) would reach
-        // maxFrames with m_goldenExit still 0 and exit 0 -- a PASS that
-        // compared NOTHING. Checked once, in MainLoop right after the frame
-        // loop exits (a whole-run property, not a per-frame one): `if
-        // (GoldenMode() && !m_goldenCaptured) m_goldenExit = 3;`.
-        bool m_goldenCaptured = false;
+
 
         // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
         // Task 8c: this is now BootSequence::Run's presenter for the WHOLE
@@ -712,7 +675,7 @@ namespace Arcane::Editor
         // Ordinary (non-golden) runs are untouched: hover behaves exactly as
         // before.
         [[nodiscard]] bool HoverLive() const noexcept
-        { return m_gameUi.inViewport && !m_config.GoldenMode(); }
+        { return m_gameUi.inViewport; }
 
         // ---- THE GIZMO predicate (NRI Phase 3, Task 13 follow-up) -----------
         // "The transform gizmo may interact and draw." HoverLive()'s sibling,
@@ -740,7 +703,7 @@ namespace Arcane::Editor
         // wrong about the outline chain. Pinned, so it is a property rather
         // than a coincidence. Ordinary runs are untouched.
         [[nodiscard]] bool GizmoLive() const noexcept
-        { return m_gizmoEnabled && !m_config.GoldenMode(); }
+        { return m_gizmoEnabled; }
 
         // THE VIEWPORT'S EXTENT: the offscreen graph output's surface size
         // (m_viewportTargets.graph -- NRI Phase 5a, Task 4 deleted the NVRHI
@@ -951,7 +914,6 @@ namespace Arcane::Editor
         // the two answers and why each is the one that is stable; see the
         // definition (EditorAppScene.cpp) for why re-applying beats a one-shot.
         // Called only under GoldenMode(); ordinary runs never reach it.
-        void PinGoldenViewport();
         // Set whenever a scene becomes the current one, consumed on the first frame
         // the viewport has a real size. See FrameSceneIfPending for why it cannot
         // be immediate.

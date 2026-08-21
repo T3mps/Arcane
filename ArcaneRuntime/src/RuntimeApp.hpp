@@ -124,34 +124,10 @@ private:
     std::optional<Arcane::PluginHost>   m_plugin;       // destructs before m_runtime
     Arcane::FramePerf                   m_perf;
     std::uint64_t                       m_frameCount = 0;
-    // NRI Phase 0 golden harness: 0 ordinarily; set to 3 by the last-frame
-    // golden capture/compare block (RuntimeApp.cpp MainLoop) on any capture
-    // write failure or compare mismatch. Read by Run()'s tail as the process
-    // exit code (device-loss stays exit code 1, checked first).
-    int                                  m_goldenExit = 0;
-
-    // "Did this golden run ever actually capture a frame to compare or write"
-    // -- a WHOLE-RUN property, checked once after MainLoop's frame loop rather
-    // than per frame (whole-branch review, I2; the editor's counterpart is
-    // EditorApp::m_goldenCaptured, added at 38b94b76, and this host -- the
-    // FROZEN FLOOR the whole phase is measured against -- was the one without
-    // it). RuntimeFrame::CaptureTail fires its capture block only on
-    // `lastFrame`, so every early break out of the loop that is neither
-    // device-loss nor graph-failure -- a window close, the "quit" input action,
-    // a run whose --frames count was never reached -- left m_goldenExit at 0
-    // and made Run() report a clean PASS having compared NOTHING.
-    //
-    // Two INDEPENDENT facts, which is why this is not folded into m_goldenExit:
-    // "did we try" (this) and "did it succeed" (that). The latch is set BEFORE
-    // the readback, so a failed readback is still a genuine attempt and reports
-    // its own, more specific error.
-    bool                                 m_goldenCaptured = false;
-
-    // The graph path's exit code, which OUTRANKS m_goldenExit (Run()'s tail):
-    // 1 = the graph run failed, 2 = RenderErrorCount grew during it. As of
-    // Phase 5a (Task 2b) this can be set on ANY run -- the graph path is
-    // unconditional, not gated on --nri-graph anymore -- so 0 means no graph
-    // failure occurred, not "the flag was not given". The latch baseline it
+    // The graph path's exit code, read by Run()'s tail: 1 = the graph run
+    // failed, 2 = RenderErrorCount grew during it. It can be set on ANY run --
+    // the graph path is unconditional -- so 0 means no graph failure occurred.
+    // The latch baseline it
     // is measured against is taken at the top of MainLoop -- boot-time errors
     // belong to the boot, not to the vehicle.
     int                                  m_graphExit  = 0;
