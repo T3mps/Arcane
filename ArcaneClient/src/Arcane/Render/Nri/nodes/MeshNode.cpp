@@ -157,9 +157,11 @@ namespace Arcane
         m_vertexInput.streams      = &m_stream;
         m_vertexInput.streamNum    = 1;
 
-        // Reserved once so Record()'s per-frame upload table never allocates
-        // inside the recording window -- the same rule every other node on this
-        // path keeps.
+        // Reserved once so Record()'s per-frame upload table keeps the STEADY
+        // STATE free of heap traffic inside the recording window. It is not an
+        // absolute: a frame carrying more than kInitialUploadSlots distinct
+        // meshes grows the vector mid-recording. See Upload's own comment for
+        // why that qualified claim is the honest one.
         m_uploads.reserve(kInitialUploadSlots);
 
         return CreateWhiteTexel() && CreateBindings() && CreateConstantArena() && CreateSets();
@@ -716,8 +718,10 @@ namespace Arcane
         // and be overwritten while the GPU reads it.
         //
         // DEDUPED BY MeshData POINTER: a scene of twenty cubes is one upload
-        // and twenty draws, not twenty uploads. The table is a reserved member
-        // so this allocates nothing inside the recording window.
+        // and twenty draws, not twenty uploads. The table is a reserved member,
+        // so in the steady state this touches no heap -- past
+        // kInitialUploadSlots distinct meshes it does, which Upload's comment
+        // states outright rather than rounding to "never".
         // ---------------------------------------------------------------
         m_uploads.clear();
         // Returns BY VALUE, deliberately: the table is a growable vector and a

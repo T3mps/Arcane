@@ -1412,8 +1412,8 @@ namespace Arcane
         // Task 7 (Phase 4): THE OPAQUE 3D PASS's scene, or null for none.
         // Read for its INSTANCE COUNT here (an empty scene declares nothing,
         // exactly as a null one does) and for nothing else -- the geometry, the
-        // camera, the light and the albedo Guids are all consumed by MeshNode
-        // at Prepare/Record time.
+        // per-instance transforms and tints, the camera and the one directional
+        // light are all consumed by MeshNode at Record time.
         //
         // A headless drive can point this at a MeshSceneDesc carrying one
         // instance with a null `mesh`: the DECLARATIONS depend on the scene

@@ -16,9 +16,13 @@
 //   * NOT a mesh IMPORT path. Geometry comes from MeshBuilder (procedural
 //     cube/sphere); cgltf/.arcmesh is a later arc, and no library is vendored
 //     for it here.
-//   * NOT the material system. A per-instance albedo Guid and a linear tint
-//     are the whole of it; Task 8's BindlessTable is what turns that into a
-//     material index.
+//   * NOT the material system. A per-instance linear tint (MeshInstance::
+//     baseColor) is the whole of it, and t0 is this node's own white texel for
+//     every draw. A per-instance albedo Guid resolved into per-image descriptor
+//     sets was written and then REMOVED at Task 7's first fix round -- nothing
+//     exercised it and Task 8's BindlessTable replaces t0 outright. That
+//     table's per-instance MATERIAL INDEX is what belongs here next; see
+//     MeshInstance's own NO PER-INSTANCE ALBEDO block.
 //
 // WHERE IT SITS IN THE FRAME: after `batch2d`, before the post chain and the
 // tonemap. The canvas is MINTED AND CLEARED by AddBatch2DNode, so the mesh
@@ -29,16 +33,17 @@
 // DeclareGraphFrame's THE CLEAR SEAM block), not this node's.
 //
 // WHAT THIS NODE OWNS (all persistent, all created once at Create()):
-//   * the 1x1 white texel + its SHADER_RESOURCE view -- what t0 binds for an
-//     instance that names no albedo, mirroring Batch2DNode's;
+//   * the 1x1 white texel + its SHADER_RESOURCE view -- what t0 binds for
+//     EVERY draw, mirroring Batch2DNode's untextured path;
 //   * one linear/repeat sampler (REPEAT, not clamp: a mesh's UVs tile);
 //   * the pipeline layout -- root constants b0 (the 80-byte MeshConstants from
-//     mesh.hlsl) plus descriptor set space0 = { b1 frame CB, t0 albedo,
-//     s0 sampler };
-//   * one descriptor pool, and the per-(albedo, frame slot) descriptor sets
-//     out of it -- written ONCE each and never rewritten, the same discipline
-//     Batch2DNode keeps and for the same reason (a set the GPU may still be
-//     reading must not be rewritten, and NRI cannot free a single set);
+//     mesh.hlsl) plus descriptor set space0 = { b1 frame CB, t0 albedo
+//     texture, s0 sampler };
+//   * one descriptor pool, and ONE descriptor set PER FRAME SLOT out of it
+//     (CreateSets) -- written ONCE each, at Create, and never rewritten. That
+//     is the same discipline Batch2DNode keeps, and stronger: the sets exist
+//     before the first frame does, so there is no window in which the GPU
+//     could be reading one (and NRI cannot free a single set anyway);
 //   * the per-frame-slot constant-buffer arena the b1 views name.
 // The PIPELINE is not owned here: it comes from the vehicle's shared
 // NriPipelineCache, keyed by (shader pair, layout, canvas format, DEPTH
@@ -297,9 +302,18 @@ namespace Arcane
 
         // ONE distinct MeshData's ring allocation for ONE frame. Record()
         // builds this table so a scene of twenty cubes is one upload and twenty
-        // draws rather than twenty uploads -- and keeps it as a RESERVED member
-        // so the per-frame table never allocates inside the recording window,
-        // the rule every node on this path keeps.
+        // draws rather than twenty uploads.
+        //
+        // A RESERVED MEMBER, not a local, so the STEADY STATE allocates nothing
+        // inside the recording window -- which is the rule every node on this
+        // path keeps for descriptor sets, pipelines and GPU resources, and
+        // which Record() keeps ABSOLUTELY for all three. This table is the one
+        // qualified case: a frame carrying more than kInitialUploadSlots
+        // distinct meshes grows the vector and therefore does hit the heap
+        // mid-recording. That is a plain allocation with no fence or pool
+        // implications, it happens once per high-water mark rather than once
+        // per frame, and raising kInitialUploadSlots is the whole fix -- but it
+        // is not "never", and this comment does not say so.
         struct Upload
         {
             const MeshData* mesh         = nullptr;
