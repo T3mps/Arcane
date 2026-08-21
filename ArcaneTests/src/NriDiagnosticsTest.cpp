@@ -77,7 +77,7 @@ namespace
         bool WriteMarkerNative(void*, std::uint32_t, bool) override { return false; }
         void CollectFault(Arcane::Diag::Envelope&) override {}
         Arcane::GpuBreadcrumbs& Breadcrumbs() override { return m_breadcrumbs; }
-        const char* Name() const override { return "stub-nvrhi"; }
+        const char* Name() const override { return "stub-incumbent"; }
         [[nodiscard]] void* NativeDevice() const override { return nullptr; }
 
     private:
@@ -293,7 +293,7 @@ TEST_CASE("nri diagnostics: a NONE device arms the whole chain, and a second Arm
     CHECK_FALSE(Arcane::NriDiagnostics::IsArmed());
 }
 
-TEST_CASE("nri diagnostics: Arm no-ops when an NVRHI crash backend already holds the chain", "[nri]")
+TEST_CASE("nri diagnostics: Arm no-ops when another crash backend already holds the chain", "[nri]")
 {
     // THE PROPERTY IS GENERAL: displacing ANY incumbent crash backend would
     // point the Diagnostics GPU-section provider at a ring with no DRED, no
@@ -306,8 +306,8 @@ TEST_CASE("nri diagnostics: Arm no-ops when an NVRHI crash backend already holds
     auto device = Arcane::NriDevice::CreateNoneForTests();
     REQUIRE(device != nullptr);
 
-    StubCrashBackend      nvrhiBackend;
-    ScopedGpuCrashBackend incumbent(&nvrhiBackend);
+    StubCrashBackend      incumbentBackend;
+    ScopedGpuCrashBackend incumbent(&incumbentBackend);
 
     ScopedNriDiagnostics guard;
 
@@ -317,18 +317,18 @@ TEST_CASE("nri diagnostics: Arm no-ops when an NVRHI crash backend already holds
 
     // Untouched, all of it: the incumbent keeps the backend slot, and no hook
     // was installed on its behalf either (the incumbent owns that too).
-    CHECK(Arcane::ActiveGpuCrashBackend() == &nvrhiBackend);
+    CHECK(Arcane::ActiveGpuCrashBackend() == &incumbentBackend);
     CHECK(Arcane::RenderDeviceRemovedHookForTest() == nullptr);
 
     // ...and a Disarm from the un-armed installer must not unslot the
     // incumbent. This is the stale-owner hazard
     // ClearActiveGpuCrashBackendIfCurrent exists for, stated as a property.
     Arcane::NriDiagnostics::Disarm();
-    CHECK(Arcane::ActiveGpuCrashBackend() == &nvrhiBackend);
+    CHECK(Arcane::ActiveGpuCrashBackend() == &incumbentBackend);
 
     // Explicit on the happy path as an ASSERTION (the incumbent is still the
     // slot's owner, so the clear takes); `incumbent`'s dtor is then a no-op.
-    REQUIRE(Arcane::ClearActiveGpuCrashBackendIfCurrent(&nvrhiBackend));
+    REQUIRE(Arcane::ClearActiveGpuCrashBackendIfCurrent(&incumbentBackend));
 }
 
 // =============================================================================

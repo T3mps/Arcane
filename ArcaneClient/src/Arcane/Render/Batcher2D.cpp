@@ -246,8 +246,8 @@ namespace Arcane
                 if (!m_warnedDevicelessEnd)
                 {
                     m_warnedDevicelessEnd = true;
-                    ARC_ERROR("Batcher2D::End records nothing -- it was the NVRHI recorder, "
-                              "and NVRHI is gone (ABI v15). Read the batch with Drain(); the "
+                    ARC_ERROR("Batcher2D::End records nothing -- this batcher has no device "
+                              "and creates no GPU object. Read the batch with Drain(); the "
                               "NRI graph path's Batch2DNode is what issues the draws. Further "
                               "occurrences are silent.");
                 }

@@ -24,8 +24,8 @@ namespace Arcane
         // harmless no-op into a boot failure at the worst moment (a shipped
         // Dist build, launched from a saved arg list nobody is watching).
         cli.Flag  ("nri-graph",      "DEPRECATED, accepted and ignored: the NRI frame graph is "
-                                     "the only render path as of Phase 5a. Kept so existing "
-                                     "scripts and saved launch args do not fail to boot.");
+                                     "the only render path. Kept so existing scripts and saved "
+                                     "launch args do not fail to boot.");
 #if !defined(ARCANE_DIST)
         cli.Option("crash-gpu", "0", "DEV: deliberately fault the GPU on frame N (0 = off) -- "
                                      "the crash-diagnostics desk trigger").Type(CliType::Uint);

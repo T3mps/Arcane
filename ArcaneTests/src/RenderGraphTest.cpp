@@ -473,7 +473,7 @@ TEST_CASE("rendergraph: Compute/Copy nodes have no attachment requirement", "[nr
     CHECK(graph.NodeHasRequiredAttachments(1));
 }
 
-TEST_CASE("rendergraph: nodes preserve declaration order -- execution order = declaration order, no reordering in Phase 2", "[nri]")
+TEST_CASE("rendergraph: nodes preserve declaration order -- execution order = declaration order, never reordered", "[nri]")
 {
     Arcane::RenderGraph graph;
 
@@ -4383,7 +4383,7 @@ TEST_CASE("nri graph frame: the post chain inserts one node per pass between the
     CHECK(compiled.transientPoolSlot[0] != compiled.transientPoolSlot[1]);
 }
 
-TEST_CASE("nri graph frame: --golden-stage batch drops the post chain; post and full keep it",
+TEST_CASE("nri graph frame: a null post chain drops the post nodes; a chain inserts them before the tonemap",
           "[nri]")
 {
     // A NULL `post` IS how a caller asks for the frame WITHOUT a chain, and
@@ -5768,7 +5768,7 @@ TEST_CASE("nri graph frame: a capture frame copies the backbuffer AFTER the HUD 
     CheckState(compiled.exitBarriers[0].after, kPresentState);
 }
 
-TEST_CASE("nri graph frame: --golden-stage batch and post drop the HUD; full keeps it", "[nri]")
+TEST_CASE("nri graph frame: a null imgui drops the HUD node; a non-null one keeps it", "[nri]")
 {
     // A NULL `imgui` IS how a caller asks for the frame WITHOUT host chrome;
     // the host calls ImGui::EndFrameDiscard() instead of rendering. Host chrome

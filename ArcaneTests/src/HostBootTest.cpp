@@ -692,7 +692,7 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
 // passing while quietly covering less. Pinning it here means such an edit fails
 // the gate instead.
 
-TEST_CASE("ReferenceProject's scene reports the materials the golden warm-up waits on",
+TEST_CASE("ReferenceProject's scene census reports the sprite and post materials as referenced but unbound",
           "[host][project]")
 {
     const fs::path dir = FindReferenceProjectDir();
@@ -751,7 +751,7 @@ TEST_CASE("ReferenceProject's scene reports the materials the golden warm-up wai
 // every stitched source -- CPU only, no device, so it belongs to the ~[gpu]
 // gate.
 
-TEST_CASE("ReferenceProject's golden materials stitch and compile on both targets",
+TEST_CASE("ReferenceProject's materials stitch and compile on both targets",
           "[host][project][shadercompile]")
 {
     const fs::path dir = FindReferenceProjectDir();
