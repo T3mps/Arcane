@@ -1451,6 +1451,32 @@ TEST_CASE("rendergraph compile: (T3P4) a transient texture declared with mipCoun
     CHECK(error.find("zero-mip-tex") != std::string::npos);
 }
 
+TEST_CASE("rendergraph compile: (T3P4 fix-1) a mipCount that cannot round-trip nri::Dim_t is refused, naming the resource", "[nri]")
+{
+    // Fix round 1. nri::Dim_t is 16-bit (NRIDescs.h:61). Without a guard here,
+    // a mipCount that is an exact multiple of 65536 sails past the == 0
+    // refusal above (it is checked pre-cast, and 65536 != 0) and then
+    // truncates to EXACTLY 0 at RealizePool's static_cast -- silently
+    // producing the one value that refusal exists to prevent, through a
+    // different door. Refused here, before the cast ever runs.
+    Arcane::RenderGraph graph;
+
+    graph.AddNode("declare", Arcane::RenderGraph::NodeKind::Compute,
+        [](Arcane::RenderGraphBuilder& builder)
+        {
+            Arcane::RgTextureDesc desc = MakeColorDesc();
+            desc.mipCount = 65536;   // 0x10000 -- truncates to 0 as a uint16_t
+            const Arcane::RgTexture tex = builder.CreateTexture("overflow-mip-tex", desc);
+            builder.Write(tex, Arcane::RgUsage::ShaderWriteCs);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    std::string error;
+    CHECK_FALSE(graph.Compile(&error).has_value());
+    INFO("message was: " << error);
+    CHECK(error.find("overflow-mip-tex") != std::string::npos);
+}
+
 TEST_CASE("rendergraph compile: (f) reading a transient BEFORE the node that writes it is refused", "[nri]")
 {
     // Declaration order IS execution order in Phase 2, so a read at node 0 of

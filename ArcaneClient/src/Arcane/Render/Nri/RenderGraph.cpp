@@ -257,6 +257,22 @@ namespace Arcane
         // refused here, up front, rather than reaching RealizePool and
         // becoming either a silent 1-mip texture or an nri::TextureDesc the
         // backend rejects for a reason far from this declaration.
+        //
+        // Fix round 1: the upper bound. nri::Dim_t is 16-bit
+        // (NRIDescs.h:61), and RealizePool's static_cast<nri::Dim_t> does
+        // not saturate -- it wraps mod 65536, exactly like the width/height
+        // guard three lines below this one in RenderGraphExec.cpp (same
+        // Dim_t, same failure mode, same "refuse instead of realizing the
+        // wrong thing" reasoning). Left unguarded, a mipCount that is an
+        // exact multiple of 65536 would sail past the == 0 check above
+        // (checked pre-cast) and truncate to EXACTLY 0 at the cast --
+        // silently producing the one value this whole pass exists to
+        // prevent, through a different door. Both mipCount rules belong in
+        // this one Compile()-time pass rather than split across Compile()
+        // and RealizePool: mipCount, unlike a transient's width/height, is
+        // never resolved late (no swapchain-extent-style deferral applies
+        // to it), so there is no functional reason to defer either half of
+        // its validity range to realize time.
         // --------------------------------------------------------------
         for (std::size_t i = 0; i < m_textures.size(); ++i)
         {
@@ -266,6 +282,11 @@ namespace Arcane
             {
                 return fail("RenderGraph::Compile: transient texture '" + m_textures[i].name
                             + "' declares mipCount = 0 -- 1 means no chain, not 0");
+            }
+            if (m_textures[i].desc.mipCount > 0xFFFFu)
+            {
+                return fail("RenderGraph::Compile: transient texture '" + m_textures[i].name
+                            + "' declares a mipCount NRI cannot express (nri::Dim_t is 16-bit)");
             }
         }
 

@@ -602,12 +602,12 @@ namespace Arcane
                     slot.texture.width       = static_cast<nri::Dim_t>(resource.desc.width);
                     slot.texture.height      = static_cast<nri::Dim_t>(resource.desc.height);
                     slot.texture.depth       = 1;
-                    // Task 3 (Phase 4): the declared mip chain. Compile()
-                    // already refused mipCount == 0, so this is always >= 1;
-                    // nri::Dim_t is 16-bit, but a mip count anywhere near
-                    // that range is not a real texture, so no separate
-                    // overflow guard (unlike width/height below, which
-                    // extents realistically DO approach).
+                    // Task 3 (Phase 4): the declared mip chain. Compile()'s
+                    // Pass 0 already refused mipCount == 0 and
+                    // mipCount > 0xFFFFu (fix round 1 -- see that pass for
+                    // why both halves of the range live there rather than
+                    // here beside width/height), so this cast always
+                    // round-trips: never truncates, never produces 0.
                     slot.texture.mipNum      = static_cast<nri::Dim_t>(resource.desc.mipCount);
                     slot.texture.layerNum    = 1;
                     slot.texture.sampleNum   = 1;
