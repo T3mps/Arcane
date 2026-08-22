@@ -17,23 +17,41 @@
 // UNITS are METERS (MKS) -- MeshBuilder emits meters and the camera's nearZ/
 // farZ are meters.
 
+// THE NORMAL MATRIX (normalMatrixCol0/1/2), Task 8/F2a. Packed as three
+// float4 COLUMNS rather than a bare float3x3 for the same reason
+// MeshFrameCB below packs g_lightDirection etc. as float4 instead of float3:
+// each column gets its own explicit 16-byte slot (12 bytes used, 4 padding)
+// so the C++ struct (MeshNode.cpp's PackedNormalMatrix) and this layout agree
+// byte-for-byte with no compiler-packing ambiguity between the two. Together
+// with `model` and `baseColor` this is EXACTLY 128 bytes -- Vulkan's
+// GUARANTEED MINIMUM maxPushConstantsSize, with ZERO headroom left. See
+// MeshNode.cpp's MeshRootConstants comment before adding another field here.
 struct MeshConstants
 {
-    float4x4 model;       // model -> world
-    float4   baseColor;   // linear tint, multiplies the albedo sample
+    float4x4 model;             // model -> world
+    float4   baseColor;         // linear tint, multiplies the albedo sample
+    float4   normalMatrixCol0;  // NormalMatrixFor(model)'s columns 0..2, xyz
+    float4   normalMatrixCol1;  // used / w padding -- see the comment above
+    float4   normalMatrixCol2;
 };
 
 #if SPIRV
 [[vk::push_constant]] ConstantBuffer<MeshConstants> g_PC;
-#define g_model     g_PC.model
-#define g_baseColor g_PC.baseColor
+#define g_model            g_PC.model
+#define g_baseColor        g_PC.baseColor
+#define g_normalMatrixCol0 g_PC.normalMatrixCol0
+#define g_normalMatrixCol1 g_PC.normalMatrixCol1
+#define g_normalMatrixCol2 g_PC.normalMatrixCol2
 #else
 cbuffer MeshConstantsCB : register(b0)
 {
     MeshConstants g_PCData;
 }
-#define g_model     g_PCData.model
-#define g_baseColor g_PCData.baseColor
+#define g_model            g_PCData.model
+#define g_baseColor        g_PCData.baseColor
+#define g_normalMatrixCol0 g_PCData.normalMatrixCol0
+#define g_normalMatrixCol1 g_PCData.normalMatrixCol1
+#define g_normalMatrixCol2 g_PCData.normalMatrixCol2
 #endif
 
 // PER-FRAME, and an ordinary descriptor-set constant buffer rather than more
@@ -75,12 +93,23 @@ VSOutput vs_main(VSInput input)
     VSOutput output;
     const float4 world = mul(g_model, float4(input.pos, 1.0));
     output.pos = mul(g_viewProjection, world);
-    // The upper 3x3, NOT the inverse transpose: this slice's transforms are
-    // rotation + translation + UNIFORM scale, for which the two differ only by
-    // a positive scalar that normalize() in the pixel shader divides out. A
-    // non-uniformly-scaled instance would need the inverse transpose passed in,
-    // and this is the line that would have to change.
-    output.normal = mul((float3x3)g_model, input.normal);
+    // THE INVERSE TRANSPOSE (Task 8/F2a), not the upper 3x3: a surface
+    // tangent scales WITH the object, so for dot(normal, tangent) to stay
+    // zero after a NON-UNIFORM scale the normal has to scale by the INVERSE
+    // along each axis, not the same factor `model` applies to a position.
+    // MeshNode::NormalMatrixFor computes this once per instance on the CPU
+    // (glm::transpose(glm::inverse(upper 3x3)), with a singular-model guard
+    // that returns identity rather than feeding this shader a NaN) and
+    // MeshNode::Record pushes its three columns above -- built as an explicit
+    // weighted sum of those columns, NOT float3x3(col0,col1,col2), because
+    // HLSL's matrix-from-vectors constructor fills ROWS from its arguments,
+    // which would silently transpose this: mul(M,v) == v.x*col0 + v.y*col1 +
+    // v.z*col2 is the definition of a column-major matrix-vector product, and
+    // stating it this way is correct on BOTH the SPIR-V and DXIL targets with
+    // no dependence on either compiler's matrix-packing defaults.
+    output.normal = input.normal.x * g_normalMatrixCol0.xyz
+                   + input.normal.y * g_normalMatrixCol1.xyz
+                   + input.normal.z * g_normalMatrixCol2.xyz;
     output.uv     = input.uv;
     return output;
 }

@@ -48,13 +48,49 @@ namespace Arcane
         constexpr float kDepthClear = 1.0f;
 
         // data/shaders/mesh.hlsl's MeshConstants (b0 / the VK push-constant
-        // block): a 4x4 model matrix followed by a float4 tint.
+        // block): a 4x4 model matrix, a float4 tint, and (Task 8/F2a) the
+        // per-instance NORMAL MATRIX -- MeshNode::NormalMatrixFor(model)'s
+        // result, packed as three float4 COLUMNS rather than a bare
+        // glm::mat3: HLSL packs each column of a float3x3 onto its own
+        // 16-byte boundary (the same std140-style rule MeshFrameConstants'
+        // comment below states for a plain vec3), whereas glm::mat3 is a
+        // tightly-packed 36 bytes with no such padding -- memcpying one
+        // straight in would misalign baseColor against mesh.hlsl's layout.
+        // Each column therefore gets an explicit glm::vec4 (xyz used, w
+        // padding), matching mesh.hlsl's MeshConstants field-for-field.
+        //
+        // THE BUDGET: 64 (model) + 16 (baseColor) + 3*16 (normal matrix) =
+        // 128 bytes EXACTLY -- which is precisely Vulkan's GUARANTEED MINIMUM
+        // maxPushConstantsSize (VkPhysicalDeviceLimits), so this fits with
+        // ZERO headroom on the worst-case device this engine has to run on.
+        // mesh.hlsl's own header comment already calls root/push-constant
+        // budget "the scarcest thing in a pipeline layout" for exactly this
+        // reason. THE NEXT PER-DRAW FIELD ADDED AFTER THIS ONE WILL NOT FIT
+        // without either shrinking something already here or moving a field
+        // out to a per-instance descriptor-bound buffer instead -- read this
+        // comment before adding one.
+        struct PackedNormalMatrix
+        {
+            glm::vec4 col0{1.0f, 0.0f, 0.0f, 0.0f};
+            glm::vec4 col1{0.0f, 1.0f, 0.0f, 0.0f};
+            glm::vec4 col2{0.0f, 0.0f, 1.0f, 0.0f};
+
+            PackedNormalMatrix() = default;
+            explicit PackedNormalMatrix(const glm::mat3& m) noexcept
+                : col0(m[0], 0.0f), col1(m[1], 0.0f), col2(m[2], 0.0f) {}
+        };
+        static_assert(sizeof(PackedNormalMatrix) == 48,
+                      "three 16-byte-padded columns -- see the comment above");
+
         struct MeshRootConstants
         {
-            glm::mat4 model{1.0f};
-            glm::vec4 baseColor{1.0f, 1.0f, 1.0f, 1.0f};
+            glm::mat4          model{1.0f};
+            glm::vec4          baseColor{1.0f, 1.0f, 1.0f, 1.0f};
+            PackedNormalMatrix normalMatrix{};
         };
-        static_assert(sizeof(MeshRootConstants) == 80, "must match mesh.hlsl's MeshConstants");
+        static_assert(sizeof(MeshRootConstants) == 128,
+                      "must match mesh.hlsl's MeshConstants -- and IS Vulkan's guaranteed-minimum "
+                      "maxPushConstantsSize; see PackedNormalMatrix's comment above before growing this");
 
         // ...and its MeshFrameCB (b1). std140/HLSL cbuffer packing rules put
         // each float4 on its own 16-byte boundary, which is what the three
@@ -819,8 +855,13 @@ namespace Arcane
             }
 
             MeshRootConstants push;
-            push.model     = instance.model;
-            push.baseColor = instance.baseColor;
+            push.model       = instance.model;
+            push.baseColor   = instance.baseColor;
+            // Derived from `model` alone, every instance, every frame --
+            // MeshInstance carries no field for this (see its own comment).
+            // NormalMatrixFor's singular guard means a degenerate instance
+            // gets identity here rather than NaN reaching the GPU.
+            push.normalMatrix = PackedNormalMatrix(NormalMatrixFor(instance.model));
             nri::SetRootConstantsDesc rootConstants = {};
             rootConstants.rootConstantIndex = 0;
             rootConstants.data              = &push;

@@ -36,9 +36,10 @@
 //   * the 1x1 white texel + its SHADER_RESOURCE view -- what t0 binds for
 //     EVERY draw, mirroring Batch2DNode's untextured path;
 //   * one linear/repeat sampler (REPEAT, not clamp: a mesh's UVs tile);
-//   * the pipeline layout -- root constants b0 (the 80-byte MeshConstants from
-//     mesh.hlsl) plus descriptor set space0 = { b1 frame CB, t0 albedo
-//     texture, s0 sampler };
+//   * the pipeline layout -- root constants b0 (the 128-byte MeshConstants
+//     from mesh.hlsl: model + tint + the per-instance normal matrix, Task 8/
+//     F2a) plus descriptor set space0 = { b1 frame CB, t0 albedo texture, s0
+//     sampler };
 //   * one descriptor pool, and ONE descriptor set PER FRAME SLOT out of it
 //     (CreateSets) -- written ONCE each, at Create, and never rewritten. That
 //     is the same discipline Batch2DNode keeps, and stronger: the sets exist
@@ -77,6 +78,7 @@
 
 #include <glm/glm.hpp>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -88,6 +90,47 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
     class NriGraphContext;
+
+    // NormalMatrixFor -- the inverse transpose of `model`'s upper 3x3, which is
+    // the transform that keeps a surface normal PERPENDICULAR TO ITS SURFACE
+    // under a NON-UNIFORM scale. (Why the upper 3x3 alone is wrong: a surface
+    // tangent scales WITH the object, so for dot(normal, tangent) to stay zero
+    // after a non-uniform scale, the normal has to scale by the INVERSE along
+    // each axis, not the same factor. A uniform scale s*I is the one case
+    // where this doesn't matter -- its inverse transpose is (1/s)*I, a
+    // positive multiple of I that this file's vs_main normalize() divides
+    // straight back out -- which is exactly why the upper-3x3 shortcut looked
+    // correct until F1 gave Transform a per-axis glm::vec3 scale the Inspector
+    // authors freely: the first non-uniform scale-handle drag on a mesh hits
+    // this.)
+    //
+    // SINGULAR GUARD: a model matrix with a collapsed axis (an authored zero
+    // scale, or a degenerate ancestor in a WorldTransform product) has no
+    // inverse. glm::inverse divides by the determinant UNCONDITIONALLY and
+    // would hand back Inf/NaN, which is undefined behaviour on the GPU rather
+    // than a wrong picture -- the same class of guard SceneCamera.hpp's
+    // degenerate-basis fallback (ActivePerspectiveSceneCamera) takes, and the
+    // same class MeshNode.cpp's own IsFinite/SafeNormalize take for the
+    // camera and the light. Identity is the least-wrong answer here: an
+    // instance whose model has collapsed a dimension has already lost its
+    // geometry to the same degeneracy (its vertices are degenerate too), so
+    // there is no "correct" normal direction left to recover -- identity just
+    // keeps the pixel shader's arithmetic finite.
+    //
+    // PURE and header-only, matching SceneCamera.hpp's PerspectiveProjection:
+    // no NRI device, no Registry, no MeshNode instance, so ArcaneTests can pin
+    // the analytic property directly (MeshNodeTest.cpp).
+    //
+    // Computed PER INSTANCE inside MeshNode::Record from `model` alone --
+    // MeshInstance gains no field for this; see its own comment below.
+    [[nodiscard]] inline glm::mat3 NormalMatrixFor(const glm::mat4& model) noexcept
+    {
+        const glm::mat3 upper = glm::mat3(model);
+        const float determinant = glm::determinant(upper);
+        if (!std::isfinite(determinant) || std::fabs(determinant) < 1e-8f)
+            return glm::mat3(1.0f);
+        return glm::transpose(glm::inverse(upper));
+    }
 
     // =====================================================================
     // THE CPU-SIDE SCENE, and the whole of what a host has to build.
@@ -106,10 +149,16 @@ namespace Arcane
         // error (a scene may legitimately carry a slot with no geometry yet).
         const MeshData* mesh = nullptr;
 
-        // Model -> world, METERS (MKS). Rotation + translation + UNIFORM scale
-        // only: mesh.hlsl transforms normals by the upper 3x3 rather than the
-        // inverse transpose, which is exact for those and wrong for a
-        // non-uniform scale. See that file's vs_main.
+        // Model -> world, METERS (MKS). Rotation, translation AND a
+        // NON-UNIFORM scale are all safe here (Task 8/F2a): MeshNode::Record
+        // derives NormalMatrixFor(model) fresh for every instance and pushes
+        // it alongside `model`, so mesh.hlsl's vs_main transforms normals by
+        // the inverse transpose rather than the upper 3x3. (Before Task 8 this
+        // comment stated a UNIFORM-scale-only restriction -- F1 gave Transform
+        // a glm::vec3 scale the Inspector authors freely, so the first
+        // non-uniform scale-handle drag on a mesh hit the old shortcut.
+        // NormalMatrixFor, above, is the fix; nothing here still depends on
+        // that restriction.)
         glm::mat4 model{1.0f};
 
         // LINEAR, and may exceed 1.0 (the canvas is RGBA16F). It multiplies

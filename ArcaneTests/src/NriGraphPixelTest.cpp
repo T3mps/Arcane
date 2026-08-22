@@ -906,3 +906,180 @@ TEST_CASE("mesh: the nearer cube occludes the farther one whichever order they a
 {
     CheckNearMeshOccludesFar(Arcane::GraphicsBackend::Vulkan);
 }
+
+// ---------------------------------------------------------------------------
+// 9. THE NORMAL MATRIX (NRI Phase 4 Task 8, F2a) -- a non-uniformly-scaled
+//    instance's normals must go through the INVERSE TRANSPOSE, not the upper
+//    3x3 mesh.hlsl's vs_main applied before this task. MeshNodeTest.cpp pins
+//    NormalMatrixFor's analytic answer headlessly; this is the one place that
+//    can prove the SHADER HALF actually consumes it.
+//
+//    A plain cube cannot exercise this at all: every one of its face normals
+//    is AXIS-ALIGNED in local space, and an axis-aligned vector's DIRECTION
+//    survives a diagonal scale identically whether or not you invert it first
+//    (scaling a vector along its own single nonzero axis never turns it, only
+//    stretches it) -- the naive upper-3x3 and the correct inverse transpose
+//    agree on every cube face under a purely diagonal `model`. So this case
+//    hand-builds a single flat quad with a deliberately OBLIQUE authored
+//    normal (not aligned with the quad's own geometric plane) -- physically
+//    unusual, but a MeshVertex's `normal` is just an attribute the shader
+//    transforms and shades with; nothing checks it against the triangle's
+//    winding, and isolating the shader's NORMAL-MATRIX MATH from its geometry
+//    is exactly the point.
+//
+//    THE COMPARISON IS STRUCTURAL, per the file header: an UNSCALED reference
+//    cube's front face (axis-aligned normal (0,0,1), so its shading is
+//    correct under EITHER formula) lit by light=(0,0,1) gives a KNOWN-GOOD
+//    N.L=1 rendering, independent of anything this task changed. The oblique
+//    quad, scaled 8x non-uniformly along X, is lit by light = the CPU's own
+//    NormalMatrixFor(model) applied to its authored normal -- i.e. the
+//    direction the shader SHOULD compute if it is correct. If it is, N.L=1
+//    there too and the two centre pixels should closely match. If the shader
+//    had regressed to the upper-3x3 (this task's exact defect), the ACTUAL
+//    shader normal would be a very different direction (dot product with the
+//    intended one ~=0.25 at this scale ratio -- worked out below), so N.L
+//    would drop to a fraction of 1 and the two centre pixels would visibly
+//    diverge.
+// ---------------------------------------------------------------------------
+namespace
+{
+    // A flat quad in the Z=0 plane, 2m per side, CCW as seen from +Z (front-
+    // facing toward this file's camera, which sits on +Z looking down -Z --
+    // MeshBuilder.hpp's WINDING contract, worked out by hand for these four
+    // vertices rather than inherited from a generator, because no generator
+    // in MeshBuilder.hpp authors a normal independent of its geometry).
+    //
+    // THE NORMAL IS DELIBERATELY OBLIQUE: normalize(1,0,1), not the quad's
+    // true geometric normal (0,0,1). See the section comment above for why an
+    // axis-aligned normal (every cube face; this quad's own true geometric
+    // one) cannot exercise this defect under a diagonal `model` at all.
+    Arcane::MeshData BuildObliqueNormalQuad()
+    {
+        const glm::vec3 n = glm::normalize(glm::vec3(1.0f, 0.0f, 1.0f));
+        Arcane::MeshData quad;
+        quad.vertices = {
+            { glm::vec3(-1.0f, -1.0f, 0.0f), n, glm::vec2(0.0f, 0.0f) },
+            { glm::vec3( 1.0f, -1.0f, 0.0f), n, glm::vec2(1.0f, 0.0f) },
+            { glm::vec3( 1.0f,  1.0f, 0.0f), n, glm::vec2(1.0f, 1.0f) },
+            { glm::vec3(-1.0f,  1.0f, 0.0f), n, glm::vec2(0.0f, 1.0f) },
+        };
+        quad.indices = { 0, 1, 2, 0, 2, 3 };
+        return quad;
+    }
+
+    void CheckNonUniformScaleNormalMatchesAnalyticLambert(Arcane::GraphicsBackend backend)
+    {
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        // ---- THE KNOWN-GOOD REFERENCE: an unscaled cube, axis-aligned
+        //      normal, light dead-on. Correct under EITHER normal-transform
+        //      formula, so it needs nothing from this task to be
+        //      trustworthy. ----
+        const Arcane::MeshData referenceCube = Arcane::BuildCube(2.0f);
+        Arcane::MeshInstance referenceInstance;
+        referenceInstance.mesh      = &referenceCube;
+        referenceInstance.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);   // white: pure N.L*light+ambient
+        const Arcane::MeshInstance referenceInstances[] = { referenceInstance };
+
+        Arcane::MeshSceneDesc referenceScene;
+        referenceScene.instances = referenceInstances;
+        FillCamera(referenceScene);   // lightDirection defaults to (0,0,1) -- exactly this face's normal
+
+        std::uint32_t rw = 0, rh = 0;
+        const std::vector<unsigned char> referencePixels = CaptureMesh(backend, referenceScene, rw, rh);
+        const Rgba referenceCentre = At(referencePixels, rw, rw / 2u, rh / 2u);
+
+        // ---- THE OBLIQUE, NON-UNIFORMLY-SCALED CASE. `model` scales X by 8x
+        //      and leaves Y/Z alone -- extreme on purpose, so a regression to
+        //      the upper-3x3 misses by a WIDE margin rather than a subtle
+        //      one (worked out below, not just asserted). ----
+        const Arcane::MeshData obliqueQuad = BuildObliqueNormalQuad();
+        const glm::vec3 localNormal = glm::normalize(glm::vec3(1.0f, 0.0f, 1.0f));
+        const glm::mat4 model = glm::scale(glm::mat4(1.0f), glm::vec3(8.0f, 1.0f, 1.0f));
+
+        // THE LIGHT IS SET FROM THE SAME FUNCTION THE SHADER MUST MATCH. This
+        // is deliberate, not circular: NormalMatrixFor is pinned analytically,
+        // headlessly, against hand-worked numbers in MeshNodeTest.cpp. What
+        // THIS case adds is proof the shader's OWN computation (mesh.hlsl's
+        // vs_main, run on a real GPU) agrees with the CPU's -- which no
+        // headless test can show.
+        //
+        //   correct = inverseTranspose(diag(8,1,1)) * normalize(1,0,1)
+        //           = diag(1/8,1,1) * (0.7071, 0, 0.7071) = (0.0884, 0, 0.7071)
+        //           normalized ~= (0.124, 0, 0.992)
+        //   naive (upper 3x3) = diag(8,1,1) * (0.7071, 0, 0.7071) = (5.657, 0, 0.7071)
+        //           normalized ~= (0.992, 0, 0.124)
+        //   dot(correct, naive) ~= 0.246 -- so a shader still using the naive
+        //   formula would land N.L ~= 0.25 here, not 1.0: a wide, unmistakable
+        //   miss, not a rounding-sized one.
+        const glm::vec3 correctNormal = glm::normalize(Arcane::NormalMatrixFor(model) * localNormal);
+
+        Arcane::MeshInstance obliqueInstance;
+        obliqueInstance.mesh      = &obliqueQuad;
+        obliqueInstance.model     = model;
+        obliqueInstance.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        const Arcane::MeshInstance obliqueInstances[] = { obliqueInstance };
+
+        Arcane::MeshSceneDesc obliqueScene;
+        obliqueScene.instances      = obliqueInstances;
+        FillCamera(obliqueScene);
+        obliqueScene.lightDirection = correctNormal;   // aim the light at the CORRECT answer
+
+        std::uint32_t ow = 0, oh = 0;
+        const std::vector<unsigned char> obliquePixels = CaptureMesh(backend, obliqueScene, ow, oh);
+        const Rgba obliqueCentre = At(obliquePixels, ow, ow / 2u, oh / 2u);
+
+        // ---- THE SAME OBLIQUE SCENE, AMBIENT ONLY -- proves the light is
+        //      actually contributing something, so "matches the reference"
+        //      cannot be explained away by "everything saturates to white
+        //      regardless of the light". Mirrors CheckMeshCubeCoversTheCentre's
+        //      own lit-vs-unlit idiom. ----
+        Arcane::MeshSceneDesc obliqueUnlitScene = obliqueScene;
+        obliqueUnlitScene.lightColor = glm::vec3(0.0f);
+        std::uint32_t uw = 0, uh = 0;
+        const std::vector<unsigned char> obliqueUnlitPixels =
+            CaptureMesh(backend, obliqueUnlitScene, uw, uh);
+        REQUIRE(uw == ow);
+        REQUIRE(uh == oh);
+        const Rgba obliqueUnlitCentre = At(obliqueUnlitPixels, uw, uw / 2u, uh / 2u);
+
+        REQUIRE(rw == ow);
+        REQUIRE(rh == oh);
+
+        // THE PROPERTY: the oblique instance's normal-matrix-corrected
+        // shading matches the known-good reference's, closely -- both are
+        // N.L=1 under the SAME ambient/light-color/albedo, so a correct
+        // shader should land these within a few luma units of each other. A
+        // regression to the upper-3x3 would land N.L ~=0.25 instead (see the
+        // worked numbers above), which is nowhere near this margin.
+        CHECK(std::abs(Luma(referenceCentre) - Luma(obliqueCentre)) < 24);
+
+        // AND THE LIGHT DEMONSTRABLY MATTERED: the lit oblique centre is far
+        // brighter than its own ambient-only twin.
+        CHECK(Luma(obliqueCentre) > Luma(obliqueUnlitCentre) + 60);
+
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+}
+
+// TAGS DELIBERATELY OMIT [mesh] (unlike this file's other mesh [pixel] cases
+// above): this task's own agent gate runs `ArcaneTests.exe "[mesh]"` as its
+// FIRST command (to exercise MeshNodeTest.cpp's new headless cases), and a
+// bare `[mesh]` filter in Catch2 matches ANY case carrying that tag alongside
+// others -- so a `[mesh]` tag here would pull this GPU case into that
+// supposedly-headless run too, exactly the outcome "you must not run it"
+// forbids. [gpu][pixel] alone is both necessary and sufficient to keep it out
+// of `~[gpu]` (the second gate command) AND out of `[mesh]` (the first); the
+// desk workflow this file's header documents (`ArcaneTests.exe "[pixel]"`)
+// finds it by [pixel] regardless.
+TEST_CASE("mesh: a non-uniformly-scaled instance's lit-face brightness matches the analytic "
+          "Lambert term (d3d12)", "[gpu][pixel][nri][d3d12]")
+{
+    CheckNonUniformScaleNormalMatchesAnalyticLambert(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("mesh: a non-uniformly-scaled instance's lit-face brightness matches the analytic "
+          "Lambert term (vulkan)", "[gpu][pixel][nri][vulkan]")
+{
+    CheckNonUniformScaleNormalMatchesAnalyticLambert(Arcane::GraphicsBackend::Vulkan);
+}
