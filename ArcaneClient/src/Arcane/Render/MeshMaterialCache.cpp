@@ -89,31 +89,14 @@ namespace Arcane
         if (!data)
             return fail("asset failed to load");
 
-        // Walk to the base, EXACTLY SpriteMaterialCache::Request's cycle
-        // guard and chain-must-reach-a-base refusal
-        // (SpriteMaterialCache.cpp:112-133) -- collecting raw
-        // MaterialAssetData instead of feeding a MaterialInstance, since
-        // there is no template to build one over.
+        // Walk to the base through the SHARED walker (Material/MaterialAsset.
+        // hpp's LoadMaterialParentChain), the same one SpriteMaterialCache::
+        // Request now calls -- this cache collects raw MaterialAssetData from
+        // it instead of feeding a MaterialInstance, since there is no
+        // template to build one over.
         std::vector<MaterialAssetData> chain;   // immediate parent .. base
-        std::vector<Guid> visited{ id };
-        Guid cursor = data->parent;
-        while (cursor.IsValid())
-        {
-            for (const Guid& seen : visited)
-                if (seen == cursor)
-                    return fail("parent chain contains a cycle");
-            visited.push_back(cursor);
-            const auto parentPath = im.services.resolveAsset(cursor);
-            if (!parentPath)
-                return fail("parent not in the asset registry");
-            auto parent = LoadMaterialAsset(*parentPath);
-            if (!parent)
-                return fail("parent failed to load");
-            cursor = parent->parent;
-            chain.push_back(std::move(*parent));
-        }
-        if (!chain.empty() && chain.back().IsInstance())
-            return fail("parent chain never reaches a base material");
+        if (const auto why = LoadMaterialParentChain(im.services.resolveAsset, id, data->parent, chain))
+            return fail(*why);
 
         // Layer base -> ... -> immediate parent -> this asset, last write
         // wins -- the same order SpriteMaterialCache::Impl::Bind applies

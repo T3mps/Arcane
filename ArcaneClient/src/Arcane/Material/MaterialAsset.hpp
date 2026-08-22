@@ -22,6 +22,7 @@
 #include <Json.hpp>
 
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -107,6 +108,38 @@ namespace Arcane
     // a value that no longer matches its decl is dropped with a warning).
     ARCANE_API std::optional<MaterialAssetData> LoadMaterialAsset(
         const std::filesystem::path& path);
+
+    // Guid -> path resolver, the shape every Guid-keyed cache in Render/ takes
+    // (SpriteCache::ResolveAssetFn, MeshCache::ResolveAssetFn, ...). Spelled
+    // out here rather than named after any one cache: MaterialAsset.hpp must
+    // not know SpriteMaterialCache or MeshMaterialCache exist, only that both
+    // hand it the same shape of resolver.
+    using ResolveMaterialAssetFn =
+        std::function<std::optional<std::filesystem::path>(const Guid&)>;
+
+    // Walk a material's parent chain to its base, cycle-guarded: resolves and
+    // loads each ancestor in turn starting from `firstParent` (`leafId`'s own
+    // `parent` field), appending each one to `out` in walk order (immediate
+    // parent, grandparent, ..., base). `leafId` seeds the cycle guard -- a
+    // chain that loops back to the material being resolved is still a cycle
+    // -- but is never itself resolved or loaded; the caller already has that
+    // data.
+    //
+    // Returns nullopt on success. Otherwise a human-readable reason: a cycle,
+    // a parent Guid not in the asset registry, or a parent asset that fails
+    // to load -- `out` is left however far the walk got. There is no fourth
+    // "the chain never reaches a base" outcome: the loop's only two exits are
+    // one of those three reasons, or `out.back()` naming a base (a Guid whose
+    // own `parent` is nil) -- a chain that FAILED to reach a base is always
+    // caught as one of the three reasons above, never discovered afterward by
+    // inspecting the result.
+    //
+    // Shared by SpriteMaterialCache::Request and MeshMaterialCache::Request
+    // (both include this header already), so the cycle guard and the three
+    // failure strings live in exactly one place.
+    ARCANE_API std::optional<std::string> LoadMaterialParentChain(
+        const ResolveMaterialAssetFn& resolveAsset, const Guid& leafId,
+        const Guid& firstParent, std::vector<MaterialAssetData>& out);
 
     // Apply saved values onto an instance built over the asset's template
     // (unknown names / type mismatches warn + skip). Returns applied count.

@@ -479,6 +479,41 @@ namespace Arcane
         return data;
     }
 
+    std::optional<std::string> LoadMaterialParentChain(
+        const ResolveMaterialAssetFn& resolveAsset, const Guid& leafId,
+        const Guid& firstParent, std::vector<MaterialAssetData>& out)
+    {
+        // `visited` seeds with the LEAF, not just its ancestors: a chain that
+        // loops all the way back to the material being resolved is still a
+        // cycle (A's parent is B, B's parent is A -- neither is `leafId`, but
+        // the same defect shows up one hop later if C's parent is A).
+        std::vector<Guid> visited{ leafId };
+        Guid cursor = firstParent;
+        while (cursor.IsValid())
+        {
+            for (const Guid& seen : visited)
+                if (seen == cursor)
+                    return std::string("parent chain contains a cycle");
+            visited.push_back(cursor);
+            const auto parentPath = resolveAsset(cursor);
+            if (!parentPath)
+                return std::string("parent not in the asset registry");
+            auto parent = LoadMaterialAsset(*parentPath);
+            if (!parent)
+                return std::string("parent failed to load");
+            cursor = parent->parent;
+            out.push_back(std::move(*parent));
+        }
+        // The loop exits ONLY when `cursor` -- the most-recently-appended
+        // ancestor's OWN `parent` -- is nil, which by definition means
+        // out.back() is a base. There is no other way out: every iteration
+        // either advances `cursor` to a fresh, valid Guid (and keeps going)
+        // or returns one of the three reasons above. So a chain that never
+        // reaches a base cannot reach this point at all; it is always caught
+        // mid-walk as a cycle, a missing link, or a load failure.
+        return std::nullopt;
+    }
+
     std::size_t ApplyMaterialParams(const MaterialAssetData& data, MaterialInstance& instance)
     {
         std::size_t applied = 0;

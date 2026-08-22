@@ -111,26 +111,14 @@ namespace Arcane
 
         // Instance chain: walk to the base (cycle-guarded) -- the base owns the
         // snippet; every hop's saved values layer under the child's.
+        // LoadMaterialParentChain (Material/MaterialAsset.hpp) owns the cycle
+        // guard and the three failure reasons; it is shared with
+        // MeshMaterialCache::Request, which walks the identical shape of
+        // chain for a params-only, no-template read instead of this one's
+        // template build.
         std::vector<MaterialAssetData> chain;
-        std::vector<Guid> visited{ id };
-        Guid cursor = data->parent;
-        while (cursor.IsValid())
-        {
-            for (const Guid& seen : visited)
-                if (seen == cursor)
-                    return fail("parent chain contains a cycle");
-            visited.push_back(cursor);
-            const auto parentPath = im.services.resolveAsset(cursor);
-            if (!parentPath)
-                return fail("parent not in the asset registry");
-            auto parent = LoadMaterialAsset(*parentPath);
-            if (!parent)
-                return fail("parent failed to load");
-            cursor = parent->parent;
-            chain.push_back(std::move(*parent));
-        }
-        if (!chain.empty() && chain.back().IsInstance())
-            return fail("parent chain never reaches a base material");
+        if (const auto why = LoadMaterialParentChain(im.services.resolveAsset, id, data->parent, chain))
+            return fail(*why);
 
         const std::string& snippet = chain.empty() ? data->snippet
                                                    : chain.back().snippet;

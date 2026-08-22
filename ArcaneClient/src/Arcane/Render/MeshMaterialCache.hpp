@@ -22,18 +22,22 @@
 //
 // INSTANCES STILL WORK, because MaterialAssetData::parent + sparse overrides
 // is data, not compiled state (MaterialAsset.hpp:5-9: "no snippet, no kind --
-// both come from the base at the end of the parent chain"). Request() walks
-// the parent chain exactly like SpriteMaterialCache::Request does (cycle-
-// guarded, refusing a chain that never reaches a base), but collects each
-// level's raw saved params instead of feeding them to a MaterialInstance --
-// there is no instance object to build without a template.
+// both come from the base at the end of the parent chain") -- and per that
+// same definition, reading only `id`'s own params would be wrong: an
+// instance genuinely IS "a parent Guid + sparse overrides," so its effective
+// baseColor can depend on ancestors it never mentions. Request() walks the
+// parent chain through Material/MaterialAsset.hpp's LoadMaterialParentChain
+// -- the SAME cycle-guarded walker SpriteMaterialCache::Request calls, so
+// the cycle guard and its failure strings live in exactly one place -- but
+// collects each level's raw saved params from it instead of feeding them to
+// a MaterialInstance, since there is no template to build one over.
 //
 // SAME FAILURE DISCIPLINE AS SpriteMaterialCache, NOT SpriteCache: a broken
-// or unresolvable material (missing asset, malformed JSON, a cyclic or
-// dead-ended parent chain) stays OUT of the published table, memoized in a
-// separate `failed` set. There is no placeholder material to fall back to --
-// Task 5's resolution chain (materialOverride -> mesh default -> white)
-// simply falls through to its next link, the same way a nil Guid does.
+// or unresolvable material (missing asset, malformed JSON, or a cyclic
+// parent chain) stays OUT of the published table, memoized in a separate
+// `failed` set. There is no placeholder material to fall back to -- Task 5's
+// resolution chain (materialOverride -> mesh default -> white) simply falls
+// through to its next link, the same way a nil Guid does.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
