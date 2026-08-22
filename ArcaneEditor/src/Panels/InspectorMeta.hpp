@@ -51,6 +51,19 @@ namespace Arcane::Editor
     // NOT the same as a zero range -- an unbounded drag is the default.
     [[nodiscard]] std::optional<Astra::Range> RangeOfField(const Astra::FieldInfo& field);
 
+    // Astra::AngleFormat's unit for a field, defaulting to the SAME default
+    // the attribute type itself carries (Astra::AngleFormat::Unit::Degrees,
+    // Attribute.hpp) when the field has no explicit AngleFormat. Unlike
+    // RangeOfField, there is no meaningful "unspecified" state distinct from
+    // that default worth exposing as an optional -- a field with no attribute
+    // and a field explicitly annotated Degrees are the same question to every
+    // caller. Read by the Quat field's ImGui call site (InspectorView.cpp) to
+    // decide whether its Euler drags show degrees or radians; the existing
+    // scalar Float field does not yet read this (Transform::rotation's own
+    // AngleFormat attribute is carried but unread anywhere today -- see the
+    // F1 Task 2 report) and this task does not retrofit it.
+    [[nodiscard]] Astra::AngleFormat::Unit AngleUnitForField(const Astra::FieldInfo& field);
+
     // Astra::ReadOnly: draw the field disabled rather than hiding it.
     [[nodiscard]] bool FieldIsReadOnly(const Astra::FieldInfo& field);
 

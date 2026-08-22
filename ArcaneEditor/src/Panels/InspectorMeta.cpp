@@ -115,6 +115,13 @@ namespace Arcane::Editor
         return std::nullopt;
     }
 
+    Astra::AngleFormat::Unit AngleUnitForField(const Astra::FieldInfo& field)
+    {
+        if (const Astra::AngleFormat* a = field.GetAttribute<Astra::AngleFormat>())
+            return a->unit;
+        return Astra::AngleFormat::Unit::Degrees;
+    }
+
     bool FieldIsReadOnly(const Astra::FieldInfo& field)
     {
         return field.GetAttribute<Astra::ReadOnly>() != nullptr;

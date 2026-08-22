@@ -9,6 +9,11 @@
 #include <Astra/Reflection/EnumInfo.hpp>
 #include <Astra/Reflection/FieldInfo.hpp>
 
+// glm::quat/glm::vec3, for the Quat field's Euler-view helpers below. Nothing
+// else in this header needed glm before -- FieldKind's Vec2/Vec3/Vec4 arms are
+// only ever named by enumerator, never by the glm type itself, at this scope.
+#include <glm/gtc/quaternion.hpp>
+
 #include <cstdint>
 #include <span>
 #include <string>
@@ -20,8 +25,11 @@ namespace Arcane::Editor
 {
     // AssetRef = an Arcane::Guid field: rendered as an asset-reference widget
     // (resolved name + pick popup + browser drag-target) instead of raw ints.
+    // Quat = a glm::quat field: edited as three Euler-angle drags -- see the
+    // QuatEulerView section below for the "Euler is a VIEW, the quaternion is
+    // the STORAGE" contract that field type has to obey.
     enum class FieldKind
-    { Bool, Int32, UInt32, Float, Vec2, Vec3, Vec4, AssetRef, String, Enum, ReadOnly };
+    { Bool, Int32, UInt32, Float, Vec2, Vec3, Vec4, Quat, AssetRef, String, Enum, ReadOnly };
 
     // Classify a reflected field into an editor kind. Unknown/compound types ->
     // ReadOnly (shown disabled, never crashing). Enum requires the enum type to
@@ -49,6 +57,86 @@ namespace Arcane::Editor
     // dedicated color type, and until one exists the field NAME is the only
     // author intent on record.
     [[nodiscard]] bool IsColorFieldName(std::string_view rawFieldName) noexcept;
+
+    // ---- glm::quat: Euler is a VIEW, the quaternion is the STORAGE --------
+    //
+    // The classic inspector bug: re-deriving Euler angles from the stored
+    // quaternion on EVERY display frame makes an untouched rotation jitter
+    // (pitch/roll silently re-picking a different-but-equivalent decomposition
+    // purely from float noise) and makes editing one axis rewrite the other
+    // two. The fix kept here is that the widget's Euler triple is UI STATE
+    // (QuatEulerView) that is re-derived from the quaternion ONLY when the
+    // quaternion changed for a reason other than the view's own last write --
+    // never on a plain display frame. SyncQuatEulerView/ApplyQuatEulerEdit are
+    // the whole contract; ToEuler/FromEuler below are the pure math they are
+    // built from. All of this is ImGui-free and is what the [editor] suite
+    // drives directly -- InspectorView.cpp's Quat case only ever calls these,
+    // and is desk-verified, the same split as every other field kind here.
+
+    // Euler order: pitch (X), yaw (Y), roll (Z) -- glm::eulerAngles' own
+    // component order, and glm::quat(vec3)'s constructor
+    // (ThirdParty/glm/glm/detail/type_quat.inl:220-229) treats its argument
+    // the same way, so the pair is a genuine round-trip: FromEulerRadians(
+    // ToEulerRadians(q)) reconstructs the SAME rotation (up to the
+    // quaternion's own +-q double cover, e.g. a 180 degree turn) for
+    // identity, every single-axis 90/180 degree rotation, compound rotations,
+    // and pitch = 90 degree (gimbal-locked) cases -- measured directly before
+    // committing to this pair rather than assumed; see the round-trip test in
+    // EditorInspectorQuatTest.cpp.
+    [[nodiscard]] glm::vec3 QuatToEulerRadians(const glm::quat& q) noexcept;
+
+    // The half-angle cos/sin products already form a unit quaternion
+    // algebraically; the normalize is a defensive, near-zero-cost guard
+    // against FP drift on repeatedly-edited or very large inputs, not a
+    // correction for a known error source.
+    [[nodiscard]] glm::quat QuatFromEulerRadians(const glm::vec3& eulerRadians) noexcept;
+
+    // The per-row UI state backing a single-selection Quat field: the Euler
+    // triple currently on screen, and the quaternion it was last synced
+    // against (derived FROM, in SyncQuatEulerView, or derived INTO, in
+    // ApplyQuatEulerEdit). Lives on InspectorState (EditorPanels.hpp), keyed
+    // per field -- see InspectorView.cpp -- because the field VISITOR is
+    // rebuilt every frame and cannot itself carry cross-frame state (the same
+    // reason EditGesture::GestureState/originalColor live there instead of on
+    // the visitor).
+    struct QuatEulerView
+    {
+        glm::vec3 eulerRadians{0.0f};
+        glm::quat lastQuat{1.0f, 0.0f, 0.0f, 0.0f};
+        bool      valid = false;
+    };
+
+    // Returns the Euler triple (radians) the widget should display THIS
+    // frame. If `liveQuat` still represents the SAME rotation (within
+    // tolerance, honouring the double cover) as the quaternion `view` was
+    // last synced against, the cached triple is returned UNCHANGED -- no
+    // re-derivation, so a display-only frame can never silently jump to a
+    // different-but-equivalent Euler solution. Only a genuine external change
+    // to the field (the first call, undo/redo, scene load, a script write)
+    // re-derives via QuatToEulerRadians.
+    [[nodiscard]] glm::vec3 SyncQuatEulerView(QuatEulerView& view,
+                                              const glm::quat& liveQuat) noexcept;
+
+    // Applies a user edit of the FULL Euler triple (as currently shown -- the
+    // caller edits the array SyncQuatEulerView handed back IN PLACE, so axes
+    // the user did not touch arrive here bit-identical to what was displayed)
+    // into a new quaternion, and updates `view` so the NEXT SyncQuatEulerView
+    // call sees no external change and keeps showing exactly
+    // `newEulerRadians` -- rather than re-deriving it from the new
+    // quaternion and risking a different (also valid) decomposition. Returns
+    // the quaternion to write into storage.
+    [[nodiscard]] glm::quat ApplyQuatEulerEdit(QuatEulerView& view,
+                                               const glm::vec3& newEulerRadians) noexcept;
+
+    // Multi-select's one-shot cousin of ApplyQuatEulerEdit: multi-select rows
+    // are plain text-commit boxes re-seeded from live storage every frame
+    // (MultiScalarRow), never a continuous drag, so there is no cross-frame
+    // view to protect and no cache to keep. This decomposes `liveQuat`
+    // FRESH, overwrites Euler component `axis` (0 = pitch, 1 = yaw, 2 = roll;
+    // any other value is a no-op read-back), and recomposes -- one commit,
+    // one entity.
+    [[nodiscard]] glm::quat QuatWithEulerAxisRadians(const glm::quat& liveQuat, int axis,
+                                                     float newValueRadians) noexcept;
 
     // Pure write-backs (no ImGui) so the round-trip is unit-testable.
     void ApplyBoolEdit (const Astra::FieldInfo& f, void* instance, bool  v) noexcept;
@@ -78,7 +166,9 @@ namespace Arcane::Editor
         [[nodiscard]] bool Test(int i) const noexcept { return (bits >> i) & 1u; }
     };
 
-    // Scalar components a kind occupies: Vec3 = 3, Vec2 = 2, everything else 1.
+    // Scalar (raw storage) components a kind occupies: Vec4/Quat = 4, Vec3 = 3,
+    // Vec2 = 2, everything else 1. See the .cpp's switch for why Quat counts
+    // its 4 raw components rather than the 3 Euler boxes the widget shows.
     [[nodiscard]] int FieldComponentCount(FieldKind kind) noexcept;
 
     // `componentHash` is the OWNING component's descriptor hash, used to fetch

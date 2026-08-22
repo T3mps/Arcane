@@ -2,6 +2,7 @@
 
 #include "Scene/EditGesture.hpp"   // EditGesture::GestureState (InspectorState parks one)
 #include "Panels/EntityList.hpp"
+#include "Panels/InspectorFields.hpp"   // Arcane::Editor::QuatEulerView (InspectorState::quatEulerViews)
 #include "Panels/PanelRegistry.hpp"   // PanelVisibility (BeginDockSpace's Window menu)
 #include "Project/RecentProjects.hpp"   // RecentSelection (File -> Open Recent)
 #include "Project/SceneRecents.hpp"   // SceneRecents::List (File -> Open Recent Scene)
@@ -15,6 +16,7 @@
 #include <functional>
 #include <glm/vec4.hpp>   // InspectorState::colorPopupOriginal
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -364,6 +366,22 @@ namespace Arcane::Editor
         // member there would reset each frame and Old would track New. One slot is
         // enough: only one colour popup can be open at a time.
         glm::vec4 colorPopupOriginal{ 1.0f, 1.0f, 1.0f, 1.0f };
+        // Per-field Euler-view cache for glm::quat rows (F1 Task 2): the
+        // triple currently on screen for a Quat field, kept across frames so
+        // "Euler is a VIEW, the quaternion is the STORAGE" holds -- see
+        // Arcane::Editor::QuatEulerView's own comment (InspectorFields.hpp).
+        // Lives HERE for the same reason colorPopupOriginal does (the visitor
+        // is rebuilt every frame and cannot itself carry state), but UNLIKE
+        // the colour popup this is not exclusive -- more than one Quat row
+        // can be on screen in the same frame (multiple components, or a
+        // future second glm::quat field) -- so it is keyed per field rather
+        // than a single shared slot. The key combines the owning component's
+        // descriptor hash with the field's own nameHash (see InspectorView.
+        // cpp); only the PRIMARY entity's rotation is ever cached, matching
+        // every other field kind's single-selection row, so switching the
+        // primary entity is just another external change SyncQuatEulerView
+        // already handles by re-deriving.
+        std::unordered_map<std::uint64_t, Arcane::Editor::QuatEulerView> quatEulerViews;
         // Live search text. A fixed buffer rather than std::string because
         // ImGui::InputText writes into it directly; 128 is far past any
         // plausible field name. Nothing clears it, so a typed filter persists

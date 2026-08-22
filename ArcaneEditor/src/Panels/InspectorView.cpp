@@ -28,6 +28,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace Arcane::Editor
@@ -146,6 +147,12 @@ namespace Arcane::Editor
             // Same lifetime, same owner, same shape as `gesture` above --
             // deliberately, so there is one rule to remember rather than two.
             glm::vec4*                        originalColor = nullptr;
+            // Per-field Euler-view cache for Quat rows (F1 Task 2). Same
+            // lifetime/ownership reason as `gesture`/`originalColor` --
+            // NEVER NULL, DrawReflectedComponent wires it unconditionally --
+            // but keyed rather than a single shared slot; see InspectorState::
+            // quatEulerViews's own comment (EditorPanels.hpp) for why.
+            std::unordered_map<std::uint64_t, Arcane::Editor::QuatEulerView>* quatEulerViews = nullptr;
 
             // Fan-out targets. `selection` includes the primary; entities lacking
             // this component are skipped (the panel only shows components the whole
@@ -755,6 +762,92 @@ namespace Arcane::Editor
                                           { if (glm::vec4* p = f.GetPtr<glm::vec4>(d)) *p = v; });
                         break;
                     }
+                    case Arcane::Editor::FieldKind::Quat:
+                    {
+                        // EULER IS A VIEW, THE QUATERNION IS THE STORAGE. All the
+                        // logic that makes that true (no re-derivation on a plain
+                        // display frame, one-axis edits leaving the other two
+                        // untouched, gimbal-adjacent safety) lives in InspectorFields.
+                        // cpp's pure Quat helpers and is driven directly by
+                        // EditorInspectorQuatTest.cpp; this arm is the thin ImGui
+                        // skin over them, same split as every other field kind.
+                        const glm::quat live = f.Get<glm::quat>(instance);
+
+                        // Keyed per FIELD (component hash + field nameHash), not
+                        // per entity: only the PRIMARY's rotation is ever shown or
+                        // cached here (same as every other single-selection row --
+                        // `instance` below is always the primary's data), so a
+                        // selection change is just another external change the
+                        // cache already handles by re-deriving.
+                        const std::uint64_t quatKey =
+                            descriptor->hash ^ (f.nameHash * 0x9E3779B97F4A7C15ULL);
+                        Arcane::Editor::QuatEulerView& view = (*quatEulerViews)[quatKey];
+
+                        // Degrees unless the field explicitly asks for radians --
+                        // Astra::AngleFormat's own default (AngleUnitForField).
+                        const bool degrees = Arcane::Editor::AngleUnitForField(f)
+                                            == Astra::AngleFormat::Unit::Degrees;
+
+                        if (Multi())
+                        {
+                            // No cross-frame cache for multi-select: MultiScalarRow's
+                            // boxes are freshly re-seeded from the PRIMARY's live
+                            // value every frame (same as every other multi row),
+                            // never dragged -- there is no continuous gesture here to
+                            // protect from re-derivation jitter, only a discrete text
+                            // commit, so QuatWithEulerAxisRadians's fresh decompose/
+                            // recompose per TARGET entity is the right tool.
+                            glm::vec3 primaryEuler = Arcane::Editor::QuatToEulerRadians(live);
+                            if (degrees) primaryEuler = glm::degrees(primaryEuler);
+                            const double cur[3]{ primaryEuler.x, primaryEuler.y, primaryEuler.z };
+
+                            // A quaternion's raw storage components have no
+                            // independent per-axis Euler meaning across DIFFERENT
+                            // rotations, so mixed is all-or-nothing: any raw-
+                            // component disagreement blanks every Euler box, not
+                            // just the ones that happen to differ bitwise.
+                            Arcane::Editor::FieldMixedMask mask;
+                            if (MixedFor(f).Any())
+                                mask.bits = 0b111u;
+
+                            double out = 0.0;
+                            const int c = MultiScalarRow(widgetId.c_str(), 3, cur, mask,
+                                                         /*integral*/ false,
+                                                         /*axisColors*/ true, out);
+                            if (c >= 0)
+                            {
+                                const float radians = degrees
+                                    ? glm::radians(static_cast<float>(out))
+                                    : static_cast<float>(out);
+                                ApplyImmediate(rawName, instance, [&](void* d)
+                                {
+                                    if (glm::quat* p = f.GetPtr<glm::quat>(d))
+                                        *p = Arcane::Editor::QuatWithEulerAxisRadians(*p, c, radians);
+                                });
+                            }
+                            break;
+                        }
+
+                        const glm::vec3 shown = Arcane::Editor::SyncQuatEulerView(view, live);
+                        glm::vec3 v = degrees ? glm::degrees(shown) : shown;
+
+                        // A degree drag and a radian drag want visibly different
+                        // step sizes for the same "feels like this much rotation"
+                        // -- 0.5 degrees/pixel matches the Vec3/Vec4 rows' 0.1
+                        // units/pixel feel; the radian fallback is scaled down by
+                        // the same ratio degrees->radians would apply.
+                        bool changed = AxisDragFloatN(widgetId.c_str(), &v.x, 3,
+                                                      degrees ? 0.5f : 0.01f);
+                        BeginGestureIfActivated(rawName, instance);
+                        if (changed)
+                        {
+                            const glm::vec3 edited = degrees ? glm::radians(v) : v;
+                            const glm::quat newQuat = Arcane::Editor::ApplyQuatEulerEdit(view, edited);
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { if (glm::quat* p = f.GetPtr<glm::quat>(d)) *p = newQuat; });
+                        }
+                        break;
+                    }
                     case Arcane::Editor::FieldKind::AssetRef:
                     {
                         // Asset-reference (Guid) field: button shows the resolved
@@ -1166,6 +1259,7 @@ namespace Arcane::Editor
         // stack's.
         visitor.gesture    = &args.state.gesture;
         visitor.originalColor = &args.state.colorPopupOriginal;
+        visitor.quatEulerViews = &args.state.quatEulerViews;
         visitor.registry   = &args.registry;
         visitor.selection  = args.selection;
         visitor.componentDisplayName = args.componentDisplayName;

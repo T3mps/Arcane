@@ -57,6 +57,7 @@ namespace
         int   secret   = 0;
         float described = 0.0f;
         int   bare     = 0;
+        float angled   = 0.0f;   // explicit AngleFormat(Radians) witness
     };
 
     ASTRA_REFLECT_TYPE(MetaProbe)
@@ -71,6 +72,8 @@ namespace
             ASTRA_REFLECT_ATTR(DisplayName, "Custom Label")
             ASTRA_REFLECT_ATTR(Tooltip, "explains itself")
         ASTRA_REFLECT_FIELD(MetaProbe, bare)
+        ASTRA_REFLECT_FIELD(MetaProbe, angled)
+            ASTRA_REFLECT_ATTR(AngleFormat, Astra::AngleFormat::Unit::Radians)
     ASTRA_REFLECT_TYPE_END()
 
     const Astra::FieldInfo& ProbeField(std::string_view name)
@@ -100,6 +103,9 @@ TEST_CASE("attributes are read when present", "[editor]")
     // An explicit DisplayName beats derivation -- the author overriding it is
     // the whole point of the attribute.
     CHECK(DisplayNameForField(ProbeField("described")) == "Custom Label");
+
+    // An explicit AngleFormat(Radians) is honoured, not defaulted away.
+    CHECK(AngleUnitForField(ProbeField("angled")) == Astra::AngleFormat::Unit::Radians);
 }
 
 TEST_CASE("a field with no attributes falls back cleanly", "[editor]")
@@ -111,6 +117,9 @@ TEST_CASE("a field with no attributes falls back cleanly", "[editor]")
     CHECK_FALSE(FieldIsReadOnly(bare));
     CHECK_FALSE(FieldIsAttributeHidden(bare));
     CHECK(DisplayNameForField(bare) == "Bare");
+    // No AngleFormat attribute -> the attribute's OWN default (Degrees,
+    // Attribute.hpp), not an arbitrary fallback invented here.
+    CHECK(AngleUnitForField(bare) == Astra::AngleFormat::Unit::Degrees);
 }
 
 TEST_CASE("the Inspector filter matches either spelling", "[editor]")

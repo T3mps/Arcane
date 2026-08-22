@@ -11,9 +11,11 @@
 #include <Astra/Registry/Registry.hpp>
 
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <span>
 #include <string>
 
@@ -38,6 +40,7 @@ namespace Arcane::Editor
         static const uint64_t kVec2 = Astra::TypeID<glm::vec2>::Hash();
         static const uint64_t kVec3 = Astra::TypeID<glm::vec3>::Hash();
         static const uint64_t kVec4 = Astra::TypeID<glm::vec4>::Hash();
+        static const uint64_t kQuat = Astra::TypeID<glm::quat>::Hash();
         static const uint64_t kGuid = Astra::TypeID<Arcane::Guid>::Hash();
         static const uint64_t kStr  = Astra::TypeID<std::string>::Hash();
 
@@ -55,6 +58,7 @@ namespace Arcane::Editor
         if (f.typeHash == kVec2) return FieldKind::Vec2;
         if (f.typeHash == kVec3) return FieldKind::Vec3;
         if (f.typeHash == kVec4) return FieldKind::Vec4;
+        if (f.typeHash == kQuat) return FieldKind::Quat;
         if (f.typeHash == kGuid) return FieldKind::AssetRef;
         if (f.typeHash == kStr)  return FieldKind::String;
 
@@ -148,7 +152,14 @@ namespace Arcane::Editor
     {
         switch (kind)
         {
-            case FieldKind::Vec4: return 4;
+            // Quat's STORAGE is 4 floats (w, x, y, z) -- what ComputeFieldMixed
+            // below actually diffs -- even though the widget only ever shows 3
+            // Euler boxes; InspectorView.cpp's Quat row collapses the 4-bit
+            // result to a single mixed/not-mixed verdict rather than trying to
+            // map individual raw components onto Euler axes, which have no
+            // shared per-axis meaning across two DIFFERENT quaternions.
+            case FieldKind::Vec4:
+            case FieldKind::Quat: return 4;
             case FieldKind::Vec3: return 3;
             case FieldKind::Vec2: return 2;
             default:              return 1;
@@ -220,6 +231,12 @@ namespace Arcane::Editor
                     if (const glm::vec4* p = f.GetPtr<glm::vec4>(data))
                     { curF[0] = p->x; curF[1] = p->y; curF[2] = p->z; curF[3] = p->w; }
                     break;
+                case FieldKind::Quat:
+                    // Raw storage components, not Euler -- see FieldComponentCount's
+                    // comment on why this is the right comparison basis.
+                    if (const glm::quat* p = f.GetPtr<glm::quat>(data))
+                    { curF[0] = p->w; curF[1] = p->x; curF[2] = p->y; curF[3] = p->z; }
+                    break;
                 case FieldKind::AssetRef:
                     if (const Arcane::Guid* p = f.GetPtr<Arcane::Guid>(data)) curG = *p;
                     break;
@@ -265,5 +282,63 @@ namespace Arcane::Editor
             }
         }
         return mask;
+    }
+
+    // ---- glm::quat: Euler is a VIEW, the quaternion is the STORAGE --------
+
+    glm::vec3 QuatToEulerRadians(const glm::quat& q) noexcept
+    {
+        return glm::eulerAngles(q);
+    }
+
+    glm::quat QuatFromEulerRadians(const glm::vec3& eulerRadians) noexcept
+    {
+        return glm::normalize(glm::quat(eulerRadians));
+    }
+
+    namespace
+    {
+        // Whether `a` and `b` represent the SAME rotation, honouring the unit
+        // quaternion's double cover (q and -q rotate identically -- see the
+        // +-180 degree cases in the round-trip test, where glm::eulerAngles is
+        // not sign-canonical). |dot| == 1 exactly for identical rotations;
+        // the tolerance is deliberately tight -- this gate decides whether
+        // SyncQuatEulerView treats `liveQuat` as "still what the view last
+        // wrote", so it must not paper over a genuine external change.
+        bool QuatNearlySameRotation(const glm::quat& a, const glm::quat& b) noexcept
+        {
+            constexpr float kTolerance = 1e-5f;
+            const float d = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+            return std::fabs(std::fabs(d) - 1.0f) < kTolerance;
+        }
+    }
+
+    glm::vec3 SyncQuatEulerView(QuatEulerView& view, const glm::quat& liveQuat) noexcept
+    {
+        if (!view.valid || !QuatNearlySameRotation(view.lastQuat, liveQuat))
+        {
+            view.eulerRadians = QuatToEulerRadians(liveQuat);
+            view.lastQuat     = liveQuat;
+            view.valid        = true;
+        }
+        return view.eulerRadians;
+    }
+
+    glm::quat ApplyQuatEulerEdit(QuatEulerView& view, const glm::vec3& newEulerRadians) noexcept
+    {
+        const glm::quat q = QuatFromEulerRadians(newEulerRadians);
+        view.eulerRadians = newEulerRadians;
+        view.lastQuat     = q;
+        view.valid        = true;
+        return q;
+    }
+
+    glm::quat QuatWithEulerAxisRadians(const glm::quat& liveQuat, int axis,
+                                       float newValueRadians) noexcept
+    {
+        glm::vec3 e = QuatToEulerRadians(liveQuat);
+        if (axis >= 0 && axis < 3)
+            e[axis] = newValueRadians;
+        return QuatFromEulerRadians(e);
     }
 }

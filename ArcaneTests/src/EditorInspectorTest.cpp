@@ -55,6 +55,7 @@ namespace ArcaneEditorTest
         glm::vec2        two{};
         glm::vec3        three{};   // the arm nothing in the engine roster witnesses
         glm::vec4        four{};    // Vec4 editor: 4-float drags (colour by name)
+        glm::quat        orientation{1.0f, 0.0f, 0.0f, 0.0f};   // Quat: another arm nothing reflects yet
         Arcane::Guid     ref{};
         ProbeMode        mode   = ProbeMode::Alpha;
         UnregisteredMode dark   = UnregisteredMode::X;
@@ -68,6 +69,7 @@ namespace ArcaneEditorTest
         ASTRA_REFLECT_FIELD(ClassifyProbe, two)
         ASTRA_REFLECT_FIELD(ClassifyProbe, three)
         ASTRA_REFLECT_FIELD(ClassifyProbe, four)
+        ASTRA_REFLECT_FIELD(ClassifyProbe, orientation)
         ASTRA_REFLECT_FIELD(ClassifyProbe, ref)
         ASTRA_REFLECT_FIELD(ClassifyProbe, mode)
         ASTRA_REFLECT_FIELD(ClassifyProbe, dark)
@@ -272,6 +274,9 @@ TEST_CASE("ClassifyField: every arm has a witness", "[editor]")
     CHECK(kindOf(probe, "flag")  == K::Bool);
     CHECK(kindOf(probe, "bits")  == K::UInt32);
     CHECK(kindOf(probe, "four")  == K::Vec4);
+    // Quat has NO witness anywhere in the engine roster either -- Transform::
+    // rotation is still the 2D scalar until F1 Task 3. The local probe is it.
+    CHECK(kindOf(probe, "orientation") == K::Quat);
     CHECK(kindOf(probe, "mode")  == K::Enum);
     // Registered-or-ReadOnly: an enum nothing ASTRA_REFLECT_ENUM'd has no
     // names to offer, so it must NOT classify Enum.
@@ -351,6 +356,10 @@ TEST_CASE("FieldComponentCount reports scalar width per kind", "[editor]")
     CHECK(FieldComponentCount(K::Bool) == 1);
     CHECK(FieldComponentCount(K::AssetRef) == 1);
     CHECK(FieldComponentCount(K::ReadOnly) == 1);
+    // 4, not 3: this is the RAW STORAGE width (w, x, y, z) that
+    // ComputeFieldMixed diffs, not the 3-box Euler display -- see the
+    // FieldComponentCount switch's own comment.
+    CHECK(FieldComponentCount(K::Quat) == 4);
 }
 
 TEST_CASE("ComputeFieldMixed: a single selected entity is never mixed", "[editor]")
