@@ -76,4 +76,60 @@ namespace Arcane
     // above and the "on the sphere" contract are, for this builder, the same
     // geometry expressed twice.
     [[nodiscard]] ARCANE_API MeshData BuildUvSphere(float radiusMeters, std::uint32_t rings, std::uint32_t segments);
+
+    // Local axis-aligned bounds of a mesh, in the mesh's own space.
+    //
+    // F3 owns culling; this exists in F2a because MeshDocument's preview has
+    // to FRAME the mesh, and it is computed from vertices rather than derived
+    // per-source analytically because F2c's imported meshes need that path
+    // regardless. An EMPTY mesh returns a zero box, not the inverted-infinity
+    // sentinel a min/max fold starts from -- a caller framing an empty mesh
+    // needs a degenerate box it can still build a camera from, and the
+    // sentinel would hand it infinities.
+    struct MeshBounds
+    {
+        glm::vec3 min{0.0f, 0.0f, 0.0f};
+        glm::vec3 max{0.0f, 0.0f, 0.0f};
+    };
+
+    [[nodiscard]] ARCANE_API MeshBounds ComputeMeshBounds(const MeshData& mesh);
+
+    // ---- UNIT generators (F2a) ------------------------------------------
+    // Every generator below emits a UNIT shape. Size is the Transform's job
+    // (spec: "scale expresses size, rotation expresses orientation, the asset
+    // expresses shape"), which is why none of them takes a size in meters the
+    // way BuildCube/BuildUvSphere above do -- those two predate the rule and
+    // keep their parameters because .arcmesh always passes 1.0 / 0.5.
+
+    // The unit XZ plane: normal +Y, spanning [-0.5, +0.5] in X and Z.
+    // `subdivisions` is quads PER AXIS, so 1 is a single quad (two triangles)
+    // and 3 is nine quads. A camera-facing quad is this mesh under a -90 degree
+    // X rotation -- orientation is the Transform's job for the same reason
+    // size is, which is why there is no separate Quad source.
+    [[nodiscard]] ARCANE_API MeshData BuildPlane(std::uint32_t subdivisions);
+
+    // Unit cylinder: diameter 1, height 1, axis +Y, spanning [-0.5, +0.5] in Y,
+    // with flat caps. `segments` is the radial count.
+    //
+    // It takes NO length ratio, and that asymmetry with BuildCapsule is the
+    // point: a cylinder scaled non-uniformly in Y is still a correct cylinder
+    // (its caps are flat discs; nothing distorts), so every cylinder in the
+    // family is reachable from this one by scale alone.
+    [[nodiscard]] ARCANE_API MeshData BuildCylinder(std::uint32_t segments);
+
+    // Unit-diameter capsule: radius 0.5, axis +Y. `lengthRatio` is TOTAL HEIGHT
+    // divided by diameter, so total height == lengthRatio and the cylindrical
+    // section is (lengthRatio - 1) long. At exactly 1 the section vanishes and
+    // this is a sphere -- legal, and pinned as such.
+    //
+    // The ratio exists where BuildCylinder needs none because a capsule scaled
+    // in Y is NOT a capsule: its hemispherical caps become ellipsoids. That is
+    // the test any future shape parameter must pass -- name a family scale
+    // cannot reach, or do not exist.
+    //
+    // `rings` is the arc step count per hemispherical cap; `segments` is the
+    // radial count.
+    [[nodiscard]] ARCANE_API MeshData BuildCapsule(std::uint32_t rings,
+                                                   std::uint32_t segments,
+                                                   float lengthRatio);
 }

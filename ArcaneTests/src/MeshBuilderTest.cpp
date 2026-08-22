@@ -14,13 +14,20 @@
 //      assertion that actually catches a flipped triangle. A dedicated test
 //      below proves this has teeth by flipping one triangle and showing the
 //      same check reports disagreement.
+//
+// F2a Task 1 extends this file: BuildPlane / BuildCylinder / BuildCapsule /
+// ComputeMeshBounds (task-1-brief.md, Step 1), appended below rather than
+// interleaved so the Task 6 coverage above stays untouched -- BuildCube and
+// BuildUvSphere are shipped and pixel-verified on the GPU.
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <Arcane/Render/MeshBuilder.hpp>
 
 #include <glm/glm.hpp>
+#include <glm/geometric.hpp>
 
 #include <cstdint>
 #include <utility>
@@ -238,4 +245,121 @@ TEST_CASE("BuildUvSphere: flipping a triangle's winding is caught by the geometr
     CHECK(glm::dot(flippedNormal, a.normal) < -0.5f);
     CHECK(glm::dot(flippedNormal, b.normal) < -0.5f);
     CHECK(glm::dot(flippedNormal, c.normal) < -0.5f);
+}
+
+// ---------------------------------------------------------------------------
+// F2a Task 1: BuildPlane / BuildCylinder / BuildCapsule / ComputeMeshBounds
+// (task-1-brief.md, Step 1). Verbatim from the brief.
+// ---------------------------------------------------------------------------
+
+using namespace Arcane;
+using Catch::Matchers::WithinAbs;
+
+namespace
+{
+    // The winding contract from MeshBuilder.hpp, as a predicate: for every
+    // triangle, the geometric normal must agree with the averaged vertex
+    // normal. A generator that emits a face backwards is INVISIBLE under
+    // CullMode::BACK, and nothing else in the suite would notice.
+    bool WindingIsOutward(const MeshData& m)
+    {
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
+        {
+            const MeshVertex& a = m.vertices[m.indices[i + 0]];
+            const MeshVertex& b = m.vertices[m.indices[i + 1]];
+            const MeshVertex& c = m.vertices[m.indices[i + 2]];
+            const glm::vec3 geo = glm::cross(b.position - a.position, c.position - a.position);
+            if (glm::length(geo) < 1e-12f)
+                return false;                       // a degenerate triangle is a bug too
+            const glm::vec3 avg = a.normal + b.normal + c.normal;
+            if (glm::dot(glm::normalize(geo), glm::normalize(avg)) <= 0.0f)
+                return false;
+        }
+        return true;
+    }
+
+    MeshBounds BoundsOf(const MeshData& m) { return ComputeMeshBounds(m); }
+}
+
+TEST_CASE("BuildPlane is a unit XZ plane with a +Y normal", "[mesh]")
+{
+    const MeshData p = BuildPlane(1);
+    REQUIRE(p.indices.size() == 6);          // one quad
+    REQUIRE(p.vertices.size() == 4);
+
+    const MeshBounds b = BoundsOf(p);
+    CHECK_THAT(b.min.x, WithinAbs(-0.5f, 1e-6f));
+    CHECK_THAT(b.max.x, WithinAbs( 0.5f, 1e-6f));
+    CHECK_THAT(b.min.z, WithinAbs(-0.5f, 1e-6f));
+    CHECK_THAT(b.max.z, WithinAbs( 0.5f, 1e-6f));
+    CHECK_THAT(b.min.y, WithinAbs(0.0f, 1e-6f));   // flat: zero thickness
+    CHECK_THAT(b.max.y, WithinAbs(0.0f, 1e-6f));
+
+    for (const MeshVertex& v : p.vertices)
+    {
+        CHECK_THAT(v.normal.y, WithinAbs(1.0f, 1e-6f));
+    }
+    CHECK(WindingIsOutward(p));
+
+    // Subdivision multiplies quads per AXIS, so 3 -> 9 quads -> 54 indices.
+    const MeshData p3 = BuildPlane(3);
+    CHECK(p3.indices.size() == 54);
+    CHECK(WindingIsOutward(p3));
+}
+
+TEST_CASE("BuildCylinder is a unit-diameter, unit-height Y-axis cylinder", "[mesh]")
+{
+    const MeshData c = BuildCylinder(16);
+    const MeshBounds b = BoundsOf(c);
+    CHECK_THAT(b.min.y, WithinAbs(-0.5f, 1e-6f));
+    CHECK_THAT(b.max.y, WithinAbs( 0.5f, 1e-6f));
+    CHECK_THAT(b.max.x, WithinAbs( 0.5f, 1e-4f));   // radius 0.5, sampled at 16 segments
+    CHECK_THAT(b.min.x, WithinAbs(-0.5f, 1e-4f));
+    CHECK(WindingIsOutward(c));
+}
+
+TEST_CASE("BuildCapsule's total height IS its length ratio", "[mesh]")
+{
+    // lengthRatio 2 -> total height 2 (Unity's capsule proportions), diameter 1.
+    const MeshData c = BuildCapsule(8, 16, 2.0f);
+    const MeshBounds b = BoundsOf(c);
+    CHECK_THAT(b.max.y - b.min.y, WithinAbs(2.0f, 1e-4f));
+    CHECK_THAT(b.max.x, WithinAbs(0.5f, 1e-3f));
+    CHECK(WindingIsOutward(c));
+
+    // ratio 1 degenerates to a sphere -- LEGAL, and the height must collapse
+    // to the diameter rather than going negative.
+    const MeshData s = BuildCapsule(8, 16, 1.0f);
+    const MeshBounds sb = BoundsOf(s);
+    CHECK_THAT(sb.max.y - sb.min.y, WithinAbs(1.0f, 1e-4f));
+    CHECK(WindingIsOutward(s));
+}
+
+TEST_CASE("ComputeMeshBounds covers every vertex, and survives an empty mesh", "[mesh]")
+{
+    const MeshData cube = BuildCube(1.0f);
+    const MeshBounds b = ComputeMeshBounds(cube);
+    for (const MeshVertex& v : cube.vertices)
+    {
+        CHECK(v.position.x >= b.min.x - 1e-6f);
+        CHECK(v.position.x <= b.max.x + 1e-6f);
+        CHECK(v.position.y >= b.min.y - 1e-6f);
+        CHECK(v.position.y <= b.max.y + 1e-6f);
+        CHECK(v.position.z >= b.min.z - 1e-6f);
+        CHECK(v.position.z <= b.max.z + 1e-6f);
+    }
+
+    // Zero, not an inverted-infinity sentinel: a caller framing an empty mesh
+    // must get a degenerate box it can still build a camera from.
+    const MeshBounds empty = ComputeMeshBounds(MeshData{});
+    CHECK_THAT(empty.min.x, WithinAbs(0.0f, 1e-6f));
+    CHECK_THAT(empty.max.x, WithinAbs(0.0f, 1e-6f));
+}
+
+TEST_CASE("the existing generators still satisfy the winding contract", "[mesh]")
+{
+    // A regression net for Task 1's edits -- these two shipped in Phase 4 and
+    // their winding is what the [pixel] case already proved on the GPU.
+    CHECK(WindingIsOutward(BuildCube(1.0f)));
+    CHECK(WindingIsOutward(BuildUvSphere(0.5f, 8, 16)));
 }
