@@ -201,11 +201,17 @@ generators are tool-time transients feeding a bake, so a clamp is invisible and
 harmless. `.arcmesh` is a **persisted asset**: a silent clamp means the file says
 `segments = 1` while the mesh is 3, forever — the two-spellings defect again.
 
-So the reflected topology fields carry `Astra::Range` minimums, which the
-Inspector already honours through `RangeOfField` (`InspectorMeta.hpp:52`). That
-makes the invalid state **unauthorable at the widget**, and leaves refusal firing
-only on a hand-edited file. The user never meets the error in normal use, and the
-file never disagrees with the mesh.
+So the minimum is enforced **at the widget**, in `MeshDocument`'s param panel,
+through the bounded-drag idiom `SpriteDocument` already uses one file over —
+`ImGui::DragFloat`/`DragInt` with explicit min/max, or `RangedDragFloat`
+(`EditorWidgets.hpp:43-49`). That makes the invalid state unauthorable, and
+leaves refusal firing only on a hand-edited file. The user never meets the error
+in normal use, and the file never disagrees with the mesh.
+
+Note this is **not** `Astra::Range` + the reflected Inspector: no `*AssetData`
+struct in the tree is reflected, because an asset is edited by its own document
+rather than by the component Inspector. `Astra::Range` governs `MeshRenderer`'s
+fields (a real component); `MeshAssetData`'s bounds live in `MeshDocument`.
 
 ### Bounds
 
@@ -431,8 +437,10 @@ Headless, in the existing gate:
   a mesh default; both nil → white; override set to an *unresolvable* Guid (falls
   through to the mesh default, warns once — it must not silently render white and
   hide the broken reference).
-- `Astra::Range` minimums are present on every validated topology field, so the
-  widget cannot author a value `BuildMeshData` would refuse.
+- Every validated topology field is drawn through a bounded widget in
+  `MeshDocument`, so the panel cannot author a value `BuildMeshData` would
+  refuse. (Desk-verified, not gate-verified — `MeshDocument`'s draw half is
+  never called headlessly.)
 - Perspective camera honours pose; degenerate basis falls back with a warning;
   the orthographic path is byte-identical.
 - Task 9's `FrameDesc` structural test (no mesh scene → Task 4's frame; with one
