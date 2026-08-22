@@ -232,6 +232,26 @@ namespace Arcane
     //     Edit::WorldMatrix/ParentWorldMatrix and DecomposeTRS/ComposeTRS
     //     (ARCANE_API, mat3 -> mat4) also changed signature, but a mangled-name
     //     mismatch fails loudly at load; it adds nothing to the verdict above.
+    // v16, amended (2026-08-22, F1 Task 4): the transform PROPAGATION was
+    //     replaced -- TransformSystems.hpp gained a public TransformOrder
+    //     (a Registry resource holding a flat topological order + dirty state)
+    //     and TransformPropagationSystem stopped walking
+    //     Relations::ForEachDescendant. The version STAYS AT 16 deliberately:
+    //     no existing type's layout moved, no ARCANE_API signature changed, and
+    //     TransformOrder is new, so a module built against the earlier v16
+    //     header cannot reference it. Both copies of the header-only system
+    //     compute the same `parentWorld * local` product and this system is the
+    //     sole writer of WorldTransform::matrix, so a mixed pairing is
+    //     redundant, not wrong -- which is the whole reason it does not need a
+    //     rejection.
+    //     Say what that costs, though: a module carrying the earlier v16 header
+    //     REGISTERS ITS OWN copy of the system (ReferenceGame.cpp does exactly
+    //     this into fixedUpdate), so it reintroduces the two per-frame
+    //     ForEachDescendant traversals inside its own scheduler. Task 4's
+    //     headline property -- a steady frame walks no descendants -- is
+    //     therefore HOST-SIDE ONLY under such a pairing, and is only a
+    //     whole-process property once the module is rebuilt against this
+    //     header. Accept the pairing; rebuild the module to get the win.
     inline constexpr uint32_t kGamePluginABIVersion = 16;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the

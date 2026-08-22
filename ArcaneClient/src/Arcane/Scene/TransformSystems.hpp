@@ -33,8 +33,11 @@
 //
 // A steady-state frame now calls ForEachDescendant ZERO times; so does a
 // rebuild, which walks RelationshipGraph::GetChildren directly (it needs the
-// parent index, which the descendant cache does not carry). Pinned in
-// ArcaneTests/src/TransformOrderTest.cpp.
+// parent index, which the descendant cache does not carry). The two mutex
+// locks, two cache copies and two heap allocations per frame are gone
+// outright, and the per-entity lookups go four to TWO (its own Transform and
+// WorldTransform) -- the parent's world matrix and the parent's identity both
+// come from arrays now. Pinned in ArcaneTests/src/TransformOrderTest.cpp.
 //
 // The ordering and dirty policy live HERE, in Arcane. Astra supplied the
 // version and nothing more; "spatial" is not a concept the ECS needs.
@@ -86,15 +89,44 @@ namespace Arcane
         // worth doing at all.
         std::vector<Transform>    shadow;
         std::vector<std::uint8_t> shadowValid;   // 0 => row i must recompose
-        std::vector<glm::mat4>    world;         // mirror of row i's WorldTransform::matrix
         std::vector<std::uint8_t> dirty;         // decided this pass; read by children
 
+        // Row i's world matrix -- and THE SOURCE its children compose against,
+        // which "mirror" would understate. A child multiplies by
+        // `world[parentIndex[i]]`, never by the parent's WorldTransform
+        // component, so:
+        //
+        //   Compose (below) is the SOLE writer of WorldTransform::matrix in
+        //   engine source. Anything else that writes one is invisible to that
+        //   entity's CHILDREN -- permanently, until the next rebuild reseeds
+        //   this array from the components.
+        //
+        // Not a latent hazard today: WorldTransform is IsStructureLocked AND
+        // IsHiddenInInspector (ComponentCatalog.cpp), so the editor can neither
+        // add, remove nor edit one, and every binary-restore path lands in a
+        // FRESH Registry, which drops this cache with it. But it is a CONTRACT
+        // a future writer must either honour or route through here.
+        // TransformOrderTest.cpp's "a clean leaf is not rewritten by the pass"
+        // enshrines exactly this behaviour -- deliberately on a LEAF, so what
+        // it pins is the skip and not the divergence.
+        std::vector<glm::mat4>    world;
+
         // Scratch, kept here so a steady frame allocates nothing at all.
-        std::vector<Astra::Entity> needsWorld;
+        std::vector<Astra::Entity>    needsWorld;
+        Astra::FlatSet<Astra::Entity> visited;   // Rebuild's cycle guard
 
         // ---- invalidation keys ----
         Astra::Entity root{};
-        std::uint32_t structureVersion = 0;      // 0 == never built (Astra's own "invalid" sentinel)
+        // 0 == never built. This works ONLY because a fresh RelationshipGraph
+        // starts at 1 (RelationshipGraph.hpp:848, and its move ctor resets the
+        // moved-from counter to 1 rather than 0 at :91) -- the same reason
+        // Astra's own TraversalCache::IsValid treats 0 as "no valid version".
+        // Had Astra started at 0, a single-entity scene that never calls
+        // SetParent would match on the first frame, skip the rebuild, and
+        // propagate NOTHING out of an empty order -- silently, and no fixture
+        // that calls SetParent could catch it. If that constant ever moves,
+        // this sentinel has to become an explicit `built` flag.
+        std::uint32_t structureVersion = 0;
 
         // How many times the order has been rebuilt. Instrumentation, and the
         // only way a test can state the headline property as an assertion
@@ -130,8 +162,23 @@ namespace Arcane
             if (cache->structureVersion != version || cache->root != root)
                 Rebuild(reg, root, version, *cache);
 
-            Materialise(reg, *cache);
-            Compose(reg, *cache);
+            // Compose reports the rows that want a WorldTransform rather than
+            // adding one inline: AddComponent moves the entity to a different
+            // archetype, invalidating every component pointer the pass is
+            // holding for OTHER entities. (The same hazard the retired
+            // two-walk version deferred for, and the one Astra's traversals
+            // explicitly do not protect against.)
+            //
+            // The second pass then composes them. It is bounded at two by
+            // construction -- the adds cannot fail into a third -- and it only
+            // runs on a frame that actually materialised something, where its
+            // rows are almost all clean skips anyway.
+            if (Compose(reg, *cache))
+            {
+                for (Astra::Entity e : cache->needsWorld)
+                    reg.AddComponent<WorldTransform>(e, WorldTransform{});
+                Compose(reg, *cache);
+            }
         }
 
     private:
@@ -158,7 +205,14 @@ namespace Arcane
             // straight from file bytes, and an unbounded BFS over a cyclic map
             // never terminates. Astra's own BuildDescendantCache carries the
             // same visited set for the same reason.
-            Astra::FlatSet<Astra::Entity> visited;
+            //
+            // Lives on the cache, not on the stack, for the same reason
+            // needsWorld does: rebuilds are rare but they are not exceptional
+            // (every reparent is one), and a set that keeps its buckets between
+            // them costs one vector's worth of memory to make them allocation-
+            // free too.
+            Astra::FlatSet<Astra::Entity>& visited = c.visited;
+            visited.Clear();
             visited.Reserve(64);
             visited.Insert(root);
 
@@ -197,6 +251,10 @@ namespace Arcane
             ++c.rebuilds;
         }
 
+        // The linear pass. Returns true when at least one row wants a
+        // WorldTransform materialised, which the caller does between the two
+        // passes.
+        //
         // WorldTransform is DERIVED, never authored: an entity that reaches this
         // subtree with a Transform but no WorldTransform (a node Edit::CreateEntity
         // just created, a SceneRoot minted by SceneAsset::CreateEmpty, one loaded
@@ -205,43 +263,27 @@ namespace Arcane
         // RenderSubmissionSystem's view no matter what components get added to it
         // afterward.
         //
-        // This cannot be folded into Rebuild: gaining a Transform is a COMPONENT
+        // That check cannot live in Rebuild: gaining a Transform is a COMPONENT
         // change, so it moves no structure version and would be missed forever.
-        // It is still free in the steady state -- shadowValid[i] can only be 1
-        // once row i has composed into a real WorldTransform, and nothing ever
-        // removes one (it is structure-locked in the editor and authored
-        // nowhere), so a settled scene does zero component lookups here.
-        static void Materialise(Astra::Registry& reg, TransformOrder& c)
+        // And it deliberately does NOT skip rows this pass considers clean.
+        // An earlier draft keyed it on shadowValid -- "a row that has composed
+        // must already have a WorldTransform, because nothing removes one" --
+        // which bought a lookup per clean row by resting the guarantee on a
+        // CONVENTION (the editor's structure-lock) that a plugin does not share.
+        // An entity whose WorldTransform was removed behind our back and whose
+        // local then never moved again would have gone un-healed forever, where
+        // the retired walk re-added it the very next frame. The presence check
+        // is now unconditional, so the guarantee holds by construction: every
+        // spatial row in the subtree leaves this pass with a WorldTransform.
+        static bool Compose(Astra::Registry& reg, TransformOrder& c)
         {
             c.needsWorld.clear();
             const std::size_t n = c.order.size();
             for (std::size_t i = 0; i < n; ++i)
             {
-                if (c.shadowValid[i])
-                    continue;
                 const Astra::Entity e = c.order[i];
-                if (!reg.GetComponent<Transform>(e))
-                    continue;                       // non-spatial: nothing to derive
-                if (!reg.GetComponent<WorldTransform>(e))
-                    c.needsWorld.push_back(e);
-            }
-
-            // Added only AFTER the scan: AddComponent moves the entity to a
-            // different archetype, invalidating every component pointer handed
-            // out for OTHER entities. (The same hazard the old two-walk version
-            // deferred for, and the one Astra's traversals explicitly do not
-            // protect against.)
-            for (Astra::Entity e : c.needsWorld)
-                reg.AddComponent<WorldTransform>(e, WorldTransform{});
-        }
-
-        static void Compose(Astra::Registry& reg, TransformOrder& c)
-        {
-            const std::size_t n = c.order.size();
-            for (std::size_t i = 0; i < n; ++i)
-            {
                 const std::uint32_t p = c.parentIndex[i];
-                Transform* local = reg.GetComponent<Transform>(c.order[i]);
+                Transform* local = reg.GetComponent<Transform>(e);
                 if (!local)
                 {
                     // Non-spatial node (never had a Transform, or the Inspector
@@ -251,6 +293,19 @@ namespace Arcane
                     // holds that same value, so its children compose against
                     // exactly what they used to read off the component. It
                     // contributes no dirtiness, because its world did not move.
+                    c.shadowValid[i] = 0;
+                    c.dirty[i] = 0;
+                    continue;
+                }
+
+                WorldTransform* world = reg.GetComponent<WorldTransform>(e);
+                if (!world)
+                {
+                    // Report and skip. The row recomposes on the second pass
+                    // (shadowValid is cleared, so `moved` is true there), and
+                    // its descendants pick the change up from `dirty` on that
+                    // same pass because they are ordered after it.
+                    c.needsWorld.push_back(e);
                     c.shadowValid[i] = 0;
                     c.dirty[i] = 0;
                     continue;
@@ -266,18 +321,7 @@ namespace Arcane
                 if (!inherited && !moved)
                 {
                     c.dirty[i] = 0;
-                    continue;   // the point of the exercise: a clean row costs one lookup
-                }
-
-                WorldTransform* world = reg.GetComponent<WorldTransform>(c.order[i]);
-                if (!world)
-                {
-                    // Unreachable after Materialise (which guarantees Transform
-                    // implies WorldTransform); belt-and-braces so a failed add
-                    // degrades to "skipped", exactly as the old walk did.
-                    c.shadowValid[i] = 0;
-                    c.dirty[i] = 0;
-                    continue;
+                    continue;   // the point of the exercise: no matrix work at all
                 }
 
                 const glm::mat4 localMat = local->ToMatrix();
@@ -288,6 +332,7 @@ namespace Arcane
                 c.shadowValid[i] = 1;
                 c.dirty[i]       = 1;
             }
+            return !c.needsWorld.empty();
         }
 
         // Exact float comparison, on purpose. This is a "did anything change"

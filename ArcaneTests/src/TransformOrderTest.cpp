@@ -39,7 +39,10 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -78,10 +81,11 @@ namespace
     //
     // Restriction, stated rather than hidden: this reproduces Task 3 exactly
     // for a FULLY SPATIAL subtree (every node carries a Transform), which is
-    // what the cases below build. Task 3's handling of a Transform-less node in
-    // the middle of a chain (its stale WorldTransform, if any, becomes the
-    // child's parent matrix) is a separate contract, pinned by
-    // TransformPropagationTest.cpp, not restated here.
+    // what the cases in THIS section build. Task 3's handling of a
+    // Transform-less node mid-chain (its stale WorldTransform, if any, becomes
+    // the child's parent matrix) is not restated here -- it is covered instead
+    // by LegacyPropagate further down, which is the retired algorithm ITSELF
+    // rather than a paraphrase of it.
     void RecurseWorld(Astra::Registry& reg, Astra::Entity e,
                       const glm::mat4* parentWorld, WorldMap& out)
     {
@@ -179,6 +183,7 @@ namespace
         Astra::Entity fanParent{};
         Astra::Entity lateChild{};
         Astra::Entity detachedRoot{};        // NOT under the scene root
+        Astra::Entity detachedChild{};       // nor is this
     };
 
     AwkwardScene BuildAwkwardScene(Astra::Registry& reg)
@@ -226,9 +231,9 @@ namespace
         reg.SetParent(s.lateChild, chain[2]);    // into the MIDDLE of the deep chain
 
         // --- a second, disconnected root: must not appear in the order at all ---
-        s.detachedRoot = Spatial(reg, {100.0f, 100.0f, 100.0f});
-        Astra::Entity detachedChild = Spatial(reg, {1.0f, 1.0f, 1.0f});
-        reg.SetParent(detachedChild, s.detachedRoot);
+        s.detachedRoot  = Spatial(reg, {100.0f, 100.0f, 100.0f});
+        s.detachedChild = Spatial(reg, {1.0f, 1.0f, 1.0f});
+        reg.SetParent(s.detachedChild, s.detachedRoot);
 
         s.all.push_back(s.root);
         for (Astra::Entity e : chain) s.all.push_back(e);
@@ -301,6 +306,30 @@ TEST_CASE("the transform order is topologically valid over an awkward tree",
     // And parentIndex actually names the real parent, not just some earlier slot.
     for (std::size_t i = 1; i < order.order.size(); ++i)
         CHECK(reg.GetParent(order.order[i]) == order.order[order.parentIndex[i]]);
+
+    // "Not in the order" has to mean "not written", not merely "not listed".
+    // Both detached entities were created with an identity WorldTransform and
+    // are outside the scene root's subtree, so the pass must never touch them
+    // -- through value changes, and through a rebuild.
+    auto outsideUntouched = [&]
+    {
+        for (Astra::Entity e : {s.detachedRoot, s.detachedChild})
+        {
+            const Arcane::WorldTransform* w = reg.GetComponent<Arcane::WorldTransform>(e);
+            REQUIRE(w != nullptr);
+            INFO("entity " << e.GetID() << " outside the subtree was written: " << Describe(w->matrix));
+            CHECK(ExactlyEqual(w->matrix, glm::mat4(1.0f)));
+        }
+    };
+    outsideUntouched();
+
+    reg.GetComponent<Arcane::Transform>(s.fanParent)->position = glm::vec3(3.0f, 3.0f, 3.0f);
+    propagate(reg);
+    outsideUntouched();
+
+    reg.SetParent(s.lateChild, s.fanParent);   // force a rebuild
+    propagate(reg);
+    outsideUntouched();
 }
 
 // ============================================================================
@@ -362,8 +391,12 @@ TEST_CASE("the transform order is rebuilt on structure and not on values",
     SECTION("destroying an entity in the tree rebuilds")
     {
         reg.DestroyEntity(s.deepLeaf);
+        // The counter alone would pass on an order that rebuilt into garbage.
+        const WorldMap reference = ReferenceWorlds(reg, s.root);
         propagate(reg);
         CHECK(RebuildCount(reg) == base + 1);
+        CheckMatchesReference(reg, reference);
+        CHECK(reg.GetComponent<Arcane::WorldTransform>(s.deepLeaf) == nullptr);   // it is gone
     }
 
     SECTION("changing the scene root rebuilds")
@@ -610,4 +643,261 @@ TEST_CASE("a WorldTransform is materialised on demand", "[scene][transform-order
         CHECK(w->matrix[3].x == Catch::Approx(5.0f));
         CHECK(w->matrix[3].y == Catch::Approx(4.0f));
     }
+}
+
+// ============================================================================
+// The Transform-less node mid-chain -- a DIFFERENTIAL test against the retired
+// algorithm.
+//
+// This is the seam where Task 4 replaced a LIVE component read with a cached
+// one. The old walk read `GetComponent<WorldTransform>(GetParent(e))` every
+// frame; the new pass reads `world[parentIndex[i]]` -- its own array. For a
+// node carrying no Transform the two agree only because of two deliberate
+// decisions (a non-spatial row contributes NO dirtiness, and Rebuild seeds that
+// array from the live components), and neither was exercised by anything above:
+// the recursive oracle explicitly excludes the case, and
+// TransformPropagationTest.cpp never builds one.
+//
+// A trace is not a test, and a paraphrase of the old algorithm is not the old
+// algorithm. So this drives BOTH implementations over the same scene and the
+// same script of mutations and compares element-for-element -- including
+// whether an entity has a WorldTransform at all, which covers the
+// materialisation contract in the same breath.
+// ============================================================================
+namespace
+{
+    // The retired algorithm, VERBATIM from
+    // `git show b91fd602:ArcaneClient/src/Arcane/Scene/TransformSystems.hpp`
+    // (the commit immediately before Task 4), with only its comments trimmed
+    // and namespace qualifiers added. Nothing about its behaviour is restated,
+    // interpreted or simplified -- that is the entire point.
+    void LegacyPropagate(Astra::Registry& reg)
+    {
+        const Arcane::SceneRoot* sceneRoot = reg.GetResource<Arcane::SceneRoot>();
+        if (!sceneRoot) return;
+        const Astra::Entity root = sceneRoot->entity;
+
+        std::vector<Astra::Entity> needsWorld;
+        if (reg.GetComponent<Arcane::Transform>(root) &&
+            !reg.GetComponent<Arcane::WorldTransform>(root))
+            needsWorld.push_back(root);
+        reg.GetRelations(root).ForEachDescendant(
+            [&](Astra::Entity e, size_t /*depth*/)
+            {
+                if (reg.GetComponent<Arcane::Transform>(e) &&
+                    !reg.GetComponent<Arcane::WorldTransform>(e))
+                    needsWorld.push_back(e);
+            });
+        for (Astra::Entity e : needsWorld)
+            reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
+
+        if (auto* rootLocal = reg.GetComponent<Arcane::Transform>(root))
+            if (auto* rootWorld = reg.GetComponent<Arcane::WorldTransform>(root))
+                rootWorld->matrix = rootLocal->ToMatrix();
+
+        reg.GetRelations(root).ForEachDescendant(
+            [&](Astra::Entity e, size_t /*depth*/)
+            {
+                auto* local = reg.GetComponent<Arcane::Transform>(e);
+                auto* world = reg.GetComponent<Arcane::WorldTransform>(e);
+                if (!local || !world) return;   // skip non-spatial nodes
+
+                const Astra::Entity parent = reg.GetParent(e);
+                const Arcane::WorldTransform* parentWorld =
+                    reg.GetComponent<Arcane::WorldTransform>(parent);
+                const glm::mat4 parentMat = parentWorld ? parentWorld->matrix : glm::mat4(1.0f);
+                world->matrix = parentMat * local->ToMatrix();
+            });
+    }
+
+    void NewPropagate(Astra::Registry& reg)
+    {
+        Arcane::TransformPropagationSystem{}(reg);
+    }
+
+    // One step's observation: every tracked entity's world matrix, or nullopt
+    // where the entity has no WorldTransform at all. Indexed by position in a
+    // creation-ordered list, so two registries built by the same script line up.
+    using WorldShot = std::vector<std::optional<glm::mat4>>;
+
+    WorldShot Snapshot(Astra::Registry& reg, const std::vector<Astra::Entity>& ordered)
+    {
+        WorldShot shot;
+        shot.reserve(ordered.size());
+        for (Astra::Entity e : ordered)
+        {
+            const Arcane::WorldTransform* w = reg.GetComponent<Arcane::WorldTransform>(e);
+            shot.push_back(w ? std::optional<glm::mat4>(w->matrix) : std::nullopt);
+        }
+        return shot;
+    }
+
+    void CheckShotsEqual(const std::vector<WorldShot>& legacy, const std::vector<WorldShot>& fresh)
+    {
+        REQUIRE(legacy.size() == fresh.size());
+        for (std::size_t step = 0; step < legacy.size(); ++step)
+        {
+            REQUIRE(legacy[step].size() == fresh[step].size());
+            for (std::size_t i = 0; i < legacy[step].size(); ++i)
+            {
+                INFO("step " << step << ", entity slot " << i);
+                CHECK(legacy[step][i].has_value() == fresh[step][i].has_value());
+                if (legacy[step][i].has_value() && fresh[step][i].has_value())
+                {
+                    INFO("  retired " << Describe(*legacy[step][i])
+                         << "\n  task 4  " << Describe(*fresh[step][i]));
+                    CHECK(ExactlyEqual(*legacy[step][i], *fresh[step][i]));
+                }
+            }
+        }
+    }
+
+    // root -> a -> b -> c -> d. `b` is the node under test.
+    struct Chain
+    {
+        Astra::Entity root{}, a{}, b{}, c{}, d{};
+        std::vector<Astra::Entity> ordered;
+    };
+
+    Chain BuildChain(Astra::Registry& reg, bool bSpatial)
+    {
+        Chain k;
+        k.root = Spatial(reg, {10.0f, 0.0f, 0.0f});
+        k.a    = Spatial(reg, {1.0f, 0.0f, 0.0f}, AxisAngle({0.0f, 0.0f, 1.0f}, 0.4f),
+                         {2.0f, 1.0f, 1.0f});
+        k.b    = bSpatial ? Spatial(reg, {0.0f, 3.0f, 0.0f}, AxisAngle({0.0f, 1.0f, 0.0f}, 0.25f),
+                                    {1.0f, 1.5f, 1.0f})
+                          : reg.CreateEntity();     // no Transform, no WorldTransform
+        k.c    = Spatial(reg, {2.0f, 0.0f, 0.0f}, AxisAngle({1.0f, 0.0f, 0.0f}, -0.6f));
+        k.d    = Spatial(reg, {0.0f, 0.0f, 4.0f});
+        reg.SetParent(k.a, k.root);
+        reg.SetParent(k.b, k.a);
+        reg.SetParent(k.c, k.b);
+        reg.SetParent(k.d, k.c);
+        reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{k.root});
+        k.ordered = {k.root, k.a, k.b, k.c, k.d};
+        return k;
+    }
+
+    // `b` never carries a Transform at all: its children must compose against
+    // IDENTITY (it has no WorldTransform for the old walk to read), and moving
+    // an ancestor of `b` must not reach them.
+    template<class Propagate>
+    std::vector<WorldShot> RunNeverSpatial(Propagate propagate)
+    {
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg(components);
+        Arcane::RegisterSceneComponents(reg);
+        Chain k = BuildChain(reg, /*bSpatial*/ false);
+
+        std::vector<WorldShot> shots;
+        propagate(reg);                                    shots.push_back(Snapshot(reg, k.ordered));
+        reg.GetComponent<Arcane::Transform>(k.a)->position = glm::vec3(100.0f, 0.0f, 0.0f);
+        propagate(reg);                                    shots.push_back(Snapshot(reg, k.ordered));
+        reg.GetComponent<Arcane::Transform>(k.c)->position = glm::vec3(5.0f, 0.0f, 0.0f);
+        propagate(reg);                                    shots.push_back(Snapshot(reg, k.ordered));
+        return shots;
+    }
+
+    // `b` composes normally and THEN loses its Transform -- the case
+    // TransformOrder's Rebuild mirror seed exists for. Its WorldTransform stays
+    // (nothing removes one), frozen at its last composed value, and its children
+    // must go on composing against exactly that -- including ACROSS a rebuild,
+    // which is where an identity-seeded mirror would teleport them.
+    template<class Propagate>
+    std::vector<WorldShot> RunLosesTransform(Propagate propagate)
+    {
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg(components);
+        Arcane::RegisterSceneComponents(reg);
+        Chain k = BuildChain(reg, /*bSpatial*/ true);
+
+        std::vector<WorldShot> shots;
+        propagate(reg);                                    shots.push_back(Snapshot(reg, k.ordered));
+
+        REQUIRE(reg.RemoveComponent<Arcane::Transform>(k.b));
+        propagate(reg);                                    shots.push_back(Snapshot(reg, k.ordered));
+
+        reg.GetComponent<Arcane::Transform>(k.a)->position = glm::vec3(100.0f, 0.0f, 0.0f);
+        propagate(reg);                                    shots.push_back(Snapshot(reg, k.ordered));
+
+        reg.GetComponent<Arcane::Transform>(k.c)->position = glm::vec3(5.0f, 0.0f, 0.0f);
+        propagate(reg);                                    shots.push_back(Snapshot(reg, k.ordered));
+
+        // A STRUCTURAL change, so the flat order is rebuilt while `b` is
+        // Transform-less. THIS is the step that fails on an identity seed.
+        Astra::Entity late = Spatial(reg, {7.0f, 7.0f, 7.0f});
+        reg.SetParent(late, k.root);
+        k.ordered.push_back(late);
+        propagate(reg);                                    shots.push_back(Snapshot(reg, k.ordered));
+
+        // ...and it stays put on the settled frames afterward.
+        propagate(reg);                                    shots.push_back(Snapshot(reg, k.ordered));
+        return shots;
+    }
+}
+
+TEST_CASE("a Transform-less node mid-chain matches the retired walk exactly",
+          "[scene][transform-order]")
+{
+    SECTION("a node that never had a Transform")
+    {
+        CheckShotsEqual(RunNeverSpatial(LegacyPropagate), RunNeverSpatial(NewPropagate));
+    }
+
+    SECTION("a node that composed and then LOST its Transform")
+    {
+        CheckShotsEqual(RunLosesTransform(LegacyPropagate), RunLosesTransform(NewPropagate));
+    }
+}
+
+// ============================================================================
+// A WorldTransform removed behind the system's back.
+//
+// An earlier draft of this task skipped the presence check for any row it had
+// already composed, reasoning that nothing removes a WorldTransform -- true of
+// the EDITOR (it is IsStructureLocked) but a convention a plugin does not
+// share. An entity whose WorldTransform vanished and whose local then never
+// moved again would never have regained one, where the retired walk re-added it
+// the very next frame. The check is unconditional now, so this holds by
+// construction rather than by convention.
+// ============================================================================
+TEST_CASE("a WorldTransform removed behind the system's back is healed",
+          "[scene][transform-order]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+
+    Astra::Entity root = Spatial(reg, {10.0f, 0.0f, 0.0f});
+    Astra::Entity mid  = Spatial(reg, {1.0f, 0.0f, 0.0f});
+    Astra::Entity leaf = Spatial(reg, {2.0f, 0.0f, 0.0f});
+    reg.SetParent(leaf, mid);
+    reg.SetParent(mid, root);
+    reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+
+    Arcane::TransformPropagationSystem propagate;
+    propagate(reg);
+    REQUIRE(reg.GetComponent<Arcane::WorldTransform>(mid) != nullptr);
+
+    // Removing it is a COMPONENT change: no structure version moves, so no
+    // rebuild will paper over it. Nothing else in the scene changes either --
+    // every local stays exactly where it was, so nothing can mark `mid` dirty.
+    REQUIRE(reg.RemoveComponent<Arcane::WorldTransform>(mid));
+    const std::uint32_t rebuildsBefore = RebuildCount(reg);
+
+    propagate(reg);
+
+    CHECK(RebuildCount(reg) == rebuildsBefore);          // healed WITHOUT a rebuild
+    Arcane::WorldTransform* healed = reg.GetComponent<Arcane::WorldTransform>(mid);
+    REQUIRE(healed != nullptr);
+    CHECK(healed->matrix[3].x == Catch::Approx(11.0f));  // and correct, not identity
+
+    // The child must be right too: it was clean, and its parent's matrix went
+    // away and came back, so only a pass that re-dirties `mid` gets this right.
+    CHECK(reg.GetComponent<Arcane::WorldTransform>(leaf)->matrix[3].x == Catch::Approx(13.0f));
+
+    // One call is enough -- the heal does not cost a second frame.
+    const WorldMap reference = ReferenceWorlds(reg, root);
+    CheckMatchesReference(reg, reference);
 }
