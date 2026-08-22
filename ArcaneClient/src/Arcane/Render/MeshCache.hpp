@@ -90,9 +90,14 @@ namespace Arcane
         const std::unordered_map<Guid, MeshEntry>& Table() const;
 
         // The loaded .arcmesh this Guid resolved from, or null if `id` has
-        // never resolved successfully. Exists solely so Task 5's material
-        // chain can read the mesh's own default `material` Guid without a
-        // second file read.
+        // never resolved successfully. For a caller that needs the REST of
+        // the asset -- name, source, topology -- without a second file
+        // read. NOT what the material chain reads: the mesh's own default
+        // `material` Guid is published straight through `MeshEntry::
+        // material` (SceneResources.hpp, copied in by Request() below)
+        // precisely so MeshSubmissionSystem can read it off the MeshTable
+        // resource alone, never through this cache directly -- see the
+        // file-level comment above.
         const MeshAssetData* AssetFor(const Guid& id) const;
 
     private:
