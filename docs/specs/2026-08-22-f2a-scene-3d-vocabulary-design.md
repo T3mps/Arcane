@@ -10,6 +10,13 @@ scopes the arc that comes out of it.
 Predecessor: `docs/plans/2026-08-21-f1-transform-spine.md` (F1, landed
 `b86c74f6`).
 
+**Amended 2026-08-22** after the UE / Source 2 research pass —
+`docs/research/2026-08-22-mesh-asset-ue-source2-comparison.md`. That pass
+confirmed the sizing rule against both engines and changed two things: materials
+moved from the component to the asset (with a per-entity override) and `tint`
+was deleted. Read the research doc for the evidence; this document carries the
+result.
+
 ---
 
 ## Why F2 is three arcs
@@ -82,6 +89,12 @@ struct MeshAssetData {
 
     // SHAPE RATIO -- a family no scale can reach.
     float capsuleLengthRatio = 2.0f;   // total height / diameter; >= 1
+
+    // The mesh's DEFAULT material, overridable per entity (see MeshRenderer).
+    // Both reference engines put material assignment on the asset:
+    // UStaticMesh::StaticMaterials (StaticMesh.h:1095) and Source 2's
+    // m_materialGroups. Nil = white.
+    Guid material{};
 };
 ```
 
@@ -114,6 +127,16 @@ rule down once, on `SpriteRenderer` (`Scene/Components.hpp:157-161`):
 > "There is NO size field: an entity is sized by its Transform scale, matching
 > Unity/Unreal (neither puts a size on the sprite renderer), so one asset can be
 > shared by many entities at different scales."
+
+**Both reference engines confirm it for meshes too.** Neither stores a size on a
+mesh asset, and UE states the positive rule in code: `GetStreamingScale()`
+returns `GetComponentTransform().GetMaximumAxisScale()`
+(`StaticMeshComponent.h:684`) — size is read from the transform. UE's parametric
+generators *do* carry absolute sizes, but they are **tool-time** types that bake
+into a sizeless `UStaticMesh`; UE has two layers where F2a has one. That is
+precisely why `capsuleLengthRatio` stays a ratio rather than becoming UE's
+absolute `Radius` + `SegmentLength` pair: with no bake step, absolute sizes on a
+persisted asset reintroduce the two-spellings problem the rule exists to prevent.
 
 Two consequences, and the second is the one that matters:
 
@@ -158,13 +181,31 @@ and the field is as meaningless to it as `halfLen` is to a `Circle`. Validating
 the whole struct regardless of tag would refuse legal assets and is the flat
 struct's one real hazard.
 
+Thresholds are UE's, taken from `GeometryCore`'s generators
+(`SphereGenerator.h:200-201`, `CapsuleGenerator.h:265-267`):
+
 | Source | Validated | Rule |
 |---|---|---|
 | `Plane` | `subdivisions` | `>= 1` |
 | `Cube` | — | always valid |
-| `UvSphere` | `rings`, `segments` | `>= 3` |
+| `UvSphere` | `rings`, `segments` | `>= 3`, `>= 3` |
 | `Cylinder` | `segments` | `>= 3` |
-| `Capsule` | `rings`, `segments`, `capsuleLengthRatio` | `>= 3`, `>= 3`, `>= 1.0` |
+| `Capsule` | `rings`, `segments`, `capsuleLengthRatio` | `>= 2`, `>= 3`, `>= 1.0` |
+
+A capsule's cap-ring floor is **2**, not 3 — UE's `NumHemisphereArcSteps` floor,
+and it differs from the circle floor because an arc needs fewer steps than a
+closed loop.
+
+**UE clamps silently here; F2a refuses, and then goes one better.** UE's
+generators are tool-time transients feeding a bake, so a clamp is invisible and
+harmless. `.arcmesh` is a **persisted asset**: a silent clamp means the file says
+`segments = 1` while the mesh is 3, forever — the two-spellings defect again.
+
+So the reflected topology fields carry `Astra::Range` minimums, which the
+Inspector already honours through `RangeOfField` (`InspectorMeta.hpp:52`). That
+makes the invalid state **unauthorable at the widget**, and leaves refusal firing
+only on a hand-edited file. The user never meets the error in normal use, and the
+file never disagrees with the mesh.
 
 ### Bounds
 
@@ -213,24 +254,43 @@ work, once there is a pipeline surface to compile a variant into.
 
 ```cpp
 struct MeshRenderer {
-    Guid      mesh{};                        // .arcmesh; nil draws nothing
-    Guid      material{};                    // nil = white; see below
-    glm::vec4 tint{1.0f, 1.0f, 1.0f, 1.0f};  // multiplies the material baseColor
+    Guid mesh{};              // .arcmesh; nil draws nothing
+    Guid materialOverride{};  // nil = use the mesh asset's default
 };
 ```
 
-`tint` mirrors `SpriteRenderer::tint` and exists so one material asset serves
-many entities at different colours — without it, every distinctly-coloured cube
-needs its own `.arcmat`. It costs nothing on the GPU: `MeshInstance::baseColor`
-already carries the product.
+**Resolution is a three-step chain: `materialOverride` → the mesh asset's
+`material` → white.** This is `UMeshComponent::OverrideMaterials`
+(`MeshComponent.h:29-31`, "Per-Component material overrides") in miniature, and
+Source 2's `m_materialGroups` answers the same way — assignment on the model,
+selected per instance.
 
-**A nil `material` is not an asset.** It resolves to `baseColor = (1,1,1,1)`
-directly, with no lookup and no built-in Guid — so `baseColor` becomes `tint`
-alone and a mesh with no material assigned still draws. There is deliberately no
-"default material asset" file: one would have to live somewhere, be resolvable
-from every project, and survive a project that deletes it. The nil case is a
-branch, not a resource. Same shape as a nil `SpriteRenderer::material` falling
-back to the plain sprite pipeline.
+Scalar rather than an array because F2a's primitives are single-section. F2c's
+imported multi-section meshes grow the scalar into a slot array, which is
+**additive** — where putting the material on the component would have forced a
+later *move*, a component schema change plus a scene re-author.
+
+**There is no `tint`, and its absence is a decision.** Neither reference engine
+has a per-instance colour on a mesh component: UE offers only
+`bOverrideWireframeColor` (editor viz) and vertex painting; Source 2's model data
+carries nothing of the kind. Both express "the same mesh in a different colour"
+through *material instances* — and **Arcane already ships that**.
+`MaterialAssetData::parent` plus sparse overrides is `UMaterialInstance`, and it
+is kind-agnostic ("no snippet, no kind — both come from the base at the end of
+the parent chain", `MaterialAsset.hpp:5-9`), so a mesh material instance works
+today with no new machinery.
+
+A `tint` would also have broken this spec's own rule: a red cube would be
+expressible twice, as a red material or as a white material with a red tint —
+the same two-spellings defect the sizing rule rejects two sections earlier.
+
+**A nil material at the end of the chain is not an asset.** It resolves to
+`baseColor = (1,1,1,1)` directly, with no lookup and no built-in Guid, so a mesh
+with nothing assigned still draws. There is deliberately no "default material
+asset" file: one would have to live somewhere, be resolvable from every project,
+and survive a project that deletes it. The nil case is a branch, not a resource —
+same shape as a nil `SpriteRenderer::material` falling back to the plain sprite
+pipeline.
 
 ---
 
@@ -253,8 +313,8 @@ facade by design (`Scene/SceneResources.hpp:4`).
 - **`MeshMaterialCache`** — Guid → `{ glm::vec4 baseColor; }`.
 - **`MeshSubmissionSystem`** — sweeps `View<WorldTransform, MeshRenderer>` minus
   `Hidden`, filling a host-owned `std::vector<MeshInstance>`. `model` comes
-  straight from `WorldTransform::matrix`; `baseColor` is
-  `material.baseColor * tint`.
+  straight from `WorldTransform::matrix`; `baseColor` is the resolved material's,
+  after the `materialOverride` → mesh default → white chain.
 - **Task 9 host wiring** — `FrameDesc` gains the mesh scene and `depth`; both
   hosts populate it. Phase 4's plan already specifies this task step by step,
   including its structural test
@@ -366,8 +426,13 @@ Headless, in the existing gate:
 - `SceneRenderResolver` publishes the mesh table; cache hit reuses the same
   `MeshData` pointer; an unresolvable Guid fails once and memoizes.
 - `MeshSubmissionSystem` skips `Hidden`, skips a missing `WorldTransform`, skips
-  a nil mesh; `model` equals `WorldTransform::matrix`; `baseColor` equals
-  `material.baseColor * tint`.
+  a nil mesh; `model` equals `WorldTransform::matrix`.
+- The material chain resolves in all four states: override set; override nil with
+  a mesh default; both nil → white; override set to an *unresolvable* Guid (falls
+  through to the mesh default, warns once — it must not silently render white and
+  hide the broken reference).
+- `Astra::Range` minimums are present on every validated topology field, so the
+  widget cannot author a value `BuildMeshData` would refuse.
 - Perspective camera honours pose; degenerate basis falls back with a warning;
   the orthographic path is byte-identical.
 - Task 9's `FrameDesc` structural test (no mesh scene → Task 4's frame; with one
