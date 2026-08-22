@@ -150,7 +150,12 @@ TEST_CASE("mat3/mat4/quat fields round-trip through JSON", "[json][reflection]")
     Xform a;
     for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r) a.m3[c][r] = static_cast<float>(c * 3 + r + 1);
     for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) a.m4[c][r] = static_cast<float>(c * 4 + r + 1);
-    a.q = glm::quat(0.1f, 0.2f, 0.3f, 0.4f);   // (w, x, y, z)
+    // Task 3 (F1): the reader REFUSES a non-unit quaternion -- glm::mat4_cast
+    // would bake its norm into the basis as a scale -- so the round-trip probe
+    // has to be an actual rotation. Normalizing keeps four DISTINCT components,
+    // which is what the property needs: a tidy value like (1,0,0,0) would let a
+    // w/x slot mix-up pass unnoticed.
+    a.q = glm::normalize(glm::quat(0.1f, 0.2f, 0.3f, 0.4f));   // (w, x, y, z)
 
     nlohmann::json j;
     Arcane::ReflectionJsonWriter writer(j);
@@ -160,7 +165,7 @@ TEST_CASE("mat3/mat4/quat fields round-trip through JSON", "[json][reflection]")
     CHECK(j["m3"].size() == 9);
     CHECK(j["m4"].size() == 16);
     CHECK(j["q"].size() == 4);
-    CHECK(j["q"][0].get<float>() == Approx(0.2f));   // x, y, z, w order
+    CHECK(j["q"][0].get<float>() == Approx(a.q.x));   // x, y, z, w order
 
     Xform b;
     Arcane::ReflectionJsonReader reader(j);
@@ -170,10 +175,10 @@ TEST_CASE("mat3/mat4/quat fields round-trip through JSON", "[json][reflection]")
         CHECK(b.m3[c][r] == Approx(a.m3[c][r]));
     for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r)
         CHECK(b.m4[c][r] == Approx(a.m4[c][r]));
-    CHECK(b.q.x == Approx(0.2f));
-    CHECK(b.q.y == Approx(0.3f));
-    CHECK(b.q.z == Approx(0.4f));
-    CHECK(b.q.w == Approx(0.1f));
+    CHECK(b.q.x == Approx(a.q.x));
+    CHECK(b.q.y == Approx(a.q.y));
+    CHECK(b.q.z == Approx(a.q.z));
+    CHECK(b.q.w == Approx(a.q.w));
 }
 
 // E02-3: a field whose TYPE the bridge cannot represent (a container here) must

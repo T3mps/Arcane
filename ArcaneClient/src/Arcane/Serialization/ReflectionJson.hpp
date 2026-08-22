@@ -14,9 +14,27 @@
 // raw pointers, an unreflected non-math struct) is NOT quietly skipped -- the
 // visitor latches an "unsupported field type" error the caller must inspect via
 // HasError()/Error(). This keeps the exception-free engine from losing data
-// without a diagnostic. Wrong-typed JSON *data* for a supported field type is
-// still tolerated on read (the field keeps its default), matching the
-// hand-edited-file contract the scene loader relies on.
+// without a diagnostic.
+//
+// READ TOLERANCE -- the contract turns on ABSENT vs PRESENT-BUT-UNREADABLE, and
+// those are deliberately different answers (tightened by Task 3, F1):
+//   * a MISSING key leaves the field at its default. Unchanged, and it is the
+//     whole forward/back-compatibility story: a file written before a field
+//     existed, or after one was removed, still loads.
+//   * a key that IS PRESENT but that this bridge cannot read into the field --
+//     wrong JSON type, an array of the wrong ARITY, a non-object where a nested
+//     struct belongs, a non-unit quaternion -- LATCHES, exactly like an
+//     unsupported field type. That is not forward compatibility; it is data
+//     loss with the witness sitting right there in the file.
+// Before that split, a `"position": [x, y]` left over from the 2D Transform read
+// as though the key were ABSENT: every entity in the scene loaded at the origin,
+// HasError() stayed false, and nothing anywhere said so. Loading a stale file as
+// a silently-zeroed scene is worse than refusing it.
+//
+// Still tolerated on purpose, because it is a VOCABULARY question and not a
+// SHAPE one -- the same call the loader already makes for an unknown component
+// type name: an enum whose stored NAME no longer resolves keeps its default. The
+// node still has to BE a string.
 
 #include <Astra/Reflection/FieldVisitor.hpp>
 #include <Astra/Reflection/FieldInfo.hpp>
@@ -27,6 +45,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <Json.hpp>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -43,6 +62,15 @@ namespace Arcane
         inline uint64_t Mat3Hash() { static const uint64_t h = Astra::TypeID<glm::mat3>::Hash(); return h; }
         inline uint64_t Mat4Hash() { static const uint64_t h = Astra::TypeID<glm::mat4>::Hash(); return h; }
         inline uint64_t QuatHash() { static const uint64_t h = Astra::TypeID<glm::quat>::Hash(); return h; }
+
+        // The outcome of trying to read ONE field from ONE JSON node.
+        //   NotMine   -- this helper does not own the field's TYPE; try the next.
+        //   Ok        -- read and stored.
+        //   Malformed -- the helper owns this type, the node is PRESENT, and it
+        //                cannot be read into the field. The caller latches.
+        // The absent case never reaches these helpers at all: ReflectionJsonReader
+        // returns before calling them when Find() comes back null.
+        enum class ReadResult : std::uint8_t { NotMine, Ok, Malformed };
 
         inline bool IsScalarHash(uint64_t h)
         {
@@ -69,23 +97,23 @@ namespace Arcane
         }
 
         // Reads a scalar field from JSON without ever throwing on a malformed
-        // document. The return value means "this field is a known scalar type"
-        // (so the visitor stops here); a node of the wrong JSON type is skipped,
-        // leaving the field at its default -- nlohmann's get<T> would otherwise
-        // throw type_error through the exception-free engine on hand-edited files.
-        inline bool ReadScalar(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
+        // document -- nlohmann's get<T> would otherwise throw type_error through
+        // the exception-free engine on a hand-edited file. A node of the wrong
+        // JSON type is Malformed, not silently skipped: the key is present and
+        // the value it holds is being thrown away.
+        inline ReadResult ReadScalar(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
         {
             const uint64_t h = f.typeHash;
-            if (h == Astra::TypeID<bool>::Hash())        { if (in.is_boolean()) f.Set<bool>(inst,        in.get<bool>());        return true; }
-            if (h == Astra::TypeID<int>::Hash())         { if (in.is_number())  f.Set<int>(inst,         in.get<int>());         return true; }
-            if (h == Astra::TypeID<int32_t>::Hash())     { if (in.is_number())  f.Set<int32_t>(inst,     in.get<int32_t>());     return true; }
-            if (h == Astra::TypeID<uint32_t>::Hash())    { if (in.is_number())  f.Set<uint32_t>(inst,    in.get<uint32_t>());    return true; }
-            if (h == Astra::TypeID<int64_t>::Hash())     { if (in.is_number())  f.Set<int64_t>(inst,     in.get<int64_t>());     return true; }
-            if (h == Astra::TypeID<uint64_t>::Hash())    { if (in.is_number())  f.Set<uint64_t>(inst,    in.get<uint64_t>());    return true; }
-            if (h == Astra::TypeID<float>::Hash())       { if (in.is_number())  f.Set<float>(inst,       in.get<float>());       return true; }
-            if (h == Astra::TypeID<double>::Hash())      { if (in.is_number())  f.Set<double>(inst,      in.get<double>());      return true; }
-            if (h == Astra::TypeID<std::string>::Hash()) { if (in.is_string())  f.Set<std::string>(inst, in.get<std::string>()); return true; }
-            return false;
+            if (h == Astra::TypeID<bool>::Hash())        { if (!in.is_boolean()) return ReadResult::Malformed; f.Set<bool>(inst,        in.get<bool>());        return ReadResult::Ok; }
+            if (h == Astra::TypeID<int>::Hash())         { if (!in.is_number())  return ReadResult::Malformed; f.Set<int>(inst,         in.get<int>());         return ReadResult::Ok; }
+            if (h == Astra::TypeID<int32_t>::Hash())     { if (!in.is_number())  return ReadResult::Malformed; f.Set<int32_t>(inst,     in.get<int32_t>());     return ReadResult::Ok; }
+            if (h == Astra::TypeID<uint32_t>::Hash())    { if (!in.is_number())  return ReadResult::Malformed; f.Set<uint32_t>(inst,    in.get<uint32_t>());    return ReadResult::Ok; }
+            if (h == Astra::TypeID<int64_t>::Hash())     { if (!in.is_number())  return ReadResult::Malformed; f.Set<int64_t>(inst,     in.get<int64_t>());     return ReadResult::Ok; }
+            if (h == Astra::TypeID<uint64_t>::Hash())    { if (!in.is_number())  return ReadResult::Malformed; f.Set<uint64_t>(inst,    in.get<uint64_t>());    return ReadResult::Ok; }
+            if (h == Astra::TypeID<float>::Hash())       { if (!in.is_number())  return ReadResult::Malformed; f.Set<float>(inst,       in.get<float>());       return ReadResult::Ok; }
+            if (h == Astra::TypeID<double>::Hash())      { if (!in.is_number())  return ReadResult::Malformed; f.Set<double>(inst,      in.get<double>());      return ReadResult::Ok; }
+            if (h == Astra::TypeID<std::string>::Hash()) { if (!in.is_string())  return ReadResult::Malformed; f.Set<std::string>(inst, in.get<std::string>()); return ReadResult::Ok; }
+            return ReadResult::NotMine;
         }
 
         inline bool IsGlmVecHash(uint64_t h) { return h == Vec2Hash() || h == Vec3Hash() || h == Vec4Hash(); }
@@ -100,13 +128,11 @@ namespace Arcane
             return false;
         }
 
-        // True when the array element at [i] exists and is a number (guards the
-        // in[i].get<float>() reads below against short/wrong-typed arrays).
-        inline bool IsNumberAt(const nlohmann::json& in, std::size_t i)
-        {
-            return i < in.size() && in[i].is_number();
-        }
-
+        // An array of EXACTLY n numbers -- the one arity/shape test every vector,
+        // matrix and quaternion read below goes through, which is what makes
+        // "wrong arity" a single decision rather than a per-type judgement call.
+        // (The per-element IsNumberAt helper this replaced allowed a LONGER array
+        // through for vectors; exact arity is the stricter and correct rule.)
         inline bool AllNumbers(const nlohmann::json& in, std::size_t n)
         {
             if (!in.is_array() || in.size() != n) return false;
@@ -116,16 +142,17 @@ namespace Arcane
         }
 
         // Reads a glm vector field from a JSON array without throwing on a
-        // malformed document. Like ReadScalar, the return value means "this field
-        // is a known vector type"; a node that is not an array of enough numbers
-        // is skipped, leaving the field at its default.
-        inline bool ReadGlm(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
+        // malformed document. ARITY IS EXACT (AllNumbers checks in.size()): a
+        // two-element array in a vec3 slot is the stale-2D-scene case this
+        // guard exists for, and a four-element one in a vec3 slot is a format
+        // mismatch in the other direction. Both are Malformed, not "absent".
+        inline ReadResult ReadGlm(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
         {
             const uint64_t h = f.typeHash;
-            if (h == Vec2Hash()) { if (in.is_array() && IsNumberAt(in, 0) && IsNumberAt(in, 1))                                    f.Set<glm::vec2>(inst, glm::vec2(in[0].get<float>(), in[1].get<float>()));                                        return true; }
-            if (h == Vec3Hash()) { if (in.is_array() && IsNumberAt(in, 0) && IsNumberAt(in, 1) && IsNumberAt(in, 2))               f.Set<glm::vec3>(inst, glm::vec3(in[0].get<float>(), in[1].get<float>(), in[2].get<float>()));                     return true; }
-            if (h == Vec4Hash()) { if (in.is_array() && IsNumberAt(in, 0) && IsNumberAt(in, 1) && IsNumberAt(in, 2) && IsNumberAt(in, 3)) f.Set<glm::vec4>(inst, glm::vec4(in[0].get<float>(), in[1].get<float>(), in[2].get<float>(), in[3].get<float>())); return true; }
-            return false;
+            if (h == Vec2Hash()) { if (!AllNumbers(in, 2)) return ReadResult::Malformed; f.Set<glm::vec2>(inst, glm::vec2(in[0].get<float>(), in[1].get<float>()));                                        return ReadResult::Ok; }
+            if (h == Vec3Hash()) { if (!AllNumbers(in, 3)) return ReadResult::Malformed; f.Set<glm::vec3>(inst, glm::vec3(in[0].get<float>(), in[1].get<float>(), in[2].get<float>()));                     return ReadResult::Ok; }
+            if (h == Vec4Hash()) { if (!AllNumbers(in, 4)) return ReadResult::Malformed; f.Set<glm::vec4>(inst, glm::vec4(in[0].get<float>(), in[1].get<float>(), in[2].get<float>(), in[3].get<float>())); return ReadResult::Ok; }
+            return ReadResult::NotMine;
         }
 
         // Matrices serialize as a flat column-major array (mat3 -> 9, mat4 -> 16):
@@ -151,36 +178,43 @@ namespace Arcane
             return false;
         }
 
-        inline bool ReadMatrix(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
+        inline ReadResult ReadMatrix(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
         {
             const uint64_t h = f.typeHash;
             if (h == Mat3Hash())
             {
-                if (AllNumbers(in, 9))
-                {
-                    glm::mat3 m(1.0f);
-                    std::size_t i = 0;
-                    for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r) m[c][r] = in[i++].get<float>();
-                    f.Set<glm::mat3>(inst, m);
-                }
-                return true;
+                if (!AllNumbers(in, 9)) return ReadResult::Malformed;
+                glm::mat3 m(1.0f);
+                std::size_t i = 0;
+                for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r) m[c][r] = in[i++].get<float>();
+                f.Set<glm::mat3>(inst, m);
+                return ReadResult::Ok;
             }
             if (h == Mat4Hash())
             {
-                if (AllNumbers(in, 16))
-                {
-                    glm::mat4 m(1.0f);
-                    std::size_t i = 0;
-                    for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) m[c][r] = in[i++].get<float>();
-                    f.Set<glm::mat4>(inst, m);
-                }
-                return true;
+                if (!AllNumbers(in, 16)) return ReadResult::Malformed;
+                glm::mat4 m(1.0f);
+                std::size_t i = 0;
+                for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) m[c][r] = in[i++].get<float>();
+                f.Set<glm::mat4>(inst, m);
+                return ReadResult::Ok;
             }
-            return false;
+            return ReadResult::NotMine;
         }
 
         // Quaternions serialize as [x, y, z, w] (component order, not glm's memory
         // layout) so the JSON is layout-agnostic. Reconstruct via glm::quat(w,x,y,z).
+        //
+        // Deliberately NOT norm-guarded, unlike ReadQuat below. Writing verbatim
+        // means a grossly non-unit quaternion that some caller put in memory
+        // produces a file the loader then REFUSES, naming the field -- which is
+        // how the caller finds out. Normalizing here instead would silently
+        // rewrite an orientation the running scene did not have, and hide the
+        // bug in the only artifact that could have revealed it. Nothing in the
+        // engine can reach that state (RotationAboutZ, QuatFromEulerRadians and
+        // glm::angleAxis are all unit by construction), so this is a plugin-bug
+        // path, and save is best-effort anyway -- see SaveJson's own note on why
+        // it does not check HasError().
         inline bool WriteQuat(const Astra::FieldInfo& f, void* inst, nlohmann::json& out)
         {
             if (f.typeHash == QuatHash())
@@ -192,16 +226,54 @@ namespace Arcane
             return false;
         }
 
-        inline bool ReadQuat(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
+        // How far a stored quaternion's SQUARED norm may sit from 1 and still be
+        // treated as "a rotation that lost precision" rather than "something
+        // that is not a rotation". Squared so the test itself costs no sqrt.
+        //
+        // 0.05 accepts a norm within ~2.5% of unit. Decimal JSON at float
+        // precision lands ~1e-7 away; a human typing 0.71 where 0.70710678
+        // belongs lands ~0.8% away -- both are ordinary authoring and must pass.
+        // Being generous here is SAFE because everything inside the band is
+        // normalized before it is stored, so no scale can survive it; the band's
+        // only job is to catch values that read as an intent to scale (norm 2 is
+        // a 4x basis) or that cannot be normalized at all.
+        inline constexpr float kQuatNormTolerance2 = 0.05f;
+
+        // Quaternions read back from [x, y, z, w].
+        //
+        // NORM GUARD (Task 3, F1). glm::mat4_cast assumes a UNIT quaternion and
+        // does not normalize, so a stored `[0,0,0,2]` bakes a uniform 4x scale
+        // into Transform::ToMatrix's basis and the entity silently renders at
+        // four times its authored size. The retired `float rotation` could not
+        // express an invalid value at all, so this hazard arrived WITH the
+        // widening -- on exactly the hand-edited-file path this reader exists to
+        // survive.
+        //
+        // Guarded HERE, at the load boundary, and deliberately NOT inside
+        // Transform::ToMatrix(): ToMatrix runs once per entity per propagation
+        // pass and must not pay a sqrt re-checking an invariant that can only be
+        // broken by data entering the process.
+        //
+        // Near-unit normalizes SILENTLY -- warning would fire on ordinary
+        // authoring. Grossly non-unit latches, and a zero-length quaternion is
+        // caught by the same branch: it is the one value that cannot be
+        // normalized at all, and normalizing it anyway would hand every matrix
+        // downstream a NaN.
+        inline ReadResult ReadQuat(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
         {
-            if (f.typeHash == QuatHash())
-            {
-                if (AllNumbers(in, 4))
-                    f.Set<glm::quat>(inst, glm::quat(in[3].get<float>(), in[0].get<float>(),
-                                                     in[1].get<float>(), in[2].get<float>()));
-                return true;
-            }
-            return false;
+            if (f.typeHash != QuatHash())
+                return ReadResult::NotMine;
+            if (!AllNumbers(in, 4))
+                return ReadResult::Malformed;
+
+            const glm::quat q(in[3].get<float>(), in[0].get<float>(),
+                              in[1].get<float>(), in[2].get<float>());
+            const float len2 = q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z;
+            if (!std::isfinite(len2) || std::fabs(len2 - 1.0f) > kQuatNormTolerance2)
+                return ReadResult::Malformed;
+
+            f.Set<glm::quat>(inst, q / std::sqrt(len2));
+            return ReadResult::Ok;
         }
 
         // A field TYPE the bridge can represent: any scalar, glm vec/mat/quat, an
@@ -240,6 +312,18 @@ namespace Arcane
         inline std::string UnsupportedFieldMessage(const Astra::FieldInfo& f)
         {
             return "unsupported field type for JSON: field '" + std::string(f.name) + "'";
+        }
+
+        // The PRESENT-but-unreadable diagnostic. Worded distinctly from the
+        // unsupported-TYPE one above because the two imply different next
+        // actions: this one means the file has a value for the field in a shape
+        // the field cannot take (a stale scene, a hand-edit typo), which is a
+        // data problem the user can go fix; the other means the engine has no
+        // way to represent that field at all, which is a code problem.
+        inline std::string MalformedFieldMessage(const Astra::FieldInfo& f)
+        {
+            return "malformed JSON value for field '" + std::string(f.name) +
+                   "' (key present but not readable as this field's type)";
         }
     }
 
@@ -330,36 +414,61 @@ namespace Arcane
             }
 
             const nlohmann::json* node = Find(field);
-            if (!node) return;   // supported but missing -> keep default
+            if (!node) return;   // supported but ABSENT -> keep the default (forward/back compat)
 
-            if (Detail::ReadScalar(field, instance, *node) ||
-                Detail::ReadGlm(field, instance, *node)    ||
-                Detail::ReadMatrix(field, instance, *node) ||
-                Detail::ReadQuat(field, instance, *node))
+            // PRESENT from here down, so "cannot read it" is data loss, not
+            // compatibility. Each helper reports NotMine / Ok / Malformed; the
+            // chain stops at the first that owns the field's type.
+            using RR = Detail::ReadResult;
+            RR r = Detail::ReadScalar(field, instance, *node);
+            if (r == RR::NotMine) r = Detail::ReadGlm(field, instance, *node);
+            if (r == RR::NotMine) r = Detail::ReadMatrix(field, instance, *node);
+            if (r == RR::NotMine) r = Detail::ReadQuat(field, instance, *node);
+            if (r == RR::Malformed)
+            {
+                Fail(Detail::MalformedFieldMessage(field));
+                return;
+            }
+            if (r == RR::Ok)
                 return;
 
-            // Enum: read by name if the node is a string; silently skip otherwise.
-            // MUST return unconditionally -- a non-string node for an enum field must
-            // not fall through to the nested-struct branch (same GetMeta ambiguity).
+            // Enum: read by name. A non-string node is a SHAPE error and latches
+            // like any other; a string that no longer resolves to an enumerator
+            // is a VOCABULARY question and keeps the default, matching how the
+            // scene loader already treats an unknown component type name.
+            // MUST return unconditionally -- an enum field must never fall
+            // through to the nested-struct branch (same GetMeta ambiguity the
+            // writer documents).
             if (field.isEnum)
             {
-                if (node->is_string())
+                if (!node->is_string())
                 {
-                    const Astra::TypeMeta* em = Astra::GetMeta(field.typeHash);
-                    if (em)
-                        if (auto v = em->EnumFromString(node->get<std::string>()))
-                            Detail::WriteEnumRaw(field, instance, *v);
+                    Fail(Detail::MalformedFieldMessage(field));
+                    return;
                 }
+                const Astra::TypeMeta* em = Astra::GetMeta(field.typeHash);
+                if (em)
+                    if (auto v = em->EnumFromString(node->get<std::string>()))
+                        Detail::WriteEnumRaw(field, instance, *v);
                 return;   // terminal: never reach the nested-struct branch
             }
             if (const Astra::TypeMeta* nested = Astra::GetMeta(field.typeHash))
             {
+                // A nested reflected struct writes as a JSON OBJECT; anything
+                // else present under that key cannot be walked, and treating it
+                // as absent would default the whole sub-struct (e.g. silently
+                // nil an asset Guid) with no diagnostic.
+                if (!node->is_object())
+                {
+                    Fail(Detail::MalformedFieldMessage(field));
+                    return;
+                }
                 ReflectionJsonReader subReader(*node);
                 void* subInstance = static_cast<std::byte*>(instance) + field.offset;
                 for (const Astra::FieldInfo& nf : nested->fields)
                     if (nf.IsSerializable())
                         subReader.Visit(nf, subInstance);
-                if (subReader.HasError())   // propagate an unsupported sub-field up
+                if (subReader.HasError())   // propagate an unsupported/malformed sub-field up
                     Fail(subReader.Error());
             }
         }

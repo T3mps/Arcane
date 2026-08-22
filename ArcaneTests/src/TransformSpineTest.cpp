@@ -146,6 +146,45 @@ TEST_CASE("Transform: a Z-axis quaternion reproduces the retired 2D rotation mat
     }
 }
 
+TEST_CASE("Transform: RotationZ and RotationAboutZ are inverses on the planar branch",
+          "[scene][transform]")
+{
+    // The planar bridge had no test of its own, and FOUR seams depend on it for
+    // their SIGN convention -- the physics write-back and author reconcile,
+    // sprite interpolation, and the gizmo write-back. A flipped sign in BOTH
+    // directions would cancel out in a round trip, so RotationAboutZ is pinned
+    // against an INDEPENDENT construction (what the rotation does to +X) as
+    // well as against its inverse.
+    const float angles[] = { 0.0f, 0.3f, kPi * 0.5f, -1.25f, 2.5f };
+    for (float rot : angles)
+    {
+        const glm::quat q = Arcane::RotationAboutZ(rot);
+        const glm::vec3 turned = q * glm::vec3(1.0f, 0.0f, 0.0f);
+        CHECK(turned.x == Approx(std::cos(rot)).margin(1e-5));   // a sign flip fails here
+        CHECK(turned.y == Approx(std::sin(rot)).margin(1e-5));
+        CHECK(turned.z == Approx(0.0f).margin(1e-6));
+        CHECK(Arcane::RotationZ(q) == Approx(rot).margin(1e-5));
+    }
+
+    // RotationZ answers in (-pi, pi] -- it is an atan2. An authored angle
+    // OUTSIDE that range comes back WRAPPED, not preserved: 5 rad reads as
+    // 5 - 2pi. That is correct (they are the same orientation, and a quaternion
+    // cannot tell them apart at all), but it IS a real difference from the
+    // retired float rotation, which stored whatever winding it was handed.
+    // Anything that needs to count turns must not route through here.
+    const float wound = 5.0f;
+    CHECK(Arcane::RotationZ(Arcane::RotationAboutZ(wound))
+          == Approx(wound - 2.0f * kPi).margin(1e-5));
+    CHECK_FALSE(Arcane::RotationZ(Arcane::RotationAboutZ(wound))
+                == Approx(wound).margin(1e-3));
+
+    // The identity reads as EXACTLY zero, not a denormal: this angle goes
+    // straight to the batcher, whose rotation-0 fast path is an exact compare
+    // (Batcher2D::QuadCorners), so a 1e-18 here would silently cost every
+    // unrotated sprite its byte-identical path.
+    CHECK(Arcane::RotationZ(glm::quat(1.0f, 0.0f, 0.0f, 0.0f)) == 0.0f);
+}
+
 TEST_CASE("Transform: hierarchy composition is parent * local", "[scene][transform]")
 {
     // Parent: at (10, 0, 0), turned +90 degrees about +Z, scaled 2x uniformly.

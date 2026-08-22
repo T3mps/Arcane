@@ -217,9 +217,12 @@ namespace Arcane
     //     these are name-keyed reflected components that a plugin COMPILES
     //     ITSELF from this header set -- except that where v7 changed the
     //     component's identity, v16 changes its LAYOUT: Transform grows
-    //     24 -> 40 bytes with every field at a new offset, and WorldTransform
-    //     36 -> 64. That is the same hazard as the v8 SpriteRenderer re-shape
-    //     (:55-62), on the type that EVERY spatial entity carries.
+    //     20 -> 40 bytes with every field at a new offset -- vec2 + float + vec2
+    //     = 8 + 4 + 8, all align-4 and unpadded, becomes vec3 + quat + vec3 =
+    //     12 + 16 + 12 (glm's quat is packed_highp here, align 4, not the
+    //     16-byte-aligned SIMD flavour) -- and WorldTransform 36 -> 64
+    //     (mat3 -> mat4). That is the same hazard as the v8 SpriteRenderer
+    //     re-shape (:55-62), on the type EVERY spatial entity carries.
     //     The header-only systems a plugin instantiates moved with the types:
     //     a v15 copy of RenderSubmissionSystem reads a sprite's world
     //     translation from matrix[2], which in a mat4 is the Z BASIS AXIS, so

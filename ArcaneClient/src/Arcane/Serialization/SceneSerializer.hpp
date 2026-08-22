@@ -180,8 +180,10 @@ namespace Arcane::Scene
             if (desc->visitFields)
             {
                 ReflectionJsonReader reader(fields);
-                desc->visitFields(buf, reader);   // tolerant of missing/wrong-typed leaf DATA;
-                                                   // latches HasError() only on an unsupported field TYPE
+                desc->visitFields(buf, reader);   // tolerant of a MISSING key (keeps the default);
+                                                   // latches HasError() on an unsupported field TYPE
+                                                   // and on a key that IS present but unreadable
+                                                   // (wrong JSON type / arity) -- see ReflectionJson.hpp
                 fieldError = reader.HasError();
             }
             reg.AddComponentByID(e, desc->id, buf, desc->size);
@@ -193,9 +195,12 @@ namespace Arcane::Scene
 
     // Returns false (never throws) on a malformed document, a missing/mismatched
     // schema version, a structurally invalid entity list, or a component whose
-    // reflection reader latched an unsupported-field-type error (E02-3). Wrong-
-    // typed leaf DATA (as opposed to an unsupported field TYPE) is still tolerated
-    // by the guarded ReflectionJsonReader (left at defaults).
+    // reflection reader latched -- either an unsupported field TYPE (E02-3) or,
+    // since Task 3 (F1), a field key that is PRESENT but unreadable (wrong JSON
+    // type, wrong array arity, a non-unit quaternion). A MISSING key is still
+    // tolerated and leaves the field at its default; that is the forward/back-
+    // compatibility path and it is unchanged. See ReflectionJson.hpp's header
+    // for why the two cases had to stop being the same answer.
     inline bool LoadJson(Astra::Registry& reg, const nlohmann::json& doc)
     {
         try

@@ -31,6 +31,7 @@
 
 #include <Json.hpp>
 
+#include <catch2/catch_approx.hpp>   // the ReferenceProject pose assertion
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -38,6 +39,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -640,6 +642,7 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
     std::vector<std::string> names;
     Astra::Entity pulseBox{};
     bool foundPulseBox = false;
+    std::map<std::string, Astra::Entity> byName;
     for (Astra::Entity child : children)
     {
         const Arcane::Identity* info = runtime.Registry().GetComponent<Arcane::Identity>(child);
@@ -649,10 +652,50 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
             pulseBox = child;
             foundPulseBox = true;
         }
+        byName[info->name] = child;
         names.push_back(info->name);
     }
     std::sort(names.begin(), names.end());
     CHECK(names == std::vector<std::string>{"BoxA", "BoxB", "Ground", "PulseBox"});
+
+    // THE POSE ASSERTION (Task 3, F1). Everything above this line asserts
+    // NAMES and GUIDS, and that is exactly why the 2D->3D format change slipped
+    // past it: a stale scene still produced four correctly-named children with
+    // resolvable materials, while every Transform in the file silently read as
+    // absent and defaulted to the origin at unit scale. Nothing in the suite
+    // said so. These three assertions are what make the next format break
+    // observable instead of green -- one per field of Transform, so no single
+    // one of them can go on passing while its neighbour rots:
+    //
+    //   * Ground's SCALE, non-uniform and not 1, so a defaulted vec3 fails it.
+    //   * BoxA's POSITION, non-zero on both axes, so a defaulted vec3 fails it.
+    //   * BoxB's ROTATION, a real ~0.35 rad turn about +Z, so a defaulted
+    //     identity quaternion fails it -- and it is the only assertion in the
+    //     suite that reads an authored quaternion back out of a FILE, which is
+    //     the path the norm guard and the arity guard both live on.
+    {
+        REQUIRE(byName.count("Ground") == 1);
+        const Arcane::Transform* ground =
+            runtime.Registry().GetComponent<Arcane::Transform>(byName["Ground"]);
+        REQUIRE(ground != nullptr);
+        CHECK(ground->scale.x == Catch::Approx(10.0f));
+        CHECK(ground->scale.y == Catch::Approx(0.5f));
+        CHECK(ground->scale.z == Catch::Approx(1.0f));
+
+        REQUIRE(byName.count("BoxA") == 1);
+        const Arcane::Transform* boxA =
+            runtime.Registry().GetComponent<Arcane::Transform>(byName["BoxA"]);
+        REQUIRE(boxA != nullptr);
+        CHECK(boxA->position.x == Catch::Approx(-1.0f));
+        CHECK(boxA->position.y == Catch::Approx(-0.5f));
+        CHECK(boxA->position.z == Catch::Approx(0.0f));
+
+        REQUIRE(byName.count("BoxB") == 1);
+        const Arcane::Transform* boxB =
+            runtime.Registry().GetComponent<Arcane::Transform>(byName["BoxB"]);
+        REQUIRE(boxB != nullptr);
+        CHECK(Arcane::RotationZ(boxB->rotation) == Catch::Approx(0.35f).margin(1e-4));
+    }
 
     // ReferenceProject's scene is the engine's canonical render fixture, so
     // the two seams it carries are pinned here -- a sprite with a REGISTERED

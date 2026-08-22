@@ -30,7 +30,8 @@ namespace Arcane
     {
         // ---- PASS 1: sprites -------------------------------------------------
         // Same OBB derivation as the retired CPU sprite-OBB pick: the world
-        // matrix's translation column (matrix[2]) is the world-space PIVOT;
+        // matrix's translation column (matrix[3] -- it was matrix[2] until Task 3
+        // (F1) widened the matrix to a mat4) is the world-space PIVOT;
         // the local-x column's angle is the world rotation; the column
         // magnitudes are the baked Transform.scale (Transform::ToMatrix
         // composes rotation*scale into columns 0/1), so half-extents = the

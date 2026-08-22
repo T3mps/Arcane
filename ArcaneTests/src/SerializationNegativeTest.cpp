@@ -27,11 +27,13 @@
 #include <Astra/Serialization/SerializationError.hpp>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <Json.hpp>
 
 #include <spdlog/sinks/callback_sink.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -364,7 +366,13 @@ TEST_CASE("Scene LoadBinary rejects a corrupt file with an error result", "[seri
 // Reflection reader (wrong-typed leaf data is tolerated, never thrown)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("ReflectionJson reader tolerates wrong-typed leaf data without throwing", "[serialization][negative][reflection]")
+// Task 3 (F1) split this contract in two. The NOTHROW half is unchanged and is
+// the load-bearing one -- nlohmann's get<T> throws type_error on a hand-edited
+// file and this engine is exception-free. What changed is the verdict: a key
+// that is PRESENT but unreadable now LATCHES instead of reading as absent.
+// The case that motivated it is in the report -- a `"position": [x, y]` left
+// over from the 2D Transform silently zeroed every entity in a scene.
+TEST_CASE("ReflectionJson reader latches wrong-typed leaf data without throwing", "[serialization][negative][reflection]")
 {
     const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::Transform>();
     REQUIRE(meta != nullptr);
@@ -375,7 +383,7 @@ TEST_CASE("ReflectionJson reader tolerates wrong-typed leaf data without throwin
 
     Arcane::Transform lt;
     lt.position = glm::vec3(9.0f, 9.0f, 0.0f);
-    lt.rotation = Arcane::RotationAboutZ(1.0f);   // radians about +Z; inside (-pi, pi] so RotationZ round-trips it
+    lt.rotation = Arcane::RotationAboutZ(1.0f);
 
     Arcane::ReflectionJsonReader reader(j);
     CHECK_NOTHROW([&]
@@ -385,9 +393,90 @@ TEST_CASE("ReflectionJson reader tolerates wrong-typed leaf data without throwin
                 reader.Visit(f, &lt);
     }());
 
-    // Wrong DATA for a supported field TYPE is not an "unsupported type" error;
-    // the guarded reader leaves the field at its prior value.
-    CHECK_FALSE(reader.HasError());
+    // Present-but-unreadable is data loss with the witness in the file: latch,
+    // and name the field so the diagnostic points at it.
+    CHECK(reader.HasError());
+    CHECK(reader.Error().find("position") != std::string::npos);
+    // The field itself is still left at its prior value -- the reader never
+    // half-writes what it refused to read.
     CHECK(lt.position.x == Approx(9.0f));
     CHECK(Arcane::RotationZ(lt.rotation) == Approx(1.0f).margin(1e-5));
+}
+
+// The other half of the same contract, and the one that must NOT change: a
+// MISSING key is forward/back compatibility, not data loss.
+TEST_CASE("ReflectionJson reader leaves a MISSING key at its default without latching", "[serialization][negative][reflection]")
+{
+    const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::Transform>();
+    REQUIRE(meta != nullptr);
+
+    nlohmann::json j;
+    j["position"] = { 1.0, 2.0, 3.0 };   // present and well-formed; rotation/scale absent
+
+    Arcane::Transform lt;
+    lt.scale = glm::vec3(7.0f);
+
+    Arcane::ReflectionJsonReader reader(j);
+    for (const Astra::FieldInfo& f : meta->fields)
+        if (f.IsSerializable())
+            reader.Visit(f, &lt);
+
+    CHECK_FALSE(reader.HasError());
+    CHECK(lt.position.z == Approx(3.0f));
+    CHECK(lt.scale.x == Approx(7.0f));   // absent -> untouched
+}
+
+// The quaternion NORM guard (Task 3, F1). glm::mat4_cast assumes a unit
+// quaternion and does not normalize, so a stored norm of 2 bakes a uniform 4x
+// scale into Transform::ToMatrix's basis: the entity renders at four times its
+// authored size with nothing anywhere saying so. The retired float rotation
+// could not express an invalid value at all -- this hazard arrived WITH the
+// widening, on the hand-edited-file path.
+TEST_CASE("ReflectionJson reader guards a non-unit quaternion", "[serialization][negative][reflection]")
+{
+    const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::Transform>();
+    REQUIRE(meta != nullptr);
+
+    const auto readRotation = [&meta](const nlohmann::json& node, Arcane::Transform& out)
+    {
+        nlohmann::json j;
+        j["rotation"] = node;
+        Arcane::ReflectionJsonReader reader(j);
+        for (const Astra::FieldInfo& f : meta->fields)
+            if (f.IsSerializable())
+                reader.Visit(f, &out);
+        return reader.HasError();
+    };
+
+    SECTION("a grossly non-unit quaternion latches instead of baking a scale")
+    {
+        Arcane::Transform lt;
+        // [x, y, z, w] = a norm-2 identity rotation. mat4_cast would produce a
+        // basis with every column 4x too long.
+        CHECK(readRotation(nlohmann::json{ 0.0, 0.0, 0.0, 2.0 }, lt));
+        // Refused, not half-applied: the basis is still unit-length.
+        const glm::mat4 m = lt.ToMatrix();
+        CHECK(glm::length(glm::vec3(m[0])) == Approx(1.0f));
+    }
+
+    SECTION("a zero-length quaternion latches rather than producing NaN")
+    {
+        Arcane::Transform lt;
+        CHECK(readRotation(nlohmann::json{ 0.0, 0.0, 0.0, 0.0 }, lt));
+        const glm::mat4 m = lt.ToMatrix();
+        CHECK(std::isfinite(m[0][0]));   // never normalized by zero
+        CHECK(glm::length(glm::vec3(m[0])) == Approx(1.0f));
+    }
+
+    SECTION("a near-unit quaternion is normalized silently, not refused")
+    {
+        // Two-decimal hand authoring of a 90-degree turn about +Z: norm is off
+        // by ~0.4%, which is ordinary and must load. Being generous is safe
+        // BECAUSE the reader normalizes what it accepts.
+        Arcane::Transform lt;
+        CHECK_FALSE(readRotation(nlohmann::json{ 0.0, 0.0, 0.71, 0.71 }, lt));
+        CHECK(Arcane::RotationZ(lt.rotation) == Approx(1.5707963f).margin(1e-3));
+        const glm::mat4 m = lt.ToMatrix();
+        CHECK(glm::length(glm::vec3(m[0])) == Approx(1.0f).margin(1e-5));   // no scale baked in
+    }
 }

@@ -143,15 +143,37 @@ TEST_CASE("scene JSON loader rejects malformed input without throwing", "[json][
         CHECK_FALSE(result);
     }
 
-    SECTION("wrong-typed leaf fields and parent are tolerated, not thrown")
+    SECTION("a wrong-typed COMPONENT FIELD is refused, not silently defaulted")
     {
-        // position should be a [x,y] array and parent an int; here both are the
-        // wrong JSON type. The guarded readers skip them (leaving defaults) rather
-        // than throwing, so a structurally valid entry still loads successfully.
+        // Task 3 (F1) inverted this case's verdict, deliberately. `position`
+        // should be an [x,y,z] array; a string is a value the file HAS and that
+        // the load would throw away. Silently defaulting it is exactly how a
+        // stale 2D scene loaded with every entity at the origin and nothing
+        // anywhere saying so. Still no throw -- that half is untouched.
         auto reg = FreshReg();
         const std::string ltName(Astra::GetMeta<Arcane::Transform>()->typeName);
         nlohmann::json entry;
         entry["components"][ltName]["position"] = "oops";
+        nlohmann::json doc;
+        doc["version"] = Arcane::Scene::kSceneJsonVersion;
+        doc["entities"] = nlohmann::json::array({ entry });
+
+        bool result = true;
+        CHECK_NOTHROW(result = Arcane::Scene::LoadJson(*reg, doc));
+        CHECK_FALSE(result);
+    }
+
+    SECTION("a wrong-typed PARENT is still tolerated, not thrown")
+    {
+        // The parent guard lives in SceneSerializer's own entity walk, NOT in
+        // the reflection reader, and its tolerance is UNCHANGED: a non-integer
+        // parent means "no parent" and a structurally valid entry still loads.
+        // Its own case now, so the field-level tightening above cannot be
+        // mistaken for a change to this one.
+        auto reg = FreshReg();
+        const std::string ltName(Astra::GetMeta<Arcane::Transform>()->typeName);
+        nlohmann::json entry;
+        entry["components"][ltName]["position"] = { 4.0, 5.0, 6.0 };
         entry["parent"] = "root";
         nlohmann::json doc;
         doc["version"] = Arcane::Scene::kSceneJsonVersion;
@@ -161,14 +183,14 @@ TEST_CASE("scene JSON loader rejects malformed input without throwing", "[json][
         CHECK_NOTHROW(result = Arcane::Scene::LoadJson(*reg, doc));
         CHECK(result);
 
-        // The corrupt position fell back to the default (0,0), no crash.
         int count = 0;
         auto view = reg->CreateView<Arcane::Transform>();
-        view.ForEach([&](Astra::Entity, Arcane::Transform& lt)
+        view.ForEach([&](Astra::Entity e, Arcane::Transform& lt)
         {
             ++count;
-            CHECK(lt.position.x == Approx(0.0f));
-            CHECK(lt.position.y == Approx(0.0f));
+            CHECK(lt.position.x == Approx(4.0f));   // the well-formed field still loaded
+            CHECK(lt.position.z == Approx(6.0f));
+            CHECK_FALSE(reg->HasParent(e));         // the malformed parent became "no parent"
         });
         CHECK(count == 1);
     }
