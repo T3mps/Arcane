@@ -5,6 +5,8 @@
 #include <Arcane/Project/AssetId.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
+#include <Arcane/Render/MeshCache.hpp>
+#include <Arcane/Render/MeshMaterialCache.hpp>
 #include <Arcane/Render/PostChainCache.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/SpriteCache.hpp>
@@ -26,6 +28,12 @@ namespace Arcane
         std::unique_ptr<SpriteCache>         sprites;
         std::unique_ptr<SpriteMaterialCache> materials;
         std::unique_ptr<PostChainCache>      post;
+        // F2a (Task 6) siblings, one dimension up. Neither compiles anything
+        // (see this header's WHAT IT OWNS block), so neither needs a
+        // ShaderCompiler/backend/batcher wired into its own Services --
+        // `resolveAsset` is the only thing they share with the three above.
+        std::unique_ptr<MeshCache>         meshes;
+        std::unique_ptr<MeshMaterialCache> meshMaterials;
 
         GlobalParams globals{};
 
@@ -100,6 +108,18 @@ namespace Arcane
         postServices.backend      = m_impl->services.backend;
         postServices.resolveAsset = resolveAsset;
         m_impl->post = std::make_unique<PostChainCache>(std::move(postServices));
+
+        // F2a (Task 6) siblings: `resolveAsset` only -- neither cache builds
+        // a compiled artifact, so there is no compiler/sources/backend/assets
+        // field on either Services struct to fill in (MeshCache.hpp,
+        // MeshMaterialCache.hpp).
+        MeshCache::Services meshServices;
+        meshServices.resolveAsset = resolveAsset;
+        m_impl->meshes = std::make_unique<MeshCache>(std::move(meshServices));
+
+        MeshMaterialCache::Services meshMaterialServices;
+        meshMaterialServices.resolveAsset = resolveAsset;
+        m_impl->meshMaterials = std::make_unique<MeshMaterialCache>(std::move(meshMaterialServices));
     }
 
     SceneRenderResolver::~SceneRenderResolver()
@@ -115,6 +135,11 @@ namespace Arcane
         {
             m_impl->services.runtime->SetSpriteTable(nullptr);
             m_impl->services.runtime->SetSpriteMaterials(nullptr);
+            // F2a (Task 6) siblings: the SAME dangling-pointer hazard, one
+            // dimension up (MeshTable::meshes / MeshMaterialTable::materials
+            // are non-owning too -- SceneResources.hpp).
+            m_impl->services.runtime->SetMeshTable(nullptr);
+            m_impl->services.runtime->SetMeshMaterials(nullptr);
         }
         delete m_impl;
     }
@@ -188,6 +213,14 @@ namespace Arcane
     {
         m_impl->materials->Invalidate(id);
         m_impl->post->Invalidate(id);
+        // Whole-cache, not Invalidate(id) -- see this method's own header
+        // comment for why a targeted drop cannot be correct here (no reverse
+        // parent -> child index, so a base's instances are not identifiable
+        // from `id` alone). The stale mesh GEOMETRY cache (MeshCache) is
+        // untouched: this hook is a MATERIAL (.arcmat) invalidation, and a
+        // mesh's own default material is only a Guid riding inside its
+        // MeshEntry, not something re-saving a .arcmat could ever change.
+        m_impl->meshMaterials->Clear();
     }
 
     void SceneRenderResolver::Clear()
@@ -195,6 +228,12 @@ namespace Arcane
         m_impl->sprites->Clear();
         m_impl->materials->Clear();
         m_impl->post->Clear();
+        // F2a (Task 6) siblings: same project-switch contract (this method's
+        // own header comment) -- a Guid resolves through the CURRENT
+        // project's registry, so these two forget everything right alongside
+        // the three above.
+        m_impl->meshes->Clear();
+        m_impl->meshMaterials->Clear();
         m_impl->postId       = Guid{};
         m_impl->postInstance = nullptr;
         m_impl->postDesc     = nullptr;
@@ -272,6 +311,57 @@ namespace Arcane
                      im.sprites->Table().size(), im.materials->Table().size());
         }
 
+        // (1b) F2a (Task 6): ONE CreateView<MeshRenderer> walk, mirroring (1)
+        // above one dimension up -- a SEPARATE view, not folded into (1),
+        // because MeshRenderer and SpriteRenderer are different component
+        // types with no shared entity requirement.
+        //
+        // UNGATED on the compiler, unlike the sprite-material half of (1):
+        // neither mesh cache compiles anything (this header's WHAT IT OWNS
+        // block; MeshMaterialCache.hpp:9-21), so there is no async compile
+        // step whose readiness this sweep needs to wait on -- the same
+        // reason the sprite GEOMETRY half of (1) is not gated either. No
+        // batcher check either, for the same reason: nothing here registers
+        // a pipeline with one.
+        //
+        // ORDERING IS LOAD-BEARING: mesh first, then materials, WITHIN THE
+        // SAME entity and the SAME Refresh call -- never two independent
+        // views. A MeshRenderer's own default material (MeshEntry::material)
+        // is only knowable AFTER MeshCache::Request resolves the mesh (it
+        // arrives copied off the loaded .arcmesh, MeshCache.cpp), so
+        // requesting it from a stale prior-frame table read (or not at all
+        // this frame) would leave a newly-referenced mesh's default material
+        // one frame late every time -- exactly the kind of bug that is
+        // miserable to find at a desk.
+        //
+        // No census log for this sweep (unlike (1)'s ARC_INFO block above):
+        // that instrument is scoped to the SpriteRenderer path it was built
+        // to debug, and bolting a parallel counter/log pair on here without
+        // a concrete "nothing draws" report to chase would be exactly the
+        // kind of unrequested widening this task's dispatch warns against.
+        reg.CreateView<MeshRenderer>().ForEach(
+            [&](Astra::Entity, MeshRenderer& mr)
+        {
+            if (!mr.mesh.IsValid())
+                return;
+            im.meshes->Request(mr.mesh);
+
+            // Look the JUST-RESOLVED (or already-known, or freshly-failed)
+            // entry up rather than trusting `mr.mesh` resolved: a broken
+            // .arcmesh Guid leaves no entry at all (MeshCache's own FAILURE
+            // DISCIPLINE), and there is no default material to chase for a
+            // mesh that itself never resolved.
+            const auto& meshTable = im.meshes->Table();
+            const auto it = meshTable.find(mr.mesh);
+            if (it == meshTable.end())
+                return;
+
+            if (mr.materialOverride.IsValid())
+                im.meshMaterials->Request(mr.materialOverride);
+            if (it->second.material.IsValid())
+                im.meshMaterials->Request(it->second.material);
+        });
+
         // (2) The scene's post assignment: FIRST entity with a valid material
         // wins (one scene, one chain -- per-camera stacks are a non-goal), and
         // more than one warns once.
@@ -332,5 +422,8 @@ namespace Arcane
         // fresh registry, which drops resources with it).
         im.services.runtime->SetSpriteTable(&im.sprites->Table());
         im.services.runtime->SetSpriteMaterials(&im.materials->Table());
+        // F2a (Task 6) siblings -- same every-frame reasoning.
+        im.services.runtime->SetMeshTable(&im.meshes->Table());
+        im.services.runtime->SetMeshMaterials(&im.meshMaterials->Table());
     }
 }

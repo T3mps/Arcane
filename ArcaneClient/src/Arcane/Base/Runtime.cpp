@@ -299,6 +299,18 @@ namespace Arcane
         m_impl->registry->SetResource<SpriteTable>(SpriteTable{sprites});
     }
 
+    void Runtime::SetMeshTable(const std::unordered_map<Guid, MeshEntry>* meshes)
+    {
+        // F2a (Task 6) sibling of SetSpriteTable -- same rule, same reason.
+        m_impl->registry->SetResource<MeshTable>(MeshTable{meshes});
+    }
+
+    void Runtime::SetMeshMaterials(const std::unordered_map<Guid, ResolvedMeshMaterial>* materials)
+    {
+        // F2a (Task 6) sibling of SetSpriteMaterials -- same rule, same reason.
+        m_impl->registry->SetResource<MeshMaterialTable>(MeshMaterialTable{materials});
+    }
+
     Astra::Result<std::vector<std::byte>, Astra::SerializationError> Runtime::SnapshotRegistry() const
     {
         // A real Save failure must be named at its source: an empty-but-"ok"

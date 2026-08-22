@@ -33,7 +33,9 @@ namespace Arcane
 {
     class Assets;
     struct ITaskExecutor;
-    struct SpriteEntry;   // Scene/SceneResources.hpp -- only named here (pointer-to-map param)
+    struct SpriteEntry;            // Scene/SceneResources.hpp -- only named here (pointer-to-map param)
+    struct MeshEntry;               // Scene/SceneResources.hpp -- SpriteEntry's F2a (3D) sibling
+    struct ResolvedMeshMaterial;    // Scene/SceneResources.hpp -- mesh-material constants
     class Batcher2D;
     class Project;
     class Config;
@@ -165,6 +167,17 @@ namespace Arcane
         // as SetSpriteMaterials above: null clears the table, and every sprite
         // falls back to the untextured 1x1 m quad.
         void SetSpriteTable(const std::unordered_map<Guid, SpriteEntry>* sprites);
+
+        // F2a (Task 6) siblings of the two methods above, ONE dimension up:
+        // .arcmesh Guid -> owned CPU geometry + bounds (MeshTable), and
+        // "mesh"-kind .arcmat Guid -> constants-only baseColor
+        // (MeshMaterialTable). Same module rule (SetSpriteTable's own
+        // comment) and null semantics: null clears the table, and every
+        // MeshRenderer draws nothing (there is no untextured-quad-shaped
+        // fallback for a mesh -- see MeshTable's own comment,
+        // Scene/SceneResources.hpp).
+        void SetMeshTable(const std::unordered_map<Guid, MeshEntry>* meshes);
+        void SetMeshMaterials(const std::unordered_map<Guid, ResolvedMeshMaterial>* materials);
 
         // NO RENDER-RESOURCES BRIDGE LIVES HERE. A plugin is handed no
         // graphics device and no shader library, so it builds no engine

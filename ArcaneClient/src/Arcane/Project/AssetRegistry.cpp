@@ -270,6 +270,17 @@ namespace Arcane
         // embeds a top-level "id" (SpriteAsset.cpp:14), so it rides the same
         // ResolveNativeId path rather than a sidecar.
         //
+        // .arcmesh (F2a, Task 4) is native for the identical reason:
+        // SaveMeshAsset embeds a top-level "id" (MeshAsset.cpp: `doc["id"] =
+        // data.id.ToString()`), so it is a plain ResolveNativeId JSON asset,
+        // never an imported binary needing a .meta sidecar. Missing from
+        // this list, a project's own MeshCache resolveAsset lambda
+        // (Host/SceneRenderResolver.cpp) can never find a Guid a project
+        // just registered -- RegisterAsset would return nullopt for every
+        // .arcmesh file, silently, since AddFile falls through to the
+        // "not an asset we track" branch below rather than warning about a
+        // format it does not recognise.
+        //
         // .arcdiag (GPU crash diagnostics arc, Task 9) carries an embedded
         // guid too, so it is "native" in the same guid-not-sidecar sense --
         // but it is its OWN branch below, never folded into the
@@ -279,7 +290,8 @@ namespace Arcane
         // conflating the two would be wrong, not just redundant.
         Guid id;
         bool idWriteFailed = false;
-        if (ext == ".json" || ext == ".arcmat" || ext == ".arcscene" || ext == ".arcsprite")
+        if (ext == ".json" || ext == ".arcmat" || ext == ".arcscene" || ext == ".arcsprite" ||
+            ext == ".arcmesh")
             id = ResolveNativeId(file, &idWriteFailed);
         else if (ext == ".arcdiag")
             id = ResolveDiagId(file);   // F-7 CRITICAL: never ResolveNativeId -- see above

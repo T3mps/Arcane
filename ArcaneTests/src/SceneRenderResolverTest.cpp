@@ -14,12 +14,23 @@
 //       reads (SpriteTable::Resolve), not through the cache's own Table(),
 //       because "the cache resolved it" was never the broken half.
 //
+//   [3] SceneRenderResolver drives the F2a mesh caches (Task 6) -- same shape
+//       as [2], one dimension up: MeshTable/MeshMaterialTable publication, the
+//       mesh-first-then-material sweep ordering (a MeshRenderer's own default
+//       material is only knowable AFTER MeshCache::Request resolves the mesh),
+//       Clear() forgetting both on a project switch, and InvalidateMaterial's
+//       full-drop rule for the mesh-material cache (a re-saved BASE material
+//       must not leave an INSTANCE of it stranded at its pre-edit colour).
+//
 // Registry-touching tests bind to Arcane::Test::SharedTypeContext() -- never a
 // bare Arcane::Runtime, which would steal Arcane.dll's TypeContext slot.
 
 #include <Arcane/Assets/Assets.hpp>          // Arcane::Assets (the EvictingAssets fake), PixelData
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
+#include <Arcane/Material/MaterialAsset.hpp>   // MaterialAssetData -- mesh-material fixtures ([3] below)
+#include <Arcane/Material/MaterialTypes.hpp>   // MatParamValue::MakeColor
+#include <Arcane/Mesh/MeshAsset.hpp>            // MeshAssetData/SaveMeshAsset -- mesh fixtures
 #include <Arcane/Project/AssetId.hpp>       // AssetId::FromGuid -- driving the fake's eviction by hand
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/SpriteCache.hpp>
@@ -78,6 +89,58 @@ namespace
         data.texture = texture;
         data.ppu     = ppu;
         REQUIRE(Arcane::SaveSpriteAsset(file, data));
+        return data.id;
+    }
+
+    // A resolvable .arcmesh -- Cube reads no topology fields, so it is valid
+    // under every parameter combination (MeshSubmissionTest.cpp's own
+    // WriteCubeMesh, mirrored here). `material` rides along as the mesh
+    // asset's own default material Guid, exactly what MeshEntry::material
+    // copies at MeshCache::Request time.
+    Arcane::Guid WriteCubeMesh(const fs::path& file, const Arcane::Guid& material)
+    {
+        Arcane::MeshAssetData data;
+        data.id       = Arcane::Guid::Generate();
+        data.name     = "probe-cube";
+        data.source   = Arcane::MeshSource::Cube;
+        data.material = material;
+        REQUIRE(Arcane::SaveMeshAsset(file, data));
+        return data.id;
+    }
+
+    // A BASE "mesh"-kind material carrying one saved "baseColor" -- no
+    // snippet, matching the F2a design (MeshSubmissionTest.cpp's own
+    // WriteMeshMaterial).
+    Arcane::Guid WriteMeshMaterial(const fs::path& file, const glm::vec4& baseColor)
+    {
+        Arcane::MaterialAssetData data;
+        data.id   = Arcane::Guid::Generate();
+        data.name = "probe-material";
+        data.kind = "mesh";
+        data.params.emplace_back(
+            "baseColor",
+            Arcane::MatParamValue::MakeColor(baseColor.r, baseColor.g, baseColor.b, baseColor.a));
+        REQUIRE(Arcane::SaveMaterialAsset(file, data));
+        return data.id;
+    }
+
+    // An INSTANCE of `parent` -- no kind, no snippet (both come from the base
+    // at the end of the chain, MaterialAsset.hpp:5-9) -- with an OPTIONAL
+    // sparse "baseColor" override (MeshSubmissionTest.cpp's own
+    // WriteMeshMaterialInstance).
+    Arcane::Guid WriteMeshMaterialInstance(const fs::path& file, const Arcane::Guid& parent,
+                                           std::optional<glm::vec4> baseColorOverride)
+    {
+        Arcane::MaterialAssetData data;
+        data.id     = Arcane::Guid::Generate();
+        data.name   = "probe-instance";
+        data.parent = parent;
+        if (baseColorOverride)
+            data.params.emplace_back(
+                "baseColor",
+                Arcane::MatParamValue::MakeColor(baseColorOverride->r, baseColorOverride->g,
+                                                 baseColorOverride->b, baseColorOverride->a));
+        REQUIRE(Arcane::SaveMaterialAsset(file, data));
         return data.id;
     }
 
@@ -430,7 +493,7 @@ TEST_CASE("SceneRenderResolver picks up a sprite added after the first Refresh",
     std::error_code ec; fs::remove_all(dir, ec);
 }
 
-TEST_CASE("SceneRenderResolver un-publishes its tables when it dies", "[sprite][host]")
+TEST_CASE("SceneRenderResolver un-publishes its tables when it dies", "[sprite][mesh][host]")
 {
     Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
     {
@@ -445,6 +508,15 @@ TEST_CASE("SceneRenderResolver un-publishes its tables when it dies", "[sprite][
         const Arcane::SpriteTable* live = rt.Registry().GetResource<Arcane::SpriteTable>();
         REQUIRE(live != nullptr);
         REQUIRE(live->sprites != nullptr);
+        // The F2a siblings (Task 6) get the SAME contract: they are owned by
+        // the resolver too, so they must be live here for the same reason.
+        const Arcane::MeshTable* liveMeshes = rt.Registry().GetResource<Arcane::MeshTable>();
+        REQUIRE(liveMeshes != nullptr);
+        REQUIRE(liveMeshes->meshes != nullptr);
+        const Arcane::MeshMaterialTable* liveMeshMaterials =
+            rt.Registry().GetResource<Arcane::MeshMaterialTable>();
+        REQUIRE(liveMeshMaterials != nullptr);
+        REQUIRE(liveMeshMaterials->materials != nullptr);
     }
     // The registry's tables are NON-OWNING pointers into the resolver's maps, so
     // a dead resolver must leave nulls behind rather than dangling pointers --
@@ -456,4 +528,232 @@ TEST_CASE("SceneRenderResolver un-publishes its tables when it dies", "[sprite][
         rt.Registry().GetResource<Arcane::SpriteMaterialTable>();
     REQUIRE(materials != nullptr);
     CHECK(materials->materials == nullptr);
+    // Same nulling for the F2a siblings -- a dangling MeshTable/
+    // MeshMaterialTable pointer is the identical hazard, one dimension up.
+    const Arcane::MeshTable* meshTable = rt.Registry().GetResource<Arcane::MeshTable>();
+    REQUIRE(meshTable != nullptr);
+    CHECK(meshTable->meshes == nullptr);
+    const Arcane::MeshMaterialTable* meshMaterials =
+        rt.Registry().GetResource<Arcane::MeshMaterialTable>();
+    REQUIRE(meshMaterials != nullptr);
+    CHECK(meshMaterials->materials == nullptr);
+}
+
+// ------------------------------------------------------- [3] the mesh caches
+
+TEST_CASE("SceneRenderResolver publishes the scene's MeshTable and MeshMaterialTable into the registry",
+          "[mesh][host]")
+{
+    const fs::path dir = MakeTempDir("mesh_publish");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
+
+    const fs::path defaultMatFile  = dir / "Game" / "Content" / "default.arcmat";
+    const fs::path overrideMatFile = dir / "Game" / "Content" / "override.arcmat";
+    const fs::path meshFile        = dir / "Game" / "Content" / "cube.arcmesh";
+    const glm::vec4 defaultColor(0.2f, 0.4f, 0.6f, 1.0f);
+    const glm::vec4 overrideColor(0.9f, 0.1f, 0.1f, 1.0f);
+    const Arcane::Guid defaultMat  = WriteMeshMaterial(defaultMatFile, defaultColor);
+    const Arcane::Guid overrideMat = WriteMeshMaterial(overrideMatFile, overrideColor);
+    const Arcane::Guid meshId      = WriteCubeMesh(meshFile, defaultMat);
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    REQUIRE(rt.OpenProject(dir / "Game") == true);
+    REQUIRE(rt.RegisterCreatedAsset(defaultMatFile).has_value());
+    REQUIRE(rt.RegisterCreatedAsset(overrideMatFile).has_value());
+    REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
+
+    // Entity A: materialOverride NIL -- the only way its material ever
+    // reaches the published table is through the ordering the sweep must
+    // get right (Task 6 dispatch, ambiguity note 2): MeshCache resolves the
+    // mesh FIRST, and only THEN is the entry's own `material` (the
+    // .arcmesh's default) knowable and requestable -- within this SAME
+    // Refresh call, not a later one.
+    const Astra::Entity a = rt.Registry().CreateEntity();
+    Arcane::MeshRenderer mrA; mrA.mesh = meshId;
+    rt.Registry().AddComponent<Arcane::MeshRenderer>(a, mrA);
+
+    // Entity B: an explicit materialOverride -- the other Guid a MeshRenderer
+    // can reference, and it must reach the table too.
+    const Astra::Entity b = rt.Registry().CreateEntity();
+    Arcane::MeshRenderer mrB; mrB.mesh = meshId; mrB.materialOverride = overrideMat;
+    rt.Registry().AddComponent<Arcane::MeshRenderer>(b, mrB);
+
+    Arcane::SceneRenderResolver::Services rs;
+    rs.runtime = &rt;
+    Arcane::SceneRenderResolver resolver(std::move(rs));
+
+    // BEFORE: nothing published -- the pre-Task-6 state (neither host ever
+    // called anything to populate these tables, so a scene with 3D content
+    // could not draw whatever it contained).
+    const Arcane::MeshTable* meshesBefore = rt.Registry().GetResource<Arcane::MeshTable>();
+    CHECK((meshesBefore == nullptr || meshesBefore->meshes == nullptr));
+
+    Arcane::SceneRenderResolver::FrameInfo frame;
+    frame.dt = 1.0 / 60.0;
+    resolver.Refresh(frame);   // ONE call -- see entity A's ordering note above
+
+    const Arcane::MeshTable* meshTable = rt.Registry().GetResource<Arcane::MeshTable>();
+    REQUIRE(meshTable != nullptr);
+    REQUIRE(meshTable->meshes != nullptr);
+    const Arcane::MeshEntry* meshEntry = meshTable->Resolve(meshId);
+    REQUIRE(meshEntry != nullptr);
+    CHECK(meshEntry->bounds.min == glm::vec3(-0.5f, -0.5f, -0.5f));
+    CHECK(meshEntry->bounds.max == glm::vec3(0.5f, 0.5f, 0.5f));
+    CHECK(meshEntry->material == defaultMat);
+
+    const Arcane::MeshMaterialTable* matTable = rt.Registry().GetResource<Arcane::MeshMaterialTable>();
+    REQUIRE(matTable != nullptr);
+    REQUIRE(matTable->materials != nullptr);
+    const Arcane::ResolvedMeshMaterial* defaultResolved = matTable->Resolve(defaultMat);
+    REQUIRE(defaultResolved != nullptr);
+    CHECK(defaultResolved->baseColor == defaultColor);
+    const Arcane::ResolvedMeshMaterial* overrideResolved = matTable->Resolve(overrideMat);
+    REQUIRE(overrideResolved != nullptr);
+    CHECK(overrideResolved->baseColor == overrideColor);
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("SceneRenderResolver::Clear drops the scene's MeshTable and MeshMaterialTable",
+          "[mesh][host]")
+{
+    const fs::path dir = MakeTempDir("mesh_clear");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
+    const fs::path matFile  = dir / "Game" / "Content" / "mat.arcmat";
+    const fs::path meshFile = dir / "Game" / "Content" / "cube.arcmesh";
+    const Arcane::Guid mat    = WriteMeshMaterial(matFile, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+    const Arcane::Guid meshId = WriteCubeMesh(meshFile, mat);
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    REQUIRE(rt.OpenProject(dir / "Game") == true);
+    REQUIRE(rt.RegisterCreatedAsset(matFile).has_value());
+    REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
+
+    const Astra::Entity e = rt.Registry().CreateEntity();
+    Arcane::MeshRenderer mr; mr.mesh = meshId;
+    rt.Registry().AddComponent<Arcane::MeshRenderer>(e, mr);
+
+    Arcane::SceneRenderResolver::Services rs;
+    rs.runtime = &rt;
+    Arcane::SceneRenderResolver resolver(std::move(rs));
+
+    Arcane::SceneRenderResolver::FrameInfo frame;
+    frame.dt = 1.0 / 60.0;
+    resolver.Refresh(frame);
+
+    // Two steps, not one chained deref, throughout this test -- an absent
+    // resource must fail a REQUIRE, not crash the whole suite (matches the
+    // sprite destructor test's own precedent above).
+    const Arcane::MeshTable* populatedMeshes = rt.Registry().GetResource<Arcane::MeshTable>();
+    REQUIRE(populatedMeshes != nullptr);
+    REQUIRE(populatedMeshes->Resolve(meshId) != nullptr);
+    const Arcane::MeshMaterialTable* populatedMaterials =
+        rt.Registry().GetResource<Arcane::MeshMaterialTable>();
+    REQUIRE(populatedMaterials != nullptr);
+    REQUIRE(populatedMaterials->Resolve(mat) != nullptr);
+
+    // Project switch: a Guid resolves through the CURRENT project's registry,
+    // so a cached entry may resolve to something else entirely (or nothing)
+    // once the project changes -- Clear()'s own documented contract, now
+    // covering the two F2a caches too.
+    resolver.Clear();
+
+    // Still PUBLISHED (a non-owning pointer resource, same as the sprite
+    // tables across their own Clear) -- just forgotten.
+    const Arcane::MeshTable* meshTable = rt.Registry().GetResource<Arcane::MeshTable>();
+    REQUIRE(meshTable != nullptr);
+    CHECK(meshTable->Resolve(meshId) == nullptr);
+    const Arcane::MeshMaterialTable* matTable = rt.Registry().GetResource<Arcane::MeshMaterialTable>();
+    REQUIRE(matTable != nullptr);
+    CHECK(matTable->Resolve(mat) == nullptr);
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("SceneRenderResolver::InvalidateMaterial drops the WHOLE mesh-material cache, "
+          "so a re-saved base does not strand its instance",
+          "[mesh][host]")
+{
+    // THE CHECKPOINT SCENARIO (Task 6 dispatch, ambiguity note 3): create a
+    // material, create an INSTANCE of it, assign the instance as a SECOND
+    // entity's materialOverride, then edit the base -- both entities must
+    // follow. `baseId` is used DIRECTLY by entity A; `instId` (an instance of
+    // `baseId` overriding nothing) is used by entity B, so B's colour comes
+    // entirely from inheritance.
+    //
+    // BOTH entities carry a real, resolvable `mesh` too -- not just a
+    // materialOverride. The dispatch's ordering ruling (ambiguity note 2) is
+    // "request materialOverride only AFTER the mesh resolves", so a
+    // MeshRenderer with a nil mesh (the one thing this checkpoint scenario
+    // never has -- a materialOverride with nothing to draw makes no sense in
+    // an actual scene) is never a case where a materialOverride gets
+    // requested at all; this fixture matches the realistic shape instead.
+    const fs::path dir = MakeTempDir("mesh_invalidate_material");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
+
+    const fs::path baseFile = dir / "Game" / "Content" / "base.arcmat";
+    const fs::path instFile = dir / "Game" / "Content" / "inst.arcmat";
+    const fs::path meshFile = dir / "Game" / "Content" / "cube.arcmesh";
+    const Arcane::Guid baseId = WriteMeshMaterial(baseFile, glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));   // red
+    const Arcane::Guid instId = WriteMeshMaterialInstance(instFile, baseId, std::nullopt);        // inherits red
+    const Arcane::Guid meshId = WriteCubeMesh(meshFile, Arcane::Guid{});   // nil default: only the overrides matter here
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    REQUIRE(rt.OpenProject(dir / "Game") == true);
+    REQUIRE(rt.RegisterCreatedAsset(baseFile).has_value());
+    REQUIRE(rt.RegisterCreatedAsset(instFile).has_value());
+    REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
+
+    const Astra::Entity eA = rt.Registry().CreateEntity();
+    Arcane::MeshRenderer mrA; mrA.mesh = meshId; mrA.materialOverride = baseId;
+    rt.Registry().AddComponent<Arcane::MeshRenderer>(eA, mrA);
+
+    const Astra::Entity eB = rt.Registry().CreateEntity();
+    Arcane::MeshRenderer mrB; mrB.mesh = meshId; mrB.materialOverride = instId;
+    rt.Registry().AddComponent<Arcane::MeshRenderer>(eB, mrB);
+
+    Arcane::SceneRenderResolver::Services rs;
+    rs.runtime = &rt;
+    Arcane::SceneRenderResolver resolver(std::move(rs));
+
+    Arcane::SceneRenderResolver::FrameInfo frame;
+    frame.dt = 1.0 / 60.0;
+    resolver.Refresh(frame);
+
+    const Arcane::MeshMaterialTable* before = rt.Registry().GetResource<Arcane::MeshMaterialTable>();
+    REQUIRE(before != nullptr);
+    REQUIRE(before->Resolve(baseId) != nullptr);
+    REQUIRE(before->Resolve(instId) != nullptr);
+    CHECK(before->Resolve(baseId)->baseColor == glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
+    CHECK(before->Resolve(instId)->baseColor == glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));   // inherited red
+
+    // The user re-saves the BASE with a new colour...
+    Arcane::MaterialAssetData edited;
+    edited.id   = baseId;
+    edited.name = "probe-material";
+    edited.kind = "mesh";
+    edited.params.emplace_back("baseColor", Arcane::MatParamValue::MakeColor(0.0f, 1.0f, 0.0f, 1.0f));   // green
+    REQUIRE(Arcane::SaveMaterialAsset(baseFile, edited));
+
+    // ...and the save handler invalidates ONLY the Guid it knows it saved --
+    // `baseId`, never `instId` (a save handler has no reverse parent->child
+    // index to consult; that is precisely the gap this ruling closes).
+    resolver.InvalidateMaterial(baseId);
+
+    frame.now = 1.0 / 60.0;
+    resolver.Refresh(frame);   // per-frame sweep re-requests both Guids
+
+    // THE RULING: BOTH entries reflect the new colour, because InvalidateMaterial
+    // drops the WHOLE mesh-material cache rather than just `baseId`'s entry --
+    // a targeted per-Guid Invalidate(baseId) alone would leave `instId` stale
+    // at red forever (it was never the named Guid), which is exactly the
+    // stranded-instance bug this test exists to catch.
+    const Arcane::MeshMaterialTable* after = rt.Registry().GetResource<Arcane::MeshMaterialTable>();
+    REQUIRE(after != nullptr);
+    REQUIRE(after->Resolve(baseId) != nullptr);
+    REQUIRE(after->Resolve(instId) != nullptr);
+    CHECK(after->Resolve(baseId)->baseColor == glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+    CHECK(after->Resolve(instId)->baseColor == glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+
+    std::error_code ec; fs::remove_all(dir, ec);
 }

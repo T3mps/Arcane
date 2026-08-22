@@ -18,14 +18,28 @@
 // Brief: docs/superpowers/plans/2026-07-29-sprite-resolution-lift.md
 // Design: docs/superpowers/specs/2026-07-29-sprite-resolution-lift-design.md
 //
-// WHAT IT OWNS. The three caches that turn a Guid into something bindable --
+// WHAT IT OWNS. Five caches that turn a Guid into something bindable --
 // SpriteCache (.arcsprite -> texture/UVs/size/pivot), SpriteMaterialCache
 // (.arcmat -> a registered Batcher2D material id) and PostChainCache (.arcmat ->
 // a bound post chain, published as PostChainDesc bytes for the graph
-// recorder). They share one compile drain site, which is why they belong to
-// one owner: splitting them would mean a second Drain(), and
+// recorder). Those three share one compile drain site, which is why they
+// belong to one owner: splitting them would mean a second Drain(), and
 // ShaderCompiler::Drain is the ONE place a compile result is taken up
 // (ShaderCompiler.hpp:9-13).
+//
+// F2a (Task 6) adds their 3D siblings, MeshCache (.arcmesh -> owned CPU
+// geometry + local bounds, Render/MeshCache.hpp) and MeshMaterialCache
+// ("mesh"-kind .arcmat -> constants-only ResolvedMeshMaterial,
+// Render/MeshMaterialCache.hpp). NEITHER touches ShaderCompiler at all -- a
+// "mesh"-kind .arcmat carries no snippet to compile in the first place
+// (MeshMaterialCache.hpp:9-21) -- so they do not extend the drain-sharing
+// argument above; they still join this class rather than standing alone,
+// for the OTHER reason every cache here is together (see WHY THIS EXISTS):
+// one per-frame call, and one project-backed `resolveAsset` closure (built
+// once in the constructor) that every cache -- compiling or not -- resolves
+// its Guids through. A second owner for the two mesh caches would mean a
+// second copy of that closure, which is exactly the kind of drift the
+// sprite arc's lift was fixing in the first place.
 //
 // WHAT IT DOES NOT OWN. The camera (a pure sweep -- Scene/SceneCamera.hpp),
 // the batcher, and the compile service: all injected. It never renders, and
@@ -104,7 +118,7 @@ namespace Arcane
         // CONTRACT for every host: declare the resolver so it destructs BEFORE
         // the Runtime (whose registry would otherwise be left pointing at freed
         // maps). There is no "before the render device" half to this
-        // contract: none of the three caches this class owns holds a
+        // contract: none of the five caches this class owns holds a
         // device-bound handle (see SpriteCache.cpp's own note), so the
         // Runtime-registry ordering above is the whole of it.
         ~SceneRenderResolver();
@@ -188,6 +202,33 @@ namespace Arcane
         // A .arcmat was re-saved: re-resolve on the next Refresh. Hits BOTH the
         // sprite-material and post caches -- one Guid cannot be known to be
         // only one of the two, and a wrong guess silently strands the other.
+        //
+        // ...AND, one level deeper (F2a, Task 6), the mesh-material cache --
+        // but NOT by the same per-Guid rule the two caches above use. Neither
+        // material cache tracks reverse parent -> child dependencies
+        // (MeshMaterialCache::Invalidate(id) drops only `id`), so from a base
+        // material's Guid alone you cannot tell which INSTANCES inherit from
+        // it -- the identical "one Guid cannot be known to be only one of the
+        // two" problem stated above, applied to a chain instead of a pair: a
+        // wrong guess here silently strands every descendant instance at its
+        // pre-edit colour. That is precisely the desk checkpoint this arc
+        // ships against (create a material, create an instance of it, assign
+        // the instance to a second entity, edit the base, expect BOTH
+        // entities to follow). So the mesh-material cache does not get a
+        // targeted Invalidate(id) call at all -- it gets Clear()'d whole.
+        // That is cheap and provably correct here, unlike for the two caches
+        // above: MeshMaterialCache is params-only, holds no compiled
+        // artifact and straddles no async step (its own header, "NEVER
+        // touches MaterialSource or ShaderCompiler"), so a full drop costs
+        // exactly one re-read per referenced material on the next Refresh --
+        // there is no in-flight compile to strand and no last-good bind to
+        // lose.
+        //
+        // The sprite path (SpriteMaterialCache) has the IDENTICAL gap -- an
+        // instance of a re-saved base SPRITE material would go stale the
+        // same way -- and it is deliberately left alone here: it is
+        // pre-existing, not a regression this task introduces, and widening
+        // into it is a different task's business.
         void InvalidateMaterial(const Guid& id);
 
         // Project switch: forget everything. A Guid resolves through the CURRENT
