@@ -23,6 +23,8 @@
 
 #include <glm/gtc/epsilon.hpp>
 
+#include <cmath>
+
 namespace
 {
     // Same shape as SceneCameraTest.cpp's CameraFixture, duplicated rather
@@ -217,12 +219,150 @@ TEST_CASE("ActivePerspectiveSceneCamera's view matrix places the camera's world 
     const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, 16.0f / 9.0f);
     REQUIRE(v.has_value());
 
-    // The eye is the entity's world position at Z=0 (Transform is 2D-only
-    // today); transforming that exact point by its own view matrix must land
-    // it at the view-space origin, same shape of assertion SceneCameraTest.cpp
-    // uses for the ortho path's "world position lands at the viewport centre".
+    // The eye is the entity's world position. This case's fixture position
+    // happens to sit at Z=0 -- not because Transform is 2D-only (it has
+    // carried a full 3D pose since F1's transform spine; the stale note that
+    // used to sit here was corrected by Task 7, F2a) but because
+    // AddPerspectiveCamera's helper hard-codes Z=0 for every case that does
+    // not need otherwise. Transforming that exact point by its own view
+    // matrix must land it at the view-space origin, same shape of assertion
+    // SceneCameraTest.cpp uses for the ortho path's "world position lands at
+    // the viewport centre". The cases below cover the Z != 0 and rotated
+    // poses this one deliberately does not.
     const glm::vec4 viewSpace = v->view * glm::vec4(3.0f, -2.0f, 0.0f, 1.0f);
     CHECK(glm::epsilonEqual(viewSpace.x, 0.0f, 1e-4f));
     CHECK(glm::epsilonEqual(viewSpace.y, 0.0f, 1e-4f));
     CHECK(glm::epsilonEqual(viewSpace.z, 0.0f, 1e-4f));
+}
+
+// ---------------------------------------------------------------------------
+// Task 7 (F2a): the perspective lens reads its entity's FULL world pose --
+// translation (Z included) AND orientation -- instead of a pinned
+// forward=-Z/up=+Y look pulled from an XY-only position. The cases above
+// pin the pre-Task-7 contract (still true: an unrotated, Z=0 camera behaves
+// exactly as before); the cases below pin what is NEW.
+//
+// F1's stated reason for pinning this lens in the first place -- "would
+// silently re-frame every scene" -- does not apply to this change: every
+// authored .arcscene in the tree defaults Camera::projection to Orthographic,
+// and "a Perspective camera is invisible to the ortho sweep" above already
+// proves the two sweeps cannot see each other's cameras. A change confined to
+// ActivePerspectiveSceneCamera's math cannot re-frame a scene that has no
+// active Perspective camera in it.
+//
+// Built directly against f.reg rather than through AddPerspectiveCamera /
+// AddOrthoCamera: both fixture helpers hard-code position.z == 0 (see their
+// own comments) and no rotation, which is exactly the pair of constraints
+// this task lifts -- widening either helper's signature would be scope creep
+// onto three passing call sites above that don't need it. The two ECS-wiring
+// cases (WorldTransform present vs. absent) are split across the next two
+// TEST_CASEs on purpose: ActivePerspectiveSceneCamera reads WorldTransform
+// FIRST and falls back to Transform only when it is missing, and a test that
+// always adds both (as the fixture helpers do) would never exercise the
+// fallback branch at all.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("the perspective camera's eye is the entity's FULL world position, Z included "
+          "(WorldTransform path)",
+          "[scene][camera][perspective]")
+{
+    PerspectiveCameraFixture f;
+    const Astra::Entity e = f.reg.CreateEntity();
+    Arcane::Transform t;
+    t.position = glm::vec3(1.0f, 2.0f, 3.0f);
+    f.reg.AddComponent<Arcane::Transform>(e, t);
+    // WorldTransform present: exercises the PRIMARY (propagated) branch --
+    // the one every real, non-root camera actually goes through at runtime.
+    f.reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{t.ToMatrix()});
+    Arcane::Camera cam;
+    cam.projection = Arcane::CameraProjection::Perspective;
+    f.reg.AddComponent<Arcane::Camera>(e, cam);
+
+    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, 16.0f / 9.0f);
+    REQUIRE(v.has_value());
+
+    // inverse(view)[3] recovers the eye in world space -- the OLD code built
+    // eye from a glm::vec2 center and could never have reported a nonzero Z
+    // here; that is the entire property this case exists to pin.
+    const glm::vec3 eye = glm::vec3(glm::inverse(v->view)[3]);
+    CHECK(glm::epsilonEqual(eye.x, 1.0f, 1e-4f));
+    CHECK(glm::epsilonEqual(eye.y, 2.0f, 1e-4f));
+    CHECK(glm::epsilonEqual(eye.z, 3.0f, 1e-4f));
+}
+
+TEST_CASE("a perspective camera yawed 90 degrees about +Y looks down -X (Transform-only fallback "
+          "path)",
+          "[scene][camera][perspective]")
+{
+    PerspectiveCameraFixture f;
+    const Astra::Entity e = f.reg.CreateEntity();
+    Arcane::Transform t;
+    // Yaw 90 degrees about +Y: forward turns from -Z to -X.
+    t.rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    f.reg.AddComponent<Arcane::Transform>(e, t);
+    // No WorldTransform: exercises the FALLBACK branch ("not propagated yet:
+    // local IS world for a root"), deliberately the other half of the
+    // WorldTransform-then-Transform read from the case above.
+    Arcane::Camera cam;
+    cam.projection = Arcane::CameraProjection::Perspective;
+    f.reg.AddComponent<Arcane::Camera>(e, cam);
+
+    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, 1.0f);
+    REQUIRE(v.has_value());
+
+    // inverse(view)'s Z-basis column is the camera's local +Z axis in world
+    // space; for a RH look-down--Z camera that is the negated forward
+    // direction, so negating it recovers forward.
+    const glm::mat4 inv = glm::inverse(v->view);
+    const glm::vec3 forward = -glm::normalize(glm::vec3(inv[2]));
+    CHECK(glm::epsilonEqual(forward.x, -1.0f, 1e-4f));
+    CHECK(glm::epsilonEqual(forward.y,  0.0f, 1e-4f));
+    CHECK(glm::epsilonEqual(forward.z,  0.0f, 1e-4f));
+}
+
+TEST_CASE("a degenerate (zero-scale) camera basis falls back to F1's pinned orientation instead of "
+          "emitting NaN",
+          "[scene][camera][perspective]")
+{
+    PerspectiveCameraFixture f;
+    const Astra::Entity e = f.reg.CreateEntity();
+    Arcane::Transform t;
+    t.scale = glm::vec3(0.0f);   // singular basis: ToMatrix's columns 0-2 all collapse to zero
+    f.reg.AddComponent<Arcane::Transform>(e, t);
+    f.reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{t.ToMatrix()});
+    Arcane::Camera cam;
+    cam.projection = Arcane::CameraProjection::Perspective;
+    f.reg.AddComponent<Arcane::Camera>(e, cam);
+
+    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, 1.0f);
+    REQUIRE(v.has_value());
+    // lookAtRH would divide a zero-length forward/up by zero and hand every
+    // later pass a NaN clip position (UB on the GPU, not merely a wrong
+    // picture) -- the guard must intercept that BEFORE lookAtRH runs.
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            CHECK(std::isfinite(v->view[c][r]));
+}
+
+TEST_CASE("the ORTHOGRAPHIC path is untouched by the perspective pose change: a Z offset and a "
+          "rotation are still ignored",
+          "[scene][camera][perspective]")
+{
+    // This case must pass BEFORE Task 7's implementation change too -- it
+    // exercises ActiveSceneCamera, which this task does not touch at all.
+    // A failure here before the change lands would mean something ELSE
+    // regressed, not this task.
+    PerspectiveCameraFixture f;
+    const Astra::Entity e = f.reg.CreateEntity();
+    Arcane::Transform t;
+    t.position = glm::vec3(4.0f, 5.0f, 99.0f);   // a Z the ortho lens must IGNORE
+    t.rotation = glm::angleAxis(glm::radians(30.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    f.reg.AddComponent<Arcane::Transform>(e, t);
+    f.reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{t.ToMatrix()});
+    f.reg.AddComponent<Arcane::Camera>(e, Arcane::Camera{});   // default: Orthographic, active
+
+    const auto v = Arcane::ActiveSceneCamera(f.reg, 1280.0f, 720.0f);
+    REQUIRE(v.has_value());
+    CHECK(glm::epsilonEqual(v->worldCenter.x, 4.0f, 1e-5f));
+    CHECK(glm::epsilonEqual(v->worldCenter.y, 5.0f, 1e-5f));
 }

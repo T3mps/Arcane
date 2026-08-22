@@ -11,6 +11,7 @@
 // plugin owns Schedulers), which would make a camera in a scene depend on the
 // game rebuilding. Being pure also means it is unit-testable with no host at all.
 
+#include <Arcane/Base/Log.hpp>              // ARC_WARN (degenerate-basis fallback, Task 7/F2a)
 #include <Arcane/Scene/Components.hpp>
 
 #include <Astra/Registry/Registry.hpp>
@@ -159,27 +160,47 @@ namespace Arcane
     // has to answer "which mode is the ambiguous first camera" -- each mode
     // resolves its own first-active-wins independently.
     //
-    // VIEW: eye is the entity's world position, resolved by the exact same
-    // WorldTransform-then-Transform-fallback rule ActiveSceneCamera uses
-    // above (so moving a camera entity moves both lenses the same way),
-    // extended into 3D at Z=0. Orientation is fixed at forward=(0,0,-1),
-    // up=(0,1,0).
+    // VIEW: eye is the entity's FULL world position (Z included), and
+    // orientation is read from the world matrix's own basis columns --
+    // forward is the negated Z column, up is the Y column. Both are resolved
+    // by the exact same WorldTransform-then-Transform-fallback rule
+    // ActiveSceneCamera uses above (so moving OR rotating a camera entity
+    // moves this lens the same way regardless of which branch supplied the
+    // matrix).
     //
-    // Task 3 (F1) NOTE -- Transform now DOES carry a 3D position and a
-    // quaternion, so the "no 3D orientation to read" reason this contract was
-    // originally written for is gone. It is kept UNCHANGED here anyway, and
-    // deliberately: Task 3 is a type widening, and pointing this lens at the
-    // camera entity's real pose is a behaviour change that belongs with the
-    // task that gives a user a way to AIM it (F4's camera work). Wiring it
-    // early would silently re-frame every scene the moment one gained a
-    // non-zero Z or a tilt. Today it still looks straight down -Z from the
-    // authored XY position, byte-identically.
+    // Task 3 (F1) NOTE, superseded below -- kept for the history: Transform
+    // gained a 3D position and a quaternion in F1, but this lens was
+    // deliberately left pinned at forward=(0,0,-1)/up=(0,1,0) anyway, on the
+    // reasoning that wiring the real pose in early "would silently re-frame
+    // every scene" the moment one gained a non-zero Z or a tilt, and that the
+    // task to give a user a way to AIM a camera (F4) should own that change.
+    //
+    // Task 7 (F2a) NOTE -- that reasoning does not survive contact with this
+    // codebase: every authored .arcscene in the tree defaults
+    // Camera::projection to Orthographic, and the projection guard on
+    // ActiveSceneCamera above (Task 5, Phase 4) already means the ortho and
+    // perspective sweeps never contend for the same camera entity -- a scene
+    // with no active Perspective camera cannot be re-framed by a change
+    // confined to THIS function's math. So the deferral is lifted HERE, for
+    // the perspective lens only. ActiveSceneCamera (orthographic) is left
+    // deliberately untouched: it frames the XY plane by definition
+    // (orthographicSize is a half-HEIGHT, a 2D concept), so an ortho camera's
+    // Z and tilt have no ortho-meaningful reading to give them, and nothing
+    // about this task changes that. The basis is read by orthonormalizing
+    // the world matrix's forward/up columns rather than glm::quat_cast(world)
+    // -- the world matrix can carry scale (the camera entity's own, or an
+    // ancestor's), and quat_cast on a scaled matrix returns a skewed,
+    // non-orthonormal rotation instead of erroring, which would silently mis-
+    // aim the lens rather than refusing outright. A basis that orthonormalizes
+    // to zero-length (an authored zero scale) falls back to this same
+    // pinned forward/up rather than feeding lookAtRH a zero vector -- see the
+    // ARC_WARN below for why that fallback is not deduplicated.
     inline std::optional<PerspectiveCameraView> ActivePerspectiveSceneCamera(Astra::Registry& reg,
                                                                               float aspectRatio,
                                                                               int* outCount = nullptr)
     {
         int       found = 0;
-        glm::vec2 center{0.0f, 0.0f};
+        glm::mat4 world{1.0f};   // identity: eye at origin, forward -Z, up +Y -- the F1 default
         float     fovYDegrees = 60.0f;
         float     nearZ = 0.1f;
         float     farZ  = 1000.0f;
@@ -195,10 +216,13 @@ namespace Arcane
             fovYDegrees = cam.fovYDegrees;
             nearZ       = cam.nearZ;
             farZ        = cam.farZ;
+            // Task 7 (F2a): capture the FULL matrix now, not just its
+            // translation column -- same WorldTransform-then-Transform
+            // fallback ActiveSceneCamera uses above.
             if (const WorldTransform* wt = reg.GetComponent<WorldTransform>(e))
-                center = glm::vec2(wt->matrix[3].x, wt->matrix[3].y);   // translation column
+                world = wt->matrix;
             else if (const Transform* lt = reg.GetComponent<Transform>(e))
-                center = glm::vec2(lt->position);   // not propagated yet: local IS world for a root
+                world = lt->ToMatrix();   // not propagated yet: local IS world for a root
         });
 
         if (outCount)
@@ -207,8 +231,45 @@ namespace Arcane
             return std::nullopt;
 
         PerspectiveCameraView v;
-        const glm::vec3 eye(center, 0.0f);
-        v.view       = glm::lookAtRH(eye, eye + glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+
+        // Full-basis read (Task 7, F2a). Orthonormalize the columns rather than
+        // glm::quat_cast(world): see the VIEW comment above for why a scaled
+        // world matrix makes quat_cast unsafe here.
+        glm::vec3 eye     = glm::vec3(world[3]);
+        glm::vec3 forward = -glm::vec3(world[2]);
+        glm::vec3 up      =  glm::vec3(world[1]);
+        const float fLen = glm::length(forward);
+        const float uLen = glm::length(up);
+        if (fLen < 1e-6f || uLen < 1e-6f)
+        {
+            // A singular basis (zero scale) has no direction to read. lookAtRH would
+            // divide by zero and hand every subsequent pass a NaN clip position, which
+            // is undefined behaviour on the GPU rather than a wrong picture -- so fall
+            // back to F1's pinned orientation and say so.
+            //
+            // Deliberately NOT deduplicated the way MeshCache::Request's `failed` set
+            // or OutlineNode's m_warnedIdOverflow bool dedupe theirs: those live on a
+            // long-lived cache/node object that can hold an "already told you" flag
+            // across calls, and this function is deliberately NOT that (see the
+            // file-top comment -- pure function of (registry, aspect), no host, no
+            // state, three independent callers per frame). A degenerate camera basis
+            // is also an authored bug (a zero scale), not a transient miss like a
+            // still-loading asset, so re-asserting it every frame it persists is an
+            // accepted cost, not an oversight -- the alternative (process-global
+            // mutable warned-state in a header-only "pure" function) would leak across
+            // every Registry that calls this, including unrelated tests in the same
+            // binary.
+            ARC_WARN("camera: entity has a degenerate basis (zero scale?) -- "
+                     "falling back to forward -Z / up +Y");
+            forward = glm::vec3(0.0f, 0.0f, -1.0f);
+            up      = glm::vec3(0.0f, 1.0f,  0.0f);
+        }
+        else
+        {
+            forward /= fLen;
+            up      /= uLen;
+        }
+        v.view       = glm::lookAtRH(eye, eye + forward, up);
         v.projection = PerspectiveProjection(fovYDegrees, aspectRatio, nearZ, farZ);
         return v;
     }
