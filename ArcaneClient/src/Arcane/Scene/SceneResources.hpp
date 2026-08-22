@@ -5,6 +5,7 @@
 // marks the subtree that IS the scene.
 
 #include <Arcane/Guid.hpp>
+#include <Arcane/Render/MeshBuilder.hpp>   // MeshData / MeshBounds -- MeshEntry's fields
 
 #include <Astra/Entity/Entity.hpp>
 
@@ -133,6 +134,68 @@ namespace Arcane
             if (!materials || !g.IsValid()) return 0;
             auto it = materials->find(g);
             return it != materials->end() ? it->second : 0;
+        }
+    };
+
+    // One resolved .arcmesh (F2a, Task 4): OWNED geometry, generated once by
+    // MeshCache::Request from BuildMeshData, plus its local-space bounds
+    // (ComputeMeshBounds). MeshInstance::mesh (Render/Nri/nodes/MeshNode.hpp)
+    // BORROWS a raw pointer into `data` for exactly the duration of one
+    // RenderFrame call -- safe against a table rehash (std::unordered_map
+    // never relocates an existing element's storage, only its iterators) but
+    // NOT against an erase, which is why MeshCache::Invalidate/Clear are the
+    // only things that may ever remove an entry mid-frame.
+    struct MeshEntry
+    {
+        MeshData   data;
+        MeshBounds bounds;
+    };
+
+    // .arcmesh Guid -> the resolved record above. Same shape and lifetime
+    // rules as SpriteTable above: the map is OWNED by the host's MeshCache
+    // (transient pointer resource, set each frame, never serialized).
+    // Unresolved (nil / absent / failed to load or validate) -> null, and
+    // MeshSubmissionSystem (Task 5) skips the entity entirely -- unlike a
+    // sprite's 1x1 m untextured placeholder, there is no meaningful
+    // placeholder mesh, so a broken reference draws nothing rather than the
+    // wrong shape.
+    struct MeshTable
+    {
+        const std::unordered_map<Guid, MeshEntry>* meshes = nullptr;
+
+        const MeshEntry* Resolve(const Guid& g) const
+        {
+            if (!meshes || !g.IsValid()) return nullptr;
+            auto it = meshes->find(g);
+            return it != meshes->end() ? &it->second : nullptr;
+        }
+    };
+
+    // One resolved mesh material (F2a, Task 4): CONSTANTS ONLY. Neither
+    // MeshCache nor MeshMaterialCache may touch MaterialSource or
+    // ShaderCompiler (that would open a second compile-drain site alongside
+    // SceneRenderResolver's one, Host/SceneRenderResolver.hpp:22-28), so
+    // there is no compiled pipeline riding along here -- just the value
+    // MeshInstance::baseColor (Render/Nri/nodes/MeshNode.hpp) copies into its
+    // per-instance root constant. Default (1,1,1,1) is exactly what a nil
+    // material at the end of the materialOverride -> mesh-default chain
+    // resolves to directly, with no lookup at all.
+    struct ResolvedMeshMaterial
+    {
+        glm::vec4 baseColor{1.0f};
+    };
+
+    // .arcmat Guid -> the resolved record above. Same shape and lifetime
+    // rules as MeshTable/SpriteTable.
+    struct MeshMaterialTable
+    {
+        const std::unordered_map<Guid, ResolvedMeshMaterial>* materials = nullptr;
+
+        const ResolvedMeshMaterial* Resolve(const Guid& g) const
+        {
+            if (!materials || !g.IsValid()) return nullptr;
+            auto it = materials->find(g);
+            return it != materials->end() ? &it->second : nullptr;
         }
     };
 }
