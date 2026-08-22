@@ -365,7 +365,11 @@ TEST_CASE("WrapEntityClipboard/ParseEntityClipboard round-trip a payload",
           "[editor]")
 {
     nlohmann::json payload;
-    payload["version"] = 2;
+    // Arbitrary as far as the ENVELOPE is concerned (Wrap/Parse do not gate on
+    // it -- InstantiateSubtrees does), but never a STALE number: built from the
+    // constant so a schema bump cannot leave a "2" sitting in the tree reading
+    // as though it meant something.
+    payload["version"] = Scene::kSceneJsonVersion;
     payload["entities"] = nlohmann::json::array();
 
     const std::string wrapped = Editor::WrapEntityClipboard(payload);

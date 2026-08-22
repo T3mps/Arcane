@@ -292,11 +292,19 @@ namespace Arcane::HostBoot
             if (!Arcane::Scene::ApplySceneDocument(*doc, runtime.Registry()))
             {
                 // Validated but unloadable -- the failure mode ReadSceneFile's
-                // structural gate cannot see (a component whose reflected field
-                // type is unsupported; SceneAsset.hpp's E02-3 note). The registry
-                // is already reset by contract, so leave a well-formed empty scene
+                // structural gate cannot see: the reflection reader latched
+                // while walking a component's data. Since Task 3 (F1) that is
+                // usually MALFORMED DATA (a stale or hand-edited field value in
+                // a shape the field cannot take), with an unsupported reflected
+                // field type (E02-3) the rarer, code-defect case -- so a reader
+                // of this line should look in the FILE first, not the code.
+                // LoadJson has already named the component and the field, which
+                // is why this does not try to restate it. The registry is
+                // already reset by contract, so leave a well-formed empty scene
                 // rather than an empty-but-rootless one.
-                ARC_ERROR("bootScene: {} parsed but could not be loaded", file.generic_string());
+                ARC_ERROR("bootScene: {} parsed but could not be loaded -- see the "
+                          "scene-load warning above for the component and field "
+                          "that refused", file.generic_string());
                 Arcane::Scene::CreateEmpty(runtime.Registry());
                 return std::nullopt;
             }

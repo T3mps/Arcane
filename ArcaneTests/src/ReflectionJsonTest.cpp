@@ -240,3 +240,45 @@ TEST_CASE("unsupported field type fails loud instead of silently dropping", "[js
         CHECK(reader.Error().find("data") != std::string::npos);
     }
 }
+
+// Task 3 (F1) gave the reader an enum branch with two DELIBERATELY different
+// answers, and the final review found neither half pinned by a test:
+//   * SHAPE   -- a non-string node under an enum key is malformed data and
+//                latches, exactly like a wrong-arity vector.
+//   * VOCABULARY -- a string that no longer names an enumerator keeps the
+//                default WITHOUT latching, mirroring how the scene loader
+//                already tolerates an unknown component TYPE NAME.
+// Without these, the tolerant half was covered only by the absence of a
+// failure, and the latching half not at all.
+TEST_CASE("enum reader: a non-string node latches, an unresolvable name is tolerated", "[json]")
+{
+    Astra::ComponentRegistry creg;
+    creg.RegisterComponent<Knob>();
+    const auto* desc = creg.GetComponentDescriptor(Astra::TypeID<Knob>::Value());
+    REQUIRE(desc != nullptr);
+
+    SECTION("a non-string node under the enum key is a SHAPE error and latches")
+    {
+        // A bare number is what "enums are ints on the wire" hand-editing
+        // produces. It must not be written over the field by the raw-memory
+        // path, and it must not pass for an absent key either.
+        nlohmann::json j; j["mode"] = 2; j["level"] = 3;
+        Knob b;
+        Arcane::ReflectionJsonReader reader(j);
+        desc->visitFields(&b, reader);
+        REQUIRE(reader.HasError());
+        CHECK(reader.Error().find("mode") != std::string::npos);
+        CHECK(b.mode == Mode::Off);   // default kept -- the raw 2 was NOT stored
+    }
+
+    SECTION("a string naming no enumerator keeps the default WITHOUT latching")
+    {
+        nlohmann::json j; j["mode"] = "Retired"; j["level"] = 3;
+        Knob b;
+        Arcane::ReflectionJsonReader reader(j);
+        desc->visitFields(&b, reader);
+        CHECK_FALSE(reader.HasError());   // vocabulary question, not a shape one
+        CHECK(b.mode == Mode::Off);       // default
+        CHECK(b.level == 3);              // and the rest of the component still loaded
+    }
+}

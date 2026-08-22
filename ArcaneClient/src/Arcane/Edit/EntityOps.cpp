@@ -12,6 +12,7 @@
 #include <Astra/Registry/Registry.hpp>
 
 #include <new>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -493,10 +494,44 @@ namespace Arcane::Edit
                     if (it.value().is_object())    fields = &it.value();
                     else if (it.value().is_null()) fields = &kEmptyFields;
                     else                            continue;
+                    std::string fieldError;
                     const Scene::Detail::AddComponentResult r =
-                        Scene::Detail::AddComponentByTypeName(reg, creg, e, it.key(), *fields);
+                        Scene::Detail::AddComponentByTypeName(reg, creg, e, it.key(), *fields,
+                                                              &fieldError);
                     if (r == Scene::Detail::AddComponentResult::Error)
-                        return destroyPartial();   // unsupported field type: fail loud
+                    {
+                        // Same mute-failure as LoadJson's own Error branch had
+                        // (final-review finding 1), and WORSE here: a paste that
+                        // fails destroys everything it created and returns an
+                        // empty vector, so the user sees literally nothing
+                        // happen -- no entities, no modal, no log line. The
+                        // reader's message names the field; say it.
+                        ARC_WARN("paste: component \"{}\" on entity #{} could not be "
+                                 "read -- {}; nothing was pasted",
+                                 it.key(), entityIndex, fieldError);
+                        Arcane::Diagnostic d;
+                        d.severity = Arcane::DiagSeverity::Error;
+                        d.scope    = Arcane::DiagScope::Scene;
+                        d.code     = "clipboard.component.malformed";
+                        d.message  = "Component \"" + std::string(it.key()) +
+                                     "\" on pasted entity #" + std::to_string(entityIndex) +
+                                     " could not be read";
+                        d.detail   = fieldError + " -- nothing was pasted.";
+                        // No locator: destroyPartial() is about to invalidate
+                        // every entity this pass created, including `e`.
+                        //
+                        // Published as a ONE-ROW group, NOT as `diagnostics`.
+                        // Two reasons, and they are the same reason: the rows
+                        // accumulated above carry Entity locators into entities
+                        // destroyPartial() is about to invalidate -- which is
+                        // exactly what the "never published on an early return"
+                        // note at the vector's declaration rules out -- and they
+                        // describe skips inside a paste that did not happen, so
+                        // they are not true of anything once this returns.
+                        Arcane::Diagnostics::Publish(
+                            "clipboard", std::span<const Arcane::Diagnostic>(&d, 1));
+                        return destroyPartial();
+                    }
 
                     // A paste is MORE likely than a scene load to meet a type
                     // the destination process doesn't know: the payload was

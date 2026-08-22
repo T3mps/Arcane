@@ -887,6 +887,52 @@ namespace Arcane::Editor
                                     FindTransformDescriptor(*regPtr, e);
                                 if (!ed)
                                     continue;
+                                // REFUSE a drag the 2D gizmo cannot express
+                                // (final-review finding 4, F1). The write-back
+                                // below demotes a world pose through
+                                // inverse(ParentWorldMatrix), and DecomposeTRS
+                                // takes scale from the 2D PROJECTION of the
+                                // basis columns -- which equals the true axis
+                                // length only while those axes lie in the XY
+                                // plane. Under a parent tilted out of plane the
+                                // projection is strictly shorter, so a PURE
+                                // TRANSLATE drag silently rescales the child (a
+                                // 45 degree pitch halves it; pinned in
+                                // EntityOpsTest.cpp). Every other component of
+                                // the demoted pose is wrong there too: `w`
+                                // itself already lost the entity's world z, so
+                                // even the translation is not world-exact.
+                                //
+                                // Before F1 this was unreachable -- a float
+                                // `rotation` cannot express a tilted parent --
+                                // and the widening made it authorable through
+                                // the new Quat Inspector row while leaving the
+                                // planar assumption in place. The honest answer
+                                // is to decline, not to repair: repairing means
+                                // carrying z, tilt and z-scale through the whole
+                                // pipeline, which IS the 3D gizmo, which is F4.
+                                //
+                                // Declined per TARGET, not per drag, so a
+                                // multi-selection still moves the members that
+                                // ARE planar; skipping before SnapshotComponent
+                                // keeps the refusal out of the undo step too.
+                                // Checked once here rather than per frame in the
+                                // write-back so the warning fires once per drag
+                                // attempt, and because a parent cannot be
+                                // reparented mid-drag.
+                                if (!Arcane::IsPlanarBasis(
+                                        Arcane::Edit::ParentWorldMatrix(*regPtr, e)))
+                                {
+                                    const Arcane::Identity* id =
+                                        regPtr->GetComponent<Arcane::Identity>(e);
+                                    ARC_WARN("gizmo: \"{}\" (id {}) sits under a parent whose "
+                                             "basis leaves the XY plane -- the 2D gizmo cannot "
+                                             "demote a world pose through it without corrupting "
+                                             "scale, so this drag leaves it alone (a 3D gizmo "
+                                             "is F4)",
+                                             id ? id->name : std::string("<unnamed>"), e.GetID());
+                                    continue;
+                                }
                                 m_undo->SnapshotComponent(e, ed);
                                 // Stored WORLD pose (see gt above) -- the group
                                 // delta below composes/replays in world space.
@@ -957,6 +1003,16 @@ namespace Arcane::Editor
                     // scene in the tree is planar today, so nothing observable
                     // is dropped -- but it is a LOSS, not a no-op, and it is
                     // named here so F4 does not have to rediscover it.
+                    //
+                    // What makes THAT loss bounded rather than open-ended: the
+                    // demotion above is only sound while the parent's basis
+                    // stays in the XY plane, and the IsPlanarBasis check at
+                    // drag start (see the targets loop) is what guarantees it
+                    // for every `e` that reaches this line. Without it, a
+                    // tilted parent turned the projection in DecomposeTRS into
+                    // silent scale corruption on a drag that touched no scale
+                    // handle at all (final-review finding 4). Do not relax that
+                    // check without making this line 3D-exact first.
                     et->position = glm::vec3(r.position, et->position.z);
                     et->rotation = Arcane::RotationAboutZ(r.rotation);
                     et->scale    = glm::vec3(r.scale, et->scale.z);

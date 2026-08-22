@@ -208,14 +208,23 @@ namespace Arcane::Editor
         if (!Arcane::Scene::ApplySceneDocument(*doc, m_runtime->Registry()))
         {
             // Validated but unloadable -- the failure mode ReadSceneFile's structural
-            // gate cannot see (a component whose reflected field type is unsupported).
+            // gate cannot see: the reflection reader latched while walking a
+            // component's data. Since Task 3 (F1) that is usually MALFORMED DATA (a
+            // stale or hand-edited field value in a shape the field cannot take),
+            // with an unsupported reflected field type (E02-3) the rarer,
+            // code-defect case -- so the answer is normally IN THE FILE, not in the
+            // engine. LoadJson names the component and the field in the Console and
+            // publishes a "scene.component.malformed" row to Problems, which is what
+            // makes the "(see Console)" in the modal below a real instruction rather
+            // than a dead end (final-review finding 1: it used to be a dead end).
             // The registry is already empty by contract, so nothing of the previous
             // scene was overwritten; give the user a well-formed empty scene rather
             // than the half-populated one this left behind.
             Arcane::Scene::CreateEmpty(m_runtime->Registry());
             m_scene.Reset(*m_undo);
             m_modalErrors.Push("Scene Error", "'" + file.generic_string() +
-                           "' parsed but could not be loaded (see Console).");
+                           "' parsed but could not be loaded -- see the Console or the "
+                           "Problems panel for the component and field that refused.");
             ARC_ERROR("Open Scene: ApplySceneDocument failed for {}", file.generic_string());
             return false;
         }

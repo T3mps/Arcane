@@ -169,7 +169,8 @@ TEST_CASE("a file the reader rejects leaves the target registry untouched", "[sc
     SECTION("malformed id")
     {
         const std::filesystem::path file = dir / "badid.arcscene";
-        std::ofstream(file) << R"({"id":"not-a-guid","version":2,"entities":[]})";
+        std::ofstream(file) << R"({"id":"not-a-guid","version":)"
+                            << Arcane::Scene::kSceneJsonVersion << R"(,"entities":[]})";
         std::string err;
         CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
         CHECK_FALSE(err.empty());
@@ -181,8 +182,9 @@ TEST_CASE("a file the reader rejects leaves the target registry untouched", "[sc
         // entities-is-an-array), then LoadJson would create one entity for
         // the object element before rejecting the integer one at index 1.
         const std::filesystem::path file = dir / "badentity.arcscene";
-        std::ofstream(file) << R"({"id":"00000000-0000-0000-0000-000000000001","version":2,)"
-                               R"("entities":[{"components":{}}, 42]})";
+        std::ofstream(file) << R"({"id":"00000000-0000-0000-0000-000000000001","version":)"
+                            << Arcane::Scene::kSceneJsonVersion
+                            << R"(,"entities":[{"components":{}}, 42]})";
         std::string err;
         CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
         CHECK(err.find("entity 1") != std::string::npos);

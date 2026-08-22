@@ -23,9 +23,14 @@ namespace Arcane
     // rotation is a QUATERNION -- not Euler angles, which have no canonical
     // order and gimbal-lock, and not a matrix, which cannot be interpolated on
     // the shortest arc (see PreviousTransform below). The editor still AUTHORS
-    // it as Euler degrees: the Inspector's FieldKind::Quat draws a three-axis
+    // it as EULER ANGLES: the Inspector's FieldKind::Quat draws a three-axis
     // Euler view over the quaternion and honours the AngleFormat attribute on
-    // the reflect row (see InspectorFields.cpp).
+    // the reflect row (see InspectorFields.cpp). The UNIT is whatever that
+    // attribute says, and for this field it says RADIANS -- see the reflect
+    // block below, which carries AngleFormat::Radians deliberately so the
+    // widening did not silently flip the row from the radians the retired float
+    // showed. (This paragraph said "Euler degrees" and was wrong about its own
+    // reflect block; the reflect block is the half that was right.)
     //
     // Every scene in the tree today is planar and stays planar: a 2D pose is
     // this type with position.z == 0, a rotation about +Z only, and scale.z ==

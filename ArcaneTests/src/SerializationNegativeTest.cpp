@@ -261,7 +261,11 @@ TEST_CASE("Scene LoadJson rejects malformed/mis-versioned documents without thro
     SECTION("missing entities key")
     {
         auto reg = FreshSceneReg(keep);
-        const nlohmann::json doc = nlohmann::json::parse(R"({"version": 2})");
+        // Version built from the constant: a hardcoded number that a later
+        // bump strands would make this section refuse for the WRONG reason
+        // and stop testing the missing-entities gate at all.
+        nlohmann::json doc;
+        doc["version"] = Arcane::Scene::kSceneJsonVersion;
         bool res = true;
         CHECK_NOTHROW(res = Arcane::Scene::LoadJson(*reg, doc));
         CHECK_FALSE(res);

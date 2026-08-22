@@ -105,4 +105,37 @@ namespace Arcane
     // unit Z scale. Identical to Transform::ToMatrix for the equivalent
     // position/rotation/scale (pinned in GizmoTest.cpp).
     ARCANE_API glm::mat4 ComposeTRS(const GizmoTransform& t);
+
+    // DecomposeTRS's PRECONDITION, written down so a caller can check it before
+    // trusting the result: does this matrix's linear part keep the XY plane in
+    // the XY plane?
+    //
+    // Why it has to exist (final-review finding 4, F1). DecomposeTRS takes
+    // scale from the 2D PROJECTION of the basis columns -- |vec2(m[0])|,
+    // |vec2(m[1])| -- which equals the true axis length only while the axis
+    // lies in the plane. Under an ancestor with an out-of-plane rotation it is
+    // strictly SHORTER, so EditorApp's world->local demotion
+    // (DecomposeTRS(inverse(ParentWorldMatrix) * ComposeTRS(w))) returns a
+    // scale that is not the entity's scale -- and a PURE TRANSLATE drag on a
+    // child of a tilted parent silently shrinks it. A 45 degree pitch costs
+    // half (the projection is applied twice: once reading the world pose, once
+    // reading the demoted local one).
+    //
+    // Before F1 the state was unreachable: a float `rotation` could not express
+    // a tilted parent. The quaternion widening made it authorable -- the Quat
+    // Inspector row will set a pitch happily -- while leaving the planar
+    // assumption in place, which is the same shape as the quaternion-norm
+    // hazard Task 3 caught at the LOAD boundary, one seam over at the AUTHORING
+    // boundary.
+    //
+    // The tolerance is RELATIVE to each column's own length, because these
+    // columns carry SCALE: an absolute epsilon would refuse a 1000x-scaled
+    // planar parent and accept a 0.001x-scaled tilted one. 1e-3 of a column's
+    // length is ~0.06 degrees of tilt -- orders of magnitude above the ~1e-7
+    // float noise a chain of planar composes accumulates, and far below
+    // anything a human authors.
+    //
+    // NOT a general "is this matrix decomposable" test, and deliberately not a
+    // shear test: it answers only the question the 2D gizmo asks.
+    ARCANE_API bool IsPlanarBasis(const glm::mat4& m);
 }

@@ -220,8 +220,38 @@ namespace Arcane
     // consumers that need per-element access use FieldInfo::GetPtr<std::vector<Fixture>>
     // and iterate manually (Astra does not recurse into container elements
     // automatically -- that is the consumer's responsibility).
+    //
+    // Serializable(false), and this is a BUG FIX, not tidiness. The
+    // reflection->JSON bridge has no container branch at all
+    // (Detail::IsHandledType, ReflectionJson.hpp), so:
+    //   * the WRITER could never emit this field -- it latched "unsupported
+    //     field type" and SaveJson, which is best-effort and does not check
+    //     writer errors, wrote the file anyway with the key absent;
+    //   * the READER classifies by TYPE before it calls Find(), so it latched
+    //     on the SAME field even though the key was absent -- and there is no
+    //     way for it to be present, because of the line above.
+    // Net, before this attribute: add a Collider2D from the Inspector (it is
+    // not structure-locked, ComponentCatalog.cpp), save, and that scene could
+    // never be opened again -- LoadJson refused it, permanently, on a field
+    // nothing had ever written. Saying "this field is outside the name-keyed
+    // JSON contract" out loud is the honest statement AND the fix: it leaves
+    // both walks, exactly as PhysicsBodyRef::handle and WorldTransform::matrix
+    // already do, and Collider2D round-trips as a present-but-empty component
+    // (SaveJson's null body -> LoadJson's roster-faithful default construct).
+    //
+    // Nothing is lost that was not already lost: this never reached the file.
+    // The BINARY path is untouched -- Collider2D::Serialize(Archive&) carries
+    // the fixtures and does not consult reflection attributes -- and the
+    // Inspector row this removes was a disabled ReadOnly placeholder, since
+    // FieldKind has no vector editor either.
+    //
+    // If per-fixture authoring in .arcscene is ever wanted, the fix is a
+    // container branch in the bridge (write an array, read it back by
+    // recursing Fixture's own reflected fields), and this attribute comes off
+    // in the same change.
     ASTRA_REFLECT_TYPE(Collider2D)
         ASTRA_REFLECT_FIELD(Collider2D, fixtures)
+            ASTRA_REFLECT_ATTR(Serializable, false)
     ASTRA_END_REFLECT_TYPE()
 
     // Hidden as well as Serializable(false): runtime plumbing nobody authors

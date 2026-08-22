@@ -7,6 +7,7 @@
 #include "Panels/AssetBrowser.hpp"
 
 #include <Arcane/Project/AssetRegistry.hpp>
+#include <Arcane/Serialization/SceneSerializer.hpp>   // kSceneJsonVersion
 
 #include <filesystem>
 #include <fstream>
@@ -147,7 +148,8 @@ TEST_CASE("a .arcscene is a native JSON asset and gets a minted id", "[editor][p
     fs::create_directories(dir / "scenes", ec);
 
     std::ofstream(dir / "scenes" / "main.arcscene")
-        << R"({"version":2,"entities":[]})";   // no id -- must be minted
+        << R"({"version":)" << Arcane::Scene::kSceneJsonVersion
+        << R"(,"entities":[]})";   // no id -- must be minted
 
     Arcane::AssetRegistry reg;
     const std::size_t n = reg.ScanContent(dir, "game");

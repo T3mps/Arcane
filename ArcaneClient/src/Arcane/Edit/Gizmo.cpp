@@ -332,4 +332,50 @@ namespace Arcane
         m[3] = glm::vec4(t.position.x,   t.position.y,  0.0f, 1.0f);
         return m;
     }
+
+    bool IsPlanarBasis(const glm::mat4& m)
+    {
+        // See Gizmo.hpp for WHY. Relative to each column's own length, because
+        // these columns carry scale.
+        constexpr float kPlanarTolerance = 1e-3f;
+
+        // A column whose length is at or below kEps carries no orientation at
+        // all -- DecomposeTRS already has explicit degenerate-axis handling
+        // (scale 0, rotation from the other axis), so refusing here would
+        // reject a case the decomposition is already honest about.
+        const auto inPlane = [](const glm::vec3& c)
+        {
+            const float len = glm::length(c);
+            return len <= kEps || std::fabs(c.z) <= kPlanarTolerance * len;
+        };
+
+        // Columns 0 and 1 in the plane is the NECESSARY AND SUFFICIENT
+        // condition for the caller's actual question, and the derivation is
+        // short enough to record: the demoted matrix is inverse(L) * C, where
+        // C is ComposeTRS's output and therefore already planar. inverse(L)
+        // maps the z = 0 plane into itself exactly when L's image of that plane
+        // IS that plane -- i.e. when L's first two columns span it -- so
+        // columns 0 and 1 having no z component is the whole test.
+        //
+        // Column 2 is checked anyway, and deliberately as a CONSERVATIVE extra
+        // rather than a necessity: it is what makes the predicate mean what its
+        // NAME says, so a later caller (F4 deciding whether 2D handles are
+        // honest, say) gets "this basis is planar" and not "this basis happens
+        // not to break one particular decomposition". It cannot cost a real
+        // drag today -- a single TRS with a unit quaternion has an orthogonal
+        // basis, so columns 0 and 1 lying in the plane forces column 2 onto
+        // +/-Z -- and where a long chain of composes could in principle shear
+        // Z into the plane while keeping the first two clean, refusing is the
+        // safe answer for a gizmo that cannot express that pose either way.
+        //
+        // A NEGATIVE z scale keeps column 2 ALONG the normal and both XY axes
+        // in the plane, so a mirrored parent stays planar -- as it must, or an
+        // ordinary mirror would refuse every drag beneath it.
+        const glm::vec3 c2(m[2]);
+        const float len2 = glm::length(c2);
+        const bool zAligned = len2 <= kEps ||
+                              glm::length(glm::vec2(c2)) <= kPlanarTolerance * len2;
+
+        return inPlane(glm::vec3(m[0])) && inPlane(glm::vec3(m[1])) && zAligned;
+    }
 }

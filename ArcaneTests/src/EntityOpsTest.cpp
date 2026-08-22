@@ -544,3 +544,88 @@ TEST_CASE("CreateEntityInScene refuses when there is no SceneRoot at all",
     Astra::Entity created = Edit::CreateEntityInScene(w.reg, Astra::Entity::Invalid());
     CHECK_FALSE(created.IsValid());
 }
+
+// ---------------------------------------------------------------------------
+// Final-review finding 4 (F1): the tilted-parent scale corruption.
+//
+// DecomposeTRS reads the 2D PROJECTION of the basis columns -- scale =
+// (|vec2(m[0])|, |vec2(m[1])|). Under an ancestor with an out-of-plane
+// rotation those projections are SHORTER than the true axis lengths, and
+// EditorApp's write-back assigns that shortened pair as the child's scale.
+// So a PURE TRANSLATE drag on a child of a tilted parent silently shrinks it.
+//
+// This is F1's problem, not F4's: before this phase a float `rotation` could
+// not express a tilted parent, so the state was unreachable. The quaternion
+// widening made it authorable -- the new Quat Inspector row will set a 45
+// degree pitch happily -- while leaving the planar assumption in place. The
+// group-drag case above uses a Z-ROTATED parent, which is precisely the
+// family that does NOT trip this, so the gap was untested by construction.
+//
+// The chosen mechanism is REFUSAL, not repair: see IsPlanarBasis in Gizmo.hpp.
+TEST_CASE("a tilted parent corrupts the planar decomposition, and IsPlanarBasis names it",
+          "[outliner][gizmo]")
+{
+    World w;
+    Astra::Entity parent = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+    Astra::Entity child  = Edit::CreateEntity(w.reg, parent);
+
+    Transform* tp = w.reg.GetComponent<Transform>(parent);
+    // 45 degrees about +X: an OUT-OF-PLANE tilt, not the Z turn the 2D gizmo
+    // is built for. Authorable today through the Inspector's Euler row.
+    tp->rotation = glm::angleAxis(glm::radians(45.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+
+    Transform* tc = w.reg.GetComponent<Transform>(child);
+    tc->position = glm::vec3(2.0f, 0.0f, 0.0f);
+    tc->scale    = glm::vec3(1.0f, 1.0f, 1.0f);
+
+    // 1. The corruption is REAL, and exactly reproducible. Run EditorApp's
+    //    write-back math (EditorAppFrame.cpp:940-963) for a PURE TRANSLATE.
+    const GizmoTransform startWorld = DecomposeTRS(Edit::WorldMatrix(w.reg, child));
+    GizmoTransform moved = startWorld;
+    moved.position += glm::vec2(1.0f, 0.0f);   // translate only -- no scale handle touched
+    const glm::mat4 localMat =
+        glm::inverse(Edit::ParentWorldMatrix(w.reg, child)) * ComposeTRS(moved);
+    const GizmoTransform r = DecomposeTRS(localMat);
+
+    // The Y axis is projected onto the plane TWICE -- once reading the world
+    // pose, once reading the demoted local one -- so a unit scale comes back
+    // as cos^2(45 deg) = 0.5. Half. From a drag that only moved the entity.
+    CHECK_THAT(r.scale.y, WithinAbs(0.5f, 1e-5f));
+    CHECK_THAT(tc->scale.y, WithinAbs(1.0f, 1e-6f));   // ... and this is what it should be
+    // The X axis lies in the plane under an X-tilt, so it survives -- which is
+    // why this fails SILENTLY: half the pose still looks right.
+    CHECK_THAT(r.scale.x, WithinAbs(1.0f, 1e-5f));
+
+    // 2. IsPlanarBasis is DecomposeTRS's precondition written down, and it
+    //    names this parent as one the 2D gizmo must not demote through.
+    CHECK_FALSE(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
+
+    // 3. It must NOT fire on the family the 2D gizmo genuinely handles, or it
+    //    would refuse every ordinary drag in the tree. A Z turn with
+    //    non-uniform, non-unit scale is the general planar parent.
+    tp->rotation = Arcane::RotationAboutZ(0.6f);
+    tp->scale    = glm::vec3(2.0f, 3.0f, 1.0f);
+    CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
+
+    // A root's parent matrix is the identity -- planar by construction, and the
+    // case every unparented drag in the editor takes.
+    CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, parent)));
+
+    // A negative Z scale mirrors the plane but keeps both XY axes IN it, so the
+    // planar decomposition is still exact. Refusing it would be over-broad.
+    tp->scale = glm::vec3(2.0f, 3.0f, -1.0f);
+    CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
+
+    // A tilt small enough to be float noise from a chain of planar composes
+    // must not refuse a legitimate drag; a tilt a human could author must.
+    tp->rotation = glm::angleAxis(glm::radians(0.001f), glm::vec3(1.0f, 0.0f, 0.0f));
+    tp->scale    = glm::vec3(1.0f, 1.0f, 1.0f);
+    CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
+    tp->rotation = glm::angleAxis(glm::radians(1.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    CHECK_FALSE(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
+
+    // A tilt about +Y is the other out-of-plane axis, and it corrupts scale.x
+    // rather than scale.y -- the guard must not have been written for X alone.
+    tp->rotation = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    CHECK_FALSE(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
+}

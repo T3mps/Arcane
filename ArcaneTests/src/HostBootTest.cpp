@@ -310,7 +310,8 @@ TEST_CASE("BootSceneFile resolves the manifest's bootScene Guid to a file", "[ho
 
     const Arcane::Guid id = Arcane::Guid::Generate();
     std::ofstream(dir / "Content" / "scenes" / "main.arcscene")
-        << R"({"id":")" << id.ToString() << R"(","version":2,"entities":[]})";
+        << R"({"id":")" << id.ToString() << R"(","version":)"
+        << Arcane::Scene::kSceneJsonVersion << R"(,"entities":[]})";
 
     std::ofstream(dir / "P.arcproj") <<
         R"({"formatVersion":1,"name":"P","engine":{"abi":)"
@@ -497,7 +498,8 @@ TEST_CASE("BootSceneFile(project, id) resolves an explicit Guid to a file", "[ho
 
     const Arcane::Guid id = Arcane::Guid::Generate();
     std::ofstream(dir / "Content" / "scenes" / "main.arcscene")
-        << R"({"id":")" << id.ToString() << R"(","version":2,"entities":[]})";
+        << R"({"id":")" << id.ToString() << R"(","version":)"
+        << Arcane::Scene::kSceneJsonVersion << R"(,"entities":[]})";
 
     // bootScene left EMPTY on purpose -- this exercises the Guid overload, not
     // the manifest path (BootSceneFile(project) would return empty here).

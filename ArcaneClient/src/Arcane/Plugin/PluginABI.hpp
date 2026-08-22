@@ -252,6 +252,29 @@ namespace Arcane
     //     therefore HOST-SIDE ONLY under such a pairing, and is only a
     //     whole-process property once the module is rebuilt against this
     //     header. Accept the pairing; rebuild the module to get the win.
+    // v16, amended (2026-08-22, F1 final review): two additive changes, and the
+    //     version STAYS AT 16 for both.
+    //       * `ARCANE_API bool IsPlanarBasis(const glm::mat4&)` joins
+    //         DecomposeTRS/ComposeTRS in Edit/Gizmo.hpp. A NEW export: no
+    //         existing signature moved, and a module built against the earlier
+    //         v16 header cannot reference a symbol it has no declaration for.
+    //       * `Arcane::Collider2D::fixtures` gained Serializable(false). That is
+    //         a reflection ATTRIBUTE, not layout -- the struct is byte-identical
+    //         and the binary Serialize(Archive&) path does not consult it. A
+    //         mixed pairing disagrees only about whether the name-keyed JSON
+    //         walk visits a field that neither side could read or write anyway
+    //         (it has no container branch), which is why this could brick a
+    //         scene rather than corrupt one. Accept the pairing.
+    //     THE SCENE FILE FORMAT DID MOVE, though, and it has its own number:
+    //     Scene::kSceneJsonVersion went 2 -> 3 for the 3D Transform's on-disk
+    //     shape, which the v16 entry above describes and which nothing had
+    //     stamped until now. That gate is enforced per FILE (SceneAsset.hpp)
+    //     and per CLIPBOARD PAYLOAD (Edit::InstantiateSubtrees) -- both HOST
+    //     paths, so it is not a plugin-pairing question today (no module in the
+    //     tree loads a scene itself). It is recorded here because every
+    //     .arcscene beside a v16 module has to carry 3, the same way the
+    //     .arcproj beside it has to carry 16: ReferenceProject and Gacha's Game
+    //     were both restamped with this change.
     inline constexpr uint32_t kGamePluginABIVersion = 16;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the

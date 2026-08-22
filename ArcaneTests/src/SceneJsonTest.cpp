@@ -6,6 +6,7 @@
 #include <catch2/catch_approx.hpp>
 
 #include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Serialization/SceneSerializer.hpp>
@@ -119,7 +120,9 @@ TEST_CASE("scene JSON loader rejects malformed input without throwing", "[json][
     SECTION("entities is not an array")
     {
         auto reg = FreshReg();
-        const nlohmann::json doc = nlohmann::json::parse(R"({"version": 2, "entities": 42})");
+        nlohmann::json doc;
+        doc["version"] = Arcane::Scene::kSceneJsonVersion;
+        doc["entities"] = 42;   // built from the constant so a future bump cannot strand it
         bool result = true;
         CHECK_NOTHROW(result = Arcane::Scene::LoadJson(*reg, doc));
         CHECK_FALSE(result);
@@ -128,7 +131,9 @@ TEST_CASE("scene JSON loader rejects malformed input without throwing", "[json][
     SECTION("an entity entry is not an object")
     {
         auto reg = FreshReg();
-        const nlohmann::json doc = nlohmann::json::parse(R"({"version": 2, "entities": [ 7 ]})");
+        nlohmann::json doc;
+        doc["version"] = Arcane::Scene::kSceneJsonVersion;
+        doc["entities"] = nlohmann::json::array({ 7 });
         bool result = true;
         CHECK_NOTHROW(result = Arcane::Scene::LoadJson(*reg, doc));
         CHECK_FALSE(result);
@@ -421,4 +426,109 @@ TEST_CASE("Loading a scene with an unknown component publishes a scene diagnosti
     CHECK(reconstructed == root->entity);
 
     store.UninstallEngineSink();
+}
+
+// Final-review finding 1 (F1): the malformed-field diagnostic was WRITTEN AND
+// NEVER READ. ReflectionJson builds a message naming the field -- "malformed
+// JSON value for field 'position' ..." -- AddComponentByTypeName latched it,
+// and LoadJson then read only HasError() and returned a bare `false`. The
+// editor's modal said "'<file>' parsed but could not be loaded (see Console)"
+// and the Console held nothing but that same sentence, while the far less
+// serious Skipped* cases twenty lines below each got an ARC_WARN AND a
+// published Arcane::Diagnostic.
+//
+// Before Task 3 that path was reachable only by an unsupported field TYPE -- a
+// code defect a developer finds anyway. Task 3 made it reachable BY DATA, on
+// exactly the hand-edited-file route the reader documents itself as existing
+// to survive. So the message has to come out.
+TEST_CASE("scene JSON load publishes a diagnostic naming the malformed field",
+          "[diagnostics][json][scene]")
+{
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+
+    // "position" is PRESENT and carries a two-element array -- the stale 2D
+    // Transform shape, which is the exact case Task 3 stopped reading as
+    // "absent". Everything else about the document is well-formed.
+    nlohmann::json entity;
+    entity["components"]["Arcane::Transform"]["position"] =
+        nlohmann::json::array({ 1.0, 2.0 });
+    entity["parent"] = -1;
+    nlohmann::json doc;
+    doc["version"] = Arcane::Scene::kSceneJsonVersion;
+    doc["entities"] = nlohmann::json::array({ entity });
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+
+    // Still refuses -- Task 3's whole thesis. The change is that it is now loud.
+    CHECK_FALSE(Arcane::Scene::LoadJson(reg, doc));
+
+    const std::vector<Arcane::Diagnostic> rows = store.Snapshot();
+    REQUIRE_FALSE(rows.empty());
+    CHECK(rows[0].code == "scene.component.malformed");
+    CHECK(rows[0].severity == Arcane::DiagSeverity::Error);
+    CHECK(rows[0].scope == Arcane::DiagScope::Scene);
+    // The component name reaches the row...
+    CHECK(rows[0].message.find("Arcane::Transform") != std::string::npos);
+    // ... and so does the reader's own message, which is the ONLY thing that
+    // names the offending FIELD. Dropping this was the finding.
+    CHECK(rows[0].detail.find("position") != std::string::npos);
+
+    store.UninstallEngineSink();
+}
+
+// Final-review, pre-existing landmine (NOT F1's doing, fixed here because it is
+// one click away from the desk session this work is handed to).
+//
+// Collider2D::fixtures is a std::vector<Fixture>. Detail::IsHandledType has no
+// vector branch, and ReflectionJsonReader::Visit classifies by TYPE before it
+// calls Find() -- so the reader latched "unsupported field type" EVEN WITH THE
+// KEY ABSENT, which is the only way the key ever is (the writer cannot emit it
+// either). Collider2D is not structure-locked, so a user can add one from the
+// Inspector; SaveJson ignores writer errors and writes the file anyway. Net:
+// add a Collider2D in the editor, save, and that scene can never be opened.
+//
+// The fix marks the field Serializable(false) -- the same mechanism
+// PhysicsBodyRef::handle and WorldTransform::matrix already use -- so it leaves
+// BOTH walks, and Collider2D round-trips as a present-but-empty component. This
+// pins the round trip, which is what "the scene opens again" means.
+TEST_CASE("a scene carrying Collider2D round-trips (the vector field is out of the JSON contract)",
+          "[json][scene]")
+{
+    nlohmann::json doc;
+    {
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg(components);
+        Arcane::RegisterSceneComponents(reg);
+        Arcane::RegisterPhysicsComponents(reg);
+
+        Astra::Entity root = reg.CreateEntity();
+        reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
+
+        // Exactly what the Inspector's Add Component produces: a default
+        // Collider2D, no fixtures authored (there is no vector editor).
+        Arcane::Collider2D col;
+        reg.AddComponent<Arcane::Collider2D>(root, col);
+        reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+
+        doc = Arcane::Scene::SaveJson(reg);
+    }
+
+    // The roster stays faithful: the key is present, so the component is.
+    REQUIRE(doc["entities"][0]["components"].contains("Arcane::Collider2D"));
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+    Arcane::RegisterPhysicsComponents(reg);
+
+    // THE regression: this returned false before the fix, permanently.
+    REQUIRE(Arcane::Scene::LoadJson(reg, doc));
+
+    int colliders = 0;
+    reg.CreateView<Arcane::Collider2D>().ForEach(
+        [&](Astra::Entity, Arcane::Collider2D&) { ++colliders; });
+    CHECK(colliders == 1);
 }

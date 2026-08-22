@@ -13,7 +13,13 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include <glm/mat3x3.hpp>
+// mat4x4, NOT mat3x3. WorldMat below returns a mat4 (Task 3, F1) and this file
+// carries no mat3 at all any more -- but the mat3x3 include survived the
+// widening, and it is exactly what let the implicit glm::mat4(glm::mat3)
+// conversion compile: a mat3 helper kept building into the widened
+// WorldTransform and silently put the translation in the Z basis column. The
+// trap is documented at WorldMat itself; removing its ingredient disarms it.
+#include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
 
 #include <Astra/Registry/Registry.hpp>

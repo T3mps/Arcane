@@ -146,14 +146,19 @@ namespace Arcane::Scene
             // refuses to open.
             //
             // This still cannot catch everything LoadJson can reject. A
-            // component whose reflected field type is unsupported (the E02-3
-            // latch inside AddComponentByTypeName) only shows up once the
-            // field reader actually walks the component's data -- there is no
-            // way to see it without applying. That failure mode is why
-            // ApplySceneDocument's contract (below) requires an
-            // already-emptied registry: if E02-3 fires past this gate, the
-            // worst case is an empty registry, never a half-overwritten
-            // previous scene.
+            // component the reflection reader LATCHES on only shows up once
+            // that reader actually walks the component's data -- there is no
+            // way to see it without applying. Two causes, and since Task 3
+            // (F1) the COMMON one is data, not code:
+            //   * a field key that is PRESENT but unreadable -- wrong JSON
+            //     type, wrong array arity, a non-unit quaternion. A stale or
+            //     hand-edited scene. This is the one a user meets.
+            //   * a component whose reflected field TYPE is unsupported (the
+            //     E02-3 latch). A code defect, and the rarer of the two.
+            // That failure mode is why ApplySceneDocument's contract (below)
+            // requires an already-emptied registry: if the reader latches past
+            // this gate, the worst case is an empty registry, never a
+            // half-overwritten previous scene.
             const nlohmann::json& entities = doc["entities"];
             for (std::size_t i = 0; i < entities.size(); ++i)
             {
@@ -182,12 +187,18 @@ namespace Arcane::Scene
     // whole point of the read/apply split.
     //
     // That empty-first contract is load-bearing, not defensive style:
-    // ReadSceneFile's structural gate cannot detect an unsupported reflected
-    // field type (E02-3), so this call can still fail on a document
-    // ReadSceneFile accepted. If it does, the registry it partially populated
-    // must already have been the empty one, never the caller's previous
-    // scene -- that is the only failure mode this split does not eliminate,
-    // only contain.
+    // ReadSceneFile's structural gate cannot see anything the reflection reader
+    // latches on, so this call can still fail on a document ReadSceneFile
+    // accepted. Since Task 3 (F1) the LIKELY cause is malformed field DATA -- a
+    // stale or hand-edited value in a shape the field cannot take -- with an
+    // unsupported reflected field type (E02-3) the rarer, code-defect case.
+    // Whichever it is, the failure names itself: LoadJson leaves an ARC_WARN
+    // and a published "scene.component.malformed" Diagnostic carrying the
+    // reader's message, so a caller reporting "parsed but could not be loaded"
+    // is pointing at a Console that has the answer in it. If it does fail, the
+    // registry it partially populated must already have been the empty one,
+    // never the caller's previous scene -- that is the only failure mode this
+    // split does not eliminate, only contain.
     inline bool ApplySceneDocument(const SceneDocument& scene, Astra::Registry& reg)
     {
         return LoadJson(reg, scene.doc);

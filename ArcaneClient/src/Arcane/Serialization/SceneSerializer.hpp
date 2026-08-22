@@ -34,14 +34,32 @@
 #include <Json.hpp>
 
 #include <new>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace Arcane::Scene
 {
     // Bumped when the on-disk schema layout changes. v1 was the implicit,
-    // hardcoded local+sprite+parent format; v2 is the reflection-driven roster.
-    inline constexpr int kSceneJsonVersion = 2;
+    // hardcoded local+sprite+parent format; v2 is the reflection-driven roster;
+    // v3 is the 3D transform spine (F1, engine ABI 16).
+    //
+    // v3 is the bump for a BREAKING on-disk change, which is the only class of
+    // change this constant exists for -- Arcane::Transform's serialized shape
+    // changed incompatibly: "position"/"scale" went from 2-element to
+    // 3-element arrays and "rotation" from a scalar (radians) to a 4-element
+    // [x,y,z,w] quaternion. Leaving it at 2 through F1 was the final review's
+    // finding 3, and the cost was concrete: a v2 file fell straight PAST the
+    // version gate into the field-level reader, which refuses it one malformed
+    // array at a time, when a clean "scene schema version 2; this engine reads
+    // 3" was available at the envelope (SceneAsset.hpp's ReadSceneFile already
+    // produces exactly that sentence). It is also the ONLY cross-version guard
+    // on the entity clipboard (Edit::InstantiateSubtrees), where an old payload
+    // otherwise reaches the component reader and pastes nothing.
+    //
+    // There is no upgrade path, deliberately: the corpus is two authored files
+    // and both were re-authored with the spine (F1 decisions ledger).
+    inline constexpr int kSceneJsonVersion = 3;
 
     // Walks a type's serializable reflected fields, driving the given visitor.
     // (The seam's per-type walk, reused outside ComponentRegistry for known types.)
@@ -155,17 +173,33 @@ namespace Arcane::Scene
         //                        plugin/module that owns the type is not
         //                        loaded in this process.
         // Added: instantiated and populated cleanly. Error: instantiated, but the
-        // reflection reader latched an unsupported-field-type diagnostic (E02-3)
-        // while populating it -- this must fail the whole load, not silently
-        // install a partially-populated component with no signal anything went
-        // wrong.
+        // reflection reader latched while populating it -- either an unsupported
+        // field TYPE (E02-3) or, since Task 3 (F1), a field key that is present
+        // but unreadable. This must fail the whole load, not silently install a
+        // partially-populated component with no signal anything went wrong.
         enum class AddComponentResult { SkippedUnknownType, SkippedUnregistered, Added, Error };
 
         // Add-by-descriptor factory: instantiate a component by its reflected type
         // name and populate it from JSON via the reflection reader. Never throws.
+        //
+        // `error`, when non-null, receives the reader's own diagnostic on the
+        // Error result -- the ONE string that names the offending FIELD
+        // ("malformed JSON value for field 'position' ...", ReflectionJson.hpp).
+        // It is an out-parameter rather than part of the enum because every
+        // caller needs the enum and only the failing branch needs the string.
+        //
+        // Final-review finding 1 (F1): this message used to be built, latched,
+        // and then dropped on the floor -- callers read HasError() and returned
+        // a bare false, so the editor's "parsed but could not be loaded (see
+        // Console)" modal pointed at a Console that said nothing at all. Before
+        // Task 3 the path was reachable only by an unsupported field type, a
+        // code defect a developer finds anyway; Task 3 made it reachable BY
+        // DATA, on exactly the hand-edited-file route the reader documents
+        // itself as existing to survive.
         inline AddComponentResult AddComponentByTypeName(Astra::Registry& reg, Astra::ComponentRegistry* creg,
                                            Astra::Entity e, const std::string& typeName,
-                                           const nlohmann::json& fields)
+                                           const nlohmann::json& fields,
+                                           std::string* error = nullptr)
         {
             const Astra::TypeMeta* meta = Astra::GetMetaByName(typeName);
             if (!meta) return AddComponentResult::SkippedUnknownType;
@@ -185,6 +219,8 @@ namespace Arcane::Scene
                                                    // and on a key that IS present but unreadable
                                                    // (wrong JSON type / arity) -- see ReflectionJson.hpp
                 fieldError = reader.HasError();
+                if (fieldError && error)
+                    *error = reader.Error();
             }
             reg.AddComponentByID(e, desc->id, buf, desc->size);
             desc->Destruct(buf);
@@ -201,6 +237,13 @@ namespace Arcane::Scene
     // tolerated and leaves the field at its default; that is the forward/back-
     // compatibility path and it is unchanged. See ReflectionJson.hpp's header
     // for why the two cases had to stop being the same answer.
+    //
+    // Which of the two is COMMON matters for anyone reading a failure: since
+    // Task 3 it is malformed DATA. An unsupported field type is a code defect a
+    // developer trips in dev; a wrong-shaped value is a hand-edited or stale
+    // file, and it is the case a user actually meets. Both now leave an
+    // ARC_WARN and a published "scene.component.malformed" Diagnostic naming
+    // the component and, through the reader's own message, the field.
     inline bool LoadJson(Astra::Registry& reg, const nlohmann::json& doc)
     {
         try
@@ -265,10 +308,58 @@ namespace Arcane::Scene
                         else if (it.value().is_null())   fields = &kEmptyFields;
                         else                              continue;
 
+                        std::string fieldError;
                         const Detail::AddComponentResult r =
-                            Detail::AddComponentByTypeName(reg, creg, e, it.key(), *fields);
+                            Detail::AddComponentByTypeName(reg, creg, e, it.key(), *fields,
+                                                           &fieldError);
                         if (r == Detail::AddComponentResult::Error)
-                            return false;   // E02-3: unsupported field type latched -- fail loud
+                        {
+                            // Fail loud -- and SAY WHY. Final-review finding 1:
+                            // this branch used to be a bare `return false` while
+                            // the two far less serious Skipped* cases below each
+                            // got an ARC_WARN and a published Diagnostic, so the
+                            // one failure that refuses the WHOLE scene was the
+                            // only one with nothing behind it. `fieldError` is
+                            // the reader's message and names the field; without
+                            // it the user is told a file "could not be loaded"
+                            // and given no way to find out which value did it.
+                            ARC_WARN("scene load: component \"{}\" on entity #{} "
+                                     "(id {}, v{}) could not be read -- {}; the scene "
+                                     "was NOT loaded",
+                                     it.key(), entityIndex, e.GetID(),
+                                     static_cast<unsigned>(e.GetVersion()), fieldError);
+                            Arcane::Diagnostic d;
+                            d.severity = Arcane::DiagSeverity::Error;
+                            d.scope    = Arcane::DiagScope::Scene;
+                            d.code     = "scene.component.malformed";
+                            d.message  = "Component \"" + std::string(it.key()) +
+                                         "\" on entity #" + std::to_string(entityIndex) +
+                                         " could not be read";
+                            d.detail   = fieldError + " -- the scene was not loaded.";
+                            // NO locator, deliberately, unlike the Skipped*
+                            // branches below. Those run on a load that SUCCEEDS,
+                            // so their entity handle stays live and clickable;
+                            // this one abandons the partially-created scene, so
+                            // an Entity locator would send the user chasing a
+                            // handle into a registry the caller is about to
+                            // replace (EditorApp::DoOpenScene -> CreateEmpty).
+                            //
+                            // Published HERE, because the post-loop Publish is
+                            // never reached from this return -- and publication
+                            // is a group REPLACE, so skipping it entirely would
+                            // leave the PREVIOUS scene's rows standing as though
+                            // they still described the editor's state.
+                            //
+                            // Published as a ONE-ROW group, NOT as
+                            // `diagnostics`: the Skipped* rows accumulated above
+                            // carry Entity locators into the partial scene this
+                            // load is abandoning, and they describe skips inside
+                            // a load that did not happen. The one row that is
+                            // still true afterwards is this one.
+                            Arcane::Diagnostics::Publish(
+                                "scene", std::span<const Arcane::Diagnostic>(&d, 1));
+                            return false;
+                        }
 
                         // Skipped (either cause): unknown/unregistered types are
                         // tolerated -- a structurally valid scene still loads --
