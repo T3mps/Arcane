@@ -86,14 +86,23 @@ namespace Arcane
     ARCANE_API GizmoTransform ApplyGroupDelta(const GizmoTransform& t,
                                               const GizmoGroupDelta& d);
 
-    // A 2D TRS mat3 (the shape Transform::ToMatrix produces) split back into
-    // position/rotation/scale. Assumes no shear -- true for any product of TRS
-    // matrices with non-negative scale, which is what the scene graph builds.
-    // A zero-length basis axis yields scale 0 on that axis and leaves the
-    // rotation taken from the other axis.
-    ARCANE_API GizmoTransform DecomposeTRS(const glm::mat3& m);
+    // The PLANAR slice of a TRS mat4 (the shape Transform::ToMatrix produces)
+    // split into position/rotation/scale. Assumes no shear -- true for any
+    // product of TRS matrices with non-negative scale, which is what the scene
+    // graph builds. A zero-length basis axis yields scale 0 on that axis and
+    // leaves the rotation taken from the other axis.
+    //
+    // Task 3 (F1) widened the matrix to a mat4; GizmoTransform stays 2D because
+    // THE GIZMO STAYS 2D (making it 3D is F4). So this reads only the XY block
+    // and the Z-axis turn, and everything out of that plane -- position.z,
+    // scale.z, any tilt -- is DROPPED. Round-tripping a pose through
+    // Decompose->Compose is therefore lossy for a non-planar entity, which is
+    // why EditorApp's write-back re-merges the components the gizmo cannot
+    // express instead of assigning the decomposed pose wholesale.
+    ARCANE_API GizmoTransform DecomposeTRS(const glm::mat4& m);
 
-    // Inverse of DecomposeTRS; identical to Transform::ToMatrix for the same
-    // position/rotation/scale.
-    ARCANE_API glm::mat3 ComposeTRS(const GizmoTransform& t);
+    // Inverse of DecomposeTRS: the planar pose embedded in a mat4 at z = 0 with
+    // unit Z scale. Identical to Transform::ToMatrix for the equivalent
+    // position/rotation/scale (pinned in GizmoTest.cpp).
+    ARCANE_API glm::mat4 ComposeTRS(const GizmoTransform& t);
 }

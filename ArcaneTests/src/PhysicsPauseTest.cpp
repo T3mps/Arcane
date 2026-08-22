@@ -26,7 +26,7 @@ namespace
             std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd), {} });
         auto add = [&](glm::vec2 pos, glm::vec2 half, Manifold2D::Physics::BodyType t) {
             Astra::Entity e = reg.CreateEntity();
-            Transform lt; lt.position = pos;
+            Transform lt; lt.position = glm::vec3(pos, 0.0f);
             reg.AddComponent<Transform>(e, lt);
             reg.AddComponent<WorldTransform>(e, WorldTransform{});
             RigidBody2D rb; rb.type = t; rb.fixedRotation = true;

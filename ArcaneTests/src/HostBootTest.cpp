@@ -375,7 +375,7 @@ TEST_CASE("BootScene loads the resolved scene into the runtime and reports the f
     const std::string ltName(Astra::GetMeta<Arcane::Transform>()->typeName);
 
     nlohmann::json e0;
-    e0["components"][ltName]["position"] = { 3.0, 4.0 };
+    e0["components"][ltName]["position"] = { 3.0, 4.0, 0.0 };   // Task 3 (F1): position is a vec3
     nlohmann::json doc;
     doc["id"] = id.ToString();
     doc["version"] = Arcane::Scene::kSceneJsonVersion;
@@ -531,7 +531,7 @@ TEST_CASE("BootScene(runtime, project, id) boots an explicit Guid override into 
     const std::string ltName(Astra::GetMeta<Arcane::Transform>()->typeName);
 
     nlohmann::json e0;
-    e0["components"][ltName]["position"] = { 5.0, 6.0 };
+    e0["components"][ltName]["position"] = { 5.0, 6.0, 0.0 };   // Task 3 (F1): position is a vec3
     nlohmann::json doc;
     doc["id"] = id.ToString();
     doc["version"] = Arcane::Scene::kSceneJsonVersion;

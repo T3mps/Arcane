@@ -35,12 +35,12 @@ TEST_CASE("scene round-trips through JSON (typed roster)", "[json][scene]")
         Arcane::RegisterSceneComponents(reg);
 
         Astra::Entity root = reg.CreateEntity();
-        Arcane::Transform rootT; rootT.position = glm::vec2(100, 0);
+        Arcane::Transform rootT; rootT.position = glm::vec3(100, 0, 0);
         reg.AddComponent<Arcane::Transform>(root, rootT);
         reg.AddComponent<Arcane::SpriteRenderer>(root, Arcane::SpriteRenderer{});
 
         Astra::Entity child = reg.CreateEntity();
-        Arcane::Transform childT; childT.position = glm::vec2(10, 5);
+        Arcane::Transform childT; childT.position = glm::vec3(10, 5, 0);
         reg.AddComponent<Arcane::Transform>(child, childT);
         Arcane::SpriteRenderer sr; sr.tint = glm::vec4(0.5f, 0.6f, 0.7f, 1.0f); sr.sortingLayer = 2;
         reg.AddComponent<Arcane::SpriteRenderer>(child, sr);

@@ -38,15 +38,20 @@ namespace
         return reg;
     }
 
-    // A non-rotating world matrix: basis columns carry the scale, m[2] the
+    // A non-rotating world matrix: basis columns carry the scale, m[3] the
     // translation (matches Transform::ToMatrix, which RenderSubmissionSystem
     // decomposes the same way).
-    glm::mat3 WorldMat(glm::vec2 pos, glm::vec2 scale)
+    //
+    // Task 3 (F1): this MUST return a mat4. glm's mat4(mat3) conversion is
+    // implicit, so a mat3 helper still compiled into the widened
+    // WorldTransform -- and silently landed the translation in the Z BASIS
+    // COLUMN, framing every entity at the origin.
+    glm::mat4 WorldMat(glm::vec2 pos, glm::vec2 scale)
     {
-        glm::mat3 m(1.0f);
-        m[0] = glm::vec3(scale.x, 0.0f, 0.0f);
-        m[1] = glm::vec3(0.0f, scale.y, 0.0f);
-        m[2] = glm::vec3(pos.x, pos.y, 1.0f);
+        glm::mat4 m(1.0f);
+        m[0] = glm::vec4(scale.x, 0.0f, 0.0f, 0.0f);
+        m[1] = glm::vec4(0.0f, scale.y, 0.0f, 0.0f);
+        m[3] = glm::vec4(pos.x, pos.y, 0.0f, 1.0f);
         return m;
     }
 

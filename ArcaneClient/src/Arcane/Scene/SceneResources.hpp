@@ -23,6 +23,12 @@ namespace Arcane
     // Blend a previous fixed-step pose toward the current one by RunLoop alpha so
     // slow-mo renders smoothly instead of snapping. Rotation MUST use AngleLerp
     // (shortest arc), not a matrix-component lerp.
+    //
+    // These two serve the PHYSICS-side InterpPose below, which stays a 2D pose
+    // (glm::vec2 + a scalar angle) because Manifold2D is a 2D solver. The
+    // COMPONENT-side pose (Arcane::PreviousTransform) went 3D in Task 3 (F1)
+    // and blends through Arcane::LerpPose (Components.hpp), whose rotation half
+    // is glm::slerp -- the same shortest-arc guarantee, one dimension up.
     [[nodiscard]] inline float Lerp(float a, float b, float t) noexcept
     {
         return a + (b - a) * t;

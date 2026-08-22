@@ -77,10 +77,14 @@ namespace Arcane
                 return;   // first active wins; keep counting for the caller's warning
 
             halfH = cam.orthographicSize;
+            // Task 3 (F1): the world matrix is a mat4, so the translation is
+            // column 3 (it was column 2). The ORTHOGRAPHIC path is otherwise
+            // untouched and stays glm::vec2-shaped end to end -- an ortho camera
+            // frames the XY plane and has no use for the entity's Z.
             if (const WorldTransform* wt = reg.GetComponent<WorldTransform>(e))
-                center = glm::vec2(wt->matrix[2].x, wt->matrix[2].y);   // translation column
+                center = glm::vec2(wt->matrix[3].x, wt->matrix[3].y);   // translation column
             else if (const Transform* lt = reg.GetComponent<Transform>(e))
-                center = lt->position;   // not propagated yet: local IS world for a root
+                center = glm::vec2(lt->position);   // not propagated yet: local IS world for a root
         });
 
         if (outCount)
@@ -116,11 +120,13 @@ namespace Arcane
     // switch is a deliberate decision, not a silent drift.
     //
     // HANDEDNESS: right-handed (the camera looks down -Z; +X is right, +Y is
-    // up), matching glm's own RH family (perspectiveRH_*/lookAtRH). There is
-    // no PRE-EXISTING 3D handedness to inherit from the ortho path: Transform/
-    // WorldTransform are 2D-only throughout today's tree (Components.hpp --
-    // glm::vec2 position, glm::mat3 world matrix) and sprite.hlsl hardcodes
-    // clip.z = 0.0, so nothing upstream of this task fixes a convention. RH is
+    // up), matching glm's own RH family (perspectiveRH_*/lookAtRH). When this
+    // was written there was no PRE-EXISTING 3D handedness to inherit from the
+    // ortho path (Transform/WorldTransform were 2D-only) and sprite.hlsl
+    // hardcodes clip.z = 0.0, so nothing upstream fixed a convention. Task 3
+    // (F1) made Transform 3D, and it adopts THIS convention rather than
+    // competing with it: +Z is toward the viewer, so a planar scene sits at
+    // z = 0 and a camera looking down -Z sees it. RH is
     // instead FORCED by this task's own pinned property (PerspectiveCameraTest.cpp,
     // the 90-degree-fov case): a view-space point (z, 0, -z) lands exactly on
     // the RIGHT clip plane at fovY=90 deg/aspect=1 only if points in front of the
@@ -157,14 +163,17 @@ namespace Arcane
     // WorldTransform-then-Transform-fallback rule ActiveSceneCamera uses
     // above (so moving a camera entity moves both lenses the same way),
     // extended into 3D at Z=0. Orientation is fixed at forward=(0,0,-1),
-    // up=(0,1,0): Transform carries no 3D orientation yet (2D-only,
-    // Components.hpp) so a perspective camera's FACING is future work --
-    // authoring a full 3D pose is out of THIS task's scope (no new Transform,
-    // no new Camera fields beyond the interface above). Today it always looks
-    // straight down -Z from its authored 2D position, which is a real,
-    // narrow, and explicit contract: enough for a GPU consumer to have a
-    // working camera without this task inventing a 3D transform its own file
-    // list does not include.
+    // up=(0,1,0).
+    //
+    // Task 3 (F1) NOTE -- Transform now DOES carry a 3D position and a
+    // quaternion, so the "no 3D orientation to read" reason this contract was
+    // originally written for is gone. It is kept UNCHANGED here anyway, and
+    // deliberately: Task 3 is a type widening, and pointing this lens at the
+    // camera entity's real pose is a behaviour change that belongs with the
+    // task that gives a user a way to AIM it (F4's camera work). Wiring it
+    // early would silently re-frame every scene the moment one gained a
+    // non-zero Z or a tilt. Today it still looks straight down -Z from the
+    // authored XY position, byte-identically.
     inline std::optional<PerspectiveCameraView> ActivePerspectiveSceneCamera(Astra::Registry& reg,
                                                                               float aspectRatio,
                                                                               int* outCount = nullptr)
@@ -187,9 +196,9 @@ namespace Arcane
             nearZ       = cam.nearZ;
             farZ        = cam.farZ;
             if (const WorldTransform* wt = reg.GetComponent<WorldTransform>(e))
-                center = glm::vec2(wt->matrix[2].x, wt->matrix[2].y);   // translation column
+                center = glm::vec2(wt->matrix[3].x, wt->matrix[3].y);   // translation column
             else if (const Transform* lt = reg.GetComponent<Transform>(e))
-                center = lt->position;   // not propagated yet: local IS world for a root
+                center = glm::vec2(lt->position);   // not propagated yet: local IS world for a root
         });
 
         if (outCount)

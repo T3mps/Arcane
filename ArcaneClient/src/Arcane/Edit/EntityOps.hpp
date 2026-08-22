@@ -179,9 +179,9 @@ namespace Arcane::Edit
     // chain (identity for a missing Transform at any level). Computed from the
     // live graph rather than the WorldTransform component, which is only
     // refreshed for SceneRoot's subtree.
-    ARCANE_API glm::mat3 WorldMatrix(Astra::Registry& reg, Astra::Entity e);
+    ARCANE_API glm::mat4 WorldMatrix(Astra::Registry& reg, Astra::Entity e);
 
     // World matrix of `e`'s PARENT (identity when it has none) -- invert this
     // to convert a world pose back into `e`'s local Transform.
-    ARCANE_API glm::mat3 ParentWorldMatrix(Astra::Registry& reg, Astra::Entity e);
+    ARCANE_API glm::mat4 ParentWorldMatrix(Astra::Registry& reg, Astra::Entity e);
 }

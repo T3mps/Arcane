@@ -55,7 +55,7 @@ TEST_CASE("ComponentEditCommand restores a component before/after via reflection
     auto reg = MakeReg();
     const Astra::Entity e = reg->CreateEntity();
     Arcane::Transform lt;
-    lt.position = glm::vec2(1.0f, 2.0f);
+    lt.position = glm::vec3(1.0f, 2.0f, 0.0f);
     reg->AddComponent<Arcane::Transform>(e, lt);
 
     const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::Transform");
@@ -63,7 +63,7 @@ TEST_CASE("ComponentEditCommand restores a component before/after via reflection
 
     // before = current; mutate; after = mutated.
     std::vector<std::byte> before = Arcane::ComponentEditCommand::Snapshot(*reg, e, desc);
-    reg->GetComponent<Arcane::Transform>(e)->position = glm::vec2(9.0f, 9.0f);
+    reg->GetComponent<Arcane::Transform>(e)->position = glm::vec3(9.0f, 9.0f, 0.0f);
     std::vector<std::byte> after = Arcane::ComponentEditCommand::Snapshot(*reg, e, desc);
     REQUIRE(before != after);
 
@@ -97,7 +97,7 @@ TEST_CASE("CommandStack: one-gesture transaction undo/redo + redo cleared on new
 {
     auto reg = MakeReg();
     const Astra::Entity e = reg->CreateEntity();
-    Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
+    Arcane::Transform lt; lt.position = glm::vec3(0.0f);
     reg->AddComponent<Arcane::Transform>(e, lt);
     const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::Transform");
 
@@ -107,7 +107,7 @@ TEST_CASE("CommandStack: one-gesture transaction undo/redo + redo cleared on new
     // returns the owner token; only its holder may close the transaction.
     Arcane::TransactionId txn = stack.Begin("move");
     stack.SnapshotComponent(e, desc);
-    reg->GetComponent<Arcane::Transform>(e)->position = glm::vec2(5.0f, 0.0f);
+    reg->GetComponent<Arcane::Transform>(e)->position = glm::vec3(5.0f, 0.0f, 0.0f);
     stack.Commit(txn);
 
     REQUIRE(stack.CanUndo());
@@ -124,7 +124,7 @@ TEST_CASE("CommandStack: one-gesture transaction undo/redo + redo cleared on new
     stack.Undo();                         // back to x=0, redo available
     REQUIRE(stack.CanRedo());
     txn = stack.Begin("move2"); stack.SnapshotComponent(e, desc);
-    reg->GetComponent<Arcane::Transform>(e)->position = glm::vec2(7.0f, 0.0f);
+    reg->GetComponent<Arcane::Transform>(e)->position = glm::vec3(7.0f, 0.0f, 0.0f);
     stack.Commit(txn);
     CHECK_FALSE(stack.CanRedo());
 }
@@ -274,7 +274,7 @@ TEST_CASE("CommandStack: survives a registry object swap (resolver, no dangling 
     // Commit one edit on the pre-swap registry.
     const Arcane::TransactionId pre = stack.Begin("pre-swap edit");
     stack.SnapshotComponent(e, desc);
-    reg->GetComponent<Arcane::Transform>(e)->position = glm::vec2(1.0f, 0.0f);
+    reg->GetComponent<Arcane::Transform>(e)->position = glm::vec3(1.0f, 0.0f, 0.0f);
     stack.Commit(pre);
     REQUIRE(stack.CanUndo());
 
@@ -552,7 +552,7 @@ TEST_CASE("CommandStack: depth cap drops the oldest", "[edit]")
     {
         const Arcane::TransactionId txn = stack.Begin("e");
         stack.SnapshotComponent(e, desc);
-        reg->GetComponent<Arcane::Transform>(e)->position = glm::vec2((float)i, 0.0f);
+        reg->GetComponent<Arcane::Transform>(e)->position = glm::vec3((float)i, 0.0f, 0.0f);
         stack.Commit(txn);
     }
     // Cap 2: only the last two edits are undoable (3->2, 2->1); the 0->1 op was dropped.

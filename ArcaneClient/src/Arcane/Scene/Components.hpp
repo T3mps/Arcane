@@ -11,6 +11,7 @@
 #include <Astra/Reflection/Reflection.hpp>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>          // quat, mat4_cast, slerp
 
 #include <cmath>
 #include <cstdint>
@@ -18,42 +19,112 @@
 
 namespace Arcane
 {
+    // Task 3 (F1): the transform spine is 3D. position/scale are vec3 and
+    // rotation is a QUATERNION -- not Euler angles, which have no canonical
+    // order and gimbal-lock, and not a matrix, which cannot be interpolated on
+    // the shortest arc (see PreviousTransform below). The editor still AUTHORS
+    // it as Euler degrees: the Inspector's FieldKind::Quat draws a three-axis
+    // Euler view over the quaternion and honours the AngleFormat attribute on
+    // the reflect row (see InspectorFields.cpp).
+    //
+    // Every scene in the tree today is planar and stays planar: a 2D pose is
+    // this type with position.z == 0, a rotation about +Z only, and scale.z ==
+    // 1, which reproduces the retired mat3 path exactly (pinned by
+    // TransformSpineTest.cpp's "Z-axis quaternion reproduces the retired 2D
+    // rotation matrix" case).
     struct Transform
     {
-        glm::vec2 position{0.0f, 0.0f};
-        float     rotation = 0.0f;          // radians
-        glm::vec2 scale{1.0f, 1.0f};
+        glm::vec3 position{0.0f, 0.0f, 0.0f};
+        glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};   // identity; glm's ctor is (w, x, y, z)
+        glm::vec3 scale{1.0f, 1.0f, 1.0f};
 
-        // 2D TRS in column-major homogeneous mat3 (translation in column 2).
-        glm::mat3 ToMatrix() const
+        // TRS in column-major homogeneous mat4: translate * rotate * scale, so
+        // the local axes are scaled, then turned, then shifted (translation in
+        // COLUMN 3 -- it was column 2 in the mat3 this replaced, which is the
+        // one index every reader of a world matrix had to move).
+        //
+        // Built column-wise rather than as three glm::translate/scale products:
+        // this is called once per entity per propagation pass, and the product
+        // form spends two full 4x4 multiplies re-deriving a result whose shape
+        // is known. Equivalence is pinned against the product form in
+        // TransformSpineTest.cpp.
+        glm::mat4 ToMatrix() const
         {
-            const float c = std::cos(rotation);
-            const float s = std::sin(rotation);
-            glm::mat3 m(1.0f);
-            m[0] = glm::vec3(c * scale.x,  s * scale.x, 0.0f);
-            m[1] = glm::vec3(-s * scale.y, c * scale.y, 0.0f);
-            m[2] = glm::vec3(position.x,   position.y,  1.0f);
+            glm::mat4 m = glm::mat4_cast(rotation);
+            m[0] *= scale.x;
+            m[1] *= scale.y;
+            m[2] *= scale.z;
+            m[3] = glm::vec4(position, 1.0f);
             return m;
         }
     };
 
     struct WorldTransform
     {
-        glm::mat3 matrix{1.0f};             // computed by TransformPropagationSystem; never authored
+        glm::mat4 matrix{1.0f};             // computed by TransformPropagationSystem; never authored
     };
+
+    // The planar bridge (Task 3, F1). Three subsystems are deliberately still
+    // 2D -- the physics simulation (Manifold2D is a 2D solver), the sprite
+    // submission path, and the transform gizmo -- and each of them has to turn a
+    // quaternion into the one angle it understands, and back. These two exist so
+    // that conversion has ONE definition instead of a hand-rolled copy at each
+    // seam that could drift in sign or convention.
+    //
+    // RotationZ reads the image of local +X, which is exactly how every consumer
+    // of a WORLD matrix reads its angle (atan2 of basis column 0). That makes
+    // the two agree for a planar pose, and degrade identically for one that is
+    // not: an out-of-plane rotation projects onto the XY plane rather than
+    // producing a different answer per call site.
+    [[nodiscard]] inline float RotationZ(const glm::quat& q) noexcept
+    {
+        const glm::vec3 forward = q * glm::vec3(1.0f, 0.0f, 0.0f);
+        return std::atan2(forward.y, forward.x);
+    }
+
+    [[nodiscard]] inline glm::quat RotationAboutZ(float radians) noexcept
+    {
+        return glm::angleAxis(radians, glm::vec3(0.0f, 0.0f, 1.0f));
+    }
 
     // PreviousTransform (Epic 04.2): an entity's LOCAL pose at the previous fixed
     // step, captured by PhysicsSystem write-back before it overwrites Transform.
     // RenderSubmissionSystem draws at lerp(previous -> current, alpha) for smooth
-    // slow-mo. Decomposed (position + angle) so rotation interpolates on the shortest
-    // arc, NOT by lerping matrix components. Purely derived render state: an entity
-    // opts into interpolation by carrying it; absent -> the sprite snaps to the latest
-    // step (unchanged).
+    // slow-mo. Decomposed (position + rotation) so rotation interpolates on the
+    // shortest arc, NOT by lerping matrix components. Purely derived render state:
+    // an entity opts into interpolation by carrying it; absent -> the sprite snaps
+    // to the latest step (unchanged).
     struct PreviousTransform
     {
-        glm::vec2 position{0.0f, 0.0f};
-        float     rotation = 0.0f;          // radians
+        glm::vec3 position{0.0f, 0.0f, 0.0f};
+        glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
     };
+
+    // The render-interpolation blend: prev -> cur at alpha. Rotation is SLERP,
+    // which is the 3D expression of the shortest-arc contract above -- glm::slerp
+    // negates one input when their dot is negative, so a 170 deg -> -170 deg step
+    // takes the +20 deg arc through 180 rather than unwinding -340 deg through 0,
+    // exactly as the retired float path's AngleLerp did. A component-wise
+    // glm::mix of the two quaternions would take the wrong arc (pinned in
+    // TransformSpineTest.cpp), and lerping the two POSE MATRICES would shear
+    // through the middle of the turn instead of rotating.
+    //
+    // A free function rather than a method: it is a pure blend of two poses, and
+    // the ONE consumer (RenderSubmissionSystem) blends a PreviousTransform
+    // against a world pose it just decomposed, not against another component.
+    //
+    // The position half is spelled a + (b - a) * t, NOT glm::mix (which is
+    // a * (1 - t) + b * t): that is the exact expression Arcane::Lerp
+    // (SceneResources.hpp) used here before, and the two differ in the last ulp.
+    // Keeping the arithmetic identical is what makes a planar sprite land on the
+    // same sub-pixel it did before the widening.
+    [[nodiscard]] inline PreviousTransform LerpPose(const PreviousTransform& prev,
+                                                    const PreviousTransform& cur,
+                                                    float alpha) noexcept
+    {
+        return PreviousTransform{ prev.position + (cur.position - prev.position) * alpha,
+                                  glm::slerp(prev.rotation, cur.rotation, alpha) };
+    }
 
     // The primitive a SpriteRenderer draws. Lets the ONE canonical 2D submission
     // path (RenderSubmissionSystem) render filled circles + capsules, not just
@@ -186,9 +257,17 @@ namespace Arcane
     ASTRA_REFLECT_TYPE(Transform)
         ASTRA_REFLECT_FIELD(Transform, position)
             ASTRA_REFLECT_ATTR(Tooltip, "World position in meters (MKS units). The renderer applies no Y-flip, so +Y moves an entity DOWN on screen, not up.")
+        // AngleFormat survives the widening to a quaternion unchanged, and
+        // KEEPING it is what preserves the authoring experience. It was inert
+        // on the float field this replaces (nothing read it -- InspectorMeta.hpp),
+        // so the Inspector showed the stored radians raw. FieldKind::Quat DOES
+        // read it (InspectorView.cpp's Quat row), and Radians is the value that
+        // makes its Euler drags go on showing radians; dropping the attribute
+        // would silently flip the Transform rotation row to degrees, which is a
+        // UI change this task has no business making.
         ASTRA_REFLECT_FIELD(Transform, rotation)
             ASTRA_REFLECT_ATTR(AngleFormat, Astra::AngleFormat::Unit::Radians)
-            ASTRA_REFLECT_ATTR(Tooltip, "Rotation in radians.")
+            ASTRA_REFLECT_ATTR(Tooltip, "Orientation, stored as a quaternion and edited as Euler angles about X/Y/Z. A 2D scene turns about Z only.")
         ASTRA_REFLECT_FIELD(Transform, scale)
     ASTRA_END_REFLECT_TYPE()
 

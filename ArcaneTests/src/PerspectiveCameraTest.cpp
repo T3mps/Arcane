@@ -42,7 +42,7 @@ namespace
         {
             const Astra::Entity e = reg.CreateEntity();
             Arcane::Transform t;
-            t.position = worldPos;
+            t.position = glm::vec3(worldPos, 0.0f);   // Task 3 (F1): 3D pose, planar scene
             reg.AddComponent<Arcane::Transform>(e, t);
             reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{t.ToMatrix()});
             Arcane::Camera cam;
@@ -59,7 +59,7 @@ namespace
         {
             const Astra::Entity e = reg.CreateEntity();
             Arcane::Transform t;
-            t.position = worldPos;
+            t.position = glm::vec3(worldPos, 0.0f);   // Task 3 (F1): 3D pose, planar scene
             reg.AddComponent<Arcane::Transform>(e, t);
             reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{t.ToMatrix()});
             reg.AddComponent<Arcane::Camera>(e, Arcane::Camera{halfHeight, active});

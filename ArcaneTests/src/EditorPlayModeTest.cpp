@@ -111,7 +111,7 @@ TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[editor]")
 
     const Astra::Entity e = reg.CreateEntity();
     Arcane::Transform lt;
-    lt.position = glm::vec2(1.0f, 0.0f);
+    lt.position = glm::vec3(1.0f, 0.0f, 0.0f);
     reg.AddComponent<Arcane::Transform>(e, lt);
 
     const Astra::ComponentDescriptor* desc = DescriptorFor(reg, e, "Arcane::Transform");
@@ -124,7 +124,7 @@ TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[editor]")
     // Edit-mode edit, committed BEFORE Play: before={1,0}, after={5,0}.
     const Arcane::TransactionId txn = stack.Begin("edit");
     stack.SnapshotComponent(e, desc);
-    reg.GetComponent<Arcane::Transform>(e)->position = glm::vec2(5.0f, 0.0f);
+    reg.GetComponent<Arcane::Transform>(e)->position = glm::vec3(5.0f, 0.0f, 0.0f);
     stack.Commit(txn);
     REQUIRE(stack.CanUndo());
 
@@ -134,7 +134,7 @@ TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[editor]")
 
     // Play-time mutation: never captured by the stack (the Inspector/gizmo
     // gate capture to Edit mode) -- Stop must discard this, not undo it.
-    runtime.Registry().GetComponent<Arcane::Transform>(e)->position = glm::vec2(99.0f, 99.0f);
+    runtime.Registry().GetComponent<Arcane::Transform>(e)->position = glm::vec3(99.0f, 99.0f, 0.0f);
 
     // Stop: restore swaps in a NEW registry object built from the snapshot.
     REQUIRE(runtime.RestoreRegistry(*snap.GetValue()));

@@ -39,9 +39,12 @@
 //        the about-to-be-overwritten Transform pose into it first, so
 //        RenderSubmissionSystem can lerp prev -> current by render alpha.
 //      - Then write:
-//        world->Position(handle) -> Transform.position
-//        world->GetAngle(handle) -> Transform.rotation
+//        world->Position(handle) -> Transform.position.xy  (z preserved)
+//        world->GetAngle(handle) -> Transform.rotation, as a pure +Z quaternion
 //      (Also writes Velocity back into RigidBody2D.velocity for Dynamic bodies.)
+//      Task 3 (F1): Transform is 3D but this solver is not -- see the DEGENERATE
+//      CASE banner in the CREATE pass and the write-back's own comment for what
+//      that means for an entity's Z and its out-of-plane orientation.
 //      TransformPropagationSystem (registered after this system) then derives
 //      WorldTransform from the updated Transform.
 //
@@ -309,10 +312,20 @@ namespace Arcane
 
                     Phys::BodyDef def;
                     def.type     = rb.type;
+                    // THE DEGENERATE CASE, STATED ONCE FOR THE WHOLE FILE
+                    // (Task 3, F1): Transform is 3D but Manifold2D is a 2D
+                    // solver, so this system reads and writes the XY PLANE and
+                    // the Z-AXIS TURN ONLY. position.z, scale.z, and any
+                    // out-of-plane component of `rotation` are not inputs to the
+                    // simulation -- they are neither consulted here nor
+                    // preserved by SetAngle-style writes; see the write-back
+                    // pass for what that costs. This is deliberate and is NOT an
+                    // oversight of the widening: 3D physics is a separate
+                    // decision that has not been made.
                     def.position = Phys::Vec2(lt.position.x, lt.position.y);
 
                     // Primary fixture shape, scaled by the authored Transform.scale.
-                    def.shape = MakeScaledShape(fx0, lt.scale);
+                    def.shape = MakeScaledShape(fx0, glm::vec2(lt.scale));
 
                     // Material + filter + local transform from fixture[0].
                     // T6 fix: categoryBits / maskBits / localPos / localAngle were
@@ -346,7 +359,7 @@ namespace Arcane
                     // one physics fixture per authored Fixture descriptor.
                     for (std::size_t i = 1; i < col.fixtures.size(); ++i)
                     {
-                        Phys::FixtureDef fd = MakeFixtureDef(col.fixtures[i], lt.scale);
+                        Phys::FixtureDef fd = MakeFixtureDef(col.fixtures[i], glm::vec2(lt.scale));
                         world.AddFixture(handle, fd);
                     }
 
@@ -356,7 +369,7 @@ namespace Arcane
                         world.SetVelocity(handle, Phys::Vec2(rb.velocity.x, rb.velocity.y));
 
                     ref.handle           = handle;
-                    ref.appliedScale     = lt.scale;
+                    ref.appliedScale     = glm::vec2(lt.scale);   // 2D solver: scale.z is not a fixture dimension
                     entityToBody[entity] = handle;
                 });
             }
@@ -428,18 +441,23 @@ namespace Arcane
                     // physics never writes scale, so appliedScale can't drift; this
                     // both detects the edit and suppresses per-frame re-rebuild. Runs
                     // before the pose branch (rebuild does not move the body).
-                    if (lt.scale != ref.appliedScale)
+                    const glm::vec2 planarScale(lt.scale);   // 2D solver: see the CREATE pass banner
+                    if (planarScale != ref.appliedScale)
                     {
-                        RebuildScaledFixtures(world, ref.handle, col, lt.scale);
-                        ref.appliedScale = lt.scale;
+                        RebuildScaledFixtures(world, ref.handle, col, planarScale);
+                        ref.appliedScale = planarScale;
                     }
 
-                    // POS/ROT: stateless author reconcile.
+                    // POS/ROT: stateless author reconcile. Only the Z-axis turn
+                    // of the authored quaternion reaches the body -- an author
+                    // who tilts an entity out of the XY plane in the Inspector
+                    // is editing something the 2D solver has no state for, so
+                    // that part of the edit is simply not a divergence here.
                     const Phys::Vec2 bp = world.Position(ref.handle);
                     const float      ba = static_cast<float>(world.GetAngle(ref.handle));
                     if (std::abs(lt.position.x - static_cast<float>(bp.x)) > kAuthorPosEps ||
                         std::abs(lt.position.y - static_cast<float>(bp.y)) > kAuthorPosEps ||
-                        AngleDelta(lt.rotation, ba) > kAuthorRotEps)
+                        AngleDelta(RotationZ(lt.rotation), ba) > kAuthorRotEps)
                     {
                         // SetPosition + SetAngle are BOTH load-bearing for a moved STATIC
                         // body: SetPosition updates the pose but NOT the static broadphase
@@ -450,7 +468,7 @@ namespace Arcane
                         // fling on resume") -- for a Kinematic body with authored rb.velocity
                         // this is a SPEC #1 design consequence (velocity re-apply is a non-goal).
                         world.SetPosition(ref.handle, Phys::Vec2(lt.position.x, lt.position.y));
-                        world.SetAngle(ref.handle, static_cast<Phys::Real>(lt.rotation));
+                        world.SetAngle(ref.handle, static_cast<Phys::Real>(RotationZ(lt.rotation)));
                         world.SetVelocity(ref.handle, Phys::Vec2(0.0f, 0.0f));
                         world.SetAngularVelocity(ref.handle, static_cast<Phys::Real>(0));
                     }
@@ -493,9 +511,26 @@ namespace Arcane
                         }
                     }
 
+                    // THE 2D WRITE-BACK, NAMED DELIBERATELY (Task 3, F1). The
+                    // solver owns the XY plane and the Z-axis turn, so that is
+                    // exactly what is written:
+                    //   * position.z is PRESERVED -- physics has no depth state,
+                    //     so an authored Z would be destroyed by writing 0 here,
+                    //     and stomping an author's value with a value the solver
+                    //     never computed is the worse of the two errors.
+                    //   * rotation is REPLACED by a pure Z-axis quaternion. Any
+                    //     out-of-plane component the author put there is LOST on
+                    //     the next fixed step. That is not an oversight of the
+                    //     widening: a body simulated by a 2D solver has one
+                    //     degree of rotational freedom, and there is no
+                    //     out-of-plane state for it to round-trip through. An
+                    //     entity whose orientation must survive physics should
+                    //     not be a physics body until the solver is 3D.
+                    //   * scale is untouched, as it always was (physics never
+                    //     writes scale -- see the appliedScale reconcile above).
                     const Phys::Vec2 pos = world.Position(ref.handle);
-                    lt.position = glm::vec2(pos.x, pos.y);
-                    lt.rotation = world.GetAngle(ref.handle);
+                    lt.position = glm::vec3(pos.x, pos.y, lt.position.z);
+                    lt.rotation = RotationAboutZ(static_cast<float>(world.GetAngle(ref.handle)));
 
                     // Mirror post-step velocity back into RigidBody2D for Dynamic
                     // bodies so authored velocity field stays consistent with physics.

@@ -58,10 +58,14 @@ namespace Arcane::Editor
     // that default worth exposing as an optional -- a field with no attribute
     // and a field explicitly annotated Degrees are the same question to every
     // caller. Read by the Quat field's ImGui call site (InspectorView.cpp) to
-    // decide whether its Euler drags show degrees or radians; the existing
-    // scalar Float field does not yet read this (Transform::rotation's own
-    // AngleFormat attribute is carried but unread anywhere today -- see the
-    // F1 Task 2 report) and this task does not retrofit it.
+    // decide whether its Euler drags show degrees or radians; the scalar Float
+    // field still does not read it, so a float angle field renders its stored
+    // number raw.
+    // Task 3 (F1) closed the case that motivated the note above:
+    // Transform::rotation became a glm::quat, so its long-carried, previously
+    // unread AngleFormat(Radians) is now LIVE through the Quat arm -- which is
+    // why that attribute was kept rather than dropped when the field widened
+    // (see the Transform reflect block in Scene/Components.hpp).
     [[nodiscard]] Astra::AngleFormat::Unit AngleUnitForField(const Astra::FieldInfo& field);
 
     // Astra::ReadOnly: draw the field disabled rather than hiding it.

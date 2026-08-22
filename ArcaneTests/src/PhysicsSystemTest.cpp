@@ -3,7 +3,7 @@
 //
 // Tests:
 //   1. Dynamic body under gravity: after N fixed steps, Transform.position.y
-//      has increased (fallen), and WorldTransform.matrix[2].y agrees (propagation ran).
+//      has increased (fallen), and WorldTransform.matrix[3].y agrees (propagation ran).
 //   2. Kinematic body with authored velocity: after N steps, Transform.position.x
 //      has increased proportionally to velocity * dt * N.
 //   3. Remove: after DestroyEntity, the body row is removed from the PhysicsResource's
@@ -83,7 +83,7 @@ namespace
         // SceneRoot (no physics, just anchors the hierarchy).
         Astra::Entity root = reg.CreateEntity();
         Arcane::Transform rootLT;
-        rootLT.position = glm::vec2(0.0f, 0.0f);
+        rootLT.position = glm::vec3(0.0f);
         reg.AddComponent<Arcane::Transform>(root, rootLT);
         reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
@@ -91,7 +91,7 @@ namespace
         // Dynamic body entity: free-falls under gravity (single-fixture circle).
         Astra::Entity dyn = reg.CreateEntity();
         {
-            Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
+            Arcane::Transform lt; lt.position = glm::vec3(0.0f);
             reg.AddComponent<Arcane::Transform>(dyn, lt);
             reg.AddComponent<Arcane::WorldTransform>(dyn, Arcane::WorldTransform{});
 
@@ -116,7 +116,7 @@ namespace
         // Kinematic body entity: constant velocity in +X (single-fixture circle).
         Astra::Entity kin = reg.CreateEntity();
         {
-            Arcane::Transform lt; lt.position = glm::vec2(5.0f, 0.0f);
+            Arcane::Transform lt; lt.position = glm::vec3(5.0f, 0.0f, 0.0f);
             reg.AddComponent<Arcane::Transform>(kin, lt);
             reg.AddComponent<Arcane::WorldTransform>(kin, Arcane::WorldTransform{});
 
@@ -186,7 +186,7 @@ TEST_CASE("PhysicsSystem: dynamic body falls under gravity (Transform updated)",
     // so the child's world matrix column 2 = its local position.
     const auto* wt = reg.GetComponent<Arcane::WorldTransform>(h.dyn);
     REQUIRE(wt != nullptr);
-    CHECK(wt->matrix[2].y == Approx(lt->position.y).margin(1e-4f));
+    CHECK(wt->matrix[3].y == Approx(lt->position.y).margin(1e-4f));   // mat4 translation column
 }
 
 // ---------------------------------------------------------------------------
@@ -323,7 +323,7 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
     // Minimal SceneRoot.
     Astra::Entity root = reg.CreateEntity();
     {
-        Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
+        Arcane::Transform lt; lt.position = glm::vec3(0.0f);
         reg.AddComponent<Arcane::Transform>(root, lt);
         reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
@@ -334,7 +334,7 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
     // Fixture 1: aabb(0.3,0.3) @ local(2,0), sensor.
     Astra::Entity e = reg.CreateEntity();
     {
-        Arcane::Transform lt; lt.position = glm::vec2(10.0f, 5.0f);
+        Arcane::Transform lt; lt.position = glm::vec3(10.0f, 5.0f, 0.0f);
         reg.AddComponent<Arcane::Transform>(e, lt);
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
@@ -430,7 +430,7 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
     // Minimal SceneRoot.
     Astra::Entity root = reg.CreateEntity();
     {
-        Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
+        Arcane::Transform lt; lt.position = glm::vec3(0.0f);
         reg.AddComponent<Arcane::Transform>(root, lt);
         reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
@@ -447,7 +447,7 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
     // so GetFixtureWorldPos(fixture0) == bodyPos + R(0)*localPos == (0.3,0).
     Astra::Entity e = reg.CreateEntity();
     {
-        Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
+        Arcane::Transform lt; lt.position = glm::vec3(0.0f);
         reg.AddComponent<Arcane::Transform>(e, lt);
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 

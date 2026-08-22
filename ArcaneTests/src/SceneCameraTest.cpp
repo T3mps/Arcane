@@ -34,7 +34,7 @@ namespace
         {
             const Astra::Entity e = reg.CreateEntity();
             Arcane::Transform t;
-            t.position = worldPos;
+            t.position = glm::vec3(worldPos, 0.0f);   // Task 3 (F1): 3D pose, planar scene
             reg.AddComponent<Arcane::Transform>(e, t);
             reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{t.ToMatrix()});
             reg.AddComponent<Arcane::Camera>(e, Arcane::Camera{halfHeight, active});
@@ -129,7 +129,7 @@ TEST_CASE("a camera with no WorldTransform yet falls back to its local position"
     // Skipping it for that frame would flicker the view back to the previous one.
     const Astra::Entity e = f.reg.CreateEntity();
     Arcane::Transform t;
-    t.position = glm::vec2(7.0f, 1.0f);
+    t.position = glm::vec3(7.0f, 1.0f, 0.0f);
     f.reg.AddComponent<Arcane::Transform>(e, t);
     f.reg.AddComponent<Arcane::Camera>(e, Arcane::Camera{5.0f, true});
 

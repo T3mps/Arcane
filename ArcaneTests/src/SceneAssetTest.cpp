@@ -35,12 +35,12 @@ namespace
         {
             Arcane::RegisterSceneComponents(reg);
             root = reg.CreateEntity();
-            Arcane::Transform rt; rt.position = glm::vec2(100.0f, 0.0f);
+            Arcane::Transform rt; rt.position = glm::vec3(100.0f, 0.0f, 0.0f);
             reg.AddComponent<Arcane::Transform>(root, rt);
             reg.AddComponent<Arcane::Identity>(root, Arcane::Identity{Arcane::Guid::Generate(), "Root"});
 
             child = reg.CreateEntity();
-            Arcane::Transform ct; ct.position = glm::vec2(5.0f, 7.0f);
+            Arcane::Transform ct; ct.position = glm::vec3(5.0f, 7.0f, 0.0f);
             reg.AddComponent<Arcane::Transform>(child, ct);
             reg.AddComponent<Arcane::Identity>(child, Arcane::Identity{Arcane::Guid::Generate(), "Child"});
             reg.SetParent(child, root);
@@ -247,8 +247,8 @@ TEST_CASE("a malformed parent, links, or non-object components field is tolerate
         // loads as a root-level entity with no parent, not as a rejected file.
         const std::filesystem::path file = dir / "goodparent.arcscene";
         nlohmann::json e0, e1;
-        e0["components"][ltName]["position"] = { 100.0, 0.0 };
-        e1["components"][ltName]["position"] = { 5.0, 7.0 };
+        e0["components"][ltName]["position"] = { 100.0, 0.0, 0.0 };
+        e1["components"][ltName]["position"] = { 5.0, 7.0, 0.0 };
         e1["parent"] = "root";
         nlohmann::json doc;
         doc["id"] = "00000000-0000-0000-0000-000000000001";
@@ -281,9 +281,9 @@ TEST_CASE("a malformed parent, links, or non-object components field is tolerate
         // but the entity (and the rest of the file) still loads.
         const std::filesystem::path file = dir / "goodlinksarray.arcscene";
         nlohmann::json e0, e1;
-        e0["components"][ltName]["position"] = { 1.0, 1.0 };
+        e0["components"][ltName]["position"] = { 1.0, 1.0, 0.0 };
         e0["links"] = 0;
-        e1["components"][ltName]["position"] = { 2.0, 2.0 };
+        e1["components"][ltName]["position"] = { 2.0, 2.0, 0.0 };
         nlohmann::json doc;
         doc["id"] = "00000000-0000-0000-0000-000000000001";
         doc["version"] = Arcane::Scene::kSceneJsonVersion;
@@ -316,9 +316,9 @@ TEST_CASE("a malformed parent, links, or non-object components field is tolerate
         // one field, not an all-or-nothing rejection of the entity.
         const std::filesystem::path file = dir / "goodlinksentry.arcscene";
         nlohmann::json e0, e1;
-        e0["components"][ltName]["position"] = { 1.0, 1.0 };
+        e0["components"][ltName]["position"] = { 1.0, 1.0, 0.0 };
         e0["links"] = { 1, "not-an-integer" };
-        e1["components"][ltName]["position"] = { 2.0, 2.0 };
+        e1["components"][ltName]["position"] = { 2.0, 2.0, 0.0 };
         nlohmann::json doc;
         doc["id"] = "00000000-0000-0000-0000-000000000001";
         doc["version"] = Arcane::Scene::kSceneJsonVersion;

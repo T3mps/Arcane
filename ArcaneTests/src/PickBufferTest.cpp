@@ -92,11 +92,13 @@ namespace
     Astra::Entity SpawnSprite(Astra::Registry& reg, glm::vec2 pos, glm::vec2 size)
     {
         const Astra::Entity e = reg.CreateEntity();
+        // Task 3 (F1): the world matrix is a mat4 -- columns 0/1 still carry
+        // rotation*scale, but the world position moved to column 3.
         Arcane::WorldTransform wt;
-        wt.matrix = glm::mat3(1.0f);
-        wt.matrix[0] = glm::vec3(size.x, 0.0f, 0.0f); // columns 0/1 = rotation*scale
-        wt.matrix[1] = glm::vec3(0.0f, size.y, 0.0f);
-        wt.matrix[2] = glm::vec3(pos, 1.0f);          // column 2 = world position
+        wt.matrix = glm::mat4(1.0f);
+        wt.matrix[0] = glm::vec4(size.x, 0.0f, 0.0f, 0.0f); // columns 0/1 = rotation*scale
+        wt.matrix[1] = glm::vec4(0.0f, size.y, 0.0f, 0.0f);
+        wt.matrix[3] = glm::vec4(pos, 0.0f, 1.0f);         // column 3 = world position
         reg.AddComponent<Arcane::WorldTransform>(e, wt);
         Arcane::SpriteRenderer sp;
         reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
@@ -115,8 +117,8 @@ namespace
         const Astra::Entity e = reg.CreateEntity();
 
         Arcane::Transform lt;
-        lt.position = pos;
-        lt.scale    = scale;
+        lt.position = glm::vec3(pos, 0.0f);
+        lt.scale    = glm::vec3(scale, 1.0f);
         reg.AddComponent<Arcane::Transform>(e, lt);
 
         Arcane::RigidBody2D rb;

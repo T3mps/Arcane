@@ -44,9 +44,14 @@ namespace Arcane
             auto spriteView = registry.CreateView<WorldTransform, SpriteRenderer>();
             spriteView.ForEach([&](Astra::Entity e, WorldTransform& xf, SpriteRenderer& sp)
             {
+                // Task 3 (F1): the world matrix is a mat4, so the translation
+                // is column 3. Picking stays PLANAR (making it 3D is F4): the
+                // basis lengths are the 2D projections of columns 0/1, exactly
+                // the quantities the sprite submission path measures, so a
+                // silhouette keeps matching the drawn quad.
                 const glm::vec2 col0 = glm::vec2(xf.matrix[0]);
                 const glm::vec2 col1 = glm::vec2(xf.matrix[1]);
-                const glm::vec2 worldPivot = glm::vec2(xf.matrix[2]);
+                const glm::vec2 worldPivot = glm::vec2(xf.matrix[3]);
                 const float sx = glm::length(col0);
                 const float sy = glm::length(col1);
                 const float angle = std::atan2(col0.y, col0.x);

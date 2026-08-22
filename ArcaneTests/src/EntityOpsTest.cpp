@@ -346,14 +346,14 @@ TEST_CASE("WorldMatrix composes the parent chain", "[outliner]")
     Astra::Entity child  = Edit::CreateEntity(w.reg, parent);
 
     Transform* tp = w.reg.GetComponent<Transform>(parent);
-    tp->position = glm::vec2(5.0f, -3.0f);
-    tp->rotation = 0.6f;
+    tp->position = glm::vec3(5.0f, -3.0f, 0.0f);
+    tp->rotation = Arcane::RotationAboutZ(0.6f);
 
     Transform* tc = w.reg.GetComponent<Transform>(child);
-    tc->position = glm::vec2(2.0f, 0.0f);
+    tc->position = glm::vec3(2.0f, 0.0f, 0.0f);
 
-    const glm::mat3 expected = tp->ToMatrix() * tc->ToMatrix();
-    const glm::mat3 actual = Edit::WorldMatrix(w.reg, child);
+    const glm::mat4 expected = tp->ToMatrix() * tc->ToMatrix();
+    const glm::mat4 actual = Edit::WorldMatrix(w.reg, child);
 
     const GizmoTransform expDecomp = DecomposeTRS(expected);
     const GizmoTransform actDecomp = DecomposeTRS(actual);
@@ -371,21 +371,21 @@ TEST_CASE("ParentWorldMatrix: identity for a root, parent's world matrix for a c
 {
     World w;
     Astra::Entity root = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
-    w.reg.GetComponent<Transform>(root)->position = glm::vec2(3.0f, 4.0f);
-    w.reg.GetComponent<Transform>(root)->rotation = 0.4f;
+    w.reg.GetComponent<Transform>(root)->position = glm::vec3(3.0f, 4.0f, 0.0f);
+    w.reg.GetComponent<Transform>(root)->rotation = Arcane::RotationAboutZ(0.4f);
     Astra::Entity child = Edit::CreateEntity(w.reg, root);
-    w.reg.GetComponent<Transform>(child)->position = glm::vec2(1.0f, 1.0f);
+    w.reg.GetComponent<Transform>(child)->position = glm::vec3(1.0f, 1.0f, 0.0f);
 
-    const glm::mat3 identity(1.0f);
-    const glm::mat3 rootParentWorld = Edit::ParentWorldMatrix(w.reg, root);
-    for (int col = 0; col < 3; ++col)
-        for (int row = 0; row < 3; ++row)
+    const glm::mat4 identity(1.0f);
+    const glm::mat4 rootParentWorld = Edit::ParentWorldMatrix(w.reg, root);
+    for (int col = 0; col < 4; ++col)
+        for (int row = 0; row < 4; ++row)
             CHECK_THAT(rootParentWorld[col][row], WithinAbs(identity[col][row], 1e-6f));
 
-    const glm::mat3 childParentWorld = Edit::ParentWorldMatrix(w.reg, child);
-    const glm::mat3 rootWorld = Edit::WorldMatrix(w.reg, root);
-    for (int col = 0; col < 3; ++col)
-        for (int row = 0; row < 3; ++row)
+    const glm::mat4 childParentWorld = Edit::ParentWorldMatrix(w.reg, child);
+    const glm::mat4 rootWorld = Edit::WorldMatrix(w.reg, root);
+    for (int col = 0; col < 4; ++col)
+        for (int row = 0; row < 4; ++row)
             CHECK_THAT(childParentWorld[col][row], WithinAbs(rootWorld[col][row], 1e-6f));
 }
 
@@ -413,13 +413,16 @@ TEST_CASE("Gizmo group delta crosses differently-parented roots correctly in WOR
         {
             const GizmoTransform startWorld = DecomposeTRS(Edit::WorldMatrix(reg, e));
             const GizmoTransform w = ApplyGroupDelta(startWorld, gd);
-            const glm::mat3 localMat =
+            const glm::mat4 localMat =
                 glm::inverse(Edit::ParentWorldMatrix(reg, e)) * ComposeTRS(w);
             const GizmoTransform r = DecomposeTRS(localMat);
             Transform* t = reg.GetComponent<Transform>(e);
-            t->position = r.position;
-            t->rotation = r.rotation;
-            t->scale    = r.scale;
+            // Mirrors EditorAppFrame.cpp's write-back exactly, INCLUDING its
+            // Task 3 (F1) merge: the 2D gizmo carries position.z/scale.z
+            // through untouched and can only express a turn about +Z.
+            t->position = glm::vec3(r.position, t->position.z);
+            t->rotation = Arcane::RotationAboutZ(r.rotation);
+            t->scale    = glm::vec3(r.scale, t->scale.z);
         }
     };
 
@@ -431,23 +434,23 @@ TEST_CASE("Gizmo group delta crosses differently-parented roots correctly in WOR
         Astra::Entity parentB = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
         Astra::Entity childB  = Edit::CreateEntity(w.reg, parentB);
 
-        w.reg.GetComponent<Transform>(parentA)->position = glm::vec2(10.0f, 0.0f);
-        w.reg.GetComponent<Transform>(childA)->position  = glm::vec2(1.0f, 0.0f);
-        w.reg.GetComponent<Transform>(parentB)->position = glm::vec2(0.0f, 10.0f);
-        w.reg.GetComponent<Transform>(childB)->position  = glm::vec2(1.0f, 0.0f);
+        w.reg.GetComponent<Transform>(parentA)->position = glm::vec3(10.0f, 0.0f, 0.0f);
+        w.reg.GetComponent<Transform>(childA)->position  = glm::vec3(1.0f, 0.0f, 0.0f);
+        w.reg.GetComponent<Transform>(parentB)->position = glm::vec3(0.0f, 10.0f, 0.0f);
+        w.reg.GetComponent<Transform>(childB)->position  = glm::vec3(1.0f, 0.0f, 0.0f);
 
         // Both children are selection roots -- neither's ancestor is selected.
         const std::array<Astra::Entity, 2> sel{ childA, childB };
         const std::vector<Astra::Entity> roots = Edit::SelectionRoots(w.reg, sel);
         REQUIRE(roots.size() == 2);
 
-        const glm::vec2 worldBeforeA(Edit::WorldMatrix(w.reg, childA)[2]);
-        const glm::vec2 worldBeforeB(Edit::WorldMatrix(w.reg, childB)[2]);
+        const glm::vec2 worldBeforeA(Edit::WorldMatrix(w.reg, childA)[3]);
+        const glm::vec2 worldBeforeB(Edit::WorldMatrix(w.reg, childB)[3]);
 
         runGroupTranslate(w.reg, roots, childA, glm::vec2(5.0f, 0.0f));
 
-        const glm::vec2 worldAfterA(Edit::WorldMatrix(w.reg, childA)[2]);
-        const glm::vec2 worldAfterB(Edit::WorldMatrix(w.reg, childB)[2]);
+        const glm::vec2 worldAfterA(Edit::WorldMatrix(w.reg, childA)[3]);
+        const glm::vec2 worldAfterB(Edit::WorldMatrix(w.reg, childB)[3]);
         CHECK_THAT(worldAfterA.x, WithinAbs(worldBeforeA.x + 5.0f, 1e-4f));
         CHECK_THAT(worldAfterA.y, WithinAbs(worldBeforeA.y, 1e-4f));
         CHECK_THAT(worldAfterB.x, WithinAbs(worldBeforeB.x + 5.0f, 1e-4f));
@@ -462,23 +465,23 @@ TEST_CASE("Gizmo group delta crosses differently-parented roots correctly in WOR
         Astra::Entity parentB = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
         Astra::Entity childB  = Edit::CreateEntity(w.reg, parentB);
 
-        w.reg.GetComponent<Transform>(parentA)->position = glm::vec2(10.0f, 0.0f);
-        w.reg.GetComponent<Transform>(childA)->position  = glm::vec2(1.0f, 0.0f);
-        w.reg.GetComponent<Transform>(parentB)->position = glm::vec2(0.0f, 10.0f);
-        w.reg.GetComponent<Transform>(parentB)->rotation = 1.5707963267948966f;   // 90deg
-        w.reg.GetComponent<Transform>(childB)->position  = glm::vec2(1.0f, 0.0f);
+        w.reg.GetComponent<Transform>(parentA)->position = glm::vec3(10.0f, 0.0f, 0.0f);
+        w.reg.GetComponent<Transform>(childA)->position  = glm::vec3(1.0f, 0.0f, 0.0f);
+        w.reg.GetComponent<Transform>(parentB)->position = glm::vec3(0.0f, 10.0f, 0.0f);
+        w.reg.GetComponent<Transform>(parentB)->rotation = Arcane::RotationAboutZ(1.5707963267948966f);   // 90deg
+        w.reg.GetComponent<Transform>(childB)->position  = glm::vec3(1.0f, 0.0f, 0.0f);
 
         const std::array<Astra::Entity, 2> sel{ childA, childB };
         const std::vector<Astra::Entity> roots = Edit::SelectionRoots(w.reg, sel);
         REQUIRE(roots.size() == 2);
 
-        const glm::vec2 worldBeforeA(Edit::WorldMatrix(w.reg, childA)[2]);
-        const glm::vec2 worldBeforeB(Edit::WorldMatrix(w.reg, childB)[2]);
+        const glm::vec2 worldBeforeA(Edit::WorldMatrix(w.reg, childA)[3]);
+        const glm::vec2 worldBeforeB(Edit::WorldMatrix(w.reg, childB)[3]);
 
         runGroupTranslate(w.reg, roots, childA, glm::vec2(5.0f, 0.0f));
 
-        const glm::vec2 worldAfterA(Edit::WorldMatrix(w.reg, childA)[2]);
-        const glm::vec2 worldAfterB(Edit::WorldMatrix(w.reg, childB)[2]);
+        const glm::vec2 worldAfterA(Edit::WorldMatrix(w.reg, childA)[3]);
+        const glm::vec2 worldAfterB(Edit::WorldMatrix(w.reg, childB)[3]);
         // Under the OLD local-space code, childB's local +5 X would have moved
         // it along world +Y instead (parent B is rotated 90deg) -- this makes
         // the old behaviour impossible to pass accidentally.

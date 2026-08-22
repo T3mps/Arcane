@@ -17,7 +17,7 @@ namespace Arcane::Editor
     {
         // World scale from a world matrix, as basis-column lengths -- the same
         // derivation RenderSubmissionSystem uses to size the drawn quad.
-        glm::vec2 WorldScaleOf(const glm::mat3& m) noexcept
+        glm::vec2 WorldScaleOf(const glm::mat4& m) noexcept
         {
             return glm::vec2(glm::length(glm::vec2(m[0])), glm::length(glm::vec2(m[1])));
         }
@@ -40,14 +40,18 @@ namespace Arcane::Editor
         // Sprite half-extent in world units: the sprite asset's base size times
         // the world scale, halved. abs() keeps min <= max, which Frame relies
         // on; a negatively authored base size would otherwise invert the box.
-        glm::vec2 SpriteHalfExtent(const glm::mat3& world, glm::vec2 baseSize) noexcept
+        glm::vec2 SpriteHalfExtent(const glm::mat4& world, glm::vec2 baseSize) noexcept
         {
             return glm::abs(baseSize * WorldScaleOf(world)) * 0.5f;
         }
 
-        glm::vec2 WorldPositionOf(const glm::mat3& m) noexcept
+        // Task 3 (F1): mat4 world matrix -- the translation moved from
+        // column 2 to column 3. Framing stays PLANAR (the editor camera is
+        // 2D; F4 owns the 3D one), so the Z of a world position is ignored
+        // rather than projected.
+        glm::vec2 WorldPositionOf(const glm::mat4& m) noexcept
         {
-            return glm::vec2(m[2].x, m[2].y);
+            return glm::vec2(m[3].x, m[3].y);
         }
 
         // The drawn quad's CENTRE. The world position is the sprite's PIVOT, and
@@ -61,7 +65,7 @@ namespace Arcane::Editor
         // NEGATIVE sizeMeters, where framing then brackets the mirrored quad on
         // the wrong side -- framing is an axis-aligned estimate either way, and
         // the abs() is what keeps min <= max for Frame.
-        glm::vec2 SpriteCentre(const glm::mat3& world, glm::vec2 half, glm::vec2 pivot) noexcept
+        glm::vec2 SpriteCentre(const glm::mat4& world, glm::vec2 half, glm::vec2 pivot) noexcept
         {
             const glm::vec2 off = (glm::vec2(0.5f) - pivot) * (half * 2.0f);
             const float angle = std::atan2(world[0].y, world[0].x);

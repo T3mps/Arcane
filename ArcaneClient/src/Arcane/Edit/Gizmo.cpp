@@ -288,10 +288,10 @@ namespace Arcane
         return r;
     }
 
-    GizmoTransform DecomposeTRS(const glm::mat3& m)
+    GizmoTransform DecomposeTRS(const glm::mat4& m)
     {
         GizmoTransform t;
-        t.position = glm::vec2(m[2]);
+        t.position = glm::vec2(m[3]);   // mat4 translation column (was column 2 in the mat3)
 
         const glm::vec2 col0(m[0]);
         const glm::vec2 col1(m[1]);
@@ -316,15 +316,20 @@ namespace Arcane
         return t;
     }
 
-    glm::mat3 ComposeTRS(const GizmoTransform& t)
+    glm::mat4 ComposeTRS(const GizmoTransform& t)
     {
-        // Mirrors Transform::ToMatrix (Scene/Components.hpp) exactly.
+        // The planar pose written into a mat4: identical to
+        // Transform::ToMatrix (Scene/Components.hpp) for a pose whose rotation
+        // is about +Z, whose position.z is 0 and whose scale.z is 1. The Z
+        // column is left as the untouched identity axis -- the gizmo has no
+        // handle that could have produced anything else.
         const float c = std::cos(t.rotation);
         const float s = std::sin(t.rotation);
-        glm::mat3 m(1.0f);
-        m[0] = glm::vec3(c * t.scale.x,  s * t.scale.x, 0.0f);
-        m[1] = glm::vec3(-s * t.scale.y, c * t.scale.y, 0.0f);
-        m[2] = glm::vec3(t.position.x,   t.position.y,  1.0f);
+        glm::mat4 m(1.0f);
+        m[0] = glm::vec4(c * t.scale.x,  s * t.scale.x, 0.0f, 0.0f);
+        m[1] = glm::vec4(-s * t.scale.y, c * t.scale.y, 0.0f, 0.0f);
+        m[2] = glm::vec4(0.0f,           0.0f,          1.0f, 0.0f);
+        m[3] = glm::vec4(t.position.x,   t.position.y,  0.0f, 1.0f);
         return m;
     }
 }

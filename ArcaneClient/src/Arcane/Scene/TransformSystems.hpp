@@ -65,7 +65,11 @@ namespace Arcane
 
                     const Astra::Entity parent = reg.GetParent(e);
                     const WorldTransform* parentWorld = reg.GetComponent<WorldTransform>(parent);
-                    const glm::mat3 parentMat = parentWorld ? parentWorld->matrix : glm::mat3(1.0f);
+                    // Task 3 (F1): mat3 -> mat4. The WALK is untouched -- same
+                    // ForEachDescendant, same BFS pre-order guarantee, same
+                    // materialise-then-compose passes; only the composition type
+                    // widened.
+                    const glm::mat4 parentMat = parentWorld ? parentWorld->matrix : glm::mat4(1.0f);
                     world->matrix = parentMat * local->ToMatrix();
                 });
         }

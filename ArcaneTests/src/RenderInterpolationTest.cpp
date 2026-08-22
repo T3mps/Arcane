@@ -1,4 +1,5 @@
-// Epic 04.2 render interpolation: pure math (Lerp / shortest-arc AngleLerp),
+// Epic 04.2 render interpolation: pure math (Lerp / shortest-arc AngleLerp for
+// the physics-side 2D InterpPose, LerpPose's SLERP for the 3D component pose),
 // PhysicsSystem previous-pose capture, and the two render consumers
 // (DrawPhysicsDebug overlay + RenderSubmissionSystem sprites) driven against a
 // recording mock Batcher2D. CPU-only (tag [interp], never [gpu]).
@@ -75,7 +76,7 @@ TEST_CASE("PhysicsInterpBuffer captures the pre-step pose each fixed step", "[in
 
     // One dynamic circle free-falling from the origin.
     Astra::Entity e = reg.CreateEntity();
-    Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
+    Arcane::Transform lt; lt.position = glm::vec3(0.0f);
     reg.AddComponent<Arcane::Transform>(e, lt);
     reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
     Arcane::RigidBody2D rb; rb.type = P::BodyType::Dynamic;
@@ -187,12 +188,12 @@ TEST_CASE("RenderSubmissionSystem interpolates a sprite by PreviousTransform + a
     // Current world pose at x=10; previous local pose at x=0. Untextured Rect
     // sprite: nil .arcsprite -> a 1x1 m quad, so the scale IS the 4x4 size.
     Astra::Entity e = reg.CreateEntity();
-    Arcane::Transform lt; lt.position = glm::vec2(10.0f, 0.0f); lt.scale = glm::vec2(4.0f, 4.0f);
+    Arcane::Transform lt; lt.position = glm::vec3(10.0f, 0.0f, 0.0f); lt.scale = glm::vec3(4.0f, 4.0f, 1.0f);
     Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
     reg.AddComponent<Arcane::WorldTransform>(e, wt);
     Arcane::SpriteRenderer sp;
     reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
-    Arcane::PreviousTransform prev; prev.position = glm::vec2(0.0f, 0.0f); prev.rotation = 0.0f;
+    Arcane::PreviousTransform prev; prev.position = glm::vec3(0.0f); prev.rotation = Arcane::RotationAboutZ(0.0f);
     reg.AddComponent<Arcane::PreviousTransform>(e, prev);
 
     RecBatcher rec;
@@ -217,14 +218,15 @@ TEST_CASE("RenderSubmissionSystem interpolates sprite rotation on the shortest a
     Arcane::RegisterSceneComponents(reg);
 
     Astra::Entity e = reg.CreateEntity();
-    Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
-    lt.rotation = 10.0f * kPi / 180.0f;            // current 10deg
-    lt.scale    = glm::vec2(4.0f, 4.0f);           // the 4x4 quad, sized by scale
+    Arcane::Transform lt; lt.position = glm::vec3(0.0f);
+    lt.rotation = Arcane::RotationAboutZ(10.0f * kPi / 180.0f);   // current 10deg about +Z
+    lt.scale    = glm::vec3(4.0f, 4.0f, 1.0f);     // the 4x4 quad, sized by scale
     Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
     reg.AddComponent<Arcane::WorldTransform>(e, wt);
     Arcane::SpriteRenderer sp;
     reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
-    Arcane::PreviousTransform prev; prev.rotation = 350.0f * kPi / 180.0f;  // previous 350deg
+    Arcane::PreviousTransform prev;
+    prev.rotation = Arcane::RotationAboutZ(350.0f * kPi / 180.0f);  // previous 350deg
     reg.AddComponent<Arcane::PreviousTransform>(e, prev);
 
     RecBatcher rec;

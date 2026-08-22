@@ -150,7 +150,7 @@ namespace
         Arcane::RegisterSceneComponents(reg);
 
         Astra::Entity e = reg.CreateEntity();
-        Arcane::Transform lt; lt.position = glm::vec2(200.0f, 150.0f); lt.scale = scale;
+        Arcane::Transform lt; lt.position = glm::vec3(200.0f, 150.0f, 0.0f); lt.scale = glm::vec3(scale, 1.0f);
         Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
         reg.AddComponent<Arcane::WorldTransform>(e, wt);
         Arcane::SpriteRenderer sp; sp.shape = shape;
@@ -198,9 +198,9 @@ TEST_CASE("RenderSubmissionSystem rotates the sprite quad by the WorldTransform"
     // body rotated by theta. The 40x12 quad comes from the Transform scale.
     const float theta = 0.6f;
     Arcane::Transform lt;
-    lt.position = glm::vec2(100.0f, 100.0f);
-    lt.rotation = theta;
-    lt.scale    = glm::vec2(40.0f, 12.0f);
+    lt.position = glm::vec3(100.0f, 100.0f, 0.0f);
+    lt.rotation = Arcane::RotationAboutZ(theta);
+    lt.scale    = glm::vec3(40.0f, 12.0f, 1.0f);
 
     Astra::Entity e = reg.CreateEntity();
     Arcane::WorldTransform wt;
@@ -245,7 +245,7 @@ TEST_CASE("Sprite with a resolved SpriteTable entry uses derived size and UVs",
 
     // Transform scale (3,4) at zoom 1 -> (2,0.5) * (3,4) = (6, 2).
     Astra::Entity ent = reg.CreateEntity();
-    Arcane::Transform lt; lt.scale = glm::vec2(3.0f, 4.0f);
+    Arcane::Transform lt; lt.scale = glm::vec3(3.0f, 4.0f, 1.0f);
     Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
     reg.AddComponent<Arcane::WorldTransform>(ent, wt);
     Arcane::SpriteRenderer sp;
@@ -283,7 +283,7 @@ TEST_CASE("Non-center pivot offsets the quad and survives rotation", "[render][s
 
     const glm::vec2 P(10.0f, 20.0f);
     Astra::Entity ent = reg.CreateEntity();
-    Arcane::Transform lt; lt.position = P;
+    Arcane::Transform lt; lt.position = glm::vec3(P, 0.0f);
     Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
     reg.AddComponent<Arcane::WorldTransform>(ent, wt);
     Arcane::SpriteRenderer sp;
@@ -307,7 +307,8 @@ TEST_CASE("Non-center pivot offsets the quad and survives rotation", "[render][s
     //   rotated centerOff = R(pi/2)*(1,1) = (c-s, s+c) = (-1, 1)
     //   -> dstPos = P + (-1,1) - (1,1) = P + (-2, 0).
     // Approx here, not ==: cos(half_pi<float>()) is -4.37e-8, not 0.
-    Arcane::Transform rot; rot.position = P; rot.rotation = glm::half_pi<float>();
+    Arcane::Transform rot; rot.position = glm::vec3(P, 0.0f);
+    rot.rotation = Arcane::RotationAboutZ(glm::half_pi<float>());
     reg.GetComponent<Arcane::WorldTransform>(ent)->matrix = rot.ToMatrix();
     sys(reg);
 

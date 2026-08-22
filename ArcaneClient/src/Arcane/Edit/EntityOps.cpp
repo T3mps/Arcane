@@ -626,7 +626,7 @@ namespace Arcane::Edit
         }
     }
 
-    glm::mat3 WorldMatrix(Astra::Registry& reg, Astra::Entity e)
+    glm::mat4 WorldMatrix(Astra::Registry& reg, Astra::Entity e)
     {
         // Walk up to the root collecting the chain, then fold the local
         // matrices back down root-first. Cycle-safe like SelectionRoots: a
@@ -641,7 +641,7 @@ namespace Arcane::Edit
             chain.push_back(cur);
         }
 
-        glm::mat3 m(1.0f);
+        glm::mat4 m(1.0f);
         for (auto it = chain.rbegin(); it != chain.rend(); ++it)
         {
             if (Transform* t = reg.GetComponent<Transform>(*it))
@@ -650,11 +650,11 @@ namespace Arcane::Edit
         return m;
     }
 
-    glm::mat3 ParentWorldMatrix(Astra::Registry& reg, Astra::Entity e)
+    glm::mat4 ParentWorldMatrix(Astra::Registry& reg, Astra::Entity e)
     {
         Astra::Entity parent = reg.GetParent(e);
         if (!parent.IsValid())
-            return glm::mat3(1.0f);
+            return glm::mat4(1.0f);
         return WorldMatrix(reg, parent);   // cycle-safe via WorldMatrix's own visited set
     }
 }

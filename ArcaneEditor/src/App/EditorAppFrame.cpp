@@ -938,12 +938,28 @@ namespace Arcane::Editor
                     // Transform (Unreal's SetWorldTransform demotes to relative
                     // when attached -- this is that demotion).
                     const Arcane::GizmoTransform w = Arcane::ApplyGroupDelta(startPose, gd);
-                    const glm::mat3 localMat =
+                    const glm::mat4 localMat =
                         glm::inverse(Arcane::Edit::ParentWorldMatrix(*regPtr, e)) * Arcane::ComposeTRS(w);
                     const Arcane::GizmoTransform r = Arcane::DecomposeTRS(localMat);
-                    et->position = r.position;
-                    et->rotation = r.rotation;
-                    et->scale    = r.scale;
+                    // Task 3 (F1): Transform is 3D but THE GIZMO IS STILL 2D
+                    // (F4 makes it 3D), so only the components it actually has
+                    // a handle for are written. position.z and scale.z are
+                    // carried through UNCHANGED rather than being zeroed by a
+                    // decomposition that never looked at them -- a translate
+                    // drag must not silently flatten an entity's depth.
+                    //
+                    // rotation is the exception, and it is a real one: the
+                    // gizmo can only express a turn about +Z, so any
+                    // out-of-plane orientation on a dragged entity is lost.
+                    // Preserving it would mean a swing-twist split of the
+                    // authored quaternion, which is 3D-gizmo work and belongs
+                    // with the task that gives the user 3D handles. Every
+                    // scene in the tree is planar today, so nothing observable
+                    // is dropped -- but it is a LOSS, not a no-op, and it is
+                    // named here so F4 does not have to rediscover it.
+                    et->position = glm::vec3(r.position, et->position.z);
+                    et->rotation = Arcane::RotationAboutZ(r.rotation);
+                    et->scale    = glm::vec3(r.scale, et->scale.z);
                 }
                 m_gizmoHovered = m_gizmoDrag.axis;   // keep the active handle highlighted
 

@@ -28,6 +28,7 @@
 #include <Astra/System/System.hpp>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>   // angleAxis -- rebuilding the current world turn for the blend
 
 #include <cmath>
 
@@ -46,29 +47,50 @@ namespace Arcane
             auto view = reg.CreateView<WorldTransform, SpriteRenderer, Astra::Not<Hidden>>();
             view.ForEach([&](Astra::Entity e, WorldTransform& world, SpriteRenderer& sprite)
             {
-                const glm::mat3& m = world.matrix;
-                glm::vec2       worldPos(m[2].x, m[2].y);
+                // Task 3 (F1): the world matrix is a mat4 now, so the
+                // translation is COLUMN 3 (it was column 2). Everything below
+                // still reads the XY PLANE ONLY and ignores Z -- a sprite is a
+                // screen-space quad, not a world quad, and making it one is F5's
+                // question, not this task's. The basis lengths are likewise
+                // taken from the 2D projection of columns 0/1, which is what the
+                // mat3 path measured, so a planar entity gets a byte-identical
+                // size.
+                const glm::mat4& m = world.matrix;
+                glm::vec2       worldPos(m[3].x, m[3].y);
                 const glm::vec2 worldScale(glm::length(glm::vec2(m[0])),
                                            glm::length(glm::vec2(m[1])));
                 // World rotation from the first basis column (matches
-                // Transform::ToMatrix: m[0] = (c*scale.x, s*scale.x)). The
-                // camera applies a uniform zoom (no rotation), so the screen-space
-                // sprite rotates by the same angle as its physics body.
+                // Transform::ToMatrix: for a Z-axis turn m[0] = (c*scale.x,
+                // s*scale.x, 0)). The camera applies a uniform zoom (no
+                // rotation), so the screen-space sprite rotates by the same
+                // angle as its physics body.
                 float worldRot = std::atan2(m[0].y, m[0].x);
 
                 // Render interpolation (Epic 04.2): if the entity carries a
                 // PreviousTransform (its prior fixed-step local pose, captured by
                 // PhysicsSystem write-back), draw at lerp(prev -> current, alpha) for
-                // smooth slow-mo. Rotation uses shortest-arc AngleLerp. Treats the
-                // entity's local pose as its world pose -- exact for a flat / identity-
-                // rooted physics entity (the case today). No PreviousTransform -> the
-                // unchanged snap-to-step path.
+                // smooth slow-mo. Rotation uses SLERP (LerpPose, Components.hpp) --
+                // shortest-arc, the 3D expression of what AngleLerp did here before.
+                // Treats the entity's local pose as its world pose -- exact for a flat
+                // / identity-rooted physics entity (the case today). No
+                // PreviousTransform -> the unchanged snap-to-step path.
                 if (const PreviousTransform* prev = reg.GetComponent<PreviousTransform>(e))
                 {
-                    const float a = ctx->alpha;
-                    worldPos = glm::vec2(Lerp(prev->position.x, worldPos.x, a),
-                                         Lerp(prev->position.y, worldPos.y, a));
-                    worldRot = AngleLerp(prev->rotation, worldRot, a);
+                    // The current world pose, re-expressed as a pose so the two
+                    // ends of the blend are the same type. Rotation is rebuilt
+                    // about +Z from the angle read out of the basis above: the
+                    // world matrix carries scale as well as rotation, so its
+                    // columns are not an orthonormal frame to cast from.
+                    const PreviousTransform cur{ glm::vec3(worldPos, 0.0f),
+                                                 RotationAboutZ(worldRot) };
+                    const PreviousTransform blend = LerpPose(*prev, cur, ctx->alpha);
+                    worldPos = glm::vec2(blend.position);
+                    // Back to the one screen-space angle the batcher takes, read
+                    // the SAME way the un-interpolated path reads it above (the
+                    // image of local +X -- see RotationZ). For a planar blend
+                    // this is the angle; for an out-of-plane one it is its
+                    // projection, which is the most a screen-space quad can say.
+                    worldRot = RotationZ(blend.rotation);
                 }
                 // Only a Rect consults the sprite asset: Circle/Capsule exist to
                 // MATCH a collider, so they must stay on the 1x1 m base times

@@ -370,12 +370,12 @@ TEST_CASE("ReflectionJson reader tolerates wrong-typed leaf data without throwin
     REQUIRE(meta != nullptr);
 
     nlohmann::json j;
-    j["position"] = "not-an-array";    // vec2 field fed a string
-    j["rotation"] = "not-a-number";    // float field fed a string
+    j["position"] = "not-an-array";    // vec3 field fed a string
+    j["rotation"] = "not-a-number";    // quaternion field fed a string
 
     Arcane::Transform lt;
-    lt.position = glm::vec2(9.0f, 9.0f);
-    lt.rotation = 5.0f;
+    lt.position = glm::vec3(9.0f, 9.0f, 0.0f);
+    lt.rotation = Arcane::RotationAboutZ(1.0f);   // radians about +Z; inside (-pi, pi] so RotationZ round-trips it
 
     Arcane::ReflectionJsonReader reader(j);
     CHECK_NOTHROW([&]
@@ -389,5 +389,5 @@ TEST_CASE("ReflectionJson reader tolerates wrong-typed leaf data without throwin
     // the guarded reader leaves the field at its prior value.
     CHECK_FALSE(reader.HasError());
     CHECK(lt.position.x == Approx(9.0f));
-    CHECK(lt.rotation == Approx(5.0f));
+    CHECK(Arcane::RotationZ(lt.rotation) == Approx(1.0f).margin(1e-5));
 }

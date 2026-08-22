@@ -105,10 +105,13 @@ namespace
             Arcane::RegisterSceneComponents(reg);
         }
 
+        // `rot` is a Z-axis turn in radians: Task 3 (F1) made Transform's
+        // rotation a quaternion, and every scene these tests model is planar.
         Astra::Entity Make(glm::vec2 pos, float rot)
         {
             Astra::Entity e = reg.CreateEntity();
-            reg.AddComponent<Arcane::Transform>(e, Arcane::Transform{ pos, rot, glm::vec2(1.0f) });
+            reg.AddComponent<Arcane::Transform>(e, Arcane::Transform{
+                glm::vec3(pos, 0.0f), Arcane::RotationAboutZ(rot), glm::vec3(1.0f) });
             return e;
         }
 
@@ -257,16 +260,19 @@ TEST_CASE("ClassifyField: every arm has a witness", "[editor]")
     CHECK(kindOf(body, "mass")          == K::Float);
     CHECK(kindOf(body, "linearDamping") == K::Float);
 
-    // Vec2 + Float from Transform.
+    // Vec3 + Quat from Transform. Task 3 (F1) widened all three fields:
+    // position/scale vec2 -> vec3 and rotation float -> glm::quat, so Transform
+    // is now the engine roster's own witness for BOTH arms (it was the Vec2 +
+    // Float witness before, and neither Vec3 nor Quat had one at all).
     const Astra::TypeMeta* xform = Astra::GetMeta<Arcane::Transform>();
     REQUIRE(xform != nullptr);
-    CHECK(kindOf(xform, "position") == K::Vec2);
-    CHECK(kindOf(xform, "scale")    == K::Vec2);
-    CHECK(kindOf(xform, "rotation") == K::Float);
+    CHECK(kindOf(xform, "position") == K::Vec3);
+    CHECK(kindOf(xform, "scale")    == K::Vec3);
+    CHECK(kindOf(xform, "rotation") == K::Quat);
 
-    // Vec3 has NO witness anywhere in the engine roster -- nothing reflected
-    // declares a glm::vec3 -- which is precisely why that arm was unpinned. The
-    // local probe below is the witness.
+    // The local probe stays the witness for the arms the engine roster still
+    // does not exercise, and keeps pinning Vec3/Quat independently of
+    // Transform so a future change to Transform cannot silently unpin them.
     const Astra::TypeMeta* probe = Astra::GetMeta<ArcaneEditorTest::ClassifyProbe>();
     REQUIRE(probe != nullptr);
     CHECK(kindOf(probe, "three") == K::Vec3);
@@ -274,8 +280,6 @@ TEST_CASE("ClassifyField: every arm has a witness", "[editor]")
     CHECK(kindOf(probe, "flag")  == K::Bool);
     CHECK(kindOf(probe, "bits")  == K::UInt32);
     CHECK(kindOf(probe, "four")  == K::Vec4);
-    // Quat has NO witness anywhere in the engine roster either -- Transform::
-    // rotation is still the 2D scalar until F1 Task 3. The local probe is it.
     CHECK(kindOf(probe, "orientation") == K::Quat);
     CHECK(kindOf(probe, "mode")  == K::Enum);
     // Registered-or-ReadOnly: an enum nothing ASTRA_REFLECT_ENUM'd has no

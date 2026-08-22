@@ -209,7 +209,27 @@ namespace Arcane
     //     callerless, none of them by-value plugin surface, so they add
     //     nothing to the verdict above. NOTHING SHIPPED between v14 and v15,
     //     so no compatibility shim is owed. Reject the pairing.
-    inline constexpr uint32_t kGamePluginABIVersion = 15;
+    // v16 (2026-08-21): Transform went 3D. position/scale widened from
+    //     glm::vec2 to glm::vec3, rotation from a float (radians) to a
+    //     glm::quat, and ToMatrix from mat3 to mat4; WorldTransform::matrix and
+    //     PreviousTransform moved with them.
+    //     This is the class of change the v7 entry above (:38-42) established --
+    //     these are name-keyed reflected components that a plugin COMPILES
+    //     ITSELF from this header set -- except that where v7 changed the
+    //     component's identity, v16 changes its LAYOUT: Transform grows
+    //     24 -> 40 bytes with every field at a new offset, and WorldTransform
+    //     36 -> 64. That is the same hazard as the v8 SpriteRenderer re-shape
+    //     (:55-62), on the type that EVERY spatial entity carries.
+    //     The header-only systems a plugin instantiates moved with the types:
+    //     a v15 copy of RenderSubmissionSystem reads a sprite's world
+    //     translation from matrix[2], which in a mat4 is the Z BASIS AXIS, so
+    //     every sprite it submits would draw at the origin; a v15
+    //     TransformPropagationSystem would compose mat3s over mat4 storage.
+    //     Reject the pairing.
+    //     Edit::WorldMatrix/ParentWorldMatrix and DecomposeTRS/ComposeTRS
+    //     (ARCANE_API, mat3 -> mat4) also changed signature, but a mangled-name
+    //     mismatch fails loudly at load; it adds nothing to the verdict above.
+    inline constexpr uint32_t kGamePluginABIVersion = 16;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

@@ -238,7 +238,7 @@ TEST_CASE("Gizmo group delta: a degenerate start scale yields ratio 1, not infin
 TEST_CASE("Gizmo DecomposeTRS(ComposeTRS(t)) round-trips a non-trivial pose", "[gizmo]")
 {
     const Arcane::GizmoTransform t{ glm::vec2(3.5f, -2.25f), 0.7f, glm::vec2(2.0f, 0.5f) };
-    const glm::mat3 m = Arcane::ComposeTRS(t);
+    const glm::mat4 m = Arcane::ComposeTRS(t);   // Task 3 (F1): ComposeTRS is mat4-shaped now
     const Arcane::GizmoTransform r = Arcane::DecomposeTRS(m);
 
     CHECK_THAT(r.position.x, WithinAbs(t.position.x, 1e-5f));
@@ -254,16 +254,19 @@ TEST_CASE("Gizmo ComposeTRS matches Transform::ToMatrix for the same pose", "[gi
     // ComposeTRS is a hand-written duplicate of Transform::ToMatrix (Gizmo
     // has no Scene dependency), so this is the only thing keeping them in sync.
     const Arcane::GizmoTransform t{ glm::vec2(-1.5f, 4.0f), 0.7f, glm::vec2(2.0f, 0.5f) };
-    const glm::mat3 gizmoM = Arcane::ComposeTRS(t);
+    const glm::mat4 gizmoM = Arcane::ComposeTRS(t);
 
+    // Task 3 (F1): the equivalent 3D pose of this 2D gizmo pose -- z = 0, a
+    // turn about +Z, unit Z scale. ComposeTRS must still land on exactly the
+    // matrix Transform::ToMatrix produces for it.
     Arcane::Transform xform;
-    xform.position = t.position;
-    xform.rotation = t.rotation;
-    xform.scale    = t.scale;
-    const glm::mat3 xformM = xform.ToMatrix();
+    xform.position = glm::vec3(t.position, 0.0f);
+    xform.rotation = Arcane::RotationAboutZ(t.rotation);
+    xform.scale    = glm::vec3(t.scale, 1.0f);
+    const glm::mat4 xformM = xform.ToMatrix();
 
-    for (int col = 0; col < 3; ++col)
-        for (int row = 0; row < 3; ++row)
+    for (int col = 0; col < 4; ++col)
+        for (int row = 0; row < 4; ++row)
             CHECK_THAT(gizmoM[col][row], WithinAbs(xformM[col][row], 1e-6f));
 }
 
