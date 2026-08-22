@@ -3,9 +3,9 @@ change them in the Astra repo and re-run scripts\sync-astra.ps1, or the next
 sync silently reverts your edit.
 
 source  : D:\dev\starworks\Astra
-commit  : 6b66d4f5d2d166c5f662443c40f62f3c6158b987
+commit  : 07b92403def137e7da43077a3df214aab721ef8c
 branch  : dev
-subject : feat(core): birth-context affinity guards -- loud cross-module aliasing failure
-synced  : 2026-08-11 01:12:55
+subject : feat(registry): RelationshipGraph exposes its structure version
+synced  : 2026-08-21 19:39:52
 scope   : include/ only (Arcane compiles nothing else from this tree --
           see Arcane/premake5.lua IncludeDir["Astra"])
