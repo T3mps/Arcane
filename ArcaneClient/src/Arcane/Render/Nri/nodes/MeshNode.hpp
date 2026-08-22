@@ -104,11 +104,25 @@ namespace Arcane
     // authors freely: the first non-uniform scale-handle drag on a mesh hits
     // this.)
     //
-    // SINGULAR GUARD: a model matrix with a collapsed axis (an authored zero
-    // scale, or a degenerate ancestor in a WorldTransform product) has no
-    // inverse. glm::inverse divides by the determinant UNCONDITIONALLY and
-    // would hand back Inf/NaN, which is undefined behaviour on the GPU rather
-    // than a wrong picture -- the same class of guard SceneCamera.hpp's
+    // SINGULAR GUARD -- computed, not predicted. `glm::inverse` runs
+    // UNCONDITIONALLY below; the guard checks its OUTPUT (all nine elements
+    // finite) rather than pre-screening `upper`'s determinant against a fixed
+    // threshold. A pre-screen is a CONDITIONING HEURISTIC, not a test for the
+    // true singular set, and the difference is not academic: a 3x3
+    // determinant scales as s^3 under a uniform scale s, so no fixed
+    // threshold is scale-invariant. A too-tight one -- the bug this shape
+    // actually had -- lets a small NON-UNIFORM scale (whose determinant can
+    // sit anywhere, independent of how ill-conditioned any one axis is) sail
+    // past the check and fall through to a normal transform that is silently
+    // wrong, reinstating exactly the defect this function exists to fix, with
+    // no diagnostic. Checking the RESULT instead is exact by construction:
+    // `glm::inverse` divides by the determinant unconditionally, so a genuine
+    // singularity (or a non-finite `model`, e.g. a degenerate ancestor in a
+    // WorldTransform product) is precisely the input for which the computed
+    // inverse transpose comes back non-finite, and nothing else does.
+    //
+    // WHY GUARD AT ALL: an Inf/NaN normal is undefined behaviour on the GPU
+    // rather than a wrong picture -- the same class of guard SceneCamera.hpp's
     // degenerate-basis fallback (ActivePerspectiveSceneCamera) takes, and the
     // same class MeshNode.cpp's own IsFinite/SafeNormalize take for the
     // camera and the light. Identity is the least-wrong answer here: an
@@ -126,10 +140,12 @@ namespace Arcane
     [[nodiscard]] inline glm::mat3 NormalMatrixFor(const glm::mat4& model) noexcept
     {
         const glm::mat3 upper = glm::mat3(model);
-        const float determinant = glm::determinant(upper);
-        if (!std::isfinite(determinant) || std::fabs(determinant) < 1e-8f)
-            return glm::mat3(1.0f);
-        return glm::transpose(glm::inverse(upper));
+        const glm::mat3 inverseTranspose = glm::transpose(glm::inverse(upper));
+        for (int c = 0; c < 3; ++c)
+            for (int r = 0; r < 3; ++r)
+                if (!std::isfinite(inverseTranspose[c][r]))
+                    return glm::mat3(1.0f);
+        return inverseTranspose;
     }
 
     // =====================================================================

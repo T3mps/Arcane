@@ -106,3 +106,41 @@ TEST_CASE("NormalMatrixFor returns identity for a singular model matrix, "
         }
     }
 }
+
+TEST_CASE("NormalMatrixFor is not fooled by a small NON-UNIFORM scale into "
+          "falling back to identity",
+          "[mesh]")
+{
+    // Review finding (Task 8, fix round 1): a FIXED determinant threshold is
+    // not scale-invariant -- a 3x3 determinant scales as s^3 under a uniform
+    // scale s, so any fixed cutoff misclassifies some genuinely-invertible
+    // small matrix as singular. Concretely: scale(0.001, 0.002, 0.003) has
+    // determinant 0.001*0.002*0.003 = 6e-9, comfortably below a naive 1e-8
+    // cutoff (any model whose geometric-mean scale is under ~2.15mm in this
+    // engine's MKS meters would trip it) -- yet this matrix is perfectly
+    // invertible and non-uniform, i.e. EXACTLY the case this function has to
+    // get right. A guard that fell back to identity here would silently
+    // reinstate the original upper-3x3 defect at small scales, with no
+    // diagnostic. NormalMatrixFor's guard checks the INVERSE'S finiteness,
+    // not a determinant pre-screen, specifically so this case is not
+    // singular to it.
+    const glm::mat4 model = glm::scale(glm::mat4(1.0f), glm::vec3(0.001f, 0.002f, 0.003f));
+    const glm::mat3 normalMatrix = Arcane::NormalMatrixFor(model);
+
+    const glm::vec3 n = glm::normalize(glm::vec3(1.0f, 1.0f, 0.0f));
+    const glm::vec3 transformed = glm::normalize(normalMatrix * n);
+
+    // inverseTranspose(diag(a,b,c)) == diag(1/a,1/b,1/c) for a diagonal
+    // matrix, applied to n gives a direction proportional to
+    // (1/a, 1/b, 0) == (1000, 500, 0) -- ratio 2:1 -- normalized to
+    // (2,1,0)/sqrt(5).
+    const glm::vec3 expected = glm::normalize(glm::vec3(2.0f, 1.0f, 0.0f));
+
+    CHECK(glm::epsilonEqual(transformed.x, expected.x, 1e-4f));
+    CHECK(glm::epsilonEqual(transformed.y, expected.y, 1e-4f));
+    CHECK(glm::epsilonEqual(transformed.z, expected.z, 1e-4f));
+
+    // NOT identity (i.e. not `n` unchanged) -- the exact wrong answer a
+    // determinant-threshold guard would have produced for this input.
+    CHECK_FALSE(glm::epsilonEqual(transformed.x, n.x, 1e-3f));
+}

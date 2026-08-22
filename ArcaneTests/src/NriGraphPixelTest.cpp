@@ -1048,11 +1048,19 @@ namespace
 
         // THE PROPERTY: the oblique instance's normal-matrix-corrected
         // shading matches the known-good reference's, closely -- both are
-        // N.L=1 under the SAME ambient/light-color/albedo, so a correct
-        // shader should land these within a few luma units of each other. A
-        // regression to the upper-3x3 would land N.L ~=0.25 instead (see the
-        // worked numbers above), which is nowhere near this margin.
-        CHECK(std::abs(Luma(referenceCentre) - Luma(obliqueCentre)) < 24);
+        // N.L=1 under the SAME ambient/light-color/albedo, so a CORRECT
+        // shader lands these BIT-IDENTICAL (both N.L=1 -> linear 1.08 -> the
+        // same tonemapped byte), making the true delta 0 and this margin free
+        // to tighten. 12 still comfortably covers CPU/GPU float noise while
+        // catching failures far short of the upper-3x3 regression this case
+        // was designed for (N.L~=0.25, nowhere near this margin): an
+        // all-identity normal matrix reaching the shader (e.g. Finding 2's
+        // singular guard misfiring, or the push constants never arriving)
+        // gives N.L=cos(angle between correctNormal and local +Z)~=0.789 ->
+        // linear 0.869, whose tonemapped delta from the reference sits at or
+        // just above 24 depending on the curve -- a margin of 24 could miss
+        // that failure; 12 does not.
+        CHECK(std::abs(Luma(referenceCentre) - Luma(obliqueCentre)) < 12);
 
         // AND THE LIGHT DEMONSTRABLY MATTERED: the lit oblique centre is far
         // brighter than its own ambient-only twin.
@@ -1062,24 +1070,14 @@ namespace
     }
 }
 
-// TAGS DELIBERATELY OMIT [mesh] (unlike this file's other mesh [pixel] cases
-// above): this task's own agent gate runs `ArcaneTests.exe "[mesh]"` as its
-// FIRST command (to exercise MeshNodeTest.cpp's new headless cases), and a
-// bare `[mesh]` filter in Catch2 matches ANY case carrying that tag alongside
-// others -- so a `[mesh]` tag here would pull this GPU case into that
-// supposedly-headless run too, exactly the outcome "you must not run it"
-// forbids. [gpu][pixel] alone is both necessary and sufficient to keep it out
-// of `~[gpu]` (the second gate command) AND out of `[mesh]` (the first); the
-// desk workflow this file's header documents (`ArcaneTests.exe "[pixel]"`)
-// finds it by [pixel] regardless.
 TEST_CASE("mesh: a non-uniformly-scaled instance's lit-face brightness matches the analytic "
-          "Lambert term (d3d12)", "[gpu][pixel][nri][d3d12]")
+          "Lambert term (d3d12)", "[gpu][pixel][mesh][nri][d3d12]")
 {
     CheckNonUniformScaleNormalMatchesAnalyticLambert(Arcane::GraphicsBackend::D3D12);
 }
 
 TEST_CASE("mesh: a non-uniformly-scaled instance's lit-face brightness matches the analytic "
-          "Lambert term (vulkan)", "[gpu][pixel][nri][vulkan]")
+          "Lambert term (vulkan)", "[gpu][pixel][mesh][nri][vulkan]")
 {
     CheckNonUniformScaleNormalMatchesAnalyticLambert(Arcane::GraphicsBackend::Vulkan);
 }
