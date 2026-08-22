@@ -889,26 +889,50 @@ namespace Arcane::Editor
                                     continue;
                                 // REFUSE a drag the 2D gizmo cannot express
                                 // (final-review finding 4, F1). The write-back
-                                // below demotes a world pose through
-                                // inverse(ParentWorldMatrix), and DecomposeTRS
-                                // takes scale from the 2D PROJECTION of the
-                                // basis columns -- which equals the true axis
-                                // length only while those axes lie in the XY
-                                // plane. Under a parent tilted out of plane the
-                                // projection is strictly shorter, so a PURE
-                                // TRANSLATE drag silently rescales the child (a
-                                // 45 degree pitch halves it; pinned in
-                                // EntityOpsTest.cpp). Every other component of
-                                // the demoted pose is wrong there too: `w`
-                                // itself already lost the entity's world z, so
-                                // even the translation is not world-exact.
+                                // below reads the entity's WORLD pose through
+                                // DecomposeTRS and demotes the dragged result
+                                // through inverse(ParentWorldMatrix), and
+                                // DecomposeTRS takes scale from the 2D
+                                // PROJECTION of the basis columns -- which
+                                // equals the true axis length only while those
+                                // axes lie in the XY plane. Every other
+                                // component of the pose is wrong off-plane too:
+                                // `w` already lost the entity's world z, so even
+                                // the translation is not world-exact.
                                 //
-                                // Before F1 this was unreachable -- a float
-                                // `rotation` cannot express a tilted parent --
-                                // and the widening made it authorable through
-                                // the new Quat Inspector row while leaving the
-                                // planar assumption in place. The honest answer
-                                // is to decline, not to repair: repairing means
+                                // BOTH matrices, not just the parent's, and
+                                // neither implies the other (all three cases
+                                // pinned in EntityOpsTest.cpp):
+                                //   * a tilted PARENT shortens the demoted local
+                                //     basis, so a PURE TRANSLATE drag silently
+                                //     rescales the child -- a 45 degree pitch
+                                //     halves it, the projection being applied
+                                //     once on the way in and once on the way
+                                //     back out;
+                                //   * a tilted ENTITY under a planar parent
+                                //     reads short on the way IN and has its tilt
+                                //     replaced outright by RotationAboutZ below,
+                                //     so a translate drag flattens an
+                                //     orientation it never touched;
+                                //   * a tilted entity under an oppositely-tilted
+                                //     parent has a PLANAR world basis and still
+                                //     demotes through a non-planar inverse.
+                                // Refusing on the parent alone (as F1 shipped)
+                                // meant the gizmo warned in one of two visually
+                                // identical situations and silently corrupted
+                                // the other, which teaches a false lesson about
+                                // when it can be trusted. Uniform restriction
+                                // beats inconsistent safety; the cost is that
+                                // translate is blocked on a tilted entity, and
+                                // that is accepted -- you cannot meaningfully
+                                // author a tilted pose with a 2D gizmo anyway.
+                                //
+                                // Before F1 none of this was reachable -- a float
+                                // `rotation` cannot express a tilt -- and the
+                                // widening made it authorable through the new
+                                // Quat Inspector row while leaving the planar
+                                // assumption in place. The honest answer is to
+                                // decline, not to repair: repairing means
                                 // carrying z, tilt and z-scale through the whole
                                 // pipeline, which IS the 3D gizmo, which is F4.
                                 //
@@ -918,26 +942,36 @@ namespace Arcane::Editor
                                 // keeps the refusal out of the undo step too.
                                 // Checked once here rather than per frame in the
                                 // write-back so the warning fires once per drag
-                                // attempt, and because a parent cannot be
-                                // reparented mid-drag.
-                                if (!Arcane::IsPlanarBasis(
-                                        Arcane::Edit::ParentWorldMatrix(*regPtr, e)))
+                                // attempt, and because neither matrix can change
+                                // mid-drag.
+                                const glm::mat4 parentMat =
+                                    Arcane::Edit::ParentWorldMatrix(*regPtr, e);
+                                const glm::mat4 worldMat =
+                                    Arcane::Edit::WorldMatrix(*regPtr, e);
+                                const bool planarParent = Arcane::IsPlanarBasis(parentMat);
+                                if (!planarParent || !Arcane::IsPlanarBasis(worldMat))
                                 {
                                     const Arcane::Identity* id =
                                         regPtr->GetComponent<Arcane::Identity>(e);
-                                    ARC_WARN("gizmo: \"{}\" (id {}) sits under a parent whose "
-                                             "basis leaves the XY plane -- the 2D gizmo cannot "
-                                             "demote a world pose through it without corrupting "
-                                             "scale, so this drag leaves it alone (a 3D gizmo "
-                                             "is F4)",
-                                             id ? id->name : std::string("<unnamed>"), e.GetID());
+                                    // Which of the two failed is the difference
+                                    // between "fix the parent" and "fix this
+                                    // entity", so the message names it rather
+                                    // than covering both vaguely.
+                                    const char* what = planarParent
+                                        ? "has a basis that leaves the XY plane"
+                                        : "sits under a parent whose basis leaves the XY plane";
+                                    ARC_WARN("gizmo: \"{}\" (id {}) {} -- the 2D gizmo cannot "
+                                             "move it without corrupting scale and orientation, "
+                                             "so this drag leaves it alone (a 3D gizmo is F4)",
+                                             id ? id->name : std::string("<unnamed>"), e.GetID(),
+                                             what);
                                     continue;
                                 }
                                 m_undo->SnapshotComponent(e, ed);
                                 // Stored WORLD pose (see gt above) -- the group
                                 // delta below composes/replays in world space.
-                                m_gizmoDrag.targets.push_back(
-                                    { e, Arcane::DecomposeTRS(Arcane::Edit::WorldMatrix(*regPtr, e)) });
+                                // Reuses the matrix the guard already walked.
+                                m_gizmoDrag.targets.push_back({ e, Arcane::DecomposeTRS(worldMat) });
                             }
                             m_gizmoDrag.active           = true;
                             m_gizmoDrag.axis             = m_gizmoHovered;
@@ -994,25 +1028,25 @@ namespace Arcane::Editor
                     // decomposition that never looked at them -- a translate
                     // drag must not silently flatten an entity's depth.
                     //
-                    // rotation is the exception, and it is a real one: the
-                    // gizmo can only express a turn about +Z, so any
-                    // out-of-plane orientation on a dragged entity is lost.
+                    // rotation is the exception, and it WOULD be a real loss:
+                    // RotationAboutZ replaces the whole quaternion, so any
+                    // out-of-plane orientation on a dragged entity is discarded
+                    // outright rather than preserved through the drag.
                     // Preserving it would mean a swing-twist split of the
                     // authored quaternion, which is 3D-gizmo work and belongs
-                    // with the task that gives the user 3D handles. Every
-                    // scene in the tree is planar today, so nothing observable
-                    // is dropped -- but it is a LOSS, not a no-op, and it is
-                    // named here so F4 does not have to rediscover it.
+                    // with the task that gives the user 3D handles.
                     //
-                    // What makes THAT loss bounded rather than open-ended: the
-                    // demotion above is only sound while the parent's basis
-                    // stays in the XY plane, and the IsPlanarBasis check at
-                    // drag start (see the targets loop) is what guarantees it
-                    // for every `e` that reaches this line. Without it, a
+                    // What keeps it from being a loss at all: the drag-start
+                    // guard (see the targets loop) refuses any `e` whose WORLD
+                    // basis leaves the XY plane, so every entity reaching this
+                    // line has a rotation RotationAboutZ can express exactly.
+                    // The same guard's parent arm is what makes the demotion
+                    // above sound -- inverse(ParentWorldMatrix) is only a planar
+                    // matrix while the parent is one, and without that check a
                     // tilted parent turned the projection in DecomposeTRS into
                     // silent scale corruption on a drag that touched no scale
-                    // handle at all (final-review finding 4). Do not relax that
-                    // check without making this line 3D-exact first.
+                    // handle at all (final-review finding 4). Do not relax
+                    // either arm without making this line 3D-exact first.
                     et->position = glm::vec3(r.position, et->position.z);
                     et->rotation = Arcane::RotationAboutZ(r.rotation);
                     et->scale    = glm::vec3(r.scale, et->scale.z);

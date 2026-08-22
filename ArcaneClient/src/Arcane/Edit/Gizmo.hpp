@@ -128,6 +128,14 @@ namespace Arcane
     // hazard Task 3 caught at the LOAD boundary, one seam over at the AUTHORING
     // boundary.
     //
+    // EditorApp asks it TWICE per drag target, of ParentWorldMatrix and of
+    // WorldMatrix, because the demotion above and the world-pose READ that
+    // precedes it fail independently -- and because a gizmo that refuses a
+    // tilted parent but silently flattens a tilted entity teaches a false
+    // lesson about when it can be trusted. Neither answer implies the other:
+    // an entity tilted opposite its parent has a planar world basis and a
+    // non-planar parent. See the targets loop in EditorAppFrame.cpp.
+    //
     // The tolerance is RELATIVE to each column's own length, because these
     // columns carry SCALE: an absolute epsilon would refuse a 1000x-scaled
     // planar parent and accept a 0.001x-scaled tilted one. 1e-3 of a column's
