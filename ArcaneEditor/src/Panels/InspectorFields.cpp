@@ -317,17 +317,43 @@ namespace Arcane::Editor
     {
         if (!view.valid || !QuatNearlySameRotation(view.lastQuat, liveQuat))
         {
-            view.eulerRadians = QuatToEulerRadians(liveQuat);
+            view.eulerDisplay = QuatToEulerRadians(liveQuat);
             view.lastQuat     = liveQuat;
             view.valid        = true;
         }
-        return view.eulerRadians;
+        return view.eulerDisplay;
     }
 
     glm::quat ApplyQuatEulerEdit(QuatEulerView& view, const glm::vec3& newEulerRadians) noexcept
     {
         const glm::quat q = QuatFromEulerRadians(newEulerRadians);
-        view.eulerRadians = newEulerRadians;
+        view.eulerDisplay = newEulerRadians;
+        view.lastQuat     = q;
+        view.valid        = true;
+        return q;
+    }
+
+    glm::vec3 SyncQuatEulerViewDegrees(QuatEulerView& view, const glm::quat& liveQuat) noexcept
+    {
+        if (!view.valid || !QuatNearlySameRotation(view.lastQuat, liveQuat))
+        {
+            view.eulerDisplay = glm::degrees(QuatToEulerRadians(liveQuat));
+            view.lastQuat     = liveQuat;
+            view.valid        = true;
+        }
+        return view.eulerDisplay;
+    }
+
+    glm::quat ApplyQuatEulerEditDegrees(QuatEulerView& view,
+                                        const glm::vec3& newEulerDisplayDegrees) noexcept
+    {
+        const glm::quat q = QuatFromEulerRadians(glm::radians(newEulerDisplayDegrees));
+        // Cache the DEGREES the caller passed in verbatim -- not a
+        // re-derivation from `q` -- so the next SyncQuatEulerViewDegrees call
+        // reports exactly `newEulerDisplayDegrees` rather than risking a
+        // different (also valid) decomposition. Same reasoning as
+        // ApplyQuatEulerEdit above, one unit over.
+        view.eulerDisplay = newEulerDisplayDegrees;
         view.lastQuat     = q;
         view.valid        = true;
         return q;

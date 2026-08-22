@@ -22,15 +22,23 @@ namespace Arcane
     // Task 3 (F1): the transform spine is 3D. position/scale are vec3 and
     // rotation is a QUATERNION -- not Euler angles, which have no canonical
     // order and gimbal-lock, and not a matrix, which cannot be interpolated on
-    // the shortest arc (see PreviousTransform below). The editor still AUTHORS
-    // it as EULER ANGLES: the Inspector's FieldKind::Quat draws a three-axis
-    // Euler view over the quaternion and honours the AngleFormat attribute on
-    // the reflect row (see InspectorFields.cpp). The UNIT is whatever that
-    // attribute says, and for this field it says RADIANS -- see the reflect
-    // block below, which carries AngleFormat::Radians deliberately so the
-    // widening did not silently flip the row from the radians the retired float
-    // showed. (This paragraph said "Euler degrees" and was wrong about its own
-    // reflect block; the reflect block is the half that was right.)
+    // the shortest arc (see PreviousTransform below). Storage is ALWAYS
+    // radians-equivalent (glm::quat has no unit of its own; nothing here
+    // changed). The editor still AUTHORS it as EULER ANGLES: the Inspector's
+    // FieldKind::Quat draws a three-axis Euler view over the quaternion and
+    // honours the AngleFormat attribute on the reflect row (see
+    // InspectorFields.cpp). Directive (2026-08-22): radians internally,
+    // DEGREES in the editor, and no live conversion -- degrees are purely an
+    // editor display artifact, never round-tripped through on an axis the
+    // user did not touch. The reflect block below carries
+    // AngleFormat::Degrees EXPLICITLY rather than omitting the attribute and
+    // relying on AngleUnitForField's own Degrees default (InspectorMeta.cpp):
+    // explicit-and-correct beats implicit-and-correct here, since a future
+    // reader of just this reflect block would otherwise have to go look up
+    // that default to know what unit the row shows. (An earlier version of
+    // this comment carried AngleFormat::Radians for the opposite reason --
+    // preserving the retired float field's on-screen unit across the 2D->3D
+    // widening. That reasoning is superseded by the directive above.)
     //
     // Every scene in the tree today is planar and stays planar: a 2D pose is
     // this type with position.z == 0, a rotation about +Z only, and scale.z ==
@@ -262,16 +270,19 @@ namespace Arcane
     ASTRA_REFLECT_TYPE(Transform)
         ASTRA_REFLECT_FIELD(Transform, position)
             ASTRA_REFLECT_ATTR(Tooltip, "World position in meters (MKS units). The renderer applies no Y-flip, so +Y moves an entity DOWN on screen, not up.")
-        // AngleFormat survives the widening to a quaternion unchanged, and
-        // KEEPING it is what preserves the authoring experience. It was inert
-        // on the float field this replaces (nothing read it -- InspectorMeta.hpp),
-        // so the Inspector showed the stored radians raw. FieldKind::Quat DOES
-        // read it (InspectorView.cpp's Quat row), and Radians is the value that
-        // makes its Euler drags go on showing radians; dropping the attribute
-        // would silently flip the Transform rotation row to degrees, which is a
-        // UI change this task has no business making.
+        // AngleFormat is EXPLICIT (not omitted) so this row's unit is
+        // readable at the reflect block itself, without a trip to
+        // AngleUnitForField's default (InspectorMeta.cpp) to confirm it.
+        // FieldKind::Quat reads it (InspectorView.cpp's Quat row) to decide
+        // whether the three Euler drags show degrees or radians; Degrees is
+        // the authoring unit the directive above asks for. Storage stays
+        // radians-equivalent regardless -- this attribute affects ONLY what
+        // the widget prints and reads back, via InspectorFields.cpp's
+        // SyncQuatEulerViewDegrees/ApplyQuatEulerEditDegrees, which cache the
+        // displayed triple in degrees so an untouched axis is never carried
+        // through a unit conversion at all.
         ASTRA_REFLECT_FIELD(Transform, rotation)
-            ASTRA_REFLECT_ATTR(AngleFormat, Astra::AngleFormat::Unit::Radians)
+            ASTRA_REFLECT_ATTR(AngleFormat, Astra::AngleFormat::Unit::Degrees)
             ASTRA_REFLECT_ATTR(Tooltip, "Orientation, stored as a quaternion and edited as Euler angles about X/Y/Z. A 2D scene turns about Z only.")
         ASTRA_REFLECT_FIELD(Transform, scale)
     ASTRA_END_REFLECT_TYPE()

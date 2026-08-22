@@ -223,6 +223,123 @@ TEST_CASE("ApplyQuatEulerEdit at gimbal-adjacent angles does not explode", "[edi
     CHECK(glm::length(q2) == Approx(1.0f).margin(1e-4));
 }
 
+// --- SyncQuatEulerViewDegrees / ApplyQuatEulerEditDegrees -------------------
+//
+// User directive (2026-08-22): radians internally, degrees in the editor,
+// and NO live conversion at all -- degrees are purely an editor display
+// artifact. SyncQuatEulerView/ApplyQuatEulerEdit above cache RADIANS, which
+// was correct while Transform::rotation's AngleFormat said Radians. Now that
+// row displays DEGREES, and if the DISPLAY layer converted that radian cache
+// to degrees on every draw and back to radians on every commit (as
+// InspectorView.cpp used to), the two axes the user did NOT touch would be
+// carried through a degrees<->radians round trip on every edit -- exactly
+// the "live conversion" the directive rules out. These two entry points
+// cache the triple in DEGREES directly, so an untouched axis is never
+// converted by anything: it is the literal float last shown.
+
+TEST_CASE("SyncQuatEulerViewDegrees: repeated sync against an unchanged quaternion returns the SAME triple",
+         "[editor]")
+{
+    QuatEulerView view{};
+    const glm::quat q =
+        glm::normalize(glm::angleAxis(glm::radians(37.0f), glm::normalize(glm::vec3(1, 2, 3))));
+
+    const glm::vec3 first = SyncQuatEulerViewDegrees(view, q);
+    for (int i = 0; i < 8; ++i)
+    {
+        const glm::vec3 again = SyncQuatEulerViewDegrees(view, q);
+        // BIT IDENTICAL, not merely close -- same contract as the radian
+        // SyncQuatEulerView above: a plain display frame must not re-derive.
+        CHECK(again.x == first.x);
+        CHECK(again.y == first.y);
+        CHECK(again.z == first.z);
+    }
+}
+
+TEST_CASE("SyncQuatEulerViewDegrees returns a DEGREE-scaled triple, not radians", "[editor]")
+{
+    // Pins the UNIT, not just the math: a yaw of 40 degrees must read back
+    // near 40.0, not near 0.698 (radians) -- catches an implementation that
+    // forgot the glm::degrees() conversion on the re-derive path. Away from
+    // 90 degrees deliberately: glm::yaw()'s asin(clamp(...)) has a singular
+    // derivative at +-1 (i.e. at +-90 degrees), so a tight tolerance AT
+    // exactly 90 fails on legitimate float32 rounding (measured ~0.02
+    // degrees there) that has nothing to do with the unit conversion this
+    // test exists to catch.
+    QuatEulerView view{};
+    const glm::quat q = glm::angleAxis(glm::radians(40.0f), glm::vec3(0, 1, 0));
+    const glm::vec3 deg = SyncQuatEulerViewDegrees(view, q);
+    CHECK(deg.y == Approx(40.0f).margin(1e-3));
+}
+
+TEST_CASE("ApplyQuatEulerEditDegrees composes the rotation the degrees describe", "[editor]")
+{
+    QuatEulerView view{};
+    const glm::vec3 target(0.0f, 90.0f, 0.0f);   // degrees
+    const glm::quat q = ApplyQuatEulerEditDegrees(view, target);
+    const glm::quat expected = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0));
+    CHECK(SameRotation(q, expected));
+}
+
+TEST_CASE("ApplyQuatEulerEditDegrees: editing one axis leaves the OTHER TWO BIT-IDENTICAL -- no unit round trip",
+         "[editor]")
+{
+    // THE test for the directive. Edit one axis in degrees; the other two
+    // displayed values must be the EXACT float the user last saw -- checked
+    // with ==, not Approx. A design that re-derives the cache by converting
+    // through radians on commit (the bug this task fixes) would still pass
+    // an Approx check here (the drift is ~1e-7 rad, i.e. ~6e-6 degrees) but
+    // fail this one.
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        INFO("axis " << axis);
+        QuatEulerView view{};
+        const glm::quat q0 =
+            glm::normalize(glm::angleAxis(glm::radians(22.0f), glm::normalize(glm::vec3(0.3f, 1.0f, 0.2f))));
+        const glm::vec3 shown = SyncQuatEulerViewDegrees(view, q0);
+
+        glm::vec3 edited = shown;
+        edited[axis] += 15.0f;   // degrees
+        const glm::quat q1 = ApplyQuatEulerEditDegrees(view, edited);
+
+        // The view now reports exactly what was committed, not a fresh
+        // decomposition of q1.
+        const glm::vec3 shownAfter = SyncQuatEulerViewDegrees(view, q1);
+        CHECK(shownAfter.x == edited.x);
+        CHECK(shownAfter.y == edited.y);
+        CHECK(shownAfter.z == edited.z);
+
+        for (int other = 0; other < 3; ++other)
+        {
+            if (other == axis) continue;
+            // Bit-identical to what was displayed BEFORE the edit -- no
+            // degrees->radians->degrees round trip happened to this axis.
+            CHECK(shownAfter[other] == shown[other]);
+        }
+
+        CHECK(shownAfter[axis] == Approx(shown[axis] + 15.0f));
+    }
+}
+
+TEST_CASE("ApplyQuatEulerEditDegrees at gimbal-adjacent angles does not explode", "[editor]")
+{
+    QuatEulerView view{};
+    const glm::quat q0 = glm::normalize(glm::angleAxis(glm::radians(89.0f), glm::vec3(1, 0, 0)));
+    const glm::vec3 shown = SyncQuatEulerViewDegrees(view, q0);
+    REQUIRE(AllFinite(shown));
+
+    glm::vec3 edited = shown;
+    edited.x = 90.0f;   // drive straight into gimbal lock, in degrees
+    const glm::quat q1 = ApplyQuatEulerEditDegrees(view, edited);
+    REQUIRE(AllFinite(q1));
+    CHECK(glm::length(q1) == Approx(1.0f).margin(1e-4));
+
+    edited.y += 20.0f;   // edit yaw WHILE gimbal-locked
+    const glm::quat q2 = ApplyQuatEulerEditDegrees(view, edited);
+    REQUIRE(AllFinite(q2));
+    CHECK(glm::length(q2) == Approx(1.0f).margin(1e-4));
+}
+
 // --- QuatWithEulerAxisRadians: the multi-select one-shot path --------------
 
 TEST_CASE("QuatWithEulerAxisRadians overrides exactly one axis of a fresh decomposition", "[editor]")

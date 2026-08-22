@@ -99,9 +99,18 @@ namespace Arcane::Editor
     // rebuilt every frame and cannot itself carry cross-frame state (the same
     // reason EditGesture::GestureState/originalColor live there instead of on
     // the visitor).
+    //
+    // `eulerDisplay` holds whatever unit the caller's chosen entry-point pair
+    // uses -- radians for SyncQuatEulerView/ApplyQuatEulerEdit, degrees for
+    // SyncQuatEulerViewDegrees/ApplyQuatEulerEditDegrees (below). A single
+    // QuatEulerView is only ever driven by ONE pair for its lifetime in
+    // practice: it is keyed per reflected FIELD (InspectorView.cpp's
+    // quatKey), and a field's AngleFormat attribute is a compile-time reflect
+    // annotation that cannot flip at runtime, so the unit is unambiguous per
+    // instance even though the struct itself does not tag which one is live.
     struct QuatEulerView
     {
-        glm::vec3 eulerRadians{0.0f};
+        glm::vec3 eulerDisplay{0.0f};
         glm::quat lastQuat{1.0f, 0.0f, 0.0f, 0.0f};
         bool      valid = false;
     };
@@ -127,6 +136,36 @@ namespace Arcane::Editor
     // the quaternion to write into storage.
     [[nodiscard]] glm::quat ApplyQuatEulerEdit(QuatEulerView& view,
                                                const glm::vec3& newEulerRadians) noexcept;
+
+    // ---- Degrees-cached cousins of the two above ---------------------------
+    //
+    // Directive (2026-08-22): the engine stores radians; the editor SHOWS
+    // degrees; degrees are purely a display artifact with NO live conversion.
+    // SyncQuatEulerView/ApplyQuatEulerEdit above cache the triple in radians,
+    // which is right for a Radians-attributed field -- but converting that
+    // radian cache to degrees for every draw and back for every commit (which
+    // is what the ImGui call site used to do) sends the two axes the user did
+    // NOT touch through a degrees<->radians round trip on every single edit.
+    // That is a live conversion, and the directive rules it out even though
+    // it is lossy only in the ~1e-7 radian ulp sense.
+    //
+    // These two cache the triple in DEGREES directly -- re-deriving via
+    // QuatToEulerRadians + glm::degrees() only on a genuine external change
+    // (same gate as SyncQuatEulerView, via QuatNearlySameRotation), and
+    // composing via glm::radians() + QuatFromEulerRadians only when the user
+    // actually edits an axis. An untouched axis is therefore never converted
+    // by anything, not even losslessly: it is the literal float last shown.
+
+    // Degrees analogue of SyncQuatEulerView.
+    [[nodiscard]] glm::vec3 SyncQuatEulerViewDegrees(QuatEulerView& view,
+                                                     const glm::quat& liveQuat) noexcept;
+
+    // Degrees analogue of ApplyQuatEulerEdit. `newEulerDisplayDegrees` is the
+    // full triple as currently shown (degrees) -- axes the caller did not
+    // edit arrive here bit-identical to what SyncQuatEulerViewDegrees handed
+    // back, exactly as ApplyQuatEulerEdit documents for its radian argument.
+    [[nodiscard]] glm::quat ApplyQuatEulerEditDegrees(QuatEulerView& view,
+                                                      const glm::vec3& newEulerDisplayDegrees) noexcept;
 
     // Multi-select's one-shot cousin of ApplyQuatEulerEdit: multi-select rows
     // are plain text-commit boxes re-seeded from live storage every frame

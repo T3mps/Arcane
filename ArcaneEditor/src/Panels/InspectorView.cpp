@@ -828,8 +828,24 @@ namespace Arcane::Editor
                             break;
                         }
 
-                        const glm::vec3 shown = Arcane::Editor::SyncQuatEulerView(view, live);
-                        glm::vec3 v = degrees ? glm::degrees(shown) : shown;
+                        // Cache the triple in the DISPLAY unit itself -- no
+                        // conversion here, not even a lossless one. Directive
+                        // (2026-08-22): radians internally, degrees in the
+                        // editor, no live conversion; degrees are purely a
+                        // display artifact. The old code called the radian
+                        // SyncQuatEulerView/ApplyQuatEulerEdit pair
+                        // unconditionally and converted with glm::degrees()/
+                        // glm::radians() around them, which sent the two axes
+                        // the user did NOT touch through a degrees<->radians
+                        // round trip on every edit. SyncQuatEulerViewDegrees/
+                        // ApplyQuatEulerEditDegrees below cache degrees
+                        // directly, so an untouched axis is the literal float
+                        // last shown -- see InspectorFields.cpp/.hpp and
+                        // EditorInspectorQuatTest.cpp's "no unit round trip"
+                        // case.
+                        glm::vec3 v = degrees
+                            ? Arcane::Editor::SyncQuatEulerViewDegrees(view, live)
+                            : Arcane::Editor::SyncQuatEulerView(view, live);
 
                         // A degree drag and a radian drag want visibly different
                         // step sizes for the same "feels like this much rotation"
@@ -841,8 +857,9 @@ namespace Arcane::Editor
                         BeginGestureIfActivated(rawName, instance);
                         if (changed)
                         {
-                            const glm::vec3 edited = degrees ? glm::radians(v) : v;
-                            const glm::quat newQuat = Arcane::Editor::ApplyQuatEulerEdit(view, edited);
+                            const glm::quat newQuat = degrees
+                                ? Arcane::Editor::ApplyQuatEulerEditDegrees(view, v)
+                                : Arcane::Editor::ApplyQuatEulerEdit(view, v);
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
                                           { if (glm::quat* p = f.GetPtr<glm::quat>(d)) *p = newQuat; });
                         }
