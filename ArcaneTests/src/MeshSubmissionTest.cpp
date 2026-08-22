@@ -1,19 +1,33 @@
-// MeshSubmissionTest.cpp -- Task 4 of the F2a arc (3D vocabulary in the
-// scene). Two groups, both CPU-only (no device, no compiler, no batcher,
-// no Runtime): MeshCache resolves .arcmesh Guids into owned geometry
-// (MeshEntry); MeshMaterialCache resolves "mesh"-kind .arcmat Guids into
-// constants (ResolvedMeshMaterial). Task 5's MeshSubmissionSystem is the
-// consumer that borrows out of the first and reads the second -- neither is
-// wired into SceneRenderResolver yet, so these cases drive each cache
-// directly, mirroring SceneRenderResolverTest.cpp's SpriteCache group: a temp
-// asset on disk plus a lambda resolver, no mocks of the asset layer.
+// MeshSubmissionTest.cpp -- Tasks 4 and 5 of the F2a arc (3D vocabulary in
+// the scene). Three groups, all CPU-only (no device, no compiler, no
+// batcher, no Runtime):
+//   [1] MeshCache resolves .arcmesh Guids into owned geometry (MeshEntry).
+//   [2] MeshMaterialCache resolves "mesh"-kind .arcmat Guids into constants
+//       (ResolvedMeshMaterial).
+//   [3] CollectMeshInstances (Scene/MeshSubmissionSystem.hpp) is the
+//       consumer that sweeps the scene and resolves each MeshRenderer
+//       through a real MeshTable/MeshMaterialTable -- built directly here
+//       (real maps, real MeshData from BuildCube/ComputeMeshBounds) rather
+//       than through the caches above, since the sweep itself never touches
+//       MeshCache/MeshMaterialCache (see MeshSubmissionSystem.hpp's own
+//       NO Request() CALL note); neither is wired into SceneRenderResolver
+//       yet, so [1] and [2] drive each cache directly, mirroring
+//       SceneRenderResolverTest.cpp's SpriteCache group: a temp asset on
+//       disk plus a lambda resolver, no mocks of the asset layer.
 //
 // Both caches follow SpriteMaterialCache's failure discipline, not
 // SpriteCache's: a broken Guid stays OUT of the published table (memoized in
 // a private `failed` set) rather than getting a visible placeholder entry --
 // there is no meaningful "placeholder mesh" or "placeholder material", so
-// Resolve() returning null is the correct outcome for MeshSubmissionSystem to
+// Resolve() returning null is the correct outcome for CollectMeshInstances to
 // act on.
+
+// Include order: NRI headers first, ALWAYS -- MeshSubmissionSystem.hpp pulls
+// MeshNode.hpp (for MeshInstance), which pulls <NRI.h> and, transitively,
+// <Extensions/NRIDeviceCreation.h> (declares nri::Message::ERROR) ahead of
+// anything below that could drag in <windows.h> (wingdi.h #defines ERROR).
+// See MeshSubmissionSystem.hpp's own header comment.
+#include <Arcane/Scene/MeshSubmissionSystem.hpp>
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
@@ -22,7 +36,12 @@
 #include <Arcane/Render/MeshBuilder.hpp>
 #include <Arcane/Render/MeshCache.hpp>
 #include <Arcane/Render/MeshMaterialCache.hpp>
+#include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
+
+#include <Astra/Component/ComponentRegistry.hpp>
+#include <Astra/Registry/Registry.hpp>
 
 #include <glm/glm.hpp>
 
@@ -31,10 +50,12 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
@@ -497,4 +518,307 @@ TEST_CASE("MeshMaterialCache::Invalidate forces the next Request to re-read the 
     CHECK(cache.Table().empty());
 
     std::error_code ec; fs::remove_all(dir, ec);
+}
+
+// ------------------------------------------------- [3] CollectMeshInstances
+
+namespace
+{
+    // A resolvable MeshEntry with REAL geometry (BuildCube/ComputeMeshBounds,
+    // not a zeroed-out stand-in) and the given default material Guid --
+    // matching exactly what MeshCache::Request now produces
+    // (MeshCache.cpp: `entry.material = data->material`). The file header's
+    // "build them honestly" note is why this goes through the real
+    // generator/bounds functions rather than a fabricated MeshData.
+    Arcane::MeshEntry MakeMeshEntry(const Arcane::Guid& defaultMaterial)
+    {
+        Arcane::MeshEntry entry;
+        entry.data     = Arcane::BuildCube(1.0f);
+        entry.bounds   = Arcane::ComputeMeshBounds(entry.data);
+        entry.material = defaultMaterial;
+        return entry;
+    }
+
+    // Spawns one entity carrying WorldTransform{matrix} + MeshRenderer{mesh,
+    // materialOverride} and returns it, so a case that needs to add a THIRD
+    // component (Hidden) still has the handle.
+    Astra::Entity SpawnMeshEntity(Astra::Registry& reg, const glm::mat4& matrix,
+                                   const Arcane::Guid& mesh,
+                                   const Arcane::Guid& materialOverride)
+    {
+        Astra::Entity e = reg.CreateEntity();
+        Arcane::WorldTransform wt; wt.matrix = matrix;
+        reg.AddComponent<Arcane::WorldTransform>(e, wt);
+        Arcane::MeshRenderer mr;
+        mr.mesh            = mesh;
+        mr.materialOverride = materialOverride;
+        reg.AddComponent<Arcane::MeshRenderer>(e, mr);
+        return e;
+    }
+}
+
+TEST_CASE("CollectMeshInstances uses a resolvable materialOverride's baseColor over the mesh default",
+          "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId      = Arcane::Guid::Generate();
+    const Arcane::Guid defaultMat  = Arcane::Guid::Generate();
+    const Arcane::Guid overrideMat = Arcane::Guid::Generate();
+
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, MakeMeshEntry(defaultMat));
+    std::unordered_map<Arcane::Guid, Arcane::ResolvedMeshMaterial> materials;
+    // Deliberately distinct colours so a case that reads the wrong link in
+    // the chain fails loudly rather than by coincidence.
+    materials.emplace(defaultMat,  Arcane::ResolvedMeshMaterial{ glm::vec4(1.0f, 0.0f, 0.0f, 1.0f) }); // red: must lose
+    materials.emplace(overrideMat, Arcane::ResolvedMeshMaterial{ glm::vec4(0.0f, 1.0f, 0.0f, 1.0f) }); // green: must win
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+    reg.SetResource<Arcane::MeshMaterialTable>(Arcane::MeshMaterialTable{ &materials });
+
+    Arcane::Transform t; t.position = glm::vec3(1.0f, 2.0f, 3.0f);
+    const glm::mat4 matrix = t.ToMatrix();
+    SpawnMeshEntity(reg, matrix, meshId, overrideMat);
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+
+    REQUIRE(out.size() == 1);
+    // BORROWED: the instance must point INTO the published table's entry,
+    // never own a copy (MeshInstance::mesh's own borrowing contract).
+    CHECK(out[0].mesh == &meshes.at(meshId).data);
+    CHECK(out[0].model == matrix);
+    CHECK(out[0].baseColor == glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+}
+
+TEST_CASE("CollectMeshInstances falls to the mesh asset's default material when materialOverride is nil",
+          "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId     = Arcane::Guid::Generate();
+    const Arcane::Guid defaultMat = Arcane::Guid::Generate();
+
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, MakeMeshEntry(defaultMat));
+    std::unordered_map<Arcane::Guid, Arcane::ResolvedMeshMaterial> materials;
+    materials.emplace(defaultMat, Arcane::ResolvedMeshMaterial{ glm::vec4(0.0f, 0.0f, 1.0f, 1.0f) }); // blue
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+    reg.SetResource<Arcane::MeshMaterialTable>(Arcane::MeshMaterialTable{ &materials });
+
+    SpawnMeshEntity(reg, glm::mat4(1.0f), meshId, Arcane::Guid{});   // materialOverride nil (default)
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].baseColor == glm::vec4(0.0f, 0.0f, 1.0f, 1.0f));
+}
+
+TEST_CASE("CollectMeshInstances resolves to white when materialOverride and the mesh default are both nil",
+          "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId = Arcane::Guid::Generate();
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, MakeMeshEntry(Arcane::Guid{}));   // nil default material
+    std::unordered_map<Arcane::Guid, Arcane::ResolvedMeshMaterial> materials;   // nothing to resolve to regardless
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+    reg.SetResource<Arcane::MeshMaterialTable>(Arcane::MeshMaterialTable{ &materials });
+
+    SpawnMeshEntity(reg, glm::mat4(1.0f), meshId, Arcane::Guid{});   // materialOverride nil too
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].baseColor == glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+}
+
+TEST_CASE("CollectMeshInstances falls through an unresolvable materialOverride to the mesh default, not white",
+          "[mesh][submission]")
+{
+    // THE LANDMINE CASE. `overrideMat` is a VALID (non-nil) Guid that is
+    // deliberately never inserted into `materials` below -- exactly the
+    // state MeshMaterialCache::Request leaves behind for a broken Guid
+    // after its ONE ARC_WARN already fired (MeshMaterialCache.cpp's `fail`
+    // lambda, memoized into a private `failed` set). CollectMeshInstances
+    // never calls Request itself (see MeshSubmissionSystem.hpp's own NO
+    // Request() CALL / WARN-ONCE notes), so it never warns here either --
+    // this case is what proves the FALL-THROUGH happens (the instance still
+    // draws, with the mesh's own colour) without needing to observe a warn
+    // that this function was never going to emit in the first place.
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId      = Arcane::Guid::Generate();
+    const Arcane::Guid defaultMat  = Arcane::Guid::Generate();
+    const Arcane::Guid overrideMat = Arcane::Guid::Generate();   // never inserted into `materials`
+
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, MakeMeshEntry(defaultMat));
+    std::unordered_map<Arcane::Guid, Arcane::ResolvedMeshMaterial> materials;
+    // A colour that is neither white nor ever assigned to overrideMat, so a
+    // read of the wrong link (silently-white, or a stale overrideMat entry)
+    // cannot pass by coincidence.
+    materials.emplace(defaultMat, Arcane::ResolvedMeshMaterial{ glm::vec4(0.2f, 0.4f, 0.6f, 1.0f) });
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+    reg.SetResource<Arcane::MeshMaterialTable>(Arcane::MeshMaterialTable{ &materials });
+
+    SpawnMeshEntity(reg, glm::mat4(1.0f), meshId, overrideMat);
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+
+    REQUIRE(out.size() == 1);   // NOT skipped -- a broken override still draws
+    CHECK(out[0].baseColor == glm::vec4(0.2f, 0.4f, 0.6f, 1.0f));   // the mesh default, never white
+}
+
+TEST_CASE("CollectMeshInstances skips a Hidden entity", "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId = Arcane::Guid::Generate();
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, MakeMeshEntry(Arcane::Guid{}));
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+
+    Astra::Entity e = SpawnMeshEntity(reg, glm::mat4(1.0f), meshId, Arcane::Guid{});
+    reg.AddComponent<Arcane::Hidden>(e, Arcane::Hidden{});
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+    CHECK(out.empty());
+}
+
+TEST_CASE("CollectMeshInstances skips an entity missing WorldTransform", "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId = Arcane::Guid::Generate();
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, MakeMeshEntry(Arcane::Guid{}));
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+
+    // e1: MeshRenderer only -- no WorldTransform. CreateView<WorldTransform,
+    // MeshRenderer, ...> excludes it by construction, the same way it would
+    // exclude any entity missing a required component.
+    Astra::Entity e1 = reg.CreateEntity();
+    Arcane::MeshRenderer mr1; mr1.mesh = meshId;
+    reg.AddComponent<Arcane::MeshRenderer>(e1, mr1);
+
+    // e2: the control -- carries both, so it must be the one instance that
+    // survives (proves e1's absence isn't just an empty-registry accident).
+    Arcane::Transform t; t.position = glm::vec3(5.0f, 6.0f, 7.0f);
+    const glm::mat4 matrix = t.ToMatrix();
+    SpawnMeshEntity(reg, matrix, meshId, Arcane::Guid{});
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].model == matrix);
+}
+
+TEST_CASE("CollectMeshInstances skips an entity whose MeshRenderer::mesh is nil", "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    // No MeshTable/MeshMaterialTable resource published at all -- a nil mesh
+    // Guid must be skipped before either resource is even consulted, so this
+    // case doubles as coverage for Resolve()'s null-table safety too.
+    SpawnMeshEntity(reg, glm::mat4(1.0f), Arcane::Guid{}, Arcane::Guid{});
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+    CHECK(out.empty());
+}
+
+TEST_CASE("CollectMeshInstances skips an entity whose mesh Guid is not in the table",
+          "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid presentMeshId = Arcane::Guid::Generate();
+    const Arcane::Guid missingMeshId = Arcane::Guid::Generate();   // valid, but never published
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(presentMeshId, MakeMeshEntry(Arcane::Guid{}));
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+
+    SpawnMeshEntity(reg, glm::mat4(1.0f), missingMeshId, Arcane::Guid{});
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+    CHECK(out.empty());
+}
+
+TEST_CASE("CollectMeshInstances::model is byte-identical to WorldTransform::matrix",
+          "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId = Arcane::Guid::Generate();
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, MakeMeshEntry(Arcane::Guid{}));
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+
+    // Rotation + non-uniform scale + translation, not just a translation --
+    // a matrix with real trigonometric entries is what would expose the
+    // sweep re-deriving the pose (e.g. from position/rotation/scale fields)
+    // instead of copying WorldTransform::matrix verbatim.
+    Arcane::Transform t;
+    t.position = glm::vec3(3.0f, -2.0f, 9.0f);
+    t.rotation = Arcane::RotationAboutZ(0.7f);
+    t.scale    = glm::vec3(2.0f, 3.0f, 1.5f);
+    const glm::mat4 matrix = t.ToMatrix();
+
+    SpawnMeshEntity(reg, matrix, meshId, Arcane::Guid{});
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+
+    REQUIRE(out.size() == 1);
+    // Exact equality, not Approx: a mismatch here would mean the sweep is
+    // re-deriving the pose rather than copying it straight across.
+    CHECK(out[0].model == matrix);
+}
+
+TEST_CASE("CollectMeshInstances clears `out` on entry", "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId = Arcane::Guid::Generate();
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, MakeMeshEntry(Arcane::Guid{}));
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+
+    SpawnMeshEntity(reg, glm::mat4(1.0f), meshId, Arcane::Guid{});
+
+    std::vector<Arcane::MeshInstance> out;
+    out.push_back(Arcane::MeshInstance{});   // a stray pre-existing entry
+    Arcane::CollectMeshInstances(reg, out);
+    REQUIRE(out.size() == 1);   // the stray entry is gone, not appended to
+
+    Arcane::CollectMeshInstances(reg, out);   // second call, same unchanged scene
+    REQUIRE(out.size() == 1);   // still 1, not 2 -- a rebuild, not an accumulation
 }

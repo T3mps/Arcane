@@ -145,10 +145,24 @@ namespace Arcane
     // never relocates an existing element's storage, only its iterators) but
     // NOT against an erase, which is why MeshCache::Invalidate/Clear are the
     // only things that may ever remove an entry mid-frame.
+    //
+    // `material` (F2a, Task 5) is a COPY of the loaded .arcmesh's own
+    // `MeshAssetData::material` -- the mesh's default material Guid, the
+    // second link in MeshSubmissionSystem's `materialOverride` -> mesh
+    // default -> white chain. It rides along here, rather than forcing the
+    // submission sweep to go through `MeshCache::AssetFor`, because
+    // MeshSubmissionSystem is host-published-resource-only by design (it
+    // reads MeshTable/MeshMaterialTable and never touches a cache pointer,
+    // matching RenderSubmissionSystem's rule of never touching the Assets
+    // facade). `AssetFor` still exists for callers that need the REST of
+    // the asset (name, source, topology) -- this field exists purely so the
+    // one Guid the render-hot-path chain needs is reachable from the
+    // published table alone.
     struct MeshEntry
     {
         MeshData   data;
         MeshBounds bounds;
+        Guid       material{};
     };
 
     // .arcmesh Guid -> the resolved record above. Same shape and lifetime

@@ -88,8 +88,13 @@ namespace Arcane
         }
 
         MeshEntry entry;
-        entry.bounds = ComputeMeshBounds(*meshData);
-        entry.data   = std::move(*meshData);
+        entry.bounds   = ComputeMeshBounds(*meshData);
+        entry.data     = std::move(*meshData);
+        // Copied out before `data` moves into `im.assets` below -- Task 5's
+        // submission sweep reads this straight off the published MeshTable
+        // (MeshEntry::material) rather than through AssetFor, so it never
+        // needs a MeshCache pointer of its own.
+        entry.material = data->material;
 
         im.assets.emplace(id, std::move(*data));
         im.table.emplace(id, std::move(entry));

@@ -21,11 +21,14 @@
 // MeshSubmissionSystem (Task 5) is expected to skip the entity entirely, the
 // same way it would for a nil MeshRenderer::mesh.
 //
-// `AssetFor` exists because Task 5's material-resolution chain
-// (materialOverride -> the mesh asset's OWN default `material` -> white)
-// needs that Guid, and re-reading the .arcmesh file every frame just to read
-// one field back out of it would be absurd -- so the cache retains the
-// loaded MeshAssetData alongside the geometry it built from it.
+// `AssetFor` retains the loaded MeshAssetData alongside the geometry built
+// from it, so a caller that needs the REST of the asset (name, source,
+// topology) never re-reads the .arcmesh file just to see it. Task 5's
+// material-resolution chain (materialOverride -> the mesh asset's OWN
+// default `material` -> white) does NOT go through this -- MeshEntry
+// (SceneResources.hpp) carries a `material` copy of its own precisely so
+// MeshSubmissionSystem can read it straight off the published MeshTable,
+// without ever holding a MeshCache pointer.
 //
 // ENGINE-SIDE, not editor-side, from the moment it is written -- the same
 // placement rule the sprite-resolution lift (2026-07-29) established for
