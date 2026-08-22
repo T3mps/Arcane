@@ -18,6 +18,7 @@
 #include <Astra/Reflection/FieldInfo.hpp>
 
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -75,6 +76,32 @@ namespace Arcane::Editor
     // Nothing to do with Arcane::Hidden, the marker component that makes render
     // submission skip an entity. The names collide; the meanings do not.
     [[nodiscard]] bool FieldIsAttributeHidden(const Astra::FieldInfo& field);
+
+    // Will the Inspector's field visitor draw a row for this field AT ALL,
+    // filter aside? Both skips on the way to the widget, in the visitor's own
+    // order: Astra's VisitFields drops non-serializable fields before Visit()
+    // ever sees them (ComponentRegistry.hpp:708), and Visit() then drops
+    // Astra::Hidden fields itself (InspectorView.cpp).
+    //
+    // It exists as ONE predicate because three sites need the same answer -- the
+    // component sweep, the category collection and the empty-body check, all in
+    // EditorPanels.cpp -- and each used to spell the pair out itself. Counting a
+    // field the visitor then drops is what renders a header over an empty body,
+    // and three hand-copies of a two-clause rule is how that drifts back.
+    //
+    // NOT filter-aware on purpose: this answers "is this field ever editable",
+    // a permanent property of the type, where a filter miss is a transient
+    // property of the search box. The two read the same in the draw loop and
+    // must not read the same in the message shown to the user.
+    [[nodiscard]] bool FieldIsDrawable(const Astra::FieldInfo& field);
+
+    // Does a component have any drawable field at all? False means its Inspector
+    // section can only ever be an empty header -- Arcane::Collider2D today, whose
+    // sole reflected field (`fixtures`) is Serializable(false) because the
+    // reflection->JSON bridge has no container branch (PhysicsComponents.hpp).
+    // The caller draws a disabled hint row instead of an empty grid, so Add
+    // Component still confirms it did something.
+    [[nodiscard]] bool AnyFieldDrawable(std::span<const Astra::FieldInfo> fields);
 
     // Case-insensitive substring, for the Inspector's search box.
     //

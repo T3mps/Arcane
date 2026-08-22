@@ -2,6 +2,8 @@
 
 #include <Astra/Reflection/Attribute.hpp>
 
+#include <algorithm>
+
 namespace Arcane::Editor
 {
     namespace
@@ -130,6 +132,21 @@ namespace Arcane::Editor
     bool FieldIsAttributeHidden(const Astra::FieldInfo& field)
     {
         return field.GetAttribute<Astra::Hidden>() != nullptr;
+    }
+
+    bool FieldIsDrawable(const Astra::FieldInfo& field)
+    {
+        // Order mirrors the visitor's: Astra's serializable drop first (it
+        // happens one frame out, in VisitFields), then the Hidden attribute.
+        // Both are all-or-nothing, so the order is documentation rather than
+        // behaviour -- but a reader comparing this against InspectorView.cpp
+        // should not have to reorder it in their head.
+        return field.IsSerializable() && !FieldIsAttributeHidden(field);
+    }
+
+    bool AnyFieldDrawable(std::span<const Astra::FieldInfo> fields)
+    {
+        return std::any_of(fields.begin(), fields.end(), FieldIsDrawable);
     }
 
     bool ComponentMatchesFilter(std::string_view componentDisplayName,

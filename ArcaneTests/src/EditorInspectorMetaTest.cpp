@@ -45,6 +45,8 @@ TEST_CASE("DisplayNameForComponent strips the namespace first", "[editor]")
 
 #include <Astra/Reflection/Reflection.hpp>
 
+#include <span>
+
 namespace
 {
     // A throwaway reflected type carrying one of every attribute this module
@@ -58,6 +60,7 @@ namespace
         float described = 0.0f;
         int   bare     = 0;
         float angled   = 0.0f;   // explicit AngleFormat(Radians) witness
+        int   unwritten = 0;     // Serializable(false) witness
     };
 
     ASTRA_REFLECT_TYPE(MetaProbe)
@@ -74,6 +77,21 @@ namespace
         ASTRA_REFLECT_FIELD(MetaProbe, bare)
         ASTRA_REFLECT_FIELD(MetaProbe, angled)
             ASTRA_REFLECT_ATTR(AngleFormat, Astra::AngleFormat::Unit::Radians)
+        ASTRA_REFLECT_FIELD(MetaProbe, unwritten)
+            ASTRA_REFLECT_ATTR(Serializable, false)
+    ASTRA_REFLECT_TYPE_END()
+
+    // The other half of the Collider2D shape: a type whose ONLY reflected field
+    // is outside the serialization contract, so its Inspector section can never
+    // be anything but an empty header.
+    struct NothingDrawable
+    {
+        int hidden = 0;
+    };
+
+    ASTRA_REFLECT_TYPE(NothingDrawable)
+        ASTRA_REFLECT_FIELD(NothingDrawable, hidden)
+            ASTRA_REFLECT_ATTR(Serializable, false)
     ASTRA_REFLECT_TYPE_END()
 
     const Astra::FieldInfo& ProbeField(std::string_view name)
@@ -120,6 +138,46 @@ TEST_CASE("a field with no attributes falls back cleanly", "[editor]")
     // No AngleFormat attribute -> the attribute's OWN default (Degrees,
     // Attribute.hpp), not an arbitrary fallback invented here.
     CHECK(AngleUnitForField(bare) == Astra::AngleFormat::Unit::Degrees);
+}
+
+// FieldIsDrawable is what stands between a component and a header drawn over a
+// void: three sites in the draw loop ask it (the component sweep, the category
+// collection, and the empty-body check that draws the disabled hint row), and
+// EditorPanels.cpp is not compiled into this gate, so the predicate itself is
+// the only part of that chain a test can reach.
+TEST_CASE("FieldIsDrawable is both of the visitor's skips", "[editor]")
+{
+    // The ordinary field draws. So does a ReadOnly one -- ReadOnly means "shown
+    // but not editable", a different statement entirely, and confusing the two
+    // would hide every view-only row in the Inspector.
+    CHECK(FieldIsDrawable(ProbeField("bare")));
+    CHECK(FieldIsDrawable(ProbeField("locked")));
+
+    // Astra::Hidden -- dropped by the visitor itself (InspectorView.cpp).
+    CHECK_FALSE(FieldIsDrawable(ProbeField("secret")));
+    // Serializable(false) -- dropped one frame out, by Astra's VisitFields,
+    // before Visit() is ever called. This is Collider2D::fixtures' case, and
+    // missing it is what left that component drawing an empty header.
+    CHECK_FALSE(FieldIsDrawable(ProbeField("unwritten")));
+}
+
+TEST_CASE("AnyFieldDrawable separates an empty section from a populated one", "[editor]")
+{
+    const Astra::TypeMeta* probe = Astra::GetMeta<MetaProbe>();
+    REQUIRE(probe != nullptr);
+    // MetaProbe carries undrawable fields AND drawable ones -- one undrawable
+    // field must not condemn the whole section.
+    CHECK(AnyFieldDrawable(probe->fields));
+
+    const Astra::TypeMeta* empty = Astra::GetMeta<NothingDrawable>();
+    REQUIRE(empty != nullptr);
+    // Every field undrawable: the caller draws the disabled hint row instead of
+    // opening a grid that would visit nothing. Collider2D's shape today.
+    CHECK_FALSE(AnyFieldDrawable(empty->fields));
+
+    // A type with no reflected fields at all answers the same way -- vacuously
+    // false, no special case at the call site.
+    CHECK_FALSE(AnyFieldDrawable(std::span<const Astra::FieldInfo>{}));
 }
 
 TEST_CASE("the Inspector filter matches either spelling", "[editor]")

@@ -2101,17 +2101,12 @@ namespace Arcane::Editor
             {
                 for (const Astra::FieldInfo& f : ci.meta->fields)
                 {
-                    // Mirrors BOTH skips the visitor applies, in the same order, so
-                    // a field this sweep counts is a field the visitor will actually
-                    // draw. visitFields is Astra's VisitFields (ComponentRegistry.hpp:314),
-                    // which drops non-serializable fields before Visit() ever sees
-                    // them; Visit() then drops Astra::Hidden fields itself (this
-                    // file, ~line 1151). Missing either one lets a component whose
-                    // only matching field fails that skip vote itself visible and
-                    // draw an empty body.
-                    if (!f.IsSerializable())
-                        continue;
-                    if (Arcane::Editor::FieldIsAttributeHidden(f))
+                    // FieldIsDrawable (InspectorMeta.hpp) is BOTH skips the
+                    // visitor applies, so a field this sweep counts is a field
+                    // the visitor will actually draw. Missing either one lets a
+                    // component whose only matching field fails that skip vote
+                    // itself visible and draw an empty body.
+                    if (!Arcane::Editor::FieldIsDrawable(f))
                         continue;
                     if (Arcane::Editor::MatchesInspectorFilter(
                             headerLabel, Arcane::Editor::DisplayNameForField(f), f.name, query))
@@ -2182,6 +2177,34 @@ namespace Arcane::Editor
                 {
                     ImGui::TextDisabled("(tag component -- no fields)");
                 }
+                else if (!Arcane::Editor::AnyFieldDrawable(ci.meta->fields))
+                {
+                    // Every reflected field is non-serializable or Hidden, so the
+                    // grid below would open, visit nothing and close -- a header
+                    // over a void. Arcane::Collider2D is the case today: its only
+                    // field is `fixtures`, Serializable(false) because the
+                    // reflection->JSON bridge has no container branch
+                    // (PhysicsComponents.hpp). Before this row, adding a
+                    // Collider2D from the catalog gave NO confirmation it had
+                    // done anything -- the section that appeared looked
+                    // indistinguishable from a rendering glitch.
+                    //
+                    // Says "not editable here" rather than "no fields": the
+                    // component genuinely carries state (PhysicsSystem builds a
+                    // body from those fixtures), it just has no authoring surface
+                    // in this panel yet. The tag-component line above is the
+                    // other statement and they must not be confused.
+                    //
+                    // Filter-independent by construction (AnyFieldDrawable does
+                    // not consult the query), so a component visible only through
+                    // a header-name match with no matching fields still falls to
+                    // the empty grid below rather than claiming a permanent
+                    // property it does not have.
+                    ImGui::TextDisabled("(no fields editable here)");
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                        ImGui::SetTooltip("%s carries data, but none of its reflected fields "
+                                          "have an Inspector widget yet.", headerLabel.c_str());
+                }
                 else
                 {
                     // Built ONCE per component and re-driven per category:
@@ -2221,12 +2244,12 @@ namespace Arcane::Editor
                     //
                     // A category is collected only when at least one of its
                     // fields will actually DRAW, which means reproducing every
-                    // skip on the way to the widget: Astra's non-serializable
-                    // drop then Astra::Hidden (both mirrored from the component
-                    // sweep above, in the visitor's own order), plus the live
-                    // filter. Counting a field the visitor then drops is what
-                    // renders a header over an empty body -- the same defect one
-                    // level up that the component sweep exists to avoid.
+                    // skip on the way to the widget: FieldIsDrawable (the
+                    // visitor's own two, shared with the component sweep above),
+                    // plus the live filter. Counting a field the visitor then
+                    // drops is what renders a header over an empty body -- the
+                    // same defect one level up that the component sweep exists
+                    // to avoid.
                     //
                     // The cheap `cat.empty()` rejection leads deliberately: it is
                     // the answer for EVERY field until components carry Category
@@ -2238,9 +2261,7 @@ namespace Arcane::Editor
                         const std::string_view cat = Arcane::Editor::CategoryOfField(f);
                         if (cat.empty())
                             continue;
-                        if (!f.IsSerializable())
-                            continue;
-                        if (Arcane::Editor::FieldIsAttributeHidden(f))
+                        if (!Arcane::Editor::FieldIsDrawable(f))
                             continue;
                         if (!Arcane::Editor::MatchesInspectorFilter(
                                 headerLabel, Arcane::Editor::DisplayNameForField(f), f.name, query))
