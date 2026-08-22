@@ -1,5 +1,6 @@
 #include <Arcane/Material/MaterialSource.hpp>
 
+#include <Arcane/Base/Assert.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
 
 #include <algorithm>
@@ -311,6 +312,18 @@ namespace Arcane
 
     const char* MaterialTemplateFile(MaterialSurface surface)
     {
+        // Mesh has no template file yet (see MaterialSurface's own comment in
+        // MaterialSource.hpp) -- nothing in F2a reaches this arm, since F2a
+        // never stitches a mesh shader source. Without a guard, a FUTURE
+        // caller that starts doing so would silently get the Fullscreen
+        // template back: a wrong answer that compiles clean and renders
+        // wrong, which is precisely the defect class this spec refuses
+        // elsewhere. ARC_ENSURE reports it loudly (once per call site) while
+        // still returning a file so an unattended build keeps running; this
+        // closes when F2b/Task 8 gives Mesh a real template.
+        ARC_ENSURE(surface != MaterialSurface::Mesh,
+                   "MaterialTemplateFile: MaterialSurface::Mesh has no template file yet "
+                   "(F2b/Task 8) -- falling back to the fullscreen template");
         return surface == MaterialSurface::Sprite
                    ? "materials/sprite_material.hlsl"
                    : "materials/fullscreen_material.hlsl";
@@ -318,14 +331,23 @@ namespace Arcane
 
     MaterialSurface MaterialSurfaceForKind(std::string_view kind)
     {
-        return kind == "sprite" ? MaterialSurface::Sprite
-                                : MaterialSurface::Fullscreen;
+        if (kind == "sprite") return MaterialSurface::Sprite;
+        if (kind == "mesh")   return MaterialSurface::Mesh;
+        return MaterialSurface::Fullscreen;
     }
 
     std::string GenerateMaterialBindings(const MaterialTemplate& templ,
                                          MaterialSurface surface,
                                          std::uint32_t chainInputs)
     {
+        // Same guard as MaterialTemplateFile above, and for the same reason:
+        // Mesh has no register map (cbuffer slot / texture base) yet, and the
+        // `sprite`-only branch below would otherwise silently emit Fullscreen
+        // bindings for it. Closes alongside MaterialTemplateFile's guard.
+        ARC_ENSURE(surface != MaterialSurface::Mesh,
+                   "GenerateMaterialBindings: MaterialSurface::Mesh has no register map yet "
+                   "(F2b/Task 8) -- falling back to the fullscreen bindings");
+
         // Members emit in declaration order: HLSL's cbuffer packing applies the
         // same rules MaterialTemplate::Build used, so the shader's offsets match
         // the CPU layout byte for byte. Keep the two in lockstep. Register

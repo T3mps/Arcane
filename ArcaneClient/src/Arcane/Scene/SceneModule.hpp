@@ -31,6 +31,7 @@ namespace Arcane
         // today, but appending costs nothing and keeps the ids of everything already
         // registered stable.
         creg.RegisterComponent<Camera>();
+        creg.RegisterComponent<MeshRenderer>();
     }
 
     inline void RegisterSceneComponents(Astra::Registry& reg)

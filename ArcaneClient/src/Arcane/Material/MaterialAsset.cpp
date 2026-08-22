@@ -34,6 +34,20 @@ namespace Arcane
             return false;
         }
 
+        // Kinds whose SURFACE has no pass-chain concept to hang passes or
+        // baseInputs off: sprite materials are batcher-owned single pass
+        // (Slice 8), and mesh materials (F2a) stitch no shader source at all
+        // yet (MaterialSurface::Mesh's guard in MaterialSource.cpp). Named
+        // for what these kinds REFUSE, not for how they are spelled, so the
+        // three gates below -- SaveMaterialAsset's passes warning, and
+        // LoadMaterialAsset's passes refusal and baseInputs refusal -- share
+        // ONE predicate instead of three copies of `kind == "sprite" ||
+        // kind == "mesh"` that could drift independently. A future kind with
+        // the same shape extends this one place.
+        bool KindRefusesPassChains(std::string_view kind)
+        {
+            return kind == "sprite" || kind == "mesh";
+        }
     }
 
     // Self-typed entry: {"type": "...", "value": ...}. Instances must load
@@ -136,10 +150,10 @@ namespace Arcane
                 doc["graph"] = GraphToJson(*data.graph);
             if (!data.passes.empty())
             {
-                if (data.kind == "sprite")
-                    ARC_WARN("SaveMaterialAsset: '{}' is a sprite material with passes -- "
-                             "the sprite kind refuses chains; they will drop on load",
-                             path.generic_string());
+                if (KindRefusesPassChains(data.kind))
+                    ARC_WARN("SaveMaterialAsset: '{}' is a '{}' material with passes -- "
+                             "this kind refuses chains; they will drop on load",
+                             path.generic_string(), data.kind);
                 nlohmann::json passes = nlohmann::json::array();
                 for (const MaterialPass& p : data.passes)
                 {
@@ -290,14 +304,23 @@ namespace Arcane
             }
         }
 
-        // Pass chain: fullscreen base materials only. Sprite kind and instances
-        // REFUSE passes (warn + drop -- the file stays intact on next save only
-        // if the editor re-adds them, which it won't for these shapes).
+        // Pass chain: fullscreen base materials only. Sprite and mesh kinds
+        // (KindRefusesPassChains above) and instances REFUSE passes (warn +
+        // drop -- the file stays intact on next save only if the editor
+        // re-adds them, which it won't for these shapes).
         if (doc.contains("passes") && doc["passes"].is_array())
         {
-            if (data.kind == "sprite" || hasParent)
-                ARC_WARN("LoadMaterialAsset: '{}' carries passes on a {} -- refused",
-                         path.generic_string(), hasParent ? "instance" : "sprite material");
+            if (KindRefusesPassChains(data.kind) || hasParent)
+            {
+                // An instance carries no kind of its own (it comes from the
+                // base at the end of the parent chain), so it reads "an
+                // instance" here; everywhere else names the refusing kind
+                // itself -- sprite and mesh alike, now that both refuse.
+                const std::string what = hasParent ? std::string("an instance")
+                                                    : ("a '" + data.kind + "' material");
+                ARC_WARN("LoadMaterialAsset: '{}' carries passes on {} -- refused",
+                         path.generic_string(), what);
+            }
             else
             {
                 for (const nlohmann::json& e : doc["passes"])
@@ -398,9 +421,10 @@ namespace Arcane
             readPos("scene", data.chainSceneX, data.chainSceneY);
         }
 
-        // The base pass's own input slots (sprite materials refuse them along
-        // with passes; same sentinel clamp as the per-pass lists).
-        if (!data.IsInstance() && data.kind != "sprite" &&
+        // The base pass's own input slots (sprite AND mesh materials refuse
+        // them along with passes -- KindRefusesPassChains above; same
+        // sentinel clamp as the per-pass lists).
+        if (!data.IsInstance() && !KindRefusesPassChains(data.kind) &&
             doc.contains("baseInputs") && doc["baseInputs"].is_array())
             for (const nlohmann::json& in : doc["baseInputs"])
                 if (in.is_number_unsigned())

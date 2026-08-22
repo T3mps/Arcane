@@ -456,7 +456,13 @@ project "ArcaneEditor"
     }
     filter "system:windows"
         systemversion "latest"
-        buildoptions { "/Zc:__cplusplus" }
+        -- /bigobj (Task 3, F2a): EditorApp.cpp aggregates a wide include surface
+        -- (Project.hpp, MaterialAsset.hpp, PanelRegistry.hpp, ...) that pulls in
+        -- Components.hpp header-only, whose ASTRA_REFLECT_TYPE blocks re-expand
+        -- PER TU. MeshRenderer's two fields pushed this TU's /ZI object past the
+        -- COFF section limit (C1128); the other projects in this file that hit
+        -- the same limit already carry this flag (see /bigobj above).
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
         -- .exe file icon (Explorer/taskbar/Alt-Tab): a Win32 ICON resource. The .rc
         -- references arcane.ico by name; resincludedirs points RC at its folder.

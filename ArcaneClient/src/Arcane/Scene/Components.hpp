@@ -172,6 +172,37 @@ namespace Arcane
         Guid        material{};
     };
 
+    // The 3D sibling of SpriteRenderer (F2a). An entity carrying one draws its
+    // .arcmesh through the opaque mesh pass, posed by its Transform.
+    //
+    // NO SIZE, for the same reason SpriteRenderer has none -- the Transform's
+    // scale is the size, so one asset serves many entities. NO TINT either,
+    // and that one IS a departure from SpriteRenderer: neither Unreal nor
+    // Source 2 puts a per-instance colour on a mesh component, and both express
+    // "the same mesh in a different colour" through material INSTANCES, which
+    // Arcane already ships (MaterialAssetData::parent + sparse overrides IS
+    // UMaterialInstance, and it is kind-agnostic). A tint would also make a red
+    // cube expressible twice -- as a red material, or a white one tinted red --
+    // which is the two-spellings defect the unit rule exists to prevent.
+    struct MeshRenderer
+    {
+        // The .arcmesh asset drawn. Nil (the default) or unresolved -> draws
+        // NOTHING. That is not an error: a scene may legitimately carry a slot
+        // with no geometry yet, exactly as MeshInstance::mesh documents.
+        Guid mesh{};
+
+        // Per-entity material override. Nil (the default) falls through to the
+        // MESH ASSET's own `material`, and a nil there resolves to white.
+        // This is UMeshComponent::OverrideMaterials (MeshComponent.h:29-31,
+        // "Per-Component material overrides") in miniature; Source 2 answers
+        // the same question with m_materialGroups.
+        //
+        // An override naming an UNRESOLVABLE material falls through to the mesh
+        // default and WARNS ONCE -- it must not silently render white, which
+        // would hide the broken reference.
+        Guid materialOverride{};
+    };
+
     // The scene's post-processing stack (post arc): the Guid of a SAVED
     // fullscreen .arcmat whose pass DAG runs between the linear canvas and the
     // tonemap (the material IS the stack; kSceneInput wires read the scene
@@ -344,6 +375,15 @@ namespace Arcane
             ASTRA_REFLECT_ATTR(Category, "Shape")
         ASTRA_REFLECT_FIELD(SpriteRenderer, material)
             ASTRA_REFLECT_ATTR(Category, "Appearance")
+    ASTRA_END_REFLECT_TYPE()
+
+    ASTRA_REFLECT_TYPE(MeshRenderer)
+        ASTRA_REFLECT_FIELD(MeshRenderer, mesh)
+            ASTRA_REFLECT_ATTR(Category, "Appearance")
+            ASTRA_REFLECT_ATTR(Tooltip, "The .arcmesh asset this renderer draws. Nil draws nothing. Size and orientation come from the Transform.")
+        ASTRA_REFLECT_FIELD(MeshRenderer, materialOverride)
+            ASTRA_REFLECT_ATTR(Category, "Appearance")
+            ASTRA_REFLECT_ATTR(Tooltip, "Overrides the mesh asset's own material for this entity only. Nil uses the mesh's default.")
     ASTRA_END_REFLECT_TYPE()
 
     // One field, so no Category -- see Transform above.

@@ -168,3 +168,62 @@ TEST_CASE("the unit rule holds for every source", "[mesh][asset]")
         CHECK(b.max.z - b.min.z <= 1.0f + 1e-3f);
     }
 }
+
+#include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/SceneModule.hpp>
+#include <Astra/Registry/Registry.hpp>
+#include "Helpers/TestTypeContext.hpp"
+
+TEST_CASE("MeshRenderer is registered, reflected, and defaults to drawing nothing",
+          "[mesh][scene]")
+{
+    auto creg = std::make_shared<Astra::ComponentRegistry>();
+    Arcane::RegisterSceneComponents(*creg);
+    Astra::Registry reg{ creg };
+
+    Astra::Entity e = reg.CreateEntity();
+    // The brief's literal `reg.AddComponent<MeshRenderer>(e)` (single-arg,
+    // T* return) does not compile -- Astra::Registry::AddComponent is
+    // two-arg (Entity, const T&) and returns bool (IM-24: graceful false on
+    // a stale handle, never a pointer); the live component comes back from
+    // GetComponent, same pattern every other reg-based test in this suite
+    // uses (CommandStackTest.cpp, AuthoredTransformSyncTest.cpp).
+    REQUIRE(reg.AddComponent<MeshRenderer>(e, MeshRenderer{}));
+    MeshRenderer* mr = reg.GetComponent<MeshRenderer>(e);
+    REQUIRE(mr != nullptr);
+
+    // Nil mesh draws nothing and is NOT an error -- same contract as a nil
+    // SpriteRenderer::sprite.
+    CHECK_FALSE(mr->mesh.IsValid());
+    CHECK_FALSE(mr->materialOverride.IsValid());
+
+    // Reflected, or the Inspector cannot render it and the scene writer cannot
+    // persist it.
+    const Astra::TypeMeta* meta = Astra::GetMeta<MeshRenderer>();
+    REQUIRE(meta != nullptr);
+    bool sawMesh = false, sawOverride = false;
+    for (const Astra::FieldInfo& f : meta->fields)
+    {
+        if (f.name == "mesh")             sawMesh = true;
+        if (f.name == "materialOverride") sawOverride = true;
+    }
+    CHECK(sawMesh);
+    CHECK(sawOverride);
+}
+
+TEST_CASE("there is no tint field on MeshRenderer, and that is deliberate", "[mesh][scene]")
+{
+    // Neither reference engine has a per-instance colour on a mesh component;
+    // both express "same mesh, different colour" through material INSTANCES,
+    // which Arcane already ships kind-agnostically. A tint would also make a
+    // red cube expressible twice -- the two-spellings defect the unit rule
+    // rejects elsewhere in the same spec. Pinned so it is not re-added by
+    // reflex.
+    const Astra::TypeMeta* meta = Astra::GetMeta<MeshRenderer>();
+    REQUIRE(meta != nullptr);
+    for (const Astra::FieldInfo& f : meta->fields)
+    {
+        CHECK(f.name != "tint");
+        CHECK(f.name != "color");
+    }
+}

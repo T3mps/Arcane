@@ -60,7 +60,15 @@ namespace Arcane
     // t0.., sampler emitted here; Sprite = the batcher's push constants own b0
     // and the sprite texture owns t0, so the material CB sits at b1 and
     // declared textures at t1.. (the template declares MaterialSampler itself).
-    enum class MaterialSurface : std::uint8_t { Fullscreen, Sprite };
+    //
+    // Mesh (F2a) is the `"mesh"` .arcmat kind's surface, but it owns no
+    // register map yet and stitches no shader source: F2a consumes mesh
+    // materials for their param VALUES only (MeshRenderer::materialOverride's
+    // eventual resolution chain), and never compiles a mesh shader variant --
+    // that is F2b/Task 8 work, once there is a mesh pipeline surface to
+    // compile into. MaterialTemplateFile/GenerateMaterialBindings guard this
+    // arm loudly (ARC_ENSURE) rather than silently falling back to Fullscreen.
+    enum class MaterialSurface : std::uint8_t { Fullscreen, Sprite, Mesh };
 
     // The engine template file for a surface ("materials/....hlsl", resolved
     // through ShaderSourceProvider) and the surface for a .arcmat "kind" string
