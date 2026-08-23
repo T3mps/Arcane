@@ -16,6 +16,8 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>     // Arcane::GpuDeviceLostObserved (PumpAndResize)
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N (RenderGraph)
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
+#include <Arcane/Scene/MeshSubmissionSystem.hpp>     // CollectMeshInstances (RenderGraph's opaque 3D pass, F2a Task 10)
+#include <Arcane/Scene/SceneCamera.hpp>              // ActivePerspectiveSceneCamera (the SAME guarded path MeshSceneDesc's comment requires)
 
 #include <imgui.h>
 
@@ -360,6 +362,63 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         graphFrame.selectedIds = io.pickSelectedIds;
     }
 #endif
+
+    // ============================================================
+    // THE OPAQUE 3D PASS (F2a Task 10) -- this frame's mesh scene, if the
+    // scene the plugin just submitted has one. CollectMeshInstances is the
+    // TESTED sweep (MeshSubmissionSystem.hpp); this call site stays thin on
+    // purpose -- RuntimeFrame.cpp is not compiled into ArcaneTests, so
+    // anything beyond "call the sweep, ask for a camera, decide whether to
+    // arm the pass" would be untested logic living in a host TU.
+    //
+    // io.meshInstances (a RuntimeApp member reached through FrameIo -- see
+    // that field's own comment) is the SAME "must outlive the RenderFrame
+    // call" storage io.pickDrawables is just above, for the same reason:
+    // MeshSceneDesc::instances is a span borrowed for the duration of that
+    // call.
+    Arcane::CollectMeshInstances(io.runtime->Registry(), io.meshInstances);
+
+    // `meshScene` only needs to outlive `io.graph->RenderFrame(graphFrame)`
+    // below, which happens inside THIS function call -- unlike the instance
+    // vector above, a RenderGraph-local is enough for it, and graphFrame.mesh
+    // is left null (its default) unless both an instance and a camera exist.
+    Arcane::MeshSceneDesc meshScene;
+    if (!io.meshInstances.empty())
+    {
+        // THE GUARDED PATH ONLY -- MeshSceneDesc's own comment (MeshNode.hpp)
+        // is explicit that the caller owes valid matrices, and
+        // ActivePerspectiveSceneCamera is the one function that either hands
+        // back a validated (view, projection) pair or nullopt, never
+        // identity. No active perspective camera means there is nothing to
+        // draw the pass WITH, so graphFrame.mesh stays null below -- the same
+        // "leave it alone rather than invent a viewpoint" contract
+        // ActiveSceneCamera documents for the 2D path (SceneCamera.hpp).
+        //
+        // Aspect ratio guarded the same way the editor's camera-rect overlay
+        // guards it (EditorAppFrame.cpp) rather than dividing raw: a 0-height
+        // frameHeight would otherwise hand ActivePerspectiveSceneCamera an
+        // Inf/NaN aspect that its own `aspectRatio <= 0.0f` check does not
+        // catch.
+        const float aspect = (frameHeight > 0)
+                            ? (float)frameWidth / (float)frameHeight
+                            : 1.0f;
+        if (const auto cam = Arcane::ActivePerspectiveSceneCamera(io.runtime->Registry(), aspect))
+        {
+            meshScene.instances = io.meshInstances;
+            meshScene.view       = cam->view;
+            meshScene.projection = cam->projection;
+            // NO SCENE LIGHT, DELIBERATELY: this engine has no light
+            // component anywhere -- Scene/Components.hpp declares none and
+            // SceneModule.hpp registers none -- so lightDirection/
+            // lightColor/ambient are left at MeshSceneDesc's own documented
+            // defaults (MeshNode.hpp:237-239). A light component is future
+            // work and out of scope for F2a; inventing one here would land
+            // an unreviewed scene-schema change in a host .cpp with zero
+            // test coverage rather than in a reviewed, tested component.
+            graphFrame.mesh = &meshScene;
+        }
+    }
+
     graphFrame.batch = &io.gpu->Batch();
     // The scene post chain as BYTES (SceneRenderResolver::PostDesc).
     // Re-read every frame for the same reason PostChain() is above:

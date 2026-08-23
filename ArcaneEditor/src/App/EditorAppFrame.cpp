@@ -26,7 +26,8 @@
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
-#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect)
+#include <Arcane/Scene/MeshSubmissionSystem.hpp>   // CollectMeshInstances (ArmGraphViewportFrame's opaque 3D pass, F2a Task 10)
+#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
 #include <Arcane/Scene/TransformSystems.hpp>   // Edit-mode derived-transform refresh
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
@@ -1566,6 +1567,58 @@ namespace Arcane::Editor
             // leaves vp.gameUi null instead -- that is the whole mechanism
             // now, and it lives in FrameDesc rather than in a stage ordinal.
             vp.gameUi = m_gameImgui->RenderToDrawData();
+        }
+
+        // ---- F2a Task 10's content: the opaque 3D pass --------------------
+        // UNCONDITIONAL, unlike the pick + outline chain below: a scene's
+        // mesh instances are ordinary scene content, and SubmitSceneToBatcher
+        // (the 2D equivalent, called from RenderSceneToViewport just before
+        // this function) draws in Edit AND Play alike -- neither is gated on
+        // InPlayMode(). This section has to sit ABOVE the pick chain's early
+        // return just below, or a frame with no selection and no hover would
+        // silently stop submitting meshes too.
+        //
+        // m_meshInstances is a MEMBER for the same "FrameDesc borrows this
+        // past the statement that fills it" reason m_pickDrawables is (see
+        // EditorApp.hpp). CollectMeshInstances is the TESTED sweep
+        // (MeshSubmissionSystem.hpp); this call site stays thin on purpose,
+        // since EditorAppFrame.cpp is not compiled into ArcaneTests.
+        Arcane::CollectMeshInstances(m_runtime->Registry(), m_meshInstances);
+        // vp.mesh is left at FrameDesc's own default (null) unless both an
+        // instance and a camera exist below -- the same "ask for the frame
+        // WITHOUT this stage by leaving the field null" mechanism vp.gameUi
+        // just used above.
+        if (!m_meshInstances.empty())
+        {
+            // THE GUARDED PATH ONLY -- MeshSceneDesc's own comment
+            // (MeshNode.hpp) is explicit that the caller owes valid
+            // matrices, and ActivePerspectiveSceneCamera is the one function
+            // that either hands back a validated (view, projection) pair or
+            // nullopt, never identity. No active perspective camera means
+            // there is nothing to draw the pass WITH, so vp.mesh stays null
+            // -- the same "leave it alone rather than invent a viewpoint"
+            // contract ActiveSceneCamera documents for the 2D path
+            // (SceneCamera.hpp).
+            const float vw = (float)ViewportWidth();
+            const float vh = (float)ViewportHeight();
+            const float aspect = (vh > 0.0f) ? (vw / vh) : 1.0f;   // same zero-height guard SubmitSceneToBatcher's camera-rect overlay uses
+            if (const auto cam = Arcane::ActivePerspectiveSceneCamera(m_runtime->Registry(), aspect))
+            {
+                m_meshScene.instances = m_meshInstances;
+                m_meshScene.view       = cam->view;
+                m_meshScene.projection = cam->projection;
+                // NO SCENE LIGHT, DELIBERATELY: this engine has no light
+                // component anywhere -- Scene/Components.hpp declares none
+                // and SceneModule.hpp registers none -- so
+                // lightDirection/lightColor/ambient are left at
+                // MeshSceneDesc's own documented defaults (MeshNode.hpp:
+                // 237-239). A light component is future work and out of
+                // scope for F2a; inventing one here would land an
+                // unreviewed scene-schema change in a host .cpp with zero
+                // test coverage rather than in a reviewed, tested
+                // component.
+                vp.mesh = &m_meshScene;
+            }
         }
 
         // ---- phases 12 + 17's content: the pick + outline chain ----------

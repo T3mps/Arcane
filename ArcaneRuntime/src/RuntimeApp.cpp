@@ -425,6 +425,7 @@ void RuntimeApp::MainLoop()
         .lastFrameDt     = m_lastFrameDt,
         .pickDrawables   = m_pickDrawables,
         .pickSelectedIds = m_pickSelectedIds,
+        .meshInstances   = m_meshInstances,
 #if !defined(ARCANE_DIST)
         .gpuFaultFired   = m_gpuFaultFired,
 #endif

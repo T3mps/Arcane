@@ -78,6 +78,17 @@ namespace Arcane::RuntimeFrame
         std::vector<Arcane::PickDrawable>& pickDrawables;
         std::vector<std::uint32_t>&        pickSelectedIds;
 
+        // THIS FRAME'S MESH INSTANCES (F2a Task 10) -- the same "member, not
+        // a RenderGraph local" reasoning as pickDrawables above: MeshSceneDesc
+        // ::instances is BORROWED for the duration of the RenderFrame call
+        // (MeshNode.hpp), and RenderGraph is a free function with nothing of
+        // its own to hold that storage, so it has to be a RuntimeApp member
+        // reached through here. Rebuilt every frame by CollectMeshInstances,
+        // which clears it on entry (MeshSubmissionSystem.hpp) -- so, again
+        // like pickDrawables, a steady-state frame with a static scene
+        // allocates nothing after the first.
+        std::vector<Arcane::MeshInstance>& meshInstances;
+
 #if !defined(ARCANE_DIST)
         // --crash-gpu N. Same Dist guard as the RuntimeApp member this is
         // bound to -- see RuntimeApp.hpp. The fired-once latch is the only

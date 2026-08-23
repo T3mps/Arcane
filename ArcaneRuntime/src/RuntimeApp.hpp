@@ -136,6 +136,17 @@ private:
     std::vector<Arcane::PickDrawable>    m_pickDrawables;
     std::vector<std::uint32_t>           m_pickSelectedIds;
 
+    // THE OPAQUE 3D PASS'S PER-FRAME INSTANCE LIST (F2a Task 10). Same
+    // ownership shape as m_pickDrawables just above and for the identical
+    // reason: FrameDesc::mesh -> MeshSceneDesc::instances is a std::span
+    // BORROWED for the duration of the RenderFrame call (MeshNode.hpp), so
+    // the vector it points into must outlive that call -- and RenderGraph
+    // (RuntimeFrame.cpp) is a free function, not a method, so it has nowhere
+    // of its own to keep one. Rebuilt every frame by CollectMeshInstances
+    // (which clears it on entry), reached from RenderGraph through
+    // FrameIo::meshInstances.
+    std::vector<Arcane::MeshInstance>    m_meshInstances;
+
 #if !defined(ARCANE_DIST)
     // --crash-gpu N (GPU crash diagnostics arc, Task 11): the desk battery's
     // item-2 trigger -- the same deliberate fault the editor's Build ->

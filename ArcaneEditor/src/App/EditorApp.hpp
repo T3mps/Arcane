@@ -913,6 +913,33 @@ namespace Arcane::Editor
         std::vector<Arcane::PickDrawable> m_pickDrawables;
         std::vector<std::uint32_t>        m_pickSelectedIds;
 
+        // ---- The viewport's opaque 3D pass (F2a Task 10) --------------------
+        // THIS FRAME's mesh instances, held as a MEMBER for the identical
+        // reason m_pickDrawables above is one: FrameDesc::mesh ->
+        // MeshSceneDesc::instances is a span borrowed for the duration of the
+        // RenderFrame call, so a per-frame temporary would dangle the moment
+        // the declaration outlives the statement that filled it.
+        //
+        // Rebuilt every frame by CollectMeshInstances (MeshSubmissionSystem.
+        // hpp), which clears it on entry -- so, again like m_pickDrawables, a
+        // steady-state frame with a static scene allocates nothing after the
+        // first. Filled inside ArmGraphViewportFrame, the same function that
+        // fills m_pickDrawables, for the same "one place fills the spans one
+        // declaration borrows" reason.
+        std::vector<Arcane::MeshInstance> m_meshInstances;
+
+        // THIS FRAME'S MESH SCENE. Unlike m_pickDrawables/m_pickSelectedIds
+        // (borrowed by FrameDesc as spans, stored inline in `vp` the moment
+        // ArmGraphViewportFrame assigns them), FrameDesc::mesh is a POINTER
+        // to a whole MeshSceneDesc -- and RenderSceneToViewport's
+        // RenderFrameOffscreen(vp) call happens in THAT function, after
+        // ArmGraphViewportFrame (which fills this struct) has already
+        // returned. A MeshSceneDesc local to ArmGraphViewportFrame would be
+        // destroyed at that return, leaving vp.mesh dangling for the call
+        // that reads it -- so, like m_pickDrawables, this has to be a member
+        // that outlives the function that fills it.
+        Arcane::MeshSceneDesc m_meshScene;
+
         // The click-pick, which cannot answer in the frame it is asked -- see
         // DeferredPick.hpp for the three hazards it closes.
         Arcane::Editor::DeferredPick m_deferredPick;
