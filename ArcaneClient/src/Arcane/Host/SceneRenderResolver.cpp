@@ -125,14 +125,6 @@ namespace Arcane
         MeshMaterialCache::Services meshMaterialServices;
         meshMaterialServices.resolveAsset = resolveAsset;
         m_impl->meshMaterials = std::make_unique<MeshMaterialCache>(std::move(meshMaterialServices));
-
-        // ===== DIAGNOSTIC SCAFFOLDING (2026-08-23, mesh-invalidate hunt) =====
-        // Remove with the rest of the [mesh-diag] lines once "a saved .arcmesh
-        // never reaches the viewport" is closed. ONE line per constructed
-        // resolver, so a host that somehow stands up two is visible as two
-        // addresses -- the half of "is there exactly one cache?" that reading
-        // alone cannot rule out at a live desk.
-        ARC_INFO("[mesh-diag] SceneRenderResolver constructed @{}", (const void*)this);
     }
 
     SceneRenderResolver::~SceneRenderResolver()
@@ -253,16 +245,6 @@ namespace Arcane
         // before this returns). See this method's header comment for the
         // borrow-lifetime rule every caller owes, and for why the
         // mesh-MATERIAL cache is deliberately left alone here.
-
-        // ===== DIAGNOSTIC SCAFFOLDING (2026-08-23) -- see the ctor's note ====
-        // The resolver ADDRESS, not just the fact of the call: a document that
-        // invalidates one resolver while the viewport reads another is only
-        // visible as a mismatch against the ctor line and the census line in
-        // Refresh. `present` answers the other half -- a call naming a Guid
-        // this cache never held is an identity problem, not an eviction one.
-        ARC_INFO("[mesh-diag] InvalidateMesh resolver@{} guid={} present={}",
-                 (const void*)this, id.ToString(), m_impl->meshes->Table().contains(id));
-
         m_impl->meshes->Invalidate(id);
         m_impl->meshes->Request(id);
     }
