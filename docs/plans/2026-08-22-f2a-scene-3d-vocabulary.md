@@ -1243,8 +1243,8 @@ Not agent-performable. The gate compiles neither `EditorApp.cpp` nor `EditorAppF
 - [ ] A topology field cannot be dragged below its minimum (`MeshDocument`'s bounded widgets).
 - [ ] Add `MeshRenderer` to an entity, pick the mesh through the Inspector's asset popup; it renders in the viewport.
 - [ ] Scale the entity non-uniformly; shading stays correct (Task 8's fix, at the desk).
-- [ ] Assign a mesh material; change its `baseColor`; the mesh follows.
-- [ ] Create a material INSTANCE of it, assign that as `materialOverride` on a second entity; the two entities differ in colour. **This is the tint replacement — if it is awkward, that is the finding.**
+- [ ] Assign the hand-authored `ReferenceProject/Content/materials/reference_mesh.arcmat` through the Inspector; the mesh takes its `baseColor`. **Then edit that file's `baseColor` on disk and save** — the mesh follows on the next resolve. (Editing it *inside* the editor is not possible in F2a — see the amendment below.)
+- [ ] ~~Create a material INSTANCE of it, assign that as `materialOverride` on a second entity~~ — **NOT PERFORMABLE IN F2a, deferred to F2b.** See the amendment below. The no-`tint` ruling therefore ships without its product-level validation, which is a known and accepted gap, not an oversight.
 - [ ] Save the scene, close, reopen; mesh and material both survive.
 - [ ] Pose the perspective camera through the Inspector to frame the mesh.
 - [ ] The same scene renders identically in `ArcaneRuntime`.
@@ -1256,7 +1256,31 @@ Not agent-performable. The gate compiles neither `EditorApp.cpp` nor `EditorAppF
 
 ## Exit criteria
 
-1. A `.arcmesh` and a `"mesh"`-kind `.arcmat` can be created, edited, saved and reopened entirely inside the editor.
+> **AMENDED 2026-08-22, after the final whole-branch review, by the user's ruling.**
+> Criterion 1 as originally written was **not met and is not being met in F2a**. The
+> final review established that there is no code path to create or edit a
+> `"mesh"`-kind `.arcmat` inside the editor: `EditorApp::CreateMaterialAt` hardcodes
+> `kind = "fullscreen"` (`EditorAppProject.cpp:402`), the surface picker offers only
+> `Fullscreen\0Sprite\0` (`ShaderEditorDocument.cpp:2121`), and the params panel is
+> decl-driven off a bound template — which a mesh material, having no snippet by
+> design, does not have, so `baseColor` is not editable there.
+>
+> **The plan lost this in translation from the spec, and nothing checked the
+> compression.** Two other spec requirements went the same way and are deferred with
+> it: the `albedo`-declared-but-unbound memoized diagnostic naming the bindless task
+> (spec `:242-247`, `:430-431`), and the "ignores `snippet`/`graph` with one
+> diagnostic" rule (spec `:253-255`). Only the `passes`/`baseInputs` half of the
+> latter shipped.
+>
+> **All three move to F2b**, which already owns the mesh-material story — it is where
+> the cook step lands and where `albedo` actually becomes bindable, so the diagnostic
+> that refuses it stops being a placeholder and starts being a real refusal. Task 13
+> items 6 and 7 are rewritten above to match.
+
+1. ~~A `.arcmesh` and a `"mesh"`-kind `.arcmat` can be created, edited, saved and reopened entirely inside the editor.~~
+   **AMENDED:** A `.arcmesh` can be created, edited, saved and reopened entirely inside the
+   editor. A `"mesh"`-kind `.arcmat` is **hand-authored JSON in F2a**; its editor
+   authoring path is F2b's.
 2. An entity carrying `MeshRenderer` renders in **both** hosts, posed by its `Transform`, from a scene that was saved and reopened.
 3. A non-uniformly-scaled mesh shades correctly.
 4. A perspective camera entity can be posed through its Transform in the Inspector to frame that mesh.
