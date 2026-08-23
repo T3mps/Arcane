@@ -2,6 +2,11 @@
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
+// MaterialSurfaceForKind ONLY -- the pure kind-string -> surface
+// classification. NOT the stitch/compile half of MaterialSource this cache's
+// header rules out; PostChainCache.cpp takes exactly the same one-function
+// dependency for exactly the same surface check.
+#include <Arcane/Material/MaterialSource.hpp>
 #include <Arcane/Material/MaterialTypes.hpp>
 
 #include <string>
@@ -34,9 +39,16 @@ namespace Arcane
         // file, most likely) is ignored rather than reinterpreted -- reading
         // .f[0..3] off a Texture value would read `tex`'s bytes as floats.
         //
-        // Returns the LAST match, matching MaterialAssetData::params being an
-        // ordered vector rather than a map -- a hand-edited file with the
-        // same name saved twice should not be ambiguous about which one won.
+        // Scans the whole vector rather than stopping at the first hit, and
+        // returns the LAST match. NOT because a loaded file can contain two
+        // "baseColor" entries -- it cannot: LoadMaterialAsset builds `params`
+        // from a JSON OBJECT (MaterialAsset.cpp's `doc["params"].items()`),
+        // whose keys are unique by construction, so a duplicate in the raw
+        // text is already collapsed by the parser. The reason is simply that
+        // `params` is an ordered vector with no uniqueness invariant of its
+        // own: an IN-MEMORY MaterialAssetData assembled by some future caller
+        // could carry two, and last-wins is the only rule consistent with how
+        // the layering loop below already treats later levels.
         std::optional<glm::vec4> OwnBaseColor(const MaterialAssetData& data)
         {
             std::optional<glm::vec4> found;
@@ -97,6 +109,30 @@ namespace Arcane
         std::vector<MaterialAssetData> chain;   // immediate parent .. base
         if (const auto why = LoadMaterialParentChain(im.services.resolveAsset, id, data->parent, chain))
             return fail(*why);
+
+        // THE KIND GATE, read off the chain's BASE and not the leaf -- an
+        // instance carries no kind of its own (MaterialAsset.hpp:7-9: "no
+        // snippet, no kind -- both come from the base at the end of the parent
+        // chain"), so the base is the only level whose `kind` means anything.
+        // Exactly the shape PostChainCache.cpp uses for its own surface
+        // (":not a fullscreen material -- the post slot runs fullscreen chains
+        // only").
+        //
+        // Without this, assigning a "sprite" or "fullscreen" .arcmat to a
+        // MeshRenderer::materialOverride resolved SILENTLY: a fullscreen
+        // material has no `baseColor` param at all, so the mesh drew plain
+        // white; a sprite material that happens to declare one drew its
+        // unrelated tint. Both are plausible authoring mistakes with an
+        // indistinguishable symptom, and a white mesh is exactly what a
+        // BROKEN reference looks like too. Refusing here turns all of that
+        // into one diagnosable log line, and the refusal falls through the
+        // same way any other failure does -- MeshSubmissionSystem's chain
+        // simply moves on to its next link (MeshMaterialCache.hpp's FAILURE
+        // DISCIPLINE block).
+        const MaterialAssetData& base = chain.empty() ? *data : chain.back();
+        if (MaterialSurfaceForKind(base.kind) != MaterialSurface::Mesh)
+            return fail("not a mesh material -- MeshRenderer resolves \"mesh\"-kind "
+                        "materials only (this one's base kind is '" + base.kind + "')");
 
         // Layer base -> ... -> immediate parent -> this asset, last write
         // wins -- the same order SpriteMaterialCache::Impl::Bind applies

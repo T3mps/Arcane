@@ -369,6 +369,73 @@ TEST_CASE("MeshMaterialCache keeps an unresolvable Guid out of the table and war
     CHECK(resolveCalls == 1);
 }
 
+TEST_CASE("MeshMaterialCache refuses a material whose chain base is not \"mesh\"-kind",
+          "[mesh][material]")
+{
+    // The authoring mistake with the WORST symptom: a MeshRenderer's
+    // materialOverride pointed at a perfectly valid sprite or fullscreen
+    // .arcmat. It used to resolve silently -- fullscreen materials declare no
+    // baseColor at all, so the mesh drew plain WHITE, which is exactly what a
+    // BROKEN reference looks like too. The refusal makes the two
+    // distinguishable in the log.
+    const fs::path dir = MakeTempDir("matl_wrong_kind");
+
+    const auto writeKinded = [&](const char* kind, const fs::path& file)
+    {
+        Arcane::MaterialAssetData data;
+        data.id   = Arcane::Guid::Generate();
+        data.name = "probe-wrong-kind";
+        data.kind = kind;
+        // WITH a baseColor, deliberately: refusal must come from the KIND, not
+        // from the material happening to lack the param this cache reads.
+        data.params.emplace_back("baseColor",
+                                 Arcane::MatParamValue::MakeColor(0.9f, 0.1f, 0.1f, 1.0f));
+        REQUIRE(Arcane::SaveMaterialAsset(file, data));
+        return data.id;
+    };
+
+    const fs::path fullscreenFile = dir / "fullscreen.arcmat";
+    const fs::path spriteFile     = dir / "sprite.arcmat";
+    const fs::path meshFile       = dir / "mesh.arcmat";
+    const Arcane::Guid fullscreenId = writeKinded("fullscreen", fullscreenFile);
+    const Arcane::Guid spriteId     = writeKinded("sprite", spriteFile);
+    const glm::vec4 meshColor(0.2f, 0.4f, 0.6f, 1.0f);
+    const Arcane::Guid meshId       = WriteMeshMaterial(meshFile, meshColor);
+
+    // An INSTANCE of the fullscreen base: the gate reads the chain's BASE, not
+    // the leaf, because an instance carries no kind of its own. This is the
+    // case a leaf-only check would wave through.
+    const fs::path instFile = dir / "inst.arcmat";
+    const Arcane::Guid instId =
+        WriteMeshMaterialInstance(instFile, fullscreenId, glm::vec4(0.1f, 0.9f, 0.1f, 1.0f));
+
+    std::unordered_map<Arcane::Guid, fs::path> registry{
+        { fullscreenId, fullscreenFile }, { spriteId, spriteFile },
+        { meshId, meshFile }, { instId, instFile } };
+    Arcane::MeshMaterialCache::Services s;
+    s.resolveAsset = [&](const Arcane::Guid& g) -> std::optional<fs::path>
+    {
+        auto it = registry.find(g);
+        return it != registry.end() ? std::optional<fs::path>(it->second) : std::nullopt;
+    };
+    Arcane::MeshMaterialCache cache(std::move(s));
+
+    cache.Request(fullscreenId);
+    cache.Request(spriteId);
+    cache.Request(instId);
+    CHECK_FALSE(cache.Table().contains(fullscreenId));
+    CHECK_FALSE(cache.Table().contains(spriteId));
+    CHECK_FALSE(cache.Table().contains(instId));
+
+    // The control that keeps all three above from being vacuous: the SAME
+    // cache, the same call, a "mesh"-kind base -- resolves, with its colour.
+    cache.Request(meshId);
+    REQUIRE(cache.Table().contains(meshId));
+    CHECK(cache.Table().at(meshId).baseColor == meshColor);
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
 TEST_CASE("MeshMaterialCache keeps a malformed .arcmat out of the table", "[mesh][material]")
 {
     const fs::path dir  = MakeTempDir("matl_malformed");

@@ -6,11 +6,16 @@
 // MeshCache's sibling, resolving the MATERIAL half of what MeshRenderer names
 // where MeshCache resolves the GEOMETRY half.
 //
-// READS SAVED PARAM VALUES DIRECTLY, and NEVER touches MaterialSource or
-// ShaderCompiler -- unlike SpriteMaterialCache, which stitches a shader
-// source and submits it for compilation (SpriteMaterialCache.cpp's
-// Request/Bind). A "mesh"-kind .arcmat carries no snippet at all (F2a design:
-// two params, `baseColor` and a declared-but-unbound `albedo`), so there is
+// READS SAVED PARAM VALUES DIRECTLY, and NEVER stitches a shader source nor
+// touches ShaderCompiler -- unlike SpriteMaterialCache, which does both
+// (SpriteMaterialCache.cpp's Request/Bind). The one thing it takes from
+// Material/MaterialSource.hpp is `MaterialSurfaceForKind`, the pure
+// kind-string -> surface classification behind THE KIND GATE below;
+// PostChainCache.cpp takes the identical one-function dependency for its own
+// surface check. None of the stitch/template/bindings machinery in that
+// header is reachable from here, and that is the part that matters: a
+// "mesh"-kind .arcmat carries no snippet at all (F2a design: two params,
+// `baseColor` and a declared-but-unbound `albedo`), so there is
 // no //@param declaration to parse and no MaterialTemplate to build --
 // MaterialSurface::Mesh does not even have a template file yet
 // (MaterialTemplateFile's ARC_ENSURE guard, Material/MaterialSource.cpp).
@@ -19,6 +24,14 @@
 // keeps SceneRenderResolver's single ShaderCompiler::Drain() site intact
 // (Host/SceneRenderResolver.hpp:22-28) -- a second compiling cache would need
 // a second drain.
+//
+// THE KIND GATE: Request refuses any material whose chain BASE is not
+// "mesh"-kind. The base, not the leaf, because an instance carries no kind of
+// its own. Assigning a "sprite" or "fullscreen" .arcmat to a
+// MeshRenderer::materialOverride used to resolve silently -- to white (no
+// baseColor param at all) or to a sprite's unrelated tint -- which is
+// indistinguishable from a BROKEN reference at the desk. The refusal makes it
+// one log line, and falls through the resolution chain like any other failure.
 //
 // INSTANCES STILL WORK, because MaterialAssetData::parent + sparse overrides
 // is data, not compiled state (MaterialAsset.hpp:5-9: "no snippet, no kind --
