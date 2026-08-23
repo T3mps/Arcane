@@ -219,25 +219,66 @@ can read 0 for reasons unrelated to correctness.
 Precedent for machine-readable emit-and-exit already exists: `--print-engine-info`
 (`ArcaneRuntime/src/main.cpp:36`, `ArcaneEditor/src/main.cpp:122`).
 
-#### Locators are descriptions, not captured ids
+#### Targets are addressed by stable identity, not by names or coordinates
 
 Playwright deprecates `ElementHandle` -- a direct reference to a node captured
 at a point in time -- because it **goes stale** when the page changes. A locator
 instead *"does not hold a reference to a DOM node. It holds a description of how
 to find one,"* and is **re-resolved on every action**.
 
-The same hazard exists here and is sharper: entity ids churn across scene
-reload, and any step that reloads or re-parents invalidates a captured id
-silently. **Scene targets are therefore addressed by a stable description --
-name or hierarchy path -- resolved fresh at each step**, never by an id or index
-carried across steps. A raw entity id remains available in probe *output* as an
-observation; it is not an input an agent is expected to hold.
+The staleness hazard is real here, but it applies to **runtime handles and
+screen coordinates**, not to identity. Arcane already has durable identity in
+both places that matter, and the surface should use it rather than invent a
+parallel naming scheme.
 
-Resolution is **strict**, matching Playwright's strict mode: a description that
-matches more than one entity is an error, not a silent first-match. Zero matches
-and two matches are distinct, separately-reported failures -- a scene query that
-quietly picks one of three candidates is exactly the confident-wrong-answer
-failure this whole design exists to remove.
+**Entities and assets are addressed by GUID.** `Components.hpp:274-282` defines
+`struct Identity { Guid id{}; std::string name; }` and serializes **both**
+(`ar(id); ar(name);`), so an entity's id survives rename, reload and re-parent.
+Display names do not. This corrects an earlier draft of this section, which
+claimed entity ids churn across reload -- that is true of runtime handles, and
+false of `Identity.id`.
+
+**Widgets are addressed by author-assigned stable ids**, using ImGui's `###`
+operator -- which sets the widget id from the text *after* the marker while
+displaying the text before it. The editor already does this for document
+windows: `"###meshdoc_" + m_data.id.ToString()` (`MeshDocument.cpp:98`), and
+likewise `spritedoc_` / `matdoc_` / `crashdoc_` (`SpriteDocument.cpp:70`,
+`ShaderEditorDocument.cpp:998`, `CrashReportDocument.cpp:55`). The codebase
+already reasons carefully about the distinction -- *"'###', not '##': only
+'###' resets the id hash"* (`InspectorView.cpp:954`).
+
+**Why a display name is not good enough**, in one existing line
+(`EditorPanels.cpp:675`):
+
+```cpp
+wantCopyAll = ImGui::Button(copyFlash ? "Copied###consolecopy"
+                                      : "Copy###consolecopy", ...
+```
+
+The visible label changes; the id does not. A name-addressed script breaks on
+that widget the moment it is clicked. This is the same reasoning that makes
+`getByTestId` Playwright's most resilient locator: an explicit, author-assigned
+identifier outlives user-visible text.
+
+**The gap, and the work it implies.** Document windows are already id-stable;
+most widgets inside panels are not -- they are plain labels. Extending the
+`###` discipline to the widgets a verification script needs is mechanical, and
+it improves the editor's own identity hygiene whether or not an agent ever runs.
+
+**Discoverability is the constraint that shapes the output format.** A raw GUID
+cannot be guessed: an agent reading `ImGui::Button("Save")` in source can write
+`"Save"`, but it cannot know an entity's GUID without asking. So **every probe
+reports both `name` and `id`**, letting an agent bootstrap from a readable query
+once and then address durably. Author-assigned widget ids are the better half of
+this trade precisely because they are readable *in source* -- discoverable and
+stable at the same time, which a random GUID is not.
+
+Resolution is **strict**, matching Playwright's strict mode: a target that
+matches more than one entity or widget is an error, not a silent first-match.
+Zero matches and two matches are distinct, separately-reported failures -- a
+scene query that quietly picks one of three candidates is exactly the
+confident-wrong-answer failure this whole design exists to remove.
+
 
 ### Layer 3 -- interaction
 
@@ -485,6 +526,36 @@ in `packages/utils/comparators.ts`. The cascade above is opt-in there. We are
 adopting the opt-in one deliberately, because cross-format comparison is exactly
 the case a plain per-channel threshold handles worst.
 
+**Independent confirmation from a game engine.** Unity's Graphics Test Framework
+reaches the same conclusion by a different route: its `PerPixelCorrectnessThreshold`
+is *"the permitted perceptual difference between individual pixels of the images
+-- the **deltaE** for each pixel of the image is compared and any differences
+below this threshold are ignored."* Two unrelated industries converged on
+perceptual delta-E as the per-pixel test, which is about as much validation as
+stage 2 can get. Unity also carries a third knob, `AverageCorrectnessThreshold`
+-- an average-correctness bound distinct from both the per-pixel test and the
+differing-pixel count. Worth having; it catches uniform slight-drift that a
+per-pixel threshold passes and a pixel count never sees.
+
+#### Where reference images live
+
+A backend-keyed hierarchy, following Unity's `ColorSpace/Platform/GraphicsAPI`
+layout: a reference image sits at the **most general level that is still
+correct**, and resolution walks up from most specific to least.
+
+This matters here specifically because **D3D12 and Vulkan can legitimately
+differ**: `mesh.hlsl` carries a `#if SPIRV` split, so some references are shared
+across both backends and some genuinely cannot be. A flat directory forces one
+wrong choice or the other -- either duplicating every image and losing the
+signal when the two backends should agree, or sharing images that were never
+meant to match. The hierarchy expresses "shared unless stated otherwise," which
+is the actual truth.
+
+The corollary is a required affordance: **a documented way to accept a new
+reference**, since an intentional visual change must be cheap to bless or the
+gate gets disabled the first week. Blessing writes to the level the image is
+resolved from, not always the most specific one.
+
 Determinism pays off beyond agents: it makes the human desk pass reproducible too.
 
 ---
@@ -535,8 +606,14 @@ Phase 2 must not block phase 1, and phase 1 must not wait on phase 2.
   tested only on pairs it correctly passes is untested in the direction that
   matters: an image comparison that never says no is indistinguishable from no
   comparison at all.
-- **Locator strictness**: a description matching zero and one matching two are
+- **Locator strictness**: a target matching zero and one matching two are
   distinct, separately-asserted failures.
+- **Id stability under rename**: renaming an entity must not break a
+  GUID-addressed script, and changing a widget's visible label must not break an
+  `###`-addressed one. `EditorPanels.cpp:675`'s `Copy`/`Copied###consolecopy`
+  button is the ready-made fixture -- it changes its label on click, so a
+  name-addressed script breaks on the second step and an id-addressed one does
+  not.
 - **Actionability**: a target under an overlay must fail the hit-target check
   rather than dispatching the click, and `force` must bypass it.
 - **Settle mode**: a scene that never converges must fail explicitly at the
