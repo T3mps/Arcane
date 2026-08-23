@@ -19,6 +19,7 @@
 #include <Arcane/Host/HostConfig.hpp>                 // CreateOffscreen's knobs
 
 #include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Base/Assert.hpp>   // ARC_ENSURE: SurfaceOf's unknown-index guard
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
@@ -52,10 +53,53 @@ namespace Arcane::Editor
 {
     namespace
     {
+        // m_surface is an INDEX -- ImGui::Combo hands back an int -- and these
+        // three functions are the ONLY conversion between it and the real
+        // MaterialSurface / .arcmat `kind`. They are TOTAL in every direction
+        // on purpose.
+        //
+        // WHY THAT MATTERS (F2a): the pre-F2a SurfaceOf mapped "anything that
+        // is not 1" onto Fullscreen, and the two initialization sites collapsed
+        // MaterialSurfaceForKind(kind) to `== Sprite ? 1 : 0`. The instant
+        // MaterialSurface gained a third enumerator (Task 3), a "mesh"-kind
+        // .arcmat opened here read as index 0 -- it DISPLAYED "Fullscreen",
+        // compiled under the fullscreen template, and one touch of the picker
+        // rewrote its `kind` to match, silently re-kinding the asset. An int is
+        // exactly the laundering MaterialSource.cpp's two ARC_ENSURE guards
+        // cannot catch: the enum is already gone before they see it.
+        constexpr int kSurfaceFullscreen = 0;
+        constexpr int kSurfaceSprite     = 1;
+        constexpr int kSurfaceMesh       = 2;
+
         Arcane::MaterialSurface SurfaceOf(int surface)
         {
-            return surface == 1 ? Arcane::MaterialSurface::Sprite
-                                : Arcane::MaterialSurface::Fullscreen;
+            if (surface == kSurfaceSprite) return Arcane::MaterialSurface::Sprite;
+            if (surface == kSurfaceMesh)   return Arcane::MaterialSurface::Mesh;
+            // Fullscreen is still the fallback -- but an index that is none of
+            // the three is a bug in this file, not a material, so it says so
+            // once rather than answering as if it knew.
+            ARC_ENSURE(surface == kSurfaceFullscreen,
+                       "ShaderEditorDocument: unknown preview-surface index -- "
+                       "falling back to Fullscreen");
+            return Arcane::MaterialSurface::Fullscreen;
+        }
+
+        int SurfaceIndexOf(Arcane::MaterialSurface surface)
+        {
+            if (surface == Arcane::MaterialSurface::Sprite) return kSurfaceSprite;
+            if (surface == Arcane::MaterialSurface::Mesh)   return kSurfaceMesh;
+            return kSurfaceFullscreen;
+        }
+
+        // The .arcmat `kind` string a surface index re-kinds a BASE material
+        // to. Paired with SurfaceIndexOf so the round trip is closed: the
+        // picker can only ever write a kind that maps straight back to the
+        // index it was showing.
+        const char* KindForSurfaceIndex(int surface)
+        {
+            if (surface == kSurfaceSprite) return "sprite";
+            if (surface == kSurfaceMesh)   return "mesh";
+            return "fullscreen";
         }
 
         // One param edit as an undo step. The live edit already happened (the
@@ -980,8 +1024,7 @@ namespace Arcane::Editor
             const std::string& kind =
                 IsInstance() && !m_parentChain.empty() ? m_parentChain.back().kind
                                                        : m_data.kind;
-            m_surface = Arcane::MaterialSurfaceForKind(kind) ==
-                                Arcane::MaterialSurface::Sprite ? 1 : 0;
+            m_surface = SurfaceIndexOf(Arcane::MaterialSurfaceForKind(kind));
             // Regenerate every graph-owned pass (deterministic codegen == the
             // saved snippets, so this leaves the doc clean) then compile; for
             // text-only docs the regen loop no-ops into a plain Rebuild.
@@ -2111,27 +2154,51 @@ namespace Arcane::Editor
         // preview under the switched surface without touching the base.
         // Pass chains are fullscreen-only: the selector LOCKS while extra
         // passes exist (no refusal path can lose data).
+        //
+        // ...AND IT LOCKS ON THE "mesh" KIND (F2a), for an unrelated reason: a
+        // mesh material is not authored in this document at all. It carries no
+        // snippet, no pass chain and no engine template to compile against
+        // (MaterialSurface's own comment, Material/MaterialSource.hpp), so the
+        // only thing a fullscreen/sprite picker could do to one is re-kind it
+        // to something it is not -- and silently, since `kind` is otherwise
+        // written back verbatim and nothing downstream would report the loss.
+        // The pass-chain condition below does NOT already cover this: a mesh
+        // material has neither `passes` nor `baseInputs`, so that test is false
+        // for every one of them.
+        const bool meshSurface = SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh;
         const bool surfaceLocked =
-            !IsInstance() &&
-            (!m_data.passes.empty() || !m_data.baseInputs.empty());
+            meshSurface ||
+            (!IsInstance() &&
+             (!m_data.passes.empty() || !m_data.baseInputs.empty()));
         if (surfaceLocked)
             ImGui::BeginDisabled();
         int surface = m_surface;
-        const bool surfacePicked =
-            ImGui::Combo("##surface", &surface, "Fullscreen\0Sprite\0");
+        // "Mesh" appears in the item list ONLY when that is already what this
+        // material IS: the combo has to be able to NAME the current index or it
+        // draws a blank preview, but offering Mesh as a DESTINATION would be
+        // authoring a mesh material, which is not this document's job.
+        const bool surfacePicked = ImGui::Combo(
+            "##surface", &surface,
+            meshSurface ? "Fullscreen\0Sprite\0Mesh\0" : "Fullscreen\0Sprite\0");
         if (surfaceLocked)
         {
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("pass chains are fullscreen-only -- remove the "
-                                  "extra passes to change the surface");
+                ImGui::SetTooltip(meshSurface
+                    ? "\"mesh\" materials are not authored here -- they carry no "
+                      "snippet and no template, and re-kinding one would silently "
+                      "retarget the asset"
+                    : "pass chains are fullscreen-only -- remove the "
+                      "extra passes to change the surface");
         }
         if (surfacePicked && surface != m_surface)
         {
             m_surface = surface;
             if (!IsInstance())
             {
-                m_data.kind = m_surface == 1 ? "sprite" : "fullscreen";
+                // Through the shared map, so the kind written back always
+                // round-trips to the index the picker was showing.
+                m_data.kind = KindForSurfaceIndex(m_surface);
                 m_dirty = true;
             }
             // Graph docs must re-CODEGEN, not just restitch -- the surface
@@ -3403,8 +3470,7 @@ namespace Arcane::Editor
             const std::string& kind =
                 IsInstance() && !m_parentChain.empty() ? m_parentChain.back().kind
                                                        : m_data.kind;
-            m_surface = Arcane::MaterialSurfaceForKind(kind) ==
-                                Arcane::MaterialSurface::Sprite ? 1 : 0;
+            m_surface = SurfaceIndexOf(Arcane::MaterialSurfaceForKind(kind));
             RegenerateFromGraph();
         }
     }
