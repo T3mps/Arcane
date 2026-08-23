@@ -267,6 +267,26 @@ namespace Arcane::Editor
         std::optional<Arcane::MeshData> m_previewMesh;
         std::optional<std::string>      m_validationReason;
 
+        // THE PREVIEW IS A STATIC IMAGE. Nothing in RenderPreview reads a
+        // clock -- there is no time input anywhere in this document -- so the
+        // rendered picture can only change when m_previewMesh does. Without
+        // this flag Tick would re-record a 512x512 offscreen graph frame for
+        // EVERY open mesh document on EVERY editor frame, because
+        // DocumentHost::TickAll ticks them all unconditionally, with no
+        // visibility or focus gate (DocumentHost.cpp:152-156) -- a collapsed
+        // background tab pays the same as the focused one.
+        //
+        // ShaderEditorDocument's own per-tick render is NOT a precedent for
+        // doing the same here: that preview genuinely animates (its
+        // m_animTime += dt, ShaderEditorDocument.cpp:1819), so its picture
+        // really is different every frame.
+        //
+        // Set by RebuildPreviewMesh -- the one place m_previewMesh and
+        // m_validationReason ever move -- and cleared only once a frame has
+        // actually landed in the texture (FrameOutcome::Presented). True at
+        // construction so the opening image records on the first Tick.
+        bool m_previewDirty = true;
+
         // The document's ONE edit-gesture bracket (the ScopeGuard at the top
         // of Draw is its guaranteed close). Every topology drag shares it --
         // same shape as SpriteDocument::m_gesture.

@@ -161,6 +161,10 @@ namespace Arcane::Editor
         // why" (ValidationReason) are two different things a caller reads.
         m_validationReason = Arcane::ValidateMeshAsset(m_data);
         m_previewMesh = Arcane::BuildMeshData(m_data);
+        // The ONE place the preview's inputs move, so the ONE place that owes
+        // the redraw flag -- see m_previewDirty (MeshDocument.hpp) for why a
+        // static image must not re-record a frame every Tick.
+        m_previewDirty = true;
     }
 
     bool MeshDocument::Save()
@@ -182,10 +186,14 @@ namespace Arcane::Editor
 
     void MeshDocument::Tick(double)
     {
-        // The whole render phase. A missing vehicle simply means no preview
-        // this Tick -- the same degraded-not-fatal outcome EnsurePreviewContext
-        // and RenderPreview both already carry.
-        if (m_preview)
+        // The whole render phase, and only when the image can actually have
+        // changed: DocumentHost::TickAll ticks EVERY open document every
+        // editor frame with no visibility gate (DocumentHost.cpp:152-156), and
+        // nothing in this preview animates -- see m_previewDirty. A missing
+        // vehicle simply means no preview this Tick -- the same
+        // degraded-not-fatal outcome EnsurePreviewContext and RenderPreview
+        // both already carry.
+        if (m_preview && m_previewDirty)
             RenderPreview();
     }
 
@@ -295,7 +303,16 @@ namespace Arcane::Editor
             ARC_ERROR("MeshDocument '{}': the preview frame failed -- dropping this "
                       "document's preview vehicle", m_title);
             DestroyPreviewContext();
+            return;
         }
+        // Cleared on `Presented` ONLY -- for an offscreen context that reads
+        // as "rendered and submitted" (NriGraphContext.hpp's FrameOutcome
+        // comment). `Skipped` is the routine zero-extent/uncreatable-target
+        // case and left NOTHING in the texture, so the flag has to survive it
+        // or the preview would stay blank for the document's lifetime once a
+        // single Tick was skipped.
+        if (outcome == Arcane::NriGraphContext::FrameOutcome::Presented)
+            m_previewDirty = false;
     }
 
     std::uint64_t MeshDocument::PreviewTextureId() const noexcept
