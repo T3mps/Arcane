@@ -20,19 +20,28 @@
 //                 pure, so there is no compile step to coalesce and no
 //                 in-flight job to route a result back to.
 //
-// SIMPLER THAN BOTH MODELS IN ONE RESPECT: unlike SpriteDocument (whose
-// texture preview would need a second cache-invalidate obligation) and unlike
-// ShaderEditorDocument (whose preview is bound to compiled bytecode a save
-// re-publishes), this preview reads `m_data` DIRECTLY every rebuild -- there
-// is no cache in front of it, so an edit or an undo is visible the instant it
-// lands, with no invalidate hook of any kind. Save() therefore has nothing to
-// invalidate either: no host wires a scene's MeshRenderer entities into a
-// frame yet (MeshSubmissionSystem::CollectMeshInstances has no call site
-// outside tests -- that host wiring is a later task's job), so there is no
-// live cache anywhere in the process that could go stale under this
-// document's own edits. Adding a speculative invalidate callback now, with no
-// caller to invalidate, would be exactly the kind of YAGNI surface Task 5's
-// review flagged MeshCache::AssetFor for.
+// TWO CACHES, AND ONLY ONE OF THEM IS THIS WINDOW'S PREVIEW. The preview
+// image reads `m_data` DIRECTLY every rebuild (RebuildPreviewMesh), so there
+// is nothing in front of THAT to invalidate: an edit or an undo shows up in
+// this window the instant it lands. The SCENE is the other story, and it is
+// not this document's preview at all: SceneRenderResolver owns a live
+// MeshCache (Host/SceneRenderResolver.cpp) whose published MeshTable both
+// hosts sweep every frame through CollectMeshInstances (EditorAppFrame.cpp:
+// 1586, RuntimeFrame.cpp:379), and MeshCache::Request memoises per Guid --
+// entries leave only via Invalidate/Clear. So a save or an undo that
+// invalidates nothing leaves every MeshRenderer in the open scene drawing the
+// PRE-edit geometry until the project is switched.
+//
+// Hence Services::invalidateMesh, called from BOTH Save() and ApplyMeshData()
+// -- the same two sites SpriteDocument calls its own invalidateSprite from
+// (SpriteDocument.cpp:119-120, :144-145), for the reason stated there: "an
+// undo the user cannot see in the scene is indistinguishable from an undo
+// that did not happen."
+//
+// This block used to argue the opposite -- that CollectMeshInstances had no
+// call site outside tests and no live cache existed. Both were true when
+// Task 9 wrote it and Task 10 falsified both; the note stays so the old
+// conclusion is not re-derived from the same (now wrong) premise.
 //
 // Implements EditorDocument's five pure virtuals (EditorDocument.hpp:15-44);
 // DocumentHost owns the open-document list, the asset-type -> factory
@@ -98,6 +107,24 @@ namespace Arcane::Editor
             // happened. Null = no undo coverage (the EditGesture bracket
             // no-ops whole); the document still edits and saves.
             Arcane::CommandStack* undo = nullptr;
+
+            // Fired with this asset's Guid after a successful Save AND after
+            // every undo/redo apply -- routed to SceneRenderResolver::
+            // InvalidateMesh, which evicts the scene's cached resolve and
+            // re-reads the saved file synchronously.
+            //
+            // NOT SPECULATIVE PLUMBING: MeshCache::Request is a once-per-Guid
+            // cache and the resolver's MeshTable is what every MeshRenderer in
+            // the open scene draws through, so this callback IS the whole
+            // mechanism that makes a mesh edit (or an undo of one) visible in
+            // the viewport -- exactly what SpriteDocument::Services::
+            // invalidateSprite is for its own asset. See the file-top block.
+            //
+            // Null (the headless tests; any host with no resolver) means no
+            // scene invalidation -- the document still edits, previews and
+            // saves, so an unwired hook degrades to "the viewport lags the
+            // file", never to a lost edit.
+            std::function<void(const Arcane::Guid&)> invalidateMesh;
 
             // ===== THE PREVIEW SEAM ==========================================
             // Borrowed from EditorApp, which outlives the document list.

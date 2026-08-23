@@ -209,6 +209,18 @@ namespace Arcane
         m_impl->sprites->Request(id);
     }
 
+    void SceneRenderResolver::InvalidateMesh(const Guid& id)
+    {
+        // Invalidate THEN Request synchronously -- identical shape and
+        // identical reasoning to InvalidateSprite above (MeshCache::Request
+        // has no async step, so the entry is rebuilt from the saved file
+        // before this returns). See this method's header comment for the
+        // borrow-lifetime rule every caller owes, and for why the
+        // mesh-MATERIAL cache is deliberately left alone here.
+        m_impl->meshes->Invalidate(id);
+        m_impl->meshes->Request(id);
+    }
+
     void SceneRenderResolver::InvalidateMaterial(const Guid& id)
     {
         m_impl->materials->Invalidate(id);

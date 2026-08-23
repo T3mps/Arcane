@@ -132,6 +132,14 @@ namespace Arcane::Editor
         // errs toward a redundant save, never toward silently dropping one.
         m_dirty = true;
         RebuildPreviewMesh();
+        // Same republish Save does, and for the same reason: RebuildPreviewMesh
+        // above only refreshes THIS WINDOW's image. The scene's MeshCache still
+        // holds the pre-undo geometry, so without this the viewport keeps
+        // drawing it -- and an undo the user cannot see in the scene is
+        // indistinguishable from an undo that did not happen (SpriteDocument.
+        // cpp:113-121, the precedent this mirrors exactly).
+        if (m_services.invalidateMesh)
+            m_services.invalidateMesh(m_data.id);
     }
 
     void MeshDocument::PushDataEdit(std::string label, const Arcane::MeshAssetData& before)
@@ -160,7 +168,15 @@ namespace Arcane::Editor
         if (!Arcane::SaveMeshAsset(m_path, m_data))
             return false;   // failed save: m_dirty stays set, edits are not silently lost
         m_dirty = false;
-        // No cache to invalidate -- see the file-top comment on MeshDocument.hpp.
+        // The SCENE's MeshCache resolve this replaces is otherwise permanent
+        // (once-per-Guid, Render/MeshCache.cpp) -- without this call every
+        // MeshRenderer referencing this asset keeps drawing the PRE-edit
+        // geometry until the project is switched. This document's own preview
+        // needs no such hook; see the file-top block on MeshDocument.hpp for
+        // the two-cache split, and Services::invalidateMesh for the
+        // borrow-lifetime rule this call site satisfies.
+        if (m_services.invalidateMesh)
+            m_services.invalidateMesh(m_data.id);
         return true;
     }
 

@@ -199,6 +199,37 @@ namespace Arcane
         // the same no-gap property from their last-good scheme instead.)
         void InvalidateSprite(const Guid& id);
 
+        // An .arcmesh was re-saved -- or undone/redone in its open document:
+        // evict, then re-resolve SYNCHRONOUSLY, the same no-gap rule
+        // InvalidateSprite states above and for the same reason (MeshCache::
+        // Request has no async step either, so the entry is back before this
+        // returns). The gap would be WORSE here than for a sprite: an evicted
+        // mesh has no placeholder at all (MeshTable's own comment,
+        // Scene/SceneResources.hpp), so a frame landing between the erase and
+        // the re-resolve draws NOTHING rather than a wrong-looking quad.
+        //
+        // WHEN THIS MAY BE CALLED IS A LIFETIME CONTRACT, not a preference.
+        // MeshInstance::mesh borrows a raw pointer INTO the MeshEntry
+        // (Render/Nri/nodes/MeshNode.hpp) and MeshCache::Invalidate ERASES
+        // that entry -- an erase is the one mutation MeshEntry's own comment
+        // says its borrowers are not safe against. So this must never land
+        // between a host's CollectMeshInstances sweep and the RenderFrame call
+        // that consumes its output. Both call sites today satisfy that by
+        // construction: MeshDocument::Save and MeshDocument::ApplyMeshData run
+        // from the editor's document phases (PumpEditorDocuments / DrawEditorUi,
+        // EditorAppFrame.cpp:273-274), which are strictly AFTER phase 10's
+        // ArmGraphViewportFrame -> RenderFrameOffscreen pair has returned and
+        // strictly BEFORE the next frame's -- no borrow is ever live across
+        // this call. A future caller inside the render phase would have to
+        // defer instead.
+        //
+        // Only the GEOMETRY cache is touched. Re-saving an .arcmesh can change
+        // which material Guid the mesh names as its default, and the Request
+        // below re-reads that into the fresh MeshEntry::material -- but the
+        // resolved VALUES of any .arcmat are untouched by a mesh edit. A
+        // .arcmat re-save is InvalidateMaterial's business, below.
+        void InvalidateMesh(const Guid& id);
+
         // A .arcmat was re-saved: re-resolve on the next Refresh. Hits BOTH the
         // sprite-material and post caches -- one Guid cannot be known to be
         // only one of the two, and a wrong guess silently strands the other.

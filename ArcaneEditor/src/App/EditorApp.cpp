@@ -688,6 +688,18 @@ namespace Arcane::Editor
                 Arcane::Editor::MeshDocument::Services meshDocServices;
                 meshDocServices.runtime = &*m_runtime;
                 meshDocServices.undo = m_undo ? &*m_undo : nullptr;
+                // Evict-then-re-resolve on a mesh re-save OR an undo/redo,
+                // the same one-call route the .arcsprite factory above takes
+                // for its own asset: the no-gap requirement (no frame may
+                // render between the erase and the re-resolve -- and for a
+                // mesh that would mean drawing NOTHING, since there is no
+                // placeholder) is SceneRenderResolver::InvalidateMesh's
+                // contract, not this lambda's.
+                meshDocServices.invalidateMesh = [this](const Arcane::Guid& g)
+                {
+                    if (m_resolver)
+                        m_resolver->InvalidateMesh(g);
+                };
                 if (m_graphChrome)
                 {
                     meshDocServices.nriDevice  = &m_graphChrome->Device();

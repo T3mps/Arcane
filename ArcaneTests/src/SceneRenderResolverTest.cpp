@@ -670,6 +670,80 @@ TEST_CASE("SceneRenderResolver::Clear drops the scene's MeshTable and MeshMateri
     std::error_code ec; fs::remove_all(dir, ec);
 }
 
+TEST_CASE("SceneRenderResolver::InvalidateMesh re-resolves a re-saved .arcmesh with no gap",
+          "[mesh][host]")
+{
+    // What MeshDocument::Save and every undo/redo apply route into. MeshCache
+    // ::Request is a once-per-Guid cache, so WITHOUT this hook a mesh edit --
+    // or an undo of one -- shows in the document's own preview and NOWHERE
+    // ELSE, and an undo the user cannot see in the scene is indistinguishable
+    // from an undo that did not happen (SpriteDocument.cpp:113-121).
+    const fs::path dir = MakeTempDir("mesh_invalidate_mesh");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
+
+    const fs::path meshFile = dir / "Game" / "Content" / "plane.arcmesh";
+
+    // A Plane, because its vertex count ((subdivisions+1)^2) makes an edit
+    // OBSERVABLE without touching anything but topology: 1 -> 4, 3 -> 16.
+    Arcane::MeshAssetData authored;
+    authored.id           = Arcane::Guid::Generate();
+    authored.name         = "probe-plane";
+    authored.source       = Arcane::MeshSource::Plane;
+    authored.subdivisions = 1;
+    REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
+    const Arcane::Guid meshId = authored.id;
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    REQUIRE(rt.OpenProject(dir / "Game") == true);
+    REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
+
+    const Astra::Entity e = rt.Registry().CreateEntity();
+    Arcane::MeshRenderer mr; mr.mesh = meshId;
+    rt.Registry().AddComponent<Arcane::MeshRenderer>(e, mr);
+
+    Arcane::SceneRenderResolver::Services rs;
+    rs.runtime = &rt;
+    Arcane::SceneRenderResolver resolver(std::move(rs));
+
+    Arcane::SceneRenderResolver::FrameInfo frame;
+    frame.dt = 1.0 / 60.0;
+    resolver.Refresh(frame);
+
+    // Re-read the resource every time rather than caching the pointer: every
+    // Refresh re-publishes it (SetMeshTable), same two-step discipline the
+    // Clear case above follows.
+    const auto vertexCount = [&]() -> std::size_t
+    {
+        const Arcane::MeshTable* t = rt.Registry().GetResource<Arcane::MeshTable>();
+        REQUIRE(t != nullptr);
+        const Arcane::MeshEntry* entry = t->Resolve(meshId);
+        REQUIRE(entry != nullptr);
+        return entry->data.vertices.size();
+    };
+    REQUIRE(vertexCount() == 4);
+
+    // The mesh document saves denser topology.
+    Arcane::MeshAssetData edited = authored;
+    edited.subdivisions = 3;
+    REQUIRE(Arcane::SaveMeshAsset(meshFile, edited));
+
+    // Control: a plain Refresh does NOT pick it up. This is what makes the
+    // assertion below non-vacuous -- the sweep calls Request every frame, and
+    // Request is a no-op once the Guid is known.
+    resolver.Refresh(frame);
+    CHECK(vertexCount() == 4);
+
+    resolver.InvalidateMesh(meshId);
+
+    // NO GAP, and this is the half a bare Invalidate would fail: the entry is
+    // back BEFORE the call returns, with no Refresh in between -- a host may
+    // render before its next sweep, and for a mesh the hole would draw
+    // nothing at all (there is no placeholder).
+    CHECK(vertexCount() == 16);
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
 TEST_CASE("SceneRenderResolver::InvalidateMaterial drops the WHOLE mesh-material cache, "
           "so a re-saved base does not strand its instance",
           "[mesh][host]")
