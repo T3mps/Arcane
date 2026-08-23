@@ -71,7 +71,7 @@ namespace Arcane
     // Guid, memoized into its own private `failed` set (MeshMaterialCache.
     // cpp's `fail` lambda) -- and that happens the FIRST time some earlier
     // sweep resolves it: the resolver's per-frame Request loop, landed at
-    // Host/SceneRenderResolver.cpp:342-363 (Task 6). By the time THIS
+    // Host/SceneRenderResolver.cpp:357-378 (Task 6). By the time THIS
     // function runs, a materialOverride Guid is
     // already either resolved or already-warned-and-memoized; either way,
     // Resolve() here is a pure lookup with no side effect of its own. This
@@ -88,7 +88,7 @@ namespace Arcane
     //
     // NO Request() CALL, ON EITHER TABLE: populating MeshTable/
     // MeshMaterialTable is the resolver's per-frame job (SceneRenderResolver::
-    // Refresh, sweep (1b) at Host/SceneRenderResolver.cpp:342-363), not this
+    // Refresh, sweep (1b) at Host/SceneRenderResolver.cpp:357-378), not this
     // sweep's -- this function reads ONLY the already-published resources.
     //
     // NO MeshData COPY: MeshInstance::mesh borrows a raw pointer straight

@@ -54,6 +54,11 @@ namespace Arcane
         int lastSeenSprites   = -1;
         int lastTableSize     = -1;
         int lastMaterialCount = -1;
+        // The mesh half of the same bookkeeping (F2a follow-up): MeshCache's
+        // and MeshMaterialCache's own Table() sizes, watched the identical
+        // way so a mesh-only change still trips the log (see Refresh).
+        int lastMeshTableSize     = -1;
+        int lastMeshMaterialCount = -1;
 
         bool CompilerReady() const
         {
@@ -319,33 +324,6 @@ namespace Arcane
                 im.materials->Request(s.material, frame.now);
         });
 
-        // Census, logged once per distinct outcome. "Nothing draws" has too many
-        // indistinguishable causes to debug from a silent log: no SpriteRenderer in
-        // the scene, a nil sprite Guid, a Guid that would not resolve, or a
-        // component view that is empty because THIS module disagrees with the
-        // loader about the component id. Those need different fixes, and the
-        // absence of a warning used to be consistent with all of them.
-        // Deliberately counted in Arcane.dll, where the loader also runs, so
-        // comparing this line against a host-side count localises a cross-module
-        // id problem immediately.
-        // Watches the MATERIAL count too, not just the sprite counts: materials bind
-        // asynchronously (compile + drain), so the first frame always reports zero of
-        // them and a sprite-only trigger would never correct itself. Verified the hard
-        // way -- the log claimed "0 bound material(s)" for a run whose screenshot
-        // showed the material visibly animating.
-        if (seenSprites != im.lastSeenSprites ||
-            (int)im.sprites->Table().size() != im.lastTableSize ||
-            (int)im.materials->Table().size() != im.lastMaterialCount)
-        {
-            im.lastSeenSprites   = seenSprites;
-            im.lastTableSize     = (int)im.sprites->Table().size();
-            im.lastMaterialCount = (int)im.materials->Table().size();
-            ARC_INFO("scene resolution: {} SpriteRenderer(s), {} sprite guid(s), "
-                     "{} material guid(s) -> {} resolved sprite(s), {} bound material(s)",
-                     seenSprites, seenSpriteGuids, seenMaterialGuids,
-                     im.sprites->Table().size(), im.materials->Table().size());
-        }
-
         // (1b) F2a (Task 6): ONE CreateView<MeshRenderer> walk, mirroring (1)
         // above one dimension up -- a SEPARATE view, not folded into (1),
         // because MeshRenderer and SpriteRenderer are different component
@@ -369,11 +347,13 @@ namespace Arcane
         // one frame late every time -- exactly the kind of bug that is
         // miserable to find at a desk.
         //
-        // No census log for this sweep (unlike (1)'s ARC_INFO block above):
-        // that instrument is scoped to the SpriteRenderer path it was built
-        // to debug, and bolting a parallel counter/log pair on here without
-        // a concrete "nothing draws" report to chase would be exactly the
-        // kind of unrequested widening this task's dispatch warns against.
+        // The census log reporting this sweep's numbers runs immediately
+        // BELOW, once this loop closes, not beside (1)'s own block above: its
+        // mesh counters are this sweep's Table() sizes, so logging any
+        // earlier would print the PRIOR frame's mesh counts next to the
+        // CURRENT frame's sprite ones. See that block's own comment for the
+        // rest of the reasoning, including why its change-detector now
+        // watches these two tables as well.
         reg.CreateView<MeshRenderer>().ForEach(
             [&](Astra::Entity, MeshRenderer& mr)
         {
@@ -396,6 +376,57 @@ namespace Arcane
             if (it->second.material.IsValid())
                 im.meshMaterials->Request(it->second.material);
         });
+
+        // Census, logged once per distinct outcome. "Nothing draws" has too many
+        // indistinguishable causes to debug from a silent log: no SpriteRenderer in
+        // the scene, a nil sprite Guid, a Guid that would not resolve, or a
+        // component view that is empty because THIS module disagrees with the
+        // loader about the component id. Those need different fixes, and the
+        // absence of a warning used to be consistent with all of them.
+        // Deliberately counted in Arcane.dll, where the loader also runs, so
+        // comparing this line against a host-side count localises a cross-module
+        // id problem immediately.
+        // Watches the MATERIAL count too, not just the sprite counts: materials bind
+        // asynchronously (compile + drain), so the first frame always reports zero of
+        // them and a sprite-only trigger would never correct itself. Verified the hard
+        // way -- the log claimed "0 bound material(s)" for a run whose screenshot
+        // showed the material visibly animating.
+        //
+        // F2a widening: the identical gap existed one dimension up -- a desk run
+        // proved a mesh renders (by screenshot) while this line said nothing about
+        // meshes at all, because MaterialCensus::meshReferenced/meshBound (this
+        // header's own struct) were only ever wired into Materials() and its
+        // tests, never into this log. The two counters appended below read the
+        // SAME MeshCache/MeshMaterialCache Table()s sweep (1b) just populated --
+        // which is why this whole block now sits AFTER that sweep instead of
+        // beside (1): its mesh numbers ARE that sweep's output, so logging any
+        // earlier would print the PRIOR frame's mesh counts next to the CURRENT
+        // frame's sprite ones. Unlike the sprite-material half above, the mesh
+        // half needs no "first frame reports zero" caveat: neither mesh cache
+        // compiles anything, so a Request() issued this frame is already
+        // resolved by the time this line runs (sweep (1b)'s own ORDERING IS
+        // LOAD-BEARING comment). The change-detector below watches both new
+        // table sizes for the same reason it already watches the sprite-material
+        // one: a scene whose mesh resolution changed while its sprite counts
+        // held steady must still print, not go silent.
+        if (seenSprites != im.lastSeenSprites ||
+            (int)im.sprites->Table().size() != im.lastTableSize ||
+            (int)im.materials->Table().size() != im.lastMaterialCount ||
+            (int)im.meshes->Table().size() != im.lastMeshTableSize ||
+            (int)im.meshMaterials->Table().size() != im.lastMeshMaterialCount)
+        {
+            im.lastSeenSprites       = seenSprites;
+            im.lastTableSize         = (int)im.sprites->Table().size();
+            im.lastMaterialCount     = (int)im.materials->Table().size();
+            im.lastMeshTableSize     = (int)im.meshes->Table().size();
+            im.lastMeshMaterialCount = (int)im.meshMaterials->Table().size();
+            ARC_INFO("scene resolution: {} SpriteRenderer(s), {} sprite guid(s), "
+                     "{} material guid(s) -> {} resolved sprite(s), {} bound material(s), "
+                     "{} resolved mesh(es), {} bound mesh material(s)",
+                     seenSprites, seenSpriteGuids, seenMaterialGuids,
+                     im.sprites->Table().size(), im.materials->Table().size(),
+                     im.meshes->Table().size(), im.meshMaterials->Table().size());
+        }
 
         // (2) The scene's post assignment: FIRST entity with a valid material
         // wins (one scene, one chain -- per-camera stacks are a non-goal), and
