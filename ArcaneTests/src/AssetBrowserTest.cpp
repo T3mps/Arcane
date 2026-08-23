@@ -136,6 +136,31 @@ TEST_CASE("AssetKindOf classifies sprites, heuristic keeps material/texture orde
     CHECK(AssetKindFilterForFieldName("spriteMaterial") == static_cast<int>(AssetKind::Material));
 }
 
+TEST_CASE("AssetKindOf classifies meshes, heuristic keeps material/texture/sprite ordering",
+          "[editor][mesh]")
+{
+    // F2a, Task 9 fix round (Finding 4): AssetKind::Mesh + the .arcmesh
+    // extension, and MeshRenderer::mesh's own field name, both resolving to
+    // it -- the gap this test closes is that the Inspector's asset-ref
+    // picker used to list every kind for MeshRenderer::mesh (no branch
+    // recognized "mesh" at all), unlike every other typed asset reference.
+    CHECK(AssetKindOf("game://meshes/prop.arcmesh") == AssetKind::Mesh);
+    CHECK(AssetKindOf("game://meshes/PROP.ARCMESH") == AssetKind::Mesh);
+    CHECK(AssetKindFilterForFieldName("mesh") == static_cast<int>(AssetKind::Mesh));
+    // The REAL MeshRenderer field this heuristic serves (Components.hpp) --
+    // already resolves Material outright (no "mesh" substring in it), so this
+    // is a sanity check, not an ordering probe.
+    CHECK(AssetKindFilterForFieldName("materialOverride") == static_cast<int>(AssetKind::Material));
+    // THIS is the order-sensitive case, same shape as "spriteMaterial" above:
+    // a compound name containing BOTH "mesh" and "material" must still
+    // resolve Material -- a heuristic that checked "mesh" before "material"
+    // would return Mesh here instead and this CHECK would fail. No field is
+    // actually named this; it probes the GENERAL ordering rule the same way
+    // the sprite case does, since AssetBrowser.hpp's own comment states the
+    // rule as "mesh" being checked LAST, immediately before the -1 fallback.
+    CHECK(AssetKindFilterForFieldName("meshMaterial") == static_cast<int>(AssetKind::Material));
+}
+
 TEST_CASE("a .arcscene is a native JSON asset and gets a minted id", "[editor][project]")
 {
     // Native-JSON rule: a top-level "id" is read, or minted and written back.

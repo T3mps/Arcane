@@ -122,12 +122,18 @@ namespace Arcane::Editor
     // Inspector asset-ref (Guid) fields: infer the expected asset kind from the
     // FIELD NAME -- reflection carries no per-field attributes yet, so this
     // heuristic is the seam until it does. Case-insensitive substring match:
-    // "material" -> Material, "texture" -> Texture, "sprite" -> Sprite;
-    // anything else -> -1 (all kinds, same convention as MatchesFilter's
-    // kindFilter). Sprite is checked AFTER material/texture ON PURPOSE: a
-    // field named e.g. "spriteMaterial" contains both substrings and must
-    // still resolve Material (the material IS what such a field means), so
-    // the material/texture branches have to win the race.
+    // "material" -> Material, "texture" -> Texture, "sprite" -> Sprite,
+    // "mesh" -> Mesh; anything else -> -1 (all kinds, same convention as
+    // MatchesFilter's kindFilter). Sprite is checked AFTER material/texture
+    // ON PURPOSE: a field named e.g. "spriteMaterial" contains both
+    // substrings and must still resolve Material (the material IS what such
+    // a field means), so the material/texture branches have to win the
+    // race. `mesh` is checked LAST, after sprite, for the identical reason:
+    // `MeshRenderer::materialOverride` faces the same race a hypothetical
+    // "meshMaterial" field would (it contains both "mesh" and "material"),
+    // and the material branch must win it exactly as spriteMaterial's does
+    // -- so `mesh` sits at the end, immediately before the -1 fallback,
+    // rather than being checked before material/texture/sprite.
     inline int AssetKindFilterForFieldName(std::string_view fieldName)
     {
         std::string lower(fieldName);
@@ -139,6 +145,8 @@ namespace Arcane::Editor
             return static_cast<int>(AssetKind::Texture);
         if (lower.find("sprite") != std::string::npos)
             return static_cast<int>(AssetKind::Sprite);
+        if (lower.find("mesh") != std::string::npos)
+            return static_cast<int>(AssetKind::Mesh);
         return -1;
     }
 

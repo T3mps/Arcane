@@ -200,13 +200,23 @@ namespace Arcane::Editor
         // Services is known, whether a device exists is already decided.
         void EnsurePreviewContext();
 
-        // Render one frame of the preview: a single instance of
-        // m_previewMesh, camera framed from ComputeMeshBounds so the whole
-        // mesh is in view regardless of source/topology. A no-op with no
-        // vehicle or no valid preview mesh -- the canvas then shows only its
-        // plain clear colour (Batch2DNode's own background), which is
-        // exactly "no geometry" made visible rather than a crash or a stale
-        // frame.
+        // Render one frame of the preview: with a valid m_previewMesh, a
+        // single instance framed from ComputeMeshBounds so the whole mesh is
+        // in view regardless of source/topology. With NO valid preview mesh
+        // (an invalid param set), the frame STILL RECORDS -- with an EMPTY
+        // instance span, which NriGraphContext's `wantsMesh` gate reads as
+        // "no mesh pass this frame" -- so the offscreen texture ends up
+        // holding Batch2DNode's plain clear colour rather than whatever
+        // undefined bytes CreateOffscreen left it with.
+        //
+        // Recording unconditionally (rather than returning early on no
+        // preview mesh) is Task 9 fix-round Finding 2: OffscreenTextureId()
+        // returns the raw texture pointer, non-zero the INSTANT
+        // CreateOffscreen succeeds -- long before any frame renders into it
+        // (NriGraphContext.cpp:582-588) -- so a Draw() that trusts a non-zero
+        // texture id as "there is something to show" was, before this fix,
+        // sampling creation-time-undefined contents for every invalid asset.
+        // A no-op ONLY when there is no vehicle at all.
         void RenderPreview();
 
         // Hand the vehicle to the app's one-frame retire (or destroy it

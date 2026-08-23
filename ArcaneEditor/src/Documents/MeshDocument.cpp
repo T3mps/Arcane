@@ -201,64 +201,74 @@ namespace Arcane::Editor
     {
         if (!m_preview)
             return;
-        // An invalid param set: BuildMeshData already refused (RebuildPreviewMesh
-        // stored nullopt), so there is genuinely no geometry to draw -- not an
-        // error, the same "nil mesh draws nothing" outcome MeshTable::Resolve
-        // documents for the live scene. The canvas still renders (its own
-        // plain clear colour), so the window is never left showing a stale
-        // frame from before the edit.
-        if (!m_previewMesh)
-            return;
 
-        // Frame the WHOLE mesh regardless of source/topology: a bounding-
-        // sphere radius from ComputeMeshBounds' AABB (half the diagonal, a
-        // safe over-estimate for any view direction) placed at a distance
-        // that keeps it inside the vertical FOV, plus a margin so the mesh
-        // never touches the frame edge.
-        const Arcane::MeshBounds bounds = Arcane::ComputeMeshBounds(*m_previewMesh);
-        const glm::vec3 center = (bounds.min + bounds.max) * 0.5f;
-        float radius = glm::length(bounds.max - bounds.min) * 0.5f;
-        if (!(radius > 1e-4f))
-            radius = 0.5f;   // degenerate-bounds guard; unreached by any of the five generators today
-
-        constexpr float kFovYDegrees = 45.0f;
-        constexpr float kMargin = 1.5f;
-        const float distance = radius / std::sin(glm::radians(kFovYDegrees * 0.5f)) * kMargin;
-        // A fixed three-quarter viewing direction -- there is no camera
-        // authoring here (F4's job), so one angle that reads every one of the
-        // five sources reasonably is enough; +Y up matches the engine-wide
-        // convention (SceneCamera.hpp).
-        const glm::vec3 dir = glm::normalize(glm::vec3(1.0f, 0.75f, 1.0f));
-        const glm::vec3 eye = center + dir * distance;
-
-        Arcane::MeshInstance instance;
-        instance.mesh = &(*m_previewMesh);
-        instance.model = glm::mat4(1.0f);   // unit geometry -- see MeshAsset.hpp's UNIT RULE
-        // Neutral white: resolving `material`'s actual baseColor/texture into
-        // this preview is F2b/F2c's bindless-table territory (the material
-        // Guid field here is authored, not rendered-through) -- deliberately
-        // out of this task's scope. The preview's job is to show the SHAPE.
-        instance.baseColor = glm::vec4(1.0f);
-
+        // ALWAYS records a frame below, even when m_previewMesh is nullopt
+        // (an invalid param set) -- fix-round Finding 2. Returning early here
+        // (the pre-fix shape) left the offscreen texture holding whatever
+        // undefined bytes CreateOffscreen's creation left in it, because
+        // OffscreenTextureId() reports non-zero -- "there is a texture" -- the
+        // INSTANT CreateOffscreen succeeds, independent of whether any frame
+        // has ever rendered into it (NriGraphContext.cpp:582-588). `scene`
+        // stays default-constructed (empty instances, identity view/
+        // projection) on the invalid-data path: NriGraphContext's
+        // `wantsMesh` gate (`shape.mesh != nullptr && !shape.mesh->
+        // instances.empty()`, NriGraphContext.cpp:1186) reads an EMPTY span
+        // as "no mesh pass this frame", so MeshNode is never even declared
+        // and only Batch2DNode's plain clear colour (kCanvasClear,
+        // Batch2DNode.cpp:45) lands in the texture -- clean, not garbage.
+        Arcane::MeshInstance instanceStorage[1]{};
         Arcane::MeshSceneDesc scene;
-        const Arcane::MeshInstance instances[] = { instance };
-        scene.instances = instances;
-        // RH, depth [0,1] -- the same convention SceneCamera.hpp's
-        // PerspectiveProjection/ActivePerspectiveSceneCamera document at
-        // length; restated by direct call here rather than by including that
-        // ECS-facing header, which this device-less, registry-free preview
-        // has no other reason to depend on.
-        scene.view = glm::lookAtRH(eye, center, glm::vec3(0.0f, 1.0f, 0.0f));
-        scene.projection = glm::perspectiveRH_ZO(glm::radians(kFovYDegrees), 1.0f,
-                                                  0.05f, distance * 4.0f + 1.0f);
-        scene.lightDirection = glm::normalize(glm::vec3(0.4f, 1.0f, 0.3f));
-        scene.lightColor = glm::vec3(1.0f);
-        // Brighter than MeshSceneDesc's own default ambient (0.05): a lone
-        // preview mesh has no fill light of any kind, and the default reads
-        // as near-black on its unlit side. A one-off UX choice for this
-        // window only -- it has no bearing on how a scene's own mesh
-        // instances light (those keep MeshSceneDesc's real default).
-        scene.ambient = glm::vec3(0.12f);
+        if (m_previewMesh)
+        {
+            // Frame the WHOLE mesh regardless of source/topology: a
+            // bounding-sphere radius from ComputeMeshBounds' AABB (half the
+            // diagonal, a safe over-estimate for any view direction) placed
+            // at a distance that keeps it inside the vertical FOV, plus a
+            // margin so the mesh never touches the frame edge.
+            const Arcane::MeshBounds bounds = Arcane::ComputeMeshBounds(*m_previewMesh);
+            const glm::vec3 center = (bounds.min + bounds.max) * 0.5f;
+            float radius = glm::length(bounds.max - bounds.min) * 0.5f;
+            if (!(radius > 1e-4f))
+                radius = 0.5f;   // degenerate-bounds guard; unreached by any of the five generators today
+
+            constexpr float kFovYDegrees = 45.0f;
+            constexpr float kMargin = 1.5f;
+            const float distance = radius / std::sin(glm::radians(kFovYDegrees * 0.5f)) * kMargin;
+            // A fixed three-quarter viewing direction -- there is no camera
+            // authoring here (F4's job), so one angle that reads every one of
+            // the five sources reasonably is enough; +Y up matches the
+            // engine-wide convention (SceneCamera.hpp).
+            const glm::vec3 dir = glm::normalize(glm::vec3(1.0f, 0.75f, 1.0f));
+            const glm::vec3 eye = center + dir * distance;
+
+            instanceStorage[0].mesh = &(*m_previewMesh);
+            instanceStorage[0].model = glm::mat4(1.0f);   // unit geometry -- see MeshAsset.hpp's UNIT RULE
+            // Neutral white: resolving `material`'s actual baseColor/texture
+            // into this preview is F2b/F2c's bindless-table territory (the
+            // material Guid field here is authored, not rendered-through) --
+            // deliberately out of this task's scope. The preview's job is to
+            // show the SHAPE.
+            instanceStorage[0].baseColor = glm::vec4(1.0f);
+            scene.instances = std::span<const Arcane::MeshInstance>(instanceStorage, 1);
+
+            // RH, depth [0,1] -- the same convention SceneCamera.hpp's
+            // PerspectiveProjection/ActivePerspectiveSceneCamera document at
+            // length; restated by direct call here rather than by including
+            // that ECS-facing header, which this device-less, registry-free
+            // preview has no other reason to depend on.
+            scene.view = glm::lookAtRH(eye, center, glm::vec3(0.0f, 1.0f, 0.0f));
+            scene.projection = glm::perspectiveRH_ZO(glm::radians(kFovYDegrees), 1.0f,
+                                                      0.05f, distance * 4.0f + 1.0f);
+            scene.lightDirection = glm::normalize(glm::vec3(0.4f, 1.0f, 0.3f));
+            scene.lightColor = glm::vec3(1.0f);
+            // Brighter than MeshSceneDesc's own default ambient (0.05): a
+            // lone preview mesh has no fill light of any kind, and the
+            // default reads as near-black on its unlit side. A one-off UX
+            // choice for this window only -- it has no bearing on how a
+            // scene's own mesh instances light (those keep MeshSceneDesc's
+            // real default).
+            scene.ambient = glm::vec3(0.12f);
+        }
 
         Arcane::NriGraphContext::FrameDesc frame;
         frame.mesh = &scene;   // batch/post/globals all left null: no 2D content, no chain
@@ -333,16 +343,25 @@ namespace Arcane::Editor
         ImGui::Separator();
 
         // ---- preview -------------------------------------------------------
+        // ORDER IS LOAD-BEARING (fix-round Finding 1): m_validationReason is
+        // checked FIRST, ahead of the texture id. A vehicle's offscreen
+        // texture is non-null (PreviewTextureId() != 0) the INSTANT
+        // CreateOffscreen succeeds -- long before any frame has rendered
+        // into it -- so in ANY session that actually has a GPU device, the
+        // texture id is non-zero from the moment this document opens,
+        // regardless of whether the current data is valid. Checking the id
+        // first made the reason branch dead code in exactly the real-editor
+        // case it exists for: a hand-edited invalid file is the ONE
+        // situation ValidateMeshAsset's refusal is reachable at all (every
+        // WIDGET below is bounded at its floor), and that is precisely when
+        // the user needs to read why. RenderPreview() (see its own comment)
+        // still records a frame for the invalid case, so the texture holds a
+        // clean cleared image rather than garbage -- but this document shows
+        // the REASON over that image regardless, because a clean blank
+        // picture answers "what" and not "why".
         ImGui::BeginChild("##meshpreview", ImVec2(0.0f, 220.0f), ImGuiChildFlags_Borders);
         const std::uint64_t texId = PreviewTextureId();
-        if (texId != 0)
-        {
-            const ImVec2 avail = ImGui::GetContentRegionAvail();
-            const float fit = (std::min)(avail.x, avail.y) / static_cast<float>(kPreviewSize);
-            const float side = static_cast<float>(kPreviewSize) * (fit > 0.0f ? fit : 1.0f);
-            ImGui::Image(static_cast<ImTextureID>(texId), ImVec2(side, side));
-        }
-        else if (m_validationReason)
+        if (m_validationReason)
         {
             // Same severity colour ProblemsPanel/Console use for
             // DiagSeverity::Error (InspectorView.cpp's dangling-reference
@@ -352,9 +371,32 @@ namespace Arcane::Editor
             ImGui::TextColored(ImVec4(0.90f, 0.35f, 0.35f, 1.0f), "%s", m_validationReason->c_str());
             ImGui::PopTextWrapPos();
         }
+        else if (texId != 0)
+        {
+            const ImVec2 avail = ImGui::GetContentRegionAvail();
+            const float fit = (std::min)(avail.x, avail.y) / static_cast<float>(kPreviewSize);
+            const float side = static_cast<float>(kPreviewSize) * (fit > 0.0f ? fit : 1.0f);
+            ImGui::Image(static_cast<ImTextureID>(texId), ImVec2(side, side));
+        }
+        else if (!m_services.nriDevice || !m_services.hostConfig)
+        {
+            // The headless-test case, and any real session with no NRI
+            // device at all -- EnsurePreviewContext() never even attempted
+            // CreateOffscreen (fix-round Finding 3: this branch used to also
+            // catch the two cases below, which DO have a device).
+            ImGui::TextDisabled("(no preview -- no GPU device)");
+        }
         else
         {
-            ImGui::TextDisabled("(no preview -- no GPU device)");
+            // A device exists, but there is no vehicle: either
+            // CreateOffscreen refused at construction, or a prior frame
+            // failed and DestroyPreviewContext dropped it (RenderPreview's
+            // FrameOutcome::Failed branch) -- both already logged (ARC_WARN/
+            // ARC_ERROR) at the point they happened. Deliberately NOT
+            // claiming "no GPU device" here, which fix-round Finding 3
+            // caught as false in exactly the situation someone would be
+            // debugging a real device.
+            ImGui::TextDisabled("(no preview -- the preview vehicle is unavailable; see the log)");
         }
         ImGui::EndChild();
         ImGui::Separator();
