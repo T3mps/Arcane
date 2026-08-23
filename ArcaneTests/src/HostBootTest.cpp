@@ -10,6 +10,7 @@
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (ReferenceProject material resolution)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Input/InputActions.hpp>
+#include <Arcane/Mesh/MeshAsset.hpp>      // LoadMeshAsset (Task 11 -- ReferenceProject's mesh content)
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Serialization/SceneAsset.hpp>   // kSceneJsonVersion, kSceneExt
 
@@ -639,7 +640,15 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
     REQUIRE(sceneRoot != nullptr);
 
     const auto children = runtime.Registry().GetChildren(sceneRoot->entity);
-    REQUIRE(children.size() == 4);
+    // Task 11 (F2a): the reference scene grows a mesh -- a MeshCube entity
+    // (Arcane::MeshRenderer) and a PerspectiveCamera entity (Arcane::Camera
+    // with projection == Perspective), both children of the scene root
+    // alongside the four pre-existing sprites. 4 -> 6, deliberately: see the
+    // brief's own warning that this count and the name list below WOULD
+    // break, and that breaking them is the point (the same "make the format
+    // break observable" spirit the pose assertions below already apply to
+    // Ground/BoxA/BoxB).
+    REQUIRE(children.size() == 6);
 
     std::vector<std::string> names;
     Astra::Entity pulseBox{};
@@ -658,7 +667,8 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
         names.push_back(info->name);
     }
     std::sort(names.begin(), names.end());
-    CHECK(names == std::vector<std::string>{"BoxA", "BoxB", "Ground", "PulseBox"});
+    CHECK(names == std::vector<std::string>{"BoxA", "BoxB", "Ground", "MeshCube",
+                                             "PerspectiveCamera", "PulseBox"});
 
     // THE POSE ASSERTION (Task 3, F1). Everything above this line asserts
     // NAMES and GUIDS, and that is exactly why the 2D->3D format change slipped
@@ -697,6 +707,71 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
             runtime.Registry().GetComponent<Arcane::Transform>(byName["BoxB"]);
         REQUIRE(boxB != nullptr);
         CHECK(Arcane::RotationZ(boxB->rotation) == Catch::Approx(0.35f).margin(1e-4));
+    }
+
+    // Task 11 (F2a): the reference scene's new mesh content. Same discipline
+    // as the pose block above -- one assertion per field that a dropped or
+    // defaulted component would silently zero out -- plus the two Guid
+    // references (MeshRenderer::mesh, and the .arcmesh's own default
+    // material) resolved through the real asset registry, mirroring the
+    // sprite/post material resolution immediately below applied to the new
+    // asset kind.
+    {
+        REQUIRE(byName.count("MeshCube") == 1);
+        const Astra::Entity meshCube = byName["MeshCube"];
+
+        const Arcane::Transform* meshCubeTransform =
+            runtime.Registry().GetComponent<Arcane::Transform>(meshCube);
+        REQUIRE(meshCubeTransform != nullptr);
+        CHECK(meshCubeTransform->position.x == Catch::Approx(0.4f));
+        CHECK(meshCubeTransform->position.y == Catch::Approx(0.3f));
+        CHECK(meshCubeTransform->position.z == Catch::Approx(0.0f));
+
+        const Arcane::MeshRenderer* meshRenderer =
+            runtime.Registry().GetComponent<Arcane::MeshRenderer>(meshCube);
+        REQUIRE(meshRenderer != nullptr);
+        REQUIRE(meshRenderer->mesh.IsValid());
+        // The asset's own default material is what should win here -- an
+        // authored override would defeat the "mesh asset carries a default
+        // material" path this fixture means to exercise.
+        CHECK_FALSE(meshRenderer->materialOverride.IsValid());
+
+        const auto meshAssetPath = proj->ResolveAsset(Arcane::AssetId::FromGuid(meshRenderer->mesh));
+        REQUIRE(meshAssetPath.has_value());
+        CHECK(meshAssetPath->filename() == "reference_cube.arcmesh");
+
+        // Follow the .arcmesh's OWN material reference too -- the same
+        // "resolve the referenced asset for real" rigor the sprite/post
+        // materials get below, applied to this new asset kind.
+        const auto meshData = Arcane::LoadMeshAsset(*meshAssetPath);
+        REQUIRE(meshData.has_value());
+        CHECK(meshData->source == Arcane::MeshSource::Cube);
+        REQUIRE(meshData->material.IsValid());
+        const auto meshMatPath = proj->ResolveAsset(Arcane::AssetId::FromGuid(meshData->material));
+        REQUIRE(meshMatPath.has_value());
+        CHECK(meshMatPath->filename() == "reference_mesh.arcmat");
+
+        REQUIRE(byName.count("PerspectiveCamera") == 1);
+        const Astra::Entity perspectiveCamera = byName["PerspectiveCamera"];
+
+        const Arcane::Transform* camTransform =
+            runtime.Registry().GetComponent<Arcane::Transform>(perspectiveCamera);
+        REQUIRE(camTransform != nullptr);
+        CHECK(camTransform->position.z == Catch::Approx(5.0f));
+
+        const Arcane::Camera* cam =
+            runtime.Registry().GetComponent<Arcane::Camera>(perspectiveCamera);
+        REQUIRE(cam != nullptr);
+        CHECK(cam->active);
+        // `projection` alone already has teeth -- Orthographic is the struct
+        // default -- and the three lens fields below are each authored away
+        // from THEIR OWN defaults (60 / 0.1 / 1000) so a dropped field fails
+        // loud instead of silently reading back as a value nobody would
+        // notice was wrong.
+        CHECK(cam->projection == Arcane::CameraProjection::Perspective);
+        CHECK(cam->fovYDegrees == Catch::Approx(50.0f));
+        CHECK(cam->nearZ == Catch::Approx(0.05f));
+        CHECK(cam->farZ == Catch::Approx(500.0f));
     }
 
     // ReferenceProject's scene is the engine's canonical render fixture, so

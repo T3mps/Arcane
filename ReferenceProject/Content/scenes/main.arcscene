@@ -235,6 +235,83 @@
         }
       },
       "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 16427260230522064100,
+            "lo": 9960719862988537293
+          },
+          "name": "MeshCube"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 0,
+            "lo": 0
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          }
+        },
+        "Arcane::Transform": {
+          "position": [
+            0.4,
+            0.3,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Camera": {
+          "active": true,
+          "farZ": 500.0,
+          "fovYDegrees": 50.0,
+          "nearZ": 0.05,
+          "projection": "Perspective"
+        },
+        "Arcane::Identity": {
+          "id": {
+            "hi": 14071049217020215849,
+            "lo": 12889695857439111016
+          },
+          "name": "PerspectiveCamera"
+        },
+        "Arcane::Transform": {
+          "position": [
+            0.0,
+            0.0,
+            5.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "parent": 0
     }
   ],
   "id": "10d8ff06-45c2-47f2-90cb-ab7ac29cb51d",

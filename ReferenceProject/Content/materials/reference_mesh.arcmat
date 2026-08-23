@@ -1,0 +1,18 @@
+{
+  "id": "7e5a0010-0010-4010-8010-000000000010",
+  "kind": "mesh",
+  "name": "ReferenceCubeMaterial",
+  "params": {
+    "baseColor": {
+      "type": "color",
+      "value": [
+        0.2,
+        0.7,
+        0.65,
+        1.0
+      ]
+    }
+  },
+  "snippet": "",
+  "type": "material"
+}

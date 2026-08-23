@@ -1,0 +1,11 @@
+{
+  "capsuleLengthRatio": 2.0,
+  "id": "7e5a0011-0011-4011-8011-000000000011",
+  "material": "7e5a0010-0010-4010-8010-000000000010",
+  "name": "ReferenceCube",
+  "rings": 16,
+  "segments": 32,
+  "source": "cube",
+  "subdivisions": 1,
+  "type": "mesh"
+}
