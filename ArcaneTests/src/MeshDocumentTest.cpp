@@ -16,16 +16,24 @@
 
 #include "Documents/MeshDocument.hpp"
 
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>
+#include <Arcane/Project/Project.hpp>
+#include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/SceneResources.hpp>
 
 #include <Astra/Component/ComponentRegistry.hpp>
 #include <Astra/Registry/Registry.hpp>
 
+#include "Helpers/TestTypeContext.hpp"
+
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
 
 using Arcane::Editor::MeshDocument;
 namespace fs = std::filesystem;
@@ -270,4 +278,102 @@ TEST_CASE("MeshDocument::Save writes the asset and clears dirty", "[editor][mesh
     REQUIRE(reloaded.has_value());
     CHECK(reloaded->subdivisions == 5);
     CHECK(reloaded->source == Arcane::MeshSource::Plane);
+}
+
+// =============================================================================
+// THE EDITOR'S OWN WIRING, END TO END
+// =============================================================================
+// Everything above drives MeshDocument in isolation, and SceneRenderResolver
+// Test drives InvalidateMesh in isolation -- and BOTH passed while a desk
+// session showed a saved .arcmesh never reaching the viewport. That gap is
+// the point of this case: EditorApp.cpp (which builds Services::
+// invalidateMesh) is NOT compiled into ArcaneTests, so nothing joined the two
+// halves. This case joins them the only way a headless test can -- by
+// standing up the exact chain EditorApp does (a real Project + Runtime, a
+// registered .arcmesh, a MeshRenderer referencing it, a real
+// SceneRenderResolver, and a document whose invalidateMesh routes into it) --
+// and then asserting on the PUBLISHED MeshTable, which is what
+// CollectMeshInstances (and therefore the viewport) actually reads.
+TEST_CASE("MeshDocument::Save reaches the scene's MeshTable through the editor's own "
+          "invalidateMesh wiring",
+          "[editor][mesh][host]")
+{
+    const fs::path dir = TempDir("save_invalidates_scene");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
+    const fs::path file = dir / "Game" / "Content" / "plane.arcmesh";
+
+    // A Plane, for SceneRenderResolverTest's reason: (subdivisions+1)^2 makes
+    // an edit observable through vertex count alone -- 1 -> 4, 3 -> 16.
+    Arcane::MeshAssetData authored;
+    authored.id           = Arcane::Guid::Generate();
+    authored.name         = "probe-plane";
+    authored.source       = Arcane::MeshSource::Plane;
+    authored.subdivisions = 1;
+    REQUIRE(Arcane::SaveMeshAsset(file, authored));
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    REQUIRE(rt.OpenProject(dir / "Game") == true);
+    REQUIRE(rt.RegisterCreatedAsset(file).has_value());
+
+    const Astra::Entity e = rt.Registry().CreateEntity();
+    Arcane::MeshRenderer mr; mr.mesh = authored.id;
+    rt.Registry().AddComponent<Arcane::MeshRenderer>(e, mr);
+
+    Arcane::SceneRenderResolver::Services rs;
+    rs.runtime = &rt;
+    Arcane::SceneRenderResolver resolver(std::move(rs));
+
+    Arcane::SceneRenderResolver::FrameInfo frame;
+    frame.dt = 1.0 / 60.0;
+    resolver.Refresh(frame);
+
+    // Re-read the resource every time: every Refresh re-publishes it.
+    const auto vertexCount = [&]() -> std::size_t
+    {
+        const Arcane::MeshTable* t = rt.Registry().GetResource<Arcane::MeshTable>();
+        REQUIRE(t != nullptr);
+        const Arcane::MeshEntry* entry = t->Resolve(authored.id);
+        REQUIRE(entry != nullptr);
+        return entry->data.vertices.size();
+    };
+    REQUIRE(vertexCount() == 4);
+
+    // THE FACTORY'S LAMBDA, VERBATIM (EditorApp.cpp:698-702) -- including the
+    // null-resolver guard, so this test fails the same way the editor would if
+    // the guard ever swallowed the call.
+    MeshDocument::Services services;
+    Arcane::SceneRenderResolver* resolverPtr = &resolver;
+    services.invalidateMesh = [&resolverPtr](const Arcane::Guid& g)
+    {
+        if (resolverPtr)
+            resolverPtr->InvalidateMesh(g);
+    };
+
+    // The document opens the file the way the factory does -- LoadMeshAsset,
+    // not the authored struct -- so an id that does not survive the round trip
+    // shows up here rather than being papered over.
+    const auto opened = Arcane::LoadMeshAsset(file);
+    REQUIRE(opened.has_value());
+    MeshDocument doc(services, file, *opened);
+
+    Arcane::MeshAssetData edited = *opened;
+    edited.subdivisions = 3;
+    doc.ApplyMeshData(edited);
+    REQUIRE(doc.Dirty());
+
+    REQUIRE(doc.Save());
+
+    // NO Refresh IN BETWEEN, deliberately: the save has to be visible to the
+    // very next frame's CollectMeshInstances, and a host may render before its
+    // next sweep.
+    CHECK(vertexCount() == 16);
+
+    // ...and the host's OWN next sweep must not undo it. A host calls Refresh
+    // every frame (EditorAppFrame.cpp:1206, RuntimeFrame.cpp), so a re-resolve
+    // that only survived until the next sweep would still read as "the
+    // viewport never updated" at a desk.
+    resolver.Refresh(frame);
+    CHECK(vertexCount() == 16);
+
+    std::error_code ec; fs::remove_all(dir, ec);
 }
