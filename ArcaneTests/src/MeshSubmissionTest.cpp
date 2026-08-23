@@ -73,9 +73,9 @@ namespace
     // A valid, minimal mesh asset -- Cube reads none of the topology fields
     // (MeshAssetTest.cpp: "a cube reads nothing -- valid under every
     // parameter combination"), so it is the cheapest way to get a resolvable
-    // .arcmesh on disk. `material` rides along so AssetFor's contract (the
-    // loaded asset's OWN default material Guid) has something non-nil to
-    // assert on.
+    // .arcmesh on disk. `material` rides along so MeshEntry::material (the
+    // loaded asset's OWN default material Guid, the second link in the
+    // submission sweep's resolution chain) has something non-nil to assert on.
     Arcane::Guid WriteCubeMesh(const fs::path& file, const Arcane::Guid& material)
     {
         Arcane::MeshAssetData data;
@@ -181,12 +181,10 @@ TEST_CASE("MeshCache resolves a Guid once and keeps serving that entry", "[mesh]
     CHECK(entry.bounds.min == glm::vec3(-0.5f, -0.5f, -0.5f));
     CHECK(entry.bounds.max == glm::vec3(0.5f, 0.5f, 0.5f));
 
-    // AssetFor is what Task 5's material chain reads the mesh's OWN default
-    // material Guid from, without a second file read.
-    const Arcane::MeshAssetData* asset = cache.AssetFor(id);
-    REQUIRE(asset != nullptr);
-    CHECK(asset->id == id);
-    CHECK(asset->material == material);
+    // MeshEntry::material is what the submission sweep reads the mesh's OWN
+    // default material Guid from -- copied off the loaded .arcmesh at Request
+    // time so the chain never needs a second file read nor a cache pointer.
+    CHECK(entry.material == material);
 
     // Per-frame sweeps call Request for every referenced Guid every frame;
     // the whole point is that this is free after the first one. Pinned BY
@@ -228,7 +226,6 @@ TEST_CASE("MeshCache keeps an unresolvable Guid out of the table and warns once"
     // there is no placeholder mesh, so a broken Guid must resolve to nullptr
     // through MeshTable::Resolve so MeshSubmissionSystem can skip the entity.
     CHECK_FALSE(cache.Table().contains(id));
-    CHECK(cache.AssetFor(id) == nullptr);
 
     // Memoized: a per-frame sweep must not re-hit the filesystem (nor warn
     // again) for a Guid already known to be unresolvable.
@@ -258,7 +255,6 @@ TEST_CASE("MeshCache keeps an .arcmesh that fails validation out of the table", 
     // contract) -- so this is a DIFFERENT failure path than "not in the
     // registry" and must land the same way: out of the table, memoized.
     CHECK_FALSE(cache.Table().contains(id));
-    CHECK(cache.AssetFor(id) == nullptr);
 
     cache.Request(id);
     CHECK(resolveCalls == 1);
@@ -295,7 +291,6 @@ TEST_CASE("MeshCache::Invalidate forces the next Request to re-read the file", "
 
     cache.Invalidate(id);
     CHECK_FALSE(cache.Table().contains(id));
-    CHECK(cache.AssetFor(id) == nullptr);
 
     cache.Request(id);
     CHECK(cache.Table().at(id).data.vertices.size() == 16);
@@ -304,7 +299,6 @@ TEST_CASE("MeshCache::Invalidate forces the next Request to re-read the file", "
     // project's registry, so nothing may survive the switch.
     cache.Clear();
     CHECK(cache.Table().empty());
-    CHECK(cache.AssetFor(id) == nullptr);
 
     std::error_code ec; fs::remove_all(dir, ec);
 }

@@ -13,7 +13,7 @@
 // SpriteCache rather than mirroring it: a failed resolve (unresolvable Guid,
 // missing file, malformed JSON, an invalid mesh) stays OUT of the published
 // table, in a separate `failed` set -- SpriteMaterialCache's scheme
-// (SpriteMaterialCache.cpp:47,95-101), not SpriteCache's own "cache a visible
+// (SpriteMaterialCache.cpp:49,97-101), not SpriteCache's own "cache a visible
 // placeholder" one. A sprite has a natural placeholder (a 1x1 m untextured
 // quad); a mesh does not -- there is no meaningful "wrong shape" to draw
 // instead of the right one, and drawing one would be worse than drawing
@@ -21,14 +21,17 @@
 // MeshSubmissionSystem (Task 5) is expected to skip the entity entirely, the
 // same way it would for a nil MeshRenderer::mesh.
 //
-// `AssetFor` retains the loaded MeshAssetData alongside the geometry built
-// from it, so a caller that needs the REST of the asset (name, source,
-// topology) never re-reads the .arcmesh file just to see it. Task 5's
-// material-resolution chain (materialOverride -> the mesh asset's OWN
-// default `material` -> white) does NOT go through this -- MeshEntry
-// (SceneResources.hpp) carries a `material` copy of its own precisely so
-// MeshSubmissionSystem can read it straight off the published MeshTable,
-// without ever holding a MeshCache pointer.
+// WHAT IT DOES NOT KEEP: the loaded MeshAssetData. An `AssetFor(Guid) ->
+// const MeshAssetData*` accessor lived here through Tasks 4-11, backed by a
+// second map beside `table`, on the stated premise that Task 5's material
+// chain would read the mesh's own default `material` Guid through it. Task 5
+// resolved that differently and better -- MeshEntry::material
+// (SceneResources.hpp) carries the Guid on the published table, so the
+// submission sweep needs no cache pointer at all -- and no other consumer
+// ever appeared: MeshDocument, its one named candidate, edits the SOURCE
+// .arcmesh and never touches the resolved cache. Deleted at F2a close with
+// zero production callers, which also removes the second map and the
+// write-ordering hazard between the two.
 //
 // ENGINE-SIDE, not editor-side, from the moment it is written -- the same
 // placement rule the sprite-resolution lift (2026-07-29) established for
@@ -46,8 +49,6 @@
 
 namespace Arcane
 {
-    struct MeshAssetData;
-
     class ARCANE_API MeshCache
     {
     public:
@@ -88,17 +89,6 @@ namespace Arcane
         // why (element addresses survive a rehash; only an erase invalidates
         // them).
         const std::unordered_map<Guid, MeshEntry>& Table() const;
-
-        // The loaded .arcmesh this Guid resolved from, or null if `id` has
-        // never resolved successfully. For a caller that needs the REST of
-        // the asset -- name, source, topology -- without a second file
-        // read. NOT what the material chain reads: the mesh's own default
-        // `material` Guid is published straight through `MeshEntry::
-        // material` (SceneResources.hpp, copied in by Request() below)
-        // precisely so MeshSubmissionSystem can read it off the MeshTable
-        // resource alone, never through this cache directly -- see the
-        // file-level comment above.
-        const MeshAssetData* AssetFor(const Guid& id) const;
 
     private:
         struct Impl;

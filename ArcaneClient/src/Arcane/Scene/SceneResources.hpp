@@ -149,15 +149,15 @@ namespace Arcane
     // `material` (F2a, Task 5) is a COPY of the loaded .arcmesh's own
     // `MeshAssetData::material` -- the mesh's default material Guid, the
     // second link in MeshSubmissionSystem's `materialOverride` -> mesh
-    // default -> white chain. It rides along here, rather than forcing the
-    // submission sweep to go through `MeshCache::AssetFor`, because
+    // default -> white chain. It rides along here because
     // MeshSubmissionSystem is host-published-resource-only by design (it
     // reads MeshTable/MeshMaterialTable and never touches a cache pointer,
     // matching RenderSubmissionSystem's rule of never touching the Assets
-    // facade). `AssetFor` still exists for callers that need the REST of
-    // the asset (name, source, topology) -- this field exists purely so the
-    // one Guid the render-hot-path chain needs is reachable from the
-    // published table alone.
+    // facade). It is also the ONLY part of the loaded MeshAssetData that
+    // survives resolution at all: MeshCache keeps no copy of the asset (see
+    // MeshCache.hpp's "WHAT IT DOES NOT KEEP"), so anything needing the
+    // rest of it -- name, source, topology -- re-reads the .arcmesh, which
+    // is what MeshDocument does.
     struct MeshEntry
     {
         MeshData   data;

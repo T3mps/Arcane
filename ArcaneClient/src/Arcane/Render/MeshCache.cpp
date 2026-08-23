@@ -11,16 +11,14 @@ namespace Arcane
 {
     // THERE IS NO KEEP-ALIVE OF ANYTHING DEVICE-SIDE, for the same reason
     // SpriteCache carries none: a MeshEntry owns plain CPU vectors
-    // (MeshData/MeshBounds), nothing GPU. `assets` is the ONLY reason this
-    // Impl needs a second map beside `table` -- AssetFor's backing store, kept
-    // separate from MeshEntry so a reader of Table() (which Task 5's
-    // submission sweep is) never has to carry MeshAssetData weight it does
-    // not need per frame.
+    // (MeshData/MeshBounds), nothing GPU. ONE map plus the failed set is the
+    // whole state -- the loaded MeshAssetData is read, distilled into the
+    // MeshEntry (geometry, bounds, the default material Guid) and dropped;
+    // see MeshCache.hpp's "WHAT IT DOES NOT KEEP".
     struct MeshCache::Impl
     {
         Services services;
         std::unordered_map<Guid, MeshEntry> table;
-        std::unordered_map<Guid, MeshAssetData> assets;
         std::unordered_set<Guid> failed;
     };
 
@@ -37,14 +35,6 @@ namespace Arcane
         return m_impl->table;
     }
 
-    const MeshAssetData* MeshCache::AssetFor(const Guid& id) const
-    {
-        if (!id.IsValid())
-            return nullptr;
-        auto it = m_impl->assets.find(id);
-        return it != m_impl->assets.end() ? &it->second : nullptr;
-    }
-
     void MeshCache::Request(const Guid& id)
     {
         Impl& im = *m_impl;
@@ -54,8 +44,9 @@ namespace Arcane
         // Negative-result caching into a SEPARATE set, deliberately unlike
         // SpriteCache::Request's cacheDefault: there is no placeholder mesh
         // to hand back, so a failure must stay OUT of the published table --
-        // SpriteMaterialCache's discipline (SpriteMaterialCache.cpp:47,
-        // 95-101), applied here instead of SpriteCache's own. The `failed`
+        // SpriteMaterialCache's discipline (its `failed` set,
+        // SpriteMaterialCache.cpp:49, and the fail lambda at :97-101), applied
+        // here instead of SpriteCache's own. The `failed`
         // set is what keeps this WARN to exactly once per broken Guid: the
         // guard above already turns back a second Request before this lambda
         // ever runs again.
@@ -90,34 +81,40 @@ namespace Arcane
         MeshEntry entry;
         entry.bounds   = ComputeMeshBounds(*meshData);
         entry.data     = std::move(*meshData);
-        // Copied out before `data` moves into `im.assets` below -- Task 5's
-        // submission sweep reads this straight off the published MeshTable
-        // (MeshEntry::material) rather than through AssetFor, so it never
-        // needs a MeshCache pointer of its own.
+        // The ONE field of the loaded asset that outlives this call: Task 5's
+        // submission sweep reads the mesh's own default material straight off
+        // the published MeshTable (MeshEntry::material) rather than through
+        // the cache, so it never needs a MeshCache pointer of its own.
+        // Everything else in `data` is already baked into the geometry above.
         entry.material = data->material;
 
-        im.assets.emplace(id, std::move(*data));
         im.table.emplace(id, std::move(entry));
     }
 
     void MeshCache::Invalidate(const Guid& id)
     {
+        // The TABLE entry goes, and that is where this cache differs from
+        // SpriteMaterialCache::Invalidate (SpriteMaterialCache.cpp:68-76),
+        // which deliberately KEEPS its table entry as last-good: a sprite
+        // material stays bound and drawable while its replacement compiles,
+        // and the entry is swapped only when the fresh compile lands. There is
+        // no such gap here -- Request resolves synchronously in one shot -- so
+        // holding a stale MeshEntry would buy nothing and would keep the
+        // pre-edit geometry on screen for no reason. (SceneRenderResolver::
+        // InvalidateMesh pairs this erase with an immediate Request precisely
+        // so no frame can observe the hole.)
+        //
+        // `failed` is erased unconditionally, exactly as SpriteMaterialCache
+        // does at the same site: that is what lets a since-fixed .arcmesh
+        // succeed on the very next Request instead of staying memoized as
+        // broken forever.
         m_impl->table.erase(id);
-        m_impl->assets.erase(id);
-        // Unlike SpriteMaterialCache::Invalidate, which KEEPS a failed Guid
-        // out of its `failed` set only when there was never a table entry to
-        // begin with, this cache has no "last-good" concept to preserve --
-        // Request resolves synchronously in one shot, so there is nothing
-        // stale left bound while a fresh compile lands. Clearing `failed`
-        // here is what lets a since-fixed .arcmesh succeed on the very next
-        // Request rather than staying memoized as broken forever.
         m_impl->failed.erase(id);
     }
 
     void MeshCache::Clear()
     {
         m_impl->table.clear();
-        m_impl->assets.clear();
         m_impl->failed.clear();
     }
 }
