@@ -453,7 +453,8 @@ namespace Arcane
         //
         // Skipped entirely at halfSection == 0 (lengthRatio == 1): the two
         // rings are then COINCIDENT (same position, same normal), and
-        // connecting them would emit six zero-area triangles -- exactly the
+        // connecting them would emit 2 * segments zero-area triangles (the
+        // loop below runs once per segment and pushes two) -- exactly the
         // trap this arc's ambiguity note calls out.
         if (halfSection > 0.0f)
         {

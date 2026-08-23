@@ -270,7 +270,9 @@ namespace Arcane
         // embeds a top-level "id" (SpriteAsset.cpp:14), so it rides the same
         // ResolveNativeId path rather than a sidecar.
         //
-        // .arcmesh (F2a, Task 4) is native for the identical reason:
+        // .arcmesh (the F2a asset format is Task 2's; this registry line is
+        // Task 6's, which is where its absence was caught) is native for the
+        // identical reason:
         // SaveMeshAsset embeds a top-level "id" (MeshAsset.cpp: `doc["id"] =
         // data.id.ToString()`), so it is a plain ResolveNativeId JSON asset,
         // never an imported binary needing a .meta sidecar. Missing from

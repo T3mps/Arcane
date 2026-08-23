@@ -97,7 +97,8 @@ VSOutput vs_main(VSInput input)
     // tangent scales WITH the object, so for dot(normal, tangent) to stay
     // zero after a NON-UNIFORM scale the normal has to scale by the INVERSE
     // along each axis, not the same factor `model` applies to a position.
-    // MeshNode::NormalMatrixFor computes this once per instance on the CPU
+    // Arcane::NormalMatrixFor (a free function in MeshNode.hpp, not a member
+    // of MeshNode) computes this once per instance on the CPU
     // (glm::transpose(glm::inverse(upper 3x3)), with a singular-model guard
     // that returns identity rather than feeding this shader a NaN) and
     // MeshNode::Record pushes its three columns above -- built as an explicit

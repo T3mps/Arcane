@@ -70,8 +70,9 @@ namespace Arcane
     // MeshMaterialCache::Request is what warns -- exactly once per broken
     // Guid, memoized into its own private `failed` set (MeshMaterialCache.
     // cpp's `fail` lambda) -- and that happens the FIRST time some earlier
-    // sweep (the resolver's per-frame Request loop, a later task) resolves
-    // it. By the time THIS function runs, a materialOverride Guid is
+    // sweep resolves it: the resolver's per-frame Request loop, landed at
+    // Host/SceneRenderResolver.cpp:342-363 (Task 6). By the time THIS
+    // function runs, a materialOverride Guid is
     // already either resolved or already-warned-and-memoized; either way,
     // Resolve() here is a pure lookup with no side effect of its own. This
     // sweep is therefore silent by construction: there is no local warn
@@ -86,16 +87,18 @@ namespace Arcane
     // either table.
     //
     // NO Request() CALL, ON EITHER TABLE: populating MeshTable/
-    // MeshMaterialTable is the resolver's per-frame job (a later task), not
-    // this sweep's -- this function reads ONLY the already-published
-    // resources.
+    // MeshMaterialTable is the resolver's per-frame job (SceneRenderResolver::
+    // Refresh, sweep (1b) at Host/SceneRenderResolver.cpp:342-363), not this
+    // sweep's -- this function reads ONLY the already-published resources.
     //
     // NO MeshData COPY: MeshInstance::mesh borrows a raw pointer straight
     // into the MeshTable entry's owned MeshData, which the resolver's
     // MeshCache owns and keeps alive well past this call and past the
     // RenderFrame call that consumes `out` -- see MeshInstance's own
-    // borrowing-contract comment (MeshNode.hpp:103-107) and MeshEntry's
-    // (SceneResources.hpp).
+    // borrowing-contract comment (MeshNode.hpp:160-166) and MeshEntry's
+    // (SceneResources.hpp). The one thing that CAN break that borrow is an
+    // erase, which is why SceneRenderResolver::InvalidateMesh documents when
+    // it may be called relative to this sweep.
     inline void CollectMeshInstances(Astra::Registry& reg, std::vector<MeshInstance>& out)
     {
         out.clear();

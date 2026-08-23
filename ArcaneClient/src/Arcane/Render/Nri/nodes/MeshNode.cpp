@@ -49,8 +49,9 @@ namespace Arcane
 
         // data/shaders/mesh.hlsl's MeshConstants (b0 / the VK push-constant
         // block): a 4x4 model matrix, a float4 tint, and (Task 8/F2a) the
-        // per-instance NORMAL MATRIX -- MeshNode::NormalMatrixFor(model)'s
-        // result, packed as three float4 COLUMNS rather than a bare
+        // per-instance NORMAL MATRIX -- Arcane::NormalMatrixFor(model)'s
+        // result (a free function in MeshNode.hpp, not a member of this
+        // class), packed as three float4 COLUMNS rather than a bare
         // glm::mat3: HLSL packs each column of a float3x3 onto its own
         // 16-byte boundary (the same std140-style rule MeshFrameConstants'
         // comment below states for a plain vec3), whereas glm::mat3 is a
@@ -308,9 +309,11 @@ namespace Arcane
             return false;
         }
 
-        // THE LAYOUT. mesh.hlsl's register map: b0 root constants (model +
-        // tint), and ONE space-0 descriptor set carrying the frame CB b1, the
-        // albedo t0 and the sampler s0.
+        // THE LAYOUT. mesh.hlsl's register map: b0 root constants (model,
+        // tint, and the packed per-instance normal matrix -- see
+        // MeshRootConstants above and its 128-byte budget), and ONE space-0
+        // descriptor set carrying the frame CB b1, the albedo t0 and the
+        // sampler s0.
         //
         // THE REGISTER-SPACE RULE (Batch2DNode.hpp's header states it in full):
         // NRI refuses rootRegisterSpace == a set's registerSpace only when the

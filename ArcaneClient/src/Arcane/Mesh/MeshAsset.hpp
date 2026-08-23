@@ -40,10 +40,14 @@ namespace Arcane
 #endif
 
     // The generator roster -- Unity's built-in set, minus Quad (which is Plane
-    // under a -90 degree X rotation; orientation is the Transform's job for the
-    // same reason size is). Explicitly uint8_t-backed and explicitly numbered:
-    // these values are PERSISTED, so reordering them silently re-authors every
-    // .arcmesh in every project.
+    // under a +90 degree X rotation, right-handed: that takes BuildPlane's +Y
+    // normal to +Z, facing a camera that looks down -Z. Orientation is the
+    // Transform's job for the same reason size is; see BuildPlane's own
+    // comment in Render/MeshBuilder.hpp).
+    //
+    // Explicitly uint8_t-backed and explicitly numbered: these values are
+    // PERSISTED, so reordering them silently re-authors every .arcmesh in
+    // every project.
     enum class MeshSource : std::uint8_t
     {
         Plane    = 0,

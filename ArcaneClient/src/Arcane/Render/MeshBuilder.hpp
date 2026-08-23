@@ -8,12 +8,15 @@
 // reason: it is what lets a headless test drive the whole builder without a
 // device.
 //
-// Task 6 (Phase 4): this phase renders procedural geometry ON PURPOSE -- mesh
-// import (cgltf, .arcmesh) is a separate, later arc, and staying out of it is
-// a decision already made, not something this file revisits. The interface
-// below is exactly BuildCube and BuildUvSphere -- no plane, no cylinder, no
-// capsule, no tangents (tangent generation needs a vendored library, which
-// belongs to that later arc), no index-buffer optimisation.
+// PROCEDURAL GEOMETRY ON PURPOSE -- mesh IMPORT (cgltf and friends) is a
+// separate, later arc, and staying out of it is a decision already made, not
+// something this file revisits. Still out of scope, and still that arc's:
+// NO TANGENTS (generation needs MikkTSpace, a vendored library this arc
+// refuses) and no index-buffer optimisation.
+//
+// The roster grew in F2a: BuildCube and BuildUvSphere (Phase 4) are joined by
+// BuildPlane, BuildCylinder and BuildCapsule plus ComputeMeshBounds below --
+// the five sources a .arcmesh can name (Mesh/MeshAsset.hpp's MeshSource).
 //
 // WINDING (Task 7 depends on this being stated exactly): front-facing is
 // COUNTER-CLOCKWISE as seen from OUTSIDE the surface -- i.e. from a point
@@ -103,9 +106,12 @@ namespace Arcane
 
     // The unit XZ plane: normal +Y, spanning [-0.5, +0.5] in X and Z.
     // `subdivisions` is quads PER AXIS, so 1 is a single quad (two triangles)
-    // and 3 is nine quads. A camera-facing quad is this mesh under a -90 degree
-    // X rotation -- orientation is the Transform's job for the same reason
-    // size is, which is why there is no separate Quad source.
+    // and 3 is nine quads. A camera-facing quad is this mesh under a +90 degree
+    // X rotation: rotation is RIGHT-HANDED here, and R_x(+90) maps this
+    // plane's +Y normal to (0,0,+1) -- toward a camera looking down -Z.
+    // (R_x(-90) would give (0,0,-1), i.e. facing AWAY, and cull.) Orientation
+    // is the Transform's job for the same reason size is, which is why there
+    // is no separate Quad source.
     [[nodiscard]] ARCANE_API MeshData BuildPlane(std::uint32_t subdivisions);
 
     // Unit cylinder: diameter 1, height 1, axis +Y, spanning [-0.5, +0.5] in Y,

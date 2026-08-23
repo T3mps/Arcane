@@ -72,8 +72,11 @@ namespace Arcane
         // Pass chain (fullscreen BASE materials only; additive schema: absent =
         // single-pass, exactly the pre-chain format). Passes run in order after
         // the main snippet; each reads the previous pass's output through the
-        // reserved InputTexture. The sprite kind REFUSES passes (multi-pass
-        // sprites are renderer-owned); instances never carry them.
+        // reserved InputTexture. The sprite AND mesh kinds REFUSE passes
+        // (multi-pass sprites are renderer-owned; a mesh material stitches no
+        // shader source at all yet) -- both go through the ONE shared
+        // predicate, MaterialAsset.cpp's KindRefusesPassChains. Instances
+        // never carry them either.
         std::vector<MaterialPass> passes;
         // The BASE pass's input slots (post materials: kSceneInput entries
         // reading the external scene color -- build-time enforced to be the
