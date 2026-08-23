@@ -7,13 +7,13 @@ namespace Arcane
 {
     Cli::Builder Cli::Flag(std::string name, std::string help)
     {
-        m_opts.push_back(Opt{ std::move(name), std::move(help), "false", 0, true, false, CliType::String, {} });
+        m_opts.push_back(Opt{ std::move(name), std::move(help), "false", 0, true, false, false, CliType::String, {} });
         return Builder{ this, m_opts.size() - 1 };
     }
 
     Cli::Builder Cli::Option(std::string name, std::string defaultValue, std::string help)
     {
-        m_opts.push_back(Opt{ std::move(name), std::move(help), std::move(defaultValue), 0, false, false, CliType::String, {} });
+        m_opts.push_back(Opt{ std::move(name), std::move(help), std::move(defaultValue), 0, false, false, false, CliType::String, {} });
         return Builder{ this, m_opts.size() - 1 };
     }
 
@@ -39,6 +39,12 @@ namespace Arcane
     {
         const auto it = values.find(std::string(name));
         return it != values.end() ? it->second : std::string();
+    }
+
+    std::vector<std::string> Cli::Result::GetMany(std::string_view name) const
+    {
+        const auto it = multi.find(std::string(name));
+        return it == multi.end() ? std::vector<std::string>{} : it->second;
     }
 
     void Cli::PrintUsage() const
@@ -176,8 +182,10 @@ namespace Arcane
                 return fail("'--" + opt->name + "' must be one of the allowed values, got '" + val + "'");
             if (!NumericOk(opt->type, val))
                 return fail("'--" + opt->name + "' expects a number, got '" + val + "'");
-            
+
             r.values[opt->name] = val;
+            if (opt->many)
+                r.multi[opt->name].push_back(val);
         }
 
         // Required semantics: a required option is declared with an EMPTY default

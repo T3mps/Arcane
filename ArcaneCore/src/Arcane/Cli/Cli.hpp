@@ -9,7 +9,8 @@
 //
 // Reusable engine-wide (ArcaneRuntime today; future tools/Game host/harnesses). std-only,
 // presentation-free. Out of scope (documented extension points, NOT built):
-// subcommands, config files, env-var fallback, positional/array options.
+// subcommands, config files, env-var fallback, positional options. REPEATABLE
+// options ARE built -- see Many()/GetMany().
 // PRESENTATION-FREE + C++23-clean.
 #include <charconv>
 #include <cstdint>
@@ -36,6 +37,7 @@ namespace Arcane
             Builder& Choices(std::initializer_list<const char*> ch) { for (const char* s : ch) cli->m_opts[idx].choices.emplace_back(s); return *this; }
             Builder& Required()                                 { cli->m_opts[idx].required = true; return *this; }
             Builder& Type(CliType t)                            { cli->m_opts[idx].type = t; return *this; }
+            Builder& Many()                                     { cli->m_opts[idx].many = true; return *this; }
         };
 
         Builder Flag(std::string name, std::string help);                         // bool, default off
@@ -48,9 +50,11 @@ namespace Arcane
             int  exitCode = 0;                                  // 0 (help) or 2 (error) when !ok
             std::unordered_map<std::string, std::string> values;// option name -> resolved value (or default)
             std::unordered_map<std::string, bool>        flags; // flag name -> present?
+            std::unordered_map<std::string, std::vector<std::string>> multi; // Many() option -> occurrences
 
             [[nodiscard]] bool        Flag(std::string_view name) const;
             [[nodiscard]] std::string Get (std::string_view name) const;
+            [[nodiscard]] std::vector<std::string> GetMany(std::string_view name) const;
             template <typename T> [[nodiscard]] T GetAs(std::string_view name) const;
         };
 
@@ -62,7 +66,7 @@ namespace Arcane
         {
             std::string name, help, def;
             char shortAlias = 0;
-            bool isFlag = false, required = false;
+            bool isFlag = false, required = false, many = false;
             CliType type = CliType::String;
             std::vector<std::string> choices;
         };

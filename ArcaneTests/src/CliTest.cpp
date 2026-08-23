@@ -96,3 +96,37 @@ TEST_CASE("Cli: a flag given an inline value is a parse error", "[cli]") {
     const Cli c = MakeCli();
     REQUIRE(ParseArgs(c, {"--verbose=1"}).exitCode == 2);
 }
+TEST_CASE("cli: a Many() option accumulates every occurrence in order", "[cli]")
+{
+    Arcane::Cli cli{ "t", "d" };
+    cli.Option("probe", "", "repeatable probe").Many();
+
+    const char* argv[] = { "t.exe", "--probe", "luma@1,2", "--probe", "census" };
+    const Arcane::Cli::Result r = cli.Parse(5, const_cast<char**>(argv));
+
+    REQUIRE(r.ok);
+    const std::vector<std::string> probes = r.GetMany("probe");
+    REQUIRE(probes.size() == 2);
+    CHECK(probes[0] == "luma@1,2");
+    CHECK(probes[1] == "census");
+}
+
+TEST_CASE("cli: GetMany on an absent option is empty, not defaulted", "[cli]")
+{
+    Arcane::Cli cli{ "t", "d" };
+    cli.Option("probe", "", "repeatable probe").Many();
+    const char* argv[] = { "t.exe" };
+    const Arcane::Cli::Result r = cli.Parse(1, const_cast<char**>(argv));
+    REQUIRE(r.ok);
+    CHECK(r.GetMany("probe").empty());
+}
+
+TEST_CASE("cli: a non-Many option repeated is still last-wins", "[cli]")
+{
+    Arcane::Cli cli{ "t", "d" };
+    cli.Option("backend", "dx12", "backend");
+    const char* argv[] = { "t.exe", "--backend", "vulkan", "--backend", "dx12" };
+    const Arcane::Cli::Result r = cli.Parse(5, const_cast<char**>(argv));
+    REQUIRE(r.ok);
+    CHECK(r.Get("backend") == "dx12");
+}
