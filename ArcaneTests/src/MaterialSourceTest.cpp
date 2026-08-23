@@ -144,6 +144,51 @@ TEST_CASE("GenerateMaterialBindings follows the sprite surface register map", "[
     CHECK(MaterialSurfaceForKind("sprite") == MaterialSurface::Sprite);
     CHECK(MaterialSurfaceForKind("fullscreen") == MaterialSurface::Fullscreen);
     CHECK(MaterialSurfaceForKind("banana") == MaterialSurface::Fullscreen);
+    // F2a's third kind. Pinned HERE, beside its two siblings, because the
+    // whole point of the enumerator is that "mesh" must NOT collapse into the
+    // unknown-kind fallback the "banana" line above pins -- which is exactly
+    // what it did before Task 3, and exactly what MeshMaterialCache's kind
+    // gate now depends on being different.
+    CHECK(MaterialSurfaceForKind("mesh") == MaterialSurface::Mesh);
+}
+
+// The two ARC_ENSURE guards Task 3 put on the Mesh arm of MaterialTemplateFile
+// and GenerateMaterialBindings (Material/MaterialSource.cpp). F2a never
+// compiles a mesh shader variant, so nothing in the shipping path reaches
+// them -- which is precisely why they need a case of their own: an
+// enumerator-fallout guard with no coverage is a guard nobody would notice
+// losing.
+//
+// WHAT IS ASSERTABLE is the documented DEGRADE, not the report itself:
+// ARC_ENSURE dedups per call site through a static inside the macro
+// expansion, so the warn fires at most once per process and a test cannot
+// observe it deterministically under --order rand. The fallback value can be
+// observed exactly, every run, and it is the half a caller depends on: the
+// guard is loud-but-non-fatal ON PURPOSE so an unattended build keeps going.
+//
+// The one ARC_WARN-shaped line each guard emits into the run's output is
+// expected, not noise -- it is this case doing its job.
+TEST_CASE("the Mesh surface has no template or register map yet, and says so", "[material][mesh]")
+{
+    MaterialSourceParse parsed = ParseMaterialSource(
+        "//@param float Speed = 1.0\n"
+        "//@param texture Noise\n");
+    REQUIRE(parsed.errors.empty());
+    const MaterialTemplate templ =
+        MaterialTemplate::Build("mesh_binds", 1, std::move(parsed.decls));
+
+    // Falls back to the FULLSCREEN template file, having said so once.
+    CHECK(std::string(MaterialTemplateFile(MaterialSurface::Mesh)) ==
+          "materials/fullscreen_material.hlsl");
+
+    // ...and to the fullscreen register map: material CB at b0, textures from
+    // t0, and this surface emits its own sampler (the sprite surface does not).
+    const std::string mesh = GenerateMaterialBindings(templ, MaterialSurface::Mesh);
+    const std::string fullscreen = GenerateMaterialBindings(templ, MaterialSurface::Fullscreen);
+    CHECK(mesh == fullscreen);
+    CHECK(mesh.find("register(b0)") != std::string::npos);
+    CHECK(mesh.find("register(t0)") != std::string::npos);
+    CHECK(mesh.find("SamplerState MaterialSampler") != std::string::npos);
 }
 
 TEST_CASE("BuildMaterialShaderSource stitches a compilable dual-target SPRITE shader", "[shadercompile]")

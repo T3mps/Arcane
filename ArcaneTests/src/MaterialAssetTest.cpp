@@ -187,6 +187,54 @@ TEST_CASE(".arcmat pass chains: round-trip, sprite/instance refusal", "[material
         CHECK(loaded->passes.empty());
     }
 
+    SECTION("the mesh kind refuses passes at load")
+    {
+        // The sprite twin above, for F2a's third kind. Both go through the ONE
+        // shared predicate (MaterialAsset.cpp's KindRefusesPassChains), so
+        // without a case here a future edit could narrow that predicate back to
+        // `kind == "sprite"` and nothing would fail -- a mesh material carries
+        // no snippet and no template, so its passes would be even more
+        // meaningless than a sprite's, and would silently ride into the file.
+        MaterialAssetData mesh = data;
+        mesh.kind = "mesh";
+        const auto file = dir / "mesh.arcmat";
+        REQUIRE(SaveMaterialAsset(file, mesh));   // save warns; load is the gate
+        const auto loaded = LoadMaterialAsset(file);
+        REQUIRE(loaded.has_value());
+        CHECK(loaded->kind == "mesh");            // the KIND survives; only the chain drops
+        CHECK(loaded->passes.empty());
+    }
+
+    SECTION("the mesh kind refuses baseInputs at load")
+    {
+        // The OTHER half of the same predicate, and the one with no sprite
+        // twin anywhere in this file: baseInputs is a base-pass input list for
+        // fullscreen post chains, and the loader's gate for it
+        // (MaterialAsset.cpp's "the base pass's own input slots") is a
+        // separate `if` from the passes gate above -- so passing one proves
+        // nothing about the other.
+        MaterialAssetData mesh = data;
+        mesh.kind = "mesh";
+        mesh.passes.clear();                      // isolate baseInputs
+        mesh.baseInputs = { kSceneInput };
+        const auto file = dir / "meshinputs.arcmat";
+        REQUIRE(SaveMaterialAsset(file, mesh));
+        const auto loaded = LoadMaterialAsset(file);
+        REQUIRE(loaded.has_value());
+        CHECK(loaded->baseInputs.empty());
+
+        // Control, so the assertion above is not vacuous: the SAME file shape
+        // on a fullscreen kind keeps its baseInputs.
+        MaterialAssetData post = mesh;
+        post.kind = "fullscreen";
+        const auto postFile = dir / "postinputs.arcmat";
+        REQUIRE(SaveMaterialAsset(postFile, post));
+        const auto postLoaded = LoadMaterialAsset(postFile);
+        REQUIRE(postLoaded.has_value());
+        REQUIRE(postLoaded->baseInputs.size() == 1);
+        CHECK(postLoaded->baseInputs[0] == kSceneInput);
+    }
+
     SECTION("instances refuse passes at load")
     {
         // Hand-authored shape: an instance file carrying a passes array.
