@@ -172,6 +172,20 @@ namespace Arcane::Editor
         if (!Arcane::SaveMeshAsset(m_path, m_data))
             return false;   // failed save: m_dirty stays set, edits are not silently lost
         m_dirty = false;
+
+        // ===== DIAGNOSTIC SCAFFOLDING (2026-08-23, mesh-invalidate hunt) =====
+        // Remove with the rest of the [mesh-diag] lines. Three facts nothing
+        // else supplies: that the gesture reached Save() AT ALL (the file
+        // changing on disk is not proof on its own -- MintMeshAsset writes
+        // .arcmesh too), the PATH written (compare against MeshCache's own
+        // [mesh-diag] line -- they must name the same file), and whether the
+        // hook is installed on THIS document, since the guard below has no
+        // else and a null hook is otherwise indistinguishable from a
+        // successful invalidate.
+        ARC_INFO("[mesh-diag] MeshDocument::Save wrote '{}' id={} hook={}",
+                 m_path.generic_string(), m_data.id.ToString(),
+                 static_cast<bool>(m_services.invalidateMesh));
+
         // The SCENE's MeshCache resolve this replaces is otherwise permanent
         // (once-per-Guid, Render/MeshCache.cpp) -- without this call every
         // MeshRenderer referencing this asset keeps drawing the PRE-edit

@@ -78,6 +78,17 @@ namespace Arcane
             return fail(reason ? *reason : std::string("mesh failed to build"));
         }
 
+        // ===== DIAGNOSTIC SCAFFOLDING (2026-08-23, mesh-invalidate hunt) =====
+        // Remove with the rest of the [mesh-diag] lines. BELOW the early-out,
+        // so this fires only on a REAL resolve -- never on the per-frame no-op
+        // Request the resolver's sweep makes. The PATH is the point: it is the
+        // one thing that can differ between the file a document wrote and the
+        // file this cache reads back, and no amount of reading settles that
+        // for a live session. The vertex count says whether the bytes that
+        // came back are the edited ones.
+        ARC_INFO("[mesh-diag] MeshCache resolved {} -> '{}' ({} verts)",
+                 id.ToString(), path->generic_string(), meshData->vertices.size());
+
         MeshEntry entry;
         entry.bounds   = ComputeMeshBounds(*meshData);
         entry.data     = std::move(*meshData);
