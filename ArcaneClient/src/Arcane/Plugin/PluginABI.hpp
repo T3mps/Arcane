@@ -288,13 +288,21 @@ namespace Arcane
     //         NEW registry resources, published through TWO NEW methods
     //         APPENDED to Runtime -- `SetMeshTable`/`SetMeshMaterials`,
     //         siblings of `SetSpriteTable`/`SetSpriteMaterials`
-    //         (Base/Runtime.hpp:162,169). Runtime crosses the boundary by
-    //         POINTER (EngineContext::engine) and, unlike Batcher2D
-    //         (v6/v11/v12/v13 above), declares no virtual anywhere -- no
-    //         vtable, so there is no slot for an appended member to slide
-    //         (contrast the v14 entry's "concrete class a plugin links
-    //         against" warning, :143-149, which was about REMOVING members,
-    //         not adding one).
+    //         (Base/Runtime.hpp:162,169). `MeshTable`'s value type,
+    //         `MeshEntry` (geometry + bounds + a `material` Guid copied off
+    //         the loaded .arcmesh), crosses too, not just the resource
+    //         wrapping it: MeshSubmissionSystem.hpp is HEADER-ONLY and
+    //         plugin-compiled, and reads `MeshEntry` straight off the
+    //         resolved table (Scene/MeshSubmissionSystem.hpp:113), including
+    //         `MeshEntry::material` for the override -> mesh-default
+    //         fallback (:58) -- the v8/v15 class of plugin-crossing surface,
+    //         additive here only because the type is brand new. Runtime
+    //         crosses the boundary by POINTER (EngineContext::engine) and,
+    //         unlike Batcher2D (v6/v11/v12/v13 above), declares no virtual
+    //         anywhere -- no vtable, so there is no slot for an appended
+    //         member to slide (contrast the v14 entry's "concrete class a
+    //         plugin links against" warning, :143-149, which was about
+    //         REMOVING members, not adding one).
     //       * `MaterialSurface` (Material/MaterialSource.hpp) gained a THIRD
     //         value, `Mesh`, APPENDED after `Sprite` -- Fullscreen and Sprite
     //         keep their existing integer values, so nothing that already
