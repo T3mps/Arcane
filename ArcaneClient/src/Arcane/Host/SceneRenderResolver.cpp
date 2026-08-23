@@ -176,6 +176,29 @@ namespace Arcane
                 ++census.spriteBound;
         });
 
+        // The 3D half, mirroring the sprite loop above exactly: count the
+        // components that REFERENCE geometry, then how many of those the
+        // MeshCache has resolved. Table() IS the MeshTable payload
+        // (SceneRenderResolver publishes &meshes->Table() every Refresh), so
+        // present == this MeshRenderer has geometry to draw and
+        // CollectMeshInstances will emit an instance for it; absent == the
+        // sweep skips the entity entirely (MeshTable's own comment,
+        // Scene/SceneResources.hpp -- there is no placeholder mesh).
+        //
+        // A SEPARATE view from the sprite one, not a folded pair: MeshRenderer
+        // and SpriteRenderer are different component types with no shared
+        // entity requirement, the same reason Refresh keeps sweeps (1) and
+        // (1b) apart.
+        reg.CreateView<MeshRenderer>().ForEach(
+            [&](Astra::Entity, MeshRenderer& mr)
+        {
+            if (!mr.mesh.IsValid())
+                return;
+            ++census.meshReferenced;
+            if (im.meshes->Table().contains(mr.mesh))
+                ++census.meshBound;
+        });
+
         // "First entity with a valid material wins" -- the SAME rule Refresh's
         // post sweep applies, restated rather than shared because Refresh also
         // owns the warn-once bookkeeping this must not touch. If that rule ever

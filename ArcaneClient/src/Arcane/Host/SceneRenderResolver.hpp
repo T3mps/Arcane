@@ -190,6 +190,30 @@ namespace Arcane
             // != nullptr (see Materials()'s own comment), which is NOT
             // device-gated: a chain counts as bound once its bytes exist.
             bool postBound        = false;
+            // The 3D half (F2a), the same referenced/bound pair one dimension
+            // up: MeshRenderers carrying a valid `mesh` Guid, and how many of
+            // those the MeshCache has actually resolved into a MeshTable entry.
+            //
+            // WHY THE GEOMETRY GUID AND NOT THE MATERIAL ONE, in a struct
+            // called MaterialCensus: `meshReferenced` has to be PURE SCENE
+            // DATA for this struct's stated cold-equals-warm property to hold
+            // (see the block above -- both halves read the live registry, so a
+            // resolver that has never swept reports everything unbound and
+            // nothing un-REFERENCED). A MeshRenderer's effective material is
+            // the materialOverride -> MeshEntry::material -> white chain
+            // (Scene/MeshSubmissionSystem.hpp), and its middle link is only
+            // knowable AFTER MeshCache has resolved the mesh -- so a
+            // material-shaped `meshReferenced` would answer 0 cold and 1 warm,
+            // breaking exactly that property. The mesh half of the material
+            // chain is still reachable to a caller that wants it, through the
+            // published MeshTable/MeshMaterialTable resources.
+            //
+            // Unlike the sprite pair, this one CAN report bound in a headless
+            // census: neither mesh cache compiles anything, so Refresh's mesh
+            // sweep is ungated on the compiler and the batcher
+            // (SceneRenderResolver.cpp's (1b)).
+            int  meshReferenced   = 0;       // MeshRenderers with a valid mesh Guid
+            int  meshBound        = 0;       // ...whose .arcmesh resolved into the MeshTable
         };
         MaterialCensus Materials() const;
 

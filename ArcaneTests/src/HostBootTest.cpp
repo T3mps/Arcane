@@ -12,6 +12,7 @@
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>      // LoadMeshAsset (Task 11 -- ReferenceProject's mesh content)
 #include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/SceneResources.hpp>       // MeshTable/MeshMaterialTable (the census's bound half)
 #include <Arcane/Serialization/SceneAsset.hpp>   // kSceneJsonVersion, kSceneExt
 
 // The scene-content case below stitches and compiles ReferenceProject's
@@ -29,6 +30,8 @@
 
 #include <Astra/Reflection/Reflection.hpp>
 #include <Astra/Registry/Registry.hpp>
+
+#include <glm/glm.hpp>   // the mesh-table case compares bounds/colour vectors
 
 #include <Json.hpp>
 
@@ -827,8 +830,18 @@ TEST_CASE("ReferenceProject's scene census reports the sprite and post materials
     // the Runtime it publishes non-owning table pointers through.
     {
         // Deliberately headless -- no batcher, no device, no compile service.
-        // Those disable BINDING (Refresh's `materialsReady`), which is exactly
-        // the shape that lets this case assert referenced-without-bound.
+        // Those disable BINDING (Refresh's `materialsReady`), which is part of
+        // what lets this case assert referenced-without-bound.
+        //
+        // THE OTHER PART, unstated until F2a's final review and worth naming
+        // because it is stronger: this fixture calls Project::Open + BootScene
+        // and never Runtime::OpenProject, so runtime.CurrentProject() is NULL
+        // and the resolver's `resolveAsset` closure returns nullopt for every
+        // Guid. NOTHING can resolve here, compiler or not. That is why the
+        // mesh half below reads unbound too even though its caches are
+        // ungated on the compiler entirely -- and why the case that proves the
+        // caches genuinely consume this project's content has to open the
+        // project properly (see the next case).
         Arcane::SceneRenderResolver::Services services;
         services.runtime = &runtime;
         Arcane::SceneRenderResolver resolver(std::move(services));
@@ -843,6 +856,12 @@ TEST_CASE("ReferenceProject's scene census reports the sprite and post materials
         CHECK(cold.postReferenced);
         CHECK(cold.spriteBound == 0);
         CHECK_FALSE(cold.postBound);
+        // The mesh half obeys the same cold/warm rule, and it is the half that
+        // makes the rule visible: `meshReferenced` is pure scene data (a
+        // MeshRenderer carrying a valid `mesh` Guid), so it already answers 1
+        // before any sweep has run.
+        CHECK(cold.meshReferenced == 1);
+        CHECK(cold.meshBound == 0);
 
         Arcane::SceneRenderResolver::FrameInfo frame;
         frame.viewportWidth = 1280.0f;
@@ -855,10 +874,110 @@ TEST_CASE("ReferenceProject's scene census reports the sprite and post materials
         // quietly spread to the pre-existing content.
         CHECK(census.spriteReferenced == 1);
         CHECK(census.postReferenced);            // the scene root's PostProcess
-        // Nothing can bind without a compiler + batcher -- which is precisely
-        // the state this case wants: referenced, and provably not yet bound.
+        // Nothing can bind: no compiler, no batcher and -- see the Services
+        // note above -- no project open on the Runtime at all. Referenced, and
+        // provably not yet bound, which is the state this case wants.
         CHECK(census.spriteBound == 0);
         CHECK_FALSE(census.postBound);
+        CHECK(census.meshReferenced == 1);
+        CHECK(census.meshBound == 0);
+    }
+}
+
+// --- the reference scene's mesh content, THROUGH the render caches ---------
+// THE ONLY HEADLESS PROOF THAT THE RENDER CACHES CONSUME THIS PROJECT'S
+// CONTENT, rather than merely that its scene data parses. Task 11's
+// assertions read the FILES (ids, component fields, LoadMeshAsset); the
+// census case above reads the scene with no project open on the Runtime, so
+// nothing there resolves. This one opens the project the way a real host
+// does -- Runtime::OpenProject, which is what scans Content into the
+// AssetRegistry and installs the resolver every cache resolves Guids through
+// -- and then follows the whole chain the viewport follows: MeshRenderer::mesh
+// -> MeshCache -> MeshEntry::material -> MeshMaterialCache -> a baseColor.
+//
+// Every link fails SILENTLY at the desk. An unresolvable mesh draws nothing;
+// a mis-kinded, missing or renamed-param material draws WHITE -- which is also
+// what a broken reference looks like. Task 6's find is the exact shape of
+// regression this catches: `.arcmesh` was missing from AssetRegistry::AddFile's
+// native-extension whitelist, making every mesh in every project unresolvable,
+// with no warning at all.
+TEST_CASE("ReferenceProject's mesh and its default material resolve into the render tables",
+          "[host][project][mesh]")
+{
+    const fs::path dir = FindReferenceProjectDir();
+    REQUIRE_FALSE(dir.empty());
+
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    // Runtime::OpenProject, NOT Project::Open: only this path scans Content
+    // into the AssetRegistry and installs the resolver behind
+    // Runtime::CurrentProject(), which is what SceneRenderResolver's one
+    // `resolveAsset` closure reads. With a bare Project::Open every Guid
+    // resolves to nullopt (see the census case's Services note).
+    REQUIRE(runtime.OpenProject(dir));
+    const Arcane::Project* proj = runtime.CurrentProject();
+    REQUIRE(proj != nullptr);
+    REQUIRE(Arcane::HostBoot::BootScene(runtime, *proj).has_value());
+
+    // Nested scope: the resolver publishes NON-OWNING pointers through the
+    // Runtime and must destruct first (its own header contract).
+    {
+        Arcane::SceneRenderResolver::Services services;
+        services.runtime = &runtime;
+        Arcane::SceneRenderResolver resolver(std::move(services));
+
+        Arcane::SceneRenderResolver::FrameInfo frame;
+        frame.viewportWidth  = 1280.0f;
+        frame.viewportHeight = 720.0f;
+        // ONE Refresh, deliberately: the mesh's default material is only
+        // knowable AFTER MeshCache resolves the mesh, and the sweep is
+        // required to do both within the SAME call (SceneRenderResolver.cpp's
+        // "ORDERING IS LOAD-BEARING"). A second Refresh here would hide a
+        // regression that made the material one frame late.
+        resolver.Refresh(frame);
+
+        // The census, now against a project that can actually resolve: this is
+        // the referenced==bound answer the headless gate could never give
+        // before, and it is available at all only because neither mesh cache
+        // compiles anything (no device or compile service is needed).
+        const auto census = resolver.Materials();
+        CHECK(census.meshReferenced == 1);
+        CHECK(census.meshBound == 1);
+
+        // The MeshRenderer the reference scene authors.
+        Arcane::Guid meshGuid;
+        int meshRenderers = 0;
+        runtime.Registry().CreateView<Arcane::MeshRenderer>().ForEach(
+            [&](Astra::Entity, Arcane::MeshRenderer& mr)
+        {
+            ++meshRenderers;
+            meshGuid = mr.mesh;
+            // Nil by design: the cube's colour comes from the MESH's own
+            // default material, which is the link this case exists to follow.
+            CHECK_FALSE(mr.materialOverride.IsValid());
+        });
+        REQUIRE(meshRenderers == 1);
+        REQUIRE(meshGuid.IsValid());
+
+        const Arcane::MeshTable* meshes = runtime.Registry().GetResource<Arcane::MeshTable>();
+        REQUIRE(meshes != nullptr);
+        const Arcane::MeshEntry* entry = meshes->Resolve(meshGuid);
+        REQUIRE(entry != nullptr);
+        // Real geometry, and a unit cube's: the generators emit UNIT shapes,
+        // so size is the Transform's business and these bounds are fixed.
+        CHECK_FALSE(entry->data.vertices.empty());
+        CHECK(entry->bounds.min == glm::vec3(-0.5f, -0.5f, -0.5f));
+        CHECK(entry->bounds.max == glm::vec3(0.5f, 0.5f, 0.5f));
+        REQUIRE(entry->material.IsValid());
+
+        const Arcane::MeshMaterialTable* materials =
+            runtime.Registry().GetResource<Arcane::MeshMaterialTable>();
+        REQUIRE(materials != nullptr);
+        const Arcane::ResolvedMeshMaterial* resolved = materials->Resolve(entry->material);
+        REQUIRE(resolved != nullptr);
+        // The AUTHORED colour, not ResolvedMeshMaterial's (1,1,1,1) default --
+        // so a mis-kinded .arcmat (MeshMaterialCache's kind gate) or a renamed
+        // param fails HERE rather than rendering white at the desk.
+        CHECK(resolved->baseColor != glm::vec4(1.0f));
     }
 }
 
