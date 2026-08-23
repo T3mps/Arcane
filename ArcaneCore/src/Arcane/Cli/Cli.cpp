@@ -47,6 +47,12 @@ namespace Arcane
         return it == multi.end() ? std::vector<std::string>{} : it->second;
     }
 
+    bool Cli::Result::Supplied(std::string_view name) const
+    {
+        const auto it = supplied.find(std::string(name));
+        return it != supplied.end() && it->second;
+    }
+
     void Cli::PrintUsage() const
     {
         std::printf("%s -- %s\n", m_prog.c_str(), m_desc.c_str());
@@ -184,6 +190,7 @@ namespace Arcane
                 return fail("'--" + opt->name + "' expects a number, got '" + val + "'");
 
             r.values[opt->name] = val;
+            r.supplied[opt->name] = true;
             if (opt->many)
                 r.multi[opt->name].push_back(val);
         }

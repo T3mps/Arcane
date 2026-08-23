@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include <Arcane/Host/HostConfig.hpp>
 namespace {
     Arcane::HostConfig::ParseOutcome Run(std::vector<std::string> args) {
@@ -199,4 +200,53 @@ TEST_CASE("host config: --nri-graph is accepted and ignored in every configurati
     REQUIRE(with.config.has_value());
     REQUIRE(without.config.has_value());
     CHECK(with.exitCode == without.exitCode);
+}
+
+// --offscreen / --fixed-dt / --probe / --report. UNGUARDED (not behind
+// ARCANE_DIST): offscreen agent verification must work in Release and Dist,
+// not just dev builds.
+namespace {
+    Arcane::HostConfig::ParseOutcome ParseArgs(std::vector<const char*> args)
+    {
+        return Arcane::HostConfig::Parse((int)args.size(), const_cast<char**>(args.data()));
+    }
+}
+
+TEST_CASE("hostconfig: --offscreen collects probes and a report path", "[hostconfig]")
+{
+    const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+                                 "--probe", "luma@640,360", "--probe", "census",
+                                 "--report", "r.json" });
+    REQUIRE(out.exitCode == 0);
+    REQUIRE(out.config.has_value());
+    CHECK(out.config->offscreen);
+    CHECK(out.config->reportPath == "r.json");
+    REQUIRE(out.config->probes.size() == 2);
+    CHECK(out.config->probes[0] == "luma@640,360");
+}
+
+TEST_CASE("hostconfig: --fixed-dt defaults to 1/60 under --offscreen", "[hostconfig]")
+{
+    const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "1" });
+    REQUIRE(out.exitCode == 0);
+    CHECK(out.config->fixedDtSeconds == Catch::Approx(1.0 / 60.0));
+}
+
+TEST_CASE("hostconfig: --fixed-dt without --offscreen is REFUSED, not ignored", "[hostconfig]")
+{
+    const auto out = ParseArgs({ "h.exe", "--fixed-dt", "0.016" });
+    CHECK(out.exitCode == 2);
+    CHECK_FALSE(out.config.has_value());
+}
+
+TEST_CASE("hostconfig: --probe without --frames is refused", "[hostconfig]")
+{
+    const auto out = ParseArgs({ "h.exe", "--offscreen", "--probe", "census" });
+    CHECK(out.exitCode == 2);
+}
+
+TEST_CASE("hostconfig: a non-positive --fixed-dt is refused", "[hostconfig]")
+{
+    const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "1", "--fixed-dt", "0" });
+    CHECK(out.exitCode == 2);
 }

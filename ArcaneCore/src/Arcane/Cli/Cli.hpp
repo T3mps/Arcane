@@ -51,10 +51,19 @@ namespace Arcane
             std::unordered_map<std::string, std::string> values;// option name -> resolved value (or default)
             std::unordered_map<std::string, bool>        flags; // flag name -> present?
             std::unordered_map<std::string, std::vector<std::string>> multi; // Many() option -> occurrences
+            std::unordered_map<std::string, bool>        supplied; // option name -> explicitly given on the command line?
 
             [[nodiscard]] bool        Flag(std::string_view name) const;
             [[nodiscard]] std::string Get (std::string_view name) const;
             [[nodiscard]] std::vector<std::string> GetMany(std::string_view name) const;
+            // True iff this Option was explicitly given on the command line, as opposed
+            // to answering from its registered default. `values` is pre-seeded with every
+            // option's default before parsing and overwritten in place on supply, so a
+            // supplied value equal to the default is indistinguishable from an unsupplied
+            // one by comparing `Get(name)` against the default string -- this is the seam
+            // that makes that comparison unnecessary. Flags are unaffected: `Flag()` is
+            // already unambiguous (there is no explicit-false state to confuse it with).
+            [[nodiscard]] bool        Supplied(std::string_view name) const;
             template <typename T> [[nodiscard]] T GetAs(std::string_view name) const;
         };
 

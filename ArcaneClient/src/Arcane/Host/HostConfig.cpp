@@ -15,6 +15,12 @@ namespace Arcane
         cli.Option("scene",   "", "asset Guid to boot instead of the manifest's bootScene (empty = follow the manifest)");
         cli.Option("screenshot", "", "write the last rendered frame to this PNG before exiting (pairs with --frames)");
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
+        cli.Flag  ("offscreen",          "render with no window shown and no swapchain; "
+                                         "pairs with --frames/--probe/--report");
+        cli.Option("fixed-dt", "0.0166666666666666666", "seconds per simulated frame "
+                                         "(--offscreen only)").Type(CliType::Double);
+        cli.Option("probe", "",          "repeatable: luma@x,y | rgba@x,y | pick@x,y | census").Many();
+        cli.Option("report", "",         "write the observation report to this JSON path");
         // NOT Dist-guarded: the NRI frame graph is the ONLY render path in
         // every configuration, so the flag that used to select it has nothing
         // left to select. Kept registered and parsed-and-ignored rather than
@@ -49,6 +55,10 @@ namespace Arcane
         cfg.sceneOverride = r.Get("scene");
         cfg.screenshotPath = r.Get("screenshot");
         cfg.printEngineInfo = r.Flag("print-engine-info");
+        cfg.offscreen      = r.Flag("offscreen");
+        cfg.fixedDtSeconds = r.GetAs<double>("fixed-dt");
+        cfg.probes         = r.GetMany("probe");
+        cfg.reportPath     = r.Get("report");
         // "nri-graph" is intentionally never read here: it is registered
         // above (unconditionally) purely so a command line that still passes
         // it does not fail to parse. There is nothing left to store -- the
@@ -64,6 +74,33 @@ namespace Arcane
         if (!cfg.screenshotPath.empty() && cfg.maxFrames == 0)
         {
             std::fprintf(stderr, "error: --screenshot requires --frames N\n");
+            return { std::nullopt, 2 };
+        }
+
+        // Refused rather than ignored -- rule 3. A flag that silently does nothing is
+        // the worst failure mode an agent can meet: it exits 0 having done nothing,
+        // and an agent reads that as success.
+        //
+        // "Was --fixed-dt supplied?" cannot be answered by comparing its resolved
+        // value against the registered default -- a caller who explicitly passes
+        // the default value is indistinguishable from one who never passed it at
+        // all if we compare strings. r.Supplied("fixed-dt") answers the actual
+        // question: did the command line contain this option.
+        const bool wantsOffscreenOnly = !cfg.probes.empty() || !cfg.reportPath.empty()
+                                      || r.Supplied("fixed-dt");
+        if (wantsOffscreenOnly && !cfg.offscreen)
+        {
+            std::fprintf(stderr, "error: --fixed-dt/--probe/--report require --offscreen\n");
+            return { std::nullopt, 2 };
+        }
+        if (!cfg.probes.empty() && cfg.maxFrames == 0)
+        {
+            std::fprintf(stderr, "error: --probe requires --frames N (the capture lands on the last frame)\n");
+            return { std::nullopt, 2 };
+        }
+        if (cfg.offscreen && cfg.fixedDtSeconds <= 0.0)
+        {
+            std::fprintf(stderr, "error: --fixed-dt wants a positive number of seconds\n");
             return { std::nullopt, 2 };
         }
 

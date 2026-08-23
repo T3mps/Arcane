@@ -130,3 +130,31 @@ TEST_CASE("cli: a non-Many option repeated is still last-wins", "[cli]")
     REQUIRE(r.ok);
     CHECK(r.Get("backend") == "dx12");
 }
+
+// Supplied() exists because Get(name) != default cannot tell "explicitly given,
+// value happens to equal the default" apart from "never given". All three
+// states below must be distinguished; the middle one is the case a
+// string-compare-against-the-default gets wrong.
+TEST_CASE("cli: Supplied distinguishes explicit-non-default, explicit-equal-to-default, and absent", "[cli]")
+{
+    Arcane::Cli cli{ "t", "d" };
+    cli.Option("fixed-dt", "0.0166666666666666666", "seconds per frame").Type(CliType::Double);
+
+    const char* nonDefault[] = { "t.exe", "--fixed-dt", "0.05" };
+    const Arcane::Cli::Result r1 = cli.Parse(3, const_cast<char**>(nonDefault));
+    REQUIRE(r1.ok);
+    CHECK(r1.Supplied("fixed-dt"));
+    CHECK(r1.Get("fixed-dt") == "0.05");
+
+    const char* equalToDefault[] = { "t.exe", "--fixed-dt", "0.0166666666666666666" };
+    const Arcane::Cli::Result r2 = cli.Parse(3, const_cast<char**>(equalToDefault));
+    REQUIRE(r2.ok);
+    CHECK(r2.Supplied("fixed-dt"));
+    CHECK(r2.Get("fixed-dt") == "0.0166666666666666666");
+
+    const char* absent[] = { "t.exe" };
+    const Arcane::Cli::Result r3 = cli.Parse(1, const_cast<char**>(absent));
+    REQUIRE(r3.ok);
+    CHECK_FALSE(r3.Supplied("fixed-dt"));
+    CHECK(r3.Get("fixed-dt") == "0.0166666666666666666");
+}

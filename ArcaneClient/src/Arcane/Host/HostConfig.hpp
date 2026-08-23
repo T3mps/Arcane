@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend
 namespace Arcane
@@ -40,6 +41,24 @@ namespace Arcane
         // a window or device. The Arcane Hub probes this to learn the plugin ABI it
         // must stamp into a new .arcproj -- see HostBoot::EngineInfoJson.
         bool            printEngineInfo = false;
+
+        // Render the real frame graph with NO window shown and NO swapchain. Not
+        // "--headless": that word already means DEVICE-LESS in this codebase
+        // (SceneRenderResolver.hpp:211), and this mode is device-ful.
+        bool            offscreen = false;
+
+        // Fixed simulation delta, seconds. --offscreen only, refused elsewhere. The
+        // host loop is otherwise wall-clock (RuntimeApp.cpp:331), which makes
+        // `--frames N` advance the sim by however long those N frames happened to
+        // take -- different on a loaded CI box than an idle desk.
+        double          fixedDtSeconds = 1.0 / 60.0;
+
+        // Raw, unparsed `--probe` arguments in command-line order. Parsed by
+        // VerifyReport, not here: the kinds are that component's vocabulary.
+        std::vector<std::string> probes;
+
+        // Write the observation report to this JSON path. Empty = off.
+        std::string     reportPath = "";
 
 #if !defined(ARCANE_DIST)
         // DEV ONLY: fire the deliberate GPU fault (Render/GpuFaultInjector.hpp)
