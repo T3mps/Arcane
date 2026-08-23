@@ -11,6 +11,9 @@
 ## Global Constraints
 
 - Spec: `docs/specs/2026-08-23-agent-verification-offscreen-design.md`. Read it before Task 1.
+- **Everything in this plan ships in the engine, always, in every build.** Plan A is the *mode*; the **Servitor** package is Plans B and C. So: no feature macro, no premake option, and nothing here goes under `#if !defined(ARCANE_DIST)` -- offscreen verification must work in Release. See the spec's **Tiering** section; the short form is that Playwright is a package and headless Chrome is a mode of Chrome, and this plan is the mode.
+- **The report JSON is the tier boundary, so it is a contract**: it carries a `schemaVersion`, like `.arcproj`'s `formatVersion`. Servitor consumes this file and does not link the engine.
+- **Engine flags stay generic** -- `--offscreen`, never `--servitor-*`. Chrome does not namespace `--headless` for Playwright.
 - **The flag is `--offscreen`, never `--headless`** -- "headless" already means *device-less* in this codebase (`SceneRenderResolver.hpp:211`).
 - **`CreateOffscreen` is mandatory.** Never build a swapchain over a hidden window (`RuntimeApp.cpp:353-365`).
 - **No flag is ever silently inert.** Honoured or refused per host, stderr + exit 2, matching `HostConfig.cpp:64-68`.
@@ -37,7 +40,8 @@ F2a's plan was a lossy compression of its spec and nothing checked the compressi
 | R5 | `--probe` parsing, malformed refused | Layer 2 | Task 1 (repeatable), Task 2 (collection + refusals), Task 7 (`ParseProbe`) |
 | R6 | Probes: `luma`, `rgba`, `pick`, `census` | Layer 2 | Tasks 7, 8, 9 |
 | R7 | `pick` via `FrameDesc::pickPixel`, not `--pick-probe` | Layer 2 | Task 9 |
-| R8 | `--report` JSON: backend, mode, framesRendered, exitReason, probes | Layer 2 | Task 7 |
+| R8 | `--report` JSON: schemaVersion, backend, mode, framesRendered, exitReason, probes | Layer 2 | Task 7 |
+| R8a | Tiering: engine mode ships always; nothing optional or `ARCANE_DIST`-gated; report JSON is the Servitor contract | Tiering | Tasks 2, 7 (+ binding on all) |
 | R14 | Full-frame capture incl. ImGui chrome | Full-frame capture | Task 11 |
 | R16 | Three rules; silent-inertness audit | Three rules | Task 12 |
 | R17 | Fixed timestep `--fixed-dt`, refused outside `--offscreen` | Determinism 1 | Tasks 2, 6 |
@@ -765,6 +769,10 @@ TEST_CASE("verify: a luma probe reads the capture and lands in the JSON", "[veri
     rep.Evaluate({ *Arcane::ParseProbe("luma@0,0", err), *Arcane::ParseProbe("luma@1,0", err) });
 
     const auto doc = nlohmann::json::parse(rep.ToJson());
+    // The report is the boundary between the engine tier and the Servitor
+    // package, which parses this file without linking the engine -- so the
+    // version is part of the contract, not decoration.
+    CHECK(doc["schemaVersion"] == 1);
     CHECK(doc["backend"] == "D3D12");
     CHECK(doc["mode"] == "offscreen");
     CHECK(doc["framesRendered"] == 5);
@@ -800,7 +808,8 @@ Follow `ProjectBoot.hpp:116-132`'s `EngineInfoJson` precedent exactly -- `nlohma
 Report shape:
 
 ```json
-{ "backend": "D3D12", "mode": "offscreen", "framesRendered": 5,
+{ "schemaVersion": 1,
+  "backend": "D3D12", "mode": "offscreen", "framesRendered": 5,
   "exitReason": "frames-complete",
   "capture": { "width": 1280, "height": 720 },
   "census": { "spriteReferenced": 4, "spriteBound": 1, "postReferenced": false,

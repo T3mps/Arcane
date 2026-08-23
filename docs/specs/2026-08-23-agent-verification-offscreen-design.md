@@ -1,7 +1,9 @@
 # Agent Verification -- Offscreen Hosts and a Verification Surface -- Design
 
 Date: 2026-08-23
-Status: design, approved section-by-section; plan not yet written
+Status: design, approved section-by-section. Plan A written; B/C outlined.
+Tiered 2026-08-23: the offscreen mode ships in the engine, the harness ships as
+the **Servitor** package. See "Tiering" below.
 Supersedes nothing. Follows F2a (`docs/plans/2026-08-22-f2a-scene-3d-vocabulary.md`).
 
 ---
@@ -162,6 +164,55 @@ with nothing displaying it," which is the same shape as "the real host with the
 window never shown."
 (https://developer.chrome.com/docs/chromium/new-headless)
 
+### Tiering -- the engine mode, and the Servitor package
+
+The Chrome argument above rejects a separate *implementation*. It says nothing
+about a separate *distribution*, and conflating the two would be a mistake in
+the opposite direction. The resolution is the one the prior art already
+demonstrates:
+
+> **Playwright is a package. Headless Chrome is a mode of Chrome.**
+
+Nobody installs anything to get `--headless`; it ships in the browser, unified
+with the normal path, and that is exactly what Chrome 112 was *for*. What you
+install is the driver, the comparator, the golden corpus and the runner that
+*use* that mode. Two layers, two answers.
+
+This design draws the same line, and it falls exactly on the existing plan split:
+
+| | **Engine** (Plan A) | **Servitor** (Plans B + C) |
+|---|---|---|
+| What | `--offscreen`, fixed timestep, `ReadCapture`-sourced capture, probes, the report JSON | comparator cascade, backend-keyed reference corpus + blessing, script tier, actionability, trace bundles |
+| Ships | always, in every build | optional, installed per project |
+| External deps a doctor must check | **none** | reference-image corpus, per-backend/platform golden tree, script runner |
+| Analogue | `chrome --headless` | Playwright |
+
+The decisive test is the third row, and it is the codebase's own. `ArcaneHub`'s
+Packages surface defines a package as *"optional capability, and the
+dependencies each one needs"* -- a doctor that "reports what is missing and
+installs it" -- and its one planned entry, **Multiplayer**, is a package
+precisely *because* it needs PostgreSQL, Docker, and the Account and Combat
+services (`ArcaneHub/src/lib/views/PackagesView.svelte`). Plan A needs nothing
+but the engine. There is nothing for a doctor to install, so it is not a
+package; it is a mode.
+
+Two consequences bind Plan A:
+
+1. **Nothing in Plan A is optional, installable, or conditionally compiled.**
+   No feature macro, no premake option, no `#if !defined(ARCANE_DIST)` around
+   the offscreen path -- verification must work in Release. A mode that only
+   some builds have re-creates the divergence the Chrome argument exists to
+   prevent, one layer down.
+2. **The report JSON is the interface between the two tiers**, so it is a
+   contract, not an implementation detail. It carries a `schemaVersion`, in the
+   same spirit as `.arcproj`'s `formatVersion` and the engine-identity `abi`.
+   That the seam is a *file format* rather than a C++ API is deliberate: it is
+   the most package-friendly boundary available, and it lets Servitor be written
+   in any language without linking the engine.
+
+Servitor is intended as the Hub's **first real package** -- the entry that
+replaces the placeholder's "not built yet".
+
 ---
 
 ## The agent-facing surface
@@ -173,6 +224,21 @@ The mode flag is **`--offscreen`**, not `--headless`. The codebase already uses
 report bound in a headless census"); this mode is *windowless but device-ful*.
 `--offscreen` also matches the existing `CreateOffscreen` / `IsOffscreen()`
 vocabulary.
+
+**The package is named Servitor.** In the occult sense a servitor is an
+artificial spirit deliberately created, programmed with one defined task,
+dispatched to carry it out, and dissolved once it reports back -- construct,
+program, dispatch, observe, tear down, which is a test agent's lifecycle
+line-for-line. It sits in the *agency* naming tradition this field actually
+uses for drivers (Puppeteer, Playwright, Marionette) rather than the *vision*
+tradition its comparators use (Sikuli, Applitools Eyes, Argos, Wraith,
+Nightwatch), and unlike both it is unclaimed. Two obvious neighbours are not:
+**Stagehand** is Browserbase's AI browser-automation SDK, and **Golem** is
+already two separate test-automation frameworks.
+
+Engine flags stay generic and unprefixed -- `--offscreen`, not `--servitor-*`.
+Chrome does not namespace `--headless` for Playwright's benefit, and the mode
+is engine vocabulary that outlives any one consumer of it.
 
 ### Layer 1 -- boot
 

@@ -1,4 +1,17 @@
-# Agent Verification -- Plans B and C -- OUTLINE ONLY
+# Servitor -- Plans B and C -- OUTLINE ONLY
+
+> **Together, Plans B and C are the Servitor package** -- the optional,
+> per-project capability that drives a host and adjudicates what it rendered.
+> Plan A is the engine *mode* it drives, and ships in every build. That boundary
+> was fixed on 2026-08-23; see the spec's **Tiering** section for why it falls
+> here and not elsewhere (short form: Playwright is a package, headless Chrome
+> is a mode of Chrome). Servitor is intended as `ArcaneHub`'s first real entry
+> under Packages, beside the planned Multiplayer one.
+>
+> Consequence for everything below: Servitor consumes Plan A's **report JSON**
+> and does not link the engine. That seam is a file format carrying a
+> `schemaVersion`, which is what lets this package be written in any language
+> and versioned independently of the engine.
 
 > **STATUS: PROVISIONAL. NOTHING HERE IS DECIDED.**
 >

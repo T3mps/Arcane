@@ -15,7 +15,18 @@
   // (vcpkg deps, Docker, the Postgres bring-up in Server/scripts/db-setup), and
   // Setup.exe is a Tauri GUI over exactly that. The Hub should drive the same
   // orchestrator rather than growing a second one.
+  // Servitor is first in this list because it is the one being built. The
+  // engine half it drives -- the --offscreen mode, its capture and its report
+  // JSON -- is NOT a package and never appears here: it ships in every build,
+  // needs nothing installed, and so has nothing for a doctor to check. That is
+  // the line: Playwright is a package, headless Chrome is a mode of Chrome.
+  // See docs/specs/2026-08-23-agent-verification-offscreen-design.md, "Tiering".
   const planned = [
+    {
+      name: "Servitor",
+      needs: "A blessed reference-image set per backend; no external services",
+      why: "Drive a project's editor or runtime with no display, and adjudicate what it rendered.",
+    },
     {
       name: "Multiplayer",
       needs: "PostgreSQL via Docker, the Account and Combat services",
