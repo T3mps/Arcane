@@ -1,5 +1,6 @@
 #include <Arcane/Material/MaterialGraph.hpp>
 
+#include <Arcane/Base/Assert.hpp>   // ARC_ENSURE: GenerateGraphSnippet's Mesh-surface guard
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>   // MatParamValueToJson/FromJson
 
@@ -367,6 +368,28 @@ namespace Arcane
         auto fail = [&](std::uint32_t node, std::string msg)
         { res.errors.push_back({ node, std::move(msg) }); };
 
+        // THE THIRD SILENT-FALLBACK SITE, guarded the same way as the other
+        // two (MaterialTemplateFile / GenerateMaterialBindings, Material/
+        // MaterialSource.cpp): every `surface` read in this function -- the
+        // vertex-colour pin gate at "the color pin requires the sprite
+        // surface" and the VertexColor/SpriteTexture gate under "surface
+        // gating", the only two -- tests `!= MaterialSurface::Sprite`, so
+        // MaterialSurface::Mesh silently takes the FULLSCREEN path and this
+        // function emits a fullscreen snippet for a surface that has no
+        // template to stitch it into.
+        //
+        // REACHABLE, not theoretical: LoadMaterialAsset's graph self-heal
+        // calls GenerateGraphSnippet(*data.graph, MaterialSurfaceForKind(
+        // data.kind)) (MaterialAsset.cpp), so a hand-authored graph-only
+        // "mesh"-kind .arcmat reaches here today. One guard at the top rather
+        // than one per site: ARC_ENSURE dedups per CALL SITE, so two would
+        // mean two log lines for one call, and the whole function's output is
+        // surface-dependent -- there is no partial answer that is right.
+        // Closes when F2b/Task 8 gives Mesh a real template and a register map.
+        ARC_ENSURE(surface != MaterialSurface::Mesh,
+                   "GenerateGraphSnippet: MaterialSurface::Mesh has no graph codegen yet "
+                   "(F2b/Task 8) -- generating against the fullscreen surface");
+
         // --- index nodes; ids must be unique and non-zero
         std::unordered_map<std::uint32_t, const GraphNode*> byId;
         byId.reserve(graph.nodes.size());
@@ -445,6 +468,8 @@ namespace Arcane
         if (vertexOut && passGraph)
             fail(vertexOut->id, "the vertex stage belongs to the BASE material's "
                                 "graph, not a pass graph");
+        // `!= Sprite`, so Mesh reads as Fullscreen here -- one of the two sites
+        // the entry guard above covers; see it before adding a third surface.
         if (vertexOut && surface != MaterialSurface::Sprite &&
             inputLink.count({ vertexOut->id, 2 }))
             fail(vertexOut->id,
@@ -509,6 +534,8 @@ namespace Arcane
         }
 
         // --- surface gating
+        // The SECOND `!= Sprite` site the entry guard above covers: Mesh takes
+        // the Fullscreen branch here too.
         if (surface != MaterialSurface::Sprite)
             for (const GraphNode* n : ordered)
                 if (n->type == GraphNodeType::VertexColor || n->type == GraphNodeType::SpriteTexture)
