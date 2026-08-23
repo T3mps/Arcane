@@ -580,6 +580,14 @@ project "ArcaneTests"
         -- document closes). Draw (the only ImGui method) is never called --
         -- same precedent as ShaderEditorDocument above.
         "%{wks.location}/ArcaneEditor/src/Documents/SpriteDocument.cpp",
+        -- F2a, Task 9: MeshDocument source-compiles into the test exe so the
+        -- [editor][mesh] units drive its HEADLESS halves directly (data/undo
+        -- following SpriteDocument above; the offscreen-preview lifecycle
+        -- following ShaderEditorDocument's -- EnsurePreviewContext/
+        -- RenderPreview/DestroyPreviewContext). Draw (the ImGui half) is
+        -- never called; device-less services skip the preview resources in
+        -- the ctor, same precedent as ShaderEditorDocument above.
+        "%{wks.location}/ArcaneEditor/src/Documents/MeshDocument.cpp",
         -- GPU crash diagnostics arc, Task 10: CrashReportDocument source-
         -- compiles into the test exe so the [editor][diag] units drive its
         -- PURE model half directly (construction from an already-loaded

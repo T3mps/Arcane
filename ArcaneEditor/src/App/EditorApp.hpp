@@ -450,7 +450,7 @@ namespace Arcane::Editor
         // watch item ("the count must not grow across a clean exit") is legible
         // rather than inferred.
         std::uint64_t m_graphErrorBaseline = 0;
-
+
 
         // The pre-device splash: non-owning, see the ctor's doc comment. It is
         // BootSequence::Run's presenter for the WHOLE boot, via
@@ -1030,6 +1030,13 @@ namespace Arcane::Editor
         // dialog; the caller (browser action consumer / Inspector drop
         // branch) decides whether to also open a document.
         Arcane::Guid MintOrReuseSpriteForTexture(const Arcane::Guid& textureGuid);
+        // F2a, Task 9: the Asset Browser's "+ Mesh" button. A mesh needs no
+        // reuse-or-mint policy the way a sprite does (there is no source
+        // asset to key reuse off) -- always mints a fresh ".../Content/New
+        // Mesh[-N].arcmesh" with MeshAssetData's own defaults (a unit Cube).
+        // Nil on failure (no project); never opens a dialog or a document --
+        // same "the caller decides" split as MintOrReuseSpriteForTexture.
+        Arcane::Guid MintMeshAsset();
         Arcane::Editor::DocServices MakeDocServices();
 
         // Problems-panel row click -> editor navigation. One switch over

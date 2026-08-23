@@ -38,9 +38,12 @@ namespace Arcane::Editor
         // Sprite used when it was added (docs/specs/2026-07-28-sprite-
         // asset-design.md:116).
         Diagnostic,
+        // F2a, Task 9: .arcmesh procedural mesh assets (MeshDocument). Same
+        // placement rule as Diagnostic above -- ahead of the catch-all.
+        Mesh,
         Other,
     };
-    inline constexpr int kAssetKindCount = 9;
+    inline constexpr int kAssetKindCount = 10;
 
     // The ImGui drag-drop payload type for browser rows (the params panel's
     // texture slots accept it). Payload bytes = AssetDragPayload (POD).
@@ -70,6 +73,8 @@ namespace Arcane::Editor
             return AssetKind::Sprite;
         if (ext == ".arcdiag")
             return AssetKind::Diagnostic;
+        if (ext == ".arcmesh")
+            return AssetKind::Mesh;
         for (const char* e : { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr" })
             if (ext == e) return AssetKind::Texture;
         for (const char* e : { ".wav", ".ogg", ".mp3", ".flac" })
@@ -202,6 +207,15 @@ namespace Arcane::Editor
         // The panel only hands back WHICH texture; the app resolves reuse-or-
         // mint and opens the result (see AssetBrowserActions consumer).
         Arcane::Guid createSpriteFrom;
+
+        // F2a, Task 9: the toolbar "+ Mesh" button. Unlike createSpriteFrom
+        // above, a mesh names no source row -- BuildMeshData's default
+        // MeshAssetData (Cube) is a complete, valid starting asset on its
+        // own -- so this is a bare flag rather than a Guid: there is nothing
+        // for the panel to hand back beyond "one was requested". The app
+        // mints a fresh sibling file and opens it, same two-step shape as
+        // createSpriteFrom's consumer.
+        bool createMesh = false;
 
         // A scene is NOT a DocumentHost document -- double-clicking one must load
         // it into the editor session (replacing the Edit-mode registry), not open

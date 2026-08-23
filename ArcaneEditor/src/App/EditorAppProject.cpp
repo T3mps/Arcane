@@ -16,6 +16,7 @@
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
+#include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MintMeshAsset)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (pre-teardown ABI gate)
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
@@ -347,6 +348,41 @@ namespace Arcane::Editor
         // into whatever field triggered the mint. The file stays on disk
         // (never deleted) and the caller sees Nil, so the drop/menu action is
         // a diagnosable no-op instead.
+        if (!m_runtime->RegisterCreatedAsset(target))
+            return {};
+        return data.id;
+    }
+
+    // F2a, Task 9: always mints (never reuses -- there is no source asset to
+    // key a reuse policy off, unlike MintOrReuseSpriteForTexture above).
+    // Placement mirrors CreateInstanceAt's save-dialog target directory
+    // (`Root() / "Content"`), and the "-N" uniqueness loop mirrors
+    // MintOrReuseSpriteForTexture's own (:325-328) -- just with no sibling
+    // file to sit next to, so the target starts at the content root itself.
+    Arcane::Guid EditorApp::MintMeshAsset()
+    {
+        const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!project)
+            return {};
+
+        const std::filesystem::path contentDir = project->Root() / "Content";
+        std::filesystem::path target = contentDir / "New Mesh.arcmesh";
+        for (int i = 1; std::filesystem::exists(target); ++i)   // never clobber an existing file
+            target = contentDir / ("New Mesh-" + std::to_string(i) + ".arcmesh");
+
+        // MeshAssetData's own defaults (source = Cube, everything else at its
+        // struct default) are already a complete, valid asset -- see
+        // MeshAsset.hpp. Only identity needs setting here.
+        Arcane::MeshAssetData data;
+        data.id   = Arcane::Guid::Generate();
+        data.name = target.stem().string();
+        if (!Arcane::SaveMeshAsset(target, data))
+        {
+            ARC_WARN("Arcane Editor: could not create a mesh at '{}'", target.generic_string());
+            return {};
+        }
+        // Register immediately so the browser and OpenPath below see it right
+        // away -- same reasoning as CreateMaterialAt/CreateInstanceAt.
         if (!m_runtime->RegisterCreatedAsset(target))
             return {};
         return data.id;

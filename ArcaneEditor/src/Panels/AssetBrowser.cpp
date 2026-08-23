@@ -30,6 +30,9 @@ namespace Arcane::Editor
                 // ICON_LC_BUG exists in IconsLucide.h (grepped: IconsLucide.h:307) --
                 // no nearest-match fallback needed.
                 case AssetKind::Diagnostic: return ICON_LC_BUG;
+                // A 3D box, for a procedural mesh -- ICON_LC_BOX exists in
+                // IconsLucide.h (grepped: IconsLucide.h:287).
+                case AssetKind::Mesh:     return ICON_LC_BOX;
                 case AssetKind::Other:    return ICON_LC_FILE;
             }
             return ICON_LC_FILE;
@@ -47,6 +50,7 @@ namespace Arcane::Editor
                 case AssetKind::Scene:    return "Scene";
                 case AssetKind::Sprite:   return "Sprite";
                 case AssetKind::Diagnostic: return "Diagnostic";
+                case AssetKind::Mesh:     return "Mesh";
                 case AssetKind::Other:    return "Other";
             }
             return "Other";
@@ -82,6 +86,16 @@ namespace Arcane::Editor
                     state.kindFilter = k;
             ImGui::EndCombo();
         }
+        ImGui::SameLine();
+        // F2a, Task 9: mint a fresh .arcmesh and open it. A mesh needs no
+        // source row to hang a context-menu action off (unlike "Create
+        // Sprite" on a Texture row) -- BuildMeshData's default MeshAssetData
+        // (Cube) is already a complete, valid asset -- so this lives here, in
+        // the panel's own toolbar, rather than on any row.
+        if (ImGui::Button(ICON_LC_PLUS " Mesh"))
+            actions.createMesh = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Create a new .arcmesh asset");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputTextWithHint("##search", "search...", state.search, sizeof(state.search));

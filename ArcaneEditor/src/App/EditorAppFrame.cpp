@@ -2042,6 +2042,21 @@ namespace Arcane::Editor
                         m_documents.OpenPath(*p);
             }
         }
+        if (browserActions.createMesh)
+        {
+            // F2a, Task 9: the "+ Mesh" button. No dialog -- unlike a
+            // material/instance, a mesh names no user-meaningful path up
+            // front (MeshAssetData's own defaults already describe a
+            // complete asset), so this mints straight into the project's
+            // Content root and opens the result, same two-step shape as the
+            // createSpriteFrom branch just above.
+            if (const Arcane::Guid minted = MintMeshAsset(); minted.IsValid())
+            {
+                if (const Arcane::Project* proj = m_runtime->CurrentProject())
+                    if (const auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(minted)))
+                        m_documents.OpenPath(*p);
+            }
+        }
         if (!browserActions.openScene.empty())
         {
             // A scene double-clicked in the browser is not a document -- it

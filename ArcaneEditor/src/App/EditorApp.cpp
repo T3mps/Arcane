@@ -26,6 +26,7 @@
 #include "Widgets/EditorTheme.hpp"
 #include "Panels/PanelRegistry.hpp"
 #include "Documents/CrashReportDocument.hpp"
+#include "Documents/MeshDocument.hpp"
 #include "Documents/SpriteDocument.hpp"
 
 #include <Arcane/Host/ProjectBoot.hpp>
@@ -37,6 +38,7 @@
 #include <Arcane/Input/InputActions.hpp>
 #include <Panels/ConsoleModel.hpp>   // ConsoleEntry / CategoryForMessage (ConsoleDiagnostics::Install)
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
+#include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
@@ -666,6 +668,47 @@ namespace Arcane::Editor
                 return data ? data->id : Arcane::Guid::Nil();
             };
         m_documents.RegisterFactory(".arcsprite", spriteFactory, spritePeek);
+
+        // F2a, Task 9: .arcmesh -> MeshDocument routing, registered right
+        // beside the .arcsprite route above (same factory+peek shape). The
+        // preview-seam wiring (nriDevice/hostConfig/chromeHud/
+        // retireGraphPreview) is the same four fields MakeDocServices sets
+        // for the shader documents (EditorAppProject.cpp:57-94, read there
+        // for the full ordering argument) -- inlined here rather than shared,
+        // because MeshDocument::Services is deliberately its own small
+        // struct (not a DocServices), matching SpriteDocument::Services'
+        // precedent of not reusing the shader editor's shape either.
+        const auto meshFactory =
+            [this](const std::filesystem::path& p)
+                -> std::unique_ptr<Arcane::Editor::EditorDocument>
+            {
+                auto data = Arcane::LoadMeshAsset(p);
+                if (!data)
+                    return nullptr;
+                Arcane::Editor::MeshDocument::Services meshDocServices;
+                meshDocServices.runtime = &*m_runtime;
+                meshDocServices.undo = m_undo ? &*m_undo : nullptr;
+                if (m_graphChrome)
+                {
+                    meshDocServices.nriDevice  = &m_graphChrome->Device();
+                    meshDocServices.hostConfig = &m_config;
+                    meshDocServices.chromeHud  = m_graphChrome->ImGuiHud();
+                    meshDocServices.retireGraphPreview =
+                        [this](std::unique_ptr<Arcane::NriGraphContext> v)
+                    {
+                        RetireDocPreview(std::move(v));
+                    };
+                }
+                return std::make_unique<Arcane::Editor::MeshDocument>(
+                    std::move(meshDocServices), p, std::move(*data));
+            };
+        const auto meshPeek =
+            [](const std::filesystem::path& p) -> Arcane::Guid
+            {
+                const auto data = Arcane::LoadMeshAsset(p);
+                return data ? data->id : Arcane::Guid::Nil();
+            };
+        m_documents.RegisterFactory(".arcmesh", meshFactory, meshPeek);
 
         // Scene asset resolution (sprite-resolution lift): ONE engine-side
         // service resolves everything a scene references into what the
