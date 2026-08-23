@@ -140,26 +140,22 @@ namespace Arcane
         // Instance chain: walk to the base (cycle-guarded) -- the base owns
         // the snippet/passes/vertex stage; every hop's saved values layer
         // under the child's.
+        //
+        // Through the SHARED walker (Material/MaterialAsset.hpp's
+        // LoadMaterialParentChain), the same one SpriteMaterialCache::Request
+        // and MeshMaterialCache::Request call: this was the third verbatim
+        // copy of the same twenty lines, and the last one still carrying the
+        // dead `chain.back().IsInstance()` branch the other two dropped. That
+        // branch cannot fire -- IsInstance() is `parent.IsValid()`
+        // (MaterialAsset.hpp:97) and the loop's only non-failing exit is a
+        // last-appended ancestor whose own `parent` is invalid -- so a chain
+        // that never reaches a base is always caught as one of the three
+        // failure strings inside the walker, never discovered afterwards by
+        // inspecting the result (the walker's own header says exactly this).
         std::vector<MaterialAssetData> chain;
-        std::vector<Guid> visited{ id };
-        Guid cursor = data->parent;
-        while (cursor.IsValid())
-        {
-            for (const Guid& seen : visited)
-                if (seen == cursor)
-                    return fail("parent chain contains a cycle");
-            visited.push_back(cursor);
-            const auto parentPath = im.services.resolveAsset(cursor);
-            if (!parentPath)
-                return fail("parent not in the asset registry");
-            auto parent = LoadMaterialAsset(*parentPath);
-            if (!parent)
-                return fail("parent failed to load");
-            cursor = parent->parent;
-            chain.push_back(std::move(*parent));
-        }
-        if (!chain.empty() && chain.back().IsInstance())
-            return fail("parent chain never reaches a base material");
+        if (const auto why = LoadMaterialParentChain(im.services.resolveAsset, id,
+                                                     data->parent, chain))
+            return fail(*why);
 
         const MaterialAssetData& base = chain.empty() ? *data : chain.back();
         if (MaterialSurfaceForKind(base.kind) != MaterialSurface::Fullscreen)
