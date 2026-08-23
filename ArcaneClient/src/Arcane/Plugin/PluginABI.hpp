@@ -275,7 +275,57 @@ namespace Arcane
     //     .arcscene beside a v16 module has to carry 3, the same way the
     //     .arcproj beside it has to carry 16: ReferenceProject and Gacha's Game
     //     were both restamped with this change.
-    inline constexpr uint32_t kGamePluginABIVersion = 16;
+    // v17 (2026-08-22, F2a): the mesh vocabulary lands -- MeshRenderer, the
+    //     .arcmesh asset, and the caches/resources/exports that resolve one
+    //     into the other. Checked against the SAME "does this actually
+    //     corrupt a mixed pairing" bar the v7 and v16-amended entries above
+    //     apply, and on that bar every individual piece is additive:
+    //       * `MeshRenderer` (Scene/Components.hpp) is a NEW name-keyed
+    //         reflected component -- the v7 PostProcess/Identity/Hidden case
+    //         (:51-54 above): a stale plugin's roster simply lacks it, typed
+    //         views come back empty, nothing smashes.
+    //       * `MeshTable`/`MeshMaterialTable` (Scene/SceneResources.hpp) are
+    //         NEW registry resources, published through TWO NEW methods
+    //         APPENDED to Runtime -- `SetMeshTable`/`SetMeshMaterials`,
+    //         siblings of `SetSpriteTable`/`SetSpriteMaterials`
+    //         (Base/Runtime.hpp:162,169). Runtime crosses the boundary by
+    //         POINTER (EngineContext::engine) and, unlike Batcher2D
+    //         (v6/v11/v12/v13 above), declares no virtual anywhere -- no
+    //         vtable, so there is no slot for an appended member to slide
+    //         (contrast the v14 entry's "concrete class a plugin links
+    //         against" warning, :143-149, which was about REMOVING members,
+    //         not adding one).
+    //       * `MaterialSurface` (Material/MaterialSource.hpp) gained a THIRD
+    //         value, `Mesh`, APPENDED after `Sprite` -- Fullscreen and Sprite
+    //         keep their existing integer values, so nothing that already
+    //         switches on this enum reads a different case.
+    //       * Everything else named below -- `MeshCache`, `MeshMaterialCache`,
+    //         `ComputeMeshBounds`, `BuildPlane`/`BuildCylinder`/
+    //         `BuildCapsule`, `LoadMaterialParentChain`, `SaveMeshAsset`/
+    //         `LoadMeshAsset`/`ValidateMeshAsset`/`BuildMeshData` -- is a
+    //         brand-NEW exported symbol; a stale plugin never links against a
+    //         symbol it has no declaration for, and MeshCache/
+    //         MeshMaterialCache fill the same ENGINE-SIDE per-frame-
+    //         resolution role SpriteCache/SpriteMaterialCache already have
+    //         (MeshCache.hpp's own header comment), not a plugin-driven one.
+    //     So this bump is NOT a corruption finding, and is recorded as such
+    //     rather than dressed up as one. It is the same desk-legibility call
+    //     the v16 entry's closing paragraph (:274-277) made for scene schema
+    //     3 beside ABI 16: a game module now has an entire vocabulary --
+    //     MeshRenderer, the .arcmesh round trip (MeshSource/MeshAssetData/
+    //     SaveMeshAsset/LoadMeshAsset/ValidateMeshAsset/BuildMeshData), the
+    //     "mesh" .arcmat kind, MeshCache/MeshMaterialCache resolving both
+    //     into MeshTable/MeshMaterialTable each frame, ComputeMeshBounds, and
+    //     the three new unit generators (BuildPlane/BuildCylinder/
+    //     BuildCapsule) -- it could not reference before this header, and 17
+    //     is the stamp that says a module was built knowing it exists.
+    //     ReferenceProject and Gacha's Game are restamped with this change,
+    //     the same precedent.
+    //     THE SCENE FILE FORMAT DID NOT MOVE: MeshRenderer is additive the
+    //     same way PostProcess/Identity/Hidden were (v7 above), so
+    //     Scene::kSceneJsonVersion (Serialization/SceneSerializer.hpp:62)
+    //     stays at 3.
+    inline constexpr uint32_t kGamePluginABIVersion = 17;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
