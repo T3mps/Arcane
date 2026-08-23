@@ -146,6 +146,22 @@ Not a second renderer, not a test-only scene loader, not a mock host. If an
 agent can only reach a scene through a special mode, it proves nothing about the
 editor a human uses. This is the rule F2a paid for.
 
+**Chrome paid for it at a much larger scale, and the outcome is the strongest
+external evidence available for this choice.** Chrome's original headless mode
+was, in Google's own words, *"a separate, alternate browser implementation"*
+that *"didn't share any of the Chrome browser code in `//chrome`."* Maintaining
+two implementations produced divergent codebases and behavioural
+inconsistencies, and in **Chrome 112 the modes were unified** so headless shares
+the browser's code; the old implementation survives only as a legacy
+`chrome-headless-shell` binary.
+
+That is precisely the rejected alternative here -- a separate `arcverify.exe`
+harness that links the engine and drives scenes itself. Google shipped that
+shape for years, paid for the divergence, and converged on "the real browser
+with nothing displaying it," which is the same shape as "the real host with the
+window never shown."
+(https://developer.chrome.com/docs/chromium/new-headless)
+
 ---
 
 ## The agent-facing surface
@@ -203,15 +219,69 @@ can read 0 for reasons unrelated to correctness.
 Precedent for machine-readable emit-and-exit already exists: `--print-engine-info`
 (`ArcaneRuntime/src/main.cpp:36`, `ArcaneEditor/src/main.cpp:122`).
 
+#### Locators are descriptions, not captured ids
+
+Playwright deprecates `ElementHandle` -- a direct reference to a node captured
+at a point in time -- because it **goes stale** when the page changes. A locator
+instead *"does not hold a reference to a DOM node. It holds a description of how
+to find one,"* and is **re-resolved on every action**.
+
+The same hazard exists here and is sharper: entity ids churn across scene
+reload, and any step that reloads or re-parents invalidates a captured id
+silently. **Scene targets are therefore addressed by a stable description --
+name or hierarchy path -- resolved fresh at each step**, never by an id or index
+carried across steps. A raw entity id remains available in probe *output* as an
+observation; it is not an input an agent is expected to hold.
+
+Resolution is **strict**, matching Playwright's strict mode: a description that
+matches more than one entity is an error, not a silent first-match. Zero matches
+and two matches are distinct, separately-reported failures -- a scene query that
+quietly picks one of three candidates is exactly the confident-wrong-answer
+failure this whole design exists to remove.
+
 ### Layer 3 -- interaction
 
 `--script <path>`: a JSON step list executed at frame boundaries and injected via
-`SDL_PushEvent`. Steps: `key`, `click`, `move`, `wait-frames`, `screenshot`,
-`probe`.
+`SDL_PushEvent`. Steps: `key`, `click`, `move`, `screenshot`, `probe`.
 
 This tier exists because no combination of flags expresses *"then"* -- and the
 checks that matter most need it. Proving F2a's per-instance normal matrix means
 setting a non-uniform scale, probing two faces, and asserting their luma differs.
+
+#### Actionability checks, and the one we already own
+
+A naive `wait-frames` step is a sleep, and sleeps are how flaky suites are born.
+Playwright replaces sleeps with **actionability checks** evaluated on a retry
+loop before every action, and two of its five map directly onto primitives this
+engine already has:
+
+- **Stable** -- Playwright's definition is *"the element has maintained the same
+  bounding box for at least two consecutive animation frames."* A **measured**
+  settle test, not a duration. The analogue here is a target whose screen-space
+  bounds are unchanged across two consecutive rendered frames.
+- **Receives events** -- *"the element is the hit target of the pointer event at
+  the action point,"* i.e. checking that an overlay will not capture the click
+  instead.
+
+> **That second check is `FrameDesc::pickPixel`.** The pick probe is not only a
+> locator; it is the actionability check. Before a scripted click at (x,y), probe
+> (x,y) and confirm the entity there is the intended target; a mismatch is a
+> failed action, not a click sent into whatever happened to be on top.
+> Playwright had to inject script into the page to obtain this. It already exists
+> in our render graph, which is why the script tier is cheaper here than the
+> analogy suggests.
+
+`wait-frames` is therefore **deliberately removed** from the step list above:
+`click` waits for *stable* + *hit-target*, and a step that needs to wait for a
+condition names the condition. A `force` escape hatch skips the non-essential
+checks, matching Playwright's, so a deliberate test of an obscured target is
+still expressible.
+
+Checks are **per-action**, not universal: in Playwright, `click` requires all
+five, `fill` requires visible + enabled + editable, and `focus`/`press`/
+`dispatchEvent` require none. The step list here should follow the same shape --
+a key press needs no hit-target test, and demanding one would make keyboard
+steps fail for no reason.
 
 ### Full-frame capture
 
@@ -227,6 +297,44 @@ Two facts make it tractable: `ImGuiNri::Init` takes a device and pipeline cache,
 `ImGuiConfigFlags_DockingEnable` (`EditorApp.cpp:404`) with **no
 `ViewportsEnable`** -- so ImGui will never try to spawn OS windows for floating
 panels.
+
+### Trace artifacts
+
+A `--report` JSON is enough to know *that* a check failed. It is not enough to
+know *why* without re-running -- and re-running is exactly what an agent is bad
+at, because the failure may not reproduce.
+
+Playwright solves this with a **trace**: a single `trace.zip` bundling
+screenshots, DOM snapshots, the action log, console output, errors, and test
+source, recorded `on-first-retry` by default and replayed in a viewer that shows
+**the state before and after each action**.
+
+That before/after pairing is the load-bearing part. A screenshot of the end
+state shows a wrong result; a before/after pair per step shows *which step made
+it wrong*.
+
+**Requirement:** `--trace <path>` bundles, per script step: the step record, a
+capture before and after, the probe results evaluated at that point, and any log
+output emitted during it. It is a **bundle of existing artifacts, not new
+instrumentation** -- captures, probes and the log already exist; the trace is
+their correlation by step index.
+
+Two adaptations, because our failures are not Playwright's:
+
+- **The engine log belongs in the trace.** Playwright captures console output
+  from the page; the equivalent here is the `[nri-graph]` / census / resolver
+  log, which is where this engine actually explains itself. The census line
+  alone (`1 resolved mesh(es), 1 bound mesh material(s)`) resolves a whole class
+  of "why is nothing on screen."
+- **Crash and hang reports belong in the trace too.** Diagnostics already
+  auto-capture to `<exe dir>/diagnostics` on crash and hang. If a scripted run
+  dies, the trace should carry the report rather than leaving an agent to
+  discover a directory it was never told about -- the failure mode this design
+  found in its own evidence base, where six weeks of driver faults sat in a log
+  nobody was reading.
+
+Recording is opt-in and off by default: it costs a capture per step, which is
+the wrong default for a fast probe-only run.
 
 ### Three rules
 
@@ -278,7 +386,33 @@ this repository** -- one canonical verification layout, loaded read-only via
 It is deliberately *not* the per-project layout file, which is user state.
 Pinning precedent exists at `EditorApp.cpp:455`.
 
-### 3. Golden-image gate
+### 3. Content animation, and a stabilisation detector
+
+Fixing the clock makes *time* deterministic; it does not make *content*
+deterministic. Playwright treats these as two separate problems and this spec
+should too.
+
+**Disable content animation by construction.** Playwright's `toHaveScreenshot`
+defaults to `animations: 'disabled'`, which fast-forwards finite animations to
+completion and cancels infinite ones. The analogue is a capture-time setting
+that puts animated scene content into a defined state rather than whatever phase
+the clock happened to land on -- the same move as the fixed timestep, applied to
+content instead of time.
+
+**Detect stability rather than assume it.** Playwright's own screenshot helper
+*"took a bunch of screenshots until two consecutive screenshots matched, and
+saved the last screenshot."* That is a cheap, general safety net for the
+non-determinism a fixed timestep cannot reach: async resource loads, shader
+compilation, cache warm-up -- all of which this engine does, and all of which
+complete on wall-clock schedules the sim clock does not control.
+
+**Requirement:** captures may be taken in *settle* mode -- repeat until two
+consecutive rendered frames compare equal, up to a bounded retry count, then
+fail explicitly if they never converge. Non-convergence is a reported fact, not
+a silent last-frame-wins. This is the same instrument as the "stable" 
+actionability check, applied to the whole frame instead of one target's bounds.
+
+### 4. Golden-image gate
 
 Offscreen must render the same *scene* as windowed. If they diverge, everything
 built on this surface is confidently wrong. This is the easiest requirement in
@@ -294,18 +428,62 @@ identical 1280x720, on **both** D3D12 and Vulkan:
 [nri-graph] starting the graph render half OFFSCREEN: 1280x720 format=9 ...
 ```
 
-So the gate is a per-pixel tolerance comparison with a stated threshold, in the
-shape the `[gpu][pixel]` luma assertions already use, plus a dimension check --
-and per the standing rule that default values are not measurements, the
-threshold must be **derived from a real measured delta between the two paths**,
-not picked and then declared to pass. Any pixel exceeding it fails the gate.
-
 Two distinct properties are being asserted and the plan must not conflate them:
 
 | Property | Comparison | Achievable |
 |---|---|---|
-| Offscreen matches windowed | tolerance, cross-format | yes, with a measured threshold |
+| Offscreen matches windowed | perceptual cascade, cross-format | yes |
 | Offscreen matches itself run-to-run | **bitwise** | yes -- same format, same path |
+
+#### The comparison is a cascade with two independent knobs, not one threshold
+
+A single scalar threshold is the wrong instrument, and Playwright's comparator
+(`packages/utils/image_tools/compare.ts`) shows the better structure -- a
+four-stage cascade, cheapest test first:
+
+1. **Exact RGB equality** -- fast path, not a difference.
+2. **Perceptual colour difference**: `colorDeltaE94(...) <= maxColorDeltaE94`,
+   default **1.0**. The constant is **derived, not tuned**, and the call site
+   says why: *"All dE* formulae are originally designed to have the difference of
+   1.0 stand for a 'just noticeable difference' (JND)."*
+3. **Local variance / flood-fill test** over a 3x3 window: *"if this pixel is a
+   part of a flood fill of a 3x3 square of either of the images, then it cannot
+   be anti-aliasing pixel so it must be a pixel difference."*
+4. **SSIM** over a 31x31 window (`SSIM_WINDOW_RADIUS = 15`) averaged across
+   R/G/B; `ssimRGB >= 0.99` classifies the pixel as antialiasing and does not
+   count it.
+
+And **two independent knobs**, which this spec previously collapsed into one:
+
+| Knob | Question | Playwright default |
+|---|---|---|
+| per-pixel tolerance | is *this pixel* different? | `threshold` 0.2 (YIQ, pixelmatch) / `maxColorDeltaE94` 1.0 |
+| aggregate tolerance | how *many* differing pixels are acceptable? | `maxDiffPixels` / `maxDiffPixelRatio`, **default 0** |
+
+**Adopt the two-knob structure and prefer a derived per-pixel constant over a
+tuned one.** This is a better answer to "default values are not measurements"
+than the measured-threshold wording it replaces: a constant with a physical
+meaning beats a number fitted to today's hardware. The `format=9` vs `format=11`
+delta is exactly the small per-channel difference a perceptual test absorbs,
+while a missing mesh or a wrong normal matrix produces structural differences
+that survive all four stages.
+
+Two details worth carrying over verbatim:
+
+- **Size mismatch is a separate, named error.** Playwright pads both images to
+  the larger size and reports `sizesMismatchError` *alongside* the pixel count
+  rather than aborting. A dimension mismatch should be its own reported fact,
+  never a crash and never silently rescaled.
+- **SSIM antialiasing detection has known traps.** Playwright keeps a
+  `julia-ssim-trap` fixture under `tests/image_tools/fixtures/should-fail/`
+  precisely because SSIM can false-pass. The aggregate knob is what covers this;
+  do not treat stage 4 as sound on its own.
+
+Accuracy note for whoever implements this: Playwright's **default comparator is
+`pixelmatch`**, not the SSIM/CIE94 one -- `(options.comparator ?? 'pixelmatch')`
+in `packages/utils/comparators.ts`. The cascade above is opt-in there. We are
+adopting the opt-in one deliberately, because cross-format comparison is exactly
+the case a plain per-channel threshold handles worst.
 
 Determinism pays off beyond agents: it makes the human desk pass reproducible too.
 
@@ -351,6 +529,22 @@ Phase 2 must not block phase 1, and phase 1 must not wait on phase 2.
   captures.
 - **`[mesh]` must be run as `"[mesh]~[gpu]"`** in the dev loop -- four cases
   carry `[gpu][pixel][mesh][nri]` tags and are real GPU tests.
+- **The comparator needs its own fixtures, including should-fail ones.**
+  Playwright keeps `tests/image_tools/fixtures/should-fail/` with a
+  `julia-ssim-trap` case specifically because SSIM false-passes. A comparator
+  tested only on pairs it correctly passes is untested in the direction that
+  matters: an image comparison that never says no is indistinguishable from no
+  comparison at all.
+- **Locator strictness**: a description matching zero and one matching two are
+  distinct, separately-asserted failures.
+- **Actionability**: a target under an overlay must fail the hit-target check
+  rather than dispatching the click, and `force` must bypass it.
+- **Settle mode**: a scene that never converges must fail explicitly at the
+  retry bound rather than silently returning the last frame.
+- **Trace round-trip**: a deliberately failing script produces a trace whose
+  before/after pair localises the failing step without a re-run. This is the
+  only test of the trace that means anything -- the artifact exists to answer
+  "which step", so the test must ask "which step".
 
 Error handling: the report is always written when requested, including on
 failure, carrying `exitReason`. The distinct "no readback landed" case already
@@ -385,8 +579,19 @@ has precedent and a clear message at `RuntimeApp.cpp:544`.
 - The seam is four changes in two hosts; `RuntimeApp.cpp:366/368` are adjacent.
 - The editor is the harder host and the more valuable one -- editor-side `Draw()`
   is where F2a's bugs actually were.
-- Determinism (fixed timestep + pinned layout) is a **prerequisite**, not a
-  follow-up, and was not costed before this design.
+- Determinism (fixed timestep + pinned layout + content-animation state +
+  settle-mode capture) is a **prerequisite**, not a follow-up, and was not
+  costed before this design.
+- **This arc is large and the Playwright research grew it further.** The
+  determinism contract, the comparator cascade, actionability checks, and the
+  trace bundle are each real work. Sequencing them so the read-only half
+  (`--offscreen` + probes + report + parity gate) lands and proves itself before
+  the interactive half (script tier + actionability + trace) is the obvious
+  wave split, and the plan should either take it or say why not.
+- **The comparator is the one component with a genuine build-or-port decision.**
+  The cascade is well-specified above and small, but it is real image-processing
+  code -- CIE94, local variance, SSIM -- and it is the piece most likely to be
+  under-estimated because the spec makes it sound like four `if` statements.
 - Do a **spec -> plan coverage diff before task 1**, listing every requirement in
   this document and the task that owns it. F2a's plan was a lossy compression of
   its spec and nothing checked the compression, so twelve reviewers each
@@ -395,3 +600,33 @@ has precedent and a clear message at `RuntimeApp.cpp:544`.
   four separate times.
 - Rebuild before hunting. A stale binary cost most of a debugging session in F2a
   and produced six correct-but-irrelevant disproofs.
+
+---
+
+## Prior art
+
+Playwright and headless Chrome were researched directly for this design rather
+than cited from memory; the findings changed four sections of it. What was taken,
+and from where:
+
+| Borrowed | Source |
+|---|---|
+| Unified headless architecture, and why a separate implementation diverges | [Chrome: old vs new headless](https://developer.chrome.com/docs/chromium/new-headless) |
+| The four-stage comparison cascade, dE94 = 1.0 as a derived JND constant, SSIM window radii | [`packages/utils/image_tools/compare.ts`](https://github.com/microsoft/playwright/blob/main/packages/utils/image_tools/compare.ts) |
+| Two-knob tolerance, `maxDiffPixels` default 0, size mismatch as a named error, default comparator is `pixelmatch` | [`packages/utils/comparators.ts`](https://github.com/microsoft/playwright/blob/main/packages/utils/comparators.ts) |
+| Actionability checks; "stable = same bounding box for two consecutive animation frames"; hit-target test; per-action check sets; `force` | [actionability.md](https://raw.githubusercontent.com/microsoft/playwright/refs/heads/main/docs/src/actionability.md) · [docs](https://playwright.dev/docs/actionability) |
+| Locators as lazy descriptions; `ElementHandle` staleness; strict mode | [Locators](https://playwright.dev/docs/locators) |
+| `threshold` 0.2 YIQ default, `animations: 'disabled'` default, screenshot stabilisation ("until two consecutive screenshots matched") | [LocatorAssertions](https://playwright.dev/docs/api/class-locatorassertions) · [Visual comparisons](https://playwright.dev/docs/test-snapshots) |
+| Trace bundle contents and before/after-per-action replay | [Trace viewer](https://playwright.dev/docs/trace-viewer-intro) |
+
+Two accuracy notes for anyone re-checking this: Playwright's default comparator
+is `pixelmatch`, not the SSIM/CIE94 cascade adopted here (that one is opt-in);
+and GitHub issue #24312, which reads like a team post-mortem on visual
+comparison, is a third-party proposal that was **closed as not-planned** -- it is
+evidence about the problem, not about Playwright's chosen solution.
+
+The deeper lesson is the first row. Chrome ran a separate headless
+implementation for years, absorbed the divergence, and unified. This spec's
+central choice -- the real host with the window never shown, rather than a
+purpose-built verification harness -- is the destination they arrived at the
+expensive way.
