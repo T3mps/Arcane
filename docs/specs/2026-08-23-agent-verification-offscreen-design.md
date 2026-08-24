@@ -278,10 +278,18 @@ apart, so an agent asserting `luma@x,y > 0.5` could get the answer backwards.
 
 So the sum keeps its behaviour under the honest name **`brightness`** — bitwise
 the same arithmetic as the pixel tests, so the two can never drift — and `luma`
-now means what it says. **Luma (Y′) is defined on gamma-encoded values**: the
-weights apply directly to the sRGB channel numbers with no linearisation. That
-is *luminance* (Y), which is a different quantity and is deliberately not
-offered.
+now means what it says.
+
+**Luma (Y′) is defined on gamma-encoded values**, so the Rec.709 weights apply
+directly to the stored channel numbers and **no linearisation step is performed**
+— that is what makes the result luma rather than something else. The quantity
+that *would* require linearising first is **luminance (Y)**, which is a
+different thing and is deliberately **not** offered here. Verified rather than
+assumed: `NriGraphContext.hpp:284-293` records that `kGraphOffscreenFormat` is
+`BGRA8_UNORM`, display-referred, *"tonemap already gamma-2.2 encodes… a `_SRGB`
+format would double-apply gamma"* — so the capture is encoded, not linear, and
+the weights are correct as applied. `ReadCapture` swizzles BGRA→RGBA before
+returning, so per-channel weighting indexes the channels it names.
 
 Corrected while the report had no consumers: renaming a field is breaking,
 adding a kind is additive, so the rename had to happen before Servitor parses
