@@ -856,9 +856,46 @@ ArcaneRuntime.exe --project ReferenceProject --offscreen --frames 5 --backend dx
 ```
 Expected: exit 0, `r.json` written.
 
-- [ ] **Step 3: Verify the report against the log**
+- [ ] **Step 3: Verify the report against pinned ground truth** *(rewritten 2026-08-23 — see below)*
 
-The census in `r.json` must match the `scene resolution:` log line exactly. For ReferenceProject that line reads `4 SpriteRenderer(s) ... 1 resolved mesh(es), 1 bound mesh material(s)`.
+> **The original criterion was wrong and has been replaced.** It read: *"The
+> census in `r.json` must match the `scene resolution:` log line exactly."*
+> That is wrong three ways. **(a) Unsatisfiable as written** — `4
+> SpriteRenderer(s)` and `1 bound mesh material(s)` have no census field at all.
+> **(b) A category error** — the log mixes 3 component counters with 4
+> `Table().size()` values, which are **per-distinct-asset**, while `Materials()`
+> is **per-component** throughout; two MeshRenderers sharing one `.arcmesh` give
+> 2 vs 1. Exactly **one** pair shares a definition: `N material guid(s)` ≡
+> `spriteReferenced`. **(c) Racy even where definitions align** — the log line
+> fires only from the change-detector (`SceneRenderResolver.cpp:412-416`), so
+> "the last line" is the last *change*, at an arbitrary early frame, being
+> compared against a shutdown-time census. This is what made `spriteBound: 1`
+> look like it contradicted `0 bound material(s)`: the `0` was frame 1, and the
+> same run logged `1` seventy-six milliseconds later.
+
+The census in `r.json` must equal, field for field, the values
+`ArcaneTests/src/HostBootTest.cpp` already pins for ReferenceProject:
+`spriteReferenced=1`, `meshReferenced=1`, `postReferenced=true` (the cold case,
+pure scene data) and `meshBound=1` (the mesh-resolution case).
+
+For a **settled** run (`--frames >= 45`, clear of the shader-compile race)
+additionally assert the *invariant* the POD exists to express, rather than
+literals:
+
+```
+spriteBound == spriteReferenced
+meshBound   == meshReferenced
+```
+
+Use the log only as **bounds**, never equality:
+`spriteBound <= spriteReferenced`, `meshBound <= meshReferenced`, and
+`spriteReferenced == <the log's "N material guid(s)">` — the one pair that
+genuinely shares a definition.
+
+> **Do NOT yet assert `postBound == postReferenced`.** A settled 60-frame run on
+> **both** backends reports `postReferenced: true, postBound: false` for
+> ReferenceProject — a declared post chain that never binds. That is an open
+> question (see Task 8's outcome notes), and the invariant would fail today.
 
 - [ ] **Step 4: Commit**
 
