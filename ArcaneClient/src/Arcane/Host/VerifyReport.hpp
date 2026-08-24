@@ -103,6 +103,23 @@ namespace Arcane
     // there a pick request", and must not double that log just to answer it.
     [[nodiscard]] ARCANE_API std::optional<ProbeSpec> FirstPickProbe(const std::vector<std::string>& probes);
 
+    // Whether canvas pixel (x, y) is inside a `width`x`height` surface (fix
+    // round 1, item 2). Pulled out as its own pure, testable predicate
+    // because --pick-probe's OWN out-of-range latch (NriGraphContext.cpp's
+    // m_probeOutOfRange) is keyed to config.pickProbe -- the OLD flag's
+    // state -- and is never armed on this path (FrameDesc::pickPixel "needs
+    // no arming at all"). Left unchecked, NriGraphContext::ProbeId() would
+    // happily return the CLAMPED EDGE TEXEL's hit-proxy id for an
+    // out-of-range request like `pick@9999,9999` -- a confident id for a
+    // pixel nobody asked about, exactly the failure the flag's own latch
+    // exists to prevent. RuntimeApp.cpp's ShutdownGraphPath calls this
+    // BEFORE trusting ProbeId() so an out-of-range probe never reaches it at
+    // all. Negative coordinates never happen in practice (ParseProbe only
+    // accepts non-negative ones), but are refused here too for a caller that
+    // has not gone through that parse.
+    [[nodiscard]] ARCANE_API bool PickPixelInRange(std::int32_t x, std::int32_t y,
+                                                    std::uint32_t width, std::uint32_t height) noexcept;
+
     // Accumulates one host run's observations and renders them as one JSON
     // document. Every setter is independent and optional except Evaluate,
     // which reads back whatever SetCapture/AddCensus have been given so far

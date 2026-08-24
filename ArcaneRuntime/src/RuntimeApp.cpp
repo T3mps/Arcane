@@ -727,67 +727,123 @@ void RuntimeApp::ShutdownGraphPath()
     {
         if (const std::optional<Arcane::ProbeSpec> pickSpec = Arcane::FirstPickProbe(m_config.probes))
         {
-            PickResolution res;
-            res.armedX = pickSpec->x;
-            res.armedY = pickSpec->y;
-
-            const std::optional<std::uint32_t> id = graph->ProbeId();
-            if (!id.has_value())
+            // Fix round 1, item 3: the WINDOWED host-window context's NodeSet
+            // (built by NriGraphContext::Init's `chromeNodes`, a call site
+            // this file does not own) never arms pickOutline for a pick@x,y
+            // probe -- only --pick-probe's OWN, orthogonal flag does, and only
+            // for that flag's own fixed pixel. So on a windowed run the pick
+            // node genuinely does not exist for THIS mechanism, and querying
+            // graph->ProbeId() below would answer for whatever state the OLD
+            // flag left behind (or nothing), never for pickSpec's pixel.
+            //
+            // Left unset here (report.SetPick() never called further down),
+            // VerifyReport::Evaluate's OWN "no pick set ... this run never
+            // armed a pick readback" wording applies -- which, unlike the
+            // generic "NO READBACK LANDED" text below, is actually TRUE in
+            // this case: nothing this mechanism controls ever armed anything.
+            // Arming the windowed path the same way the offscreen vehicle is
+            // armed (or routing it through --pick-probe) is future work, not
+            // attempted here -- reasoned from source (this NodeSet's
+            // construction, and DeclareGraphFrame's own `frame.pickOutline &&
+            // m_pick && m_outline` guard, which is why RuntimeFrame.cpp's
+            // per-frame arming is harmless-but-inert here rather than a
+            // crash), not run windowed to confirm (process constraint).
+            if (!m_config.offscreen)
             {
-                ARC_ERROR("[nri-graph] pick@{},{}: NO READBACK LANDED -- the run was too short "
-                          "(the copy lands a couple of frames after the pass that wrote it) or the "
-                          "probe pixel was outside the surface",
-                          pickSpec->x, pickSpec->y);
-                // res.landed stays false -- the report itself carries this as
-                // an honest error entry (VerifyReport::Evaluate's Pick case),
-                // never a silently-dropped probe. Deliberately does NOT touch
-                // m_graphExit: the report's job is to state facts, not to
-                // change what "did the host run" means for this process.
+                ARC_WARN("[nri-graph] pick@{},{}: this run is WINDOWED -- the pick node is only "
+                         "built for a pick@ probe under --offscreen today, so the report will "
+                         "honestly say no pick was armed rather than answer for the wrong pixel",
+                         pickSpec->x, pickSpec->y);
+                // pickResolution stays nullopt -- report.SetPick() below is
+                // simply never called for this run.
             }
             else
             {
-                res.landed     = true;
-                res.hitProxyId = *id;
-                if (*id == 0u)
+                PickResolution res;
+                res.armedX = pickSpec->x;
+                res.armedY = pickSpec->y;
+
+                // Fix round 1, item 2: --pick-probe's OWN out-of-range latch
+                // (NriGraphContext.cpp's m_probeOutOfRange) is keyed to
+                // config.pickProbe -- the OLD flag's state, always false here
+                // -- so ProbeId() would otherwise happily return the CLAMPED
+                // EDGE TEXEL's hit-proxy id for e.g. `pick@9999,9999`: a
+                // confident answer for a pixel nobody asked about. Checked
+                // BEFORE calling ProbeId() at all, so that value is never
+                // trusted.
+                const bool inRange = Arcane::PickPixelInRange(pickSpec->x, pickSpec->y,
+                                                              graph->SurfaceWidth(), graph->SurfaceHeight());
+                const std::optional<std::uint32_t> id = inRange ? graph->ProbeId() : std::nullopt;
+                if (!inRange)
                 {
-                    ARC_INFO("[nri-graph] pick@{},{}: hit-proxy 0 -- BACKGROUND (miss); {} "
-                             "pickable(s) were in the scene",
-                             pickSpec->x, pickSpec->y, m_pickDrawables.size());
+                    ARC_ERROR("[nri-graph] pick@{},{}: NO READBACK LANDED -- the probe pixel is "
+                              "outside the {}x{} surface",
+                              pickSpec->x, pickSpec->y, graph->SurfaceWidth(), graph->SurfaceHeight());
+                    // res.landed stays false, same as the "too short" case
+                    // below -- VerifyReport's shared "NO READBACK LANDED"
+                    // wording already names both causes disjunctively,
+                    // matching --pick-probe's own precedent
+                    // (NriGraphContext.cpp's ProbeId(), which folds "no node"
+                    // and "out of range" into the same nullopt).
+                }
+                else if (!id.has_value())
+                {
+                    ARC_ERROR("[nri-graph] pick@{},{}: NO READBACK LANDED -- the run was too short "
+                              "(the copy lands a couple of frames after the pass that wrote it) or "
+                              "the probe pixel was outside the surface",
+                              pickSpec->x, pickSpec->y);
+                    // res.landed stays false -- the report itself carries
+                    // this as an honest error entry (VerifyReport::Evaluate's
+                    // Pick case), never a silently-dropped probe. Deliberately
+                    // does NOT touch m_graphExit: the report's job is to state
+                    // facts, not to change what "did the host run" means for
+                    // this process.
                 }
                 else
                 {
-                    const Astra::Entity hit = Arcane::PickEntityForId(m_pickDrawables, *id);
-                    if (hit.IsValid())
+                    res.landed     = true;
+                    res.hitProxyId = *id;
+                    if (*id == 0u)
                     {
-                        if (const Arcane::Identity* identity =
-                                m_runtime->Registry().GetComponent<Arcane::Identity>(hit))
-                        {
-                            res.resolved   = true;
-                            res.entityName = identity->name;
-                            res.entityGuid = identity->id.ToString();
-                            ARC_INFO("[nri-graph] pick@{},{}: hit-proxy {} -- HIT (\"{}\", id {}) "
-                                     "of {} pickable(s)",
-                                     pickSpec->x, pickSpec->y, *id, res.entityName, res.entityGuid,
-                                     m_pickDrawables.size());
-                        }
-                        else
-                        {
-                            ARC_WARN("[nri-graph] pick@{},{}: hit-proxy {} -- HIT but the entity "
-                                     "carries no Identity component; the report will carry an "
-                                     "honest error rather than a stable-looking id that would "
-                                     "silently churn between runs",
-                                     pickSpec->x, pickSpec->y, *id);
-                        }
+                        ARC_INFO("[nri-graph] pick@{},{}: hit-proxy 0 -- BACKGROUND (miss); {} "
+                                 "pickable(s) were in the scene",
+                                 pickSpec->x, pickSpec->y, m_pickDrawables.size());
                     }
                     else
                     {
-                        ARC_WARN("[nri-graph] pick@{},{}: hit-proxy {} does not map to any entity "
-                                 "in this run's {} pickable(s) -- stale id?",
-                                 pickSpec->x, pickSpec->y, *id, m_pickDrawables.size());
+                        const Astra::Entity hit = Arcane::PickEntityForId(m_pickDrawables, *id);
+                        if (hit.IsValid())
+                        {
+                            if (const Arcane::Identity* identity =
+                                    m_runtime->Registry().GetComponent<Arcane::Identity>(hit))
+                            {
+                                res.resolved   = true;
+                                res.entityName = identity->name;
+                                res.entityGuid = identity->id.ToString();
+                                ARC_INFO("[nri-graph] pick@{},{}: hit-proxy {} -- HIT (\"{}\", id {}) "
+                                         "of {} pickable(s)",
+                                         pickSpec->x, pickSpec->y, *id, res.entityName, res.entityGuid,
+                                         m_pickDrawables.size());
+                            }
+                            else
+                            {
+                                ARC_WARN("[nri-graph] pick@{},{}: hit-proxy {} -- HIT but the entity "
+                                         "carries no Identity component; the report will carry an "
+                                         "honest error rather than a stable-looking id that would "
+                                         "silently churn between runs",
+                                         pickSpec->x, pickSpec->y, *id);
+                            }
+                        }
+                        else
+                        {
+                            ARC_WARN("[nri-graph] pick@{},{}: hit-proxy {} does not map to any entity "
+                                     "in this run's {} pickable(s) -- stale id?",
+                                     pickSpec->x, pickSpec->y, *id, m_pickDrawables.size());
+                        }
                     }
                 }
+                pickResolution = res;
             }
-            pickResolution = res;
         }
     }
 

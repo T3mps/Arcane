@@ -486,6 +486,21 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
             // a visible outline -- a --screenshot cross-check must show the
             // scene exactly as an ordinary run would, not a pick-highlighted
             // one.
+            //
+            // hoverPixel MUST be set explicitly (fix round 1, item 1): left
+            // unset, it falls back to ProbeX()/ProbeY() -- the OLD flag's
+            // fixed pixel, which defaults to (0, 0) when the flag was never
+            // armed (NriGraphContext.cpp's m_currentHover init). outline_seed.hlsl
+            // seeds a HOVER silhouette there in ADDITION to the (empty)
+            // selection one, and the outline composites a cyan ring over the
+            // tonemapped backbuffer -- BEFORE the capture node -- so any scene
+            // with a pickable at (0, 0), or any run also combining the dev
+            // --pick-probe flag, would silently corrupt every other probe and
+            // the screenshot. It reads clean today only because (0, 0) is
+            // empty background in ReferenceProject -- that is an accident of
+            // this scene, not a property of the mechanism, so the no-hover
+            // sentinel is spelled out here rather than left to the default.
+            graphFrame.hoverPixel = glm::ivec2(-1, -1);
         }
     }
 

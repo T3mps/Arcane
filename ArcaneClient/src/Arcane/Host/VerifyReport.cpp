@@ -158,6 +158,14 @@ namespace Arcane
         return std::nullopt;
     }
 
+    bool PickPixelInRange(std::int32_t x, std::int32_t y,
+                           std::uint32_t width, std::uint32_t height) noexcept
+    {
+        if (x < 0 || y < 0)
+            return false;
+        return static_cast<std::uint32_t>(x) < width && static_cast<std::uint32_t>(y) < height;
+    }
+
     void VerifyReport::SetRun(std::string backend, bool offscreen, std::uint64_t framesRendered,
                                std::string exitReason)
     {
@@ -358,6 +366,12 @@ namespace Arcane
                     entry["entity"]     = nullptr;
                     entry["id"]         = "00000000-0000-0000-0000-000000000000";
                     entry["hitProxyId"] = m_pickHitProxyId;
+                    // fix round 1, item 4: see the resolved-hit branch below
+                    // for why these two fields ride along on every RESULT
+                    // (never an error) entry.
+                    entry["pickableKinds"] = nlohmann::json::array({ "sprite", "collider2d" });
+                    if (m_censusSet && m_meshReferenced > 0)
+                        entry["meshesNotPickable"] = true;
                 }
                 else if (!m_pickResolved)
                 {
@@ -377,6 +391,20 @@ namespace Arcane
                     entry["entity"]     = m_pickEntityName;
                     entry["id"]         = m_pickEntityGuid;
                     entry["hitProxyId"] = m_pickHitProxyId;
+                    // fix round 1, item 4: an agent has no way to tell "Ground"
+                    // is a wrong-but-durable answer for a pixel that is
+                    // visibly a 3D mesh -- CollectPickables (PickEmit.hpp)
+                    // only walks SpriteRenderer/Collider2D entities and has
+                    // no knowledge of MeshRenderer ones at all, so a hit
+                    // ALWAYS came from one of these two kinds, never a mesh.
+                    // Naming that capability explicitly, and flagging when
+                    // the scene has a bound mesh at all (the census this
+                    // function already carries), converts a silent wrong
+                    // answer into a visibly-qualified one without VerifyReport
+                    // pretending to know WHICH mesh, if any, sits in front.
+                    entry["pickableKinds"] = nlohmann::json::array({ "sprite", "collider2d" });
+                    if (m_censusSet && m_meshReferenced > 0)
+                        entry["meshesNotPickable"] = true;
                 }
                 break;
             case ProbeKind::Census:

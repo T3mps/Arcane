@@ -333,6 +333,115 @@ TEST_CASE("verify: a pick@ probe at a pixel other than the one armed refuses rat
     CHECK(entry["error"].get<std::string>().find("never probed") != std::string::npos);
 }
 
+// ---------------------------------------------------------------------------
+// Fix round 1, item 2: PickPixelInRange -- the out-of-range guard
+// RuntimeApp.cpp uses BEFORE trusting NriGraphContext::ProbeId(), because
+// --pick-probe's own out-of-range latch (m_probeOutOfRange) is keyed to the
+// OLD flag's state and is never armed on this path. Without this guard,
+// `pick@9999,9999` would confidently report the CLAMPED EDGE TEXEL's entity
+// as if it were a measurement of the pixel actually asked about.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("verify: PickPixelInRange accepts every pixel inside the surface, including its edges", "[verify]")
+{
+    CHECK(Arcane::PickPixelInRange(0, 0, 1280, 720));
+    CHECK(Arcane::PickPixelInRange(1279, 719, 1280, 720));      // last valid texel, both axes
+    CHECK(Arcane::PickPixelInRange(640, 360, 1280, 720));
+}
+
+TEST_CASE("verify: PickPixelInRange refuses the whole out-of-range family -- past either edge, and negative", "[verify]")
+{
+    CHECK_FALSE(Arcane::PickPixelInRange(1280, 0, 1280, 720));   // x == width (one past the last column)
+    CHECK_FALSE(Arcane::PickPixelInRange(0, 720, 1280, 720));    // y == height (one past the last row)
+    CHECK_FALSE(Arcane::PickPixelInRange(9999, 9999, 1280, 720));
+    // Negative coordinates never reach here through ParseProbe (which only
+    // accepts non-negative ones), but a caller that bypassed that parse must
+    // not be answered either.
+    CHECK_FALSE(Arcane::PickPixelInRange(-1, 0, 1280, 720));
+    CHECK_FALSE(Arcane::PickPixelInRange(0, -1, 1280, 720));
+}
+
+// ---------------------------------------------------------------------------
+// Fix round 1, item 4: the cheap mesh-pick mitigation. CollectPickables
+// (PickEmit.hpp) only ever walks SpriteRenderer/Collider2D entities -- a
+// MeshRenderer entity is invisible to it -- so a hit is ALWAYS one of those
+// two kinds, never a mesh. `pickableKinds` names that capability on every
+// non-error pick result; `meshesNotPickable` additionally flags the run
+// whenever the scene's own census (already carried by this function) reports
+// a bound mesh, converting a silent wrong answer (e.g. Task 9's "Ground" for
+// a teal MeshRenderer at the same screen position) into a visibly-qualified
+// one.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("verify: a resolved pick names its pickable kinds, and flags meshesNotPickable when the scene has a bound mesh", "[verify]")
+{
+    Arcane::VerifyReport rep;
+    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.AddCensus(/*spriteReferenced=*/4, /*spriteBound=*/1, /*postReferenced=*/true,
+                  /*postBound=*/true, /*meshReferenced=*/1, /*meshBound=*/1);
+    rep.SetPick(640, 360, /*landed=*/true, /*hitProxyId=*/1, /*resolved=*/true,
+                "Ground", "acd0708f-ffc1-47e9-a105-b10e0b3f8497");
+
+    std::string err;
+    rep.Evaluate({ *Arcane::ParseProbe("pick@640,360", err) });
+
+    const auto doc = nlohmann::json::parse(rep.ToJson());
+    const auto& entry = doc["probes"][0];
+    REQUIRE(entry.contains("pickableKinds"));
+    CHECK(entry["pickableKinds"] == std::vector<std::string>{ "sprite", "collider2d" });
+    REQUIRE(entry.contains("meshesNotPickable"));
+    CHECK(entry["meshesNotPickable"] == true);
+}
+
+TEST_CASE("verify: meshesNotPickable is omitted, not false, when the scene's census carries no bound mesh", "[verify]")
+{
+    Arcane::VerifyReport rep;
+    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.AddCensus(4, 1, false, false, /*meshReferenced=*/0, /*meshBound=*/0);
+    rep.SetPick(640, 360, true, 1, true, "Ground", "acd0708f-ffc1-47e9-a105-b10e0b3f8497");
+
+    std::string err;
+    rep.Evaluate({ *Arcane::ParseProbe("pick@640,360", err) });
+
+    const auto& entry = nlohmann::json::parse(rep.ToJson())["probes"][0];
+    CHECK(entry.contains("pickableKinds"));       // always present on a result
+    CHECK_FALSE(entry.contains("meshesNotPickable"));   // omitted, not `false`
+}
+
+TEST_CASE("verify: a background pick miss also carries pickableKinds -- the mitigation applies to both result branches", "[verify]")
+{
+    Arcane::VerifyReport rep;
+    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.AddCensus(4, 1, true, true, 1, 1);
+    rep.SetPick(20, 700, /*landed=*/true, /*hitProxyId=*/0, /*resolved=*/false, "", "");
+
+    std::string err;
+    rep.Evaluate({ *Arcane::ParseProbe("pick@20,700", err) });
+
+    const auto& entry = nlohmann::json::parse(rep.ToJson())["probes"][0];
+    CHECK(entry["entity"].is_null());
+    REQUIRE(entry.contains("pickableKinds"));
+    CHECK(entry["pickableKinds"] == std::vector<std::string>{ "sprite", "collider2d" });
+    REQUIRE(entry.contains("meshesNotPickable"));
+    CHECK(entry["meshesNotPickable"] == true);
+}
+
+TEST_CASE("verify: an error branch never carries pickableKinds -- it is a result-only field, not a blanket addition", "[verify]")
+{
+    Arcane::VerifyReport rep;
+    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.AddCensus(4, 1, true, true, 1, 1);
+    rep.SetPick(640, 360, /*landed=*/false, 0, false, "", "");   // NO READBACK LANDED
+
+    std::string err;
+    rep.Evaluate({ *Arcane::ParseProbe("pick@640,360", err) });
+
+    const auto& entry = nlohmann::json::parse(rep.ToJson())["probes"][0];
+    REQUIRE(entry.contains("error"));
+    CHECK_FALSE(entry.contains("pickableKinds"));
+    CHECK_FALSE(entry.contains("meshesNotPickable"));
+}
+
 TEST_CASE("verify: every pick branch carries exactly one of entity or error, never both, never neither", "[verify]")
 {
     // The XOR invariant, exercised across every branch Evaluate's Pick case
