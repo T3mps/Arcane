@@ -105,6 +105,26 @@ namespace Arcane::RuntimeFrame
         // allocates nothing after the first.
         std::vector<Arcane::MeshInstance>& meshInstances;
 
+        // ---- THE LAST-FRAME CAPTURE (Task 8: --report wiring) ---------------
+        // CaptureTail fills these on the run's LAST frame whenever --screenshot
+        // or --report was requested (see that function's own comment on the
+        // widened read gate) -- the SAME readback --screenshot already takes,
+        // just retained here instead of written straight to a PNG and
+        // discarded, because a report's Brightness/Luma/Rgba probes need the
+        // identical pixels. RuntimeApp::ShutdownGraphPath is where they are
+        // consumed, once the loop has ended and backend/frameCount/exitReason
+        // are all settled -- see that method's own comment for why the WRITE
+        // happens there rather than here.
+        //
+        // captureRead stays at its bound member's default (false) on any run
+        // that broke out early (device lost, render failure, an interactive
+        // quit) or that asked for neither flag; a VerifyReport built from that
+        // simply never calls SetCapture rather than reporting a phantom frame.
+        bool&                       captureRead;
+        std::uint32_t&              captureWidth;
+        std::uint32_t&              captureHeight;
+        std::vector<unsigned char>& captureRgba;
+
 #if !defined(ARCANE_DIST)
         // --crash-gpu N. Same Dist guard as the RuntimeApp member this is
         // bound to -- see RuntimeApp.hpp. The fired-once latch is the only

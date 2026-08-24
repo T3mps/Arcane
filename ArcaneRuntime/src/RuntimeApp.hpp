@@ -177,6 +177,21 @@ private:
     // FrameIo::meshInstances.
     std::vector<Arcane::MeshInstance>    m_meshInstances;
 
+    // THE LAST-FRAME CAPTURE (Task 8: --report wiring). CaptureTail
+    // (RuntimeFrame.cpp) fills these on the run's last frame whenever
+    // --screenshot or --report was requested -- the SAME readback
+    // --screenshot already takes, just retained here rather than written
+    // straight to a PNG and discarded, because a report's Brightness/Luma/
+    // Rgba probes need the identical pixels. ShutdownGraphPath is where they
+    // are consumed, once the loop has ended and backend/frameCount/
+    // exitReason are all settled. m_captureRead false means either the run
+    // never reached its last frame (an early exit) or neither flag was
+    // passed -- either way, a report built from this simply omits SetCapture
+    // rather than reporting a phantom empty frame.
+    bool                                  m_captureRead   = false;
+    std::uint32_t                         m_captureWidth  = 0, m_captureHeight = 0;
+    std::vector<unsigned char>            m_captureRgba;
+
 #if !defined(ARCANE_DIST)
     // --crash-gpu N (GPU crash diagnostics arc, Task 11): the desk battery's
     // item-2 trigger -- the same deliberate fault the editor's Build ->

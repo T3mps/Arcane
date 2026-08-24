@@ -8,6 +8,7 @@
 #include "RuntimeFrame.hpp"   // MainLoop's frame body
 
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Host/VerifyReport.hpp>  // Arcane::VerifyReport/ProbeSpec/ParseProbe (Task 8: --report wiring, ShutdownGraphPath)
 #include <Arcane/Assets/Assets.hpp>      // Arcane::Assets (AssetsFacade().PixelsFor -- the pre-loop SetPixelSupply lambda)
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat/SetPhase (pre-loop phase markers)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
@@ -534,6 +535,10 @@ void RuntimeApp::MainLoop()
         .pickDrawables   = m_pickDrawables,
         .pickSelectedIds = m_pickSelectedIds,
         .meshInstances   = m_meshInstances,
+        .captureRead     = m_captureRead,
+        .captureWidth    = m_captureWidth,
+        .captureHeight   = m_captureHeight,
+        .captureRgba     = m_captureRgba,
 #if !defined(ARCANE_DIST)
         .gpuFaultFired   = m_gpuFaultFired,
 #endif
@@ -709,6 +714,91 @@ void RuntimeApp::ShutdownGraphPath()
         // the errors it produced on the way out.
         if (m_graphExit == 0)
             m_graphExit = 2;
+    }
+
+    // THE REPORT (Task 8), written LAST in this function so exitReason below
+    // can read the FINAL m_graphExit -- including the fold just above, which
+    // only settles after the vehicle is gone. WriteTo never touches
+    // m_graphExit itself, so this call only DESCRIBES what already happened;
+    // Run()'s tail still decides the process exit code exactly as it did
+    // before this task.
+    //
+    // Guarded on reportPath alone (HostConfig.hpp's "Empty = off"), not on
+    // --probe: a bare `--report` with no probes still writes a valid report
+    // (run identity + whatever AddCensus below always contributes), and a
+    // bare `--probe` with no `--report` intentionally writes nothing -- there
+    // is nowhere for it to go.
+    if (!m_config.reportPath.empty())
+    {
+        const bool completedAllFrames =
+            m_config.maxFrames != 0 && m_frameCount >= m_config.maxFrames;
+
+        // Reuses the SAME vocabulary Run()'s own tail comment already
+        // documents for m_graphExit (1 = the graph run failed, 2 =
+        // RenderErrorCount grew) and the device-lost check it makes right
+        // alongside -- this is not a new classification, just the existing
+        // one spelled into the exit-reason string VerifyReport carries.
+        // "frames-complete" is what a normal run reports; "stopped-early"
+        // covers any exit this function was not told the reason for (e.g. an
+        // interactive quit -- unreachable under --offscreen today, but this
+        // call site is unconditional and must not lie about a mode it does
+        // not recognise).
+        std::string exitReason = "frames-complete";
+        if (Arcane::GpuDeviceLostObserved())
+            exitReason = "device-lost";
+        else if (m_graphExit == 1)
+            exitReason = "render-failed";
+        else if (m_graphExit == 2)
+            exitReason = "validation-errors";
+        else if (!completedAllFrames)
+            exitReason = "stopped-early";
+
+        Arcane::VerifyReport report;
+        report.SetRun(Arcane::ToString(m_config.backend), m_config.offscreen,
+                      m_frameCount, exitReason);
+
+        // Only set when CaptureTail (RuntimeFrame.cpp) actually landed a
+        // readback this run -- an early exit, or a run that asked for
+        // neither --report-needing probe nor --screenshot, leaves this
+        // false, and SetCapture is skipped so Brightness/Luma/Rgba probes
+        // report an honest "no capture set" rather than a phantom frame.
+        if (m_captureRead)
+            report.SetCapture(m_captureWidth, m_captureHeight, m_captureRgba);
+
+        // The census is carried whether or not a `census` PROBE was asked
+        // for -- ToJson's top-level "census" field and a `census` probe
+        // entry both read AddCensus's same values, and Materials() is a
+        // live, on-demand read (SceneRenderResolver.hpp's own comment on
+        // why it re-walks the registry rather than replaying a stale
+        // Refresh) -- so populating it always costs nothing extra.
+        if (m_resolver)
+        {
+            const Arcane::SceneRenderResolver::MaterialCensus census = m_resolver->Materials();
+            report.AddCensus(census.spriteReferenced, census.spriteBound,
+                              census.postReferenced, census.postBound,
+                              census.meshReferenced, census.meshBound);
+        }
+
+        // Parse-then-evaluate, never silently drop a malformed --probe: an
+        // agent that typo'd a probe kind gets a loud ARC_ERROR rather than a
+        // report that just never mentions it (ParseProbe's own header
+        // comment on why an unparseable probe is a refusal, not a skip).
+        std::vector<Arcane::ProbeSpec> specs;
+        specs.reserve(m_config.probes.size());
+        for (const std::string& raw : m_config.probes)
+        {
+            std::string error;
+            if (std::optional<Arcane::ProbeSpec> spec = Arcane::ParseProbe(raw, error))
+                specs.push_back(std::move(*spec));
+            else
+                ARC_ERROR("--probe '{}': {}", raw, error);
+        }
+        report.Evaluate(specs);
+
+        if (report.WriteTo(m_config.reportPath))
+            ARC_INFO("report written: {} ({} probe(s))", m_config.reportPath, specs.size());
+        else
+            ARC_ERROR("failed to write report to '{}'", m_config.reportPath);
     }
 }
 

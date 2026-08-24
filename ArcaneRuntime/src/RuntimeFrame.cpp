@@ -518,7 +518,14 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // CaptureTail, i.e. after this arm returns Presented.
     const bool willBeLastFrame =
         io.config.maxFrames != 0 && (io.frameCount + 1) >= io.config.maxFrames;
-    graphFrame.capture = willBeLastFrame && !io.config.screenshotPath.empty();
+    // Armed for --report too (Task 8), not --screenshot alone: a report's
+    // Brightness/Luma/Rgba probes read this SAME readback, and CaptureTail
+    // (this file) widens its own read gate to match -- without this, a run
+    // that passed --report/--probe but no --screenshot would never declare
+    // the readback node, and every positional probe would report an honest
+    // but avoidable "no capture set".
+    graphFrame.capture = willBeLastFrame &&
+                          (!io.config.screenshotPath.empty() || !io.config.reportPath.empty());
 
     // Timed into accPresent rather than left unmeasured, so `--perf`
     // reports something real on this path too (the spec's waiting-
@@ -590,7 +597,13 @@ bool CaptureTail(FrameIo& io)
     // The capture tail. Reached on the final frame only, AFTER the
     // present -- so the pixels are the ones that were actually shown and
     // the capture cannot race the recording that produced it.
-    if (lastFrame && !io.config.screenshotPath.empty())
+    //
+    // GATED on --screenshot OR --report (Task 8), not --screenshot alone: a
+    // report's Brightness/Luma/Rgba probes need this same readback, and
+    // RenderGraph's graphFrame.capture arm (above) is widened identically --
+    // this read only ever finds pixels when that node was actually declared
+    // this frame, so the two gates must agree.
+    if (lastFrame && (!io.config.screenshotPath.empty() || !io.config.reportPath.empty()))
     {
         std::uint32_t w = 0, h = 0;
         std::vector<unsigned char> actual;
@@ -608,16 +621,34 @@ bool CaptureTail(FrameIo& io)
             // A WARN, never an exit code: ReadCapture's own contract is
             // explicit that "a capture that could not be read is not a bad
             // frame" -- so a miss here must not trip the GPU tests'
-            // RenderErrorCount()==0 gate, nor flip io.graphExit.
-            ARC_WARN("screenshot FAILED: {} (no capture landed)", io.config.screenshotPath);
+            // RenderErrorCount()==0 gate, nor flip io.graphExit, nor fail a
+            // --report run (io.captureRead simply stays false below, so
+            // VerifyReport::SetCapture is never called).
+            if (!io.config.screenshotPath.empty())
+                ARC_WARN("screenshot FAILED: {} (no capture landed)", io.config.screenshotPath);
+            else
+                ARC_WARN("capture FAILED: no capture landed this frame -- the report's pixel "
+                         "probes (brightness/luma/rgba) will report 'no capture set'");
         }
         else
         {
             // The exact pixels a player sees (post-tonemap, post-ImGui).
-            if (Arcane::WritePngRgba(io.config.screenshotPath, w, h, actual.data()))
-                ARC_INFO("screenshot written: {} ({}x{})", io.config.screenshotPath, w, h);
-            else
-                ARC_WARN("screenshot FAILED: {}", io.config.screenshotPath);
+            if (!io.config.screenshotPath.empty())
+            {
+                if (Arcane::WritePngRgba(io.config.screenshotPath, w, h, actual.data()))
+                    ARC_INFO("screenshot written: {} ({}x{})", io.config.screenshotPath, w, h);
+                else
+                    ARC_WARN("screenshot FAILED: {}", io.config.screenshotPath);
+            }
+
+            // Stashed for VerifyReport regardless of --screenshot:
+            // RuntimeApp::ShutdownGraphPath hands these to SetCapture() once
+            // the loop has ended and the run's identity (backend/frameCount/
+            // exitReason) is settled -- see that method's own comment.
+            io.captureWidth  = w;
+            io.captureHeight = h;
+            io.captureRgba   = std::move(actual);
+            io.captureRead   = true;
         }
     }
 
