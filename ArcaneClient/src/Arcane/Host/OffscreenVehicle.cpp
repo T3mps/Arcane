@@ -21,6 +21,22 @@ namespace Arcane
 
         RenderDeviceDesc desc;
         desc.backend = cfg.backend;
+#if defined(ARCANE_DEBUG)
+        // Mirror NriGraphContext.cpp's windowed creation half EXACTLY (same
+        // three flags, same Debug-only gate). An offscreen run's
+        // RenderErrorCount is the WHOLE verdict an agent gets -- there is no
+        // human watching a window to notice what a narrower validation
+        // surface would miss. Leaving any of these three off here would make
+        // --offscreen quietly weaker than windowed, silently undermining
+        // every verification built on top of it. This is legal here because
+        // OffscreenVehicle::Create is the FIRST device the process creates
+        // (see DeviceCreationD3D12.cpp's g_d3d12DeviceCreated latch); arming
+        // enableD3D12DebugLayer anywhere else, after a device already exists,
+        // would tear that device down instead.
+        desc.enableValidation      = true;
+        desc.enableD3D12DebugLayer = true;
+        desc.enableSyncValidation  = true;   // VK-only; see RenderDeviceDesc.hpp
+#endif
         v->m_native = NativeDeviceOwner::Create(desc);
         if (!v->m_native) { ARC_ERROR("[offscreen] no usable adapter for the requested backend"); return nullptr; }
 
