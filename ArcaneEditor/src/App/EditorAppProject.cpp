@@ -55,7 +55,7 @@ namespace Arcane::Editor
         s.undo     = m_undo ? &*m_undo : nullptr;
         s.clock    = &m_editorClock;
         s.backend  = m_config.backend;
-        if (m_graphChrome)
+        if (ChromeGraph())
         {
             // THE PROCESS'S ONE DEVICE is owned by the chrome context: a
             // document's preview context BORROWS it, exactly as the viewport
@@ -78,13 +78,13 @@ namespace Arcane::Editor
             // document's preview vehicle, and that function drains the retire
             // list inside the same stage, while the chrome context whose node
             // the drain invalidates against is still alive.
-            s.nriDevice  = &m_graphChrome->Device();
+            s.nriDevice  = &ChromeGraph()->Device();
             s.hostConfig = &m_config;
             // The backend that will CACHE the preview texture when
             // ImGui::Image draws it, and therefore the one owed an
             // InvalidateUserTextureNow before that texture dies. The document
             // makes that call from its destructor.
-            s.chromeHud  = m_graphChrome->ImGuiHud();
+            s.chromeHud  = ChromeGraph()->ImGuiHud();
             // ...and the one-frame retire, which is what makes closing a
             // document safe at all on this arm. See DocServices'
             // retireGraphPreview for why the destroy cannot happen inline.
@@ -1373,13 +1373,13 @@ namespace Arcane::Editor
         // keeps "who armed it" and "who faulted it" the same object. Reached
         // from the menu item AND from the scheduled --crash-gpu N block at the
         // top of MainLoop, which is how this is scriptable at all.
-        if (!m_graphChrome)
+        if (!ChromeGraph())
         {
             ARC_ERROR("Crash GPU: the graph vehicle is not up -- nothing dispatched");
             return;
         }
-        nri::Queue* const queue = m_graphChrome->Device().GraphicsQueue();
-        if (!queue || !Arcane::NriDiagnostics::FireFault(m_graphChrome->Device(), *queue))
+        nri::Queue* const queue = ChromeGraph()->Device().GraphicsQueue();
+        if (!queue || !Arcane::NriDiagnostics::FireFault(ChromeGraph()->Device(), *queue))
             ARC_ERROR("Crash GPU: fault injector unavailable -- nothing dispatched");
     }
 #endif

@@ -15,6 +15,7 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <optional>
 
 #ifdef _WIN32
 #include <shobjidl.h>
@@ -83,8 +84,31 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 // is shared by both hosts, so a flag the editor parses is not automatically a
 // flag the editor DOES anything with.
 //   --project/--plugin/--scene/--frames/--backend/--no-vsync -- honoured.
-//   --screenshot        -- honoured; it captures the VIEWPORT panel's texture,
-//                          not the editor window.
+//   --screenshot        -- honoured. WINDOWED it captures the VIEWPORT panel's
+//                          texture, not the editor window (so the Inspector and
+//                          the asset browser are not in it). Under --offscreen
+//                          it captures the COMPOSITED EDITOR FRAME instead --
+//                          chrome, docking, panels, and the viewport texture
+//                          inside its panel -- off the offscreen chrome
+//                          context's colour target (EditorAppFrame.cpp's
+//                          PresentChromeFrame).
+//   --offscreen         -- honoured. No window is ever mapped and no swapchain
+//                          is built anywhere: the chrome context becomes an
+//                          OffscreenVehicle (EditorApp::CreateGraphVehicles),
+//                          the boot splash below is not constructed at all, and
+//                          the per-project ImGui layout is PINNED to the
+//                          committed <project>/Saved/verify-layout.ini seed with
+//                          io.IniFilename null, so a run can neither read a
+//                          machine-local layout nor write one back.
+//                          Requires --frames N (HostConfig refuses otherwise).
+//   --report / --probe  -- REFUSED at launch on this host, loudly. Unlike the
+//   --settle               inert flags below, these three make a scripted
+//                          caller expect an ARTEFACT (a JSON report, a settled
+//                          capture) that this host does not produce -- and exit
+//                          0 with no artefact is precisely the silent success an
+//                          agent misreads as a pass. Parsing them and shrugging
+//                          would be worse than refusing. ArcaneRuntime honours
+//                          all three.
 //   --nri-graph         -- PARSED AND IGNORED: the NRI frame graph is the only
 //                          render path, so there is nothing left for this flag
 //                          to select.
@@ -126,6 +150,38 @@ int main(int argc, char** argv)
         // ANSI-codepage bytes under MSVC, which a strict-UTF-8 dump() rejects.
         std::printf("%s\n", Arcane::HostBoot::EngineInfoJson(Arcane::ExecutablePathUtf8()).c_str());
         return 0;
+    }
+
+    // THE THREE OBSERVATION FLAGS THIS HOST DOES NOT IMPLEMENT, refused here
+    // rather than silently ignored. HostConfig is SHARED with ArcaneRuntime, so
+    // all three parse cleanly on this exe and would otherwise produce a run that
+    // exits 0 having written no report and settled nothing -- the exact
+    // silent-success shape Task 8 paid to find on the runtime (a --report with
+    // pixel probes and no --screenshot ran, exited 0, and reported "no capture
+    // set" for every probe). An agent reads exit 0 plus a missing artefact as a
+    // pass, so the refusal is the fix; wiring any of them into this host is a
+    // later task, and it must delete the matching line here on the same day.
+    //
+    // AHEAD OF Diagnostics::Install BELOW, and that placement is load-bearing
+    // rather than tidy: an early `return` taken AFTER Install leaves the hang
+    // watchdog's std::thread joinable at static destruction, which is
+    // std::terminate -> abort() -> process exit code 3. That is measured, not
+    // theorised, and it is a PRE-EXISTING defect of the two refusals further
+    // down (a bare `--frames 10` with no project is documented as exit 2 and
+    // actually exits 3, colliding with the rival-editor code). It is left
+    // alone here -- ArcaneHub decodes those two, and rewriting host exit codes
+    // is not this task -- but a third copy of the shape is not added either.
+    // Returning from up here pays for nothing it can skip, exactly as the
+    // --print-engine-info probe above does.
+    if (!parsed.config->reportPath.empty() || !parsed.config->probes.empty() ||
+        parsed.config->settleAttempts != 0)
+    {
+        std::fprintf(stderr,
+            "Arcane Editor: --report / --probe / --settle are not implemented on this host.\n"
+            "  This exe would exit 0 having produced none of them, which is worse than\n"
+            "  refusing. Use ArcaneRuntime for observation reports; ArcaneEditor supports\n"
+            "  --offscreen --frames N --screenshot <png> for a composited editor capture.\n");
+        return 2;
     }
 
     // Post-mortem capture, armed for every REAL run. A crash writes a minidump
@@ -208,7 +264,20 @@ int main(int argc, char** argv)
     // lock check) returns before this line specifically so none of them pays
     // for a window they might not need. Never fails boot -- BootSplashWindow's
     // whole contract is "every error path degrades to no splash, silently".
-    Arcane::BootSplashWindow splash("data/images/arcane_logo.png");
+    // ...UNLESS --offscreen, where the whole point is that this process maps
+    // no window. The splash is a real WS_POPUP on its own thread, so
+    // constructing it unconditionally would make "--offscreen" a lie for the
+    // ~seconds boot takes -- the one window an offscreen run would still
+    // flash on screen. std::optional is what it takes: BootSplashWindow's
+    // only constructor takes an image path and there is no "disabled" state,
+    // and every consumer downstream is already null-tolerant by contract
+    // (BootSplashPresenter's ctor comment: "`splash` may be null ... every
+    // call then degrades to do nothing"; EditorApp guards with `if
+    // (m_splash)`). Destruction order is unchanged -- `app` still lives in the
+    // nested scope below and is destroyed before this object.
+    std::optional<Arcane::BootSplashWindow> splash;
+    if (!parsed.config->offscreen)
+        splash.emplace("data/images/arcane_logo.png");
 
     // Scoped so ~EditorApp -- the load-bearing teardown sequence -- runs while
     // the watchdog is STILL armed. Teardown does not beat, so a deadlock in it
@@ -220,7 +289,7 @@ int main(int argc, char** argv)
     // the same relative order as when both were siblings here.
     int rc = 0;
     {
-        Arcane::Editor::EditorApp app(*parsed.config, &splash);
+        Arcane::Editor::EditorApp app(*parsed.config, splash ? &*splash : nullptr);
         if (noProject)
             app.RaiseOpenProjectOnStart();
         rc = app.Run();

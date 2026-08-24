@@ -321,10 +321,17 @@ namespace Arcane::Editor
         // reason). The CHROME context's swapchain is the surface bound to
         // this window. The VIEWPORT's offscreen output is NOT resized here at
         // all -- it tracks the panel, not the window, and phase 8 owns it.
+        //
+        // NOT UNDER --offscreen: there is no swapchain to resize, the window is
+        // never mapped so a real resize event cannot arrive, and
+        // NriGraphContext::Resize is HOST-WINDOW MODE ONLY (ResizeOffscreen is
+        // the offscreen twin, and it is NOT wanted here either -- the offscreen
+        // chrome target is deliberately fixed at the boot extent for the whole
+        // run, which is what makes two runs' captures the same size).
         if (events.resized)
         {
-            if (m_graphChrome)
-                m_graphChrome->Resize(events.width, events.height);
+            if (ChromeGraph() && !ChromeGraph()->IsOffscreen())
+                ChromeGraph()->Resize(events.width, events.height);
         }
         if (m_gpu->Win().IsMinimized())
         {
@@ -1095,7 +1102,7 @@ namespace Arcane::Editor
     // Phase 8: deferred viewport resize. Must stay before the scene render.
     void EditorApp::ApplyPendingViewportResize()
     {
-        m_viewportTargets.ApplyPendingResize(m_graphChrome.get());
+        m_viewportTargets.ApplyPendingResize(ChromeGraph());
     }
 
     // Deferred resize: the Viewport panel's content-region size measured LAST
@@ -1265,6 +1272,31 @@ namespace Arcane::Editor
     // Phase 10: the scene render. Must run BEFORE the ImGui pass builds the
     // Viewport panel's Image, and the gizmo inside it is drawn AFTER the scene
     // submit so it renders on top.
+    // ===== "IS A CAPTURE WANTED AT ALL", IN ONE PLACE =======================
+    // Named rather than spelled out at each of the two capture sites below,
+    // because Task 8 was bitten on the RUNTIME by exactly the divergence a
+    // second copy invites: that host's gate read `screenshotPath` ALONE, so
+    // `--report` with pixel probes and no `--screenshot` ran, exited 0, wrote a
+    // well-formed JSON, and reported "no capture set" for every probe -- a
+    // silent success an agent reads as a pass. RuntimeFrame.cpp now arms on
+    // capture-WANTED (`!screenshotPath.empty() || !reportPath.empty()`).
+    //
+    // THIS HOST'S ANSWER IS DELIBERATELY THE NARROWER ONE, and the difference
+    // is not an oversight: ArcaneEditor implements no --report at all
+    // (`grep -n reportPath ArcaneEditor/src` finds nothing outside this
+    // comment), so ORing reportPath in here would arm a readback, a device
+    // idle and a PNG-less pixel copy that nothing in this process ever reads --
+    // trading one silent no-op for a slower one. The silent-success hole is
+    // closed at the OTHER end instead, where it can actually be closed: main()
+    // now REFUSES --report/--probe/--settle on this host with a message naming
+    // them as unimplemented, so an agent cannot get exit 0 and an absent report
+    // out of ArcaneEditor. Wire --report here and this predicate must grow the
+    // second clause the same day.
+    static bool CaptureWanted(const Arcane::HostConfig& cfg) noexcept
+    {
+        return !cfg.screenshotPath.empty();
+    }
+
     void EditorApp::RenderSceneToViewport()
     {
         // ================= THE VIEWPORT FRAME =============================
@@ -1329,9 +1361,22 @@ namespace Arcane::Editor
             //
             // `maxFrames != 0` matches the runtime: both capture on the LAST
             // frame, and without --frames there is no last frame.
+            //
+            // AND NOT UNDER --offscreen, which is the whole point of Task 11:
+            // there the screenshot is the COMPOSITED EDITOR FRAME, captured off
+            // the chrome context in PresentChromeFrame (phase 19) -- panels,
+            // docking, asset browser and this viewport's texture inside its
+            // panel. Leaving this arm live as well would have the viewport
+            // capture land first and the chrome capture overwrite it with a
+            // different picture at the same path: same run, same flag, two
+            // meanings. The WINDOWED behaviour is unchanged -- there the chrome
+            // context is a swapchain nothing reads back, so the viewport
+            // texture remains the only editor screenshot there is (main.cpp's
+            // flag table says so).
             const bool isCaptureLastFrame = m_config.maxFrames != 0 &&
                                             (m_frameCount + 1) >= m_config.maxFrames &&
-                                            !m_config.screenshotPath.empty();
+                                            CaptureWanted(m_config) &&
+                                            !m_config.offscreen;
             vp.capture = isCaptureLastFrame;
 
             const Arcane::NriGraphContext::FrameOutcome outcome =
@@ -1399,7 +1444,12 @@ namespace Arcane::Editor
                 {
                     // A WARN, never an exit code -- the same contract
                     // RuntimeFrame::CaptureTail keeps.
-                    ARC_WARN("screenshot FAILED: {} (viewport capture readback)",
+                    // "(no capture landed)" -- the SAME wording
+                    // RuntimeFrame::CaptureTail uses. It was
+                    // "(viewport capture readback)" here, a third variant
+                    // across the two hosts, which makes a log line unsearchable
+                    // for the one failure it names.
+                    ARC_WARN("screenshot FAILED: {} (no capture landed)",
                              m_config.screenshotPath);
                 }
                 else
@@ -2599,16 +2649,57 @@ namespace Arcane::Editor
         // can sit in. TRUE, not false: a frame that cannot present is not a
         // reason to stop counting frames and stop polling the plugin, which is
         // what a false return means to MainLoop.
-        if (!m_graphChrome)
+        if (!ChromeGraph())
             return true;
 
         Arcane::NriGraphContext::FrameDesc frame;
         frame.imgui = chrome;
+
+        // ===== THE --offscreen FORK, AND THE FULL-FRAME CAPTURE ==============
+        // The absence table above says an editor screenshot has never
+        // contained a chrome pixel: `frame.capture` was never set here, and
+        // every capture path read the VIEWPORT's texture instead -- so the
+        // Inspector, the asset browser and the docking chrome were invisible in
+        // every editor PNG ever taken (main.cpp's flag table records it).
+        //
+        // Under --offscreen that is now false ON PURPOSE, and the table above
+        // is amended by this block rather than contradicted by it: this context
+        // has NO SWAPCHAIN, so "the backbuffer" it captures is the offscreen
+        // colour target the whole composited editor was just drawn into --
+        // chrome, panels, and the viewport texture sampled inside its panel.
+        // That is the only picture that can answer "did the editor draw", which
+        // is the entire job of the mode.
+        //
+        // THE MECHANISM NEEDED NO INVENTION. ImGuiNri::Init takes a device and
+        // a pipeline cache, NOT a window, and this host sets only
+        // ImGuiConfigFlags_DockingEnable with no ViewportsEnable -- so ImGui
+        // never spawns an OS window for a floating panel and every pixel of the
+        // editor is inside this one target by construction. The runtime already
+        // composites its own ImGui HUD into an offscreen capture the same way.
+        //
+        // THE LAST FRAME ONLY, by the same `+1` arithmetic RenderSceneToViewport
+        // uses and for the same reason: phase 20's EndFrame is what increments
+        // m_frameCount, and it has not run yet this iteration. `maxFrames != 0`
+        // matches both other hosts -- without --frames there is no last frame --
+        // and --offscreen cannot be passed without --frames anyway (HostConfig
+        // refuses it at parse time).
+        const bool offscreenChrome = ChromeGraph()->IsOffscreen();
+        const bool captureThisFrame = offscreenChrome &&
+                                      CaptureWanted(m_config) &&
+                                      m_config.maxFrames != 0 &&
+                                      (m_frameCount + 1) >= m_config.maxFrames;
+        frame.capture = captureThisFrame;
+
         // A non-null `imgui` is what declares the HUD node at all
         // (DeclareGraphFrame gates the host HUD on exactly that), and the
         // chrome frame always wants one.
+        //
+        // RenderFrameOffscreen vs RenderFrame is NOT a style choice: each
+        // REFUSES on the other's mode (NriGraphContext.hpp), so the fork is
+        // mandatory the moment this context can be either.
         const Arcane::NriGraphContext::FrameOutcome outcome =
-            m_graphChrome->RenderFrame(frame);
+            offscreenChrome ? ChromeGraph()->RenderFrameOffscreen(frame)
+                            : ChromeGraph()->RenderFrame(frame);
 
         if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)
         {
@@ -2631,6 +2722,34 @@ namespace Arcane::Editor
             // otherwise spin.
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             return false;
+        }
+
+        // THE READBACK, right here rather than in a later phase, for the reason
+        // RenderSceneToViewport's own capture block states: ReadCapture is
+        // synchronous (it idles the device internally) and the pixels belong to
+        // the frame that was JUST submitted -- reading them any later risks the
+        // next frame's Begin/Draw overwriting the vehicle's transient state
+        // first. Reached only on Presented: both other outcomes returned above.
+        if (captureThisFrame)
+        {
+            std::uint32_t cw = 0, ch = 0;
+            std::vector<unsigned char> pixels;
+            if (!ChromeGraph()->ReadCapture(cw, ch, pixels))
+            {
+                // A WARN, never an exit code -- the same contract
+                // RuntimeFrame::CaptureTail and the viewport capture keep, and
+                // the same wording, so one grep finds every host's version.
+                ARC_WARN("screenshot FAILED: {} (no capture landed)", m_config.screenshotPath);
+            }
+            else if (Arcane::WritePngRgba(m_config.screenshotPath, cw, ch, pixels.data()))
+            {
+                ARC_INFO("screenshot written: {} ({}x{}, composited editor frame -- "
+                         "chrome, panels and viewport)", m_config.screenshotPath, cw, ch);
+            }
+            else
+            {
+                ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
+            }
         }
         return true;
     }

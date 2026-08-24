@@ -21,6 +21,7 @@
 #include <Arcane/Host/BootSequence.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Host/OffscreenVehicle.hpp>   // the --offscreen chrome vehicle (m_offscreenChrome)
 #include "Panels/AssetBrowser.hpp"
 #include "Panels/ConsoleBuffer.hpp"
 #include "Panels/DiagnosticStore.hpp"
@@ -146,6 +147,21 @@ namespace Arcane::Editor
         // backend-specific corner a desk-only machine cannot pre-clear. False
         // = already logged; Main() turns it into exit 1.
         bool       CreateGraphVehicles();
+
+        // THE LIVE CHROME CONTEXT, resolved in ONE place so no call site
+        // branches on --offscreen to find it. Exactly one of the two members
+        // below is ever non-null (CreateGraphVehicles builds one or the
+        // other): m_graphChrome, the host-window context with a swapchain over
+        // m_gpu->Win(), or m_offscreenChrome, an OffscreenVehicle that owns its
+        // own device and has NO window handle and NO swapchain anywhere in it.
+        // Deliberately the same shape as RuntimeApp::Graph(), and for the same
+        // reason: an `if (offscreen) ... else ...` at each of the ~25 use sites
+        // is how the two modes silently drift apart.
+        //
+        // Null only before CreateGraphVehicles runs and after
+        // ShutdownGraphPath -- every guard that used to read `if
+        // (m_graphChrome)` reads `if (ChromeGraph())` instead.
+        [[nodiscard]] Arcane::NriGraphContext* ChromeGraph() const noexcept;
         // The VIEWPORT context and every seam it needs, with TWO callers:
         // CreateGraphVehicles at boot, and SwitchProject's
         // "render_bridge" stage on every project switch -- which rebuilds this
@@ -352,7 +368,7 @@ namespace Arcane::Editor
         // arms the crash chain, and its swapchain binds m_gpu's window --
         // exactly what RuntimeApp::m_graphContext is. LIVE ON EVERY RUN, in
         // every configuration including Dist -- this is null only on a failed
-        // boot (CreateGraphVehicles' `if (!m_graphChrome)` returns false
+        // boot (CreateGraphVehicles' `if (!ChromeGraph())` returns false
         // before its caller proceeds).
         //
         // IT DRAWS THE EDITOR'S CHROME FRAME (clear + one ImGui node over the
@@ -399,6 +415,20 @@ namespace Arcane::Editor
         // previews by raw pointer. EditorApp::TeardownGraphForSwitch carries
         // the whole sequence and the argument for the split.
         std::unique_ptr<Arcane::NriGraphContext> m_graphChrome;
+
+        // THE --offscreen TWIN of m_graphChrome, and the ONLY one of the pair
+        // that is non-null under that flag. It owns a native device + NRI wrap
+        // + an offscreen NriGraphContext (OffscreenVehicle), so it is a
+        // strictly LARGER object than m_graphChrome -- which merely borrows the
+        // device GpuContext made. Everything downstream reaches whichever one
+        // is live through ChromeGraph().
+        //
+        // DECLARED IMMEDIATELY AFTER m_graphChrome so the two are adjacent in
+        // reverse-destruction order: every member that BORROWS the chrome
+        // device (m_retiredDocPreviews, m_documents, m_viewportTargets.graph)
+        // is declared below and is therefore destroyed first, which is the
+        // same guarantee m_graphChrome's own comment relies on.
+        std::unique_ptr<Arcane::OffscreenVehicle> m_offscreenChrome;
 
         // ---- Closed documents' preview vehicles ------------------------------
         // A shader document owns an offscreen NriGraphContext, and it is

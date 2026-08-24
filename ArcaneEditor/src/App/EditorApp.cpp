@@ -700,11 +700,11 @@ namespace Arcane::Editor
                     if (m_resolver)
                         m_resolver->InvalidateMesh(g);
                 };
-                if (m_graphChrome)
+                if (ChromeGraph())
                 {
-                    meshDocServices.nriDevice  = &m_graphChrome->Device();
+                    meshDocServices.nriDevice  = &ChromeGraph()->Device();
                     meshDocServices.hostConfig = &m_config;
-                    meshDocServices.chromeHud  = m_graphChrome->ImGuiHud();
+                    meshDocServices.chromeHud  = ChromeGraph()->ImGuiHud();
                     meshDocServices.retireGraphPreview =
                         [this](std::unique_ptr<Arcane::NriGraphContext> v)
                     {
@@ -928,6 +928,60 @@ namespace Arcane::Editor
 
     void EditorApp::RetargetLayoutIni()
     {
+        // ===== PINNED UNDER --offscreen, AHEAD OF EVERYTHING ELSE ============
+        // The per-project layout is USER STATE: it differs per machine, it is
+        // whatever this desk last arranged, and the flush below WRITES IT BACK
+        // on every project switch (and ~ImGuiLayer saves it again at exit). An
+        // agent run would therefore both READ a layout it did not choose and
+        // MUTATE it, making run N+1 differ from run N for a reason that has
+        // nothing to do with the engine. That is the imgui.ini veto class this
+        // file already calls "the worst kind of bug" (see the game-context
+        // block above); the pinning precedent is OffscreenImGuiLayer's own
+        // io.IniFilename = nullptr.
+        //
+        // FIRST STATEMENT IN THE FUNCTION on purpose: every path below carries
+        // an early `return` (no LOCALAPPDATA, an unwritable dir, an unchanged
+        // target), and a pin placed after any of them would be silently
+        // skipped on exactly the machines least able to notice.
+        //
+        // BOTH HALVES ARE REQUIRED. A null IniFilename ALONE leaves the editor
+        // with ImGui's built-in defaults -- deterministic, but every panel a
+        // free-floating window over an empty dockspace. So exactly one
+        // COMMITTED seed is loaded explicitly instead, and nothing is written
+        // back: ImGui auto-saves only to io.IniFilename, which is null, and
+        // both explicit SaveIniSettingsToDisk call sites in this host are
+        // unreachable from here.
+        //
+        // A MISSING SEED IS NOT AN ERROR -- LoadIniSettingsFromDisk on an
+        // absent path is a silent no-op inside ImGui, landing on those same
+        // built-in defaults. Degraded, never broken, and still deterministic:
+        // the file is either committed or absent for every run alike.
+        if (m_config.offscreen)
+        {
+            ImGuiIO& io    = ImGui::GetIO();
+            io.IniFilename = nullptr;               // never read, never written
+            m_layoutIniPath.clear();                // and nothing for a flush to name
+
+            const Arcane::Project* pinProj = m_runtime ? m_runtime->CurrentProject() : nullptr;
+            if (!pinProj)
+                return;                             // project-less: defaults, and no seed to find
+
+            const std::filesystem::path seed = pinProj->Root() / "Saved" / "verify-layout.ini";
+            std::error_code seedEc;
+            if (std::filesystem::exists(seed, seedEc))
+            {
+                ImGui::LoadIniSettingsFromDisk(seed.string().c_str());
+                ARC_INFO("--offscreen: layout PINNED to the committed seed {} "
+                         "(io.IniFilename null -- never read, never written)", seed.string());
+            }
+            else
+            {
+                ARC_WARN("--offscreen: no layout seed at {} -- falling back to ImGui's built-in "
+                         "defaults (deterministic, but not the authored layout)", seed.string());
+            }
+            return;
+        }
+
         // %LOCALAPPDATA%\Arcane\editor\layouts\<project-guid>.ini ("default"
         // for a project-less session) -- the editor's slot under the same
         // family root the Hub already uses (%LOCALAPPDATA%\Arcane\hub,
@@ -955,6 +1009,13 @@ namespace Arcane::Editor
         // SWITCH (m_layoutIniPath already set). At boot nothing has drawn
         // yet, and saving here would write an EMPTY settings file over the
         // legacy exe-dir imgui.ini before the seed below could read it.
+        //
+        // UNREACHABLE UNDER --offscreen: the pin at the top of this function
+        // returns before this line, and it leaves m_layoutIniPath EMPTY and
+        // io.IniFilename NULL -- so even a hypothetical fall-through fails
+        // both halves of the condition. That is the Step 2 guard, held by an
+        // early return plus the state it leaves behind rather than by a third
+        // clause here.
         if (!m_layoutIniPath.empty() && io.IniFilename && *io.IniFilename)
             ImGui::SaveIniSettingsToDisk(io.IniFilename);
 
@@ -1375,6 +1436,14 @@ namespace Arcane::Editor
     // is the LAST boot stage. So the earliest honest point for the chrome
     // context is after boot, and the offscreen one cannot precede it: it
     // BORROWS the device the chrome context creates.
+    // See the declaration: one place resolves the live chrome context, so no
+    // call site branches on --offscreen to find it. Exactly one member is ever
+    // non-null; both null before CreateGraphVehicles and after ShutdownGraphPath.
+    Arcane::NriGraphContext* EditorApp::ChromeGraph() const noexcept
+    {
+        return m_offscreenChrome ? &m_offscreenChrome->Graph() : m_graphChrome.get();
+    }
+
     bool EditorApp::CreateGraphVehicles()
     {
         // UNCONDITIONAL, AND NOT #if-GUARDED. This body runs in every
@@ -1389,7 +1458,22 @@ namespace Arcane::Editor
         // swapchain create (per the ordering above) and follow everything
         // else. Show() also RAISES, which is the launch reveal this host owes
         // exactly once.
-        m_gpu->Win().Show();
+        //
+        // ...AND IT IS SKIPPED ENTIRELY UNDER --offscreen, exactly as
+        // RuntimeApp::MainLoop skips its own. The window still EXISTS --
+        // GpuContext creates it hidden -- so ImGuiLayer, InputDevices and the
+        // event pump keep working unchanged, and io.DisplaySize still resolves
+        // off that HWND's pixel size; it is simply never mapped, and no
+        // swapchain is ever built over it.
+        //
+        // Deliberately NOT "hidden window + ordinary swapchain": the ordering
+        // note above is the warning against exactly that -- a surface created
+        // against a window the compositor has never mapped is the
+        // backend-specific corner a desk-only machine cannot pre-clear. The
+        // offscreen vehicle below builds no surface at all, which sidesteps
+        // the corner instead of walking into it.
+        if (!m_config.offscreen)
+            m_gpu->Win().Show();
 
         // THE LATCH BASELINE, taken HERE rather than at
         // process start for the reason RuntimeApp::MainLoop states for its own:
@@ -1405,8 +1489,67 @@ namespace Arcane::Editor
         // process-wide slot with no owner identity, so a second armer would be
         // harmless but a second DISARMER would unplug this one's chain. That
         // gating lives inside CreateOffscreen; nothing here may disturb it.
-        m_graphChrome = Arcane::NriGraphContext::Create(m_config, m_gpu->Win());
-        if (!m_graphChrome)
+        if (m_config.offscreen)
+        {
+            // THE EXTENT, from the same place the windowed path's comes from:
+            // the window's own pixel size. NriGraphContext::Init hands the
+            // borrowed window to the swapchain, which resolves its extent off
+            // that HWND -- so reading it here is the SAME number, hidden or
+            // shown (SDL tracks a window's size regardless of visibility;
+            // GpuContext's 1280x720 WindowDesc default is what both modes
+            // therefore start at). It is ALSO what ImGuiLayer reports as
+            // io.DisplaySize, so the chrome geometry and the render target
+            // agree by construction rather than by coincidence.
+            std::uint32_t chromeW = 0, chromeH = 0;
+            m_gpu->Win().GetPixelSize(chromeW, chromeH);
+
+            // hostHud ALONE, which is the whole of what a chrome context
+            // draws. The host-window twin below declares neither pickOutline
+            // nor gameUi ("it draws chrome, and a node it never declares is a
+            // readback buffer and a descriptor pool nobody reads"), and this
+            // one must match it or the two modes' captures would differ for a
+            // reason that is not the editor.
+            Arcane::NriGraphContext::NodeSet chromeNodes;
+            chromeNodes.hostHud = true;
+
+            m_offscreenChrome = Arcane::OffscreenVehicle::Create(m_config, chromeW, chromeH,
+                                                                 chromeNodes);
+            if (!m_offscreenChrome)
+            {
+                // NO SECOND ERROR LINE: Create logs the step that actually
+                // failed (adapter / wrap / CreateOffscreen), and a generic
+                // restatement here would only push the real cause further up
+                // the log. Same contract as RuntimeApp::MainLoop's.
+                return false;
+            }
+
+            // ===== THE GPU-STALL WATCHDOG IS DELIBERATELY LEFT UNARMED ======
+            // RuntimeApp::MainLoop calls SetGpuHeartbeatPublisher(true) on its
+            // offscreen vehicle. THIS HOST MUST NOT, and the reason is stated
+            // at that call site: the contract is "this offscreen context is
+            // the ONLY graph context in this process", and the editor can
+            // never satisfy it. Even under --offscreen it holds FOUR graph
+            // contexts -- this chrome one, the viewport
+            // (BuildGraphViewportContext), and one apiece for any open
+            // ShaderEditorDocument / MeshDocument preview -- so publishing
+            // here would make the process's single heartbeat slot a four-way
+            // alternation between unrelated fences, which is worse than
+            // silence: Diagnostics' GPU-progress rule would compare a value
+            // from one device timeline against a threshold set by another.
+            //
+            // The class CANNOT enforce this; it is caller contract only. So
+            // the cost is named rather than papered over: under --offscreen
+            // the editor's GPU-stall watchdog is OFF, a wedged GPU produces
+            // no diagnostics capture, and closing that gap needs a different
+            // rule ("the frame-driving context publishes") that does not
+            // exist yet. The CRASH chain is unaffected -- CreateOffscreen's
+            // own gating decides that, and nothing here disturbs it.
+        }
+        else
+        {
+            m_graphChrome = Arcane::NriGraphContext::Create(m_config, m_gpu->Win());
+        }
+        if (!ChromeGraph())
         {
             ARC_ERROR("the editor's chrome graph context could not be created");
             return false;
@@ -1434,7 +1577,7 @@ namespace Arcane::Editor
         // it has not moved, so this is a restatement rather than a fix.
         // Idempotent by construction (AdoptContext pins, re-ORs two flags,
         // restores) and null-safe.
-        if (Arcane::ImGuiNriNode* chromeNode = m_graphChrome->ImGuiHud())
+        if (Arcane::ImGuiNriNode* chromeNode = ChromeGraph()->ImGuiHud())
             chromeNode->AdoptImGuiContext(m_editorImguiContext);
 
         // ===== THE TOOLBAR MARK ==============================================
@@ -1457,12 +1600,12 @@ namespace Arcane::Editor
         if (Arcane::LoadDisplayPixels("data/images/arcane_logo.png", 64, m_graphLogoPixels))
         {
             m_graphLogoId = Arcane::Guid::Generate();
-            m_graphChrome->SetPixelSupply(
+            ChromeGraph()->SetPixelSupply(
                 [this](const Arcane::Guid& id) -> const Arcane::PixelData*
                 {
                     return id == m_graphLogoId ? &m_graphLogoPixels : nullptr;
                 });
-            if (Arcane::NriTextureCache* cache = m_graphChrome->Textures())
+            if (Arcane::NriTextureCache* cache = ChromeGraph()->Textures())
                 if (nri::Texture* logo = cache->Resolve(
                         m_graphLogoId, Arcane::NriTextureCache::ColorSpace::Display))
                 {
@@ -1499,7 +1642,7 @@ namespace Arcane::Editor
     // body in EVERY configuration, Dist included.
     bool EditorApp::BuildGraphViewportContext(std::uint32_t width, std::uint32_t height)
     {
-        if (!m_graphChrome)
+        if (!ChromeGraph())
         {
             ARC_ERROR("no chrome context -- the viewport context has no device to borrow");
             return false;
@@ -1535,7 +1678,7 @@ namespace Arcane::Editor
         viewportNodes.pickOutline = true;
         viewportNodes.gameUi      = true;
         m_viewportTargets.graph = Arcane::NriGraphContext::CreateOffscreen(
-            m_config, m_graphChrome->Device(), width, height, viewportNodes);
+            m_config, ChromeGraph()->Device(), width, height, viewportNodes);
         if (!m_viewportTargets.graph)
         {
             ARC_ERROR("the editor's offscreen viewport context could not be created");
@@ -1652,7 +1795,7 @@ namespace Arcane::Editor
     {
         if (m_retiredDocPreviews.empty())
             return;
-        Arcane::ImGuiNriNode* chrome = m_graphChrome ? m_graphChrome->ImGuiHud() : nullptr;
+        Arcane::ImGuiNriNode* chrome = ChromeGraph() ? ChromeGraph()->ImGuiHud() : nullptr;
         for (std::unique_ptr<Arcane::NriGraphContext>& vehicle : m_retiredDocPreviews)
         {
             if (!vehicle)
@@ -1789,7 +1932,7 @@ namespace Arcane::Editor
     {
         keepWidth  = 0;
         keepHeight = 0;
-        if (!m_graphChrome)
+        if (!ChromeGraph())
             return;   // never built a vehicle -- nothing of this arm exists to tear down
 
         // The panel's CURRENT extent, carried to the rebuild so the replacement
@@ -1804,7 +1947,7 @@ namespace Arcane::Editor
         }
 
         // ---- 1. IDLE ------------------------------------------------------
-        Arcane::NriDevice& device = m_graphChrome->Device();
+        Arcane::NriDevice& device = ChromeGraph()->Device();
         const nri::CoreInterface& core = device.Core();
         if (core.DeviceWaitIdle)
             (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&device.Device()));
@@ -1825,9 +1968,9 @@ namespace Arcane::Editor
         // spans both contexts. Unconditional and idempotent: a miss (nothing
         // ever drew the panel) returns false and buries nothing, a null
         // early-outs.
-        if (m_graphChrome->ImGuiHud() && m_viewportTargets.graph)
+        if (ChromeGraph()->ImGuiHud() && m_viewportTargets.graph)
         {
-            m_graphChrome->ImGuiHud()->InvalidateUserTextureNow(
+            ChromeGraph()->ImGuiHud()->InvalidateUserTextureNow(
                 m_viewportTargets.graph->OffscreenOutput());
         }
 
@@ -1845,7 +1988,7 @@ namespace Arcane::Editor
 
     void EditorApp::ShutdownGraphPath()
     {
-        if (!m_graphChrome && !m_viewportTargets.graph)
+        if (!ChromeGraph() && !m_viewportTargets.graph)
             return;   // a run that never built a vehicle
 
         // ===== OPEN DOCUMENTS FIRST ==========================================
@@ -1903,9 +2046,9 @@ namespace Arcane::Editor
         // there IS a pointer-keyed entry to evict now, on EVERY run. A grown
         // RenderErrorCount here is precisely what the D3b/D3c watch lists read
         // as a finding, and the line below is what makes it legible.
-        if (m_graphChrome && m_graphChrome->ImGuiHud() && m_viewportTargets.graph)
+        if (ChromeGraph() && ChromeGraph()->ImGuiHud() && m_viewportTargets.graph)
         {
-            m_graphChrome->ImGuiHud()->InvalidateUserTextureNow(
+            ChromeGraph()->ImGuiHud()->InvalidateUserTextureNow(
                 m_viewportTargets.graph->OffscreenOutput());
         }
 
@@ -1928,6 +2071,12 @@ namespace Arcane::Editor
         // declaration-order one it replaces.
         m_viewportTargets.graph.reset();
         m_graphChrome.reset();
+        // The --offscreen twin, released in the same statement group and for
+        // the same reason -- exactly one of the two was ever built, and
+        // resetting the null one is a no-op. It is destroyed AFTER
+        // m_viewportTargets.graph because the viewport context BORROWS the
+        // device this vehicle owns.
+        m_offscreenChrome.reset();
 
         // ===== AND ONLY THEN THE LATCH =======================================
         // The editor's equivalent of the runtime's line, and the reason it

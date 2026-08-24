@@ -1,7 +1,17 @@
 # Derived / generated -- never commit
 Binaries/
 Intermediate/
-Saved/
+# Saved/ is per-project untracked scratch (AutoScreenshot.png, Diagnostics/,
+# recent_scenes.json) -- with ONE committed exception. `Saved/*` rather than
+# `Saved/` is load-bearing: git cannot re-include a path whose PARENT
+# DIRECTORY is excluded, so the negation below only works against a pattern
+# that excludes the CONTENTS. Everything else under Saved/, directories
+# included, is still ignored exactly as before.
+Saved/*
+# The --offscreen layout seed. Shared by every agent run on every machine, so
+# it must be committed rather than machine-local: it is the one thing that
+# makes an offscreen editor capture reproducible across desks.
+!Saved/verify-layout.ini
 
 # Golden harness failure artifacts -- the golden PNG itself IS committed;
 # only the failure-run byproducts (a mismatch's actual capture + diff viz)
