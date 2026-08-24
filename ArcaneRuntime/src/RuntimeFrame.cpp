@@ -9,6 +9,7 @@
 #include <Arcane/Base/Assert.hpp>         // ARC_ASSERT (FrameExtent's io.graph invariant)
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (PumpAndResize)
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Host/VerifyReport.hpp>   // Arcane::FirstPickProbe (Task 9: pick@x,y -> FrameDesc::pickPixel)
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Render/Batcher2D.hpp>              // Arcane::Batch2DStats (BuildHud's HUD text, CaptureTail's perf tick)
@@ -444,6 +445,49 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         graphFrame.selectedIds = io.pickSelectedIds;
     }
 #endif
+
+    // ---- pick@x,y probes (Task 9), driven through FrameDesc::pickPixel --
+    // NOT the --pick-probe flag above, and deliberately NOT ARCANE_DIST-gated
+    // like it: this is the report's pick channel (VerifyReport's `pick@x,y`
+    // probe kind), not a dev-only exit-code check, so it must exist in every
+    // build configuration the same way every other probe kind does.
+    //
+    // Gated on reportPath too, matching the offscreen vehicle's own gate
+    // (RuntimeApp.cpp's offscreenNodes.pickOutline): a bare `--probe pick@..`
+    // with no `--report` has nowhere for the answer to go, so arming the
+    // readback here would cost a copy nobody reads -- and worse, the pick
+    // node itself was never BUILT for that run (NriGraphContext.cpp only
+    // builds it when NodeSet::pickOutline asked at Create time), so setting
+    // graphFrame.pickOutline here without that node existing would be
+    // arming a chain that is not there. The two gates must agree exactly.
+    //
+    // Armed at the SAME pixel every frame (FirstPickProbe's answer does not
+    // change frame to frame -- a run has exactly one `pick@x,y` request that
+    // matters), which is what lets the readback -- landing
+    // kSwapchainFramesInFlight frames after the pass that wrote it -- settle
+    // well before ShutdownGraphPath reads NriGraphContext::ProbeId() after
+    // the loop ends. A run combining this with the (windowed-only) dev
+    // --pick-probe flag above has this block win FrameDesc::pickPixel for
+    // the frame -- the flag's own fixed pixel is superseded rather than
+    // silently ignored, which is an acceptable trade for an untested
+    // combination neither mechanism was designed to share.
+    if (!io.config.reportPath.empty())
+    {
+        if (const std::optional<Arcane::ProbeSpec> pickSpec = Arcane::FirstPickProbe(io.config.probes))
+        {
+            const Arcane::PickView view{ io.runtime->CameraOffset(), io.runtime->CameraZoom() };
+            io.pickDrawables.clear();
+            Arcane::CollectPickables(io.runtime->Registry(), view, io.pickDrawables);
+
+            graphFrame.pickOutline = true;
+            graphFrame.pickables   = io.pickDrawables;
+            graphFrame.pickPixel   = glm::ivec2(pickSpec->x, pickSpec->y);
+            // selectedIds left empty (default): this probe reports FACTS, not
+            // a visible outline -- a --screenshot cross-check must show the
+            // scene exactly as an ordinary run would, not a pick-highlighted
+            // one.
+        }
+    }
 
     // ============================================================
     // THE OPAQUE 3D PASS (F2a Task 10) -- this frame's mesh scene, if the

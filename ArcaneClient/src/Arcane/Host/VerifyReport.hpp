@@ -58,7 +58,10 @@ namespace Arcane
     //                 applied DIRECTLY to the gamma-encoded byte values (see
     //                 the capture-format note above), normalised to [0,1].
     //   Rgba       -- the four raw channel bytes at (x, y), 0-255 each.
-    //   Pick       -- the entity id at (x, y). DEFERRED: no data channel yet.
+    //   Pick       -- the entity at (x, y), reported as a DURABLE identity
+    //                 (Identity.id's Guid + Identity.name), not the raw
+    //                 hit-proxy uint32 the id pass wrote -- see SetPick's
+    //                 comment for why the two must never be conflated.
     //   Census     -- the six SceneRenderResolver::MaterialCensus counts.
     enum class ProbeKind : std::uint8_t { Brightness, Luma, Rgba, Pick, Census };
 
@@ -82,6 +85,23 @@ namespace Arcane
     // (HostConfig.cpp): a NEGATIVE probe pixel is not a coordinate, it is a
     // typo, and evaluating it would report a fact about the wrong question.
     [[nodiscard]] ARCANE_API std::optional<ProbeSpec> ParseProbe(std::string_view text, std::string& error);
+
+    // The FIRST `pick@x,y` spec among `probes` (HostConfig::probes, raw and
+    // unparsed, in command-line order), or nullopt if none is present. ONE
+    // pixel is ever probed per run -- FrameDesc::pickPixel is armed once
+    // (RuntimeFrame.cpp's RenderGraph), from this same spec -- so this
+    // helper is the SINGLE source of truth for which pixel that is, shared
+    // by the frame driver (arms it, every frame) and the report writer
+    // (resolves + describes it, once, at shutdown) so the two can never
+    // disagree about which spec won. A run with more than one `pick@` probe
+    // only ever gets an answer for this one; Evaluate's Pick case refuses
+    // the others rather than silently answering the wrong question.
+    //
+    // Malformed specs among `probes` are silently skipped here -- ParseProbe's
+    // error is reported once, later, by the real parse-and-log pass
+    // (RuntimeApp.cpp's ShutdownGraphPath); this helper only answers "is
+    // there a pick request", and must not double that log just to answer it.
+    [[nodiscard]] ARCANE_API std::optional<ProbeSpec> FirstPickProbe(const std::vector<std::string>& probes);
 
     // Accumulates one host run's observations and renders them as one JSON
     // document. Every setter is independent and optional except Evaluate,
@@ -112,7 +132,43 @@ namespace Arcane
         void AddCensus(int spriteReferenced, int spriteBound, bool postReferenced,
                        bool postBound, int meshReferenced, int meshBound);
 
-        // Evaluates every spec against whatever SetCapture/AddCensus were
+        // The pick readback (Task 9): the entity-id probe's answer, resolved
+        // to a durable identity HOST-SIDE, before this call -- VerifyReport
+        // has no registry to invert a hit-proxy id itself (the same "no
+        // scene to look at" reasoning AddCensus's own comment gives for
+        // Census). `armedX`/`armedY` is the ONE pixel FrameDesc::pickPixel
+        // was set to this run (FirstPickProbe's spec) -- Evaluate's Pick
+        // case refuses any `pick@x,y` probe asking about a DIFFERENT pixel,
+        // rather than answering a question this run never measured.
+        //
+        //   landed      -- false means the readback never arrived
+        //                  (NriGraphContext::ProbeId() returned nullopt: the
+        //                  run was too short, or the pixel was outside the
+        //                  surface). Evaluate reuses RuntimeApp.cpp's own
+        //                  "NO READBACK LANDED" wording for this case, so
+        //                  the two paths read alike.
+        //   hitProxyId  -- the RAW, frame-scoped id the id pass wrote (0 ==
+        //                  background). Carried into the report for
+        //                  debugging ONLY -- meaningless outside the one
+        //                  draw submission that produced it, and NEVER the
+        //                  field an agent should address an entity by (see
+        //                  entityGuid below).
+        //   resolved    -- true iff hitProxyId named a live entity that ALSO
+        //                  carries an Identity component, i.e.
+        //                  entityName/entityGuid are meaningful. Only
+        //                  consulted when hitProxyId != 0 -- a background
+        //                  hit (id 0) is a FACT regardless of this flag, not
+        //                  routed through it.
+        //   entityName/entityGuid -- Identity::name / Identity::id.ToString()
+        //                  (canonical lowercase 8-4-4-4-12 hex): the durable
+        //                  pair an agent bootstraps a readable query from and
+        //                  then addresses by id. Ignored unless
+        //                  resolved && hitProxyId != 0.
+        void SetPick(std::int32_t armedX, std::int32_t armedY, bool landed,
+                     std::uint32_t hitProxyId, bool resolved,
+                     std::string entityName, std::string entityGuid);
+
+        // Evaluates every spec against whatever SetCapture/AddCensus/SetPick were
         // given before this call, and appends one JSON entry per spec.
         // Callable more than once (specs accumulate) -- there is no reset,
         // matching the one-shot lifetime a host uses this for (parse ->
@@ -153,6 +209,14 @@ namespace Arcane
         bool m_postBound          = false;
         int  m_meshReferenced     = 0;
         int  m_meshBound          = 0;
+
+        bool          m_pickSet        = false;
+        std::int32_t  m_pickArmedX     = 0, m_pickArmedY = 0;
+        bool          m_pickLanded     = false;
+        std::uint32_t m_pickHitProxyId = 0;
+        bool          m_pickResolved   = false;
+        std::string   m_pickEntityName;
+        std::string   m_pickEntityGuid;
 
         // Already-evaluated probe entries, in Evaluate() call order.
         nlohmann::json m_probes = nlohmann::json::array();

@@ -19,7 +19,8 @@
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend / ToString (StageGpuCore's boot banner)
 #include <Arcane/Render/RenderErrorLatch.hpp>  // RenderErrorCount (the graph latch fold)
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved (Run()'s exit-code tail)
-#include <Arcane/Render/PickEmit.hpp>    // PickEntityForId (ShutdownGraphPath's --pick-probe report)
+#include <Arcane/Render/PickEmit.hpp>    // PickEntityForId (ShutdownGraphPath's --pick-probe AND pick@x,y reports)
+#include <Arcane/Scene/Components.hpp>   // Arcane::Identity (ShutdownGraphPath's pick@x,y readback resolution, Task 9)
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (PushSceneCamera; RenderGraph calls it via FrameIo::app)
 // Assets.hpp/AudioDevice.hpp/InputActions.hpp/InputSnapshot.hpp/Batcher2D.hpp
 // live in RuntimeFrame.cpp instead: every symbol they are needed for (the
@@ -426,13 +427,27 @@ void RuntimeApp::MainLoop()
         // built WITHOUT the node would silently drop the HUD and make the two
         // modes' captures differ for a reason that is not the renderer.
         //
-        // pickOutline is deliberately NOT set: --pick-probe's arming is
-        // refused on an offscreen context by construction
-        // (NriGraphContext.cpp's `m_pickArmed = config.pickProbe &&
-        // !IsOffscreen()`), and driving the chain per frame through
-        // FrameDesc::pickPixel is a later task's job, not this one's.
+        // pickOutline (Task 9): --pick-probe's arming is STILL refused on an
+        // offscreen context by construction (NriGraphContext.cpp's
+        // `m_pickArmed = config.pickProbe && !IsOffscreen()`) -- that flag
+        // remains windowed-only, unconditionally. But a `pick@x,y` --report
+        // probe drives the SAME pick+outline node pair per frame through
+        // FrameDesc::pickPixel instead (RuntimeFrame.cpp's RenderGraph),
+        // which "needs no arming at all" (NriGraphContext.cpp) beyond the
+        // node pair existing -- so THIS is the one place that has to build
+        // it. Gated on both a pick@ request AND --report having somewhere to
+        // put the answer: "not asking costs nothing" is structural
+        // (NriGraphContext.cpp's own comment on NodeSet), and a bare
+        // `--probe pick@..` with no `--report` already writes nothing
+        // (ShutdownGraphPath's own precedent for --probe/--report). This
+        // MUST agree exactly with RuntimeFrame.cpp's own gate, or that block
+        // could arm a chain this vehicle never built.
+        const bool wantsPickReport = !m_config.reportPath.empty() &&
+                                      Arcane::FirstPickProbe(m_config.probes).has_value();
+
         Arcane::NriGraphContext::NodeSet offscreenNodes;
-        offscreenNodes.hostHud = true;
+        offscreenNodes.hostHud     = true;
+        offscreenNodes.pickOutline = wantsPickReport;
 
         m_offscreen = Arcane::OffscreenVehicle::Create(m_config, offscreenW, offscreenH,
                                                        offscreenNodes);
@@ -684,6 +699,98 @@ void RuntimeApp::ShutdownGraphPath()
     }
 #endif
 
+    // ---- pick@x,y readback (Task 9), read BEFORE the vehicle resets -----
+    // (same reason the --pick-probe block above reads early: ProbeId() reads
+    // state that dies with the vehicle). NOT ARCANE_DIST-gated, unlike that
+    // block: this is the report's pick channel, not a dev-only exit-code
+    // check, so it exists in every build configuration. Uses the SAME
+    // Arcane::FirstPickProbe lookup RuntimeFrame.cpp's RenderGraph used to
+    // arm FrameDesc::pickPixel every frame, so the pixel resolved against
+    // here can never disagree with the one that was actually probed.
+    //
+    // Stored as a local rather than pushed straight into a VerifyReport,
+    // because that object is not constructed until the --report block
+    // further down (it needs m_frameCount/m_graphExit settled first) -- this
+    // captures the FACTS while the vehicle is still alive, and the block
+    // below hands them to report.SetPick() once the report exists.
+    struct PickResolution
+    {
+        std::int32_t  armedX = 0, armedY = 0;
+        bool          landed = false;
+        std::uint32_t hitProxyId = 0;
+        bool          resolved = false;
+        std::string   entityName;
+        std::string   entityGuid;
+    };
+    std::optional<PickResolution> pickResolution;
+    if (!m_config.reportPath.empty())
+    {
+        if (const std::optional<Arcane::ProbeSpec> pickSpec = Arcane::FirstPickProbe(m_config.probes))
+        {
+            PickResolution res;
+            res.armedX = pickSpec->x;
+            res.armedY = pickSpec->y;
+
+            const std::optional<std::uint32_t> id = graph->ProbeId();
+            if (!id.has_value())
+            {
+                ARC_ERROR("[nri-graph] pick@{},{}: NO READBACK LANDED -- the run was too short "
+                          "(the copy lands a couple of frames after the pass that wrote it) or the "
+                          "probe pixel was outside the surface",
+                          pickSpec->x, pickSpec->y);
+                // res.landed stays false -- the report itself carries this as
+                // an honest error entry (VerifyReport::Evaluate's Pick case),
+                // never a silently-dropped probe. Deliberately does NOT touch
+                // m_graphExit: the report's job is to state facts, not to
+                // change what "did the host run" means for this process.
+            }
+            else
+            {
+                res.landed     = true;
+                res.hitProxyId = *id;
+                if (*id == 0u)
+                {
+                    ARC_INFO("[nri-graph] pick@{},{}: hit-proxy 0 -- BACKGROUND (miss); {} "
+                             "pickable(s) were in the scene",
+                             pickSpec->x, pickSpec->y, m_pickDrawables.size());
+                }
+                else
+                {
+                    const Astra::Entity hit = Arcane::PickEntityForId(m_pickDrawables, *id);
+                    if (hit.IsValid())
+                    {
+                        if (const Arcane::Identity* identity =
+                                m_runtime->Registry().GetComponent<Arcane::Identity>(hit))
+                        {
+                            res.resolved   = true;
+                            res.entityName = identity->name;
+                            res.entityGuid = identity->id.ToString();
+                            ARC_INFO("[nri-graph] pick@{},{}: hit-proxy {} -- HIT (\"{}\", id {}) "
+                                     "of {} pickable(s)",
+                                     pickSpec->x, pickSpec->y, *id, res.entityName, res.entityGuid,
+                                     m_pickDrawables.size());
+                        }
+                        else
+                        {
+                            ARC_WARN("[nri-graph] pick@{},{}: hit-proxy {} -- HIT but the entity "
+                                     "carries no Identity component; the report will carry an "
+                                     "honest error rather than a stable-looking id that would "
+                                     "silently churn between runs",
+                                     pickSpec->x, pickSpec->y, *id);
+                        }
+                    }
+                    else
+                    {
+                        ARC_WARN("[nri-graph] pick@{},{}: hit-proxy {} does not map to any entity "
+                                 "in this run's {} pickable(s) -- stale id?",
+                                 pickSpec->x, pickSpec->y, *id, m_pickDrawables.size());
+                    }
+                }
+            }
+            pickResolution = res;
+        }
+    }
+
     // This reset is what destroys every NRI object (graph, cache, ring,
     // swapchain, NRI device, native device), and teardown ordering is exactly
     // the class of mistake a validation layer exists to catch -- so the latch
@@ -777,6 +884,18 @@ void RuntimeApp::ShutdownGraphPath()
             report.AddCensus(census.spriteReferenced, census.spriteBound,
                               census.postReferenced, census.postBound,
                               census.meshReferenced, census.meshBound);
+        }
+
+        // The pick@x,y readback (Task 9), captured above while the vehicle
+        // was still alive. Only set when a `pick@` probe was actually
+        // present -- a run with none leaves this unset, and Evaluate's Pick
+        // case (unreachable then, since no Pick spec exists to evaluate)
+        // would report "no pick set" if it somehow were.
+        if (pickResolution)
+        {
+            report.SetPick(pickResolution->armedX, pickResolution->armedY, pickResolution->landed,
+                            pickResolution->hitProxyId, pickResolution->resolved,
+                            pickResolution->entityName, pickResolution->entityGuid);
         }
 
         // Parse-then-evaluate, never silently drop a malformed --probe: an

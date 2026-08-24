@@ -146,6 +146,18 @@ namespace Arcane
         return spec;
     }
 
+    std::optional<ProbeSpec> FirstPickProbe(const std::vector<std::string>& probes)
+    {
+        for (const std::string& raw : probes)
+        {
+            std::string ignoredError;   // the real parse-and-log pass reports this later
+            if (std::optional<ProbeSpec> spec = ParseProbe(raw, ignoredError);
+                spec && spec->kind == ProbeKind::Pick)
+                return spec;
+        }
+        return std::nullopt;
+    }
+
     void VerifyReport::SetRun(std::string backend, bool offscreen, std::uint64_t framesRendered,
                                std::string exitReason)
     {
@@ -173,6 +185,20 @@ namespace Arcane
         m_postBound        = postBound;
         m_meshReferenced   = meshReferenced;
         m_meshBound        = meshBound;
+    }
+
+    void VerifyReport::SetPick(std::int32_t armedX, std::int32_t armedY, bool landed,
+                                std::uint32_t hitProxyId, bool resolved,
+                                std::string entityName, std::string entityGuid)
+    {
+        m_pickSet        = true;
+        m_pickArmedX     = armedX;
+        m_pickArmedY     = armedY;
+        m_pickLanded     = landed;
+        m_pickHitProxyId = hitProxyId;
+        m_pickResolved   = resolved;
+        m_pickEntityName = std::move(entityName);
+        m_pickEntityGuid = std::move(entityGuid);
     }
 
     void VerifyReport::Evaluate(const std::vector<ProbeSpec>& specs)
@@ -288,16 +314,70 @@ namespace Arcane
                 break;
             }
             case ProbeKind::Pick:
-                // DEFERRED, not merely unimplemented: VerifyReport has no
-                // channel for an entity-id readback at all in this task --
-                // there is no SetPick()/AddPick() counterpart to
-                // SetCapture()/AddCensus() above, because the pick buffer
-                // this would read only exists once a host wires it through
-                // (Task 8/9). Reporting a fabricated id (or silently a 0)
-                // would look like a measured miss; an honest "error" is the
-                // only fact this component can state today.
-                entry["error"] = "pick probes are not evaluable yet -- entity-id readback is "
-                                  "wired into VerifyReport in a later task";
+                if (!m_pickSet)
+                {
+                    // Either this run never armed a pick readback at all (no
+                    // `pick@x,y` probe -- FirstPickProbe found nothing), or a
+                    // caller evaluated before calling SetPick() (the header's
+                    // own "call setters before Evaluate" contract).
+                    entry["error"] = "no pick set -- Evaluate() was called before SetPick(), or "
+                                      "this run never armed a pick readback";
+                }
+                else if (spec.x != m_pickArmedX || spec.y != m_pickArmedY)
+                {
+                    // Only the FIRST `pick@x,y` spec in a run is ever armed
+                    // (RuntimeFrame.cpp's RenderGraph arms FrameDesc::pickPixel
+                    // once, from FirstPickProbe) -- a second, differently
+                    // positioned pick probe in the same run asked a question
+                    // the readback never answered. Reporting THIS pixel's
+                    // hit-proxy id as if it belonged to that one would be a
+                    // wrong-but-plausible answer, not a fact.
+                    entry["error"] = "pixel (" + std::to_string(spec.x) + "," + std::to_string(spec.y) +
+                                      ") was never probed -- only the first pick@ probe in a run is "
+                                      "armed (this run armed (" + std::to_string(m_pickArmedX) + "," +
+                                      std::to_string(m_pickArmedY) + "))";
+                }
+                else if (!m_pickLanded)
+                {
+                    // Reuses RuntimeApp.cpp's own wording (ShutdownGraphPath's
+                    // --pick-probe report) verbatim, so the two paths read
+                    // alike rather than inventing a second vocabulary for the
+                    // same fact.
+                    entry["error"] = "NO READBACK LANDED -- the run was too short (the copy lands a "
+                                      "couple of frames after the pass that wrote it) or the probe "
+                                      "pixel was outside the surface";
+                }
+                else if (m_pickHitProxyId == 0)
+                {
+                    // A background miss is a FACT, not an error: the readback
+                    // landed and measured nothing there. `id` is the NIL
+                    // Guid's canonical string, never the integer 0 -- `id` is
+                    // ALWAYS the durable Identity.id shape in this report,
+                    // whether the pick hit or missed; `hitProxyId` is where
+                    // the raw, frame-scoped number belongs.
+                    entry["entity"]     = nullptr;
+                    entry["id"]         = "00000000-0000-0000-0000-000000000000";
+                    entry["hitProxyId"] = m_pickHitProxyId;
+                }
+                else if (!m_pickResolved)
+                {
+                    // A live entity WAS hit (hitProxyId != 0) but the host
+                    // could not resolve it all the way to an Identity
+                    // component -- an honest error, not a stable-looking id
+                    // that would silently churn between runs (this is
+                    // load-bearing: see the header's own comment on why
+                    // hitProxyId must never be reported under a field name
+                    // that implies durability).
+                    entry["error"] = "pick landed on hit-proxy " + std::to_string(m_pickHitProxyId) +
+                                      " but it could not be resolved to an entity carrying an "
+                                      "Identity component -- no durable id to report";
+                }
+                else
+                {
+                    entry["entity"]     = m_pickEntityName;
+                    entry["id"]         = m_pickEntityGuid;
+                    entry["hitProxyId"] = m_pickHitProxyId;
+                }
                 break;
             case ProbeKind::Census:
                 // NOT deferred: unlike Pick, AddCensus() already gives this
