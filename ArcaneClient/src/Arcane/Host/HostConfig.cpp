@@ -19,7 +19,7 @@ namespace Arcane
                                          "pairs with --frames/--probe/--report");
         cli.Option("fixed-dt", "0.0166666666666666666", "seconds per simulated frame "
                                          "(--offscreen only)").Type(CliType::Double);
-        cli.Option("probe", "",          "repeatable: luma@x,y | rgba@x,y | pick@x,y | census").Many();
+        cli.Option("probe", "",          "repeatable: brightness@x,y | luma@x,y | rgba@x,y | pick@x,y | census").Many();
         cli.Option("report", "",         "write the observation report to this JSON path");
         // NOT Dist-guarded: the NRI frame graph is the ONLY render path in
         // every configuration, so the flag that used to select it has nothing

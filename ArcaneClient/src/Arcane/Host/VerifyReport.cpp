@@ -20,10 +20,11 @@ namespace Arcane
         };
 
         constexpr KindInfo kKinds[] = {
-            { "luma",   ProbeKind::Luma,   true  },
-            { "rgba",   ProbeKind::Rgba,   true  },
-            { "pick",   ProbeKind::Pick,   true  },
-            { "census", ProbeKind::Census, false },
+            { "brightness", ProbeKind::Brightness, true  },
+            { "luma",       ProbeKind::Luma,       true  },
+            { "rgba",       ProbeKind::Rgba,       true  },
+            { "pick",       ProbeKind::Pick,       true  },
+            { "census",     ProbeKind::Census,     false },
         };
 
         const KindInfo* FindKind(std::string_view name) noexcept
@@ -97,7 +98,7 @@ namespace Arcane
         if (!found)
         {
             error = "unknown probe kind '" + std::string(kindText) +
-                    "' -- expected one of luma, rgba, pick, census";
+                    "' -- expected one of brightness, luma, rgba, pick, census";
             return std::nullopt;
         }
 
@@ -193,6 +194,46 @@ namespace Arcane
 
             switch (spec.kind)
             {
+            case ProbeKind::Brightness:
+            {
+                unsigned char r = 0, g = 0, b = 0, a = 0;
+                if (!m_captureSet)
+                {
+                    entry["error"] = "no capture set -- Evaluate() was called before SetCapture()";
+                }
+                else if (!ReadTexel(m_captureWidth, m_captureHeight, m_captureRgba, spec.x, spec.y, r, g, b, a))
+                {
+                    entry["error"] = "pixel (" + std::to_string(spec.x) + "," + std::to_string(spec.y) +
+                                      ") is outside the " + std::to_string(m_captureWidth) + "x" +
+                                      std::to_string(m_captureHeight) + " capture";
+                }
+                else
+                {
+                    // The SUM `r + g + b` is VERBATIM from NriGraphPixelTest.cpp's
+                    // Luma(const Rgba&): `static_cast<int>(p.r) +
+                    // static_cast<int>(p.g) + static_cast<int>(p.b)`. That
+                    // function's own comment calls this "deliberately crude
+                    // and integer... never for a colour-accurate comparison"
+                    // -- reused unchanged rather than reinvented, because two
+                    // different definitions of brightness in one codebase is
+                    // a bug generator, and the pixel tests are the reference
+                    // this report has to agree with. The division by 765
+                    // (255*3) is THIS component's own addition, not part of
+                    // the reused expression: it normalises the sum's natural
+                    // 0-765 range to [0,1] because this JSON is a
+                    // cross-process contract Servitor parses without ever
+                    // seeing the pixel test's raw integer scale.
+                    //
+                    // Named "brightness", not "luma": this is an UNWEIGHTED
+                    // channel sum, not a perceptual quantity -- pure red and
+                    // pure green both read ~0.33 here despite being visibly
+                    // far apart in brightness. See ProbeKind::Luma below for
+                    // the weighted formula that name actually promises.
+                    const int sum = static_cast<int>(r) + static_cast<int>(g) + static_cast<int>(b);
+                    entry["value"] = static_cast<double>(sum) / (255.0 * 3.0);
+                }
+                break;
+            }
             case ProbeKind::Luma:
             {
                 unsigned char r = 0, g = 0, b = 0, a = 0;
@@ -208,19 +249,21 @@ namespace Arcane
                 }
                 else
                 {
-                    // VERBATIM from NriGraphPixelTest.cpp's Luma(const Rgba&):
-                    // `static_cast<int>(p.r) + static_cast<int>(p.g) + static_cast<int>(p.b)`.
-                    // That function's own comment calls this "deliberately
-                    // crude and integer... never for a colour-accurate
-                    // comparison" -- reused unchanged rather than reinvented,
-                    // because two different definitions of brightness in one
-                    // codebase is a bug generator, and the pixel tests are
-                    // the reference this report has to agree with. Normalised
-                    // to [0, 1] here (the sum's natural range is 0-765) since
-                    // this JSON is a cross-process contract Servitor parses
-                    // without ever seeing the pixel test's raw integer scale.
-                    const int sum = static_cast<int>(r) + static_cast<int>(g) + static_cast<int>(b);
-                    entry["value"] = static_cast<double>(sum) / (255.0 * 3.0);
+                    // Rec.709 luma (Y'): 0.2126*R + 0.7152*G + 0.0722*B. This
+                    // is Y' (luma), not Y (luminance) -- Y' is DEFINED on
+                    // gamma-encoded values, so the weights apply directly to
+                    // these bytes with NO sRGB-to-linear conversion. That is
+                    // correct here specifically because the capture is
+                    // already gamma-encoded (see the header's capture-format
+                    // note, sourced from kGraphOffscreenFormat's own
+                    // comment) -- linearising first would be the right move
+                    // for luminance, and the wrong one for luma. Channel
+                    // bytes are already 0-255, and the weights sum to 1, so
+                    // dividing by 255 alone lands the result in [0,1].
+                    const double y = 0.2126 * static_cast<double>(r) +
+                                      0.7152 * static_cast<double>(g) +
+                                      0.0722 * static_cast<double>(b);
+                    entry["value"] = y / 255.0;
                 }
                 break;
             }

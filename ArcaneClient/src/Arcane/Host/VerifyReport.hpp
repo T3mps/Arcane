@@ -1,8 +1,8 @@
 #pragma once
 
 // VerifyReport: turns an offscreen host's capture into machine-readable FACTS
-// an agent can assert on -- probe specs (`luma@640,360`, `census`, ...), their
-// evaluation against one captured frame, and a JSON report.
+// an agent can assert on -- probe specs (`brightness@640,360`, `census`, ...),
+// their evaluation against one captured frame, and a JSON report.
 //
 // This is the boundary between the engine tier and the separate, optional
 // Servitor package: Servitor parses this JSON WITHOUT linking the engine, so
@@ -16,6 +16,17 @@
 // component's job, not HostConfig's -- see HostConfig.hpp's `probes` comment.
 // Feeding a real capture/census into this component from a running host is
 // Task 8, not here: this header only defines the component and its contract.
+//
+// CAPTURE FORMAT ASSUMPTION (read before touching Brightness/Luma below):
+// SetCapture's bytes come from ReadCapture, which reads back
+// kGraphOffscreenFormat -- BGRA8_UNORM, NOT a `_SRGB` format
+// (NriGraphContext.hpp:284-293's own comment: "Display-referred... the
+// tonemap already gamma-2.2 encodes, so a plain UNORM target matches what a
+// real backbuffer shows"). That means every byte SetCapture receives is
+// ALREADY gamma-encoded (display-referred), not scene-linear. Luma (Y') is
+// defined ON gamma-encoded values -- its weights apply directly to these
+// bytes, no linearisation step. Do not add an sRGB-to-linear conversion here;
+// that would be correct for LUMINANCE (Y), which this is deliberately not.
 
 #include <Arcane/Base/Api.hpp>
 
@@ -29,16 +40,32 @@
 
 namespace Arcane
 {
-    // The probe vocabulary. Luma/Rgba/Pick are POSITIONAL (`kind@x,y`); Census
-    // is ARGLESS (`census`, no `@...`) -- it asks a question about the whole
-    // scene's material binding, not one pixel. See ParseProbe for the exact
-    // grammar and ProbeSpec below for which fields each kind actually uses.
-    enum class ProbeKind : std::uint8_t { Luma, Rgba, Pick, Census };
+    // The probe vocabulary. Brightness/Luma/Rgba/Pick are POSITIONAL
+    // (`kind@x,y`); Census is ARGLESS (`census`, no `@...`) -- it asks a
+    // question about the whole scene's material binding, not one pixel. See
+    // ParseProbe for the exact grammar and ProbeSpec below for which fields
+    // each kind actually uses.
+    //
+    // One line each, because an agent reads the JSON this produces, not this
+    // header -- but "what does this number mean" has to be answerable here,
+    // without archaeology, for the next engineer:
+    //   Brightness -- unweighted (R+G+B) / 765, NriGraphPixelTest.cpp's own
+    //                 Luma() reused verbatim (see VerifyReport.cpp). Renamed
+    //                 FROM "luma" because it is not perceptual -- pure red
+    //                 and pure green both read ~0.33 under this formula
+    //                 despite being ~3x apart in perceived brightness.
+    //   Luma       -- Rec.709 Y': 0.2126*R + 0.7152*G + 0.0722*B, weights
+    //                 applied DIRECTLY to the gamma-encoded byte values (see
+    //                 the capture-format note above), normalised to [0,1].
+    //   Rgba       -- the four raw channel bytes at (x, y), 0-255 each.
+    //   Pick       -- the entity id at (x, y). DEFERRED: no data channel yet.
+    //   Census     -- the six SceneRenderResolver::MaterialCensus counts.
+    enum class ProbeKind : std::uint8_t { Brightness, Luma, Rgba, Pick, Census };
 
     struct ProbeSpec
     {
         ProbeKind    kind{};
-        std::int32_t x = 0, y = 0;   // only meaningful for Luma/Rgba/Pick
+        std::int32_t x = 0, y = 0;   // only meaningful for Brightness/Luma/Rgba/Pick
         std::string  raw;            // as typed, echoed into the report
     };
 
@@ -48,8 +75,8 @@ namespace Arcane
     // coordinate, or a kind this build does not know. This is a REFUSAL, not
     // a silent skip -- a probe an agent asked for and silently never got is a
     // worse failure than one that never ran, because it is invisible in the
-    // report (`ArcaneRuntime --probe luam@1,2` typo'd would otherwise just
-    // vanish rather than tell anyone).
+    // report (`ArcaneRuntime --probe brigtness@1,2` typo'd would otherwise
+    // just vanish rather than tell anyone).
     //
     // Coordinates are unsigned on purpose, matching --pick-probe's own parse
     // (HostConfig.cpp): a NEGATIVE probe pixel is not a coordinate, it is a
@@ -71,7 +98,7 @@ namespace Arcane
         void SetRun(std::string backend, bool offscreen, std::uint64_t framesRendered,
                     std::string exitReason);
 
-        // The captured frame Luma/Rgba probes read against. `rgba` is TIGHT
+        // The captured frame Brightness/Luma/Rgba probes read against. `rgba` is TIGHT
         // RGBA8 (row stride == w*4), the same shape ReadCapture hands back --
         // see NriGraphPixelTest.cpp's `At()` helper, which this reuses the
         // indexing math from.

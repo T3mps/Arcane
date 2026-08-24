@@ -17,9 +17,23 @@
 #include <string>
 #include <vector>
 
+// The three TEST_CASEs immediately below are the Task-7 brief's original
+// pinned cases, UPDATED for the fix-round rename: the brief's "luma" probe
+// tested the unweighted (R+G+B)/765 sum, which is now named "brightness"
+// (see VerifyReport.hpp's ProbeKind comment for why -- it is not perceptual).
+// "luma@640,360" is kept as a second assertion in the first case below so the
+// new kind's grammar gets the same pinned coverage the old one had.
 TEST_CASE("verify: probe specs parse, and malformed ones are refused", "[verify]")
 {
     std::string err;
+    const auto brightness = Arcane::ParseProbe("brightness@640,360", err);
+    REQUIRE(brightness.has_value());
+    CHECK(brightness->kind == Arcane::ProbeKind::Brightness);
+    CHECK(brightness->x == 640);
+    CHECK(brightness->y == 360);
+
+    // Luma is a second, distinct positional kind (Rec.709, added alongside
+    // the rename) -- same grammar, same refusal rules, exercised here too.
     const auto luma = Arcane::ParseProbe("luma@640,360", err);
     REQUIRE(luma.has_value());
     CHECK(luma->kind == Arcane::ProbeKind::Luma);
@@ -30,14 +44,14 @@ TEST_CASE("verify: probe specs parse, and malformed ones are refused", "[verify]
     REQUIRE(census.has_value());
     CHECK(census->kind == Arcane::ProbeKind::Census);
 
-    CHECK_FALSE(Arcane::ParseProbe("census@1,2", err).has_value());   // args to an argless kind
-    CHECK_FALSE(Arcane::ParseProbe("luma", err).has_value());         // kind missing its args
-    CHECK_FALSE(Arcane::ParseProbe("luma@-1,2", err).has_value());    // negative is a typo
-    CHECK_FALSE(Arcane::ParseProbe("bogus@1,2", err).has_value());    // unknown kind
+    CHECK_FALSE(Arcane::ParseProbe("census@1,2", err).has_value());        // args to an argless kind
+    CHECK_FALSE(Arcane::ParseProbe("brightness", err).has_value());        // kind missing its args
+    CHECK_FALSE(Arcane::ParseProbe("brightness@-1,2", err).has_value());   // negative is a typo
+    CHECK_FALSE(Arcane::ParseProbe("bogus@1,2", err).has_value());         // unknown kind
     CHECK_FALSE(err.empty());
 }
 
-TEST_CASE("verify: a luma probe reads the capture and lands in the JSON", "[verify]")
+TEST_CASE("verify: a brightness probe reads the capture and lands in the JSON", "[verify]")
 {
     // 2x1 capture: black pixel, white pixel.
     const std::vector<unsigned char> rgba = { 0,0,0,255,  255,255,255,255 };
@@ -47,7 +61,7 @@ TEST_CASE("verify: a luma probe reads the capture and lands in the JSON", "[veri
     rep.SetCapture(2, 1, rgba);
 
     std::string err;
-    rep.Evaluate({ *Arcane::ParseProbe("luma@0,0", err), *Arcane::ParseProbe("luma@1,0", err) });
+    rep.Evaluate({ *Arcane::ParseProbe("brightness@0,0", err), *Arcane::ParseProbe("brightness@1,0", err) });
 
     const auto doc = nlohmann::json::parse(rep.ToJson());
     // The report is the boundary between the engine tier and the Servitor
@@ -59,6 +73,7 @@ TEST_CASE("verify: a luma probe reads the capture and lands in the JSON", "[veri
     CHECK(doc["framesRendered"] == 5);
     CHECK(doc["exitReason"] == "frames-complete");
     REQUIRE(doc["probes"].size() == 2);
+    CHECK(doc["probes"][0]["kind"] == "brightness");
     CHECK(doc["probes"][0]["value"].get<double>() == Catch::Approx(0.0).margin(0.01));
     CHECK(doc["probes"][1]["value"].get<double>() == Catch::Approx(1.0).margin(0.01));
 }
@@ -69,12 +84,36 @@ TEST_CASE("verify: an out-of-bounds probe reports a fact, it does not crash", "[
     rep.SetRun("D3D12", true, 1, "frames-complete");
     rep.SetCapture(2, 1, { 0,0,0,255, 255,255,255,255 });
     std::string err;
-    rep.Evaluate({ *Arcane::ParseProbe("luma@99,99", err) });
+    rep.Evaluate({ *Arcane::ParseProbe("brightness@99,99", err) });
 
     const auto doc = nlohmann::json::parse(rep.ToJson());
     REQUIRE(doc["probes"].size() == 1);
     CHECK(doc["probes"][0].contains("error"));
     CHECK_FALSE(doc["probes"][0].contains("value"));
+}
+
+TEST_CASE("verify: brightness and luma diverge on a pure-green pixel -- the whole point of the rename", "[verify]")
+{
+    // Pure green: brightness (unweighted) reads the same ~0.33 it would for
+    // pure red or pure blue -- exactly the blind spot that made "luma" the
+    // wrong name for it. Luma (Rec.709, G weighted 0.7152) reads far higher.
+    // If a future change ever made these two agree again, the rename would
+    // have bought nothing -- this is the test that catches that.
+    const std::vector<unsigned char> rgba = { 0, 255, 0, 255 };   // 1x1, pure green
+    Arcane::VerifyReport rep;
+    rep.SetRun("D3D12", true, 1, "frames-complete");
+    rep.SetCapture(1, 1, rgba);
+
+    std::string err;
+    rep.Evaluate({ *Arcane::ParseProbe("brightness@0,0", err), *Arcane::ParseProbe("luma@0,0", err) });
+
+    const auto doc = nlohmann::json::parse(rep.ToJson());
+    const double brightnessValue = doc["probes"][0]["value"].get<double>();
+    const double lumaValue       = doc["probes"][1]["value"].get<double>();
+
+    CHECK(brightnessValue == Catch::Approx(255.0 / 765.0).margin(0.01));   // ~0.333
+    CHECK(lumaValue       == Catch::Approx(0.7152).margin(0.01));          // Rec.709 G weight
+    CHECK(lumaValue - brightnessValue > 0.3);   // clearly, not marginally, different
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +196,7 @@ TEST_CASE("verify: a census probe reads AddCensus's data when set, and refuses w
 TEST_CASE("verify: a pick probe is a deferred, honest refusal -- no fabricated entity id", "[verify]")
 {
     // Judgment call (Task 7): Pick PARSES today (the syntax is fully defined,
-    // refused the same way Luma/Rgba are on bad input) but never EVALUATES,
+    // refused the same way Brightness/Luma/Rgba are on bad input) but never EVALUATES,
     // because VerifyReport has no channel for an entity-id readback in this
     // task -- unlike Census, there is no AddPick()/SetPick() counterpart to
     // AddCensus()/SetCapture(). It stays an error even with a capture set,
@@ -182,17 +221,19 @@ TEST_CASE("verify: every probe entry carries exactly one of value/entity or erro
 {
     // The invariant the whole report exists to uphold, exercised across every
     // kind and every set/unset combination of the data those kinds read --
-    // luma/rgba with and without a capture, in and out of bounds; census with
-    // and without AddCensus; pick, always deferred. If a future edit to
-    // Evaluate() ever sets both fields, or neither, on ANY branch -- not just
-    // the ones the pinned Task-7 cases happen to cover -- this fails.
+    // brightness/luma/rgba with and without a capture, in and out of bounds;
+    // census with and without AddCensus; pick, always deferred. If a future
+    // edit to Evaluate() ever sets both fields, or neither, on ANY branch --
+    // not just the ones the pinned Task-7 cases happen to cover -- this fails.
     std::string err;
     const std::vector<Arcane::ProbeSpec> specs = {
+        *Arcane::ParseProbe("brightness@0,0", err),
+        *Arcane::ParseProbe("brightness@50,50", err),   // will be out of bounds
         *Arcane::ParseProbe("luma@0,0", err),
-        *Arcane::ParseProbe("luma@50,50", err),     // will be out of bounds
+        *Arcane::ParseProbe("luma@50,50", err),          // out of bounds
         *Arcane::ParseProbe("rgba@0,0", err),
-        *Arcane::ParseProbe("rgba@50,50", err),      // out of bounds
-        *Arcane::ParseProbe("pick@0,0", err),        // always deferred
+        *Arcane::ParseProbe("rgba@50,50", err),          // out of bounds
+        *Arcane::ParseProbe("pick@0,0", err),            // always deferred
         *Arcane::ParseProbe("census", err),
     };
 
