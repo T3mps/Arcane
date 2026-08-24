@@ -1300,6 +1300,15 @@ correct only because `EditorPanels.cpp:389` runs `BuildDefaultLayout` when
       since. Outcome is either "reproduced, trigger characterised" or "not
       reproduced in three runs, recorded dormant, detector in place".
 
+## H2. Precondition for ANY Dist run - do not skip
+
+- [ ] `msbuild ReferenceProject.slnx /p:Configuration=Dist` **before** any Dist
+      offscreen run. `ReferenceProject.slnx` is a **separate solution the engine
+      build never drives**, so `ReferenceGame.dll` goes stale on a config flip and
+      the host fails with "plugin: initial load failed". This is the known
+      single-slot `Binaries/` + config-flip failure mode; it cost a debugging
+      round during execution and is documented nowhere else.
+
 ## I. Things that CANNOT be closed at the desk - named so they are not assumed
 
 - **The GPU-stall watchdog is armed but has never been observed firing.**

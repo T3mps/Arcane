@@ -365,7 +365,7 @@ kinds, and then **exactly one of a result or an `error` -- never neither,
 never both.** Enforced in code, not just by convention: `VerifyReport::Evaluate`
 asserts `entry.contains("value") || entry.contains("entity")` XOR
 `entry.contains("error")` at the point every kind's branches converge, in every
-build (Debug fires it; Release/Dist still evaluate the condition).
+build (Debug fires it; Debug only -- `ARC_ASSERT` resolves to `MOSAIC_ASSERT`, which `Mosaic/Assert.hpp:193-199` compiles out under `NDEBUG`, so Release/Dist do NOT evaluate the condition).
 
 | Field | Type | Present when |
 |---|---|---|
