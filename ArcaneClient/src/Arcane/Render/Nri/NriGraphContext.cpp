@@ -1821,18 +1821,68 @@ namespace Arcane
 
         ++m_frameIndex;
 
-        // NO HEARTBEAT IS PUBLISHED HERE, and that is a choice rather than an
-        // omission. Diagnostics::GpuHeartbeat holds ONE process-wide counter
-        // and its stall rule fires on "the value stopped changing"; two
-        // publishers with unrelated timelines would alternate values and read
-        // as progress forever, which would disarm the rule on exactly the case
-        // it exists to catch. The presenting context is the process's
-        // publisher (there is one), and its pacing fence only advances when the
-        // queue retires -- including this context's work, which shares the
-        // queue. An offscreen-ONLY host would therefore publish nothing and get
-        // silence, which is the documented behaviour for a host that never
-        // renders; giving it a publisher is a follow-up for whoever builds one.
+        // THE GPU-PROGRESS HEARTBEAT, published ONLY when the caller has said
+        // this context is its process's sole graph context
+        // (SetGpuHeartbeatPublisher -- the header carries the full contract).
+        //
+        // The DEFAULT is still silence, and for the original reason:
+        // Diagnostics::GpuHeartbeat holds ONE process-wide counter whose stall
+        // rule fires on "the value stopped changing", so two publishers with
+        // unrelated timelines would alternate values and read as progress
+        // forever -- disarming the rule on exactly the case it exists to
+        // catch. In the editor's topology the PRESENTING context is that one
+        // publisher, and its pacing fence only advances when the queue
+        // retires, this context's work included (they share the queue).
+        //
+        // What changed is that the engine now has a host that RENDERS AND
+        // NEVER PRESENTS (ArcaneRuntime --offscreen). "The presenting context
+        // publishes" covered every case while every device-ful host presented;
+        // it covers nothing when there is no presenting context, and the
+        // result was not a false positive but NO GPU-stall coverage at all --
+        // g_gpuBeatSeen never armed, so Diagnostics.cpp's rule returned before
+        // it looked at anything, and a hang during an offscreen run wrote no
+        // capture. The opt-in closes that without touching the two-context
+        // case, which never calls it.
+        //
+        // The VALUE is the pacing fence's COMPLETED value, deliberately, and
+        // for the same reason the present path publishes
+        // NriSwapChain::CompletedFrameValue() rather than its frame index:
+        // m_frameIndex is what the CPU has SUBMITTED and keeps climbing while
+        // the GPU is wedged. GetFenceValue advances only when the trailing
+        // signal submit above has actually retired.
+        //
+        // PLACED AFTER THAT STAMP, mirroring the present path's "after the
+        // frame's last submit": a beat published before this frame's work was
+        // signalled would report progress the GPU had not yet made. The
+        // FRESHNESS half of the rule is already wired on this path --
+        // PollingWaitForTimelineFence (top of this file) calls
+        // Diagnostics::GpuHeartbeatRefresh() while it polls, which is what
+        // keeps a wedged GPU reading as "publishing, but frozen" instead of as
+        // silence.
+        if (m_publishGpuBeat && m_offscreenFence)
+            NriDiagnostics::PublishHeartbeat(m_device->Core().GetFenceValue(*m_offscreenFence));
+
         return FrameOutcome::Presented;
+    }
+
+    void NriGraphContext::SetGpuHeartbeatPublisher(bool enable) noexcept
+    {
+        // REFUSED, not silently ignored, on a host-window context: that
+        // context already publishes unconditionally from RenderFrame, so a
+        // caller reaching here has misread the topology and the flag would do
+        // nothing -- which is the failure mode that hides a misreading rather
+        // than surfacing it. Not latched: it is a caller mistake, not a render
+        // error, and it must not fail an otherwise clean run's exit code.
+        if (m_mode != Mode::Offscreen)
+        {
+            ARC_WARN("[nri-graph] SetGpuHeartbeatPublisher on a HOST-WINDOW context -- ignored; "
+                     "the present path is already this process's GPU-progress publisher");
+            return;
+        }
+        m_publishGpuBeat = enable;
+        if (enable)
+            ARC_INFO("[nri-graph] offscreen context is this process's GPU-progress publisher -- "
+                     "the gpu-stall watchdog is armed for a run that never presents");
     }
 
     std::optional<std::uint32_t> NriGraphContext::ProbeId() const noexcept

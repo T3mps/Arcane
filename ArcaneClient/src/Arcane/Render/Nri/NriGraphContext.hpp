@@ -833,6 +833,41 @@ namespace Arcane
         // the offscreen twin of it and does not replace it.
         void ResizeOffscreen(std::uint32_t width, std::uint32_t height);
 
+        // ===== THE GPU-PROGRESS HEARTBEAT, FOR AN OFFSCREEN-ONLY PROCESS ====
+        // OFF by default, and OFFSCREEN MODE ONLY (a host-window context is
+        // the publisher unconditionally -- see RenderFrame).
+        //
+        // Diagnostics::GpuHeartbeat holds ONE process-wide counter and its
+        // stall rule fires on "the value stopped changing", so TWO publishers
+        // with unrelated fence timelines would alternate values and read as
+        // progress forever -- disarming the rule on exactly the case it exists
+        // to catch. That is why RenderFrameOffscreen does not publish on its
+        // own: in the EDITOR topology the presenting chrome context is the
+        // process's publisher, and its pacing fence only advances when the
+        // queue retires -- this context's work included, since they share the
+        // queue.
+        //
+        // A HOST THAT RENDERS AND NEVER PRESENTS BREAKS THAT ASSUMPTION, and
+        // it is a host this engine now has (ArcaneRuntime --offscreen). With
+        // no presenting context there is no publisher at all, so Diagnostics'
+        // `g_gpuBeatSeen` never arms and the GPU-stall watchdog stays disabled
+        // for the whole run -- a GPU hang produces NO capture. That is not a
+        // false positive; it is no coverage.
+        //
+        // THE CALLER ASSERTS THE TOPOLOGY, because only the caller knows it:
+        // "this offscreen context is the ONLY graph context in this process."
+        // A host that also holds a presenting context must NOT call this --
+        // that is the two-publisher case above. Refused (logged, no effect) on
+        // a host-window context, which already publishes.
+        //
+        // What gets published is the offscreen pacing fence's COMPLETED value,
+        // the exact analogue of the present path's
+        // NriSwapChain::CompletedFrameValue(): it advances only when the GPU
+        // retires the trailing signal submit, whereas m_frameIndex is what the
+        // CPU has submitted and advances happily while the GPU is wedged --
+        // which is precisely the state this heartbeat exists to make visible.
+        void SetGpuHeartbeatPublisher(bool enable) noexcept;
+
         // Maps the buffer the last capture frame read the backbuffer into and
         // hands back TIGHT RGBA8 -- swizzled from BGRA when that is what the
         // swapchain resolved to, so the bytes are display-referred RGBA
@@ -1263,6 +1298,11 @@ namespace Arcane
         // signal-only QueueSubmit and waited on kSwapchainFramesInFlight deep
         // at the top of the next frame -- the same 1-based values, the same
         // depth and the same polling wait NriSwapChain's pacing fence uses.
+        // "This offscreen context is its process's ONLY graph context, so it
+        // owes the GPU-progress heartbeat nobody else is publishing." The
+        // CALLER asserts it (SetGpuHeartbeatPublisher); false by default, so
+        // the editor's two-context topology is unchanged by construction.
+        bool          m_publishGpuBeat  = false;
         nri::Texture* m_offscreen       = nullptr;
         nri::Fence*   m_offscreenFence  = nullptr;
         std::uint32_t m_offscreenWidth  = 0;

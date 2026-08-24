@@ -103,6 +103,27 @@ namespace Arcane
             std::fprintf(stderr, "error: --fixed-dt wants a positive number of seconds\n");
             return { std::nullopt, 2 };
         }
+        // AN OPEN-ENDED OFFSCREEN RUN CANNOT BE STOPPED, and that is a
+        // stronger claim than "it is inconvenient". A windowed run has two
+        // exits the frame loop honours -- the window's close button
+        // (WindowEvents::quitRequested) and the `quit` input action, which
+        // needs the window FOCUSED to deliver a key. --offscreen never maps
+        // the window, so it has neither: no titlebar to click and nothing the
+        // keyboard can reach. maxFrames == 0 therefore means "run forever,
+        // killable only from outside the process".
+        //
+        // That is exactly backwards for the workflow this mode exists for. An
+        // agent spawning a bare `--offscreen` spawns a process it cannot stop
+        // by any means it owns, and it will sit there until something else
+        // reaps it. Refuse at parse time -- the same treatment, and the same
+        // idiom, --probe and --screenshot already get one screen up.
+        if (cfg.offscreen && cfg.maxFrames == 0)
+        {
+            std::fprintf(stderr, "error: --offscreen requires --frames N (an unmapped window has no "
+                                 "close button and cannot be focused for the quit action, so an "
+                                 "open-ended offscreen run has no way to stop itself)\n");
+            return { std::nullopt, 2 };
+        }
 
 #if !defined(ARCANE_DIST)
         // --pick-probe x,y. Parsed HERE rather than at
@@ -158,6 +179,30 @@ namespace Arcane
                 {
                     std::fprintf(stderr, "error: --pick-probe requires --frames N (the readback "
                                          "lands a couple of frames after the pass that wrote it)\n");
+                    return { std::nullopt, 2 };
+                }
+
+                // ...AND IT DOES NOT WORK OFFSCREEN YET, so refuse it there
+                // rather than let the run answer wrongly. Arming is declined
+                // on an offscreen context BY CONSTRUCTION (NriGraphContext.cpp
+                // -- `m_pickArmed = config.pickProbe && !IsOffscreen()`, whose
+                // own comment explains that the editor's viewport drives its
+                // probe per frame through FrameDesc::pickPixel instead). So
+                // the pick nodes are never built, no readback ever lands, and
+                // the run exits 1 reporting "the run was too short ... or the
+                // probe pixel was outside the surface" -- BOTH of which are
+                // false. A confidently wrong diagnosis costs more than a
+                // refusal, and costs most to the agent this mode is for.
+                //
+                // Temporary by intent: when the offscreen pick is driven
+                // per frame through FrameDesc::pickPixel, this refusal is what
+                // gets deleted.
+                if (cfg.offscreen)
+                {
+                    std::fprintf(stderr, "error: --pick-probe does not work with --offscreen yet "
+                                         "(an offscreen context declines the fixed probe pixel, so "
+                                         "no readback would ever land and the run would report a "
+                                         "miss it never measured)\n");
                     return { std::nullopt, 2 };
                 }
 

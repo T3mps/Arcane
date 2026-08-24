@@ -93,12 +93,16 @@ bool PumpAndResize(FrameIo& io)
     }
 
     // EXACTLY ONE PUMP PER FRAME, OF THE ONE WINDOW THIS PROCESS HAS.
-    // There is one graphics device and one swapchain, and that swapchain
+    // There is one graphics device, and AT MOST one swapchain: windowed, it
     // binds THIS window -- DXGI allows only one flip-model swapchain per
     // HWND, so a second presentation surface would force a second window
-    // and this line would have to choose between them. SDL's event queue
-    // is process-wide and Window::PumpEvents drains all of it, so
-    // "exactly one pump" is the rule, and there is one window to name.
+    // and this line would have to choose between them. Under --offscreen
+    // there is no swapchain at all, and the window below is never mapped --
+    // but it still EXISTS and is still the object ImGui's platform backend
+    // and the input stack were initialised against, so it is still pumped,
+    // and it is still the only one there is. SDL's event queue is
+    // process-wide and Window::PumpEvents drains all of it, so "exactly one
+    // pump" is the rule in both modes, and there is one window to name.
     Arcane::Window& eventWindow = io.gpu->Win();
     const Arcane::WindowEvents events = eventWindow.PumpEvents();
     if (events.quitRequested) return true;
@@ -379,8 +383,11 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // The view is the SCENE camera PushSceneCamera just installed, so
     // the id pass rasterises the same silhouettes the batch node drew.
     // They cannot disagree even in principle: both are fitted to
-    // frameWidth/frameHeight above, which IS the graph swapchain's
-    // extent.
+    // frameWidth/frameHeight above, which IS the vehicle's own surface
+    // extent (FrameExtent -- the swapchain's, or the offscreen output's).
+    // In practice this block is windowed-only regardless: --pick-probe is
+    // refused at parse time alongside --offscreen (HostConfig.cpp), because
+    // an offscreen context declines to arm the fixed probe pixel.
     if (io.config.pickProbe)
     {
         const Arcane::PickView view{ io.runtime->CameraOffset(), io.runtime->CameraZoom() };

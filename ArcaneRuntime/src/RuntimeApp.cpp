@@ -426,6 +426,24 @@ void RuntimeApp::MainLoop()
             ShutdownGraphPath();
             return;
         }
+
+        // THE GPU-STALL WATCHDOG, which would otherwise be silently off for
+        // this whole run. Diagnostics' GPU-progress rule arms only once
+        // something has PUBLISHED a fence value, and until now the engine's
+        // sole publisher was the swapchain present path -- which this mode
+        // does not have. Nothing failed loudly: g_gpuBeatSeen stayed false,
+        // the rule returned before it looked at anything, and a wedged GPU
+        // produced no diagnostics capture at all. Silence rather than a false
+        // positive -- the worse of the two for the mode whose entire job is to
+        // be the gate.
+        //
+        // THIS HOST IS ENTITLED TO ASSERT IT because it knows its own
+        // topology: under --offscreen it built exactly ONE graph context and
+        // there is no presenting one (the reveal above was skipped and
+        // m_graphContext stays null). The editor, which holds a chrome context
+        // AND a viewport context over one device, must never call this -- and
+        // does not.
+        m_offscreen->Graph().SetGpuHeartbeatPublisher(true);
     }
     else
     {

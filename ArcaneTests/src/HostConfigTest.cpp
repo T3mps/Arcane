@@ -183,6 +183,31 @@ TEST_CASE("host config: --pick-probe still requires --frames, no longer requires
     REQUIRE(plain.config.has_value());
     CHECK_FALSE(plain.config->pickProbe);
 }
+
+// The refusal that keeps a CONFIDENTLY WRONG answer unreachable. An offscreen
+// context declines to arm the fixed probe pixel by construction
+// (NriGraphContext.cpp -- `m_pickArmed = config.pickProbe && !IsOffscreen()`),
+// so the pick nodes are never built, no readback lands, and the run exits 1
+// blaming a short run or an out-of-range pixel -- neither of which happened.
+// Refuse the combination at parse time until the offscreen pick is driven per
+// frame through FrameDesc::pickPixel.
+TEST_CASE("host config: --pick-probe with --offscreen is refused at parse time", "[host][nri]") {
+    const auto both = Run({"--offscreen", "--frames", "60", "--pick-probe", "640,360"});
+    REQUIRE_FALSE(both.config.has_value());
+    CHECK(both.exitCode == 2);
+
+    // Neither flag alone is affected -- the refusal is about the PAIR, and a
+    // refusal that leaked onto either one would silently retire a working
+    // desk item.
+    const auto probeOnly = Run({"--frames", "60", "--pick-probe", "640,360"});
+    REQUIRE(probeOnly.config.has_value());
+    CHECK(probeOnly.config->pickProbe);
+
+    const auto offscreenOnly = Run({"--offscreen", "--frames", "60"});
+    REQUIRE(offscreenOnly.config.has_value());
+    CHECK(offscreenOnly.config->offscreen);
+    CHECK_FALSE(offscreenOnly.config->pickProbe);
+}
 #endif
 // UNGUARDED, deliberately: every case above this point that touches
 // --nri-graph is Dist-excluded (several pair it with --pick-probe/--crash-gpu,
@@ -249,4 +274,33 @@ TEST_CASE("hostconfig: a non-positive --fixed-dt is refused", "[hostconfig]")
 {
     const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "1", "--fixed-dt", "0" });
     CHECK(out.exitCode == 2);
+}
+
+// THE UNSTOPPABLE-PROCESS REFUSAL. A windowed run has two exits the frame loop
+// honours: the window's close button, and the `quit` input action -- which
+// needs the window FOCUSED to deliver a key. An unmapped window has neither,
+// so a bare --offscreen with maxFrames == 0 runs until something outside the
+// process reaps it. In the agent workflow this mode exists for, that is a
+// process the spawner cannot stop by any means it owns.
+TEST_CASE("hostconfig: --offscreen without --frames is refused", "[hostconfig]")
+{
+    const auto bare = ParseArgs({ "h.exe", "--offscreen" });
+    CHECK(bare.exitCode == 2);
+    CHECK_FALSE(bare.config.has_value());
+
+    // --frames 0 is the SAME state spelled explicitly (0 == "run until quit"),
+    // and it must not slip past a check written against the default.
+    const auto zero = ParseArgs({ "h.exe", "--offscreen", "--frames", "0" });
+    CHECK(zero.exitCode == 2);
+    CHECK_FALSE(zero.config.has_value());
+
+    // ...and the refusal is about --offscreen ONLY. A windowed open-ended run
+    // still has its close button, so it stays legal -- this is exactly the
+    // pairing that would break if the check were written against maxFrames
+    // alone.
+    const auto windowed = ParseArgs({ "h.exe" });
+    REQUIRE(windowed.config.has_value());
+    CHECK(windowed.exitCode == 0);
+    CHECK(windowed.config->maxFrames == 0);
+    CHECK_FALSE(windowed.config->offscreen);
 }

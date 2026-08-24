@@ -45,6 +45,13 @@ namespace Arcane
         // Render the real frame graph with NO window shown and NO swapchain. Not
         // "--headless": that word already means DEVICE-LESS in this codebase
         // (SceneRenderResolver.hpp:211), and this mode is device-ful.
+        //
+        // REQUIRES --frames N, refused at parse time otherwise: an unmapped
+        // window has no close button and cannot be focused for the `quit`
+        // action, so an open-ended offscreen run has no exit of its own. It
+        // also REFUSES --pick-probe, which an offscreen context declines to
+        // arm. Both refusals carry their full reasoning at the check in the
+        // .cpp.
         bool            offscreen = false;
 
         // Fixed simulation delta, seconds. --offscreen only, refused elsewhere. The

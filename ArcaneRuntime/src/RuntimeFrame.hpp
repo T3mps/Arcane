@@ -57,11 +57,13 @@ namespace Arcane::RuntimeFrame
     // Everything MainLoop's body reaches through `this` or a loop-local,
     // bundled by reference/pointer so the functions below can read and write
     // it without becoming RuntimeApp members. NOTHING here is NEW state:
-    // every field is bound, once, in MainLoop to a RuntimeApp member or a
-    // MainLoop-scope local. Pointer fields mirror how MainLoop reaches the
-    // same object (m_gpu/m_graphContext via `->`, m_resolver/m_runtime/
-    // m_plugin likewise); reference fields mirror members it accesses with
-    // `.` (m_config, m_perf, the scalar/vector perf locals).
+    // every field is bound, once, in MainLoop to a RuntimeApp member, a
+    // MainLoop-scope local, or -- for `graph` -- the vehicle
+    // RuntimeApp::Graph() resolved out of the two mutually exclusive members
+    // that could hold one. Pointer fields mirror how MainLoop reaches the
+    // same object (m_gpu via `->`, the resolved graph likewise, m_resolver/
+    // m_runtime/m_plugin the same); reference fields mirror members it
+    // accesses with `.` (m_config, m_perf, the scalar/vector perf locals).
     struct FrameIo
     {
         // ---- the pointers MainLoop already owned ----------------------------
