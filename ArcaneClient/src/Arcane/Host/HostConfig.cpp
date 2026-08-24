@@ -21,6 +21,9 @@ namespace Arcane
                                          "(--offscreen only)").Type(CliType::Double);
         cli.Option("probe", "",          "repeatable: brightness@x,y | luma@x,y | rgba@x,y | pick@x,y | census").Many();
         cli.Option("report", "",         "write the observation report to this JSON path");
+        cli.Option("settle", "0",        "repeat the capture (render clock frozen) until two consecutive "
+                                         "frames compare byte-equal, up to N attempts (0 = off; "
+                                         "--offscreen only; needs --screenshot or --report)").Type(CliType::Uint);
         // NOT Dist-guarded: the NRI frame graph is the ONLY render path in
         // every configuration, so the flag that used to select it has nothing
         // left to select. Kept registered and parsed-and-ignored rather than
@@ -59,6 +62,7 @@ namespace Arcane
         cfg.fixedDtSeconds = r.GetAs<double>("fixed-dt");
         cfg.probes         = r.GetMany("probe");
         cfg.reportPath     = r.Get("report");
+        cfg.settleAttempts = r.GetAs<std::uint64_t>("settle");
         // "nri-graph" is intentionally never read here: it is registered
         // above (unconditionally) purely so a command line that still passes
         // it does not fail to parse. There is nothing left to store -- the
@@ -87,10 +91,10 @@ namespace Arcane
         // all if we compare strings. r.Supplied("fixed-dt") answers the actual
         // question: did the command line contain this option.
         const bool wantsOffscreenOnly = !cfg.probes.empty() || !cfg.reportPath.empty()
-                                      || r.Supplied("fixed-dt");
+                                      || r.Supplied("fixed-dt") || r.Supplied("settle");
         if (wantsOffscreenOnly && !cfg.offscreen)
         {
-            std::fprintf(stderr, "error: --fixed-dt/--probe/--report require --offscreen\n");
+            std::fprintf(stderr, "error: --fixed-dt/--probe/--report/--settle require --offscreen\n");
             return { std::nullopt, 2 };
         }
         if (!cfg.probes.empty() && cfg.maxFrames == 0)
@@ -101,6 +105,28 @@ namespace Arcane
         if (cfg.offscreen && cfg.fixedDtSeconds <= 0.0)
         {
             std::fprintf(stderr, "error: --fixed-dt wants a positive number of seconds\n");
+            return { std::nullopt, 2 };
+        }
+        // "Was --settle supplied" mirrors --fixed-dt's own r.Supplied() reasoning
+        // just above: a caller who explicitly typed the value that also means
+        // "off" gets a refusal, not a silent no-op indistinguishable from never
+        // having passed the flag.
+        if (r.Supplied("settle") && cfg.settleAttempts == 0)
+        {
+            std::fprintf(stderr, "error: --settle wants a positive attempt count (0 means \"off\", "
+                                 "which is what omitting the flag already means)\n");
+            return { std::nullopt, 2 };
+        }
+        // Settle compares CAPTURED frames (RuntimeFrame.cpp's CaptureTail) -- with
+        // neither --screenshot nor --report there is nowhere for that comparison
+        // to land, and (more importantly) nothing would ever arm the capture node
+        // that convergence is measured against, so the loop would spin until the
+        // OS killed it rather than ever reporting a result.
+        if (cfg.settleAttempts != 0 && cfg.screenshotPath.empty() && cfg.reportPath.empty())
+        {
+            std::fprintf(stderr, "error: --settle requires --screenshot or --report (it compares "
+                                 "captured frames; with neither, there is nowhere to land the "
+                                 "result and the run would never know when to stop)\n");
             return { std::nullopt, 2 };
         }
         // AN OPEN-ENDED OFFSCREEN RUN CANNOT BE STOPPED, and that is a

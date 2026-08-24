@@ -64,6 +64,47 @@ namespace Arcane
         // VerifyReport, not here: the kinds are that component's vocabulary.
         std::vector<std::string> probes;
 
+        // --settle N. --offscreen only, refused elsewhere -- same idiom as
+        // fixedDtSeconds above -- and requires --screenshot or --report too
+        // (RuntimeFrame.cpp's CaptureTail has nowhere to land the comparison
+        // otherwise, and the loop would never know when to stop). 0 = off.
+        //
+        // fixedDtSeconds fixes TIME; it does not fix CONTENT. Async shader
+        // compiles finish on a WALL-CLOCK schedule the sim clock does not
+        // control: ShaderCompiler::Poll's `readyAt` is measured in sim
+        // seconds, so DISPATCH is frame-indexed and deterministic, but the
+        // compile itself runs on a background thread and completes on real
+        // milliseconds. A `--frames N` run landing its capture before that
+        // finish shows the untextured fallback; one landing after shows the
+        // bound material -- same binary, same flags, back to back (see
+        // .superpowers/sdd/2026-08-23-agent-verification-offscreen-hosts/
+        // task-6-report.md's bisection: the boundary is exactly 12 frames,
+        // 0.2s debounce / (1/60s fixed dt)).
+        //
+        // N > 0 means: once the ordinary --frames budget above is spent,
+        // FREEZE the render/sim clock (RuntimeFrame.cpp's AdvanceSim) and
+        // keep re-rendering that same instant -- so nothing but async
+        // resource state can still change frame to frame -- capturing again
+        // each time, for up to N attempts, until two CONSECUTIVE captures
+        // compare BYTE-EQUAL. Freezing the clock is load-bearing, not an
+        // optimisation: ReferenceProject's PulseSprite material shades as a
+        // function of Time (Content/materials/pulse_sprite.arcmat), so
+        // comparing un-frozen frames would never converge on anything --
+        // every frame would legitimately differ regardless of whether the
+        // compile race has resolved.
+        //
+        // Byte equality, never a tolerance: same mode, same format, same
+        // capture path every attempt, so an honest bitwise compare is
+        // correct, and a perceptual comparator would hide exactly the
+        // failure this flag exists to catch (that is a later plan's job).
+        //
+        // NON-CONVERGENCE IS A FAILURE, reported explicitly -- exitReason
+        // "settle-not-converged" in the JSON report and a nonzero process
+        // exit code -- rather than silently handing back whatever the last
+        // attempt happened to render. See RuntimeFrame.cpp's CaptureTail and
+        // RuntimeApp.cpp's ShutdownGraphPath.
+        std::uint64_t settleAttempts = 0;
+
         // Write the observation report to this JSON path. Empty = off.
         std::string     reportPath = "";
 

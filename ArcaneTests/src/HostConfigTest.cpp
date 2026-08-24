@@ -282,6 +282,73 @@ TEST_CASE("hostconfig: a non-positive --fixed-dt is refused", "[hostconfig]")
 // so a bare --offscreen with maxFrames == 0 runs until something outside the
 // process reaps it. In the agent workflow this mode exists for, that is a
 // process the spawner cannot stop by any means it owns.
+// --settle N (Task 10). UNGUARDED like the block above: offscreen agent
+// verification must work in Release and Dist, not just dev builds.
+TEST_CASE("hostconfig: --settle defaults to 0 (off)", "[hostconfig]")
+{
+    const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "1", "--screenshot", "s.png" });
+    REQUIRE(out.exitCode == 0);
+    REQUIRE(out.config.has_value());
+    CHECK(out.config->settleAttempts == 0u);
+
+    // The bare defaults case (no --offscreen at all) carries the same 0.
+    const auto bare = ParseArgs({ "h.exe" });
+    REQUIRE(bare.config.has_value());
+    CHECK(bare.config->settleAttempts == 0u);
+}
+
+TEST_CASE("hostconfig: --settle without --offscreen is refused, not ignored", "[hostconfig]")
+{
+    const auto out = ParseArgs({ "h.exe", "--settle", "10", "--frames", "5", "--screenshot", "s.png" });
+    CHECK(out.exitCode == 2);
+    CHECK_FALSE(out.config.has_value());
+}
+
+// Settle compares CAPTURED frames -- with neither --screenshot nor --report
+// there is nowhere for that comparison to land, and nothing would ever arm
+// the capture node convergence is measured against, so the loop would never
+// know when to stop.
+TEST_CASE("hostconfig: --settle requires --screenshot or --report", "[hostconfig]")
+{
+    const auto neither = ParseArgs({ "h.exe", "--offscreen", "--frames", "5", "--settle", "10" });
+    CHECK(neither.exitCode == 2);
+    CHECK_FALSE(neither.config.has_value());
+
+    const auto withScreenshot = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+                                            "--settle", "10", "--screenshot", "s.png" });
+    REQUIRE(withScreenshot.config.has_value());
+    CHECK(withScreenshot.config->settleAttempts == 10u);
+
+    const auto withReport = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+                                        "--settle", "10", "--report", "r.json" });
+    REQUIRE(withReport.config.has_value());
+    CHECK(withReport.config->settleAttempts == 10u);
+}
+
+// Explicitly typing the value that also means "off" is a mistake, not a way
+// to turn the flag off -- same reasoning as --fixed-dt's own r.Supplied()
+// check just above.
+TEST_CASE("hostconfig: an explicit --settle 0 is refused", "[hostconfig]")
+{
+    const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+                                 "--settle", "0", "--report", "r.json" });
+    CHECK(out.exitCode == 2);
+    CHECK_FALSE(out.config.has_value());
+}
+
+TEST_CASE("hostconfig: --settle N parses and composes with the rest of the offscreen vocabulary", "[hostconfig]")
+{
+    const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "30", "--backend", "vulkan",
+                                 "--settle", "25", "--screenshot", "s.png", "--report", "r.json",
+                                 "--probe", "census" });
+    REQUIRE(out.exitCode == 0);
+    REQUIRE(out.config.has_value());
+    CHECK(out.config->settleAttempts == 25u);
+    CHECK(out.config->maxFrames == 30u);
+    CHECK(out.config->screenshotPath == "s.png");
+    CHECK(out.config->reportPath == "r.json");
+}
+
 TEST_CASE("hostconfig: --offscreen without --frames is refused", "[hostconfig]")
 {
     const auto bare = ParseArgs({ "h.exe", "--offscreen" });

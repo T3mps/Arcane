@@ -144,9 +144,9 @@ private:
     Arcane::FramePerf                   m_perf;
     std::uint64_t                       m_frameCount = 0;
     // The graph path's exit code, read by Run()'s tail: 1 = the graph run
-    // failed, 2 = RenderErrorCount grew during it. It can be set on ANY run --
-    // the graph path is unconditional -- so 0 means no graph failure occurred.
-    // The latch baseline it
+    // failed, 2 = RenderErrorCount grew during it, 3 = --settle N never
+    // converged (Task 10). It can be set on ANY run -- the graph path is
+    // unconditional -- so 0 means no graph failure occurred. The latch baseline it
     // is measured against is taken at the top of MainLoop -- boot-time errors
     // belong to the boot, not to the vehicle.
     int                                  m_graphExit  = 0;
@@ -191,6 +191,21 @@ private:
     bool                                  m_captureRead   = false;
     std::uint32_t                         m_captureWidth  = 0, m_captureHeight = 0;
     std::vector<unsigned char>            m_captureRgba;
+
+    // --settle N (Task 10). RuntimeFrame.cpp's CaptureTail owns the whole
+    // comparison loop; these are just its persistent home, following the
+    // exact same "bound through FrameIo, not a RuntimeFrame.cpp static" shape
+    // m_captureRead/m_captureWidth/... just above already established for
+    // Task 8. m_previousCapture* is the WORKING comparison baseline (churns
+    // every attempt); m_captureRead/m_captureRgba/... above stay the FINAL,
+    // agreed-on capture, only ever written once convergence actually happens.
+    // m_settleConverged is what ShutdownGraphPath reads to decide exitReason
+    // "settle-not-converged" and the process exit code -- see that method.
+    std::vector<unsigned char>            m_previousCaptureRgba;
+    std::uint32_t                         m_previousCaptureWidth = 0, m_previousCaptureHeight = 0;
+    bool                                  m_previousCaptureValid = false;
+    std::uint32_t                         m_settleAttemptsUsed   = 0;
+    bool                                  m_settleConverged      = false;
 
 #if !defined(ARCANE_DIST)
     // --crash-gpu N (GPU crash diagnostics arc, Task 11): the desk battery's

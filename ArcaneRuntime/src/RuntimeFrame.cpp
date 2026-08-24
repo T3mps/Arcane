@@ -182,6 +182,21 @@ void AdvanceSim(FrameIo& io)
 {
     io.perf.FrameStart();
 
+    // --settle N (Task 10): once the ordinary --frames budget is spent,
+    // FREEZE the render/sim clock instead of advancing it -- extra frames
+    // from here on exist only to give the async shader compiler more REAL
+    // wall-clock time before the next capture attempt (RuntimeFrame.cpp's
+    // CaptureTail), not to advance content. This is load-bearing, not an
+    // optimisation: ReferenceProject's PulseSprite material shades as a
+    // function of Time (Content/materials/pulse_sprite.arcmat's `sin(Time *
+    // PulseSpeed)`), so an UN-frozen clock would make every settle-hold
+    // frame legitimately differ from the last regardless of whether the
+    // compile race has resolved, and CaptureTail's byte-equal comparison
+    // would never converge on anything. Computed once, read by both the
+    // frameDt and simDt branches below.
+    const bool settleHold = io.config.offscreen && io.config.settleAttempts != 0 &&
+                             io.config.maxFrames != 0 && io.frameCount >= io.config.maxFrames;
+
     // Input: sample SDL state, evaluate actions. Must precede ImGui BeginFrame
     // so capture flags are set before the evaluator reads them.
     {
@@ -198,7 +213,11 @@ void AdvanceSim(FrameIo& io)
         // sim-advancing as that one is, just for the render side instead of
         // gameplay.
         double frameDt;
-        if (io.config.offscreen)
+        if (settleHold)
+        {
+            frameDt = 0.0;   // see settleHold's own comment above
+        }
+        else if (io.config.offscreen)
         {
             frameDt = io.config.fixedDtSeconds;
         }
@@ -237,7 +256,11 @@ void AdvanceSim(FrameIo& io)
         // positive (HostConfig.cpp) and is a deliberate per-run choice, not a
         // stall to guard against.
         double simDt;
-        if (io.config.offscreen)
+        if (settleHold)
+        {
+            simDt = 0.0;   // see settleHold's own comment above AdvanceSim's input block
+        }
+        else if (io.config.offscreen)
         {
             simDt = io.config.fixedDtSeconds;
         }
@@ -575,6 +598,18 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // BEFORE the frame is declared (the readback is a graph NODE, not
     // an after-the-fact copy). Hence `+ 1`: io.frameCount is bumped in
     // CaptureTail, i.e. after this arm returns Presented.
+    //
+    // --settle N (Task 10): this predicate's NAME says "last frame", and
+    // under an ordinary (non-settle) run it is exactly that -- CaptureTail
+    // stops the loop the moment it fires. Under --settle it stays true for
+    // EVERY frame from here on (io.frameCount only grows), which is exactly
+    // what is wanted: each such frame is one more settle attempt, and
+    // CaptureTail -- not this predicate -- is what decides when the loop
+    // actually ends (converged, or the attempt budget spent). No settle-
+    // specific arming logic is needed here as a result: MainLoop's while
+    // condition already stops calling this function once CaptureTail says
+    // so, so "arm every frame past the base budget" and "arm the one last
+    // frame" are the SAME expression.
     const bool willBeLastFrame =
         io.config.maxFrames != 0 && (io.frameCount + 1) >= io.config.maxFrames;
     // Armed for --report too (Task 8), not --screenshot alone: a report's
@@ -651,18 +686,117 @@ bool CaptureTail(FrameIo& io)
     }
 
     ++io.frameCount;
-    const bool lastFrame = io.config.maxFrames != 0 && io.frameCount >= io.config.maxFrames;
+    const bool wantsCapture = !io.config.screenshotPath.empty() || !io.config.reportPath.empty();
+    // TRUE from the moment the ordinary --frames budget is spent, and stays
+    // true forever after (io.frameCount only grows) -- the non-settle tail
+    // below reads this as "the last frame", which it only ever IS in that
+    // mode, because CaptureTail itself is what stops the loop the moment it
+    // fires there.
+    const bool pastBase = io.config.maxFrames != 0 && io.frameCount >= io.config.maxFrames;
 
-    // The capture tail. Reached on the final frame only, AFTER the
-    // present -- so the pixels are the ones that were actually shown and
-    // the capture cannot race the recording that produced it.
+    // =========================================================================
+    // --settle N (Task 10). Once the base --frames budget is reached, every
+    // further call to this function is ONE SETTLE ATTEMPT: AdvanceSim has
+    // frozen the render/sim clock for these frames (see its own comment), so
+    // the ONLY thing that can still change frame to frame is asynchronous
+    // resource state -- a shader compile landing, a texture upload completing
+    // -- which is exactly the race this mode exists to pin down. Each
+    // attempt's capture is compared to the IMMEDIATELY PRECEDING one; two
+    // byte-equal in a row is convergence. io.config.settleAttempts bounds how
+    // long a non-converging run spins.
+    // =========================================================================
+    if (io.config.settleAttempts != 0)
+    {
+        if (!pastBase || !wantsCapture)
+            return false;   // still running the ordinary --frames N budget
+
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> actual;
+        const bool read = io.graph->ReadCapture(w, h, actual);
+        ++io.settleAttemptsUsed;
+
+        if (!read)
+        {
+            // Same "a miss is not a bad frame" contract ReadCapture documents
+            // elsewhere (the non-settle branch below) -- still counts against
+            // the attempt budget (this loop MUST terminate even if every
+            // readback misses), but is neither a match nor a new comparison
+            // baseline: io.previousCapture* is left exactly as it was, so the
+            // NEXT attempt still compares against the last frame that
+            // actually landed rather than against nothing.
+            ARC_WARN("--settle attempt {}/{}: capture FAILED (no readback landed this frame)",
+                     io.settleAttemptsUsed, io.config.settleAttempts);
+        }
+        else
+        {
+            const bool matches = io.previousCaptureValid &&
+                                  w == io.previousCaptureWidth && h == io.previousCaptureHeight &&
+                                  actual == io.previousCaptureRgba;
+            if (matches)
+            {
+                io.settleConverged = true;
+                ARC_INFO("--settle: CONVERGED after {} attempt(s) -- frame {} matches frame {} "
+                         "byte-for-byte ({}x{})", io.settleAttemptsUsed, io.frameCount,
+                         io.frameCount - 1, w, h);
+
+                // The exact pixels a player sees, same as the non-settle tail
+                // below -- this IS the converged capture (either of the two
+                // equal frames would do; this one, the later, is what gets
+                // written/stashed).
+                if (!io.config.screenshotPath.empty())
+                {
+                    if (Arcane::WritePngRgba(io.config.screenshotPath, w, h, actual.data()))
+                        ARC_INFO("screenshot written: {} ({}x{})", io.config.screenshotPath, w, h);
+                    else
+                        ARC_WARN("screenshot FAILED: {}", io.config.screenshotPath);
+                }
+
+                io.captureWidth  = w;
+                io.captureHeight = h;
+                io.captureRgba   = std::move(actual);
+                io.captureRead   = true;
+                return true;   // converged -- stop the loop
+            }
+
+            // Not settled yet: THIS frame becomes the baseline the NEXT
+            // attempt compares against.
+            io.previousCaptureWidth  = w;
+            io.previousCaptureHeight = h;
+            io.previousCaptureRgba   = std::move(actual);
+            io.previousCaptureValid  = true;
+        }
+
+        if (io.settleAttemptsUsed >= io.config.settleAttempts)
+        {
+            // NON-CONVERGENCE. FAIL EXPLICITLY rather than hand back
+            // whatever the last attempt happened to render: io.settleConverged
+            // stays false (RuntimeApp::ShutdownGraphPath reads it to set
+            // exitReason "settle-not-converged" and a nonzero process exit
+            // code) and io.captureRead is deliberately left false -- no
+            // --screenshot is written, and the report's SetCapture is never
+            // called, so an agent reading either artifact gets an honest
+            // ABSENCE rather than a frame this run never actually agreed on.
+            ARC_ERROR("--settle: NOT CONVERGED after {} attempt(s) -- two consecutive captures "
+                      "never compared byte-equal", io.settleAttemptsUsed);
+            return true;   // stop the loop -- the run failed, but it must still stop
+        }
+        return false;   // keep going: one more attempt next frame
+    }
+
+    // =========================================================================
+    // The ordinary (non-settle) tail, unchanged from Task 8: reached on the
+    // final frame only, AFTER the present -- so the pixels are the ones that
+    // were actually shown and the capture cannot race the recording that
+    // produced it.
     //
     // GATED on --screenshot OR --report (Task 8), not --screenshot alone: a
     // report's Brightness/Luma/Rgba probes need this same readback, and
     // RenderGraph's graphFrame.capture arm (above) is widened identically --
     // this read only ever finds pixels when that node was actually declared
     // this frame, so the two gates must agree.
-    if (lastFrame && (!io.config.screenshotPath.empty() || !io.config.reportPath.empty()))
+    // =========================================================================
+    const bool lastFrame = pastBase;
+    if (lastFrame && wantsCapture)
     {
         std::uint32_t w = 0, h = 0;
         std::vector<unsigned char> actual;

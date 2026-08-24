@@ -125,6 +125,34 @@ namespace Arcane::RuntimeFrame
         std::uint32_t&              captureHeight;
         std::vector<unsigned char>& captureRgba;
 
+        // ---- --settle N (Task 10) --------------------------------------------
+        // The PREVIOUS settle attempt's capture -- kept only long enough to
+        // compare against the NEXT one (CaptureTail's byte-equal check) -- plus
+        // the attempt budget's running state. Distinct storage from
+        // captureRead/captureWidth/captureHeight/captureRgba just above: those
+        // four hold the FINAL, agreed-on capture (only ever written once
+        // convergence -- or the ordinary Task 8 single-shot capture -- has
+        // actually happened); these hold the WORKING comparison baseline, which
+        // churns every attempt until then and is never itself a claim about
+        // anything converged.
+        //
+        // previousCaptureValid stays false until the FIRST settle attempt lands
+        // a readback, so the very first attempt (which has nothing yet to
+        // compare against) can never spuriously "match".
+        std::vector<unsigned char>& previousCaptureRgba;
+        std::uint32_t&              previousCaptureWidth;
+        std::uint32_t&              previousCaptureHeight;
+        bool&                       previousCaptureValid;
+        // How many settle attempts have been taken so far (bounded by
+        // HostConfig::settleAttempts) and whether one of them converged.
+        // settleConverged is what RuntimeApp::ShutdownGraphPath reads to decide
+        // exitReason "settle-not-converged" and the process exit code -- see
+        // that method's comment. Both stay at their defaults (0/false) on a run
+        // that never asked for --settle at all, which must never read as a
+        // failure.
+        std::uint32_t&              settleAttemptsUsed;
+        bool&                       settleConverged;
+
 #if !defined(ARCANE_DIST)
         // --crash-gpu N. Same Dist guard as the RuntimeApp member this is
         // bound to -- see RuntimeApp.hpp. The fired-once latch is the only
@@ -171,6 +199,12 @@ namespace Arcane::RuntimeFrame
     // the reload_plugin/reload_plugin_fresh actions, and the fixed-step
     // RunLoop::Advance (FixedUpdateAll/UpdateAll) + the audio voice reap.
     // Sets io.quit true on the Pressed("quit") input action.
+    //
+    // --settle N (Task 10): once io.frameCount reaches the configured
+    // --frames budget, this FREEZES frameDt/simDt at 0 rather than advancing
+    // them -- see the .cpp's own comment for why that is load-bearing (a
+    // Time-driven material would otherwise never let CaptureTail's
+    // byte-equal comparison converge on anything).
     void AdvanceSim(FrameIo& io);
 
     // ImGui BeginFrame + the host's own "ArcaneRuntime" HUD window + the
@@ -199,5 +233,17 @@ namespace Arcane::RuntimeFrame
     // (`stop`) on the final frame -- MainLoop does
     // `if (CaptureTail(io)) running = false;`, so the while condition, not an
     // explicit break, is what ends the loop.
+    //
+    // --settle N (Task 10): "the final frame only" above describes the
+    // ordinary (non-settle) tail unchanged from Task 8. When
+    // io.config.settleAttempts != 0, this instead keeps returning false
+    // (keep going) once the ordinary --frames budget is reached, one more
+    // settle attempt per call, until two consecutive captures compare
+    // byte-equal (converged: true is returned, the captured pixels are
+    // published the same way Task 8's tail does) or the attempt budget is
+    // spent (non-convergence: true is returned too -- the loop MUST still
+    // stop -- but io.captureRead is deliberately left false and no
+    // --screenshot is written, so nothing downstream can mistake an
+    // unconverged run for a converged one).
     bool CaptureTail(FrameIo& io);
 }

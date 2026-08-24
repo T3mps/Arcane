@@ -554,6 +554,12 @@ void RuntimeApp::MainLoop()
         .captureWidth    = m_captureWidth,
         .captureHeight   = m_captureHeight,
         .captureRgba     = m_captureRgba,
+        .previousCaptureRgba   = m_previousCaptureRgba,
+        .previousCaptureWidth  = m_previousCaptureWidth,
+        .previousCaptureHeight = m_previousCaptureHeight,
+        .previousCaptureValid  = m_previousCaptureValid,
+        .settleAttemptsUsed    = m_settleAttemptsUsed,
+        .settleConverged       = m_settleConverged,
 #if !defined(ARCANE_DIST)
         .gpuFaultFired   = m_gpuFaultFired,
 #endif
@@ -890,6 +896,24 @@ void RuntimeApp::ShutdownGraphPath()
             m_graphExit = 2;
     }
 
+    // --settle N (Task 10): FAIL EXPLICITLY on non-convergence -- checked
+    // HERE, not only inside the --report block below, because an agent that
+    // checks only the PROCESS EXIT CODE (never opens the JSON) must still see
+    // this fail. m_settleConverged/m_settleAttemptsUsed are only meaningful
+    // when settle was actually requested (m_config.settleAttempts != 0); a
+    // run that never asked for it leaves both at their defaults, which must
+    // never read as a failure.
+    //
+    // Precedence 1/2 > 3: a run that already failed for a REAL reason
+    // (render-failed or validation-errors, folded into m_graphExit just
+    // above) keeps that reason. Settle non-convergence is downstream of both
+    // -- CaptureTail's settle branch is only ever reached on a Presented
+    // outcome, past any point either of those could have fired -- so this
+    // only ever promotes an otherwise-clean exit code.
+    const bool settleFailed = m_config.settleAttempts != 0 && !m_settleConverged;
+    if (settleFailed && m_graphExit == 0)
+        m_graphExit = 3;
+
     // THE REPORT (Task 8), written LAST in this function so exitReason below
     // can read the FINAL m_graphExit -- including the fold just above, which
     // only settles after the vehicle is gone. WriteTo never touches
@@ -924,6 +948,16 @@ void RuntimeApp::ShutdownGraphPath()
             exitReason = "render-failed";
         else if (m_graphExit == 2)
             exitReason = "validation-errors";
+        // --settle N (Task 10): checked BEFORE completedAllFrames below --
+        // a non-converged settle run has m_frameCount >= m_config.maxFrames
+        // by construction (settle-hold frames only ever run AFTER the base
+        // budget is spent), so completedAllFrames reads true regardless of
+        // whether the run actually converged. Left unguarded here it would
+        // silently fall through to "frames-complete", which is exactly the
+        // "hands back an unconverged frame without admitting it" failure
+        // mode the plan calls out by name.
+        else if (settleFailed)
+            exitReason = "settle-not-converged";
         else if (!completedAllFrames)
             exitReason = "stopped-early";
 
@@ -1090,9 +1124,11 @@ int RuntimeApp::Run()
     if (Arcane::GpuDeviceLostObserved()) return 1;
     // The render path's own codes: 1 = the graph run FAILED (it says WHERE
     // the run died), 2 = RenderErrorCount GREW (a validation error fired,
-    // which explains a bad capture rather than the reverse). The lower number
-    // wins -- see ShutdownGraphPath. They can fire on ANY run, the render
-    // path being unconditional, so 0 here means no graph failure occurred.
+    // which explains a bad capture rather than the reverse), 3 = --settle N
+    // never converged (Task 10 -- two consecutive captures never compared
+    // byte-equal within the attempt budget). The lower number wins -- see
+    // ShutdownGraphPath. They can fire on ANY run, the render path being
+    // unconditional, so 0 here means no graph failure occurred.
     if (m_graphExit != 0) return m_graphExit;
     return 0;
 }
