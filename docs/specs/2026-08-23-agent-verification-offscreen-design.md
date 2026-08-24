@@ -316,6 +316,95 @@ can read 0 for reasons unrelated to correctness.
 Precedent for machine-readable emit-and-exit already exists: `--print-engine-info`
 (`ArcaneRuntime/src/main.cpp:36`, `ArcaneEditor/src/main.cpp:122`).
 
+#### Report JSON field reference (`schemaVersion: 1`)
+
+Written before the version number is relied on by anything outside the engine
+(final fix wave, Fix 4) -- derived directly from `VerifyReport.cpp`/`.hpp`, not
+from memory, so it is expected to match the code exactly. This is the ONE thing
+Servitor parses without linking the engine (see "Tiering" above); a field this
+table omits, or gets wrong, is a field Servitor cannot safely rely on.
+
+**Top level.** Every field below is present on every report; `capture` and
+`census` are the only two that can be absent.
+
+| Field | Type | Present when |
+|---|---|---|
+| `schemaVersion` | int | always; currently `1` |
+| `backend` | string | always (`"D3D12"` \| `"Vulkan"`, from `SetRun`) |
+| `mode` | string | always; currently always `"offscreen"` -- see below |
+| `framesRendered` | uint64 | always (from `SetRun`) |
+| `exitReason` | string | always (from `SetRun`; e.g. `"frames-complete"`, `"device-lost"`, `"render-failed"`, `"validation-errors"`, `"settle-not-converged"`, `"stopped-early"`) |
+| `capture` | object `{ width: uint32, height: uint32 }` | only if `SetCapture` was called before `Evaluate`/`ToJson` (i.e. a `--screenshot`- or probe-driven capture landed this run) |
+| `census` | object, shape below | only if `AddCensus` was called (a scene was resolved this run) |
+| `probes` | array of probe-entry objects, shape below | always (empty array if no `--probe` was given) |
+
+**`mode` is a single-value field on purpose, not a stale one.** VerifyReport's
+`SetRun` used to take a `bool offscreen` and this field used to read
+`"windowed"` when it was false -- final fix wave Fix 3 removed that parameter
+and that value entirely. `HostConfig::Parse`'s `wantsOffscreenOnly` gate
+refuses `--report` without `--offscreen`, unconditionally, for every host, so
+no live run can ever produce a report any other way; the field stays in the
+contract (rather than being dropped) so a consumer has an explicit tag instead
+of having to infer the run kind from its absence.
+
+**`census`** (top-level, and also a probe entry's `value` for a `census`
+probe -- both read the same six counts, one call to `AddCensus`):
+
+| Field | Type |
+|---|---|
+| `spriteReferenced` | int |
+| `spriteBound` | int |
+| `postReferenced` | bool |
+| `postBound` | bool |
+| `meshReferenced` | int |
+| `meshBound` | int |
+
+**Probe entries** (`probes[i]`, one per `--probe` spec, in command-line order).
+Every entry carries `raw` and `kind` always, `x`/`y` for the four positional
+kinds, and then **exactly one of a result or an `error` -- never neither,
+never both.** Enforced in code, not just by convention: `VerifyReport::Evaluate`
+asserts `entry.contains("value") || entry.contains("entity")` XOR
+`entry.contains("error")` at the point every kind's branches converge, in every
+build (Debug fires it; Release/Dist still evaluate the condition).
+
+| Field | Type | Present when |
+|---|---|---|
+| `raw` | string | always -- the spec exactly as typed, e.g. `"luma@640,360"` |
+| `kind` | string | always -- `"brightness"` \| `"luma"` \| `"rgba"` \| `"pick"` \| `"census"` |
+| `x`, `y` | int32 | present iff `kind != "census"` (the four positional kinds); absent for `census` -- echoing a fixed `(0,0)` back would read as a coordinate nobody asked for |
+| `error` | string | XOR the result fields below -- see per-kind table |
+
+Per-kind result shape (absent whenever that entry carries `error` instead):
+
+| Kind | Result field(s) | Type | Notes |
+|---|---|---|---|
+| `brightness` | `value` | double, `[0,1]` | unweighted `(R+G+B)/765` |
+| `luma` | `value` | double, `[0,1]` | Rec.709 `0.2126R+0.7152G+0.0722B`, applied to gamma-encoded bytes directly (no linearisation) |
+| `rgba` | `value` | object `{ r, g, b, a: int, 0-255 each }` | raw texel |
+| `census` | `value` | object, same 6-field shape as top-level `census` above | |
+| `pick` | `entity`, `id`, `hitProxyId`, `pickableKinds`, `meshesNotPickable` | see below | `entity`/`id` are the RESULT pair `hasResult` checks for -- `hitProxyId`/`pickableKinds`/`meshesNotPickable` are extra fields that ride along on a result, never meaningful alone |
+
+**`pick`'s result fields, in full** (all absent together whenever `error` is
+present instead):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `entity` | string \| `null` | `Identity::name` on a resolved hit; `null` on a background miss (id 0). Never present on an error entry. |
+| `id` | string | canonical lowercase 8-4-4-4-12 `Identity.id` on a resolved hit; the nil Guid `"00000000-0000-0000-0000-000000000000"` on a background miss. **This is the durable id an agent should address the entity by -- never `hitProxyId`.** |
+| `hitProxyId` | uint32 | the RAW, frame-scoped id the id pass wrote (0 == background). Debugging only; meaningless outside the one draw submission that produced it, and never stable across runs. Present on every result entry, background miss included. |
+| `pickableKinds` | array of string | always `["sprite", "collider2d"]` on a result entry (result-only -- never present on an `error` entry). Names what `CollectPickables` can ever hit: `SpriteRenderer`/`Collider2D` entities only, never `MeshRenderer`. |
+| `meshesNotPickable` | bool | **optional even on a result entry** -- present (`true`) only when a census was ALSO taken this run (`AddCensus` called) AND it found `meshReferenced > 0`. Flags that a visually-obvious mesh in front of the probe pixel could never be the hit, because meshes are outside `pick`'s reach today. |
+
+`pick`'s `error` cases (mutually exclusive, one string each): no pick armed
+this run (`FirstPickProbe` found no `pick@` spec, or `Evaluate` ran before
+`SetPick`); this spec's pixel does not match the ONE pixel the run actually
+armed (only the first `pick@` spec in a run is armed -- a second, differently
+positioned one always errors); the readback never landed and the pixel is
+known to be outside the pick surface; the readback never landed and the reason
+is ambiguous (surface size unknown to the report); or the hit-proxy resolved
+to a live entity that carries no `Identity` component (an honest error rather
+than a stable-looking id that would silently churn between runs).
+
 #### Targets are addressed by stable identity, not by names or coordinates
 
 Playwright deprecates `ElementHandle` -- a direct reference to a node captured

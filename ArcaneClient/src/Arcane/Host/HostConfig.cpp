@@ -1,5 +1,6 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Cli/Cli.hpp>
+#include <Arcane/Host/VerifyReport.hpp>   // Arcane::ParseProbe -- reused for the --probe parse-time refusal below
 #include <cstdio>
 namespace Arcane
 {
@@ -68,8 +69,29 @@ namespace Arcane
         cfg.printEngineInfo = r.Flag("print-engine-info");
         cfg.offscreen      = r.Flag("offscreen");
         cfg.fixedDtSeconds = r.GetAs<double>("fixed-dt");
+        cfg.fixedDtSupplied = r.Supplied("fixed-dt");
         cfg.probes         = r.GetMany("probe");
         cfg.reportPath     = r.Get("report");
+        // Malformed --probe syntax is refused HERE, at parse time, not
+        // deferred to evaluation. VerifyReport::Evaluate only ever sees specs
+        // ParseProbe already accepted (a host parses-and-logs separately, at
+        // shutdown) -- so a typo like `--probe brigtness@1,2` used to parse
+        // clean, run to completion, and exit 0 with that probe simply absent
+        // from the report: no error, no artifact, invisible unless a caller
+        // diffs the probe list against the output by hand. Rule 3 (refuse,
+        // don't silently skip) applies at THIS boundary just as much as it
+        // does to --screenshot/--offscreen/--settle above and below. Reuses
+        // ParseProbe's own error text (VerifyReport.hpp) rather than a second
+        // vocabulary for the same mistake.
+        for (const std::string& rawProbe : cfg.probes)
+        {
+            std::string probeError;
+            if (!ParseProbe(rawProbe, probeError))
+            {
+                std::fprintf(stderr, "error: --probe '%s': %s\n", rawProbe.c_str(), probeError.c_str());
+                return { std::nullopt, 2 };
+            }
+        }
         cfg.settleAttempts = r.GetAs<std::uint64_t>("settle");
         // "nri-graph" is intentionally never read here: it is registered
         // above (unconditionally) purely so a command line that still passes

@@ -264,10 +264,72 @@ TEST_CASE("hostconfig: --fixed-dt without --offscreen is REFUSED, not ignored", 
     CHECK_FALSE(out.config.has_value());
 }
 
+// fixedDtSupplied (final fix wave, Fix 1): a caller-facing "was this flag
+// typed" bit distinct from the resolved value, needed because the registered
+// default (1/60) is itself a value a caller could pass on purpose --
+// comparing the resolved double against its own default cannot tell the two
+// apart. Consumed by ArcaneEditor/src/main.cpp to refuse --fixed-dt without
+// misfiring on every ordinary run that never mentioned the flag.
+TEST_CASE("hostconfig: fixedDtSupplied distinguishes an explicit default from an absent flag", "[hostconfig]")
+{
+    const auto absent = ParseArgs({ "h.exe", "--offscreen", "--frames", "1" });
+    REQUIRE(absent.config.has_value());
+    CHECK_FALSE(absent.config->fixedDtSupplied);
+
+    const auto explicitDefault = ParseArgs({ "h.exe", "--offscreen", "--frames", "1",
+                                              "--fixed-dt", "0.0166666666666666666" });
+    REQUIRE(explicitDefault.config.has_value());
+    CHECK(explicitDefault.config->fixedDtSupplied);
+    CHECK(explicitDefault.config->fixedDtSeconds == Catch::Approx(1.0 / 60.0));
+}
+
 TEST_CASE("hostconfig: --probe without --frames is refused", "[hostconfig]")
 {
     const auto out = ParseArgs({ "h.exe", "--offscreen", "--probe", "census" });
     CHECK(out.exitCode == 2);
+}
+
+// Fix 2 (final fix wave): a malformed --probe used to parse clean, run to
+// completion, and exit 0 with the bad spec simply absent from the report --
+// no error, no artifact. Refused HERE, at parse time, reusing ParseProbe's
+// own error text (VerifyReport.hpp) rather than a second vocabulary for the
+// same mistake. Caught before the --offscreen/--frames gates further down,
+// so it fires even on a command line missing both of those too.
+TEST_CASE("hostconfig: a malformed --probe is refused at parse time", "[hostconfig]")
+{
+    const std::vector<std::string> bad[] = {
+        { "bogus@1,2" },        // unknown kind
+        { "brightness" },       // positional kind missing its @x,y
+        { "census@1,2" },       // argless kind given @x,y anyway
+        { "luma@-1,2" },        // negative is a typo, not a coordinate
+        { "luma@1" },           // no comma
+        { "luma@1,2,3" },       // a third component is not a pixel
+    };
+    for (const auto& spec : bad)
+    {
+        const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "5", "--probe", spec[0].c_str() });
+        CHECK_FALSE(out.config.has_value());
+        CHECK(out.exitCode == 2);
+    }
+
+    // Fires even without --offscreen/--frames -- a syntax error does not need
+    // either flag to already be wrong.
+    const auto bare = ParseArgs({ "h.exe", "--probe", "bogus@1,2" });
+    CHECK_FALSE(bare.config.has_value());
+    CHECK(bare.exitCode == 2);
+
+    // A well-formed probe alongside a malformed one still refuses the whole
+    // command line -- there is no partial acceptance.
+    const auto mixed = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+                                    "--probe", "census", "--probe", "bogus@1,2" });
+    CHECK_FALSE(mixed.config.has_value());
+    CHECK(mixed.exitCode == 2);
+
+    // A genuinely well-formed probe list is unaffected.
+    const auto good = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+                                   "--probe", "luma@640,360", "--probe", "census" });
+    REQUIRE(good.config.has_value());
+    CHECK(good.exitCode == 0);
 }
 
 TEST_CASE("hostconfig: a non-positive --fixed-dt is refused", "[hostconfig]")

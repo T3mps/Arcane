@@ -83,7 +83,7 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 // easily-confused question of FLAGS, and it is called out because HostConfig
 // is shared by both hosts, so a flag the editor parses is not automatically a
 // flag the editor DOES anything with.
-//   --project/--plugin/--scene/--frames/--backend/--no-vsync -- honoured.
+//   --project/--plugin/--frames/--backend/--no-vsync -- honoured.
 //   --screenshot        -- honoured. WINDOWED it captures the VIEWPORT panel's
 //                          texture, not the editor window (so the Inspector and
 //                          the asset browser are not in it). Under --offscreen
@@ -108,6 +108,32 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          the silent success an agent misreads as a pass.
 //                          Parsing them and shrugging would be worse than
 //                          refusing. ArcaneRuntime honours all three.
+//   --scene              -- REFUSED at launch on this host (final-fix-wave
+//                          audit; this table used to claim it was honoured,
+//                          which was FALSE -- HostConfig::sceneOverride has
+//                          no consumer anywhere in ArcaneEditor/. The only
+//                          hit in this tree is a passing comment in
+//                          Project/RuntimeLaunch.hpp; the sole real consumer
+//                          is ArcaneRuntime's RuntimeApp.cpp. Without this
+//                          refusal, `ArcaneEditor --scene <guid>` parsed,
+//                          booted the manifest's default scene, and exited
+//                          0 -- silent success for a caller that asked for a
+//                          SPECIFIC scene.
+//   --fixed-dt           -- REFUSED at launch on this host (final-fix-wave
+//                          audit; previously not even mentioned in this
+//                          table). The sim clock (EditorAppFrame.cpp's
+//                          AdvanceSim) and the chrome/plugin-input clock
+//                          (EditorAppFrame.cpp:492-495) are each an
+//                          INDEPENDENT std::chrono::steady_clock read --
+//                          neither ever looks at fixedDtSeconds. Refusal is
+//                          keyed on fixedDtSupplied (HostConfig.hpp), not the
+//                          resolved value: the registered default (1/60) is
+//                          itself a value a caller could legitimately pass on
+//                          purpose, so comparing the resolved double against
+//                          that default cannot tell "never passed" from
+//                          "passed the default explicitly" apart -- same
+//                          r.Supplied() reasoning HostConfig.cpp already uses
+//                          for this exact flag internally.
 //   --nri-graph         -- PARSED AND IGNORED: the NRI frame graph is the only
 //                          render path, so there is nothing left for this flag
 //                          to select. THE ONE DELIBERATE EXCEPTION to rule 3
@@ -241,6 +267,37 @@ int main(int argc, char** argv)
     {
         std::fprintf(stderr, "error: --perf is not implemented on the editor host "
                              "(FramePerf is constructed and never sampled). Use ArcaneRuntime.exe.\n");
+        return 2;
+    }
+
+    // --fixed-dt: final-fix-wave audit finding, same reasoning and position as
+    // --perf/--pick-probe above. AdvanceSim (EditorAppFrame.cpp) and the
+    // chrome/plugin-input dt a few lines above it are each an independent
+    // std::chrono::steady_clock read; neither ever consults fixedDtSeconds, so
+    // this exe would otherwise exit 0 having silently run wall-clock anyway.
+    // Gated on fixedDtSupplied, not the resolved value -- see HostConfig.hpp's
+    // comment on that field for why comparing the resolved double against its
+    // own default cannot tell "never passed" from "passed the default
+    // explicitly" apart.
+    if (parsed.config->fixedDtSupplied)
+    {
+        std::fprintf(stderr, "error: --fixed-dt is not implemented on the editor host "
+                             "(the sim and chrome clocks are both wall-clock steady_clock reads that "
+                             "never consult it). Use ArcaneRuntime.exe for a deterministic fixed "
+                             "timestep.\n");
+        return 2;
+    }
+    // --scene: final-fix-wave audit finding. HostConfig::sceneOverride has no
+    // consumer anywhere in this tree -- ArcaneRuntime's RuntimeApp.cpp is the
+    // only real reader. Without this refusal `ArcaneEditor --scene <guid>`
+    // parsed cleanly, booted the manifest's default scene, and exited 0: a
+    // silent no-op for a caller that asked for a specific scene.
+    if (!parsed.config->sceneOverride.empty())
+    {
+        std::fprintf(stderr, "error: --scene is not implemented on the editor host "
+                             "(this exe always boots the project manifest's bootScene). Use "
+                             "ArcaneRuntime.exe for a scene override, or open the scene from the "
+                             "editor's asset browser once booted.\n");
         return 2;
     }
 

@@ -166,11 +166,10 @@ namespace Arcane
         return static_cast<std::uint32_t>(x) < width && static_cast<std::uint32_t>(y) < height;
     }
 
-    void VerifyReport::SetRun(std::string backend, bool offscreen, std::uint64_t framesRendered,
+    void VerifyReport::SetRun(std::string backend, std::uint64_t framesRendered,
                                std::string exitReason)
     {
         m_backend        = std::move(backend);
-        m_offscreen      = offscreen;
         m_framesRendered = framesRendered;
         m_exitReason     = std::move(exitReason);
     }
@@ -485,7 +484,13 @@ namespace Arcane
         nlohmann::json j;
         j["schemaVersion"]   = 1;
         j["backend"]         = m_backend;
-        j["mode"]            = m_offscreen ? "offscreen" : "windowed";
+        // Always "offscreen" -- Fix 3 (final fix wave) removed the "windowed"
+        // value from this contract: HostConfig::Parse refuses --report
+        // without --offscreen unconditionally, so no live run can ever
+        // produce anything else. Kept as a field (not just implied) because
+        // an out-of-process consumer -- the Servitor package this JSON is the
+        // boundary for -- should not have to infer the run kind from absence.
+        j["mode"]            = "offscreen";
         j["framesRendered"]  = m_framesRendered;
         j["exitReason"]      = m_exitReason;
 

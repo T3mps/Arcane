@@ -128,11 +128,25 @@ namespace Arcane
     class ARCANE_API VerifyReport
     {
     public:
-        // The run's own identity: which backend rendered it, whether it ran
-        // offscreen, how many frames it completed, and why it stopped
-        // (mirrors the exit-reason vocabulary the offscreen loop already
-        // logs -- "frames-complete", a gpu-stall watchdog verdict, etc).
-        void SetRun(std::string backend, bool offscreen, std::uint64_t framesRendered,
+        // The run's own identity: which backend rendered it, how many frames
+        // it completed, and why it stopped (mirrors the exit-reason
+        // vocabulary the offscreen loop already logs -- "frames-complete", a
+        // gpu-stall watchdog verdict, etc).
+        //
+        // NO `offscreen` PARAMETER (final fix wave, Fix 3 -- reconciling
+        // windowed --report): this report can only ever describe an offscreen
+        // run. HostConfig::Parse's wantsOffscreenOnly gate refuses --report
+        // without --offscreen, unconditionally, for every host -- so
+        // ArcaneRuntime's one real call site (RuntimeApp.cpp's
+        // ShutdownGraphPath) could never have reached this with a windowed
+        // run. A `bool offscreen` parameter that is provably always true is
+        // not a fact worth carrying; ToJson's "mode" field reflects that by
+        // always emitting "offscreen" rather than branching on a value that
+        // can never be anything else. Older revisions of this component
+        // modelled a "windowed" mode for a code path RuntimeApp.cpp never
+        // actually had a way to reach -- see the plan's Task 9 desk item F,
+        // which describes a scenario the parse-time gate makes unrunnable.
+        void SetRun(std::string backend, std::uint64_t framesRendered,
                     std::string exitReason);
 
         // The captured frame Brightness/Luma/Rgba probes read against. `rgba` is TIGHT
@@ -235,7 +249,6 @@ namespace Arcane
 
     private:
         std::string   m_backend;
-        bool          m_offscreen = false;
         std::uint64_t m_framesRendered = 0;
         std::string   m_exitReason;
 

@@ -60,6 +60,17 @@ namespace Arcane
         // take -- different on a loaded CI box than an idle desk.
         double          fixedDtSeconds = 1.0 / 60.0;
 
+        // Whether --fixed-dt was actually typed on the command line, as opposed
+        // to fixedDtSeconds simply holding its registered default. Needed
+        // because that default (1/60) is a legitimate value a caller could also
+        // pass explicitly -- comparing the RESOLVED value against the default
+        // cannot tell "never passed" from "passed the default on purpose" apart
+        // (the same r.Supplied() reasoning HostConfig.cpp already applies to
+        // this exact flag internally). A host that refuses --fixed-dt when it
+        // does nothing (ArcaneEditor's main.cpp) needs this to avoid refusing
+        // every ordinary run that never mentioned the flag at all.
+        bool            fixedDtSupplied = false;
+
         // Raw, unparsed `--probe` arguments in command-line order. Parsed by
         // VerifyReport, not here: the kinds are that component's vocabulary.
         std::vector<std::string> probes;

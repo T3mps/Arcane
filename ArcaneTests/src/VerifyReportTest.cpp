@@ -57,7 +57,7 @@ TEST_CASE("verify: a brightness probe reads the capture and lands in the JSON", 
     const std::vector<unsigned char> rgba = { 0,0,0,255,  255,255,255,255 };
 
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", /*offscreen=*/true, /*framesRendered=*/5, "frames-complete");
+    rep.SetRun("D3D12", /*framesRendered=*/5, "frames-complete");
     rep.SetCapture(2, 1, rgba);
 
     std::string err;
@@ -81,7 +81,7 @@ TEST_CASE("verify: a brightness probe reads the capture and lands in the JSON", 
 TEST_CASE("verify: an out-of-bounds probe reports a fact, it does not crash", "[verify]")
 {
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 1, "frames-complete");
+    rep.SetRun("D3D12", 1, "frames-complete");
     rep.SetCapture(2, 1, { 0,0,0,255, 255,255,255,255 });
     std::string err;
     rep.Evaluate({ *Arcane::ParseProbe("brightness@99,99", err) });
@@ -101,7 +101,7 @@ TEST_CASE("verify: brightness and luma diverge on a pure-green pixel -- the whol
     // have bought nothing -- this is the test that catches that.
     const std::vector<unsigned char> rgba = { 0, 255, 0, 255 };   // 1x1, pure green
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 1, "frames-complete");
+    rep.SetRun("D3D12", 1, "frames-complete");
     rep.SetCapture(1, 1, rgba);
 
     std::string err;
@@ -118,17 +118,16 @@ TEST_CASE("verify: brightness and luma diverge on a pure-green pixel -- the whol
 
 // ---------------------------------------------------------------------------
 // Coverage beyond the pinned Task-7 cases above: the remaining probe kinds,
-// the windowed/offscreen mode string, WriteTo, and -- the one that matters
-// most -- a sweep that would actually FAIL if the value/entity-xor-error
-// invariant ever broke, rather than merely happening to hold for whichever
-// cases someone thought to write.
+// WriteTo, and -- the one that matters most -- a sweep that would actually
+// FAIL if the value/entity-xor-error invariant ever broke, rather than
+// merely happening to hold for whichever cases someone thought to write.
 // ---------------------------------------------------------------------------
 
 TEST_CASE("verify: rgba probe reads all four channels", "[verify]")
 {
     const std::vector<unsigned char> rgba = { 10, 20, 30, 40 };   // 1x1 capture
     Arcane::VerifyReport rep;
-    rep.SetRun("Vulkan", true, 1, "frames-complete");
+    rep.SetRun("Vulkan", 1, "frames-complete");
     rep.SetCapture(1, 1, rgba);
 
     std::string err;
@@ -142,12 +141,21 @@ TEST_CASE("verify: rgba probe reads all four channels", "[verify]")
     CHECK(v["a"] == 40);
 }
 
-TEST_CASE("verify: mode reports windowed when the run was not offscreen", "[verify]")
+// Fix 3 (final fix wave): "windowed" is GONE, not just untested. It used to
+// be reachable only by calling SetRun's old bool `offscreen` parameter with
+// false directly -- never through any live host, since HostConfig::Parse
+// refuses --report without --offscreen unconditionally, for every host. That
+// made "windowed" a value an out-of-process consumer (the Servitor package
+// this JSON is the boundary for) would have had to handle for a state no
+// real run could ever produce. SetRun no longer takes the parameter at all,
+// so this is now a compile-time guarantee, not just a runtime one -- ToJson
+// always emits "offscreen".
+TEST_CASE("verify: mode is always offscreen -- there is no windowed report", "[verify]")
 {
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", /*offscreen=*/false, 42, "window-closed");
+    rep.SetRun("D3D12", 42, "window-closed");
     const auto doc = nlohmann::json::parse(rep.ToJson());
-    CHECK(doc["mode"] == "windowed");
+    CHECK(doc["mode"] == "offscreen");
     CHECK(doc["framesRendered"] == 42);
     CHECK(doc["exitReason"] == "window-closed");
 }
@@ -160,7 +168,7 @@ TEST_CASE("verify: a census probe reads AddCensus's data when set, and refuses w
     // empty scene.
     {
         Arcane::VerifyReport rep;
-        rep.SetRun("D3D12", true, 1, "frames-complete");
+        rep.SetRun("D3D12", 1, "frames-complete");
         rep.Evaluate({ *Arcane::ParseProbe("census", err) });
         const auto doc = nlohmann::json::parse(rep.ToJson());
         CHECK(doc["probes"][0].contains("error"));
@@ -172,7 +180,7 @@ TEST_CASE("verify: a census probe reads AddCensus's data when set, and refuses w
     // both sourced from the same AddCensus call.
     {
         Arcane::VerifyReport rep;
-        rep.SetRun("D3D12", true, 1, "frames-complete");
+        rep.SetRun("D3D12", 1, "frames-complete");
         rep.AddCensus(/*spriteReferenced=*/4, /*spriteBound=*/1, /*postReferenced=*/false,
                       /*postBound=*/false, /*meshReferenced=*/1, /*meshBound=*/1);
         rep.Evaluate({ *Arcane::ParseProbe("census", err) });
@@ -204,7 +212,7 @@ TEST_CASE("verify: a pick probe is an honest refusal when SetPick was never call
     // with a capture set, so an agent never mistakes "no pick armed" for
     // "measured zero".
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 1, "frames-complete");
+    rep.SetRun("D3D12", 1, "frames-complete");
     rep.SetCapture(1, 1, { 1, 2, 3, 4 });
 
     std::string err;
@@ -247,7 +255,7 @@ TEST_CASE("verify: SetPick(landed=false), surface UNKNOWN (no width/height given
     // out-of-range from too-short without a real surface size, and says so
     // honestly rather than guessing.
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetRun("D3D12", 60, "frames-complete");
     rep.SetPick(/*armedX=*/640, /*armedY=*/360, /*landed=*/false,
                 /*hitProxyId=*/0, /*resolved=*/false, "", "");
 
@@ -274,7 +282,7 @@ TEST_CASE("verify: SetPick(landed=false), surface UNKNOWN (no width/height given
 TEST_CASE("verify: SetPick(landed=false), surface KNOWN and the armed pixel is inside it, still reports the too-short wording", "[verify]")
 {
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetRun("D3D12", 60, "frames-complete");
     rep.SetPick(640, 360, /*landed=*/false, 0, false, "", "", /*surfaceWidth=*/1280, /*surfaceHeight=*/720);
 
     std::string err;
@@ -297,7 +305,7 @@ TEST_CASE("verify: SetPick(landed=false), surface KNOWN and the armed pixel is O
     // land no matter how many frames the run had. Must not be conflated with
     // "too short".
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetRun("D3D12", 60, "frames-complete");
     rep.SetPick(9999, 9999, /*landed=*/false, 0, false, "", "", /*surfaceWidth=*/1280, /*surfaceHeight=*/720);
 
     std::string err;
@@ -317,7 +325,7 @@ TEST_CASE("verify: SetPick(landed=false), surface KNOWN and the armed pixel is O
 TEST_CASE("verify: a background pick miss is a FACT (id 0 as the nil Guid), never an error", "[verify]")
 {
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetRun("D3D12", 60, "frames-complete");
     rep.SetPick(20, 700, /*landed=*/true, /*hitProxyId=*/0, /*resolved=*/false, "", "");
 
     std::string err;
@@ -335,7 +343,7 @@ TEST_CASE("verify: a background pick miss is a FACT (id 0 as the nil Guid), neve
 TEST_CASE("verify: a resolved pick reports the durable name+Guid, and the raw hit-proxy separately", "[verify]")
 {
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetRun("D3D12", 60, "frames-complete");
     rep.SetPick(640, 360, /*landed=*/true, /*hitProxyId=*/3, /*resolved=*/true,
                 "TealQuad", "3f2504e0-4f89-11d3-9a0c-0305e82c3301");
 
@@ -357,7 +365,7 @@ TEST_CASE("verify: a pick hit that could not resolve an Identity is an honest er
     // stable-looking value that silently churns between runs. An error says
     // so instead.
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetRun("D3D12", 60, "frames-complete");
     rep.SetPick(640, 360, /*landed=*/true, /*hitProxyId=*/3, /*resolved=*/false, "", "");
 
     std::string err;
@@ -377,7 +385,7 @@ TEST_CASE("verify: a pick@ probe at a pixel other than the one armed refuses rat
     // a second, differently-positioned pick@ probe in the same run's --probe
     // list must not silently be answered with the FIRST one's hit-proxy.
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetRun("D3D12", 60, "frames-complete");
     rep.SetPick(640, 360, /*landed=*/true, /*hitProxyId=*/3, /*resolved=*/true, "TealQuad", "guid");
 
     std::string err;
@@ -433,7 +441,7 @@ TEST_CASE("verify: PickPixelInRange refuses the whole out-of-range family -- pas
 TEST_CASE("verify: a resolved pick names its pickable kinds, and flags meshesNotPickable when the scene has a bound mesh", "[verify]")
 {
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetRun("D3D12", 60, "frames-complete");
     rep.AddCensus(/*spriteReferenced=*/4, /*spriteBound=*/1, /*postReferenced=*/true,
                   /*postBound=*/true, /*meshReferenced=*/1, /*meshBound=*/1);
     rep.SetPick(640, 360, /*landed=*/true, /*hitProxyId=*/1, /*resolved=*/true,
@@ -453,7 +461,7 @@ TEST_CASE("verify: a resolved pick names its pickable kinds, and flags meshesNot
 TEST_CASE("verify: meshesNotPickable is omitted, not false, when the scene's census carries no bound mesh", "[verify]")
 {
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetRun("D3D12", 60, "frames-complete");
     rep.AddCensus(4, 1, false, false, /*meshReferenced=*/0, /*meshBound=*/0);
     rep.SetPick(640, 360, true, 1, true, "Ground", "acd0708f-ffc1-47e9-a105-b10e0b3f8497");
 
@@ -473,7 +481,7 @@ TEST_CASE("verify: meshesNotPickable is omitted, not false, when the scene's cen
 TEST_CASE("verify: a background pick miss also carries pickableKinds -- the mitigation applies to both result branches", "[verify]")
 {
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetRun("D3D12", 60, "frames-complete");
     rep.AddCensus(4, 1, true, true, 1, 1);
     rep.SetPick(20, 700, /*landed=*/true, /*hitProxyId=*/0, /*resolved=*/false, "", "");
 
@@ -496,7 +504,7 @@ TEST_CASE("verify: a background pick miss also carries pickableKinds -- the miti
 TEST_CASE("verify: an error branch never carries pickableKinds -- it is a result-only field, not a blanket addition", "[verify]")
 {
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetRun("D3D12", 60, "frames-complete");
     rep.AddCensus(4, 1, true, true, 1, 1);
     rep.SetPick(640, 360, /*landed=*/false, 0, false, "", "");   // NO READBACK LANDED
 
@@ -533,41 +541,41 @@ TEST_CASE("verify: every pick branch carries exactly one of entity or error, nev
 
     {   // SetPick never called.
         Arcane::VerifyReport rep;
-        rep.SetRun("D3D12", true, 1, "frames-complete");
+        rep.SetRun("D3D12", 1, "frames-complete");
         rep.Evaluate({ spec });
         checkXor(nlohmann::json::parse(rep.ToJson())["probes"][0]);
     }
     {   // Mismatched pixel.
         Arcane::VerifyReport rep;
-        rep.SetRun("D3D12", true, 1, "frames-complete");
+        rep.SetRun("D3D12", 1, "frames-complete");
         rep.SetPick(640, 360, true, 3, true, "X", "guid");
         rep.Evaluate({ mismatchedSpec });
         checkXor(nlohmann::json::parse(rep.ToJson())["probes"][0]);
     }
     {   // Not landed.
         Arcane::VerifyReport rep;
-        rep.SetRun("D3D12", true, 1, "frames-complete");
+        rep.SetRun("D3D12", 1, "frames-complete");
         rep.SetPick(640, 360, false, 0, false, "", "");
         rep.Evaluate({ spec });
         checkXor(nlohmann::json::parse(rep.ToJson())["probes"][0]);
     }
     {   // Background miss.
         Arcane::VerifyReport rep;
-        rep.SetRun("D3D12", true, 1, "frames-complete");
+        rep.SetRun("D3D12", 1, "frames-complete");
         rep.SetPick(640, 360, true, 0, false, "", "");
         rep.Evaluate({ spec });
         checkXor(nlohmann::json::parse(rep.ToJson())["probes"][0]);
     }
     {   // Hit, unresolved.
         Arcane::VerifyReport rep;
-        rep.SetRun("D3D12", true, 1, "frames-complete");
+        rep.SetRun("D3D12", 1, "frames-complete");
         rep.SetPick(640, 360, true, 3, false, "", "");
         rep.Evaluate({ spec });
         checkXor(nlohmann::json::parse(rep.ToJson())["probes"][0]);
     }
     {   // Hit, resolved.
         Arcane::VerifyReport rep;
-        rep.SetRun("D3D12", true, 1, "frames-complete");
+        rep.SetRun("D3D12", 1, "frames-complete");
         rep.SetPick(640, 360, true, 3, true, "X", "guid");
         rep.Evaluate({ spec });
         checkXor(nlohmann::json::parse(rep.ToJson())["probes"][0]);
@@ -601,7 +609,7 @@ TEST_CASE("verify: every probe entry carries exactly one of value/entity or erro
         for (const bool withCensus : { false, true })
         {
             Arcane::VerifyReport rep;
-            rep.SetRun("D3D12", true, 1, "frames-complete");
+            rep.SetRun("D3D12", 1, "frames-complete");
             if (withCapture)
                 rep.SetCapture(2, 2, { 0,0,0,255, 10,10,10,255, 20,20,20,255, 30,30,30,255 });
             if (withCensus)
@@ -625,7 +633,7 @@ TEST_CASE("verify: every probe entry carries exactly one of value/entity or erro
 TEST_CASE("verify: WriteTo round-trips through disk", "[verify]")
 {
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 3, "frames-complete");
+    rep.SetRun("D3D12", 3, "frames-complete");
     rep.SetCapture(1, 1, { 100, 150, 200, 255 });
     std::string err;
     rep.Evaluate({ *Arcane::ParseProbe("luma@0,0", err) });
@@ -649,7 +657,7 @@ TEST_CASE("verify: WriteTo round-trips through disk", "[verify]")
 TEST_CASE("verify: WriteTo fails, does not throw, when the path cannot be opened", "[verify]")
 {
     Arcane::VerifyReport rep;
-    rep.SetRun("D3D12", true, 1, "frames-complete");
+    rep.SetRun("D3D12", 1, "frames-complete");
     // A directory that does not exist -- std::ofstream cannot create the
     // intermediate path component, so the open fails.
     const auto path = (std::filesystem::temp_directory_path() /
