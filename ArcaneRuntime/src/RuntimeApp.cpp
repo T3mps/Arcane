@@ -328,8 +328,26 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
 
 void RuntimeApp::MainLoop()
 {
+    // WALL-CLOCK BASELINES, consulted only in HOST-WINDOW mode: RuntimeFrame
+    // ::AdvanceSim branches on io.config.offscreen and does not call
+    // steady_clock::now() at all under --offscreen, using
+    // m_config.fixedDtSeconds for both frameDt and simDt instead (see that
+    // function's comments) -- so these two starting stamps go unread for the
+    // whole of an --offscreen run. Still initialised unconditionally: the
+    // branch lives in RuntimeFrame.cpp, not here, and an uninitialised
+    // steady_clock::time_point read on the windowed path's first frame would
+    // be undefined behavior, not merely wrong.
     auto simPrev       = std::chrono::steady_clock::now();
     auto lastFrameTime = simPrev;
+    // DEAD STATE, deliberately left alone rather than removed by this task:
+    // bound into FrameIo below and never once read or written by any
+    // function in RuntimeFrame.cpp -- PrepareFrame's own comment says why
+    // ("There is no shader hot-reload poll beside it: the render path reads
+    // offline artifacts through NriGraphContext::ShaderBytecode and has no
+    // ShaderLibrary to poll"). It predates that comment (compare
+    // docs/superpowers/plans/2026-06-14-arcane-m5-plugin-host.md's
+    // lastShaderPoll, which DID poll a ShaderLibrary once a second). Carries
+    // no timing decision either way, so it needs no --offscreen branch.
     auto lastShaderPoll = simPrev;
     bool running = true;
 

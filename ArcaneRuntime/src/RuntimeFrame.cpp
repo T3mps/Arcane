@@ -184,10 +184,29 @@ void AdvanceSim(FrameIo& io)
     // Input: sample SDL state, evaluate actions. Must precede ImGui BeginFrame
     // so capture flags are set before the evaluator reads them.
     {
-        const auto now = std::chrono::steady_clock::now();
-        const double wallDt = std::chrono::duration<double>(now - io.lastFrameTime).count();
-        io.lastFrameTime = now;
-        const double frameDt = wallDt;
+        // FIXED under --offscreen, wall-clock otherwise -- and steady_clock::
+        // now() is not even CALLED in the fixed branch, deliberately: this
+        // frameDt does not stay local to input. It becomes io.lastFrameDt/
+        // io.hostClock below, which PrepareFrame hands the scene resolver as
+        // FrameInfo::dt/now -- the Time/DeltaTime the material globals report
+        // to every bound shader (SceneRenderResolver.cpp, Batcher2D::
+        // SetGlobals). A wall-clock frameDt here would leak straight into
+        // anything an .arcmat animates by time, so two --offscreen runs of
+        // the same `--frames N` could still render different pixels even
+        // with the RunLoop sim held fixed below -- this is every bit as
+        // sim-advancing as that one is, just for the render side instead of
+        // gameplay.
+        double frameDt;
+        if (io.config.offscreen)
+        {
+            frameDt = io.config.fixedDtSeconds;
+        }
+        else
+        {
+            const auto now = std::chrono::steady_clock::now();
+            frameDt = std::chrono::duration<double>(now - io.lastFrameTime).count();
+            io.lastFrameTime = now;
+        }
         // The host clock the compile service debounces against + the frame dt
         // the material globals report. Advanced exactly once per frame, here,
         // because this is where the frame's wall-clock delta is measured (the
@@ -206,10 +225,28 @@ void AdvanceSim(FrameIo& io)
 
     // Sim advance: clamp dt, drive RunLoop with plugin callbacks interleaved.
     {
-        const auto now = std::chrono::steady_clock::now();
-        double simDt = std::chrono::duration<double>(now - io.simPrev).count();
-        io.simPrev = now;
-        if (simDt > 0.25) simDt = 0.25;
+        // THE SITE the plan calls out by name ("the sim-advance site that
+        // consumes simPrev"): FIXED under --offscreen, for the same reason
+        // HostConfig.hpp's fixedDtSeconds comment gives. simDt reaches
+        // RunLoop::Advance below, i.e. FixedUpdateAll/UpdateAll -- gameplay
+        // -- so a wall-clock simDt means `--frames 5` advances the sim by
+        // however long five frames happened to take on THIS run's machine,
+        // and no two runs agree. The 0.25s spiral-of-death clamp stays
+        // wall-clock-only: fixedDtSeconds is refused at parse time unless
+        // positive (HostConfig.cpp) and is a deliberate per-run choice, not a
+        // stall to guard against.
+        double simDt;
+        if (io.config.offscreen)
+        {
+            simDt = io.config.fixedDtSeconds;
+        }
+        else
+        {
+            const auto now = std::chrono::steady_clock::now();
+            simDt = std::chrono::duration<double>(now - io.simPrev).count();
+            io.simPrev = now;
+            if (simDt > 0.25) simDt = 0.25;
+        }
         const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
         io.runtime->Loop().Advance(simDt,
             [&](double dt)          { io.plugin->FixedUpdateAll(dt); },
