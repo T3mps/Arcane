@@ -560,21 +560,25 @@ bool CaptureTail(FrameIo& io)
         // The graph's readback NODE ran inside this frame's own command
         // buffer (declared up front, because a graph capture is a node and
         // not an afterthought) -- ReadCapture maps it and normalizes
-        // BGRA -> RGBA, since NRI resolves the swapchain's channel order
-        // rather than letting us pin it.
+        // BGRA -> RGBA off m_format, not a swapchain read, which is exactly
+        // what makes this call MODE-AGNOSTIC: windowed resolves m_format
+        // from the swapchain, offscreen sets it to kGraphOffscreenFormat,
+        // and this call site never has to know which.
         const bool read = io.graph->ReadCapture(w, h, actual);
 
         if (!read)
         {
-            // A WARN, never an exit code: a screenshot that cannot be written
-            // must not trip the GPU tests' RenderErrorCount()==0 gate.
-            ARC_WARN("screenshot FAILED: {} (backbuffer readback)", io.config.screenshotPath);
+            // A WARN, never an exit code: ReadCapture's own contract is
+            // explicit that "a capture that could not be read is not a bad
+            // frame" -- so a miss here must not trip the GPU tests'
+            // RenderErrorCount()==0 gate, nor flip io.graphExit.
+            ARC_WARN("screenshot FAILED: {} (no capture landed)", io.config.screenshotPath);
         }
         else
         {
             // The exact pixels a player sees (post-tonemap, post-ImGui).
             if (Arcane::WritePngRgba(io.config.screenshotPath, w, h, actual.data()))
-                ARC_INFO("screenshot written: {}", io.config.screenshotPath);
+                ARC_INFO("screenshot written: {} ({}x{})", io.config.screenshotPath, w, h);
             else
                 ARC_WARN("screenshot FAILED: {}", io.config.screenshotPath);
         }
