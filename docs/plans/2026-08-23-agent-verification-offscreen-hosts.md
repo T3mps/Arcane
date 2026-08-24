@@ -1188,3 +1188,133 @@ Append a short outcome section to this plan -- what passed, what the reproductio
 
 - **Plan B** -- the comparator cascade (CIE94, 3x3 variance, SSIM), its knobs, the backend-keyed reference-image hierarchy, and the blessing path. Until it lands, parity is the manual check in Task 14.
 - **Plan C** -- identity addressing (`###` widget ids, entity GUIDs, strict resolution), the script tier, actionability checks, and the trace bundle.
+
+
+---
+
+# Task 14 - CONSOLIDATED DESK CHECKLIST
+
+**Assembled 2026-08-24 from every item banked during execution.** Windowed runs
+were forbidden throughout (a known NVIDIA driver fault under this box's live
+Parsec session), so **every windowed path in this branch is unverified by
+design.** This list is what closes that. Each line is a behaviour that was
+changed or newly created and never executed.
+
+Run `powershell -File scripts\check-faults.ps1 -Days 1` after each windowed block.
+
+## A. The foundational parity check (the arc's one-time claim)
+
+- [ ] For **each** of `dx12` and `vulkan`, capture windowed and offscreen at the
+      same extent and compare by eye. Offscreen images from this build are under
+      `.superpowers/sdd/2026-08-23-agent-verification-offscreen-hosts/evidence/`.
+- [ ] **Do not rest parity on flat regions.** A previous "cross-backend parity"
+      result here was an artifact of sampling a pixel >=20 px inside a
+      uniformly-shaded quad, and the editor capture is 42% flat chrome + 28%
+      flat viewport clear, no gradients, no AA. Compare **edge and gradient**
+      pixels, or a whole-image/tile hash.
+
+## B. Windowed regression - the runtime (Tasks 4, 5, 6)
+
+- [ ] `ArcaneRuntime.exe --project ReferenceProject --frames 5 --backend dx12`
+      - window appears, exit 0. **This is the check that matters**: offscreen was
+      supposed to be purely additive.
+- [ ] `--frames 5 --backend dx12 --screenshot win.png`, then eyeball against the
+      offscreen PNG.
+- [ ] Seven behaviours changed inside windowed branches, never executed: reveal
+      ordering/raise; `FrameExtent`'s null-`m_swap` yielding a silent 0x0 rather
+      than a loud failure; the resolved-graph ternary's false branch; live resize
+      reporting; windowed teardown latch; windowed `ProbeId`; **Release/Dist**
+      (only Debug was exercised at runtime).
+
+## C. Windowed regression - the editor (Tasks 11, 12)
+
+- [ ] Editor smoke run: boots windowed, opens a scene **plus a Mesh or Shader
+      document preview**, no `SetGpuHeartbeatPublisher` WARN, `RenderErrorCount
+      0 -> 0`, and a viewport drag-storm produces **no spurious `gpu-stall`
+      .arcdiag**. The Task 4 fix widened the shared surface into
+      `NriGraphContext.cpp`/`HostConfig.cpp`; its new WARN branch has never run.
+- [ ] `ArcaneEditor.exe --project ReferenceProject --nri-graph --frames 1`
+      - expect **exit 0**; the deliberate rule-3 carve-out must still boot.
+      Reasoned from source only.
+- [ ] The rival-editor-lock `Diagnostics::Shutdown()` fix was applied **by
+      analogy** to the measured no-project case, never reproduced. Needs a second
+      live windowed editor to confirm it exits 2 rather than hanging on the modal.
+
+## D. The layout seed - WITH its falsifiability condition (Task 11)
+
+`ReferenceProject/Saved/verify-layout.ini` is committed but **inert**: its two
+entries name `Debug##Default` and `DockSpaceViewport`, while this editor's dock
+host window is `EditorDockHost`. **Zero of two entries match a live window**, so
+`LoadIniSettingsFromDisk` has never applied a single setting. The capture looks
+correct only because `EditorPanels.cpp:389` runs `BuildDefaultLayout` when
+`DockBuilderGetNode` is null.
+
+- [ ] Author the layout **visibly different from `BuildDefaultLayout`** (e.g.
+      Inspector docked left). **This is the falsifiability condition** - with an
+      identical layout the test cannot distinguish "ini restored" from
+      "programmatic default ran", and would pass either way.
+- [ ] Commit it, then verify: (a) the PINNED log line fires; (b)
+      `DockBuilderGetNode` is **non-null on frame 1** so `BuildDefaultLayout`
+      does NOT run; (c) the capture shows the authored arrangement; (d) two runs
+      byte-identical **and** the seed's SHA unchanged.
+- [ ] `git status ReferenceProject/` clean afterwards. **Snapshot it BEFORE the
+      run and diff against that** - `EditorApp::MintMeshAsset` writes an
+      untracked `New Mesh.arcmesh` into the real project and is not gitignored.
+
+## E. Offscreen paths never exercised (Task 11)
+
+- [ ] `--offscreen` + a **project switch**. Note ImGui applies ini settings at
+      window *creation*, so a mid-session `LoadIniSettingsFromDisk` is partially
+      inert anyway - already-created panels will not move.
+- [ ] `--offscreen` **with a document open** - the case that makes the
+      four-context heartbeat topology concrete.
+
+## F. The pick probe, windowed (Task 9)
+
+- [ ] `ArcaneRuntime --report r.json --probe pick@640,360` **without**
+      `--offscreen`: confirm the "this run is WINDOWED" WARN fires, exit 0, and
+      `r.json` carries `"mode":"windowed"` with the no-pick-set error and no
+      `entity`/`pickableKinds`.
+- [ ] Repeat adding `--pick-probe 100,100`: no crash, and **no cyan ring in the
+      window**. An unset `hoverPixel` defaulting to (0,0) was one scene-layout
+      change away from compositing an outline into every capture.
+
+## G. Determinism, re-confirmed on real hardware
+
+- [ ] Two identical offscreen runs, `fc /b a.png b.png` -> "no differences".
+- [ ] A settled run at `--frames 30 --settle 30` reports `postBound: true`.
+      Observed 3/3 here; the "25/25" figure rests on one agent's word.
+- [ ] **Cross-machine reproducibility is NOT established.** `BuildDefaultLayout`
+      sizes off `GetMainViewport()->WorkSize` - the hidden window's pixel size -
+      so a different-DPI machine changes both the layout and the capture extent
+      even with the pin held. Only same-machine determinism is proven.
+
+## H. The dormant driver fault (spec phase 2)
+
+- [ ] With **Parsec active**, run the windowed `[gpu]` suite three consecutive
+      times: `cd bin\Debug-windows-x86_64-md\ArcaneTests` then
+      `.\ArcaneTests.exe "[gpu]" -d yes`.
+- [ ] `powershell -File scripts\check-faults.ps1 -Days 1`.
+- [ ] **A negative result is valid and expected.** Ground truth: 7
+      `nvwgf2umx.dll +0x1203ce` faults, all 2026-07-09 21:51 to 07-10 11:56, zero
+      since. Outcome is either "reproduced, trigger characterised" or "not
+      reproduced in three runs, recorded dormant, detector in place".
+
+## I. Things that CANNOT be closed at the desk - named so they are not assumed
+
+- **The GPU-stall watchdog is armed but has never been observed firing.**
+  Proving it needs a *stall*; `--crash-gpu` fires a TDR (device-removed), a
+  different failure. **No stall trigger exists in the codebase.**
+- **An offscreen editor run can hang with no diagnostics** - `PresentChromeFrame`
+  returns false on `Skipped`, so `m_frameCount` never advances and `--frames N`
+  never completes; no `Skipped`-streak bailout, watchdog disarmed on that host.
+  Narrow (offscreen has no swapchain, so only a zero-sized surface could trigger
+  it, which `CreateOffscreen` refuses at boot) but it is the one place the
+  rationale and the code disagree.
+- **Mesh picking is unimplemented.** `CollectPickables` builds only
+  `View<WorldTransform,SpriteRenderer>` and `View<Collider2D,PhysicsBodyRef>`.
+  Picking a 3D mesh silently returns the 2D sprite behind it. Mitigated by
+  reporting `pickableKinds`/`meshesNotPickable`, not fixed.
+- **`ShaderCompiler::IsIdle()`'s non-`_WIN32` stub returns `true`
+  unconditionally**, so on the Linux port `--settle` silently degrades to the
+  pre-fix stability-only predicate **with no warning**.
