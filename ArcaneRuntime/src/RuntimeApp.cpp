@@ -337,9 +337,13 @@ void RuntimeApp::MainLoop()
     //
     // THIS VEHICLE OWNS THE PROCESS'S ONLY DEVICE. The boot above ran
     // GpuContext::Create, which builds no graphics device at all, so the
-    // vehicle below creates the first and only one -- over the HOST's window,
-    // which it borrows and must not outlive (m_graphContext is declared after
-    // m_gpu, so it is destroyed first).
+    // vehicle below creates the first and only one. WINDOWED, that device
+    // carries a swapchain over the HOST's window, which it borrows and must
+    // not outlive (m_graphContext is declared after m_gpu, so it is destroyed
+    // first). OFFSCREEN (--offscreen), the vehicle is an OffscreenVehicle
+    // instead: still one device, still the real frame graph, but with no
+    // window handle and no swapchain anywhere in it. Exactly one of the two
+    // is built per run, and everything downstream reaches it through Graph().
     //
     // The latch baseline is taken HERE, not at process start: boot-time errors
     // belong to the boot, and everything from this point until the vehicle is
@@ -363,23 +367,89 @@ void RuntimeApp::MainLoop()
     // for the handful of milliseconds until the first graph frame, the
     // same gap the vehicle always had. Show() also RAISES, which is the
     // launch reveal this host owes exactly once.
-    m_gpu->Win().Show();
+    //
+    // ...AND IT IS SKIPPED ENTIRELY UNDER --offscreen. The window still
+    // EXISTS -- GpuContext creates it hidden (GpuContext.hpp's Create
+    // comment) -- so ImGuiLayer, InputDevices and the event pump keep
+    // working unchanged; it is simply never mapped, and no swapchain is ever
+    // built over it.
+    //
+    // Deliberately NOT "hidden window + ordinary swapchain": the paragraph
+    // above is the warning against exactly that -- a surface created against
+    // a window the compositor has never mapped is the backend-specific corner
+    // a desk-only machine cannot pre-clear. The offscreen vehicle builds no
+    // surface at all, which sidesteps the corner instead of walking into it.
+    if (!m_config.offscreen)
+        m_gpu->Win().Show();
 
-    m_graphContext = Arcane::NriGraphContext::Create(m_config, m_gpu->Win());
-    if (!m_graphContext)
+    if (m_config.offscreen)
     {
-        ARC_ERROR("the graph render half could not be created");
-        m_graphExit = 1;
-        ShutdownGraphPath();
-        return;
+        // THE EXTENT, from the same place the windowed path's initial extent
+        // comes from: the window's own pixel size. NriGraphContext::Init
+        // hands the borrowed window to the swapchain, which resolves its
+        // extent off that HWND -- so reading it here is the SAME number,
+        // hidden or shown (SDL tracks a window's size regardless of
+        // visibility; GpuContext's 1280x720 WindowDesc default is what both
+        // modes therefore start at, and that default is already documented as
+        // load-bearing for anything comparing captured frames).
+        //
+        // There is no Window::Width()/Height() -- GetPixelSize(w, h) is the
+        // accessor, and inventing a second one to fit a call shape would be a
+        // worse trade than an out-parameter pair.
+        std::uint32_t offscreenW = 0, offscreenH = 0;
+        m_gpu->Win().GetPixelSize(offscreenW, offscreenH);
+
+        // THE SAME NODE SET THE WINDOWED PATH BUILDS. NriGraphContext::Init
+        // sets hostHud unconditionally ("a host-window context presents chrome
+        // by definition"), and this host's frame body hands the graph its HUD
+        // draw data every frame (RuntimeFrame.cpp's RenderGraph) without
+        // knowing which vehicle it is talking to -- so an offscreen vehicle
+        // built WITHOUT the node would silently drop the HUD and make the two
+        // modes' captures differ for a reason that is not the renderer.
+        //
+        // pickOutline is deliberately NOT set: --pick-probe's arming is
+        // refused on an offscreen context by construction
+        // (NriGraphContext.cpp's `m_pickArmed = config.pickProbe &&
+        // !IsOffscreen()`), and driving the chain per frame through
+        // FrameDesc::pickPixel is a later task's job, not this one's.
+        Arcane::NriGraphContext::NodeSet offscreenNodes;
+        offscreenNodes.hostHud = true;
+
+        m_offscreen = Arcane::OffscreenVehicle::Create(m_config, offscreenW, offscreenH,
+                                                       offscreenNodes);
+        if (!m_offscreen)
+        {
+            // NO SECOND ERROR LINE: Create logs the step that actually failed
+            // (adapter / wrap / CreateOffscreen), and a generic restatement
+            // here would only push the real cause further up the log.
+            m_graphExit = 1;
+            ShutdownGraphPath();
+            return;
+        }
     }
+    else
+    {
+        m_graphContext = Arcane::NriGraphContext::Create(m_config, m_gpu->Win());
+        if (!m_graphContext)
+        {
+            ARC_ERROR("the graph render half could not be created");
+            m_graphExit = 1;
+            ShutdownGraphPath();
+            return;
+        }
+    }
+
+    // From here down the mode is GONE: everything reaches the live vehicle
+    // through Graph(), which selects between the two exactly once.
+    Arcane::NriGraphContext& graph = *Graph();
+
     // Guid -> asset file, so the graph path can make a REGISTERED sprite
     // material's declared TEXTURES resident on its own device (Task 9).
     // Deliberately the same lambda SceneRenderResolver builds
     // (SceneRenderResolver.cpp's constructor): re-reads CurrentProject()
     // per call, so it survives a project switch, and resolves through the
     // one registry both render paths already agree on.
-    m_graphContext->SetAssetResolver(
+    graph.SetAssetResolver(
         [rt = &*m_runtime](const Arcane::Guid& id)
             -> std::optional<std::filesystem::path>
         {
@@ -391,7 +461,7 @@ void RuntimeApp::MainLoop()
     // own textures from the engine's RETAINED, device-free decode
     // (Assets::PixelsFor). That is what makes a textured sprite render
     // without the asset layer ever holding a device handle.
-    m_graphContext->SetPixelSupply(
+    graph.SetPixelSupply(
         [rt = &*m_runtime](const Arcane::Guid& id) -> const Arcane::PixelData*
         {
             return rt ? rt->AssetsFacade().PixelsFor(id) : nullptr;
@@ -405,13 +475,15 @@ void RuntimeApp::MainLoop()
     // functions below (its old body, extracted verbatim -- see
     // RuntimeFrame.hpp/.cpp) can read and write them without being RuntimeApp
     // members. Constructed once: none of these bindings change identity
-    // frame-to-frame (m_graphContext/m_resolver are set once at boot; the
+    // frame-to-frame (the live vehicle/m_resolver are set once at boot; the
     // rest are references, so mutations through `io` land on the real
     // members/locals directly).
     Arcane::RuntimeFrame::FrameIo io
     {
         .gpu             = m_gpu.get(),
-        .graph           = m_graphContext.get(),
+        // THE LIVE VEHICLE, resolved once, here -- so the frame body never
+        // branches on --offscreen to find its graph. See Graph().
+        .graph           = &graph,
         .resolver        = m_resolver ? &*m_resolver : nullptr,
         .runtime         = &*m_runtime,
         .plugin          = &*m_plugin,
@@ -524,7 +596,11 @@ void RuntimeApp::PushSceneCamera(float viewportWidth, float viewportHeight)
 
 void RuntimeApp::ShutdownGraphPath()
 {
-    if (!m_graphContext)
+    // EITHER vehicle, never both (Graph()'s own comment). Null here means no
+    // vehicle was ever created -- a boot failure ahead of the one that would
+    // have built it -- which is the sole no-op case this function has.
+    Arcane::NriGraphContext* const graph = Graph();
+    if (!graph)
         return;
 
 #if !defined(ARCANE_DIST)
@@ -538,7 +614,7 @@ void RuntimeApp::ShutdownGraphPath()
     // below. So this only ever turns a CLEAN run into a miss.
     if (m_config.pickProbe)
     {
-        const std::optional<std::uint32_t> id = m_graphContext->ProbeId();
+        const std::optional<std::uint32_t> id = graph->ProbeId();
         if (!id.has_value())
         {
             ARC_ERROR("[nri-graph] --pick-probe ({}, {}): NO READBACK LANDED -- the run was too "
@@ -577,7 +653,15 @@ void RuntimeApp::ShutdownGraphPath()
     // HWND/surface dies while that window is still alive -- MainLoop calls
     // this on every exit path, and m_gpu outlives it regardless (member
     // order).
+    //
+    // BOTH are reset, unconditionally, because exactly one of them is live
+    // and a `if (offscreen) ... else ...` here would be a second copy of a
+    // decision Graph() already made. The offscreen vehicle owns its OWN
+    // device rather than borrowing anything from the window, so it has no
+    // ordering debt against m_gpu -- but the latch below still has to be
+    // sampled after its last NRI object is gone, which is what this line is.
     m_graphContext.reset();
+    m_offscreen.reset();
 
     const std::uint64_t errorsNow = Arcane::RenderErrorCount();
     ARC_INFO("[nri-graph] RenderErrorCount {} -> {}", m_graphErrorBaseline, errorsNow);

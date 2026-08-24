@@ -35,18 +35,29 @@ namespace
     // Everything that needs a viewport size this frame -- the resolver's
     // material globals, the scene camera's fit, the batcher's Begin -- asks
     // HERE, so no two of them can end up fitted to different rectangles. It is
-    // one rectangle by construction: there is ONE window, and the graph
-    // swapchain is its one presentation surface. The graph's own canvas is a
-    // TRANSIENT sized to this swapchain inside BuildFrame -- so the swapchain
-    // is the single source of truth, not a proxy for one.
+    // one rectangle by construction: the vehicle has exactly ONE target, and
+    // the graph's own canvas is a TRANSIENT sized to that target inside
+    // BuildFrame -- so the target is the single source of truth, not a proxy
+    // for one. Windowed that target is the swapchain over the host's one
+    // window; under --offscreen it is the vehicle's persistent output texture.
+    //
+    // READ MODE-AGNOSTICALLY, and that is not a style choice: this used to be
+    // `io.graph->Swap().Width()/Height()`, and an offscreen context HAS NO
+    // SWAPCHAIN, so that read would have faulted on frame 1 of every
+    // --offscreen run. SurfaceWidth/SurfaceHeight are the accessors
+    // NriGraphContext documents as "the mode-agnostic reading of
+    // Swap().Width()/Height(), which an offscreen context cannot answer" --
+    // the same pair PumpAndResize below already reads for its before/after
+    // extent report.
     //
     // ASSERT-THEN-READ, not `if (io.graph) ... else fail`. `io.graph` is
-    // unconditional: MainLoop refuses to reach the frame loop at all if
-    // NriGraphContext::Create failed (RuntimeApp.cpp, ShutdownGraphPath runs
-    // and MainLoop returns first), so every call into RuntimeFrame's functions
-    // has a live vehicle -- which is why RenderGraph and CaptureTail in this
-    // same file dereference it with no guard. The fail-loud stands hoisted
-    // above the read rather than left as an unreachable tail.
+    // unconditional: MainLoop refuses to reach the frame loop at all if the
+    // vehicle -- either vehicle -- could not be created (RuntimeApp.cpp,
+    // ShutdownGraphPath runs and MainLoop returns first), so every call into
+    // RuntimeFrame's functions has a live vehicle -- which is why RenderGraph
+    // and CaptureTail in this same file dereference it with no guard. The
+    // fail-loud stands hoisted above the read rather than left as an
+    // unreachable tail.
     //
     // The assert is not decoration. A 0x0 frame would propagate into the
     // resolver's material globals and the batcher's viewport as a quiet
@@ -57,8 +68,8 @@ namespace
         ARC_ASSERT(io.graph, "RuntimeFrame::FrameExtent: io.graph is null -- "
                              "the graph vehicle should be unconditional by the "
                              "time the frame loop runs");
-        width  = io.graph->Swap().Width();
-        height = io.graph->Swap().Height();
+        width  = io.graph->SurfaceWidth();
+        height = io.graph->SurfaceHeight();
     }
 }
 
@@ -91,7 +102,19 @@ bool PumpAndResize(FrameIo& io)
     Arcane::Window& eventWindow = io.gpu->Win();
     const Arcane::WindowEvents events = eventWindow.PumpEvents();
     if (events.quitRequested) return true;
-    if (events.resized)
+    // A RESIZE IS A PRESENTATION EVENT, AND --offscreen HAS NO PRESENTATION.
+    //
+    // NriGraphContext::Resize is documented HOST-WINDOW MODE ONLY and refuses
+    // an offscreen context through the LATCHED error seam -- which is a grown
+    // RenderErrorCount and therefore a nonzero exit for the whole run, not a
+    // warning. So this must be gated rather than left to "a hidden window
+    // never resizes": SDL posts SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED (the one
+    // event Window::PumpEvents turns into `resized`) when a window's pixel
+    // size is first established and again on a display-scale change, and
+    // NEITHER requires the window to have been mapped. The offscreen output's
+    // extent is fixed at Create and only ResizeOffscreen can change it, so
+    // there is nothing here to forward the event to.
+    if (events.resized && !io.graph->IsOffscreen())
     {
         // ONE resize, to this run's one presentation surface.
         //
@@ -134,6 +157,12 @@ bool PumpAndResize(FrameIo& io)
             }
         }
     }
+    // Left ungated for --offscreen, deliberately: IsMinimized reads
+    // SDL_WINDOW_MINIMIZED, which a never-shown window does not carry (hidden
+    // and minimized are different SDL window states), so this is false for the
+    // whole of an offscreen run and the skip below is unreachable there. It
+    // would be harmless even if it fired -- a skipped frame is routine -- so
+    // there is nothing to gate.
     if (eventWindow.IsMinimized())
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -244,6 +273,14 @@ void PrepareFrame(FrameIo& io)
 // DeclareGraphFrame; each bracketed stage is dropped by passing the
 // FrameDesc field that carries it as null (see that struct).
 //
+// UNDER --offscreen the frame's SHAPE is identical -- same declaration,
+// same node census -- and only its two ends differ: the tonemap writes
+// the vehicle's imported output instead of an acquired backbuffer, and
+// Execute runs with no swapchain, so it acquires nothing and presents
+// nothing. That is the vehicle's business, not this function's; the one
+// thing this function owes it is calling the right member of the
+// RenderFrame/RenderFrameOffscreen pair. See that call below.
+//
 // The plugin's RENDER submission: the batcher is Begin()'d with the
 // canvas extent alone, SubmitRender fills it, and the graph's
 // Batch2DNode DRAINS it -- one batcher, one batching algorithm, one
@@ -309,7 +346,8 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     graphFrame.imgui = io.gpu->Imgui().RenderToDrawData();
 
     // THE FRAME'S EXTENT, from the one surface this run has (see
-    // FrameExtent): the graph swapchain's. Read once and used for the
+    // FrameExtent): the graph swapchain's, or -- under --offscreen -- the
+    // vehicle's persistent output texture. Read once and used for the
     // batcher's viewport AND the scene camera's fit, so those two can
     // never be fitted to different rectangles -- and it is the same
     // number PrepareFrame gave the resolver for the material globals.
@@ -448,9 +486,22 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // above is the work it names), but accEnd/accTone stay 0 -- there is
     // no separate flush or tonemap step left to time, both being inside
     // this one call.
+    //
+    // THE ONE LINE IN THIS FILE THAT NAMES THE MODE, and it is forced. The
+    // vehicle deliberately exposes a PAIR that refuses each other's mode --
+    // RenderFrame latches an error on an offscreen context and
+    // RenderFrameOffscreen latches one on a host-window context, because
+    // "a vehicle that quietly did the wrong thing for its mode would be a
+    // wrong picture, not an error" (NriGraphContext.hpp). There is no
+    // mode-agnostic entry point to route through, and inventing one in the
+    // engine would erase exactly the refusal that design is buying. So the
+    // frame driver picks, once, here -- everything above and below this line
+    // is identical in both modes, which is the property Task 14's parity check
+    // rests on.
     const auto graphT0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
     const Arcane::NriGraphContext::FrameOutcome outcome =
-        io.graph->RenderFrame(graphFrame);
+        io.graph->IsOffscreen() ? io.graph->RenderFrameOffscreen(graphFrame)
+                                : io.graph->RenderFrame(graphFrame);
     io.perf.Add(io.perf.accPresent, graphT0, io.perf.Now());
     if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)
     {

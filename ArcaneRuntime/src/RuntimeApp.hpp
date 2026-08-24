@@ -10,6 +10,7 @@
 #include <vector>
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/GpuContext.hpp>
+#include <Arcane/Host/OffscreenVehicle.hpp>   // --offscreen's vehicle: device + NRI wrap + offscreen graph context, no window, no swapchain
 #include <Arcane/Host/FramePerf.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Host/BootSequence.hpp>
@@ -66,34 +67,63 @@ private:
     void Shutdown();
 
     // Destroy the render vehicle and fold a grown RenderErrorCount into
-    // m_graphExit. Idempotent, and a no-op only if m_graphContext was never
+    // m_graphExit. Idempotent, and a no-op only if NEITHER vehicle was ever
     // created (a boot failure before it) -- that is the sole reason. MainLoop
     // calls it on EVERY exit path, because the latch must be read after the
     // last NRI object is gone.
     void ShutdownGraphPath();
+
+    // THE LIVE GRAPH CONTEXT, whichever of the two vehicles this run built.
+    // Exactly one of m_graphContext / m_offscreen is ever non-null (MainLoop's
+    // one if/else builds one or the other and returns on failure), so this is
+    // a selection, never a preference.
+    //
+    // A POINTER, not the reference the plan sketched: it feeds
+    // FrameIo::graph -- a pointer, in an aggregate-initialised struct that a
+    // reference member would fight (RuntimeFrame.hpp) -- and it is called from
+    // ShutdownGraphPath, which runs on boot-failure paths where BOTH are null
+    // and needs a null to test rather than a reference to nothing.
+    [[nodiscard]] Arcane::NriGraphContext* Graph() noexcept
+    {
+        return m_offscreen ? &m_offscreen->Graph() : m_graphContext.get();
+    }
 
     Arcane::HostConfig                  m_config;
     std::unique_ptr<Arcane::GpuContext> m_gpu;          // destructs LAST among engine state
 
     // THE WHOLE RENDER HALF: the native device, NRI wrap, swapchain (over
     // the HOST's window, borrowed), upload ring, pipeline cache and
-    // RenderGraph. LIVE ON EVERY RUN, in every configuration including Dist
-    // -- this is null only on a failed boot (MainLoop's
-    // `if (!m_graphContext)` returns before the loop starts).
+    // RenderGraph. LIVE ON EVERY WINDOWED RUN, in every configuration
+    // including Dist -- this is null on a failed boot (MainLoop's
+    // `if (!m_graphContext)` returns before the loop starts) AND on every
+    // --offscreen run, where m_offscreen below is the vehicle instead.
     //
     // NOT #if-guarded: the type is compiled into the engine DLL in every
     // configuration (it is ordinary Render/Nri source), and a
     // preprocessor-guarded MEMBER would force every use site in MainLoop's
     // frame body to grow a guard of its own -- which is exactly how a
-    // Dist-only compile break gets introduced. The CREATION is unconditional
-    // too; there is no configuration where this carries a null pointer on an
-    // ordinary run.
+    // Dist-only compile break gets introduced. --offscreen is a RUNTIME
+    // choice for the same reason: a mode gated on a macro would not exist in
+    // Release or Dist, and this arc needs it in all three.
     //
     // Declared AFTER m_gpu so it destructs BEFORE it, and that ordering is
     // LOAD-BEARING rather than merely tidy: this object's swapchain is bound
     // to the window inside m_gpu (NriGraphContext.hpp, THE BORROWED WINDOW),
     // so it must be gone before that window is.
     std::unique_ptr<Arcane::NriGraphContext> m_graphContext;
+
+    // THE OTHER RENDER HALF, and the two are MUTUALLY EXCLUSIVE: --offscreen
+    // builds this one and leaves m_graphContext null. It owns its own native
+    // device + NRI wrap + an offscreen NriGraphContext that renders into a
+    // texture it owns -- no window handle, no surface, no swapchain, nothing
+    // for a compositor to map. Reach the graph inside it through Graph()
+    // above, never directly.
+    //
+    // Declared beside m_graphContext, after m_gpu, for the same teardown
+    // reason -- even though this vehicle borrows NO window (that is the whole
+    // point of it), the pair must sit on the same side of m_gpu so the rule
+    // reads as one rule rather than two that happen to agree.
+    std::unique_ptr<Arcane::OffscreenVehicle> m_offscreen;
 
     // The boot splash: non-owning, see the ctor's doc comment. It is
     // BootSequence::Run's presenter for the WHOLE boot, not merely a

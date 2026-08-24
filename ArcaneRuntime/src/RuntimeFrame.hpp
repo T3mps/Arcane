@@ -7,21 +7,28 @@
 // here.
 //
 // THE SHAPE, so a reader can see it rather than reconstruct it:
-//   * ONE WINDOW IS PUMPED, always the host's. The render half does not own
-//     one -- it borrows this exact window and presents into it.
+//   * ONE WINDOW IS PUMPED, always the host's. Windowed, the render half
+//     borrows this exact window and presents into it; under --offscreen the
+//     window exists but is never shown, and the pump keeps running because
+//     ImGui and the input stack are wired to it either way.
 //   * ONE RESIZE, `io.graph->Resize`, to that window's one presentation
-//     surface and to nothing else.
+//     surface and to nothing else -- and only in HOST-WINDOW MODE, because
+//     that is the only mode with a surface to resize. See PumpAndResize.
 //   * BuildHud IS ONLY THE HUD: the ImGui frame, the "ArcaneRuntime" window
 //     and DrawUIAll. PrepareFrame, called straight after it, is the scene
 //     resolver's Refresh.
-//   * THE FRAME'S EXTENT comes from the graph swapchain (see FrameExtent in
-//     the .cpp) -- there is no second surface that could disagree with it.
+//   * THE FRAME'S EXTENT comes from the vehicle's own surface -- the
+//     swapchain's, or the offscreen output's, read mode-agnostically through
+//     SurfaceWidth/SurfaceHeight (see FrameExtent in the .cpp). There is no
+//     second surface that could disagree with it in either mode.
 //   * ImGui CALLS GO THROUGH ImGuiLayer (RenderToDrawData / EndFrameDiscard)
 //     instead of bare ImGui::Render()/EndFrame(), so the context pin the
 //     layer owns covers them too.
 //
 // RenderGraph is the only per-frame render function here: the frame graph is
-// the only render path.
+// the only render path. It is the ONE function that still names the mode, at
+// exactly one line -- the vehicle's RenderFrame/RenderFrameOffscreen pair
+// refuses each other's mode by design, so the frame driver has to pick.
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Host/FramePerf.hpp>
@@ -59,7 +66,14 @@ namespace Arcane::RuntimeFrame
     {
         // ---- the pointers MainLoop already owned ----------------------------
         Arcane::GpuContext*          gpu;       // never null once MainLoop is running
-        Arcane::NriGraphContext*     graph;     // never null: m_graphContext is built unconditionally, and MainLoop refuses to enter the frame loop if that failed
+        // THE LIVE VEHICLE, and never null: MainLoop builds exactly one of
+        // m_graphContext (windowed) / m_offscreen (--offscreen) and RETURNS
+        // before the frame loop if that build failed, so by the time any
+        // function below runs there is a vehicle. Which of the two it is, is
+        // resolved once at the binding site (RuntimeApp::Graph()) -- the frame
+        // body does not branch on --offscreen to find its graph, and asks
+        // IsOffscreen() only where the vehicle's own API genuinely differs.
+        Arcane::NriGraphContext*     graph;
         Arcane::SceneRenderResolver* resolver;  // null iff the boot scene published none
         Arcane::Runtime*             runtime;
         Arcane::PluginHost*          plugin;
@@ -127,7 +141,8 @@ namespace Arcane::RuntimeFrame
     // false (MainLoop `continue`s).
     //
     // ONE window: the host's. Its resize goes to that window's one
-    // presentation surface and to nothing else.
+    // presentation surface and to nothing else -- and under --offscreen there
+    // IS no such surface, so the resize is dropped rather than forwarded.
     bool PumpAndResize(FrameIo& io);
 
     // Per-frame timing (wall dt for input, clamped sim dt), input sampling +
