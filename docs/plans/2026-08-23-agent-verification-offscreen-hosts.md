@@ -38,7 +38,7 @@ F2a's plan was a lossy compression of its spec and nothing checked the compressi
 | R3 | `CreateOffscreen`, never swapchain-over-hidden-window | Mandatory | Tasks 3, 4 |
 | R4 | `--screenshot` reads `ReadCapture()` | The seam | Task 5 |
 | R5 | `--probe` parsing, malformed refused | Layer 2 | Task 1 (repeatable), Task 2 (collection + refusals), Task 7 (`ParseProbe`) |
-| R6 | Probes: `luma`, `rgba`, `pick`, `census` | Layer 2 | Tasks 7, 8, 9 |
+| R6 | Probes: `brightness`, `luma`, `rgba`, `pick`, `census` | Layer 2 | Tasks 7, 8, 9 |
 | R7 | `pick` via `FrameDesc::pickPixel`, not `--pick-probe` | Layer 2 | Task 9 |
 | R8 | `--report` JSON: schemaVersion, backend, mode, framesRendered, exitReason, probes | Layer 2 | Task 7 |
 | R8a | Tiering: engine mode ships always; nothing optional or `ARCANE_DIST`-gated; report JSON is the Servitor contract | Tiering | Tasks 2, 7 (+ binding on all) |

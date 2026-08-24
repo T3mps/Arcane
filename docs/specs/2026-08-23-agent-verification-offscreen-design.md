@@ -259,10 +259,33 @@ coordinate pair (`HostConfig.cpp:109-114`).
 
 | Probe | Yields | Mechanism |
 |---|---|---|
-| `luma@x,y` | pixel intensity | `ReadCapture()`, as `[gpu][pixel]` already does |
+| `brightness@x,y` | unweighted `(R+G+B)/765` | `ReadCapture()`, the same sum `[gpu][pixel]` uses |
+| `luma@x,y` | Rec.709 `0.2126R+0.7152G+0.0722B` | `ReadCapture()` |
 | `rgba@x,y` | raw pixel | `ReadCapture()` |
 | `pick@x,y` | entity id under the pixel | **`FrameDesc::pickPixel`** |
 | `census` | 6-field resolution census | `SceneRenderResolver::Materials()` |
+
+**The first two are distinct on purpose, and the naming was corrected during
+implementation** (2026-08-23). This table originally listed a single `luma@x,y`
+described as "pixel intensity", and the plan told the implementer to reuse
+`NriGraphPixelTest.cpp`'s `Luma` helper. That helper is an **unweighted channel
+sum**, and its own comment says it is *"deliberately crude and integer: this is
+only ever used for 'much brighter than', never for a colour-accurate
+comparison."* Propagating it into an agent-facing contract under the name `luma`
+would have promised perceptual brightness and delivered something else: pure red
+and pure green both read `0.33` under the sum, while real luma puts them ~2.7x
+apart, so an agent asserting `luma@x,y > 0.5` could get the answer backwards.
+
+So the sum keeps its behaviour under the honest name **`brightness`** — bitwise
+the same arithmetic as the pixel tests, so the two can never drift — and `luma`
+now means what it says. **Luma (Y′) is defined on gamma-encoded values**: the
+weights apply directly to the sRGB channel numbers with no linearisation. That
+is *luminance* (Y), which is a different quantity and is deliberately not
+offered.
+
+Corrected while the report had no consumers: renaming a field is breaking,
+adding a kind is additive, so the rename had to happen before Servitor parses
+anything and the addition could safely have waited.
 
 **`pick` must be driven by `FrameDesc::pickPixel`, not by the runtime's
 `--pick-probe` flag.** `ArcaneEditor/src/main.cpp:92-98` records that
