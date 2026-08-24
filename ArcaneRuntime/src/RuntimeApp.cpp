@@ -717,6 +717,11 @@ void RuntimeApp::ShutdownGraphPath()
     {
         std::int32_t  armedX = 0, armedY = 0;
         bool          landed = false;
+        // The pick surface's own extent, stashed here for the SAME reason
+        // armedX/armedY are: graph is about to be reset, and VerifyReport
+        // needs this to tell "out of range" apart from "too short" itself
+        // (fix round 1) rather than trusting a bool computed here.
+        std::uint32_t surfaceWidth = 0, surfaceHeight = 0;
         std::uint32_t hitProxyId = 0;
         bool          resolved = false;
         std::string   entityName;
@@ -762,6 +767,12 @@ void RuntimeApp::ShutdownGraphPath()
                 PickResolution res;
                 res.armedX = pickSpec->x;
                 res.armedY = pickSpec->y;
+                // Always known once the vehicle exists (unconditional on
+                // in-range-ness) -- lets VerifyReport itself distinguish
+                // "out of range" from "too short" later (fix round 1's
+                // design-question answer: these are different facts).
+                res.surfaceWidth  = graph->SurfaceWidth();
+                res.surfaceHeight = graph->SurfaceHeight();
 
                 // Fix round 1, item 2: --pick-probe's OWN out-of-range latch
                 // (NriGraphContext.cpp's m_probeOutOfRange) is keyed to
@@ -951,7 +962,8 @@ void RuntimeApp::ShutdownGraphPath()
         {
             report.SetPick(pickResolution->armedX, pickResolution->armedY, pickResolution->landed,
                             pickResolution->hitProxyId, pickResolution->resolved,
-                            pickResolution->entityName, pickResolution->entityGuid);
+                            pickResolution->entityName, pickResolution->entityGuid,
+                            pickResolution->surfaceWidth, pickResolution->surfaceHeight);
         }
 
         // Parse-then-evaluate, never silently drop a malformed --probe: an

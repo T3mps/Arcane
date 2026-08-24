@@ -197,16 +197,19 @@ namespace Arcane
 
     void VerifyReport::SetPick(std::int32_t armedX, std::int32_t armedY, bool landed,
                                 std::uint32_t hitProxyId, bool resolved,
-                                std::string entityName, std::string entityGuid)
+                                std::string entityName, std::string entityGuid,
+                                std::uint32_t surfaceWidth, std::uint32_t surfaceHeight)
     {
-        m_pickSet        = true;
-        m_pickArmedX     = armedX;
-        m_pickArmedY     = armedY;
-        m_pickLanded     = landed;
-        m_pickHitProxyId = hitProxyId;
-        m_pickResolved   = resolved;
-        m_pickEntityName = std::move(entityName);
-        m_pickEntityGuid = std::move(entityGuid);
+        m_pickSet          = true;
+        m_pickArmedX       = armedX;
+        m_pickArmedY       = armedY;
+        m_pickLanded       = landed;
+        m_pickSurfaceWidth  = surfaceWidth;
+        m_pickSurfaceHeight = surfaceHeight;
+        m_pickHitProxyId   = hitProxyId;
+        m_pickResolved     = resolved;
+        m_pickEntityName   = std::move(entityName);
+        m_pickEntityGuid   = std::move(entityGuid);
     }
 
     void VerifyReport::Evaluate(const std::vector<ProbeSpec>& specs)
@@ -347,13 +350,46 @@ namespace Arcane
                 }
                 else if (!m_pickLanded)
                 {
-                    // Reuses RuntimeApp.cpp's own wording (ShutdownGraphPath's
-                    // --pick-probe report) verbatim, so the two paths read
-                    // alike rather than inventing a second vocabulary for the
-                    // same fact.
-                    entry["error"] = "NO READBACK LANDED -- the run was too short (the copy lands a "
-                                      "couple of frames after the pass that wrote it) or the probe "
-                                      "pixel was outside the surface";
+                    // Fix round 1: "the run never landed a readback" and "you
+                    // asked about a pixel that does not exist on this run's
+                    // surface" are TWO DIFFERENT FACTS -- mirrors Brightness/
+                    // Luma/Rgba's own "no capture set" vs "pixel outside
+                    // capture" split (ReadTexel above) rather than folding
+                    // both into one ambiguous message. Derived HERE, from the
+                    // surface size SetPick was given, rather than trusting a
+                    // host-computed bool -- the same "VerifyReport derives
+                    // the fact itself" shape ReadTexel already uses.
+                    //
+                    // 0x0 is the "surface size unknown" sentinel (SetPick's
+                    // doc comment) -- a real offscreen surface is never 0x0 --
+                    // so that case (and the genuine in-range-but-too-short
+                    // case) both fall through to the combined wording, which
+                    // is honest either way: it just can't narrow further.
+                    const bool knowsSurface = m_pickSurfaceWidth != 0 && m_pickSurfaceHeight != 0;
+                    if (knowsSurface &&
+                        !PickPixelInRange(m_pickArmedX, m_pickArmedY, m_pickSurfaceWidth, m_pickSurfaceHeight))
+                    {
+                        entry["error"] = "pixel (" + std::to_string(m_pickArmedX) + "," +
+                                          std::to_string(m_pickArmedY) + ") is outside the " +
+                                          std::to_string(m_pickSurfaceWidth) + "x" +
+                                          std::to_string(m_pickSurfaceHeight) + " surface -- this pixel "
+                                          "can never land, regardless of --frames";
+                    }
+                    else
+                    {
+                        // Reuses RuntimeApp.cpp's own wording (ShutdownGraphPath's
+                        // --pick-probe report) verbatim, so the two paths read
+                        // alike rather than inventing a second vocabulary for the
+                        // same fact. No longer hedges with "...or outside the
+                        // surface" when the surface IS known -- that case is
+                        // the branch above now.
+                        entry["error"] = knowsSurface
+                            ? "NO READBACK LANDED -- the run was too short (the copy lands a couple "
+                              "of frames after the pass that wrote it)"
+                            : "NO READBACK LANDED -- the run was too short (the copy lands a couple of "
+                              "frames after the pass that wrote it) or the probe pixel was outside the "
+                              "surface (surface size unknown to this report)";
+                    }
                 }
                 else if (m_pickHitProxyId == 0)
                 {

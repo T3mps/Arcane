@@ -160,10 +160,33 @@ namespace Arcane
         //
         //   landed      -- false means the readback never arrived
         //                  (NriGraphContext::ProbeId() returned nullopt: the
-        //                  run was too short, or the pixel was outside the
-        //                  surface). Evaluate reuses RuntimeApp.cpp's own
-        //                  "NO READBACK LANDED" wording for this case, so
-        //                  the two paths read alike.
+        //                  run was too short, OR the pixel was outside the
+        //                  surface). These are TWO DIFFERENT FACTS, not one
+        //                  -- fix round 1 split them, mirroring how
+        //                  Brightness/Luma/Rgba already distinguish "no
+        //                  capture set" from "pixel outside capture"
+        //                  (ReadTexel): "the run never captured anything" is
+        //                  not the same claim as "you asked about a pixel
+        //                  that does not exist", and an agent needs to tell
+        //                  them apart. Evaluate derives WHICH of the two
+        //                  applies itself, via PickPixelInRange against
+        //                  surfaceWidth/surfaceHeight below -- it does not
+        //                  trust a host-computed bool for that -- and reuses
+        //                  RuntimeApp.cpp's "NO READBACK LANDED" wording only
+        //                  for the genuine too-short case, now that the
+        //                  out-of-range case has its own distinct message.
+        //   surfaceWidth/surfaceHeight -- the pick id-buffer's own extent
+        //                  (NriGraphContext::SurfaceWidth/Height), NOT the
+        //                  same thing as SetCapture's capture buffer (a
+        //                  different readback entirely) -- what
+        //                  PickPixelInRange checks armedX/armedY against.
+        //                  0/0 (the default) means "the caller did not know
+        //                  or did not pass it", which Evaluate treats as
+        //                  "cannot tell out-of-range from too-short" and
+        //                  falls back to the combined wording -- a real
+        //                  offscreen surface is never 0x0 (CreateOffscreen
+        //                  refuses that extent), so 0/0 is an unambiguous
+        //                  "unknown" sentinel, not a legitimate size.
         //   hitProxyId  -- the RAW, frame-scoped id the id pass wrote (0 ==
         //                  background). Carried into the report for
         //                  debugging ONLY -- meaningless outside the one
@@ -183,7 +206,8 @@ namespace Arcane
         //                  resolved && hitProxyId != 0.
         void SetPick(std::int32_t armedX, std::int32_t armedY, bool landed,
                      std::uint32_t hitProxyId, bool resolved,
-                     std::string entityName, std::string entityGuid);
+                     std::string entityName, std::string entityGuid,
+                     std::uint32_t surfaceWidth = 0, std::uint32_t surfaceHeight = 0);
 
         // Evaluates every spec against whatever SetCapture/AddCensus/SetPick were
         // given before this call, and appends one JSON entry per spec.
@@ -230,6 +254,9 @@ namespace Arcane
         bool          m_pickSet        = false;
         std::int32_t  m_pickArmedX     = 0, m_pickArmedY = 0;
         bool          m_pickLanded     = false;
+        // 0/0 = "unknown" (see SetPick's doc comment) -- a real offscreen
+        // surface is never 0x0, so this sentinel is unambiguous.
+        std::uint32_t m_pickSurfaceWidth = 0, m_pickSurfaceHeight = 0;
         std::uint32_t m_pickHitProxyId = 0;
         bool          m_pickResolved   = false;
         std::string   m_pickEntityName;

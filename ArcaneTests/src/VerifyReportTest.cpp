@@ -240,8 +240,12 @@ TEST_CASE("verify: FirstPickProbe finds the first pick@ spec among raw probes, s
     CHECK(skipsMalformed->y == 20);
 }
 
-TEST_CASE("verify: SetPick(landed=false) reports NO READBACK LANDED, matching --pick-probe's own wording", "[verify]")
+TEST_CASE("verify: SetPick(landed=false), surface UNKNOWN (no width/height given), reports the combined NO READBACK LANDED wording", "[verify]")
 {
+    // surfaceWidth/surfaceHeight default to 0/0 -- the "unknown" sentinel --
+    // so this exercises the fallback branch: VerifyReport cannot tell
+    // out-of-range from too-short without a real surface size, and says so
+    // honestly rather than guessing.
     Arcane::VerifyReport rep;
     rep.SetRun("D3D12", true, 60, "frames-complete");
     rep.SetPick(/*armedX=*/640, /*armedY=*/360, /*landed=*/false,
@@ -255,6 +259,59 @@ TEST_CASE("verify: SetPick(landed=false) reports NO READBACK LANDED, matching --
     REQUIRE(entry.contains("error"));
     CHECK_FALSE(entry.contains("entity"));
     CHECK(entry["error"].get<std::string>().find("NO READBACK LANDED") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// Fix round 1's design question: "is 'no capture was ever set' the same
+// condition as 'the requested pixel is outside the capture'?" -- no. Applied
+// to Pick: "the readback never landed" (too short) and "the pixel is outside
+// the surface" (structural, can never land) are two different facts, and an
+// agent needs to tell them apart -- exactly the split Brightness/Luma/Rgba's
+// ReadTexel already makes between "no capture set" and "pixel outside
+// capture". These two cases pin that split for Pick.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("verify: SetPick(landed=false), surface KNOWN and the armed pixel is inside it, still reports the too-short wording", "[verify]")
+{
+    Arcane::VerifyReport rep;
+    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetPick(640, 360, /*landed=*/false, 0, false, "", "", /*surfaceWidth=*/1280, /*surfaceHeight=*/720);
+
+    std::string err;
+    rep.Evaluate({ *Arcane::ParseProbe("pick@640,360", err) });
+
+    const auto doc = nlohmann::json::parse(rep.ToJson());
+    const auto& entry = doc["probes"][0];
+    REQUIRE(entry.contains("error"));
+    const std::string& msg = entry["error"].get_ref<const std::string&>();
+    CHECK(msg.find("NO READBACK LANDED") != std::string::npos);
+    CHECK(msg.find("too short") != std::string::npos);
+    // The surface IS known and the pixel IS inside it, so this must NOT be
+    // misreported as an out-of-range refusal.
+    CHECK(msg.find("outside the") == std::string::npos);
+}
+
+TEST_CASE("verify: SetPick(landed=false), surface KNOWN and the armed pixel is OUTSIDE it, reports a distinct out-of-range fact, not the too-short wording", "[verify]")
+{
+    // pick@9999,9999 against a 1280x720 surface -- structurally can never
+    // land no matter how many frames the run had. Must not be conflated with
+    // "too short".
+    Arcane::VerifyReport rep;
+    rep.SetRun("D3D12", true, 60, "frames-complete");
+    rep.SetPick(9999, 9999, /*landed=*/false, 0, false, "", "", /*surfaceWidth=*/1280, /*surfaceHeight=*/720);
+
+    std::string err;
+    rep.Evaluate({ *Arcane::ParseProbe("pick@9999,9999", err) });
+
+    const auto doc = nlohmann::json::parse(rep.ToJson());
+    const auto& entry = doc["probes"][0];
+    REQUIRE(entry.contains("error"));
+    const std::string& msg = entry["error"].get_ref<const std::string&>();
+    CHECK(msg.find("outside the 1280x720 surface") != std::string::npos);
+    CHECK(msg.find("never land") != std::string::npos);
+    // Distinct vocabulary from the too-short case -- an agent parsing this
+    // must be able to tell the two apart without fragile substring games.
+    CHECK(msg.find("too short") == std::string::npos);
 }
 
 TEST_CASE("verify: a background pick miss is a FACT (id 0 as the nil Guid), never an error", "[verify]")
@@ -403,7 +460,12 @@ TEST_CASE("verify: meshesNotPickable is omitted, not false, when the scene's cen
     std::string err;
     rep.Evaluate({ *Arcane::ParseProbe("pick@640,360", err) });
 
-    const auto& entry = nlohmann::json::parse(rep.ToJson())["probes"][0];
+    // `doc` OWNS the parsed json; `entry` is a reference INTO it, not into a
+    // temporary -- binding `const auto&` straight to `parse(...)["probes"][0]`
+    // in one expression dangles (operator[] chained on a temporary does not
+    // lifetime-extend it), which is exactly the bug fix round 1 found here.
+    const auto doc = nlohmann::json::parse(rep.ToJson());
+    const auto& entry = doc["probes"][0];
     CHECK(entry.contains("pickableKinds"));       // always present on a result
     CHECK_FALSE(entry.contains("meshesNotPickable"));   // omitted, not `false`
 }
@@ -418,7 +480,12 @@ TEST_CASE("verify: a background pick miss also carries pickableKinds -- the miti
     std::string err;
     rep.Evaluate({ *Arcane::ParseProbe("pick@20,700", err) });
 
-    const auto& entry = nlohmann::json::parse(rep.ToJson())["probes"][0];
+    // `doc` OWNS the parsed json; `entry` is a reference INTO it, not into a
+    // temporary -- binding `const auto&` straight to `parse(...)["probes"][0]`
+    // in one expression dangles (operator[] chained on a temporary does not
+    // lifetime-extend it), which is exactly the bug fix round 1 found here.
+    const auto doc = nlohmann::json::parse(rep.ToJson());
+    const auto& entry = doc["probes"][0];
     CHECK(entry["entity"].is_null());
     REQUIRE(entry.contains("pickableKinds"));
     CHECK(entry["pickableKinds"] == std::vector<std::string>{ "sprite", "collider2d" });
@@ -436,7 +503,12 @@ TEST_CASE("verify: an error branch never carries pickableKinds -- it is a result
     std::string err;
     rep.Evaluate({ *Arcane::ParseProbe("pick@640,360", err) });
 
-    const auto& entry = nlohmann::json::parse(rep.ToJson())["probes"][0];
+    // `doc` OWNS the parsed json; `entry` is a reference INTO it, not into a
+    // temporary -- binding `const auto&` straight to `parse(...)["probes"][0]`
+    // in one expression dangles (operator[] chained on a temporary does not
+    // lifetime-extend it), which is exactly the bug fix round 1 found here.
+    const auto doc = nlohmann::json::parse(rep.ToJson());
+    const auto& entry = doc["probes"][0];
     REQUIRE(entry.contains("error"));
     CHECK_FALSE(entry.contains("pickableKinds"));
     CHECK_FALSE(entry.contains("meshesNotPickable"));
