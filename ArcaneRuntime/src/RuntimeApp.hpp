@@ -204,7 +204,12 @@ private:
     std::vector<unsigned char>            m_previousCaptureRgba;
     std::uint32_t                         m_previousCaptureWidth = 0, m_previousCaptureHeight = 0;
     bool                                  m_previousCaptureValid = false;
-    std::uint32_t                         m_settleAttemptsUsed   = 0;
+    // uint64_t, matching HostConfig::settleAttempts' own width (fix round 1,
+    // item 4) -- a narrower counter compared against a wider budget could
+    // silently WRAP on an absurd --settle value, reintroducing the
+    // unstoppable-run hazard --offscreen's own --frames-required refusal
+    // exists to prevent.
+    std::uint64_t                         m_settleAttemptsUsed   = 0;
     bool                                  m_settleConverged      = false;
 
 #if !defined(ARCANE_DIST)

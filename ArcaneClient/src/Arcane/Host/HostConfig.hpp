@@ -81,17 +81,24 @@ namespace Arcane
         // task-6-report.md's bisection: the boundary is exactly 12 frames,
         // 0.2s debounce / (1/60s fixed dt)).
         //
-        // N > 0 means: once the ordinary --frames budget above is spent,
-        // FREEZE the render/sim clock (RuntimeFrame.cpp's AdvanceSim) and
-        // keep re-rendering that same instant -- so nothing but async
-        // resource state can still change frame to frame -- capturing again
-        // each time, for up to N attempts, until two CONSECUTIVE captures
-        // compare BYTE-EQUAL. Freezing the clock is load-bearing, not an
-        // optimisation: ReferenceProject's PulseSprite material shades as a
-        // function of Time (Content/materials/pulse_sprite.arcmat), so
-        // comparing un-frozen frames would never converge on anything --
-        // every frame would legitimately differ regardless of whether the
-        // compile race has resolved.
+        // N > 1 (>= 2; a bare 1 is refused at parse time -- one attempt has
+        // nothing to compare against and would always fail) means: once the
+        // ordinary --frames budget above is spent, FREEZE the render/sim
+        // clock (RuntimeFrame.cpp's AdvanceSim) and keep re-rendering that
+        // same instant -- so nothing but async resource state can still
+        // change frame to frame -- capturing again each time, for up to N
+        // attempts, until two CONSECUTIVE captures compare BYTE-EQUAL AND
+        // the shader compiler reports IsIdle() (fix round 1, item 1 -- byte
+        // equality alone is a STABILITY predicate, not the QUIESCENCE one
+        // this mode actually needs: Drain() is not clock-gated, only Submit's
+        // debounce dispatch is, so two frozen frames can agree while a
+        // dispatched-but-undrained compile is still genuinely in flight).
+        // Freezing the clock is load-bearing, not an optimisation:
+        // ReferenceProject's PulseSprite material shades as a function of
+        // Time (Content/materials/pulse_sprite.arcmat), so comparing
+        // un-frozen frames would never converge on anything -- every frame
+        // would legitimately differ regardless of whether the compile race
+        // has resolved.
         //
         // Byte equality, never a tolerance: same mode, same format, same
         // capture path every attempt, so an honest bitwise compare is

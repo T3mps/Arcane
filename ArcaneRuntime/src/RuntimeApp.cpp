@@ -560,6 +560,11 @@ void RuntimeApp::MainLoop()
         .previousCaptureValid  = m_previousCaptureValid,
         .settleAttemptsUsed    = m_settleAttemptsUsed,
         .settleConverged       = m_settleConverged,
+        // Fix round 1, item 1: the SAME instance SceneRenderResolver::Services
+        // already points at (StageSpriteTables's `rs.compiler = &m_shaderCompiler`)
+        // -- CaptureTail reads its IsIdle() to conjoin quiescence into
+        // convergence, never a second compiler.
+        .compiler              = m_shaderCompiler,
 #if !defined(ARCANE_DIST)
         .gpuFaultFired   = m_gpuFaultFired,
 #endif

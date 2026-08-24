@@ -336,6 +336,26 @@ TEST_CASE("hostconfig: an explicit --settle 0 is refused", "[hostconfig]")
     CHECK_FALSE(out.config.has_value());
 }
 
+// Fix round 1, item 3: --settle 1 parses as valid syntax but is a GUARANTEED
+// failure -- the first attempt has no prior capture to compare against, so it
+// can never converge on any scene. That is a worse trap than a refusal (the
+// caller only discovers it after paying for a whole run), so it is refused at
+// parse time exactly like the explicit-0 case just above -- but with its own
+// message, since "0 means off" would be a wrong explanation for why 1 fails.
+TEST_CASE("hostconfig: --settle 1 is refused -- one attempt has nothing to compare against", "[hostconfig]")
+{
+    const auto one = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+                                 "--settle", "1", "--report", "r.json" });
+    CHECK(one.exitCode == 2);
+    CHECK_FALSE(one.config.has_value());
+
+    // 2 is the smallest legal value -- the boundary this refusal draws.
+    const auto two = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+                                 "--settle", "2", "--report", "r.json" });
+    REQUIRE(two.config.has_value());
+    CHECK(two.config->settleAttempts == 2u);
+}
+
 TEST_CASE("hostconfig: --settle N parses and composes with the rest of the offscreen vocabulary", "[hostconfig]")
 {
     const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "30", "--backend", "vulkan",

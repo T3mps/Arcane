@@ -22,7 +22,8 @@ namespace Arcane
         cli.Option("probe", "",          "repeatable: brightness@x,y | luma@x,y | rgba@x,y | pick@x,y | census").Many();
         cli.Option("report", "",         "write the observation report to this JSON path");
         cli.Option("settle", "0",        "repeat the capture (render clock frozen) until two consecutive "
-                                         "frames compare byte-equal, up to N attempts (0 = off; "
+                                         "frames compare byte-equal AND the shader compiler is idle, "
+                                         "up to N attempts (0 = off, 1 is refused -- needs >= 2; "
                                          "--offscreen only; needs --screenshot or --report)").Type(CliType::Uint);
         // NOT Dist-guarded: the NRI frame graph is the ONLY render path in
         // every configuration, so the flag that used to select it has nothing
@@ -115,6 +116,20 @@ namespace Arcane
         {
             std::fprintf(stderr, "error: --settle wants a positive attempt count (0 means \"off\", "
                                  "which is what omitting the flag already means)\n");
+            return { std::nullopt, 2 };
+        }
+        // Fix round 1, item 3: 1 is ACCEPTED syntax but a GUARANTEED failure --
+        // the first settle attempt has no prior capture to compare against
+        // (RuntimeFrame.cpp's io.previousCaptureValid starts false), so it can
+        // never converge, on any scene, by construction. Refusing it here is
+        // the same treatment the explicit-0 case just above gets: a value that
+        // parses cleanly and then always fails is a worse trap than a refusal,
+        // because the caller only discovers it after the run.
+        if (cfg.settleAttempts == 1)
+        {
+            std::fprintf(stderr, "error: --settle needs at least 2 attempts to compare (one "
+                                 "capture has nothing to compare against, so it would ALWAYS "
+                                 "fail to converge)\n");
             return { std::nullopt, 2 };
         }
         // Settle compares CAPTURED frames (RuntimeFrame.cpp's CaptureTail) -- with

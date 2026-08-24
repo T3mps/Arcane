@@ -40,6 +40,7 @@
 #include <Arcane/Render/GpuFaultInjector.hpp>       // dev-only --crash-gpu N (kPassName only; RenderGraph fires through NriDiagnostics::FireFault)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>    // the graph vehicle (RenderGraph); unconditional
 #include <Arcane/Render/PickEmit.hpp>                // PickDrawable (--pick-probe)
+#include <Arcane/Render/ShaderCompiler.hpp>          // --settle N's IsIdle() quiescence check (Task 10 fix round 1)
 
 
 #include <chrono>
@@ -150,8 +151,31 @@ namespace Arcane::RuntimeFrame
         // that method's comment. Both stay at their defaults (0/false) on a run
         // that never asked for --settle at all, which must never read as a
         // failure.
-        std::uint32_t&              settleAttemptsUsed;
+        //
+        // uint64_t, matching HostConfig::settleAttempts' own width (fix round 1,
+        // item 4): a uint32_t counter compared against a uint64_t budget would
+        // silently WRAP on an absurd `--settle` value larger than 2^32, turning
+        // "run until convergence or N attempts" back into the unstoppable-process
+        // hazard --offscreen's own --frames-required refusal exists to prevent.
+        std::uint64_t&              settleAttemptsUsed;
         bool&                       settleConverged;
+        // ShaderCompiler::IsIdle() (fix round 1, item 1): byte-equal consecutive
+        // captures are a STABILITY predicate ("nothing rendered differently
+        // between these two samples"), not the QUIESCENCE predicate this mode
+        // actually needs ("nothing is still loading"). Collection (Drain, via
+        // SceneRenderResolver::Refresh every PrepareFrame) is NOT gated on
+        // io.hostClock -- only DISPATCH is (ShaderCompiler::Poll's readyAt
+        // check) -- so two frozen-clock frames can compare byte-equal while a
+        // dispatched-but-undrained compile is still genuinely in flight, simply
+        // because it had no chance to finish (or be drained) in the ~1ms
+        // between two back-to-back offscreen frames. CaptureTail conjoins
+        // `compiler.IsIdle()` into the convergence check for exactly this
+        // reason -- see that function's comment. A REFERENCE to RuntimeApp's
+        // own m_shaderCompiler (RuntimeApp.hpp), the same object
+        // SceneRenderResolver's Services already point at -- not a second
+        // instance, so this reads the SAME pending/in-flight/undrained state
+        // the resolver's own Refresh just drained from.
+        Arcane::ShaderCompiler&     compiler;
 
 #if !defined(ARCANE_DIST)
         // --crash-gpu N. Same Dist guard as the RuntimeApp member this is
@@ -239,11 +263,13 @@ namespace Arcane::RuntimeFrame
     // io.config.settleAttempts != 0, this instead keeps returning false
     // (keep going) once the ordinary --frames budget is reached, one more
     // settle attempt per call, until two consecutive captures compare
-    // byte-equal (converged: true is returned, the captured pixels are
-    // published the same way Task 8's tail does) or the attempt budget is
-    // spent (non-convergence: true is returned too -- the loop MUST still
-    // stop -- but io.captureRead is deliberately left false and no
-    // --screenshot is written, so nothing downstream can mistake an
+    // byte-equal AND io.compiler.IsIdle() (fix round 1, item 1 -- byte-equal
+    // alone is a stability predicate, not the quiescence one this mode needs;
+    // see FrameIo::compiler's comment) (converged: true is returned, the
+    // captured pixels are published the same way Task 8's tail does) or the
+    // attempt budget is spent (non-convergence: true is returned too -- the
+    // loop MUST still stop -- but io.captureRead is deliberately left false
+    // and no --screenshot is written, so nothing downstream can mistake an
     // unconverged run for a converged one).
     bool CaptureTail(FrameIo& io);
 }

@@ -255,6 +255,35 @@ TEST_CASE("ShaderCompiler async submit -> poll -> drain round-trip", "[shadercom
     sc.Shutdown();
 }
 
+// Task 10 fix round 1, item 1: --settle N conjoins IsIdle() into its
+// convergence check on the strength of this exact contract -- "nothing
+// pending, in flight, OR WAITING TO BE DRAINED" (ShaderCompiler.hpp). The
+// round-trip test just above only ever samples IsIdle() BEFORE dispatch
+// (false) and AFTER a successful Drain() (true); it never pins the middle
+// state a completed-but-undrained job sits in, which is exactly the state a
+// two-frozen-frames-apart settle comparison can land astride. If this
+// regressed to "idle once the worker is merely done, before Drain() has
+// actually run", settle would converge on stale pixels one Refresh early.
+TEST_CASE("ShaderCompiler: IsIdle() stays false while a finished result sits undrained", "[shadercompile]")
+{
+    ShaderCompiler sc;
+    REQUIRE(sc.Initialize(0.0));
+
+    sc.Submit(MakeRequest(kGoodPs, /*key=*/99), /*now=*/0.0);
+    CHECK_FALSE(sc.IsIdle());   // pending, pre-dispatch
+
+    sc.Poll(/*now=*/0.0);       // debounce 0: dispatches immediately
+    WaitUntilUndrained(sc, 1);  // the worker finished; Drain() has NOT run yet
+    CHECK(sc.UndrainedCount() >= 1);
+    CHECK_FALSE(sc.IsIdle());   // still not idle -- "waiting to be drained"
+
+    const auto results = sc.Drain();
+    REQUIRE(results.size() == 1);
+    CHECK(sc.IsIdle());         // only now, after the actual Drain() call
+
+    sc.Shutdown();
+}
+
 TEST_CASE("ShaderCompiler last-good stays bound while a newer compile fails", "[shadercompile]")
 {
     // The arc's headline failure-UX contract: a broken edit must never regress

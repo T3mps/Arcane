@@ -707,7 +707,21 @@ bool CaptureTail(FrameIo& io)
     // =========================================================================
     if (io.config.settleAttempts != 0)
     {
-        if (!pastBase || !wantsCapture)
+        if (!wantsCapture)
+        {
+            // DEFENSIVE (fix round 1, item 5): HostConfig::Parse refuses
+            // --settle without --screenshot/--report already, so this should
+            // be unreachable from any real command line. But `return false`
+            // unconditionally here would spin the loop forever if some other
+            // caller ever built a HostConfig bypassing Parse (a test, a
+            // future embedder) -- fail CLOSED rather than hang.
+            ARC_ERROR("--settle has nothing to compare against (--screenshot and --report are "
+                      "both empty) -- this should have been refused at parse time; stopping "
+                      "rather than spinning forever");
+            io.settleConverged = false;
+            return true;
+        }
+        if (!pastBase)
             return false;   // still running the ordinary --frames N budget
 
         std::uint32_t w = 0, h = 0;
@@ -729,15 +743,31 @@ bool CaptureTail(FrameIo& io)
         }
         else
         {
-            const bool matches = io.previousCaptureValid &&
-                                  w == io.previousCaptureWidth && h == io.previousCaptureHeight &&
-                                  actual == io.previousCaptureRgba;
-            if (matches)
+            const bool byteEqual = io.previousCaptureValid &&
+                                    w == io.previousCaptureWidth && h == io.previousCaptureHeight &&
+                                    actual == io.previousCaptureRgba;
+            // FIX ROUND 1, ITEM 1. Byte-equal alone is a STABILITY predicate
+            // ("nothing rendered differently between these two samples"), not
+            // the QUIESCENCE predicate this mode actually needs ("nothing is
+            // still loading"). Collection is NOT clock-gated: Drain() runs
+            // inside SceneRenderResolver::Refresh every PrepareFrame,
+            // regardless of io.hostClock -- only DISPATCH is gated, by
+            // ShaderCompiler::Poll's readyAt check. So two frozen-clock
+            // attempts can compare byte-equal while a dispatched-but-
+            // undrained compile is still genuinely in flight: it simply had
+            // no chance to finish (or be drained) in the ~1ms two
+            // back-to-back offscreen frames take. IsIdle() ("nothing
+            // pending, in flight, or waiting to be drained" --
+            // ShaderCompiler.hpp) is what actually answers whether async
+            // work this capture could still be missing is outstanding, so
+            // convergence requires BOTH.
+            const bool idle = io.compiler.IsIdle();
+            if (byteEqual && idle)
             {
                 io.settleConverged = true;
                 ARC_INFO("--settle: CONVERGED after {} attempt(s) -- frame {} matches frame {} "
-                         "byte-for-byte ({}x{})", io.settleAttemptsUsed, io.frameCount,
-                         io.frameCount - 1, w, h);
+                         "byte-for-byte ({}x{}), compiler idle", io.settleAttemptsUsed,
+                         io.frameCount, io.frameCount - 1, w, h);
 
                 // The exact pixels a player sees, same as the non-settle tail
                 // below -- this IS the converged capture (either of the two
@@ -758,8 +788,21 @@ bool CaptureTail(FrameIo& io)
                 return true;   // converged -- stop the loop
             }
 
-            // Not settled yet: THIS frame becomes the baseline the NEXT
-            // attempt compares against.
+            if (byteEqual && !idle)
+            {
+                // The pixels agree but the compiler is not done -- exactly
+                // the case this fix closes: NOT counted as converged.
+                ARC_WARN("--settle attempt {}/{}: frame {} matches frame {} byte-for-byte, but "
+                         "the shader compiler is not idle yet (still pending/in-flight/"
+                         "undrained) -- not counted as converged",
+                         io.settleAttemptsUsed, io.config.settleAttempts, io.frameCount,
+                         io.frameCount - 1);
+            }
+
+            // Not settled yet -- either the bytes genuinely differed, or they
+            // matched but the compiler still has outstanding work. Either
+            // way THIS frame becomes the baseline the NEXT attempt compares
+            // against.
             io.previousCaptureWidth  = w;
             io.previousCaptureHeight = h;
             io.previousCaptureRgba   = std::move(actual);
@@ -777,7 +820,7 @@ bool CaptureTail(FrameIo& io)
             // called, so an agent reading either artifact gets an honest
             // ABSENCE rather than a frame this run never actually agreed on.
             ARC_ERROR("--settle: NOT CONVERGED after {} attempt(s) -- two consecutive captures "
-                      "never compared byte-equal", io.settleAttemptsUsed);
+                      "never compared byte-equal with the compiler idle", io.settleAttemptsUsed);
             return true;   // stop the loop -- the run failed, but it must still stop
         }
         return false;   // keep going: one more attempt next frame
