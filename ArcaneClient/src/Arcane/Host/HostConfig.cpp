@@ -33,6 +33,13 @@ namespace Arcane
         // still pass it, and a hard "unknown argument" refusal would turn a
         // harmless no-op into a boot failure at the worst moment (a shipped
         // Dist build, launched from a saved arg list nobody is watching).
+        //
+        // DELIBERATE EXCEPTION TO RULE 3 (silent-inertness), not an oversight
+        // that Task 12's audit missed: every other HostConfig flag either does
+        // something or is refused per-host (ArcaneEditor/src/main.cpp's flag
+        // table). This is the one flag that stays a no-op on purpose, because
+        // refusing it would break exactly the backward-compatibility case it
+        // exists for. Do not "fix" this into a refusal later.
         cli.Flag  ("nri-graph",      "DEPRECATED, accepted and ignored: the NRI frame graph is "
                                      "the only render path. Kept so existing scripts and saved "
                                      "launch args do not fail to boot.");

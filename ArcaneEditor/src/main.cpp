@@ -101,26 +101,49 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          io.IniFilename null, so a run can neither read a
 //                          machine-local layout nor write one back.
 //                          Requires --frames N (HostConfig refuses otherwise).
-//   --report / --probe  -- REFUSED at launch on this host, loudly. Unlike the
-//   --settle               inert flags below, these three make a scripted
-//                          caller expect an ARTEFACT (a JSON report, a settled
-//                          capture) that this host does not produce -- and exit
-//                          0 with no artefact is precisely the silent success an
-//                          agent misreads as a pass. Parsing them and shrugging
-//                          would be worse than refusing. ArcaneRuntime honours
-//                          all three.
+//   --report / --probe  -- REFUSED at launch on this host, loudly. These three
+//   --settle               make a scripted caller expect an ARTEFACT (a JSON
+//                          report, a settled capture) that this host does not
+//                          produce -- and exit 0 with no artefact is precisely
+//                          the silent success an agent misreads as a pass.
+//                          Parsing them and shrugging would be worse than
+//                          refusing. ArcaneRuntime honours all three.
 //   --nri-graph         -- PARSED AND IGNORED: the NRI frame graph is the only
 //                          render path, so there is nothing left for this flag
-//                          to select.
+//                          to select. THE ONE DELIBERATE EXCEPTION to rule 3
+//                          (Task 12 audit) rather than a drift nobody caught:
+//                          refusing it would break saved Hub launch args and
+//                          scripts that still pass it out of habit, for a flag
+//                          that costs nothing to leave parsed-and-ignored. See
+//                          HostConfig.cpp's own carve-out comment. Do not
+//                          "fix" this one into a refusal.
 //   --crash-gpu N       -- honoured (also reachable from the Debug menu).
-//   --pick-probe x,y    -- PARSED AND INERT ON THIS HOST. It is a RUNTIME desk
-//                          item: one fixed canvas pixel reported as an exit
-//                          code. The editor's own pick is a live click through
-//                          FrameDesc::pickPixel, and NriGraphContext refuses to
-//                          latch the flag on an offscreen (viewport) context
-//                          for that reason -- passing it here is a no-op, not a
-//                          second pick mechanism.
-//   --perf              -- PARSED AND INERT ON THIS HOST. EditorApp constructs
+//   --pick-probe x,y    -- REFUSED at launch on this host (Task 12 audit; see
+//                          the refusal below main()). Re-derived rather than
+//                          trusted: this comment used to call it a plain
+//                          no-op, which undersold it. It IS a no-op from the
+//                          caller's side -- nothing ever reports a hit/miss --
+//                          but it is not a zero-cost one on a WINDOWED editor.
+//                          NriGraphContext.cpp:524's
+//                          `m_pickArmed = config.pickProbe && !IsOffscreen()`
+//                          reads false only for the OFFSCREEN VIEWPORT
+//                          context; the CHROME (host-window) context this
+//                          editor also owns is NOT offscreen when windowed, so
+//                          the flag DOES arm there -- the pick + JFA outline
+//                          NODES get built and one ARC_INFO line gets logged.
+//                          What still never happens is the per-frame PASS:
+//                          EditorAppFrame.cpp's chrome FrameDesc never sets
+//                          `pickOutline`, so AddPickNodes never runs, nothing
+//                          is drawn, and no id is ever read back. Net effect
+//                          for a caller is unchanged (still nothing useful),
+//                          which is why refusing outright is still correct --
+//                          it is also a RUNTIME desk item: one fixed canvas
+//                          pixel reported as an exit code, and the editor's
+//                          own pick is a live click through
+//                          FrameDesc::pickPixel instead, so there is nowhere
+//                          for this flag to plug in even if it were wired.
+//   --perf              -- REFUSED at launch on this host (Task 12 audit; see
+//                          the refusal below main()). EditorApp constructs
 //                          FramePerf m_perf(m_config.perf) and never calls
 //                          FrameStart/Add/Tick -- the ctor and the member
 //                          declaration are its ONLY references in this tree, so
@@ -152,27 +175,34 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    // THE THREE OBSERVATION FLAGS THIS HOST DOES NOT IMPLEMENT, refused here
-    // rather than silently ignored. HostConfig is SHARED with ArcaneRuntime, so
-    // all three parse cleanly on this exe and would otherwise produce a run that
-    // exits 0 having written no report and settled nothing -- the exact
-    // silent-success shape Task 8 paid to find on the runtime (a --report with
-    // pixel probes and no --screenshot ran, exited 0, and reported "no capture
-    // set" for every probe). An agent reads exit 0 plus a missing artefact as a
-    // pass, so the refusal is the fix; wiring any of them into this host is a
-    // later task, and it must delete the matching line here on the same day.
+    // THE HostConfig FLAGS THIS HOST DOES NOT IMPLEMENT, refused here rather
+    // than silently ignored -- Task 12's silent-inertness audit widened this
+    // from three flags to five (--pick-probe and --perf joined below). HostConfig
+    // is SHARED with ArcaneRuntime, so all five parse cleanly on this exe and
+    // would otherwise let a scripted run exit 0 having done nothing useful --
+    // the exact silent-success shape Task 8 paid to find on the runtime (a
+    // --report with pixel probes and no --screenshot ran, exited 0, and
+    // reported "no capture set" for every probe). An agent reads exit 0 plus a
+    // missing/unchanged result as a pass, so the refusal is the fix; wiring any
+    // of them into this host is a later task, and it must delete the matching
+    // line here on the same day.
     //
     // AHEAD OF Diagnostics::Install BELOW, and that placement is load-bearing
     // rather than tidy: an early `return` taken AFTER Install leaves the hang
     // watchdog's std::thread joinable at static destruction, which is
-    // std::terminate -> abort() -> process exit code 3. That is measured, not
-    // theorised, and it is a PRE-EXISTING defect of the two refusals further
-    // down (a bare `--frames 10` with no project is documented as exit 2 and
-    // actually exits 3, colliding with the rival-editor code). It is left
-    // alone here -- ArcaneHub decodes those two, and rewriting host exit codes
-    // is not this task -- but a third copy of the shape is not added either.
-    // Returning from up here pays for nothing it can skip, exactly as the
-    // --print-engine-info probe above does.
+    // std::terminate -> abort(). The two refusals further down USED to pay
+    // for exactly this (a bare `--frames 10` with no project was documented
+    // as exit 2 and, this task discovered by actually running it, does not
+    // even reliably reach exit code 3 -- under a Debug CRT abort() pops a
+    // BLOCKING "Microsoft Visual C++ Runtime Library" dialog and the process
+    // never exits on its own; see those two sites for the measurement). That
+    // turned out to be worse than a documentation mismatch, so THIS task
+    // fixed both of them too, by calling Diagnostics::Shutdown() before their
+    // `return`s rather than moving them -- zero behaviour cost, and it does
+    // not touch ArcaneHub's exit-code contract for either one. The two
+    // refusals ADDED here (--pick-probe, --perf) still go ahead of Install
+    // instead, matching this block's existing shape rather than adding a
+    // third flavour of fix to one function.
     if (!parsed.config->reportPath.empty() || !parsed.config->probes.empty() ||
         parsed.config->settleAttempts != 0)
     {
@@ -183,6 +213,36 @@ int main(int argc, char** argv)
             "  --offscreen --frames N --screenshot <png> for a composited editor capture.\n");
         return 2;
     }
+#if !defined(ARCANE_DIST)
+    // --pick-probe: DEV-ONLY, matching HostConfig.hpp/.cpp's own
+    // #if !defined(ARCANE_DIST) guard around the pickProbe member and its Cli
+    // registration -- the member does not exist on a Dist build, so reading
+    // parsed.config->pickProbe unguarded would fail to COMPILE there, not just
+    // misbehave (confirmed by building Dist below). Same reasoning and same
+    // position as the block above: this is genuinely NOT a zero-cost no-op on
+    // this host -- see the disposition table above main() -- NriGraphContext
+    // arms the pick+outline nodes on the windowed chrome context and logs one
+    // line -- but nothing ever reads an id back, so the caller still gets
+    // nothing for its trouble. Refuse rather than let that drift stand.
+    if (parsed.config->pickProbe)
+    {
+        std::fprintf(stderr, "error: --pick-probe is a RUNTIME flag; the editor's pick is a live "
+                             "click through FrameDesc::pickPixel. Use ArcaneRuntime.exe.\n");
+        return 2;
+    }
+#endif
+    // --perf: same reasoning and position as above (and its own #if is not
+    // needed -- HostConfig::perf is NOT Dist-guarded, unlike pickProbe).
+    // EditorApp constructs FramePerf m_perf(m_config.perf) and never calls
+    // FrameStart/Add/Tick, so no [PERF] line is ever emitted on this host by
+    // any build -- FramePerf's seven fixed buckets do not map onto this
+    // host's 19-phase frame.
+    if (parsed.config->perf)
+    {
+        std::fprintf(stderr, "error: --perf is not implemented on the editor host "
+                             "(FramePerf is constructed and never sampled). Use ArcaneRuntime.exe.\n");
+        return 2;
+    }
 
     // Post-mortem capture, armed for every REAL run. A crash writes a minidump
     // plus a symbolized all-thread stack; a WEDGED main thread writes the same
@@ -191,6 +251,13 @@ int main(int argc, char** argv)
     // ("Not Responding") otherwise produces nothing, anywhere, ever.
     // Deliberately AFTER the probe -- that path pays for nothing it can skip,
     // and a watchdog thread is not free.
+    //
+    // ORDERING IS LOAD-BEARING, reciprocal note to the block above: every flag
+    // refusal above this point `return`s before the watchdog thread exists, so
+    // each one is a clean exit at its documented code. Moving this Install()
+    // call any earlier turns every one of those returns into std::terminate ->
+    // abort() -> exit code 3 instead -- measured, not theorised (see above).
+    // Do not move this line up without re-auditing every refusal above it.
     {
         Arcane::Diagnostics::Config diag;
         diag.appName = "ArcaneEditor";
@@ -225,6 +292,17 @@ int main(int argc, char** argv)
     // Both flags remain bypasses ON PURPOSE: CI and the headless
     // `--project <p> --frames N` harness depend on --project, and --plugin is the
     // engine-dev path (hosting a plugin without a project).
+    // Task 12 fix, MEASURED rather than left as the theorised "actually exits
+    // 3" the comment above once claimed: under a Debug CRT this `return 2`,
+    // taken after Diagnostics::Install armed the watchdog thread, does not
+    // even reach exit code 3 cleanly -- std::terminate's default handler pops
+    // a BLOCKING "Microsoft Visual C++ Runtime Library" MessageBox
+    // (confirmed via Process.MainWindowTitle on a run of exactly this
+    // command) and the process never exits on its own. That is a hang, not a
+    // wrong code, and a scripted/CI caller has no recourse but an external
+    // timeout-kill. Shutdown() joins the watchdog cleanly first, so this
+    // `return 2` is now an ordinary clean exit at the code it names --
+    // zero behaviour cost otherwise, and it needed no ordering change.
     const bool noProject = parsed.config->projectPath.empty() && parsed.config->pluginPath.empty();
     if (noProject && parsed.config->maxFrames != 0)
     {
@@ -232,6 +310,7 @@ int main(int argc, char** argv)
             "Arcane Editor: no project selected, and --frames makes this a scripted run.\n"
             "  Pass --project <folder-or-.arcproj> to open one,\n"
             "  or --plugin <dll> to host a plugin without a project.\n");
+        Arcane::Diagnostics::Shutdown();
         return 2;
     }
 
@@ -244,6 +323,14 @@ int main(int argc, char** argv)
     // the folder), RivalPid is self-exempt and defeats stale locks by
     // pid+creation-time, and exit code 3 is distinct from 2 (the no-project
     // refusal above) so the Hub's boot watchdog can name the reason.
+    //
+    // Same Shutdown()-before-return fix as the no-project block above, and
+    // the same `return`-after-`Install()` shape just MEASURED there -- but
+    // NOT independently measured for this specific branch: reproducing it
+    // needs a second, already-live rival editor process holding the lock,
+    // and standing one up risks exactly the windowed boot this task's
+    // verification avoids. Applying the identical fix on the strength of the
+    // identical mechanism, not a second measurement of this exact path.
     if (!parsed.config->projectPath.empty())
     {
         std::filesystem::path lockRoot(parsed.config->projectPath);
@@ -255,6 +342,7 @@ int main(int argc, char** argv)
                 "Arcane Editor: '%s' is already open in another editor (pid %u) -- focusing it.\n",
                 parsed.config->projectPath.c_str(), *rival);
             Arcane::EditorLock::FocusWindowOfProcess(*rival);
+            Arcane::Diagnostics::Shutdown();
             return 3;
         }
     }
