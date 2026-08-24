@@ -28,11 +28,22 @@ namespace Arcane
         // human watching a window to notice what a narrower validation
         // surface would miss. Leaving any of these three off here would make
         // --offscreen quietly weaker than windowed, silently undermining
-        // every verification built on top of it. This is legal here because
-        // OffscreenVehicle::Create is the FIRST device the process creates
-        // (see DeviceCreationD3D12.cpp's g_d3d12DeviceCreated latch); arming
-        // enableD3D12DebugLayer anywhere else, after a device already exists,
-        // would tear that device down instead.
+        // every verification built on top of it.
+        //
+        // enableD3D12DebugLayer's legality here is guaranteed only for
+        // ArcaneRuntime: RuntimeApp::MainLoop (RuntimeApp.cpp) builds exactly
+        // ONE graphics device per process, windowed or offscreen, so under
+        // that host this Create() call really is the first (and only)
+        // device, and EnableDebugLayer's before-any-device requirement holds.
+        // Inside ArcaneTests that guarantee does NOT hold -- Catch2 runs
+        // cases in randomized order and other [gpu] cases create their own
+        // devices, so a device may already exist by the time an offscreen
+        // vehicle is built there. That is still safe: DeviceCreationD3D12.cpp's
+        // g_d3d12DeviceCreated latch turns this into a no-op rather than the
+        // illegal after-device call -- it DECLINES to arm the layer for the
+        // later device (WARN, losing that one validation channel) instead of
+        // calling EnableDebugLayer and tearing down the device that already
+        // exists.
         desc.enableValidation      = true;
         desc.enableD3D12DebugLayer = true;
         desc.enableSyncValidation  = true;   // VK-only; see RenderDeviceDesc.hpp

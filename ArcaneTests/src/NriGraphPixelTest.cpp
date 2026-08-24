@@ -115,6 +115,20 @@ namespace
 
         Arcane::RenderDeviceDesc desc;
         desc.backend = backend;
+#if defined(ARCANE_DEBUG)
+        // Mirror OffscreenVehicle::Create / NriGraphContext.cpp's windowed
+        // creation half EXACTLY (same three flags, same Debug-only gate).
+        // These [gpu][pixel] cases are node-level frame-graph tests -- they
+        // exercise hand- and graph-derived barrier placement more directly
+        // than anything else in the tree, which is precisely the defect
+        // class Vulkan sync validation catches and core validation does not
+        // (RenderDeviceDesc.hpp). Leaving this vehicle at RenderDeviceDesc's
+        // defaults would make the best-placed cases in the suite for finding
+        // barrier hazards the ones running with the least validation.
+        desc.enableValidation      = true;
+        desc.enableD3D12DebugLayer = true;
+        desc.enableSyncValidation  = true;   // VK-only; see RenderDeviceDesc.hpp
+#endif
         v.native = Arcane::NativeDeviceOwner::Create(desc);
         REQUIRE(v.native != nullptr);
 
