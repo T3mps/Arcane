@@ -94,4 +94,64 @@ namespace Arcane
         const double tH = deltaH / sH / kH;
         return std::sqrt(tL * tL + tC * tC + tH * tH);
     }
+
+    void ImageChannel::BoundXY(std::int64_t x, std::int64_t y,
+                               std::uint32_t& outX, std::uint32_t& outY) const noexcept
+    {
+        const std::int64_t maxX = static_cast<std::int64_t>(width)  - 1;
+        const std::int64_t maxY = static_cast<std::int64_t>(height) - 1;
+        outX = static_cast<std::uint32_t>(std::clamp<std::int64_t>(x, 0, maxX));
+        outY = static_cast<std::uint32_t>(std::clamp<std::int64_t>(y, 0, maxY));
+    }
+
+    void IntoRgb(std::uint32_t width, std::uint32_t height,
+                 const unsigned char* rgba, const PaddingOptions& options,
+                 ImageChannel& r, ImageChannel& g, ImageChannel& b)
+    {
+        const std::uint32_t pad       = options.paddingSize;
+        const std::uint32_t newWidth  = width  + 2 * pad;
+        const std::uint32_t newHeight = height + 2 * pad;
+        const std::size_t   count     = static_cast<std::size_t>(newWidth) * newHeight;
+
+        auto init = [&](ImageChannel& c)
+        {
+            c.width  = newWidth;
+            c.height = newHeight;
+            c.data.assign(count, 0);
+        };
+        init(r); init(g); init(b);
+
+        for (std::uint32_t y = 0; y < newHeight; ++y)
+        {
+            for (std::uint32_t x = 0; x < newWidth; ++x)
+            {
+                const std::size_t index = static_cast<std::size_t>(y) * newWidth + x;
+                const bool inside = y >= pad && y < newHeight - pad &&
+                                    x >= pad && x < newWidth  - pad;
+                if (inside)
+                {
+                    const std::size_t offset =
+                        (static_cast<std::size_t>(y - pad) * width + (x - pad)) * 4;
+                    // Upstream keeps alpha == 255 as exactly 1 rather than
+                    // 255/255, so the common opaque case stays bit-exact.
+                    const double alpha = rgba[offset + 3] == 255
+                                       ? 1.0
+                                       : rgba[offset + 3] / 255.0;
+                    // TRUNCATION, not rounding -- see BlendWithWhite's comment.
+                    r.data[index] = static_cast<unsigned char>(BlendWithWhite(rgba[offset + 0], alpha));
+                    g.data[index] = static_cast<unsigned char>(BlendWithWhite(rgba[offset + 1], alpha));
+                    b.data[index] = static_cast<unsigned char>(BlendWithWhite(rgba[offset + 2], alpha));
+                }
+                else
+                {
+                    const unsigned char* color = ((y + x) % 2 == 0)
+                                               ? options.colorEven
+                                               : options.colorOdd;
+                    r.data[index] = color[0];
+                    g.data[index] = color[1];
+                    b.data[index] = color[2];
+                }
+            }
+        }
+    }
 }

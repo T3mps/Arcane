@@ -57,4 +57,51 @@ namespace Arcane
     // ColorDeltaE94(a, b) != ColorDeltaE94(b, a) in general. rgb1 is always the
     // EXPECTED image. Do not "fix" this into a symmetric formula.
     [[nodiscard]] ARCANE_API double ColorDeltaE94(const double rgb1[3], const double rgb2[3]) noexcept;
+
+    // ---- channels (imageChannel.ts) --------------------------------------
+
+    // One 8-bit plane of an image, optionally surrounded by padding so that a
+    // window centred on a real pixel never runs off the end.
+    struct ARCANE_API ImageChannel
+    {
+        std::uint32_t width = 0, height = 0;
+        std::vector<unsigned char> data;
+
+        [[nodiscard]] unsigned char Get(std::uint32_t x, std::uint32_t y) const noexcept
+        {
+            return data[static_cast<std::size_t>(y) * width + x];
+        }
+
+        // Clamp a possibly-NEGATIVE window corner into the plane. Takes
+        // int64_t deliberately: callers pass (x - SSIM_WINDOW_RADIUS), which
+        // goes negative near the edge, and doing that subtraction in an
+        // unsigned type wraps instead of clamping.
+        void BoundXY(std::int64_t x, std::int64_t y,
+                     std::uint32_t& outX, std::uint32_t& outY) const noexcept;
+    };
+
+    // The padding fill. Upstream alternates two colours on (x + y) % 2 so a
+    // window overlapping the border can never see a uniform field -- a uniform
+    // field has zero variance, which the flood-fill stage reads as "this cannot
+    // be antialiasing", which would classify every border pixel as a real
+    // difference. The checkerboard is load-bearing, not decoration.
+    //
+    // NOTE the values: compare.ts passes even = magenta, odd = green, which is
+    // the OPPOSITE of imageChannel.ts's own defaults. These fields carry
+    // compare.ts's assignment, because that is the call site that matters.
+    struct PaddingOptions
+    {
+        std::uint32_t paddingSize = 0;
+        unsigned char colorEven[3] = { 255, 0, 255 };
+        unsigned char colorOdd[3]  = { 0, 255, 0 };
+    };
+
+    // Split tight RGBA8 into three padded planes, compositing each channel
+    // against WHITE using the pixel's own alpha first. Our captures are opaque,
+    // so the blend is a no-op on them -- but size-mismatch padding is
+    // transparent black, which must read as white, and the conformance corpus
+    // contains genuinely translucent fixtures.
+    ARCANE_API void IntoRgb(std::uint32_t width, std::uint32_t height,
+                            const unsigned char* rgba, const PaddingOptions& options,
+                            ImageChannel& r, ImageChannel& g, ImageChannel& b);
 }
