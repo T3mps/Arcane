@@ -154,4 +154,116 @@ namespace Arcane
             }
         }
     }
+
+    FastStats::FastStats(const ImageChannel& c1, const ImageChannel& c2)
+        : m_width(c1.width), m_height(c1.height)
+    {
+        const std::size_t count = static_cast<std::size_t>(m_width) * m_height;
+        m_sumC1.assign(count, 0.0);
+        m_sumC2.assign(count, 0.0);
+        m_sumSq1.assign(count, 0.0);
+        m_sumSq2.assign(count, 0.0);
+        m_sumMult.assign(count, 0.0);
+
+        const std::uint32_t w = m_width;
+        auto recalc = [w](std::vector<double>& table, std::size_t idx, double initial,
+                          std::uint32_t x, std::uint32_t y)
+        {
+            double v = initial;
+            if (y > 0) v += table[idx - w];
+            if (x > 0) v += table[idx - 1];
+            if (x > 0 && y > 0) v -= table[idx - w - 1];
+            table[idx] = v;
+        };
+
+        for (std::uint32_t y = 0; y < m_height; ++y)
+        {
+            for (std::uint32_t x = 0; x < m_width; ++x)
+            {
+                const std::size_t idx = static_cast<std::size_t>(y) * m_width + x;
+                const double v1 = c1.data[idx];
+                const double v2 = c2.data[idx];
+                recalc(m_sumC1,   idx, v1,      x, y);
+                recalc(m_sumC2,   idx, v2,      x, y);
+                recalc(m_sumSq1,  idx, v1 * v1, x, y);
+                recalc(m_sumSq2,  idx, v2 * v2, x, y);
+                recalc(m_sumMult, idx, v1 * v2, x, y);
+            }
+        }
+    }
+
+    double FastStats::Sum(const std::vector<double>& table,
+                          std::uint32_t x1, std::uint32_t y1,
+                          std::uint32_t x2, std::uint32_t y2) const noexcept
+    {
+        const std::uint32_t w = m_width;
+        double result = table[static_cast<std::size_t>(y2) * w + x2];
+        if (y1 > 0) result -= table[static_cast<std::size_t>(y1 - 1) * w + x2];
+        if (x1 > 0) result -= table[static_cast<std::size_t>(y2) * w + x1 - 1];
+        if (x1 > 0 && y1 > 0) result += table[static_cast<std::size_t>(y1 - 1) * w + x1 - 1];
+        return result;
+    }
+
+    namespace
+    {
+        [[nodiscard]] double WindowN(std::uint32_t x1, std::uint32_t y1,
+                                     std::uint32_t x2, std::uint32_t y2) noexcept
+        {
+            return static_cast<double>(y2 - y1 + 1) * static_cast<double>(x2 - x1 + 1);
+        }
+    }
+
+    double FastStats::MeanC1(std::uint32_t x1, std::uint32_t y1,
+                             std::uint32_t x2, std::uint32_t y2) const noexcept
+    {
+        return Sum(m_sumC1, x1, y1, x2, y2) / WindowN(x1, y1, x2, y2);
+    }
+
+    double FastStats::MeanC2(std::uint32_t x1, std::uint32_t y1,
+                             std::uint32_t x2, std::uint32_t y2) const noexcept
+    {
+        return Sum(m_sumC2, x1, y1, x2, y2) / WindowN(x1, y1, x2, y2);
+    }
+
+    double FastStats::VarianceC1(std::uint32_t x1, std::uint32_t y1,
+                                 std::uint32_t x2, std::uint32_t y2) const noexcept
+    {
+        const double n = WindowN(x1, y1, x2, y2);
+        const double s = Sum(m_sumC1, x1, y1, x2, y2);
+        return (Sum(m_sumSq1, x1, y1, x2, y2) - (s * s) / n) / n;
+    }
+
+    double FastStats::VarianceC2(std::uint32_t x1, std::uint32_t y1,
+                                 std::uint32_t x2, std::uint32_t y2) const noexcept
+    {
+        const double n = WindowN(x1, y1, x2, y2);
+        const double s = Sum(m_sumC2, x1, y1, x2, y2);
+        return (Sum(m_sumSq2, x1, y1, x2, y2) - (s * s) / n) / n;
+    }
+
+    double FastStats::Covariance(std::uint32_t x1, std::uint32_t y1,
+                                 std::uint32_t x2, std::uint32_t y2) const noexcept
+    {
+        const double n  = WindowN(x1, y1, x2, y2);
+        const double s1 = Sum(m_sumC1, x1, y1, x2, y2);
+        const double s2 = Sum(m_sumC2, x1, y1, x2, y2);
+        return (Sum(m_sumMult, x1, y1, x2, y2) - s1 * s2 / n) / n;
+    }
+
+    double Ssim(const FastStats& stats, std::uint32_t x1, std::uint32_t y1,
+                std::uint32_t x2, std::uint32_t y2) noexcept
+    {
+        const double mean1 = stats.MeanC1(x1, y1, x2, y2);
+        const double mean2 = stats.MeanC2(x1, y1, x2, y2);
+        const double var1  = stats.VarianceC1(x1, y1, x2, y2);
+        const double var2  = stats.VarianceC2(x1, y1, x2, y2);
+        const double cov   = stats.Covariance(x1, y1, x2, y2);
+
+        constexpr double kDynamicRange = 255.0;   // 2^8 - 1
+        constexpr double c1 = (0.01 * kDynamicRange) * (0.01 * kDynamicRange);
+        constexpr double c2 = (0.03 * kDynamicRange) * (0.03 * kDynamicRange);
+
+        return (2.0 * mean1 * mean2 + c1) * (2.0 * cov + c2)
+             / (mean1 * mean1 + mean2 * mean2 + c1) / (var1 + var2 + c2);
+    }
 }

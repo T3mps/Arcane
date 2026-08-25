@@ -104,4 +104,56 @@ namespace Arcane
     ARCANE_API void IntoRgb(std::uint32_t width, std::uint32_t height,
                             const unsigned char* rgba, const PaddingOptions& options,
                             ImageChannel& r, ImageChannel& g, ImageChannel& b);
+
+    // ---- windowed statistics (stats.ts) ----------------------------------
+
+    // Five summed-area tables over a pair of planes, so any rectangular
+    // window's mean, variance and covariance are O(1).
+    //
+    // MEMORY: five tables of width*height doubles, per channel. At 1280x720
+    // padded to 1310x750 that is ~39 MB per channel and ~118 MB for three. This
+    // is why compare() builds them LAZILY -- only once some pixel has already
+    // failed the exact and dE94 stages.
+    //
+    // WHY DOUBLE, NOT UINT64: upstream accumulates in a JS number[], i.e.
+    // double. The partial sums themselves are exact in double (max ~6.4e10),
+    // but variance computes sum*sum, which reaches ~6.3e16 -- past 2^53, where
+    // double rounds. Exact integer arithmetic would produce a slightly
+    // different variance and break the bit-parity ImageCompareConformanceTest
+    // asserts. The rounding is inherited deliberately.
+    class ARCANE_API FastStats
+    {
+    public:
+        // Both planes must have identical dimensions.
+        FastStats(const ImageChannel& c1, const ImageChannel& c2);
+
+        // Inclusive window corners, already clamped by ImageChannel::BoundXY.
+        [[nodiscard]] double MeanC1(std::uint32_t x1, std::uint32_t y1,
+                                    std::uint32_t x2, std::uint32_t y2) const noexcept;
+        [[nodiscard]] double MeanC2(std::uint32_t x1, std::uint32_t y1,
+                                    std::uint32_t x2, std::uint32_t y2) const noexcept;
+        // POPULATION variance (divides by N, not N-1) -- matches upstream.
+        [[nodiscard]] double VarianceC1(std::uint32_t x1, std::uint32_t y1,
+                                        std::uint32_t x2, std::uint32_t y2) const noexcept;
+        [[nodiscard]] double VarianceC2(std::uint32_t x1, std::uint32_t y1,
+                                        std::uint32_t x2, std::uint32_t y2) const noexcept;
+        [[nodiscard]] double Covariance(std::uint32_t x1, std::uint32_t y1,
+                                        std::uint32_t x2, std::uint32_t y2) const noexcept;
+
+    private:
+        [[nodiscard]] double Sum(const std::vector<double>& table,
+                                 std::uint32_t x1, std::uint32_t y1,
+                                 std::uint32_t x2, std::uint32_t y2) const noexcept;
+
+        std::uint32_t m_width = 0, m_height = 0;
+        std::vector<double> m_sumC1, m_sumC2, m_sumSq1, m_sumSq2, m_sumMult;
+    };
+
+    // Structural similarity over the given window, averaged nowhere -- this is
+    // ONE channel. compare() averages the three itself. Stabilising constants
+    // are (0.01 * 255)^2 and (0.03 * 255)^2, the standard SSIM choices for an
+    // 8-bit dynamic range.
+    [[nodiscard]] ARCANE_API double Ssim(const FastStats& stats,
+                                         std::uint32_t x1, std::uint32_t y1,
+                                         std::uint32_t x2, std::uint32_t y2) noexcept;
 }
