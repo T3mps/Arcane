@@ -1327,3 +1327,93 @@ correct only because `EditorPanels.cpp:389` runs `BuildDefaultLayout` when
 - **`ShaderCompiler::IsIdle()`'s non-`_WIN32` stub returns `true`
   unconditionally**, so on the Linux port `--settle` silently degrades to the
   pre-fix stability-only predicate **with no warning**.
+
+
+---
+
+# DESK RESULTS — 2026-08-24 (Task 14, partial)
+
+Run by the user at the desk with the controller interpreting. **These are
+measurements, not estimates.** Everything below is `ReferenceProject`, 1280x720,
+Debug, on the RTX 3070 with Parsec active.
+
+## What was closed
+
+| Item | Result |
+|---|---|
+| Runtime windowed regression | **PASS** - `--frames 5` and `--frames 120`, exit 0, `RenderErrorCount 0 -> 0` |
+| Editor windowed smoke | **PASS** - **121,494 frames**, `0 error(s) latched` on every alive line, both contexts live (windowed chrome `format=11` + offscreen viewport `format=9`), clean exit |
+| Fault log after windowed work | **CLEAN** - no `nvwgf2umx`, nothing new |
+| `git status ReferenceProject/` after an editor session | **CLEAN** - the `Saved/*` + `!Saved/verify-layout.ini` ignore form holds |
+| Spurious `gpu-stall` during a drag-storm | **NONE** - only 2026-08-12 diagnostics remain |
+| Parity, offscreen vs windowed | **MEASURED, both backends** - see below |
+
+## >>> THE MEASURED PARITY TOLERANCE — this is what Plan B's threshold comes from <<<
+
+All four comparisons at matched census state (`spriteBound`/`meshBound`/
+`postBound` all equal). Offscreen used `--frames 60 --settle 30`; windowed used
+`--frames 120` (settle requires `--offscreen`).
+
+| Comparison | Differing px | Max delta | p50 | p90 | p99 |
+|---|---|---|---|---|---|
+| **dx12** offscreen vs windowed | 36,288 (3.938%) | **21** | 0 | 0 | 19 |
+| **vulkan** offscreen vs windowed | **36,288** (3.938%) | **8** | 0 | 0 | 7 |
+| offscreen **dx12 vs vulkan** | **121** (0.013%) | 241 | 0 | 0 | 0 |
+| windowed dx12 vs vulkan | 36,409 (3.951%) | 241 | 0 | 0 | 12 |
+
+**Three things this establishes:**
+
+1. **Offscreen renders the same scene as windowed.** ~96% bit-identical, and the
+   differing ~4% is **the same 36,288-pixel set on both backends** - so it is the
+   `format=9` vs `format=11` conversion, structural, not noise.
+2. **The effects decompose exactly**: 36,288 (format) + 121 (backend) = 36,409
+   (both). Independent and disjoint.
+3. **The 121 cross-backend outliers are TEXT, not rendering.** They sit in
+   x 131-872, y 89-241 - the ImGui overlay - and the values are binary,
+   `(16,14,16)` vs `(255,255,255)`, flipping **in both directions**. A glyph
+   landing one pixel differently where the two backends round oppositely.
+   Nothing in the scene's shading, lighting or geometry differs.
+
+**Design consequence for Plan B, free of charge:** a comparator with a
+**per-pixel tolerance PLUS a `maxDiffPixels` count** passes this cleanly, while a
+single global threshold either flags 121 legitimate text pixels or must be
+loosened until it stops catching real regressions. That is exactly the two-knob
+structure Playwright arrived at, reached here independently from our own data.
+
+## >>> THE PRECONDITION THAT MAKES OR BREAKS THE COMPARISON <<<
+
+**Both runs must reach the same CENSUS STATE before their images are
+comparable** - not the same extent, not the same frame count. `spriteBound`,
+`meshBound` **and** `postBound` must all match.
+
+Worked example, from this session, same build, one variable changed:
+
+| Windowed frames | postBound | Result vs the same offscreen image |
+|---|---|---|
+| 60 | **false** | **99.632% of pixels differ, max delta 72** |
+| 120 | **true** | **3.938% differ, max delta 21** |
+
+At 60 frames the windowed run had not yet bound the post chain, so an ungraded
+image was being compared against a purple-graded one. It looks like catastrophic
+failure and is **entirely an artifact**. The post chain binds later than
+everything else because it compiles more shader permutations.
+
+**Section A of the checklist is understated as written** - "capture at the same
+extent and compare" is not sufficient. Check the census first, every time.
+
+## Still open after this session
+
+- **The layout seed (section D).** Unauthored, and the committed placeholder is
+  **inert** - zero of its entries name a window this editor submits, so
+  `LoadIniSettingsFromDisk` has never applied a setting. Layout pinning is
+  **proven; seeding is not.** Must be authored *visibly different* from
+  `BuildDefaultLayout` or the test cannot fail.
+- **The driver reproduction attempt (section H).** Three windowed `[gpu]` runs
+  with Parsec active, then `check-faults.ps1 -Days 1`. A negative result closes
+  it validly.
+- Completeness only: `--nri-graph --frames 1`, the windowed pick probe,
+  offscreen project-switch / document-open, cross-machine DPI, Release/Dist
+  windowed.
+- **Section I is permanently open** and not desk-closable: no stall trigger
+  exists for the watchdog; mesh picking is unimplemented; `IsIdle()`'s
+  non-`_WIN32` stub returns `true` unconditionally.
