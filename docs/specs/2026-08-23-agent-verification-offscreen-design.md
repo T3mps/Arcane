@@ -182,7 +182,7 @@ This design draws the same line, and it falls exactly on the existing plan split
 
 | | **Engine** (Plan A) | **Servitor** (Plans B + C) |
 |---|---|---|
-| What | `--offscreen`, fixed timestep, `ReadCapture`-sourced capture, probes, the report JSON | comparator cascade, backend-keyed reference corpus + blessing, script tier, actionability, trace bundles |
+| What | `--offscreen`, fixed timestep, `ReadCapture`-sourced capture, probes, the report JSON, **+ the comparison cascade and blessing** (amended 2026-08-25) | ~~comparator cascade~~, backend-keyed reference corpus, script tier, actionability, trace bundles, **+ orchestration, reference-tree lifecycle, CI reporting, the doctor** (amended 2026-08-25) |
 | Ships | always, in every build | optional, installed per project |
 | External deps a doctor must check | **none** | reference-image corpus, per-backend/platform golden tree, script runner |
 | Analogue | `chrome --headless` | Playwright |
@@ -212,6 +212,63 @@ Two consequences bind Plan A:
 
 Servitor is intended as the Hub's **first real package** -- the entry that
 replaces the placeholder's "not built yet".
+
+#### AMENDED 2026-08-25 (Plan B) -- the comparator moves engine-side, and this line is convention, not mechanism
+
+Three corrections to this section, all made before Plan B's first task.
+
+**1. The comparator is engine-side, not Servitor-side.** Plan A's desk pass
+established that the settle predicate and the comparison are two halves of one
+mechanism: settle without a goal cannot detect *stably wrong*, and a goal without
+settle flakes on tearing. Conjoining `ShaderCompiler::IsIdle()` took convergence
+from 7/25 correct to 3/3 observed. The comparator therefore lives **inside** the
+wait loop (`RuntimeFrame.cpp:746-767`), which means in-process. Playwright checks
+its goal only on the first iteration and then exits on stability
+(`page.ts:772`) -- microsoft/playwright#28160 and #20987 are that bug. We do not
+inherit it.
+
+This does not weaken consequence 1 above: the comparator ships in every build,
+unconditionally, like the rest of the mode.
+
+**2. The package surface is thinner than this section assumed, and that is a
+real finding rather than a wording fix.** With measurement engine-side, what
+remains for Servitor is orchestration and policy -- running matrices of backend
+and configuration, the reference tree's lifecycle, CI reporting, and the doctor
+that checks a project actually has a blessed corpus. Plan C's script tier will
+likely land engine-side too, for the same in-process reason. Whether Servitor is
+a *package* or a *mode plus CI glue* is now an open question that Plan B is
+expected to answer with evidence, not prose.
+
+**3. This line is maintained by convention and by the JSON seam -- there is no
+mechanism.** Verified 2026-08-25: `ArcaneHub/src/lib/components/Sidebar.svelte:32`
+is a nav entry, `ArcaneHub/src/lib/views/PackagesView.svelte` is an `EmptyState`
+reading "Not built yet" over a hardcoded `const planned = [...]` array (and says
+in its own comment that it is a deliberate placeholder), and the remaining hits
+are comments in `VerifyReport.hpp/.cpp` and `VerifyReportTest.cpp`. There is no
+registry, no manifest, no loader, and no install path. `.arcproj` carries
+`plugins: []`, but that is in-process DLLs behind the ABI gate -- a different
+mechanism, and conflating the two would be a mistake.
+
+What does hold is the seam in consequence 2: the report JSON's `schemaVersion`,
+enforced by `VerifyReportTest.cpp`, which asserts the file parses without
+linking the engine.
+
+**USER DIRECTIVE, 2026-08-25: tiering gets formalized, as Plan B's final
+phase.** Not up front -- a doctor contract specified before we own a single
+dependency it must check would be invented, not derived. The formalization is
+therefore sequenced after Servitor's concrete artifacts exist, and covers five
+things: a package manifest format; a `packages: []` declaration in `.arcproj`
+beside `plugins: []`; a doctor contract driving the existing `scripts/setup.ps1`
+orchestrator rather than a second one; a registry-driven Hub Packages view
+replacing the hardcoded array; and a written rule for where the mode/package
+line falls.
+
+**It is validated against a second consumer on paper.** Multiplayer is not
+hypothetical -- it is the Aphelyon Server (Auth/Account/Combat + PostgreSQL via
+Docker) in the Gacha repo, and its dependency shape is the inverse of
+Servitor's. The manifest must be able to express both without either being
+built to fit it. A manifest that can only describe the package it was extracted
+from has not been formalized.
 
 ---
 
@@ -720,8 +777,11 @@ below this threshold are ignored."* Two unrelated industries converged on
 perceptual delta-E as the per-pixel test, which is about as much validation as
 stage 2 can get. Unity also carries a third knob, `AverageCorrectnessThreshold`
 -- an average-correctness bound distinct from both the per-pixel test and the
-differing-pixel count. Worth having; it catches uniform slight-drift that a
-per-pixel threshold passes and a pixel count never sees.
+differing-pixel count. **SUPERSEDED -- see the 2026-08-25 amendment at the end
+of this section: the third knob is DROPPED.** It catches uniform slight-drift
+that a per-pixel threshold passes and a pixel count never sees, but Playwright
+has no equivalent and our measured distributions (p50=0, p90=0) show no such
+drift to catch.
 
 #### Where reference images live
 
@@ -743,6 +803,96 @@ gate gets disabled the first week. Blessing writes to the level the image is
 resolved from, not always the most specific one.
 
 Determinism pays off beyond agents: it makes the human desk pass reproducible too.
+
+#### AMENDED 2026-08-25 (Plan B) -- the desk measurements, and what defers to Playwright
+
+**1. This is TWO comparisons with budgets ~300x apart, and collapsing them
+destroys the gate.** Measured at the desk 2026-08-24, ReferenceProject,
+1280x720, Debug, at matched census state:
+
+| Comparison | Format | Differing px | Max delta | Role |
+|---|---|---|---|---|
+| offscreen vs blessed offscreen reference, same backend | identical | **bitwise** | 0 | **the per-build gate** |
+| offscreen dx12 vs offscreen vulkan | identical | 121 (0.013%) | 241 | decides shared vs split references |
+| offscreen vs windowed | `format=9` vs `format=11` | 36,288 (3.938%) | 21 dx12 / 8 vulkan | a one-off structural assertion, already answered |
+
+The per-build gate compares like against like, so its aggregate knob sits at or
+near **zero**. What makes the gate work is *format-matched references*, not the
+cascade; the cascade earns its place deciding whether a reference can be shared
+across backends, which is where the 121 pixels live -- and those are ImGui text
+glyphs (binary (16,14,16) vs (255,255,255), flipping in both directions), not
+rendering. Effects decompose exactly: 36,288 + 121 = 36,409.
+
+**2. The census precondition.** Both runs must reach the same census state
+(`spriteBound` + `meshBound` + `postBound`) before their images are comparable
+-- not the same extent, not the same frame count. Same build, one variable:
+windowed at 60 frames (`postBound:false`) differs from offscreen in **99.632%**
+of pixels at max delta 72; at 120 frames (`postBound:true`), **3.938%** at max
+delta 21. The first looks catastrophic and is entirely an artifact of comparing
+an ungraded image against a purple-graded one.
+
+**3. Unity's third knob is DROPPED.** Playwright has no equivalent to
+`AverageCorrectnessThreshold`, and the measured distributions (p50=0, p90=0 on
+both backends) show no uniform drift for it to catch. Revisit only if a
+measurement demands it.
+
+**4. Deference ruling (user, 2026-08-25): Playwright is the reference of
+record.** Where we would otherwise invent, we defer. Constants and behaviour are
+adopted verbatim with a citation at each site and attribution in `NOTICE.md`.
+Read first-hand on 2026-08-25 -- `packages/utils/image_tools/{compare,colorUtils,imageChannel,stats}.ts`
+and `packages/utils/comparators.ts` -- which corrected four things this spec and
+the B/C outline had second-hand:
+
+- **`VARIANCE_WINDOW_RADIUS = 1`**, not 3. It is a *radius*; the window is 3x3.
+  `SSIM_WINDOW_RADIUS = 15` gives 31x31. Padding is `max(1, 15) = 15`, a
+  magenta/green **checkerboard** on `(x+y)%2` -- load-bearing, because it
+  guarantees a border window can never read as a flood fill.
+- **`ImageChannel.intoRGB` composites alpha against white** via
+  `blendWithWhite(c, a) = 255 + (c-255)*a` before any comparison. A no-op on our
+  opaque `ReadCapture` buffers, but required for fidelity.
+- **`FastStats` is five integral images per channel, built lazily** -- only once
+  some pixel survives stage 2 (`compare.ts:88-92`), which is why the common case
+  costs nothing. At 1280x720 padded to 1310x750 that is ~39 MB per channel,
+  ~118 MB for three, and the accumulators need `uint64`/`double`: `uint32`
+  overflows on sum-of-squares (~6.4e10).
+- **Argument order is `compare(expected, actual, ...)`** and dE94 is
+  **asymmetric** -- `sC` and `sH` are built from *expected's* chroma alone.
+  Diff-image grey is drawn from expected. Swapping the arguments changes results.
+
+Also adopted verbatim: aggregate knob resolution is
+`min(maxDiffPixels, maxDiffPixelRatio * W * H)`, defaulting to **0**
+(`comparators.ts:96-102`); size mismatch pads both images to the per-axis max
+with **transparent black anchored top-left**, reports the mismatch *alongside*
+the pixel count, and never aborts or rescales.
+
+**5. The single knowing deviation is the wait loop** (see the Tiering
+amendment). There is no other.
+
+**6. Their fixture corpus is our conformance oracle, and it replaces the
+"research task" the outline budgeted for.** Their arithmetic is IEEE 754
+binary64; so is C++ `double`. If we decline to "improve" the arithmetic, the
+port must return the *identical* `diffCount` on identical inputs, which makes
+`tests/image_tools/fixtures/` a conformance suite rather than inspiration:
+`should-match/` (trivial, looks-same-tests, tiny-antialiasing-sample,
+webkit-rendering-artifacts, crbug-919955) and `should-fail/` (trivial,
+looks-same-tests, **julia-ssim-trap**, **original-ssim-trap**). That is *two*
+SSIM traps, not the one previously known, plus `equal-luma` and `opposite`
+cases. Our own engine traps -- missing mesh, wrong normal matrix, the unbound
+post chain -- are additive on top and cheap to generate with Plan A's
+instrument.
+
+This is also why the integer-exact variance improvement is **declined**: it
+would break bit-parity with the oracle to buy a robustness we have no evidence
+we need.
+
+**7. Engine gap this gate depends on: the editor host has neither `--settle`
+nor `--report`.** The runtime has both; the editor writes its screenshot at a
+fixed frame (`EditorAppFrame.cpp:2737-2751`) and `reportPath` is unused there --
+its own comment at `:1286` records that `grep -n reportPath ArcaneEditor/src`
+finds nothing outside that comment. Plan A's Task 11 gave the editor the
+*capture*, not the verification surface. An editor golden image without settle
+is a frame number, not a converged state, so bringing the editor up to the
+runtime's surface is a prerequisite task, not an optional extra.
 
 ---
 
