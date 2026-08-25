@@ -49,7 +49,14 @@ namespace
             fs::path actual = entry.path().parent_path() / (stem + "-actual.png");
             if (!fs::exists(actual)) continue;
 
+            // Label includes the ROOT (should-match/should-fail), not just the
+            // immediate parent dir + stem: two different roots can share a
+            // subdirectory name (both have a "looks-same-tests"), and while no
+            // stem collides across them today, the label exists purely for
+            // diagnosability -- disambiguating costs one expression, so do it
+            // rather than leave a future upstream addition ambiguous in INFO.
             cases.push_back({ entry.path(), std::move(actual),
+                              root.filename().string() + "/" +
                               entry.path().parent_path().filename().string() + "/" + stem });
         }
         return cases;
@@ -93,16 +100,30 @@ TEST_CASE("compare: the vendored Playwright fixture corpus is present", "[compar
     for (const auto& c : fail) failLabels.push_back(c.label);
 
     const bool hasJuliaTrap = std::find(failLabels.begin(), failLabels.end(),
-                                        "julia-ssim-trap/1") != failLabels.end();
+                                        "should-fail/julia-ssim-trap/1") != failLabels.end();
     const bool hasOriginalTrap = std::find(failLabels.begin(), failLabels.end(),
-                                           "original-ssim-trap/sample") != failLabels.end();
+                                           "should-fail/original-ssim-trap/sample") != failLabels.end();
     CHECK(hasJuliaTrap);
     CHECK(hasOriginalTrap);
 }
 
 TEST_CASE("compare: every should-match fixture passes at a ZERO budget", "[compare][conformance]")
 {
-    for (const auto& c : CasesUnder(FixtureRoot() / "should-match"))
+    const auto cases = CasesUnder(FixtureRoot() / "should-match");
+
+    // SELF-DEFENSE, deliberately duplicating the corpus-presence test above:
+    // Catch2 runs every TEST_CASE independently, so a wrong working directory
+    // (or any other reason CasesUnder comes back empty) makes THIS loop
+    // iterate zero times and report PASSED with zero assertions -- the sibling
+    // presence test failing does not stop this one from going green. A
+    // negative-control run (invoking the exe from the wrong directory)
+    // demonstrated exactly that before this REQUIRE existed. Do not "tidy
+    // this away" as redundant with the presence test; each TEST_CASE must be
+    // self-defending in isolation, e.g. under a per-test CI view or a
+    // name-filtered re-run that never executes the presence test at all.
+    REQUIRE(cases.size() == 12);
+
+    for (const auto& c : cases)
     {
         Arcane::PixelData expected, actual;
         INFO("case " << c.label);
@@ -117,7 +138,17 @@ TEST_CASE("compare: every should-match fixture passes at a ZERO budget", "[compa
 
 TEST_CASE("compare: every should-fail fixture is caught, SSIM traps included", "[compare][conformance]")
 {
-    for (const auto& c : CasesUnder(FixtureRoot() / "should-fail"))
+    const auto cases = CasesUnder(FixtureRoot() / "should-fail");
+
+    // SELF-DEFENSE, deliberately duplicating the corpus-presence test above --
+    // see the matching comment in the should-match test case for why this is
+    // NOT redundant to remove. This is the loop that carries the two SSIM
+    // traps; an empty corpus here would silently drop the exact failure mode
+    // ("SSIM false-passing") this task exists to catch, while still reporting
+    // PASSED.
+    REQUIRE(cases.size() == 9);
+
+    for (const auto& c : cases)
     {
         Arcane::PixelData expected, actual;
         INFO("case " << c.label);
