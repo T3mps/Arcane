@@ -337,14 +337,19 @@ namespace Arcane
                     continue;
                 }
 
-                // Stage 2: perceptual colour difference.
-                const double c1[3] = { static_cast<double>(r1.Get(x, y)),
-                                       static_cast<double>(g1.Get(x, y)),
-                                       static_cast<double>(b1.Get(x, y)) };
-                const double c2[3] = { static_cast<double>(r2.Get(x, y)),
-                                       static_cast<double>(g2.Get(x, y)),
-                                       static_cast<double>(b2.Get(x, y)) };
-                if (ColorDeltaE94(c1, c2) <= options.maxColorDeltaE94)
+                // Stage 2: perceptual colour difference. Named expectedRgb/
+                // actualRgb, not c1/c2 -- those identifiers are the SSIM
+                // stabilising constants one function away in this file, and
+                // reusing them here (different scope, so it compiles, but
+                // it is a readability trap when scanning) invites confusing
+                // the two.
+                const double expectedRgb[3] = { static_cast<double>(r1.Get(x, y)),
+                                                static_cast<double>(g1.Get(x, y)),
+                                                static_cast<double>(b1.Get(x, y)) };
+                const double actualRgb[3] = { static_cast<double>(r2.Get(x, y)),
+                                              static_cast<double>(g2.Get(x, y)),
+                                              static_cast<double>(b2.Get(x, y)) };
+                if (ColorDeltaE94(expectedRgb, actualRgb) <= options.maxColorDeltaE94)
                 {
                     drawGrey();
                     continue;

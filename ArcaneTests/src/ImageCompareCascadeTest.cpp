@@ -144,11 +144,18 @@ TEST_CASE("compare: stage 4 forgives an edge-adjacent perturbation as antialiasi
 
 TEST_CASE("compare: stage 4 condemns an edge-adjacent perturbation as a real difference", "[compare]")
 {
-    // A shallow edge (0 vs 20 -- dE94(grey 0, grey 20) ~= 6.3, comfortably
-    // above the 1.0 JND so stage 2 does not absorb it) has much smaller
-    // baseline variance than a full 0/255 edge, so a single pixel driven all
-    // the way to the opposite extreme (0 -> 255) is a much larger fraction of
-    // that variance and CANNOT be mistaken for antialiasing.
+    // A shallow edge (0 vs 20) has much smaller baseline variance than a
+    // full 0/255 edge, so a single pixel driven all the way to the opposite
+    // extreme (0 -> 255) is a much larger fraction of that variance and
+    // CANNOT be mistaken for antialiasing.
+    //
+    // Every 0-vs-20 boundary pixel is UNCHANGED between expected and
+    // actual, so those pairs are caught by stage 1's exact-equality check
+    // and never reach ColorDeltaE94 at all -- the only pixel that reaches
+    // stage 2 is the one actually perturbed, (31,32), where dE94(grey 0,
+    // grey 255) is the full black-vs-white case (~100, see "ColorDeltaE94
+    // puts pure black and pure white ~100 apart"), trivially far above the
+    // 1.0 JND, so stage 2 does not absorb it.
     //
     // Hand derivation (columns [16,31] @0 = 16 cols, [32,46] @20 = 15 cols,
     // N=961, pixel (31,32) changed from 0 to 255):
@@ -234,4 +241,53 @@ TEST_CASE("compare: a null diff buffer is legal and changes no count", "[compare
     const std::uint64_t without =
         Arcane::Compare(expected.data(), actual.data(), nullptr, 32, 32);
     CHECK(withDiff == without);
+}
+
+TEST_CASE("compare: the expected/actual binding is only observable through the diff grey, not the count", "[compare]")
+{
+    // ARGUMENT ORDER IS LOAD-BEARING -- three separate comments in this file
+    // say so -- but almost nothing in the cascade can actually witness a
+    // swap:
+    //
+    //   - SSIM (stage 4) is provably symmetric in its two planes: swapping
+    //     gives m1<->m2, var1<->var2, cov unchanged, and 2*m1*m2, m1^2+m2^2
+    //     and var1+var2 are all invariant under that swap. Stage 4 can never
+    //     detect it.
+    //   - Stage 3's predicate, var1 == 0 || var2 == 0, is symmetric by
+    //     construction. Also blind to it.
+    //   - dE94's asymmetry (sC/sH built from rgb1's chroma alone) is not
+    //     practically exploitable near the 1.0 threshold: sC = 1 + 0.045*Ce,
+    //     so straddling the threshold in one direction but not the other
+    //     needs Ce/(1+0.045*Ce) <= 1 < Ce, i.e. Ce <= 1.047 -- a chroma
+    //     window far too narrow to hit with integer RGB while also holding
+    //     deltaL near zero.
+    //
+    // The ONE place the binding is observable at all is the grey drawn into
+    // the diff image at a pixel that differs but is ABSORBED by stage 2 (so
+    // it never reaches the symmetric stages 3/4): drawGrey() reads r1/g1/b1,
+    // which IntoRgb built from `expected` specifically.
+    //
+    // Uniform expected (124,124,124) vs uniform actual (125,125,125), 16x16:
+    // both are neutral greys, so deltaC = deltaH = 0 and dE94 = |deltaL*| =
+    // 0.393 <= 1.0 -- EVERY pixel is absorbed by stage 2, so count == 0.
+    // Rgb2Gray(124,124,124) = 124, Rgb2Gray(125,125,125) = 125. Checked the
+    // ACTUAL double rounding of BlendWithWhite(_, 0.1), not the decimal,
+    // since a 1-level grey step only crosses a truncation boundary for some
+    // pairs and this is one that does:
+    //   BlendWithWhite(124, 0.1) = 255 + (124-255)*0.1
+    //     = 255 + (-131 * 0.1); -131*0.1 rounds UP to
+    //       13.100000000000001421 in binary64, so 255 - that
+    //     = 241.899999999999998... -> truncates to 241.
+    //   BlendWithWhite(125, 0.1) = 255 + (-130 * 0.1); -130*0.1 is exactly
+    //     13.0 in binary64, so 255 - 13 = 242.0 exactly -> 242.
+    // Correct binding (grey drawn from EXPECTED = 124) gives 241; a swapped
+    // binding (grey drawn from ACTUAL = 125) would give 242.
+    auto expected = Solid(16, 16, 124, 124, 124);
+    auto actual   = Solid(16, 16, 125, 125, 125);
+
+    std::vector<unsigned char> diff(static_cast<std::size_t>(16) * 16 * 4, 0);
+    const std::uint64_t count =
+        Arcane::Compare(expected.data(), actual.data(), diff.data(), 16, 16);
+    CHECK(count == 0);
+    CHECK(diff[0] == 241);
 }
