@@ -694,6 +694,10 @@ project "ArcaneTests"
         -- lines above create. (The M6 physics_oracle fixtures were retired in
         -- v2 T8; physics_feel_reference/ now holds the Phase-B Lua feel traces.)
         '{COPYDIR} "%{wks.location}/ArcaneTests/data" "%{cfg.buildtarget.directory}/data"',
+        -- Playwright's own image-comparison fixture corpus (Task 6): the
+        -- CONFORMANCE ORACLE for ImageCompare. ImageCompareConformanceTest.cpp
+        -- walks this tree by a RELATIVE path from the exe's own directory.
+        '{COPYDIR} "%{wks.location}/ThirdParty/playwright-fixtures" "%{cfg.buildtarget.directory}/playwright-fixtures"',
         -- Vendored dxc trio (minus dxc.exe): the runtime compile service
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
         '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
