@@ -403,23 +403,42 @@ TEST_CASE("compare: the ratio is computed against EXPECTED's dimensions", "[comp
     // "ratio against expected's dims" from "ratio against the padded
     // extent" -- both denominators are 100. Reshaped to a size MISMATCH so
     // the two candidate denominators diverge: expected is 10x10 (area 100),
-    // but the padded extent (this comparison's `width`/`height`) is 20x10
-    // (area 200). One differing pixel reads 0.01 against expected and 0.005
-    // against the padded extent -- asserting 0.01 pins the numerator to
-    // expected's own dimensions specifically.
+    // actual is 20x10, so the padded extent (this comparison's
+    // `width`/`height`) is 20x10 (area 200).
     //
-    // The differing pixel sits at (5,5), per Hole A, so its 3x3 cascade
-    // window is entirely interior and uniform, keeping diffCount
-    // deterministic. This comparison also trips sizesMismatch, so `passed`
-    // is false regardless -- that is not what this case is about; only the
-    // ratio and the count are asserted here.
+    // The reported ratio is upstream's `Math.ceil(count/area*100)/100`, NOT
+    // plain division -- with only ONE differing pixel the two candidate
+    // denominators COLLIDE: ceil(1/100*100)/100 = 0.01 against expected,
+    // and ceil(1/200*100)/100 = ceil(0.5)/100 = 0.01 against the padded
+    // extent too, so a single pixel would NOT have caught a
+    // padded-extent-denominator regression. TWO differing pixels keep the
+    // readings apart: ceil(2/100*100)/100 = 0.02 against expected, but
+    // ceil(2/200*100)/100 = ceil(1)/100 = 0.01 against the padded extent --
+    // asserting 0.02 pins the numerator to expected's own dimensions and
+    // would fail under a padded-extent bug.
+    //
+    // Both differing pixels sit at (5,5) and (7,5), per Hole A, so their 3x3
+    // cascade windows are entirely interior to the real region and uniform
+    // in the expected plane (expected is solid white everywhere, including
+    // its size-mismatch padding once blended to white), keeping var1 == 0
+    // and diffCount deterministic regardless of the other pixel's presence.
+    //
+    // This comparison also trips sizesMismatch, so `passed` is false
+    // regardless -- that is not what this case is about. It additionally
+    // exercises the "both errors fire together" contract: with the default
+    // zero budget, diffCount(2) exceeds it, so BOTH the size-mismatch text
+    // and the pixel-count text must appear in errorMessage, concatenated
+    // rather than one silently overwriting the other.
     auto expected = Pixels(10, 10, 255, 255, 255);
     auto actual   = Pixels(20, 10, 255, 255, 255);
     SetPixel(actual.rgba, 20, 5, 5, 0, 0, 0);
+    SetPixel(actual.rgba, 20, 7, 5, 0, 0, 0);
 
     const auto res = Arcane::CompareImages(expected, actual);
-    CHECK(res.diffCount == 1);
-    CHECK(res.diffRatio == Approx(0.01));
+    CHECK(res.diffCount == 2);
+    CHECK(res.diffRatio == Approx(0.02));
+    CHECK(res.errorMessage.find("10px by 10px") != std::string::npos);  // sizesMismatchError fragment
+    CHECK(res.errorMessage.find("are different.") != std::string::npos); // pixelsMismatchError fragment
 }
 
 TEST_CASE("compare: an invalid PixelData is refused rather than indexed", "[compare]")
