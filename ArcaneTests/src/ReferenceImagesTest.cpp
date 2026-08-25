@@ -207,6 +207,34 @@ TEST_CASE("reference: a backend containing a path separator is refused, not just
     CHECK(res.blessTarget.empty());
 }
 
+// --- Review Finding 2 (task-7 fix pass): NameIsSafe's FIFTH branch,
+// name.empty(), was still dark -- nothing above ever passed "" for either
+// argument, and it is exactly the branch a grep-based audit is structurally
+// blind to (grepping for '/', '\', ".." finds three substring/char checks;
+// an empty-string guard and a front()-of-non-empty check don't match that
+// pattern). Order matters here: NameIsSafe checks name.empty() FIRST, so
+// name.front() is never reached on an empty string -- see the comment on
+// that check in ReferenceImages.cpp. These two pin the branch on each
+// argument independently, matching the shape of the four cases above.
+
+TEST_CASE("reference: an empty name is refused", "[reference]")
+{
+    const auto root = TempProject("empty-name");
+    const auto res = Arcane::ResolveReference(root, "", "dx12");
+
+    CHECK(res.level == Arcane::ReferenceLevel::None);
+    CHECK(res.blessTarget.empty());
+}
+
+TEST_CASE("reference: an empty backend is refused", "[reference]")
+{
+    const auto root = TempProject("empty-backend");
+    const auto res = Arcane::ResolveReference(root, "editor-ui", "");
+
+    CHECK(res.level == Arcane::ReferenceLevel::None);
+    CHECK(res.blessTarget.empty());
+}
+
 // --- Hole A: DiffArtifactPath applied NameIsSafe to neither argument, so
 // DiffArtifactPath(root, "../../evil", "dx12") built a path escaping the
 // project -- the very path Task 8 writes a diff image to on a comparison
@@ -227,4 +255,42 @@ TEST_CASE("reference: DiffArtifactPath refuses an unsafe backend and returns an 
     const auto p = Arcane::DiffArtifactPath(root, "runtime-scene", "../evil");
 
     CHECK(p.empty());
+}
+
+// --- Review Finding 1 (task-7 fix pass): BlessReference's own false-return
+// path -- `if (resolution.blessTarget.empty() || rgba == nullptr) return
+// false;` -- was exercised by zero tests. Every BlessReference call above is
+// wrapped in CHECK(...) expecting true; nothing ever constructs a refused
+// resolution and asserts false, and nothing ever passes rgba == nullptr.
+// Inverting that condition, or deleting the early return outright, would
+// leave the whole suite green -- the mirror image of Hole B, which this task
+// exists to close.
+
+TEST_CASE("reference: BlessReference refuses a resolution with no bless target", "[reference]")
+{
+    // A refused ResolveReference (traversal name) carries an empty
+    // blessTarget; BlessReference must decline to write at all, not just
+    // decline to know where.
+    const auto root = TempProject("bless-refused");
+    const auto refused = Arcane::ResolveReference(root, "../escape", "dx12");
+    REQUIRE(refused.blessTarget.empty());
+
+    std::vector<unsigned char> px(4 * 4 * 4, 42);
+    for (std::size_t i = 3; i < px.size(); i += 4) px[i] = 255;
+    CHECK_FALSE(Arcane::BlessReference(refused, 4, 4, px.data()));
+
+    // And nothing was written anywhere under the project root.
+    CHECK_FALSE(fs::exists(root / "Verify"));
+}
+
+TEST_CASE("reference: BlessReference refuses a null pixel buffer", "[reference]")
+{
+    // An otherwise-valid, resolvable bless target -- only the pixel pointer
+    // is bad.
+    const auto root = TempProject("bless-null");
+    const auto res = Arcane::ResolveReference(root, "runtime-scene", "dx12");
+    REQUIRE_FALSE(res.blessTarget.empty());
+
+    CHECK_FALSE(Arcane::BlessReference(res, 4, 4, nullptr));
+    CHECK_FALSE(fs::exists(res.blessTarget));
 }

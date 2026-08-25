@@ -19,6 +19,10 @@ namespace Arcane
         // literal).
         [[nodiscard]] bool NameIsSafe(const std::string& name) noexcept
         {
+            // ORDER MATTERS: this empty check must run FIRST. name.front()
+            // below is undefined behaviour on an empty string, and it is
+            // this early return -- not luck -- that makes it safe. Reordering
+            // these five lines would trade a wrong answer for UB.
             if (name.empty()) return false;
             if (name.find('/') != std::string::npos)  return false;
             if (name.find('\\') != std::string::npos) return false;
@@ -66,6 +70,15 @@ namespace Arcane
     bool BlessReference(const ReferenceResolution& resolution,
                         std::uint32_t width, std::uint32_t height, const unsigned char* rgba)
     {
+        // Belt-and-suspenders with WritePngRgba's own defenses (it also
+        // null-checks rgba and fails gracefully on an empty path via a
+        // failed fopen) -- verified by mutation-deleting this line entirely:
+        // the observable contract (false, nothing written) held regardless,
+        // because the lower layer refuses independently. Kept explicit
+        // anyway: it documents the REFUSED-RESOLUTION case as a distinct,
+        // intentional short-circuit rather than an accident of how far a
+        // hostile path gets before the OS rejects it, and it means a refused
+        // bless never even reaches the filesystem layer.
         if (resolution.blessTarget.empty() || rgba == nullptr) return false;
         return WritePngRgba(resolution.blessTarget, width, height, rgba);
     }
