@@ -188,4 +188,47 @@ namespace Arcane
         unsigned char* diff,
         std::uint32_t width, std::uint32_t height,
         const CompareOptions& options = {});
+
+    // ---- image-level entry point (comparators.ts) ------------------------
+    //
+    // CompareImages is the entry point this header is FOR -- the one call an
+    // outside consumer should make. Everything above (ImageChannel, FastStats,
+    // Compare, ...) is ARCANE_API-exported only so ArcaneTests can exercise
+    // the cascade's internals directly across the DLL boundary; it is test
+    // surface, not a menu of public API to build against.
+
+    struct ImageCompareOptions
+    {
+        // The two knobs are INDEPENDENT: one asks "is this pixel different",
+        // the other "how many differing pixels are acceptable". If both are
+        // set the SMALLER budget wins; if neither is set the budget is ZERO.
+        std::optional<std::uint64_t> maxDiffPixels;
+        std::optional<double>        maxDiffPixelRatio;
+        double maxColorDeltaE94 = 1.0;
+    };
+
+    struct ImageCompareResult
+    {
+        bool          passed = false;
+        std::uint64_t diffCount = 0;
+        double        diffRatio = 0.0;
+        std::uint64_t maxDiffPixelsUsed = 0;   // the budget actually applied
+        bool          sizesMismatch = false;
+        std::uint32_t width = 0, height = 0;   // the compared (padded) extent
+        // Empty iff passed. A size mismatch and a pixel-count failure are
+        // reported TOGETHER, concatenated, never one instead of the other.
+        std::string   errorMessage;
+        // Tight RGBA8, only populated on failure -- the artifact that makes a
+        // failure diagnosable rather than a number.
+        std::vector<unsigned char> diffRgba;
+    };
+
+    // Compare two decoded images. A dimension mismatch is NOT an error: both
+    // are padded to the per-axis maximum with transparent black anchored
+    // top-left (which the channel split then composites to white), the
+    // comparison still runs, and the mismatch is reported as its own named
+    // fact beside the pixel count. Never rescales, never throws.
+    [[nodiscard]] ARCANE_API ImageCompareResult CompareImages(
+        const PixelData& expected, const PixelData& actual,
+        const ImageCompareOptions& options = {});
 }

@@ -6,11 +6,14 @@
 // asymmetric and the diff image's grey is drawn from EXPECTED.
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <Arcane/Assets/ImageCompare.hpp>
 
 #include <cstdint>
 #include <vector>
+
+using Catch::Approx;
 
 namespace
 {
@@ -290,4 +293,141 @@ TEST_CASE("compare: the expected/actual binding is only observable through the d
         Arcane::Compare(expected.data(), actual.data(), diff.data(), 16, 16);
     CHECK(count == 0);
     CHECK(diff[0] == 241);
+}
+
+// ---- CompareImages: the image-level layer (comparators.ts) ----------------
+
+namespace
+{
+    Arcane::PixelData Pixels(std::uint32_t w, std::uint32_t h,
+                             unsigned char r, unsigned char g, unsigned char b)
+    {
+        Arcane::PixelData p;
+        p.width = w; p.height = h;
+        p.rgba = Solid(w, h, r, g, b);
+        return p;
+    }
+}
+
+TEST_CASE("compare: identical images pass with the default zero budget", "[compare]")
+{
+    const auto a = Pixels(32, 32, 10, 20, 30);
+    const auto res = Arcane::CompareImages(a, a);
+
+    CHECK(res.passed);
+    CHECK(res.diffCount == 0);
+    CHECK(res.errorMessage.empty());
+    CHECK(res.diffRgba.empty());          // no artifact on success
+}
+
+TEST_CASE("compare: ONE differing pixel fails, because the default budget is zero", "[compare]")
+{
+    auto expected = Pixels(32, 32, 255, 255, 255);
+    auto actual   = expected;
+    SetPixel(actual.rgba, 32, 16, 16, 0, 0, 0);
+
+    const auto res = Arcane::CompareImages(expected, actual);
+    CHECK_FALSE(res.passed);
+    CHECK(res.diffCount == 1);
+    CHECK(res.errorMessage.find("1 pixels") != std::string::npos);
+    CHECK_FALSE(res.diffRgba.empty());    // the artifact that makes it diagnosable
+
+    // comparators.ts:102 -- the reported ratio is `Math.ceil(count/area*100)
+    // /100`, NOT a plain division. 1/1024 = 0.0009765625 plain, but rounds UP
+    // to 0.01. A plain-division regression would print "0.00" or similar
+    // (never round up past the true value) and would not satisfy either
+    // check below.
+    CHECK(res.diffRatio == Approx(0.01));
+    CHECK(res.errorMessage.find("ratio 0.01") != std::string::npos);
+}
+
+TEST_CASE("compare: maxDiffPixels forgives exactly that many and no more", "[compare]")
+{
+    auto expected = Pixels(32, 32, 255, 255, 255);
+    auto actual   = expected;
+    SetPixel(actual.rgba, 32, 4, 4, 0, 0, 0);
+    SetPixel(actual.rgba, 32, 20, 20, 0, 0, 0);
+
+    Arcane::ImageCompareOptions two;  two.maxDiffPixels = 2;
+    CHECK(Arcane::CompareImages(expected, actual, two).passed);
+
+    Arcane::ImageCompareOptions one;  one.maxDiffPixels = 1;
+    CHECK_FALSE(Arcane::CompareImages(expected, actual, one).passed);
+}
+
+TEST_CASE("compare: when BOTH knobs are set the SMALLER budget wins", "[compare]")
+{
+    auto expected = Pixels(100, 100, 255, 255, 255);
+    auto actual   = expected;
+    // Hole A: (0..4, 0) sits ON the cascade's checkerboard padding boundary
+    // (Compare() pads by max(1,15) = 15, so the 3x3 variance window around a
+    // pixel on row 0 is half checkerboard, non-uniform, and stage 3 does not
+    // reliably fire). Moved inward to (40..44, 50) so every 3x3 window is
+    // entirely real, uniform white -- var1 == 0, stage 3 fires, count is
+    // deterministically 5.
+    for (std::uint32_t i = 0; i < 5; ++i)
+        SetPixel(actual.rgba, 100, 40 + i, 50, 0, 0, 0);
+
+    // ratio 0.001 * 10000 = 10 allowed; maxDiffPixels 3 allowed. min() is 3.
+    Arcane::ImageCompareOptions opt;
+    opt.maxDiffPixels = 3;
+    opt.maxDiffPixelRatio = 0.001;
+    CHECK_FALSE(Arcane::CompareImages(expected, actual, opt).passed);
+
+    // Reversed: min() is now the ratio's 10, which forgives all 5.
+    Arcane::ImageCompareOptions opt2;
+    opt2.maxDiffPixels = 100;
+    opt2.maxDiffPixelRatio = 0.001;
+    CHECK(Arcane::CompareImages(expected, actual, opt2).passed);
+}
+
+TEST_CASE("compare: a size mismatch is a NAMED error reported ALONGSIDE the count", "[compare]")
+{
+    // Never abort, never rescale: pad both to the per-axis max, anchored
+    // top-left with transparent black, and report both facts.
+    const auto expected = Pixels(16, 16, 255, 255, 255);
+    const auto actual   = Pixels(32, 16, 255, 255, 255);
+
+    const auto res = Arcane::CompareImages(expected, actual);
+    CHECK_FALSE(res.passed);
+    CHECK(res.sizesMismatch);
+    CHECK(res.width == 32);
+    CHECK(res.height == 16);
+    CHECK(res.errorMessage.find("16px by 16px") != std::string::npos);
+    CHECK(res.errorMessage.find("32px by 16px") != std::string::npos);
+}
+
+TEST_CASE("compare: the ratio is computed against EXPECTED's dimensions", "[compare]")
+{
+    // Hole B: a same-size 10x10 vs 10x10 comparison cannot discriminate
+    // "ratio against expected's dims" from "ratio against the padded
+    // extent" -- both denominators are 100. Reshaped to a size MISMATCH so
+    // the two candidate denominators diverge: expected is 10x10 (area 100),
+    // but the padded extent (this comparison's `width`/`height`) is 20x10
+    // (area 200). One differing pixel reads 0.01 against expected and 0.005
+    // against the padded extent -- asserting 0.01 pins the numerator to
+    // expected's own dimensions specifically.
+    //
+    // The differing pixel sits at (5,5), per Hole A, so its 3x3 cascade
+    // window is entirely interior and uniform, keeping diffCount
+    // deterministic. This comparison also trips sizesMismatch, so `passed`
+    // is false regardless -- that is not what this case is about; only the
+    // ratio and the count are asserted here.
+    auto expected = Pixels(10, 10, 255, 255, 255);
+    auto actual   = Pixels(20, 10, 255, 255, 255);
+    SetPixel(actual.rgba, 20, 5, 5, 0, 0, 0);
+
+    const auto res = Arcane::CompareImages(expected, actual);
+    CHECK(res.diffCount == 1);
+    CHECK(res.diffRatio == Approx(0.01));
+}
+
+TEST_CASE("compare: an invalid PixelData is refused rather than indexed", "[compare]")
+{
+    Arcane::PixelData empty;              // width/height 0, no bytes
+    const auto good = Pixels(8, 8, 0, 0, 0);
+
+    const auto res = Arcane::CompareImages(empty, good);
+    CHECK_FALSE(res.passed);
+    CHECK(res.errorMessage.find("could not") != std::string::npos);
 }

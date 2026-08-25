@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 namespace Arcane
 {
@@ -407,5 +408,137 @@ namespace Arcane
         }
 
         return diffCount;
+    }
+
+    // ---- image-level entry point (comparators.ts) ------------------------
+
+    namespace
+    {
+        // imageUtils.ts's padImageToSize: anchored TOP-LEFT, filled with
+        // transparent black. Transparent black then blends to WHITE in
+        // IntoRgb, which is what makes a padded region compare equal against
+        // another padded region.
+        std::vector<unsigned char> PadToSize(const PixelData& src,
+                                             std::uint32_t width, std::uint32_t height)
+        {
+            std::vector<unsigned char> out(static_cast<std::size_t>(width) * height * 4, 0);
+            for (std::uint32_t y = 0; y < src.height && y < height; ++y)
+            {
+                const std::size_t from = static_cast<std::size_t>(y) * src.width * 4;
+                const std::size_t to   = static_cast<std::size_t>(y) * width * 4;
+                const std::size_t run  = static_cast<std::size_t>(std::min(src.width, width)) * 4;
+                std::copy_n(src.rgba.begin() + from, run, out.begin() + to);
+            }
+            return out;
+        }
+
+        // comparators.ts:102's `ratio.toFixed(2)`. The ratio itself (see
+        // below) is already rounded UP to the nearest hundredth, so this only
+        // needs to print exactly two fractional digits -- never
+        // std::to_string's default six, which would read e.g. "0.010000" and
+        // break bit-parity with the fixture corpus's recorded error text.
+        std::string FormatRatio2(double ratio)
+        {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.2f", ratio);
+            return buf;
+        }
+    }
+
+    ImageCompareResult CompareImages(const PixelData& expected, const PixelData& actual,
+                                     const ImageCompareOptions& options)
+    {
+        ImageCompareResult result;
+
+        if (!expected.Valid() || !actual.Valid())
+        {
+            result.errorMessage = "could not compare: one of the images is not a valid "
+                                  "tight RGBA8 buffer";
+            return result;
+        }
+
+        const std::uint32_t width  = std::max(expected.width,  actual.width);
+        const std::uint32_t height = std::max(expected.height, actual.height);
+        result.width  = width;
+        result.height = height;
+
+        std::string sizesMismatchError;
+        const unsigned char* expectedPixels = expected.rgba.data();
+        const unsigned char* actualPixels   = actual.rgba.data();
+        std::vector<unsigned char> paddedExpected, paddedActual;
+
+        if (expected.width != actual.width || expected.height != actual.height)
+        {
+            result.sizesMismatch = true;
+            sizesMismatchError = "Expected an image " + std::to_string(expected.width) +
+                                 "px by " + std::to_string(expected.height) +
+                                 "px, received " + std::to_string(actual.width) +
+                                 "px by " + std::to_string(actual.height) + "px. ";
+            paddedExpected = PadToSize(expected, width, height);
+            paddedActual   = PadToSize(actual,   width, height);
+            expectedPixels = paddedExpected.data();
+            actualPixels   = paddedActual.data();
+        }
+
+        std::vector<unsigned char> diff(static_cast<std::size_t>(width) * height * 4, 0);
+
+        CompareOptions cascade;
+        cascade.maxColorDeltaE94 = options.maxColorDeltaE94;
+        result.diffCount = Compare(expectedPixels, actualPixels, diff.data(),
+                                   width, height, cascade);
+
+        // comparators.ts:96-102 -- if both knobs are set take the smaller; if
+        // neither is set the budget is zero. The ratio is against EXPECTED's
+        // own dimensions, not the padded extent. Upstream keeps maxDiffPixels2
+        // as an un-truncated double and compares `count > maxDiffPixels`
+        // directly; flooring it into this uint64_t field first is equivalent
+        // for that comparison because count is always integral (for integer
+        // n and real x, n > x iff n > floor(x)), so this stays bit-parity-safe
+        // while giving the struct an honest integer budget to report.
+        const double expectedArea =
+            static_cast<double>(expected.width) * static_cast<double>(expected.height);
+        std::optional<std::uint64_t> fromRatio;
+        if (options.maxDiffPixelRatio.has_value())
+        {
+            fromRatio = static_cast<std::uint64_t>(expectedArea * *options.maxDiffPixelRatio);
+        }
+
+        if (options.maxDiffPixels.has_value() && fromRatio.has_value())
+            result.maxDiffPixelsUsed = std::min(*options.maxDiffPixels, *fromRatio);
+        else if (options.maxDiffPixels.has_value())
+            result.maxDiffPixelsUsed = *options.maxDiffPixels;
+        else if (fromRatio.has_value())
+            result.maxDiffPixelsUsed = *fromRatio;
+        else
+            result.maxDiffPixelsUsed = 0;
+
+        // comparators.ts:102 -- `Math.ceil(count / area * 100) / 100`. This is
+        // NOT a plain ratio: it rounds UP to the nearest hundredth, so e.g. 1
+        // pixel out of 1024 (0.0009765625) is reported as 0.01, not 0.001.
+        // Bit-parity with the fixture corpus's error-message text depends on
+        // this, not just on the pass/fail verdict.
+        result.diffRatio = expectedArea > 0.0
+                         ? std::ceil(static_cast<double>(result.diffCount) / expectedArea * 100.0) / 100.0
+                         : 0.0;
+
+        std::string pixelsMismatchError;
+        if (result.diffCount > result.maxDiffPixelsUsed)
+        {
+            pixelsMismatchError = std::to_string(result.diffCount) + " pixels (ratio " +
+                                  FormatRatio2(result.diffRatio) +
+                                  " of all image pixels) are different.";
+        }
+
+        if (!pixelsMismatchError.empty() || !sizesMismatchError.empty())
+        {
+            result.errorMessage = sizesMismatchError + pixelsMismatchError;
+            result.diffRgba = std::move(diff);
+            result.passed = false;
+        }
+        else
+        {
+            result.passed = true;
+        }
+        return result;
     }
 }
