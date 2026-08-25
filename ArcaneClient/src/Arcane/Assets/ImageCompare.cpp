@@ -266,4 +266,141 @@ namespace Arcane
         return (2.0 * mean1 * mean2 + c1) * (2.0 * cov + c2)
              / (mean1 * mean1 + mean2 * mean2 + c1) / (var1 + var2 + c2);
     }
+
+    // ---- the cascade (compare.ts) ----------------------------------------
+
+    namespace
+    {
+        // compare.ts's own constants. VARIANCE_WINDOW_RADIUS is 1 -- a RADIUS,
+        // giving a 3x3 window. Writing 3 here is the classic misport.
+        constexpr std::int64_t kSsimWindowRadius     = 15;   // 31x31
+        constexpr std::int64_t kVarianceWindowRadius = 1;    // 3x3
+        constexpr double       kSsimAntialiasing     = 0.99;
+
+        void DrawPixel(unsigned char* diff, std::uint32_t width,
+                       std::uint32_t x, std::uint32_t y,
+                       unsigned char r, unsigned char g, unsigned char b) noexcept
+        {
+            const std::size_t idx = (static_cast<std::size_t>(y) * width + x) * 4;
+            diff[idx + 0] = r;
+            diff[idx + 1] = g;
+            diff[idx + 2] = b;
+            diff[idx + 3] = 255;
+        }
+    }
+
+    std::uint64_t Compare(const unsigned char* expected, const unsigned char* actual,
+                          unsigned char* diff,
+                          std::uint32_t width, std::uint32_t height,
+                          const CompareOptions& options)
+    {
+        const std::uint32_t pad =
+            static_cast<std::uint32_t>(std::max(kVarianceWindowRadius, kSsimWindowRadius));
+
+        PaddingOptions padding;
+        padding.paddingSize = pad;
+        // compare.ts's assignment: even magenta, odd green.
+        padding.colorEven[0] = 255; padding.colorEven[1] = 0;   padding.colorEven[2] = 255;
+        padding.colorOdd[0]  = 0;   padding.colorOdd[1]  = 255; padding.colorOdd[2]  = 0;
+
+        ImageChannel r1, g1, b1, r2, g2, b2;
+        IntoRgb(width, height, expected, padding, r1, g1, b1);
+        IntoRgb(width, height, actual,   padding, r2, g2, b2);
+
+        // Built lazily: three FastStats over padded planes cost ~118 MB at
+        // 720p, and an image that matches exactly never needs them at all.
+        std::optional<FastStats> fastR, fastG, fastB;
+
+        std::uint64_t diffCount = 0;
+
+        for (std::uint32_t y = pad; y < r1.height - pad; ++y)
+        {
+            for (std::uint32_t x = pad; x < r1.width - pad; ++x)
+            {
+                const std::uint32_t dx = x - pad;   // diff-image coordinates
+                const std::uint32_t dy = y - pad;
+
+                auto drawGrey = [&]()
+                {
+                    if (!diff) return;
+                    const int grey = Rgb2Gray(r1.Get(x, y), g1.Get(x, y), b1.Get(x, y));
+                    const auto v = static_cast<unsigned char>(BlendWithWhite(grey, 0.1));
+                    DrawPixel(diff, width, dx, dy, v, v, v);
+                };
+
+                // Stage 1: exact equality.
+                if (r1.Get(x, y) == r2.Get(x, y) &&
+                    g1.Get(x, y) == g2.Get(x, y) &&
+                    b1.Get(x, y) == b2.Get(x, y))
+                {
+                    drawGrey();
+                    continue;
+                }
+
+                // Stage 2: perceptual colour difference.
+                const double c1[3] = { static_cast<double>(r1.Get(x, y)),
+                                       static_cast<double>(g1.Get(x, y)),
+                                       static_cast<double>(b1.Get(x, y)) };
+                const double c2[3] = { static_cast<double>(r2.Get(x, y)),
+                                       static_cast<double>(g2.Get(x, y)),
+                                       static_cast<double>(b2.Get(x, y)) };
+                if (ColorDeltaE94(c1, c2) <= options.maxColorDeltaE94)
+                {
+                    drawGrey();
+                    continue;
+                }
+
+                if (!fastR)
+                {
+                    fastR.emplace(r1, r2);
+                    fastG.emplace(g1, g2);
+                    fastB.emplace(b1, b2);
+                }
+
+                // Stage 3: flood fill in either image means this cannot be
+                // antialiasing, so it must be a real difference.
+                std::uint32_t vx1 = 0, vy1 = 0, vx2 = 0, vy2 = 0;
+                r1.BoundXY(static_cast<std::int64_t>(x) - kVarianceWindowRadius,
+                           static_cast<std::int64_t>(y) - kVarianceWindowRadius, vx1, vy1);
+                r1.BoundXY(static_cast<std::int64_t>(x) + kVarianceWindowRadius,
+                           static_cast<std::int64_t>(y) + kVarianceWindowRadius, vx2, vy2);
+
+                const double var1 = fastR->VarianceC1(vx1, vy1, vx2, vy2)
+                                  + fastG->VarianceC1(vx1, vy1, vx2, vy2)
+                                  + fastB->VarianceC1(vx1, vy1, vx2, vy2);
+                const double var2 = fastR->VarianceC2(vx1, vy1, vx2, vy2)
+                                  + fastG->VarianceC2(vx1, vy1, vx2, vy2)
+                                  + fastB->VarianceC2(vx1, vy1, vx2, vy2);
+                if (var1 == 0.0 || var2 == 0.0)
+                {
+                    if (diff) DrawPixel(diff, width, dx, dy, 255, 0, 0);
+                    ++diffCount;
+                    continue;
+                }
+
+                // Stage 4: SSIM.
+                std::uint32_t sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0;
+                r1.BoundXY(static_cast<std::int64_t>(x) - kSsimWindowRadius,
+                           static_cast<std::int64_t>(y) - kSsimWindowRadius, sx1, sy1);
+                r1.BoundXY(static_cast<std::int64_t>(x) + kSsimWindowRadius,
+                           static_cast<std::int64_t>(y) + kSsimWindowRadius, sx2, sy2);
+
+                const double ssimRgb = (Ssim(*fastR, sx1, sy1, sx2, sy2)
+                                      + Ssim(*fastG, sx1, sy1, sx2, sy2)
+                                      + Ssim(*fastB, sx1, sy1, sx2, sy2)) / 3.0;
+
+                if (ssimRgb >= kSsimAntialiasing)
+                {
+                    if (diff) DrawPixel(diff, width, dx, dy, 255, 255, 0);
+                }
+                else
+                {
+                    if (diff) DrawPixel(diff, width, dx, dy, 255, 0, 0);
+                    ++diffCount;
+                }
+            }
+        }
+
+        return diffCount;
+    }
 }

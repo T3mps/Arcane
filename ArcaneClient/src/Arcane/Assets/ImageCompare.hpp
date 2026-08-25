@@ -156,4 +156,36 @@ namespace Arcane
     [[nodiscard]] ARCANE_API double Ssim(const FastStats& stats,
                                          std::uint32_t x1, std::uint32_t y1,
                                          std::uint32_t x2, std::uint32_t y2) noexcept;
+
+    // ---- the cascade (compare.ts) ----------------------------------------
+
+    struct CompareOptions
+    {
+        // The just-noticeable-difference. DERIVED, not tuned -- see
+        // ColorDeltaE94. Raising it to make a flaky test pass is the wrong
+        // lever; the aggregate knob in ImageCompareOptions is the right one.
+        double maxColorDeltaE94 = 1.0;
+    };
+
+    // Count the pixels that genuinely differ between two tight RGBA8 images of
+    // the same size, four stages, cheapest first:
+    //
+    //   1. exact RGB equality              -> not a difference
+    //   2. colorDeltaE94 <= 1.0            -> below the JND, not a difference
+    //   3. 3x3 flood fill in EITHER image  -> cannot be antialiasing, IS a difference
+    //   4. SSIM over 31x31 >= 0.99         -> antialiasing, not a difference
+    //
+    // `expected` and `actual` must both be width*height*4 bytes. `diff`, if not
+    // null, must be the same size and is painted: red for a real difference,
+    // yellow for a pixel classified as antialiasing, and a washed-out grey of
+    // EXPECTED everywhere else.
+    //
+    // ARGUMENT ORDER IS SIGNIFICANT. dE94 is asymmetric and the grey is drawn
+    // from `expected`; calling this (actual, expected) produces a different
+    // number.
+    [[nodiscard]] ARCANE_API std::uint64_t Compare(
+        const unsigned char* expected, const unsigned char* actual,
+        unsigned char* diff,
+        std::uint32_t width, std::uint32_t height,
+        const CompareOptions& options = {});
 }
