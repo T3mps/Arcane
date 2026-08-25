@@ -37,6 +37,15 @@ Build-time (not vendored):
 - **SDL3** is installed via vcpkg (`scripts/setup-vcpkg-deps.bat`) -- zlib
   license.
 
+Reimplemented (not vendored):
+
+- **Playwright's image comparator** -- `ArcaneClient/src/Arcane/Assets/ImageCompare.*`
+  is a C++ reimplementation of `packages/utils/image_tools/*` and
+  `packages/utils/comparators.ts` from microsoft/playwright, Apache License 2.0,
+  Copyright (c) Microsoft Corporation. Constants and cascade structure are adopted
+  verbatim. Their test fixtures are vendored under `ThirdParty/playwright-fixtures/`
+  and used as a conformance corpus.
+
 Fonts shipped under `data/font/`:
 
 - **Inter** -- SIL Open Font License 1.1 (`data/font/inter/OFL.txt`)
