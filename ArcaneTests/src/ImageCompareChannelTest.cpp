@@ -72,8 +72,13 @@ TEST_CASE("compare: a FULLY TRANSPARENT pixel composites to white", "[compare]")
 
 TEST_CASE("compare: a half-transparent pixel TRUNCATES, it does not round", "[compare]")
 {
-    // alpha 128 -> 128/255 = 0.50196...; BlendWithWhite(0, 0.50196) = 127.0004...
-    // Upstream truncates into a Uint8Array, so this must be 127, not 128.
+    // alpha 128 -> 128/255 = fl(0.501960...) rounds DOWN, so 255 * fl(128/255)
+    // lands on exactly 128.0, and 255.0 - 128.0 is exact: BlendWithWhite(0, 128/255)
+    // is exactly 127.0, not 127.0004. Because it lands on an exact integer,
+    // truncation and rounding AGREE here -- this case cannot by itself catch a
+    // static_cast<unsigned char> -> std::round substitution. It is kept because
+    // it is an upstream-faithful identity, not because it discriminates; see the
+    // next test case for the one that actually does.
     const auto px = Solid(1, 1, 0, 0, 0, 128);
     Arcane::ImageChannel r, g, b;
     Arcane::PaddingOptions opt;
@@ -81,6 +86,21 @@ TEST_CASE("compare: a half-transparent pixel TRUNCATES, it does not round", "[co
     Arcane::IntoRgb(1, 1, px.data(), opt, r, g, b);
 
     CHECK(r.Get(0, 0) == 127);
+}
+
+TEST_CASE("compare: a half-transparent pixel's fractional remainder TRUNCATES, it does not round", "[compare]")
+{
+    // The discriminating case the one above cannot be: BlendWithWhite(1, 230/255)
+    // = 255 + (1 - 255) * (230/255) = 25.90196... Truncation gives 25; rounding
+    // would give 26. Unlike the c=0/alpha=128 case, this does NOT land on an
+    // exact integer, so it is the case that actually catches a rounding bug.
+    const auto px = Solid(1, 1, 1, 1, 1, 230);
+    Arcane::ImageChannel r, g, b;
+    Arcane::PaddingOptions opt;
+    opt.paddingSize = 0;
+    Arcane::IntoRgb(1, 1, px.data(), opt, r, g, b);
+
+    CHECK(r.Get(0, 0) == 25);
 }
 
 TEST_CASE("compare: padding is a CHECKERBOARD, so no border window is a flood fill", "[compare]")
@@ -101,8 +121,17 @@ TEST_CASE("compare: padding is a CHECKERBOARD, so no border window is a flood fi
     CHECK(g.Get(1, 0) == 255);
     CHECK(b.Get(1, 0) == 0);
 
+    // (0,1): same x as (0,0) above but different y -> (x+y)%2 == 1 -> odd ->
+    // green (0, 255, 0). Catches an implementation that alternates on x%2 alone
+    // and ignores y entirely, which (0,0) vs (1,0) above cannot: those two only
+    // differ in x, so an x-only predicate would still pass them.
+    CHECK(r.Get(0, 1) == 0);
+    CHECK(g.Get(0, 1) == 255);
+    CHECK(b.Get(0, 1) == 0);
+
     // The point of the alternation: two adjacent padding pixels DIFFER.
     CHECK(r.Get(0, 0) != r.Get(1, 0));
+    CHECK(r.Get(0, 0) != r.Get(0, 1));
 }
 
 TEST_CASE("compare: BoundXY clamps NEGATIVE coordinates without unsigned underflow", "[compare]")
