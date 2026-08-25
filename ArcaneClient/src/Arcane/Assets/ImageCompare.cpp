@@ -41,9 +41,19 @@ namespace Arcane
         const double y = xyz[1];
         const double z = xyz[2] / 1.088840;
 
+        // Upstream is `x ** (1/3)`; std::pow(v, 1.0/3.0) is the literal port of
+        // that call, not std::cbrt. Bit-parity binds every arithmetic choice
+        // here, and pow(v, 1/3) and a correctly-rounded cbrt are NOT the same
+        // function -- JS's exponent is the inexact double 0.3333333333333333,
+        // so the two diverge by several ULPs in the shadows, which is exactly
+        // where Lab spends its precision and this function feeds every dE94.
+        // It is the `v > kSigmaPow3` guard above -- not the function choice --
+        // that excludes the negative branch where cbrt and pow(., 1/3) would
+        // otherwise disagree (pow rejects a negative base with a fractional
+        // exponent; cbrt does not).
         auto f = [](double v) noexcept
         {
-            return v > kSigmaPow3 ? std::cbrt(v) : v / 3.0 / kSigmaPow2 + 4.0 / 29.0;
+            return v > kSigmaPow3 ? std::pow(v, 1.0 / 3.0) : v / 3.0 / kSigmaPow2 + 4.0 / 29.0;
         };
         const double fx = f(x), fy = f(y), fz = f(z);
 

@@ -78,3 +78,56 @@ TEST_CASE("compare: Srgb2Xyz applies the sRGB transfer function, not a plain pow
     const double expectedLinear = (2.0 / 255.0) / 12.92;
     CHECK(xyz[1] == Approx(expectedLinear).epsilon(1e-9));
 }
+
+TEST_CASE("compare: Xyz2Lab pins the white point and the linear branch directly", "[compare]")
+{
+    // The trap: Xyz2Lab is declared "exposed for tests" but every case above
+    // exercises it only transitively through ColorDeltaE94, where a sign error
+    // in fx/fy/fz would cancel under the paired deltaL/deltaA/deltaB
+    // subtraction and still pass. These two cases pin fx, fy, fz directly.
+
+    // D65 white point maps to Lab's origin: L*=100 (top of the 0..100 scale),
+    // a*=b*=0 (achromatic). Exact, not approximate -- pins both white-point
+    // divisors (0.950489, 1.088840) and the 116*fy-16 term.
+    {
+        const double xyz[3] = { 0.950489, 1.0, 1.088840 };
+        double lab[3] = {};
+        Arcane::Xyz2Lab(xyz, lab);
+        CHECK(lab[0] == Approx(100.0).margin(1e-9));
+        CHECK(lab[1] == Approx(0.0).margin(1e-9));
+        CHECK(lab[2] == Approx(0.0).margin(1e-9));
+    }
+
+    // Below (6/29)^3 ~ 0.008856, f(v) switches to the linear branch
+    // v/3/(6/29)^2 + 4/29. Three DISTINCT values under the threshold for
+    // x, y, z (rather than one shared value) so fx != fy != fz -- a sign
+    // error confined to a single channel cannot cancel the way it could in
+    // the ColorDeltaE94 cases above. Expected values are the piecewise
+    // formula written out here, not a magic number computed once against
+    // the implementation.
+    {
+        constexpr double kSigmaPow2 = 6.0 * 6.0 / 29.0 / 29.0;
+        constexpr double kSigmaPow3 = 6.0 * 6.0 * 6.0 / 29.0 / 29.0 / 29.0;
+        const double vx = 0.002, vy = 0.005, vz = 0.007;
+        REQUIRE(vx < kSigmaPow3);
+        REQUIRE(vy < kSigmaPow3);
+        REQUIRE(vz < kSigmaPow3);
+
+        // Chosen so that xyz[i]/divisor recovers vx/vy/vz inside Xyz2Lab.
+        const double xyz[3] = { vx * 0.950489, vy, vz * 1.088840 };
+        double lab[3] = {};
+        Arcane::Xyz2Lab(xyz, lab);
+
+        // Mirrors Xyz2Lab's own white-point division so fx/fy/fz below come
+        // from the SAME operands in the SAME order as the implementation.
+        const double x = xyz[0] / 0.950489;
+        const double y = xyz[1];
+        const double z = xyz[2] / 1.088840;
+        auto fLinear = [&](double v) { return v / 3.0 / kSigmaPow2 + 4.0 / 29.0; };
+        const double fx = fLinear(x), fy = fLinear(y), fz = fLinear(z);
+
+        CHECK(lab[0] == Approx(116.0 * fy - 16.0).epsilon(1e-9));
+        CHECK(lab[1] == Approx(500.0 * (fx - fy)).epsilon(1e-9));
+        CHECK(lab[2] == Approx(200.0 * (fy - fz)).epsilon(1e-9));
+    }
+}
