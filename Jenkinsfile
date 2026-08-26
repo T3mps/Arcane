@@ -55,6 +55,42 @@ pipeline {
                         bat 'cd bin\\Release-windows-x86_64-md\\ArcaneTests && ArcaneTests.exe -r junit::out=%WORKSPACE%\\test-results\\arcane-release.xml'
                     }
                 }
+                stage('Golden gate') {
+                    // Task 12 (plan-b comparator): the HOST-LEVEL half of the
+                    // golden-image gate. The [gpu][golden] Catch2 case in the
+                    // stage above proves the render path compiles and matches
+                    // its own committed reference, but ArcaneTests links
+                    // neither RuntimeApp nor EditorApp -- it is silent about
+                    // boot, settle, --report/--compare and the CLI. THIS
+                    // stage is what actually launches both real hosts, on
+                    // both backends, the way an agent would, and fails the
+                    // build on any of the four comparisons regressing.
+                    //
+                    // scripts/golden-gate.ps1 enforces its own precondition
+                    // (a fresh ReferenceProject/Binaries/ rebuild for the
+                    // configuration it is about to run, since that folder is
+                    // a single slot shared across configs) before launching
+                    // anything, so no separate step is needed here for that.
+                    steps {
+                        bat 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\golden-gate.ps1 -Configuration Debug'
+                        bat 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\golden-gate.ps1 -Configuration Release'
+                    }
+                    post {
+                        // Diff artifacts land under EACH exe's own directory
+                        // (bin/<Config>-windows-x86_64-md/<ArcaneRuntime|
+                        // ArcaneEditor>/ReferenceProject/Saved/Verify/*.png --
+                        // Saved/ is project-gitignored, so this is the only
+                        // way a failure's diff image survives the workspace
+                        // being wiped for the next build). Archived on
+                        // failure only: a passing gate has nothing worth
+                        // keeping here, and Saved/ can otherwise accumulate
+                        // stale screenshots across unrelated stages.
+                        failure {
+                            archiveArtifacts artifacts: 'bin/**/ReferenceProject/Saved/Verify/*.png',
+                                              allowEmptyArchive: true
+                        }
+                    }
+                }
                 stage('ReferenceProject (SDK build)') {
                     // The in-repo external-project consumer: its own premake
                     // workspace over build/arcane.lua -> Binaries/ReferenceGame.dll.
