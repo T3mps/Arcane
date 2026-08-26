@@ -66,8 +66,9 @@ TEST_CASE("verify: a brightness probe reads the capture and lands in the JSON", 
     const auto doc = nlohmann::json::parse(rep.ToJson());
     // The report is the boundary between the engine tier and the Servitor
     // package, which parses this file without linking the engine -- so the
-    // version is part of the contract, not decoration.
-    CHECK(doc["schemaVersion"] == 1);
+    // version is part of the contract, not decoration -- bumped to 2 by
+    // Task 8's --compare/--bless block.
+    CHECK(doc["schemaVersion"] == 2);
     CHECK(doc["backend"] == "D3D12");
     CHECK(doc["mode"] == "offscreen");
     CHECK(doc["framesRendered"] == 5);
@@ -648,7 +649,7 @@ TEST_CASE("verify: WriteTo round-trips through disk", "[verify]")
     in.close();
 
     const auto doc = nlohmann::json::parse(contents.str());
-    CHECK(doc["schemaVersion"] == 1);
+    CHECK(doc["schemaVersion"] == 2);
     CHECK(doc["framesRendered"] == 3);
 
     std::remove(path.c_str());
@@ -663,4 +664,94 @@ TEST_CASE("verify: WriteTo fails, does not throw, when the path cannot be opened
     const auto path = (std::filesystem::temp_directory_path() /
                         "arcane_verify_report_test_missing_dir" / "report.json").string();
     CHECK_FALSE(rep.WriteTo(path));
+}
+
+// ---- Task 8: --compare/--bless inside the settle loop, report schema 2 ----
+
+TEST_CASE("verify: the report schema is version 2 once compare exists", "[verify]")
+{
+    Arcane::VerifyReport r;
+    r.SetRun("dx12", 60, "frames-complete");
+    const auto doc = nlohmann::json::parse(r.ToJson());
+    CHECK(doc["schemaVersion"] == 2);
+}
+
+TEST_CASE("verify: a run with no --compare emits NO compare block", "[verify]")
+{
+    // Absence must be absence. An agent must be able to tell "no comparison was
+    // asked for" from "a comparison ran and passed".
+    Arcane::VerifyReport r;
+    r.SetRun("dx12", 60, "frames-complete");
+    const auto doc = nlohmann::json::parse(r.ToJson());
+    CHECK_FALSE(doc.contains("compare"));
+}
+
+TEST_CASE("verify: a passing comparison reports its facts", "[verify]")
+{
+    Arcane::VerifyReport r;
+    r.SetRun("vulkan", 60, "frames-complete");
+    r.SetCompare("runtime-scene", "shared",
+                 "ReferenceProject/Verify/References/runtime-scene.png",
+                 /*passed*/ true, /*diffCount*/ 0, /*diffRatio*/ 0.0,
+                 /*maxDiffPixels*/ 0, /*sizesMismatch*/ false,
+                 /*diffPath*/ "", /*errorMessage*/ "");
+
+    const auto doc = nlohmann::json::parse(r.ToJson());
+    REQUIRE(doc.contains("compare"));
+    CHECK(doc["compare"]["reference"] == "runtime-scene");
+    CHECK(doc["compare"]["resolvedLevel"] == "shared");
+    CHECK(doc["compare"]["passed"] == true);
+    CHECK(doc["compare"]["diffCount"] == 0);
+    // No diff artifact is written on success, so the field is empty, not absent.
+    CHECK(doc["compare"]["diffPath"] == "");
+}
+
+TEST_CASE("verify: a failing comparison carries the count, the budget and the diff path", "[verify]")
+{
+    Arcane::VerifyReport r;
+    r.SetRun("dx12", 60, "compare-failed");
+    r.SetCompare("editor-ui", "backend",
+                 "ReferenceProject/Verify/References/dx12/editor-ui.png",
+                 false, 1234, 0.0134, 0, false,
+                 "ReferenceProject/Saved/Verify/editor-ui-dx12-diff.png",
+                 "1234 pixels (ratio 0.013400 of all image pixels) are different.");
+
+    const auto doc = nlohmann::json::parse(r.ToJson());
+    CHECK(doc["compare"]["passed"] == false);
+    CHECK(doc["compare"]["diffCount"] == 1234);
+    CHECK(doc["compare"]["maxDiffPixels"] == 0);
+    CHECK(doc["compare"]["diffPath"] != "");
+    CHECK(doc["exitReason"] == "compare-failed");
+}
+
+TEST_CASE("verify: a missing reference is its own resolvedLevel, not a zero-diff pass", "[verify]")
+{
+    Arcane::VerifyReport r;
+    r.SetRun("dx12", 60, "compare-missing-reference");
+    r.SetCompare("brand-new", "none", "", false, 0, 0.0, 0, false, "",
+                 "no reference image on disk; re-run with --bless to create one");
+
+    const auto doc = nlohmann::json::parse(r.ToJson());
+    CHECK(doc["compare"]["resolvedLevel"] == "none");
+    CHECK(doc["compare"]["passed"] == false);
+    CHECK(doc["compare"]["diffCount"] == 0);   // NOT a pass despite zero diffs
+}
+
+TEST_CASE("verify: a --bless run's compare block reports a pass at the level it blessed to", "[verify]")
+{
+    // Not one of the brief's pinned cases -- added because SetCompare's
+    // contract has to cover the --bless caller too (RuntimeApp::
+    // ShutdownGraphPath calls it on every --compare run, blessed or not),
+    // and nothing above exercises "passed because we just wrote the
+    // reference", as opposed to "passed because it genuinely matched".
+    Arcane::VerifyReport r;
+    r.SetRun("dx12", 60, "compare-blessed");
+    r.SetCompare("runtime-scene", "shared",
+                 "ReferenceProject/Verify/References/runtime-scene.png",
+                 /*passed*/ true, 0, 0.0, 0, false, "", "");
+
+    const auto doc = nlohmann::json::parse(r.ToJson());
+    CHECK(doc["exitReason"] == "compare-blessed");
+    CHECK(doc["compare"]["passed"] == true);
+    CHECK(doc["compare"]["resolvedLevel"] == "shared");
 }

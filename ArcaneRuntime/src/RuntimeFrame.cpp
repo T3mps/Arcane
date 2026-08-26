@@ -762,7 +762,34 @@ bool CaptureTail(FrameIo& io)
             // work this capture could still be missing is outstanding, so
             // convergence requires BOTH.
             const bool idle = io.compiler.IsIdle();
-            if (byteEqual && idle)
+
+            // PLAN B (Task 8): the comparison is a THIRD conjunct, evaluated
+            // HERE -- inside the loop -- and not after it. Settle without a
+            // goal cannot detect "stably wrong"; a goal without settle
+            // flakes on tearing. They are two halves of one mechanism.
+            //
+            // FINDING 4 (Task 8 dispatch audit): io.compareRequested is
+            // false whenever --bless was given, REGARDLESS of whether a
+            // reference already exists -- see FrameIo::compareRequested's
+            // own comment for why blessing must disable this conjunct
+            // rather than gate on it. `matches` therefore stays its default
+            // `true` on any run that never asked for --compare, or that did
+            // ask but paired it with --bless, so this conjunct degrades to
+            // Plan A's `byteEqual && idle` exactly in both cases.
+            bool matches = true;
+            if (byteEqual && idle && io.compareRequested)
+            {
+                Arcane::PixelData actualPixels;
+                actualPixels.width  = w;
+                actualPixels.height = h;
+                actualPixels.rgba   = actual;
+                io.compareResult   = Arcane::CompareImages(io.referencePixels, actualPixels,
+                                                            io.compareOptions);
+                matches             = io.compareResult.passed;
+                io.compareEvaluated = true;
+            }
+
+            if (byteEqual && idle && matches)
             {
                 io.settleConverged = true;
                 ARC_INFO("--settle: CONVERGED after {} attempt(s) -- frame {} matches frame {} "
@@ -786,6 +813,20 @@ bool CaptureTail(FrameIo& io)
                 io.captureRgba   = std::move(actual);
                 io.captureRead   = true;
                 return true;   // converged -- stop the loop
+            }
+
+            if (byteEqual && idle && !matches)
+            {
+                // Stable, quiescent, and WRONG. Do NOT fail fast here: on a
+                // platform where ShaderCompiler::IsIdle()'s non-_WIN32 stub
+                // returns true unconditionally, `idle` is vacuous and the
+                // reference goal is the ONLY signal left that can separate
+                // "still loading" from "genuinely wrong" -- so spending the
+                // remaining attempts is what keeps that platform honest. The
+                // attempt budget below still bounds how long this can spin.
+                ARC_WARN("--compare attempt {}/{}: converged pixels do not match reference "
+                         "'{}' -- {}", io.settleAttemptsUsed, io.config.settleAttempts,
+                         io.config.compareReference, io.compareResult.errorMessage);
             }
 
             if (byteEqual && !idle)

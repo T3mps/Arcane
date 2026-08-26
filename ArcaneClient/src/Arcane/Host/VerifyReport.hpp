@@ -223,6 +223,53 @@ namespace Arcane
                      std::string entityName, std::string entityGuid,
                      std::uint32_t surfaceWidth = 0, std::uint32_t surfaceHeight = 0);
 
+        // The --compare verdict (Task 8). Emitted as a `compare` object ONLY
+        // when this was actually called -- a run without --compare emits NO
+        // such key, so an agent can distinguish "not asked" from "asked and
+        // passed" (the same absence-must-be-absence contract SetCapture's
+        // m_captureSet already upholds for probes). RuntimeApp::
+        // ShutdownGraphPath is the one real caller, on every run that named
+        // --compare -- converged-and-matched, converged-and-mismatched,
+        // budget-exhausted, blessed, or resolution-missing all funnel
+        // through this same call with different arguments, rather than each
+        // growing its own reporting path.
+        //
+        //   reference      -- the bare --compare name, echoed back.
+        //   resolvedLevel  -- "none" | "shared" | "backend", mirroring
+        //                     Arcane::ReferenceLevel. "none" means no
+        //                     reference existed (or, on a first --bless,
+        //                     existed only after this run wrote it) -- NEVER
+        //                     conflate this with a zero-difference pass; see
+        //                     the missing-reference test case below.
+        //   referencePath  -- the file this run actually compared against
+        //                     (or blessed to), empty iff resolvedLevel is
+        //                     "none" and nothing was blessed either.
+        //   passed         -- true iff the comparison passed, OR a bless
+        //                     wrote the reference this run (the reference
+        //                     now IS the capture, by construction) -- never
+        //                     true merely because nothing was compared.
+        //   diffCount/diffRatio/maxDiffPixels/sizesMismatch -- lifted
+        //                     verbatim from Arcane::ImageCompareResult
+        //                     (CompareImages, Task 5); zero/false on a
+        //                     bless or a missing-reference run, where no
+        //                     comparison ever ran.
+        //   diffPath       -- the diff artifact's path, written only on a
+        //                     genuine mismatch; empty on a pass, a bless, or
+        //                     a missing reference -- never absent, so an
+        //                     agent can tell "no diff was needed" from
+        //                     "SetCompare was never called" (the same
+        //                     empty-not-absent contract diffPath's own test
+        //                     case pins).
+        //   errorMessage   -- human-readable context: CompareImages' own
+        //                     message on a mismatch, or this component's
+        //                     own wording for a missing reference / an
+        //                     unconverged run; empty on a pass or a bless.
+        void SetCompare(std::string reference, std::string resolvedLevel,
+                        std::string referencePath, bool passed,
+                        std::uint64_t diffCount, double diffRatio,
+                        std::uint64_t maxDiffPixels, bool sizesMismatch,
+                        std::string diffPath, std::string errorMessage);
+
         // Evaluates every spec against whatever SetCapture/AddCensus/SetPick were
         // given before this call, and appends one JSON entry per spec.
         // Callable more than once (specs accumulate) -- there is no reset,
@@ -274,6 +321,21 @@ namespace Arcane
         bool          m_pickResolved   = false;
         std::string   m_pickEntityName;
         std::string   m_pickEntityGuid;
+
+        // The --compare verdict (Task 8) -- see SetCompare's own comment for
+        // what each field means and why m_compareSet gates emission the same
+        // way m_captureSet/m_pickSet already gate theirs.
+        bool          m_compareSet            = false;
+        std::string   m_compareReference;
+        std::string   m_compareResolvedLevel;
+        std::string   m_compareReferencePath;
+        bool          m_comparePassed         = false;
+        std::uint64_t m_compareDiffCount      = 0;
+        double        m_compareDiffRatio      = 0.0;
+        std::uint64_t m_compareMaxDiffPixels  = 0;
+        bool          m_compareSizesMismatch  = false;
+        std::string   m_compareDiffPath;
+        std::string   m_compareErrorMessage;
 
         // Already-evaluated probe entries, in Evaluate() call order.
         nlohmann::json m_probes = nlohmann::json::array();

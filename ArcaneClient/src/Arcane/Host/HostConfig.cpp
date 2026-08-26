@@ -1,6 +1,7 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Cli/Cli.hpp>
 #include <Arcane/Host/VerifyReport.hpp>   // Arcane::ParseProbe -- reused for the --probe parse-time refusal below
+#include <Arcane/Host/ReferenceImages.hpp>   // Arcane::ReferenceNameIsSafe -- reused for --compare's parse-time refusal (Task 8, Finding 2)
 #include <cstdio>
 namespace Arcane
 {
@@ -26,6 +27,19 @@ namespace Arcane
                                          "frames compare byte-equal AND the shader compiler is idle, "
                                          "up to N attempts (0 = off, 1 is refused -- needs >= 2; "
                                          "--offscreen only; needs --screenshot or --report)").Type(CliType::Uint);
+        // --compare / --bless (Task 8). Registered beside --settle: the
+        // comparison is a THIRD conjunct in that same convergence predicate,
+        // not a separate mode -- see HostConfig.hpp's compareReference comment.
+        cli.Option("compare", "",        "compare the converged capture against reference image "
+                                         "<name>, resolved from <project>/Verify/References "
+                                         "(--offscreen + --settle only)");
+        cli.Flag  ("bless",              "accept the converged capture AS the reference "
+                                         "--compare names, writing to the level it resolved "
+                                         "from; exits 0 (--compare only)");
+        cli.Option("max-diff-pixels", "", "differing-pixel budget (default 0)").Type(CliType::Uint);
+        cli.Option("max-diff-pixel-ratio", "", "differing-pixel budget as a fraction of the "
+                                         "reference's area; when both budgets are given the "
+                                         "SMALLER wins").Type(CliType::Double);
         // NOT Dist-guarded: the NRI frame graph is the ONLY render path in
         // every configuration, so the flag that used to select it has nothing
         // left to select. Kept registered and parsed-and-ignored rather than
@@ -93,6 +107,20 @@ namespace Arcane
             }
         }
         cfg.settleAttempts = r.GetAs<std::uint64_t>("settle");
+        // --compare / --bless (Task 8). maxDiffPixels/maxDiffPixelRatio stay
+        // nullopt unless EXPLICITLY supplied -- r.GetAs<>() on an unsupplied
+        // Option resolves its registered default ("", which GetAs would
+        // parse as 0/0.0), and "the caller asked for a budget of exactly
+        // zero" is a different fact from "the caller never mentioned a
+        // budget at all" (CompareImages' own ImageCompareOptions documents
+        // the same "unset = zero" default, but HostConfig must not collapse
+        // "unset" into "explicitly zero" before it ever reaches there).
+        cfg.compareReference = r.Get("compare");
+        cfg.bless            = r.Flag("bless");
+        if (r.Supplied("max-diff-pixels"))
+            cfg.maxDiffPixels = r.GetAs<std::uint64_t>("max-diff-pixels");
+        if (r.Supplied("max-diff-pixel-ratio"))
+            cfg.maxDiffPixelRatio = r.GetAs<double>("max-diff-pixel-ratio");
         // "nri-graph" is intentionally never read here: it is registered
         // above (unconditionally) purely so a command line that still passes
         // it does not fail to parse. There is nothing left to store -- the
@@ -121,10 +149,12 @@ namespace Arcane
         // all if we compare strings. r.Supplied("fixed-dt") answers the actual
         // question: did the command line contain this option.
         const bool wantsOffscreenOnly = !cfg.probes.empty() || !cfg.reportPath.empty()
-                                      || r.Supplied("fixed-dt") || r.Supplied("settle");
+                                      || r.Supplied("fixed-dt") || r.Supplied("settle")
+                                      || r.Supplied("compare");
         if (wantsOffscreenOnly && !cfg.offscreen)
         {
-            std::fprintf(stderr, "error: --fixed-dt/--probe/--report/--settle require --offscreen\n");
+            std::fprintf(stderr, "error: --fixed-dt/--probe/--report/--settle/--compare require "
+                                 "--offscreen\n");
             return { std::nullopt, 2 };
         }
         if (!cfg.probes.empty() && cfg.maxFrames == 0)
@@ -171,6 +201,61 @@ namespace Arcane
             std::fprintf(stderr, "error: --settle requires --screenshot or --report (it compares "
                                  "captured frames; with neither, there is nowhere to land the "
                                  "result and the run would never know when to stop)\n");
+            return { std::nullopt, 2 };
+        }
+        // --compare / --bless (Task 8).
+        //
+        // Finding 1 (dispatch audit): every refusal below tests
+        // cfg.compareReference.empty() as the "not supplied" sentinel, which
+        // conflates "not supplied" with "supplied empty" -- the same
+        // r.Supplied() idiom --settle already needs one screen up, because
+        // "" also happens to be the registered default. Without this check,
+        // `--compare ""` would parse clean and silently disable the whole
+        // comparison -- exactly the Rule-3 silent inertness this file
+        // refuses everywhere else.
+        if (r.Supplied("compare") && cfg.compareReference.empty())
+        {
+            std::fprintf(stderr, "error: --compare wants a reference name (an empty value means "
+                                 "\"off\", which is what omitting the flag already means)\n");
+            return { std::nullopt, 2 };
+        }
+        // Finding 2: an unsafe name is refused HERE, at PARSE time, with its
+        // own message -- not deferred to ResolveReference. Deferring it
+        // would have the run reach RuntimeApp's resolve-before-the-loop
+        // step, get back ReferenceLevel::None (ResolveReference refuses an
+        // unsafe name the exact same way it reports a genuinely absent
+        // file), and exit "compare-missing-reference" -- which is a LIE: the
+        // name was refused, not missing, and those are two different bugs
+        // for an agent to chase. Reuses ReferenceImages' own predicate
+        // (Arcane::ReferenceNameIsSafe) rather than a second copy of the
+        // same five checks -- see that function's header comment for why.
+        if (!cfg.compareReference.empty() && !Arcane::ReferenceNameIsSafe(cfg.compareReference))
+        {
+            std::fprintf(stderr, "error: --compare '%s' is not a safe reference name (no '/', "
+                                 "'\\', \"..\", or a leading '.' -- it is resolved into a file path "
+                                 "under the project)\n", cfg.compareReference.c_str());
+            return { std::nullopt, 2 };
+        }
+        // --compare needs a CONVERGED frame to be a verdict rather than a
+        // frame number, so it requires --settle, which itself already requires
+        // --offscreen and --screenshot/--report.
+        if (!cfg.compareReference.empty() && cfg.settleAttempts == 0)
+        {
+            std::fprintf(stderr, "error: --compare requires --settle (comparing an unconverged "
+                                 "frame reports which frame you got, not whether it is right)\n");
+            return { std::nullopt, 2 };
+        }
+        // Rule 3: no silently inert flags.
+        if (cfg.bless && cfg.compareReference.empty())
+        {
+            std::fprintf(stderr, "error: --bless has nothing to bless (--compare was not given)\n");
+            return { std::nullopt, 2 };
+        }
+        if ((r.Supplied("max-diff-pixels") || r.Supplied("max-diff-pixel-ratio"))
+            && cfg.compareReference.empty())
+        {
+            std::fprintf(stderr, "error: --max-diff-pixels/--max-diff-pixel-ratio require "
+                                 "--compare\n");
             return { std::nullopt, 2 };
         }
         // AN OPEN-ENDED OFFSCREEN RUN CANNOT BE STOPPED, and that is a

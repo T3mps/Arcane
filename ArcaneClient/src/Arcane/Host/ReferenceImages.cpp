@@ -7,36 +7,36 @@ namespace fs = std::filesystem;
 
 namespace Arcane
 {
-    namespace
+    // A reference name is a NAME, not a path. Refuse anything that could walk
+    // out of the project -- this string comes from a command line and
+    // BlessReference/DiffArtifactPath both turn it into a file path. Applied
+    // to both `name` and `backend` everywhere in this file: DiffArtifactPath
+    // builds a path from both, exactly as ResolveReference does, and both
+    // strings arrive from the same command-line surface (Task 8 reads
+    // `backend` from the host, not a literal).
+    //
+    // EXPORTED (Task 8, moved out of this file's anonymous namespace): see
+    // the header's own comment on why HostConfig.cpp shares this exact
+    // function rather than a second copy of the same five checks.
+    bool ReferenceNameIsSafe(const std::string& name) noexcept
     {
-        // A reference name is a NAME, not a path. Refuse anything that could
-        // walk out of the project -- this string comes from a command line and
-        // BlessReference/DiffArtifactPath both turn it into a file path.
-        // Applied to both `name` and `backend` everywhere in this file:
-        // DiffArtifactPath builds a path from both, exactly as
-        // ResolveReference does, and both strings arrive from the same
-        // command-line surface (Task 8 reads `backend` from the host, not a
-        // literal).
-        [[nodiscard]] bool NameIsSafe(const std::string& name) noexcept
-        {
-            // ORDER MATTERS: this empty check must run FIRST. name.front()
-            // below is undefined behaviour on an empty string, and it is
-            // this early return -- not luck -- that makes it safe. Reordering
-            // these five lines would trade a wrong answer for UB.
-            if (name.empty()) return false;
-            if (name.find('/') != std::string::npos)  return false;
-            if (name.find('\\') != std::string::npos) return false;
-            if (name.find("..") != std::string::npos) return false;
-            if (name.front() == '.') return false;
-            return true;
-        }
+        // ORDER MATTERS: this empty check must run FIRST. name.front()
+        // below is undefined behaviour on an empty string, and it is
+        // this early return -- not luck -- that makes it safe. Reordering
+        // these five lines would trade a wrong answer for UB.
+        if (name.empty()) return false;
+        if (name.find('/') != std::string::npos)  return false;
+        if (name.find('\\') != std::string::npos) return false;
+        if (name.find("..") != std::string::npos) return false;
+        if (name.front() == '.') return false;
+        return true;
     }
 
     ReferenceResolution ResolveReference(const fs::path& projectRoot,
                                          const std::string& name, const std::string& backend)
     {
         ReferenceResolution out;
-        if (!NameIsSafe(name) || !NameIsSafe(backend))
+        if (!ReferenceNameIsSafe(name) || !ReferenceNameIsSafe(backend))
             return out;   // level None, blessTarget empty -- refused
 
         const fs::path root   = projectRoot / "Verify" / "References";
@@ -92,7 +92,7 @@ namespace Arcane
         // hole this fixes) let a hostile `name` or `backend` escape the
         // project on write, with no exists-check to catch it the way
         // ResolveReference's fs::exists incidentally would.
-        if (!NameIsSafe(name) || !NameIsSafe(backend))
+        if (!ReferenceNameIsSafe(name) || !ReferenceNameIsSafe(backend))
             return fs::path{};   // refused: nowhere safe to write
 
         return projectRoot / "Saved" / "Verify" / (name + "-" + backend + "-diff.png");

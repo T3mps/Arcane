@@ -24,6 +24,21 @@
 
 namespace Arcane
 {
+    // Whether `name` is a safe reference NAME rather than something that
+    // could walk out of the project when turned into a file path: non-empty,
+    // no '/' or '\', no ".." substring, no leading '.'. ResolveReference and
+    // DiffArtifactPath both apply this to `name` AND `backend` below.
+    //
+    // EXPORTED (Task 8) so HostConfig's own --compare parse-time refusal can
+    // share this exact rule rather than duplicating it -- a name HostConfig
+    // accepted that this file went on to refuse would misreport a rejected
+    // name as "no reference on disk" (ResolveReference's refusal and "the
+    // file genuinely does not exist" both resolve to ReferenceLevel::None),
+    // and a second, independently-drifting copy of this predicate is exactly
+    // how the two validators would end up disagreeing about what "unsafe"
+    // means.
+    [[nodiscard]] ARCANE_API bool ReferenceNameIsSafe(const std::string& name) noexcept;
+
     enum class ReferenceLevel : std::uint8_t
     {
         None,      // nothing on disk for this name

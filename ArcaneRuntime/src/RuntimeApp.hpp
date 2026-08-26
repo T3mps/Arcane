@@ -8,8 +8,10 @@
 #include <memory>
 #include <optional>
 #include <vector>
+#include <Arcane/Assets/ImageCompare.hpp>   // --compare (Task 8): PixelData/ImageCompareResult
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/GpuContext.hpp>
+#include <Arcane/Host/ReferenceImages.hpp>  // --compare/--bless (Task 8): ReferenceResolution
 #include <Arcane/Host/OffscreenVehicle.hpp>   // --offscreen's vehicle: device + NRI wrap + offscreen graph context, no window, no swapchain
 #include <Arcane/Host/FramePerf.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
@@ -211,6 +213,35 @@ private:
     // exists to prevent.
     std::uint64_t                         m_settleAttemptsUsed   = 0;
     bool                                  m_settleConverged      = false;
+
+    // --compare / --bless (Task 8). Resolved ONCE, before the settle loop
+    // starts (Finding 3 of the Task 8 dispatch audit -- see MainLoop's own
+    // comment at the resolve site). Default-constructed (level None, both
+    // paths empty) on a run that never asked for --compare at all, which
+    // ShutdownGraphPath must never mistake for "the reference was looked
+    // for and not found".
+    Arcane::ReferenceResolution           m_compareResolution;
+    // The reference pixels the settle loop's compare conjunct reads,
+    // loaded ONCE from m_compareResolution.path. Left default/invalid
+    // whenever --compare was not given, or --bless disables the conjunct
+    // entirely (Finding 4 -- see FrameIo::compareRequested's comment): a
+    // bless run never loads or reads this.
+    Arcane::PixelData                     m_referencePixels;
+    // The MOST RECENT CompareImages() verdict -- see FrameIo::compareResult's
+    // own comment for why "most recent" is exactly what ShutdownGraphPath
+    // should report.
+    Arcane::ImageCompareResult            m_compareResult;
+    // Whether m_compareResult was ever actually written by a real
+    // CompareImages() call this run -- see FrameIo::compareEvaluated.
+    bool                                  m_compareEvaluated     = false;
+    // Finding 3: set true ONLY by MainLoop's pre-loop resolution, when
+    // --compare named a reference that does not exist on disk (or exists
+    // but failed to decode) and --bless was not given -- the fail-fast
+    // path. ShutdownGraphPath reads this to report exitReason
+    // "compare-missing-reference" rather than falling through the ordinary
+    // settle/frames-complete classification, which would misreport a
+    // refused/absent name as "the run simply never converged".
+    bool                                  m_compareMissingFatal  = false;
 
 #if !defined(ARCANE_DIST)
     // --crash-gpu N (GPU crash diagnostics arc, Task 11): the desk battery's

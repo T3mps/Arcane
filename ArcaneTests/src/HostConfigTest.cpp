@@ -453,3 +453,104 @@ TEST_CASE("hostconfig: --offscreen without --frames is refused", "[hostconfig]")
     CHECK(windowed.config->maxFrames == 0);
     CHECK_FALSE(windowed.config->offscreen);
 }
+
+// ---- Task 8: --compare / --bless -----------------------------------------
+
+TEST_CASE("host: --compare requires --offscreen and --settle", "[host]")
+{
+    // A comparison against an unconverged frame is a frame number, not a
+    // verdict -- the same reasoning that already gates --settle behind
+    // --screenshot/--report.
+    {
+        const char* argv[] = { "ArcaneRuntime", "--compare", "runtime-scene" };
+        CHECK_FALSE(Arcane::HostConfig::Parse(3, const_cast<char**>(argv)).config.has_value());
+    }
+    {
+        const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+                               "--compare", "runtime-scene" };
+        CHECK_FALSE(Arcane::HostConfig::Parse(6, const_cast<char**>(argv)).config.has_value());
+    }
+    {
+        const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+                               "--settle", "30", "--report", "r.json",
+                               "--compare", "runtime-scene" };
+        const auto outcome = Arcane::HostConfig::Parse(10, const_cast<char**>(argv));
+        REQUIRE(outcome.config.has_value());
+        CHECK(outcome.config->compareReference == "runtime-scene");
+    }
+}
+
+TEST_CASE("host: --bless without --compare is refused, not ignored", "[host]")
+{
+    // Rule 3, silent inertness: a flag that does nothing must say so.
+    const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+                           "--settle", "30", "--report", "r.json", "--bless" };
+    CHECK_FALSE(Arcane::HostConfig::Parse(9, const_cast<char**>(argv)).config.has_value());
+}
+
+// Finding 1 (Task 8 dispatch audit): every refusal above tests
+// cfg.compareReference.empty() as the sentinel for "not supplied", which
+// conflates "not supplied" with "supplied empty". `--compare ""` must be its
+// OWN refusal, not a silent, wordless disabling of the comparison -- Rule 3,
+// the same treatment an explicit `--settle 0` already gets one screen up in
+// HostConfig.cpp.
+TEST_CASE("host: --compare with an explicit empty value is refused, not silently disabled", "[host]")
+{
+    const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+                           "--settle", "30", "--report", "r.json",
+                           "--compare", "" };
+    CHECK_FALSE(Arcane::HostConfig::Parse(10, const_cast<char**>(argv)).config.has_value());
+}
+
+// Finding 2: an unsafe reference name must be refused HERE, at PARSE time,
+// with its own message -- deferring to ResolveReference's own refusal would
+// have the run exit "compare-missing-reference", which is a LIE: the name
+// was refused, not missing. Uses the exact traversal name
+// ReferenceImagesTest.cpp's own "refused, not resolved" case already pins.
+TEST_CASE("host: --compare refuses an unsafe reference name at parse time", "[host]")
+{
+    const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+                           "--settle", "30", "--report", "r.json",
+                           "--compare", "../evil" };
+    CHECK_FALSE(Arcane::HostConfig::Parse(10, const_cast<char**>(argv)).config.has_value());
+}
+
+TEST_CASE("host: --max-diff-pixels/--max-diff-pixel-ratio require --compare", "[host]")
+{
+    const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+                           "--settle", "30", "--report", "r.json",
+                           "--max-diff-pixels", "5" };
+    CHECK_FALSE(Arcane::HostConfig::Parse(9, const_cast<char**>(argv)).config.has_value());
+
+    const char* argv2[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+                            "--settle", "30", "--report", "r.json",
+                            "--max-diff-pixel-ratio", "0.01" };
+    CHECK_FALSE(Arcane::HostConfig::Parse(9, const_cast<char**>(argv2)).config.has_value());
+}
+
+TEST_CASE("host: --compare/--bless/--max-diff-pixels/--max-diff-pixel-ratio round-trip", "[host]")
+{
+    const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+                           "--settle", "30", "--report", "r.json",
+                           "--compare", "runtime-scene", "--bless",
+                           "--max-diff-pixels", "5", "--max-diff-pixel-ratio", "0.001" };
+    const auto outcome = Arcane::HostConfig::Parse(15, const_cast<char**>(argv));
+    REQUIRE(outcome.config.has_value());
+    CHECK(outcome.config->compareReference == "runtime-scene");
+    CHECK(outcome.config->bless);
+    REQUIRE(outcome.config->maxDiffPixels.has_value());
+    CHECK(*outcome.config->maxDiffPixels == 5u);
+    REQUIRE(outcome.config->maxDiffPixelRatio.has_value());
+    CHECK(*outcome.config->maxDiffPixelRatio == Catch::Approx(0.001));
+}
+
+TEST_CASE("host: --compare/--bless default off, maxDiff budgets default unset", "[host]")
+{
+    const char* argv[] = { "ArcaneRuntime" };
+    const auto o = Arcane::HostConfig::Parse(1, const_cast<char**>(argv));
+    REQUIRE(o.config.has_value());
+    CHECK(o.config->compareReference.empty());
+    CHECK_FALSE(o.config->bless);
+    CHECK_FALSE(o.config->maxDiffPixels.has_value());
+    CHECK_FALSE(o.config->maxDiffPixelRatio.has_value());
+}

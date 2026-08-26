@@ -9,7 +9,9 @@
 
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Host/VerifyReport.hpp>  // Arcane::VerifyReport/ProbeSpec/ParseProbe (Task 8: --report wiring, ShutdownGraphPath)
+#include <Arcane/Host/ReferenceImages.hpp>  // Arcane::ResolveReference/BlessReference/DiffArtifactPath (Task 8: --compare/--bless)
 #include <Arcane/Assets/Assets.hpp>      // Arcane::Assets (AssetsFacade().PixelsFor -- the pre-loop SetPixelSupply lambda)
+#include <Arcane/Assets/ImageCompare.hpp>   // Arcane::CompareImages/ImageCompareOptions (Task 8: --compare)
 #include <Arcane/Base/Assert.hpp>        // ARC_ASSERT (ShutdownGraphPath's offscreen-guaranteed invariant, Fix 3)
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat/SetPhase (pre-loop phase markers)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
@@ -43,6 +45,26 @@
 #include <thread>
 #include <vector>
 
+
+namespace
+{
+    // --compare / --bless (Task 8). The CLI's own spelling for the backend
+    // axis ("dx12"/"vulkan" -- HostConfig.cpp's --backend Choices()), which
+    // is ALSO the directory name ResolveReference/DiffArtifactPath
+    // (ReferenceImages.cpp) key their Backend level on -- ReferenceImagesTest
+    // .cpp's own fixtures use exactly these two strings. Deliberately NOT
+    // Arcane::ToString(backend), which returns "D3D12"/"Vulkan": that
+    // capitalised spelling is what the report's top-level "backend" field
+    // and the host's own boot banner use. The two strings serve different
+    // audiences -- this one is a FILE PATH COMPONENT that has to match the
+    // shipped ReferenceProject fixtures byte-for-byte, that one is a
+    // human-facing log/report label -- and conflating them would silently
+    // resolve every --compare against the wrong directory.
+    const char* CompareBackendName(Arcane::GraphicsBackend backend)
+    {
+        return backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12";
+    }
+}
 
 RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
     : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash),
@@ -520,6 +542,76 @@ void RuntimeApp::MainLoop()
             return rt ? rt->AssetsFacade().PixelsFor(id) : nullptr;
         });
 
+    // --compare / --bless (Task 8, FINDING 3 of the dispatch audit):
+    // resolve the reference BEFORE the settle loop starts, so a reference
+    // that does not exist fails FAST -- rather than entering the loop with
+    // an invalid m_referencePixels, which would make CompareImages report
+    // "could not compare" on every one of up to --settle N attempts, never
+    // converge, spam N WARNs, and arrive at the same verdict N attempts
+    // later than it had to. The vehicle already exists by this point (the
+    // if/else above), so ShutdownGraphPath()'s `if (!graph) return;` guard
+    // does not swallow the report this fail-fast path still owes.
+    Arcane::ImageCompareOptions compareOptions;
+    compareOptions.maxDiffPixels     = m_config.maxDiffPixels;
+    compareOptions.maxDiffPixelRatio = m_config.maxDiffPixelRatio;
+
+    if (!m_config.compareReference.empty())
+    {
+        const std::filesystem::path projectRoot =
+            (m_runtime && m_runtime->CurrentProject()) ? m_runtime->CurrentProject()->Root()
+                                                        : std::filesystem::path{};
+        const char* const backendName = CompareBackendName(m_config.backend);
+        m_compareResolution = Arcane::ResolveReference(projectRoot, m_config.compareReference,
+                                                        backendName);
+
+        if (m_compareResolution.level == Arcane::ReferenceLevel::None)
+        {
+            if (!m_config.bless)
+            {
+                // Fail fast: a reference that does not exist will not start
+                // existing after N wasted settle attempts, and this is the
+                // same treatment a parse-time refusal already gets for a
+                // comparably "this can never work" shape.
+                ARC_ERROR("--compare '{}': no reference image on disk for backend '{}' -- "
+                          "re-run with --bless to create one",
+                          m_config.compareReference, backendName);
+                m_compareMissingFatal = true;
+                m_graphExit = 4;
+                ShutdownGraphPath();
+                return;
+            }
+            // else: --bless is present -- the normal FIRST bless. Fall
+            // through with compareRequested false below (Finding 4): there
+            // is nothing yet to compare against, and the conjunct would be
+            // disabled for the whole run regardless.
+        }
+        else if (!m_config.bless)
+        {
+            // A real reference exists and this run is not overwriting it --
+            // load it for the settle loop's compare conjunct.
+            if (!Arcane::LoadPngRgba(m_compareResolution.path, m_referencePixels.width,
+                                      m_referencePixels.height, m_referencePixels.rgba) ||
+                !m_referencePixels.Valid())
+            {
+                ARC_ERROR("--compare '{}': reference '{}' exists but could not be decoded -- "
+                          "treating it as missing (re-run with --bless to replace it)",
+                          m_config.compareReference, m_compareResolution.path.string());
+                m_compareMissingFatal = true;
+                m_graphExit = 4;
+                ShutdownGraphPath();
+                return;
+            }
+        }
+        // else: a reference exists but --bless will overwrite it -- also
+        // nothing to load; compareRequested stays false either way (Finding 4).
+    }
+
+    // Finding 4: disabled outright whenever --bless is set, regardless of
+    // whether m_compareResolution actually found anything -- see
+    // FrameIo::compareRequested's own comment for why blessing must not
+    // also gate convergence.
+    const bool compareRequested = !m_config.compareReference.empty() && !m_config.bless;
+
     // Boot is over; anything the watchdog reports from here on belongs to the
     // frame loop, not to a stale boot stage.
     Arcane::Diagnostics::SetPhase("runtime frame loop");
@@ -566,6 +658,16 @@ void RuntimeApp::MainLoop()
         // -- CaptureTail reads its IsIdle() to conjoin quiescence into
         // convergence, never a second compiler.
         .compiler              = m_shaderCompiler,
+        // --compare / --bless (Task 8) -- see FrameIo's own field comments.
+        // compareRequested/compareOptions are MainLoop locals (computed
+        // just above, before this struct); referencePixels/compareResult/
+        // compareEvaluated are RuntimeApp members so ShutdownGraphPath can
+        // read them once the loop has ended.
+        .compareRequested      = compareRequested,
+        .referencePixels       = m_referencePixels,
+        .compareOptions        = compareOptions,
+        .compareResult         = m_compareResult,
+        .compareEvaluated      = m_compareEvaluated,
 #if !defined(ARCANE_DIST)
         .gpuFaultFired   = m_gpuFaultFired,
 #endif
@@ -904,6 +1006,40 @@ void RuntimeApp::ShutdownGraphPath()
     if (settleFailed && m_graphExit == 0)
         m_graphExit = 3;
 
+    // --compare / --bless (Task 8). NOT nested inside the `--report` block
+    // below: --settle only requires --screenshot OR --report (HostConfig.cpp),
+    // so a run can legally pair --compare/--bless with --screenshot and no
+    // --report at all -- the PNG this writes must land regardless of whether
+    // a JSON report was ever asked for.
+    //
+    // FINDING 4 (Task 8 dispatch audit): a --bless run's settle loop
+    // converges on byteEqual && idle ALONE -- the compare conjunct is
+    // disabled for the whole run (FrameIo::compareRequested) -- so
+    // m_captureRead here means exactly "the settle loop converged", and
+    // THIS is where that converged capture actually becomes the new
+    // reference. Never attempted when settleFailed (nothing converged to
+    // bless) or when --bless was not given at all.
+    bool compareBlessed     = false;
+    bool compareWriteFailed = false;
+    if (m_config.bless && !m_config.compareReference.empty() && m_captureRead)
+    {
+        if (Arcane::BlessReference(m_compareResolution, m_captureWidth, m_captureHeight,
+                                   m_captureRgba.data()))
+        {
+            compareBlessed = true;
+            ARC_INFO("--bless: wrote reference '{}' ({}x{}) -> {}", m_config.compareReference,
+                     m_captureWidth, m_captureHeight, m_compareResolution.blessTarget.string());
+        }
+        else
+        {
+            compareWriteFailed = true;
+            ARC_ERROR("--bless: failed to write reference to {}",
+                      m_compareResolution.blessTarget.string());
+            if (m_graphExit == 0)
+                m_graphExit = 4;
+        }
+    }
+
     // THE REPORT (Task 8), written LAST in this function so exitReason below
     // can read the FINAL m_graphExit -- including the fold just above, which
     // only settles after the vehicle is gone. WriteTo never touches
@@ -938,6 +1074,14 @@ void RuntimeApp::ShutdownGraphPath()
             exitReason = "render-failed";
         else if (m_graphExit == 2)
             exitReason = "validation-errors";
+        // --compare / --bless (Task 8): checked BEFORE settleFailed below.
+        // m_compareMissingFatal's fail-fast path also leaves settleAttempts
+        // != 0 and m_settleConverged false (the loop never ran at all), so
+        // settleFailed reads true there too -- this branch has to win, or a
+        // refused/absent reference would misreport as "the run simply never
+        // converged" instead of naming --bless as the fix.
+        else if (m_compareMissingFatal)
+            exitReason = "compare-missing-reference";
         // --settle N (Task 10): checked BEFORE completedAllFrames below --
         // a non-converged settle run has m_frameCount >= m_config.maxFrames
         // by construction (settle-hold frames only ever run AFTER the base
@@ -947,7 +1091,22 @@ void RuntimeApp::ShutdownGraphPath()
         // "hands back an unconverged frame without admitting it" failure
         // mode the plan calls out by name.
         else if (settleFailed)
-            exitReason = "settle-not-converged";
+        {
+            // Task 8: settleFailed alone now conflates two different
+            // causes, now that the convergence predicate has grown a third
+            // conjunct -- "the pixels never stabilised/finished loading"
+            // and "they stabilised, but did not match the reference" both
+            // leave m_settleConverged false. m_compareEvaluated only ever
+            // latches true from an ACTUAL CompareImages() call, which
+            // Finding 4 means can never happen on a --bless run (the
+            // conjunct is disabled there entirely) -- so this can only ever
+            // read "compare-failed" when --bless was NOT given.
+            exitReason = m_compareEvaluated ? "compare-failed" : "settle-not-converged";
+        }
+        else if (compareBlessed)
+            exitReason = "compare-blessed";
+        else if (compareWriteFailed)
+            exitReason = "compare-failed";
         else if (!completedAllFrames)
             exitReason = "stopped-early";
 
@@ -993,6 +1152,103 @@ void RuntimeApp::ShutdownGraphPath()
                             pickResolution->hitProxyId, pickResolution->resolved,
                             pickResolution->entityName, pickResolution->entityGuid,
                             pickResolution->surfaceWidth, pickResolution->surfaceHeight);
+        }
+
+        // The --compare verdict (Task 8). Emitted ONLY when a comparison
+        // was actually requested, so an agent can tell "not asked" from
+        // "asked and passed" -- VerifyReport::SetCompare's own contract.
+        // Every --compare outcome (converged-and-matched, converged-and-
+        // mismatched, budget-exhausted, blessed, missing-reference) funnels
+        // through this ONE call with different arguments, rather than each
+        // growing its own reporting path.
+        if (!m_config.compareReference.empty())
+        {
+            const char* const backendName = CompareBackendName(m_config.backend);
+            const std::filesystem::path projectRoot =
+                (m_runtime && m_runtime->CurrentProject()) ? m_runtime->CurrentProject()->Root()
+                                                            : std::filesystem::path{};
+
+            const auto levelName = [](Arcane::ReferenceLevel level) -> std::string
+            {
+                switch (level)
+                {
+                    case Arcane::ReferenceLevel::Shared:  return "shared";
+                    case Arcane::ReferenceLevel::Backend: return "backend";
+                    default:                               return "none";
+                }
+            };
+
+            std::string   resolvedLevel = levelName(m_compareResolution.level);
+            std::string   referencePath = m_compareResolution.path.string();
+            bool          passed            = false;
+            std::uint64_t diffCount         = 0;
+            double        diffRatio         = 0.0;
+            std::uint64_t maxDiffPixelsUsed = 0;
+            bool          sizesMismatch     = false;
+            std::string   diffPath;
+            std::string   errorMessage;
+
+            if (m_compareMissingFatal)
+            {
+                errorMessage = "no reference image on disk; re-run with --bless to create one";
+            }
+            else if (compareBlessed)
+            {
+                // m_compareResolution was captured BEFORE the write
+                // (Finding 3), so its level is stale for a first bless (was
+                // None, is now Shared) -- re-resolve so the report
+                // describes where the reference actually ended up, not
+                // where it started. Cheap: an fs::exists check, nothing
+                // more.
+                const Arcane::ReferenceResolution after =
+                    Arcane::ResolveReference(projectRoot, m_config.compareReference, backendName);
+                resolvedLevel = levelName(after.level);
+                referencePath = after.path.string();
+                passed        = true;   // the reference now IS the capture, by construction
+            }
+            else if (compareWriteFailed)
+            {
+                errorMessage = "the settle loop converged, but writing the blessed reference to "
+                               "'" + m_compareResolution.blessTarget.string() + "' failed";
+            }
+            else if (m_compareEvaluated)
+            {
+                passed            = m_compareResult.passed;
+                diffCount         = m_compareResult.diffCount;
+                diffRatio         = m_compareResult.diffRatio;
+                maxDiffPixelsUsed = m_compareResult.maxDiffPixelsUsed;
+                sizesMismatch     = m_compareResult.sizesMismatch;
+                errorMessage      = m_compareResult.errorMessage;
+
+                if (!passed && !m_compareResult.diffRgba.empty())
+                {
+                    const std::filesystem::path artifact =
+                        Arcane::DiffArtifactPath(projectRoot, m_config.compareReference, backendName);
+                    if (!artifact.empty())
+                    {
+                        if (Arcane::WritePngRgba(artifact, m_compareResult.width,
+                                                  m_compareResult.height,
+                                                  m_compareResult.diffRgba.data()))
+                            diffPath = artifact.string();
+                        else
+                            ARC_ERROR("--compare: failed to write diff artifact to {}",
+                                      artifact.string());
+                    }
+                }
+            }
+            else
+            {
+                // --settle exhausted its budget without ever reaching
+                // byteEqual&&idle once -- the comparison never actually
+                // ran (settleFailed's own "settle-not-converged" exitReason
+                // above already explains why).
+                errorMessage = "the settle loop never reached a stable, idle frame, so no "
+                               "comparison ever ran";
+            }
+
+            report.SetCompare(m_config.compareReference, resolvedLevel, referencePath, passed,
+                               diffCount, diffRatio, maxDiffPixelsUsed, sizesMismatch, diffPath,
+                               errorMessage);
         }
 
         // Parse-then-evaluate, never silently drop a malformed --probe: an

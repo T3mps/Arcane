@@ -123,6 +123,35 @@ namespace Arcane
         // RuntimeApp.cpp's ShutdownGraphPath.
         std::uint64_t settleAttempts = 0;
 
+        // --compare <name>. A bare reference NAME, resolved through
+        // Arcane::ResolveReference against the project root. Empty = no
+        // comparison. Refused without --settle, refused on an explicit empty
+        // value, and refused on an unsafe name (a path separator, "..", or a
+        // leading '.') -- all three at parse time; see HostConfig.cpp.
+        //
+        // Wired into RuntimeFrame.cpp's settle loop as a THIRD convergence
+        // conjunct (byteEqual && idle && matchesReference) -- see that
+        // file's CaptureTail. --bless (below) DISABLES that conjunct for the
+        // whole run rather than gating on it: blessing exists to REPLACE the
+        // reference, so the stale one on disk must never also be the
+        // convergence goal, or an intentional visual change (or a first
+        // bless, with nothing yet on disk) could never converge at all.
+        std::string compareReference;
+
+        // --bless. Accept the converged capture as the reference --compare
+        // names, writing to the level ResolveReference's own resolution
+        // named (RuntimeApp::ShutdownGraphPath). Refused without --compare
+        // (Rule 3: no silently inert flags) -- see HostConfig.cpp.
+        bool bless = false;
+
+        // The two aggregate knobs CompareImages accepts, both unset by
+        // default -- which means a budget of ZERO differing pixels
+        // (Playwright's own default). When both are set the SMALLER budget
+        // wins (ImageCompareOptions' own contract). Refused without
+        // --compare, same as --bless.
+        std::optional<std::uint64_t> maxDiffPixels;
+        std::optional<double>        maxDiffPixelRatio;
+
         // Write the observation report to this JSON path. Empty = off.
         std::string     reportPath = "";
 

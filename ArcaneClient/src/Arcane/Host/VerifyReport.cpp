@@ -211,6 +211,25 @@ namespace Arcane
         m_pickEntityGuid   = std::move(entityGuid);
     }
 
+    void VerifyReport::SetCompare(std::string reference, std::string resolvedLevel,
+                                   std::string referencePath, bool passed,
+                                   std::uint64_t diffCount, double diffRatio,
+                                   std::uint64_t maxDiffPixels, bool sizesMismatch,
+                                   std::string diffPath, std::string errorMessage)
+    {
+        m_compareSet           = true;
+        m_compareReference     = std::move(reference);
+        m_compareResolvedLevel = std::move(resolvedLevel);
+        m_compareReferencePath = std::move(referencePath);
+        m_comparePassed        = passed;
+        m_compareDiffCount     = diffCount;
+        m_compareDiffRatio     = diffRatio;
+        m_compareMaxDiffPixels = maxDiffPixels;
+        m_compareSizesMismatch = sizesMismatch;
+        m_compareDiffPath      = std::move(diffPath);
+        m_compareErrorMessage  = std::move(errorMessage);
+    }
+
     void VerifyReport::Evaluate(const std::vector<ProbeSpec>& specs)
     {
         for (const auto& spec : specs)
@@ -482,7 +501,11 @@ namespace Arcane
     std::string VerifyReport::ToJson() const
     {
         nlohmann::json j;
-        j["schemaVersion"]   = 1;
+        // Bumped 1 -> 2 by Task 8: a NEW required-for-the-mode section
+        // (`compare`) is a contract change, not a silent addition -- this
+        // JSON is the boundary Servitor parses without linking the engine,
+        // and VerifyReportTest.cpp pins that it parses standalone.
+        j["schemaVersion"]   = 2;
         j["backend"]         = m_backend;
         // Always "offscreen" -- Fix 3 (final fix wave) removed the "windowed"
         // value from this contract: HostConfig::Parse refuses --report
@@ -505,6 +528,20 @@ namespace Arcane
                              { "postBound",        m_postBound },
                              { "meshReferenced",   m_meshReferenced },
                              { "meshBound",        m_meshBound } };
+        }
+
+        if (m_compareSet)
+        {
+            j["compare"] = { { "reference",     m_compareReference },
+                              { "resolvedLevel", m_compareResolvedLevel },
+                              { "referencePath", m_compareReferencePath },
+                              { "passed",        m_comparePassed },
+                              { "diffCount",     m_compareDiffCount },
+                              { "diffRatio",     m_compareDiffRatio },
+                              { "maxDiffPixels", m_compareMaxDiffPixels },
+                              { "sizesMismatch", m_compareSizesMismatch },
+                              { "diffPath",      m_compareDiffPath },
+                              { "errorMessage",  m_compareErrorMessage } };
         }
 
         j["probes"] = m_probes;

@@ -30,6 +30,7 @@
 // exactly one line -- the vehicle's RenderFrame/RenderFrameOffscreen pair
 // refuses each other's mode by design, so the frame driver has to pick.
 
+#include <Arcane/Assets/ImageCompare.hpp>            // --compare N (Task 8): PixelData/ImageCompareOptions/ImageCompareResult
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Host/FramePerf.hpp>
 #include <Arcane/Host/GpuContext.hpp>
@@ -176,6 +177,57 @@ namespace Arcane::RuntimeFrame
         // instance, so this reads the SAME pending/in-flight/undrained state
         // the resolver's own Refresh just drained from.
         Arcane::ShaderCompiler&     compiler;
+
+        // ---- --compare / --bless (Task 8) ------------------------------------
+        // Whether the settle loop's convergence predicate grows its THIRD
+        // conjunct THIS run -- true only when --compare was given AND
+        // --bless was NOT (RuntimeApp::MainLoop computes it once, before the
+        // loop starts, from HostConfig::compareReference/::bless). FINDING 4
+        // of the Task 8 dispatch audit: blessing exists to REPLACE the
+        // reference, so the OLD one on disk must never also gate
+        // convergence -- an intentional visual change could otherwise never
+        // converge (the fresh capture can never match the stale reference it
+        // is meant to replace), and a first bless could never converge
+        // either (there is nothing yet to compare against). A --bless run
+        // therefore converges on byteEqual && idle ALONE, exactly like a
+        // plain --settle run with no --compare at all -- see CaptureTail's
+        // own comment on the conjunct.
+        bool compareRequested;
+
+        // The reference pixels the compare conjunct reads, resolved and
+        // loaded ONCE before the loop starts (FINDING 3 of the dispatch
+        // audit: a missing reference cannot start existing after N wasted
+        // attempts, so RuntimeApp::MainLoop fails fast -- exitReason
+        // "compare-missing-reference" -- before ever reaching this loop,
+        // rather than deferring the discovery to here and spending the
+        // whole --settle budget spinning CompareImages against invalid
+        // pixels). Only ever READ when compareRequested is true -- a
+        // --bless run may leave this default/invalid, and that is fine,
+        // because nothing reads it (see compareRequested above).
+        const Arcane::PixelData& referencePixels;
+        // The two aggregate diff-pixel budgets (HostConfig::maxDiffPixels /
+        // ::maxDiffPixelRatio), already folded into one options struct --
+        // CompareImages' own "the smaller budget wins" rule applies inside
+        // it, not here.
+        const Arcane::ImageCompareOptions& compareOptions;
+
+        // The MOST RECENT CompareImages() verdict -- overwritten every
+        // settle attempt that actually evaluates the conjunct (byteEqual &&
+        // idle && compareRequested). RuntimeApp::ShutdownGraphPath reads
+        // whatever is here once the loop ends, which is exactly the attempt
+        // that decided the run's outcome, whether that is a converged pass
+        // or a budget-exhausted mismatch. Left at its default (passed =
+        // false) on any run that never evaluated it -- compareEvaluated
+        // below is the flag that tells "never got the chance" apart from
+        // "compared, and this is a genuine failing verdict"; this result
+        // alone cannot.
+        Arcane::ImageCompareResult& compareResult;
+        // Whether compareResult was ever actually written by a real
+        // CompareImages() call this run. Stays false forever on a run with
+        // no --compare, on a --bless run (the conjunct is disabled -- see
+        // compareRequested), or on one where the settle budget was spent
+        // without ever reaching a single byteEqual&&idle attempt.
+        bool& compareEvaluated;
 
 #if !defined(ARCANE_DIST)
         // --crash-gpu N. Same Dist guard as the RuntimeApp member this is
