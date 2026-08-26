@@ -43,7 +43,7 @@ marked **ships with the engine** or **per-project / per-repo**.
 | 9 | `Saved/Verify/<name>-<backend>-diff.png` — failure diff artifacts | `ReferenceProject/Saved/Verify/` | **generated, gitignored** | n/a |
 | 10 | `scripts/golden-gate.ps1` — the four-lane host orchestration | Arcane repo, `scripts/` | **per repo, not per project** | n/a — it is a checked-in script |
 | 11 | The Jenkins `Golden gate` stage + its failure-artifact archiving | Arcane repo, `Jenkinsfile` | **per repo** | n/a |
-| 12 | What (10) needs to run: PowerShell 5.1, `ci\msbuild.cmd`, `ThirdParty\premake5\premake5.exe`, a GPU agent with both D3D12 and Vulkan drivers | Arcane repo / CI agent | **already required to build Arcane at all** | these ARE doctor-checkable — but they are the *engine's* build requirements, not Servitor's |
+| 12 | What (10) needs to run: PowerShell 5.1, `ci\msbuild.cmd`, `ThirdParty\premake5\premake5.exe` — **and a machine carrying BOTH a D3D12 and a Vulkan driver** | Arcane repo / CI agent | **split, corrected 2026-08-26.** The three tools are already required to build Arcane at all. **The both-drivers requirement is NOT** — it belongs to the *four-lane matrix* (`scripts/golden-gate.ps1:143-148` enumerates `{ArcaneRuntime, ArcaneEditor}` × `{dx12, vulkan}`); building Arcane needs neither driver, and either host starts on one alone | **Yes, all of them** — these are genuinely doctor-checkable. The tools are the *engine's* build requirements; the both-drivers requirement belongs to **running the matrix**, i.e. to the per-repo CI glue of rows 10–11, not to any project. See Test B and the partition below |
 | 13 | External services, daemons, containers, ports, environment variables | — | **none** | — |
 | 14 | Known-state: three OWED engine defects (below) | — | — | — |
 
@@ -60,11 +60,27 @@ material to what the Hub view may honestly claim:
    captures into. The golden image therefore depends on the machine's failure
    history. The **Debug editor lane is red on this**, at exactly 24 px: the
    Assets scrollbar thumb cap.
-3. `settleAttemptsUsed` is absent from `VerifyReport` entirely — verified, the
-   symbol exists only in `EditorApp`'s private state. A report cannot currently
-   distinguish "converged" from "exhausted its attempts."
+3. `settleAttemptsUsed` is absent from `VerifyReport` entirely. Re-derived
+   2026-08-26 with an uncapped census: `grep -c -i settle` over
+   `VerifyReport.hpp` and `VerifyReport.cpp` returns **0 and 0**. The symbol
+   itself is private per-host state in **both hosts, not one** — seven files:
+   `ArcaneEditor/src/App/EditorApp.{hpp,cpp}` and `EditorAppFrame.cpp`, plus
+   `ArcaneRuntime/src/RuntimeApp.{hpp,cpp}` and `RuntimeFrame.{hpp,cpp}` (e.g.
+   `RuntimeApp.hpp:214`, `RuntimeFrame.cpp:730`) — and it reaches no report
+   field from either. A report cannot currently distinguish "converged" from
+   "exhausted its attempts."
 
 **Both runtime lanes PASS 0-diff on both backends and both configurations.**
+
+> **CORRECTION 2026-08-26 — recorded rather than quietly repaired.** Defect 3's
+> evidence as first published in this document read *"verified, the symbol
+> exists only in `EditorApp`'s private state."* That was false: it is in both
+> hosts, across seven files. The conclusion survived; the evidence did not. The
+> cause is this repo's own standing lesson about instruments — the census behind
+> it was a `grep … | head -5`, so the command **could not return** more than
+> five lines, and its silence past the cap was read as absence. A claim carrying
+> the word "verified", in a document whose whole value is rigour, is precisely
+> where that must not happen.
 
 ### What the inventory decides
 
@@ -84,14 +100,40 @@ it. Rows 10–12 are checked-in scripts and the engine's own build prerequisites
 even one been a tool, a service, a port, an environment variable, or a version
 floor, the verdict would be "package". None is.
 
+**Test A is CORROBORATING, not independently decisive.** Stated plainly, because
+this document previously implied otherwise. Its "zero" reads zero only *after*
+two prior moves have been made: Test B's engine-baseline carve-out (which is why
+rows 1–4 do not count) and the partition below (which is why rows 10–12 do not
+count — even though row 12 names things that genuinely **are** doctor-checkable,
+and now says so). Applied cold to the raw inventory, Test A does not return
+zero. It is the codebase's own definition applied to a result, not a
+discriminator that produced one.
+
 **Test B — the machine-state test.** A `requires` entry is a statement about the
-**machine**, not about the project. Servitor adds **zero** machine requirements
-over the engine baseline: it needs a GPU and a D3D12 or Vulkan driver, which
-`ArcaneEditor` already needs in order to start at all. Nothing that runs
+**machine**, not about the project. Applied to the **mode and the corpus**,
+Servitor adds **zero** machine requirements over the engine baseline: running
+`--offscreen --settle --compare` needs a GPU and a D3D12 *or* Vulkan driver,
+which `ArcaneEditor` already needs in order to start at all. Nothing that runs
 `--compare` is absent from a machine that can run the editor. Compare
 Multiplayer, which adds Docker, a PostgreSQL 16 image carrying `pg_partman`, a
 free TCP 5432, and an environment variable. Different kind of thing, and the
 difference is not one of degree.
+
+**Applied to the ORCHESTRATION, Test B returns "not zero" — and this document
+originally concealed that behind a false claim.** Row 12 used to assert that the
+matrix's prerequisites were "already required to build Arcane at all". The three
+tools are; **a machine carrying BOTH a D3D12 and a Vulkan driver is not.**
+`scripts/golden-gate.ps1:143-148` enumerates four lanes across both backends, so
+the matrix needs both drivers present on one machine — while building Arcane
+needs neither, and either host starts on one alone. That is a genuine machine
+requirement over the baseline, and it is doctor-checkable.
+
+**So Test B survives, but in weakened form: it disposes of the mode and the
+corpus, and it does NOT on its own dispose of the orchestration.** That work is
+done by the partition below — which is therefore load-bearing, and which is now
+argued rather than assumed. This is real damage to the argument's tidiness, and
+it is left standing rather than patched over: an inaccurate supporting claim was
+carrying a conclusion the partition should have carried all along.
 
 **Test C — the bootstrap test, which is the decisive one.** The only "install"
 action Servitor has is `--bless` — a flag **on the mode itself**. The capability
@@ -100,12 +142,63 @@ ships. A package whose sole dependency is manufactured by running the package is
 not carrying a dependency; it is carrying **state**. That is the whole finding
 in one sentence.
 
-**The honest corollary, which is where "plus CI glue" comes from.** Rows 10–12
-*are* optional and *are* dependency-bearing. But they are **per-repo**, not
-per-project: they live in the Arcane repo, they orchestrate the Arcane repo's
-own CI, and no consuming project installs them. That is CI glue by any
-reasonable reading, and calling it a package would require the word to mean
-something it does not mean anywhere else in this codebase.
+**The partition — argued rather than assumed, because it is the load-bearing
+step.** Before any of the three tests runs, Servitor is split into three
+buckets: **(i)** the engine mode, **(ii)** the consuming project's authored
+content, and **(iii)** per-repo CI glue — `scripts/golden-gate.ps1`, the Jenkins
+stage, and their prerequisites (rows 10–12). Bucket (iii) *is* optional and *is*
+dependency-bearing, and it is exactly what the brief named as "genuinely
+optional and dependency-bearing … the orchestration that runs the matrix". So
+excluding it is not a free move — and the codebase's own definition, quoted as
+the authority throughout ("optional capability, and the dependencies each one
+needs"), says nothing about *per-project*. That distinction is mine. It needs an
+argument, and here it is.
+
+**Four reasons per-repo CI glue is categorically not package-shaped:**
+
+1. **A package is something a project ACQUIRES; CI glue is something a repo
+   OPERATES.** The Hub's definition describes capability *added to a project*.
+   `golden-gate.ps1` is added to no project: it is checked into the engine repo
+   and run by that repo's own pipeline against `ReferenceProject`. A consuming
+   game project neither installs it nor gains capability from it.
+2. **Its "installation" is `git clone`, and it has no independent version.** It
+   arrives with the repo, at the repo's revision, and *cannot* be at a different
+   one. The `.arcpkg` format gives a package a `version` distinct from
+   `formatVersion` precisely because a package has a lifecycle of its own. CI
+   glue has none to give.
+3. **No project can declare it.** `packages: []` names packages a project uses.
+   There is no coherent value a game project could put there for
+   `golden-gate.ps1` — it does not run in a project's context at all.
+4. **Its prerequisites describe a CI AGENT's role, not a project's
+   dependencies.** PowerShell, `ci\msbuild.cmd` and premake5 are the engine
+   repo's own build requirements. The both-drivers requirement is real and is
+   **not** one of those — but it attaches to *running the matrix*, which is a
+   property of an agent that volunteered for that job, never of a project that
+   wants `--compare`.
+
+**What would have to become true for it to BE a package** — stated so the
+partition is falsifiable rather than definitional: extract the orchestration so
+it runs against **arbitrary** projects rather than `ReferenceProject`,
+distribute it independently of the engine repo, give it its own version, and let
+a project name it in `packages: []`. At that point all four reasons above fail
+at once, its `requires` becomes non-empty (PowerShell, msbuild, premake5,
+**both** graphics drivers), and it **is** a package. **Plan C's script tier is
+the obvious candidate to trigger exactly that** — re-read this section when it
+lands.
+
+**Which tests carry independent weight.** Stated plainly, because a three-test
+argument that is really two-discriminators-and-a-partition should say so:
+
+| | Independent? | What it disposes of |
+|---|---|---|
+| **Test C — bootstrap** | **Yes — the only fully independent discriminator.** Flips immediately if the corpus ever needs fetching from an artifact store, a sibling repo, or a vendor drop | the corpus (rows 5–8) |
+| **Test B — machine-state** | **Yes, and falsifiable** — one extra tool (ImageMagick, a Python runtime, a service) and it returns "package". But **partial**: it returns "not zero" for the orchestration | the mode (rows 1–4) |
+| **Test A — doctor** | **No — corroborating.** Returns "zero" only after B's carve-out and the partition have already run | nothing, on its own |
+| **The partition** | Load-bearing; argued immediately above | the CI glue (rows 10–12) |
+
+The verdict is unchanged — Test C alone disposes of the corpus, which is the
+thing anyone would actually call "the package" — but the argument is weaker than
+it first reads, and saying so is worth more than a tidier claim.
 
 **A fourth signal, from the brief itself.** The task's own proposed home for the
 manifest was `ReferenceProject/Verify/servitor.arcpkg` — a *package's* manifest,
@@ -218,11 +311,33 @@ document.
 | `env` | `id`, optional `pattern` | An environment variable is set, and optionally matches a shape | Aphelyon's `APHELYON_INTERNAL_SECRET` (Release refuses to start without it) |
 | `package` | `id`, optional `minVersion` | Another `.arcpkg` is present and satisfied | none yet — reserved, and marked as unexercised |
 
+**`probe`, defined — because a named-but-undefined field is exactly the prose
+this section exists to forbid.** `probe` is an optional **argument vector** on a
+`tool` entry: a command to run, given as an array
+(`["docker","image","inspect","aphelyon/postgres:16"]`), never a shell string.
+It is adjudicated by **exit status alone** — zero is `pass`, non-zero is `fail`
+— and its stdout is captured only for the human-readable message, never parsed
+for control flow. It runs **only after** the entry's `id` has been found, so a
+probe never doubles as the presence check. Three constraints stop it becoming
+the arbitrary-logic escape hatch that a closed kind set exists to prevent:
+
+- **argv, not a shell** — no pipes, redirection, chaining, globbing or
+  interpolation;
+- **read-only and idempotent** — a check must never mutate the machine it is
+  reporting on;
+- **the named tool's own subcommand** — `probe[0]` must equal the entry's `id`.
+  A manifest where it does not is malformed, exactly as an unknown `kind` is.
+
 Two rules about the set itself:
 
-- **`env` was added by the Multiplayer paper validation, not by Servitor.** See
-  §5. That is the point of the exercise, and it is recorded rather than smoothed
-  over.
+- **`env` was surfaced — not invented — by the Multiplayer paper validation.**
+  Expressing Multiplayer needed it and Servitor never exercised it, but the
+  honest version is weaker than "the format grew a field it lacked": the
+  precedent already checked an environment variable, and the four-shape
+  derivation had folded it away. `Gacha/scripts/doctor.bat:90-102` is an
+  `if defined VCPKG_ROOT` test — an env check — filed under the *vcpkg tool*
+  item, `warn` branch included. The exercise **recovered a distinction the
+  derivation had lost**. Real, and smaller than first claimed. See §6.
 - **`kind: "package"` is reserved and unexercised.** It is named so the format
   has a place to put transitive dependencies, and flagged so nobody mistakes an
   untested field for a validated one.
@@ -507,12 +622,34 @@ PostgreSQL 16 in Docker, in the Gacha repo, and its dependency shape is the
 ### What the exercise found — and it found something
 
 **`kind: "env"` did not exist before this step.** Servitor never exercised an
-environment-variable dependency, because Servitor has no dependencies at all. It
-was added *because* expressing Multiplayer needed it, which is exactly what the
-paper validation is for. `APHELYON_INTERNAL_SECRET` is a real, hard requirement:
-a Release Auth build **refuses to start** without it
+environment-variable dependency, because Servitor has no dependencies at all,
+and expressing Multiplayer needed one. `APHELYON_INTERNAL_SECRET` is a real,
+hard requirement: a Release Auth build **refuses to start** without it
 (`Server/Auth/src/main.cpp:115-119`). A manifest that could not say so would be
 describing a package that does not start.
+
+**But this exercise did NOT stress the format as much as that sentence
+suggests, and the limits belong here rather than in a reader's eventual
+suspicion:**
+
+1. **`env` was latent in the precedent, not absent from it.**
+   `Gacha/scripts/doctor.bat:90-102` already checks `VCPKG_ROOT` — an
+   environment variable — under the "vcpkg" *tool* item, including a `warn`
+   branch for "tool present, variable unset". The exercise recovered a
+   distinction the four-shape derivation had folded away: a real result, and a
+   smaller one than "the format grew a field it lacked".
+2. **The vocabulary and the validation subject are the same ecosystem.** Four of
+   the five kinds were derived from Aphelyon's doctor (§5) and the fifth from
+   Aphelyon's server — and the format was then validated **against Aphelyon's
+   server**. Servitor, the nominal extraction subject, contributed **nothing**:
+   its `requires` is empty. So what this document establishes is that **one
+   ecosystem's dependency vocabulary has been written down coherently**. A
+   genuinely independent second consumer — a different toolchain, a different
+   platform, somebody else's package — **is still owed**, and the format should
+   be expected to move when one arrives.
+3. **The worked example stresses the KINDS, not the FIELDS.** Four sub-fields go
+   unexercised by it: `probe`, `mustContain`, `pattern`, and `minVersion` on two
+   of the three `tool` entries. Specified, unvalidated.
 
 **Two things it did NOT force, worth recording as bounded gaps rather than
 overspecifying now:**
@@ -523,9 +660,19 @@ overspecifying now:**
    `postgres:16` does **not** ship `pg_partman`, and pointing compose at it makes
    schema apply fail with `schema "partman" does not exist`. The `service` check
    above catches "Postgres is not reachable" but not "Postgres is reachable and
-   is the wrong image". **A future `kind: "image"` (id + tag + a capability
-   probe) is the shape this wants.** Not added, because inventing a kind on one
-   unbuilt example is how a format gets a field nobody needed.
+   is the wrong image".
+
+   **`kind: "image"` is DECLINED — and the reason is NOT "one unbuilt example",
+   which would be inconsistent with adding `env` on exactly one unbuilt
+   example.** The real reason is that **`tool` + `probe` already generalizes
+   it**. Written out, the check is
+   `{ "kind": "tool", "id": "docker", "probe": ["docker","image","inspect","aphelyon/postgres:16"], "remedy": "Run docker compose build in Server/." }`
+   — argv, exit-status-adjudicated, read-only, `probe[0] == id`, satisfying
+   every constraint §2 places on a probe. A dedicated `image` kind would add
+   **container-runtime-specific vocabulary** to a set that is otherwise
+   runtime-agnostic, buy nothing `probe` does not already buy, and invite
+   `kind: "helm-chart"` in behind it. **A kind earns its place by expressing
+   something no existing kind can.** `env` did; `image` does not.
 2. **Ordering.** Several entries are sequential in reality — vcpkg deps before
    the build, `db-setup` before the services. `requires` is a **set**, not a
    plan; ordering belongs to the orchestrator, which is exactly how
@@ -535,13 +682,23 @@ overspecifying now:**
 ### And the counter-check, which is the whole point
 
 Run the **same** manifest format at Servitor, honestly, and `requires` comes out
-**empty** — every row of the Step 1 inventory is either engine-shipped or
-project content. Per §2, a package with an empty `requires` fails the rule.
+**empty** — every row of the Step 1 inventory is either engine-shipped, project
+content, or per-repo CI glue. Per §2, a package with an empty `requires` fails
+the rule.
 
-**The format did not have to be bent to reach that answer, and it was not.** It
-produced "no" for Servitor and a seven-entry manifest for Multiplayer, from the
-same five kinds. That is the evidence that the format describes something real
-rather than describing the one thing it was extracted from.
+**What that does and does not establish — stated precisely, because the claim
+made here was previously too strong.** It **does** establish that the format was
+not bent to manufacture a "yes": nothing was added to make Servitor look
+dependency-bearing, and the empty array *is* the verdict. It does **not**
+establish expressive range. An empty array is a **degenerate** result — any
+format returns one for a candidate with no dependencies — so Servitor is a
+*negative control*, not a second description. The format has been demonstrated
+on **one** package, from **one** ecosystem, whose vocabulary it was derived from
+in the first place. That is enough to ship a specification. It is **not** enough
+to call the format validated, and the brief's own test — "a manifest that can
+only describe the package it was extracted from has not been formalized" — is
+met only in the letter, since the nominal extraction subject contributed no
+fields. **A second, independent consumer is still owed.**
 
 ---
 

@@ -184,7 +184,7 @@ This design draws the same line, and it falls exactly on the existing plan split
 |---|---|---|
 | What | `--offscreen`, fixed timestep, `ReadCapture`-sourced capture, probes, the report JSON, **+ the comparison cascade and blessing** (amended 2026-08-25) | ~~comparator cascade~~, ~~backend-keyed reference corpus~~, ~~script tier~~, ~~actionability~~, ~~trace bundles~~, ~~orchestration, reference-tree lifecycle, CI reporting, the doctor~~ — **all of it resolved to one of three things: engine-side code, the consuming project's own authored content, or per-repo CI glue** (answered 2026-08-26) |
 | Ships | always, in every build | **also always, in every build.** The per-project part is a blessed reference corpus, which is *content*, not an install |
-| External deps a doctor must check | **none** | **none.** Not "few" — zero, across a 14-row inventory |
+| External deps a doctor must check | **none** | **none for the mode and the corpus** — zero across a 14-row inventory. Corrected 2026-08-26: the four-lane CI matrix *does* need both graphics drivers on one machine, but that is **per-repo CI glue**, not per-project |
 | Analogue | `chrome --headless` | ~~Playwright~~ — **also `chrome --headless`.** The golden corpus is the analogue of a project's own test fixtures, not of Playwright |
 
 **ANSWERED 2026-08-26 (Plan B, Task 13). Servitor is a mode plus a corpus. It is
