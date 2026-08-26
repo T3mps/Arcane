@@ -12,6 +12,7 @@
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 
 #include <cstdio>
+#include <optional>
 
 // Agility SDK handshake: the D3D12 loader reads these EXPORTED symbols from
 // the EXE to redirect device creation into the vendored D3D12Core.dll under
@@ -77,7 +78,21 @@ int main(int argc, char** argv)
     // return above stays free of any window on purpose. Never fails boot --
     // BootSplashWindow's whole contract is "every error path degrades to no
     // splash, silently".
-    Arcane::BootSplashWindow splash("data/images/arcane_logo.png");
+    // ...UNLESS --offscreen, where the whole point is that this process maps
+    // no window. The splash is a real WS_POPUP on its own thread, so
+    // constructing it unconditionally would make "--offscreen" a lie for the
+    // ~seconds boot takes -- the one window an offscreen run would still
+    // flash on screen. std::optional is what it takes: BootSplashWindow's
+    // only constructor takes an image path and there is no "disabled" state,
+    // and every consumer downstream is already null-tolerant by contract
+    // (BootSplashPresenter's ctor comment: "`splash` may be null ... every
+    // call then degrades to do nothing"; RuntimeApp takes a non-owning
+    // pointer that defaults to nullptr). See ArcaneEditor/src/main.cpp for
+    // the identical pattern. Destruction order is unchanged -- `app` still
+    // lives in the nested scope below and is destroyed before this object.
+    std::optional<Arcane::BootSplashWindow> splash;
+    if (!parsed.config->offscreen)
+        splash.emplace("data/images/arcane_logo.png");
 
     // Scoped so ~RuntimeApp runs while the watchdog is still armed, then joined
     // before main returns -- see ArcaneEditor/src/main.cpp for the full reason
@@ -85,7 +100,7 @@ int main(int argc, char** argv)
     // calls std::terminate).
     int rc = 0;
     {
-        RuntimeApp app(*parsed.config, &splash);
+        RuntimeApp app(*parsed.config, splash ? &*splash : nullptr);
         rc = app.Run();
         Arcane::Diagnostics::SetPhase("runtime teardown");
         Arcane::Diagnostics::Heartbeat();
