@@ -72,10 +72,10 @@ const BOOT_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(2);
 /// exit codes 2 and 3 mean different things depending on WHEN in the run they
 /// fire, and the wait thread's decoder only sees a number and a duration.
 ///
-///   * 2 -- pre-boot: the project gate (wrong abi, unreadable manifest).
-///          post-boot: RenderErrorCount grew across the run.
-///   * 3 -- pre-boot: the project is already open in another live editor.
-///          post-boot: a golden capture/compare failed.
+/// * 2 -- pre-boot: the project gate (wrong abi, unreadable manifest).
+///   post-boot: RenderErrorCount grew across the run.
+/// * 3 -- pre-boot: the project is already open in another live editor.
+///   post-boot: a golden capture/compare failed.
 ///
 /// A run that reaches EditorApp::Run() has cleared both pre-boot refusals, so
 /// from there on the later meanings apply -- but from outside the process the
