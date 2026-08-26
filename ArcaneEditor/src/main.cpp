@@ -157,6 +157,21 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          io.IniFilename null, so a run can neither read a
 //                          machine-local layout nor write one back.
 //                          Requires --frames N (HostConfig refuses otherwise).
+//   --dump-layout <path> -- HONOURED as of Task 10 (plan-b comparator): write
+//                          the LIVE ImGui layout to <path> at shutdown
+//                          (EditorApp::Shutdown, unconditionally on
+//                          --offscreen -- ImGui::SaveIniSettingsToDisk never
+//                          consults io.IniFilename, so it writes to the given
+//                          path even though that pointer is null offscreen).
+//                          This is the authoring half of the committed
+//                          ReferenceProject/Saved/verify-layout.ini seed:
+//                          `--project ReferenceProject --offscreen --frames N
+//                          --dump-layout out.ini` produces a file with REAL
+//                          EditorDockHost dock-node ids, no windowed session
+//                          required. THE ONE FLAG THIS HOST HONOURS THAT
+//                          ArcaneRuntime REFUSES OUTRIGHT (see that exe's
+//                          main.cpp) -- there is no ImGui layout on a game
+//                          host to dump.
 //   --settle / --report -- HONOURED as of Task 9 (the editor's verification
 //   --compare / --bless    surface): PresentChromeFrame's capture arm is the
 //                          SAME three-conjunct predicate (byte-equal &&

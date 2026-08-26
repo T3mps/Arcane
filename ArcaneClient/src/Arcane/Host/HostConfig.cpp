@@ -23,6 +23,9 @@ namespace Arcane
                                          "(--offscreen only)").Type(CliType::Double);
         cli.Option("probe", "",          "repeatable: brightness@x,y | luma@x,y | rgba@x,y | pick@x,y | census").Many();
         cli.Option("report", "",         "write the observation report to this JSON path");
+        cli.Option("dump-layout", "", "write the live ImGui layout to this .ini at shutdown "
+                                      "(editor only; the authoring half of the committed "
+                                      "verify-layout.ini seed)");
         cli.Option("settle", "0",        "repeat the capture (render clock frozen) until two consecutive "
                                          "frames compare byte-equal AND the shader compiler is idle, "
                                          "up to N attempts (0 = off, 1 is refused -- needs >= 2; "
@@ -86,6 +89,7 @@ namespace Arcane
         cfg.fixedDtSupplied = r.Supplied("fixed-dt");
         cfg.probes         = r.GetMany("probe");
         cfg.reportPath     = r.Get("report");
+        cfg.dumpLayoutPath = r.Get("dump-layout");
         // Malformed --probe syntax is refused HERE, at parse time, not
         // deferred to evaluation. VerifyReport::Evaluate only ever sees specs
         // ParseProbe already accepted (a host parses-and-logs separately, at

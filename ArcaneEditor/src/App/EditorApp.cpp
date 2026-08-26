@@ -2376,6 +2376,38 @@ namespace Arcane::Editor
         // Run returns): leave the Hub a fresh cover of the last thing seen.
         WriteAutoScreenshot();
 
+        // --dump-layout: write the LIVE ImGui layout (real EditorDockHost
+        // dock-node ids and sizes, as of whatever this run actually
+        // submitted over its --frames budget) to this .ini, right before
+        // teardown -- the authoring half of the committed
+        // ReferenceProject/Saved/verify-layout.ini seed.
+        //
+        // NOT placed beside RetargetLayoutIni's own SaveIniSettingsToDisk
+        // call (the guard `!m_layoutIniPath.empty() && io.IniFilename` a
+        // project switch flushes through): that call fires at OnProjectOpened,
+        // BEFORE the frame loop has drawn a single panel, and it is flatly
+        // UNREACHABLE under --offscreen (RetargetLayoutIni's offscreen branch
+        // clears m_layoutIniPath, nulls io.IniFilename, and returns ahead of
+        // it). Dumping there would capture whatever was on disk before this
+        // run touched anything -- not "the live layout", and not reachable
+        // offscreen at all, which is the one mode this flag exists for.
+        //
+        // Runs UNCONDITIONALLY relative to --offscreen/windowed, matching
+        // HostConfig.hpp's own comment on dumpLayoutPath:
+        // ImGui::SaveIniSettingsToDisk(path) never reads io.IniFilename (which
+        // IS null here under --offscreen) -- it always writes to the path it
+        // is GIVEN. Gated on m_gpu, not m_frameCount: a null m_gpu means no
+        // ImGui context was ever created (a failed Create()), and
+        // SaveIniSettingsToDisk dereferences the current context
+        // unconditionally -- a crash, not a degraded result. A dump with zero
+        // frames rendered is merely uninteresting, not unsafe, so that case
+        // is not refused.
+        if (!m_config.dumpLayoutPath.empty() && m_gpu)
+        {
+            ImGui::SaveIniSettingsToDisk(m_config.dumpLayoutPath.c_str());
+            ARC_INFO("--dump-layout: wrote the live ImGui layout to {}", m_config.dumpLayoutPath);
+        }
+
         // Release the editor lock: this project is no longer open anywhere.
         if (m_bootCompleted && m_runtime)
         {

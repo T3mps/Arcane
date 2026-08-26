@@ -155,6 +155,23 @@ namespace Arcane
         // Write the observation report to this JSON path. Empty = off.
         std::string     reportPath = "";
 
+        // --dump-layout <path>. Write the LIVE ImGui layout to this .ini at
+        // shutdown -- the authoring half of the committed
+        // ReferenceProject/Saved/verify-layout.ini seed (RetargetLayoutIni's
+        // pin, EditorApp.cpp). Empty = off. EDITOR ONLY: ArcaneRuntime has no
+        // ImGui layout to dump and refuses this flag outright (main.cpp) --
+        // a flag that parsed clean and silently did nothing would be exactly
+        // the failure Plan A's Task 12 closed.
+        //
+        // Deliberately NOT folded into HostConfig.cpp's wantsOffscreenOnly
+        // predicate: windowed authoring is the NATURAL flow (arrange the
+        // panels by hand, dump, inspect), and Step 2 of the task that added
+        // this ALSO requires it to work under --offscreen, where the point
+        // is authoring a seed with no windowed session at all. It must work
+        // in both -- adding it to that predicate would refuse the windowed
+        // case for no reason.
+        std::string     dumpLayoutPath = "";
+
 #if !defined(ARCANE_DIST)
         // DEV ONLY: fire the deliberate GPU fault (Render/GpuFaultInjector.hpp)
         // ONCE, on the first frame recorded after this many frames have

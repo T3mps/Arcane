@@ -698,6 +698,19 @@ project "ArcaneTests"
         -- CONFORMANCE ORACLE for ImageCompare. ImageCompareConformanceTest.cpp
         -- walks this tree by a RELATIVE path from the exe's own directory.
         '{COPYDIR} "%{wks.location}/ThirdParty/playwright-fixtures" "%{cfg.buildtarget.directory}/playwright-fixtures"',
+        -- Task 10 (plan-b comparator): ONLY the committed layout seed, not
+        -- the whole ReferenceProject tree the two HOST exes stage (this
+        -- project's own COPYDIR two screens up, and ArcaneEditor's/
+        -- ArcaneRuntime's matching lines) -- GoldenImageTest.cpp's
+        -- "[golden]" case is a CHEAP, no-GPU text check of this ONE file and
+        -- nothing else under ReferenceProject/ is read from this exe. A
+        -- narrow {COPYFILE} rather than mirroring the full {COPYDIR}: a
+        -- later golden-image case that wants the project's REFERENCE IMAGES
+        -- too (Verify/References/...) will need to widen this to the full
+        -- directory copy -- see that task's own audit before assuming this
+        -- one line is enough.
+        '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Saved"',
+        '{COPYFILE} "%{wks.location}/ReferenceProject/Saved/verify-layout.ini" "%{cfg.buildtarget.directory}/ReferenceProject/Saved/verify-layout.ini"',
         -- Vendored dxc trio (minus dxc.exe): the runtime compile service
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
         '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',

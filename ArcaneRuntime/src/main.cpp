@@ -42,6 +42,28 @@ int main(int argc, char** argv)
         return 0;
     }
 
+    // --dump-layout: THIS HOST'S FIRST REFUSAL (Task 10, plan-b comparator).
+    // HostConfig is shared with ArcaneEditor, which implements the flag
+    // (EditorApp::Shutdown dumps the live ImGui layout to this path) --
+    // ArcaneRuntime has no ImGui layout at all, so parsing it and shrugging
+    // would exit 0 having silently done nothing, the exact failure Plan A's
+    // Task 12 closed everywhere else in this file's sibling (see
+    // ArcaneEditor/src/main.cpp's own refusal table for the established
+    // idiom this one-line table borrows).
+    //
+    // AHEAD OF Diagnostics::Install BELOW, and that placement is load-bearing,
+    // not tidy -- same reasoning ArcaneEditor/src/main.cpp's refusal-table
+    // comment states in full: an early `return` taken AFTER Install leaves
+    // the hang watchdog's std::thread joinable at static destruction, which
+    // is std::terminate -> abort() (a BLOCKING dialog under a Debug CRT, not
+    // a clean exit). Ahead of Install, a plain `return 2;` is already clean.
+    if (!parsed.config->dumpLayoutPath.empty())
+    {
+        std::fprintf(stderr, "error: --dump-layout is an EDITOR-only flag (there is no ImGui "
+                             "layout on this host to dump). Use ArcaneEditor.exe.\n");
+        return 2;
+    }
+
     // Same arming as the editor, same reasoning, same position relative to the
     // probe -- see ArcaneEditor/src/main.cpp. The two hosts must not diverge on
     // whether a crash or a hang leaves evidence behind.
