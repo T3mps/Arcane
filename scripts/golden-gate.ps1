@@ -108,6 +108,37 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "-- ReferenceProject rebuilt for $Configuration --" -ForegroundColor Green
 
+# ---- ...AND THEN RESTAGE IT. The rebuild above writes ONLY
+#      ReferenceProject/Binaries/ at the repo root. That is NOT the copy the
+#      hosts load: premake5.lua's ArcaneRuntime/ArcaneEditor postbuilds
+#      ({COPYDIR} "%{wks.location}/ReferenceProject" -> the exe's own
+#      directory, lines 355 and 430) stage the WHOLE ReferenceProject tree --
+#      Binaries/ included -- beside each exe, and the hosts run with
+#      `--project ReferenceProject` from that exe directory, so
+#      bin/<Config>-windows-x86_64-md/<Host>/ReferenceProject/Binaries/
+#      ReferenceGame.dll is what actually gets LoadLibrary'd. That staged copy
+#      is refreshed only when the HOST project itself builds, so the rebuild
+#      above, on its own, leaves the precondition UNMET: measured on 2026-08-26,
+#      a repo-root Release ReferenceGame.dll (MSVCP140.dll) sat beside a staged
+#      copy still importing ucrtbased.dll -- i.e. a Debug-flavour plugin about
+#      to be handed to a Release host, which PluginHost.cpp refuses outright
+#      BEFORE LoadLibrary. On a fresh CI agent it is worse: the staged copy can
+#      be absent entirely. So mirror the postbuild here, for exactly the two
+#      hosts this script launches.
+foreach ($stageHost in @('ArcaneRuntime', 'ArcaneEditor')) {
+    $stagedBinaries = Join-Path $repoRoot "bin\$configDirName\$stageHost\ReferenceProject\Binaries"
+    if (-not (Test-Path $stagedBinaries)) {
+        New-Item -ItemType Directory -Path $stagedBinaries -Force | Out-Null
+    }
+    Copy-Item -Path (Join-Path $referenceProjectDir 'Binaries\*') -Destination $stagedBinaries -Force -Recurse
+    $stagedDll = Join-Path $stagedBinaries 'ReferenceGame.dll'
+    if (-not (Test-Path $stagedDll)) {
+        Write-Error "restaging FAILED -- $stagedDll does not exist after the copy."
+        exit 1
+    }
+}
+Write-Host "-- ReferenceGame.dll restaged beside both hosts --" -ForegroundColor Green
+
 # ---- The four combinations. ----
 $combos = @(
     @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'dx12' }
