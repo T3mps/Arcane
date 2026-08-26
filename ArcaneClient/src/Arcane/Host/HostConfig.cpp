@@ -2,6 +2,7 @@
 #include <Arcane/Cli/Cli.hpp>
 #include <Arcane/Host/VerifyReport.hpp>   // Arcane::ParseProbe -- reused for the --probe parse-time refusal below
 #include <Arcane/Host/ReferenceImages.hpp>   // Arcane::ReferenceNameIsSafe -- reused for --compare's parse-time refusal (Task 8, Finding 2)
+#include <cmath>    // std::isfinite -- --max-diff-pixel-ratio's range refusal below
 #include <cstdio>
 namespace Arcane
 {
@@ -260,6 +261,42 @@ namespace Arcane
         {
             std::fprintf(stderr, "error: --max-diff-pixels/--max-diff-pixel-ratio require "
                                  "--compare\n");
+            return { std::nullopt, 2 };
+        }
+        // Final-review I-1: --max-diff-pixel-ratio is RANGE-refused here, at the
+        // parse boundary, and NOT clamped.
+        //
+        // Cli's NumericOk (Cli.cpp:69-89) only asks whether std::from_chars can
+        // consume the whole token as a double -- which it can for "-1", "1e30",
+        // "inf" and "nan" alike (from_chars accepts a leading '-' and the
+        // inf/nan spellings). The value then flows, unchecked, into
+        // ImageCompare.cpp's `static_cast<std::uint64_t>(expectedArea * ratio)`.
+        // Converting a negative, non-finite, or out-of-uint64-range double to an
+        // unsigned integer type is UNDEFINED BEHAVIOUR ([conv.fpint]); on MSVC/
+        // x64 it yields an unspecified value, so `--max-diff-pixel-ratio 1e30`
+        // ("forgive everything") can silently produce a budget of ZERO -- the
+        // strictest possible verdict from the loosest possible request. An agent
+        // reading that verdict has no way to tell it apart from a genuine
+        // regression.
+        //
+        // Upper bound is 1.0 because the value is a FRACTION OF THE REFERENCE'S
+        // AREA (see the --max-diff-pixel-ratio help text and ImageCompare.cpp's
+        // `expectedArea * ratio`): 1.0 already means "every pixel may differ",
+        // and there is nothing above it to ask for.
+        //
+        // NOT CLAMPED, deliberately: clamping is the silent-wrong-answer shape
+        // this file refuses everywhere else (rule 3). A caller who typed a value
+        // outside the range typed something they did not mean, and finding that
+        // out at parse time is cheaper than finding it out from a verdict.
+        if (cfg.maxDiffPixelRatio.has_value()
+            && !(std::isfinite(*cfg.maxDiffPixelRatio)
+                 && *cfg.maxDiffPixelRatio >= 0.0
+                 && *cfg.maxDiffPixelRatio <= 1.0))
+        {
+            std::fprintf(stderr, "error: --max-diff-pixel-ratio wants a finite fraction in "
+                                 "[0, 1] (it is a fraction of the reference image's area, so "
+                                 "1 already means \"every pixel may differ\"), got '%s'\n",
+                         r.Get("max-diff-pixel-ratio").c_str());
             return { std::nullopt, 2 };
         }
         // AN OPEN-ENDED OFFSCREEN RUN CANNOT BE STOPPED, and that is a

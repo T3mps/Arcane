@@ -497,6 +497,21 @@ namespace Arcane
         // while giving the struct an honest integer budget to report.
         const double expectedArea =
             static_cast<double>(expected.width) * static_cast<double>(expected.height);
+        //
+        // PRECONDITION ON maxDiffPixelRatio, enforced at the CLI BOUNDARY and
+        // not here (final-review I-1): the value must be finite and in [0, 1].
+        // `static_cast<std::uint64_t>` of a negative, NaN, or out-of-range
+        // double is UNDEFINED BEHAVIOUR ([conv.fpint]) -- it does not saturate,
+        // so `1e30` ("forgive everything") could yield a budget of 0.
+        // HostConfig::Parse refuses anything outside that range with its own
+        // message before it can reach here, which is the only place a bad value
+        // can still be attributed to the argument that carried it. The cast
+        // stays a plain cast deliberately: a guard here would have to invent a
+        // policy (clamp? zero? pass?) for a value the boundary has already ruled
+        // out, and every one of those is the silent-wrong-answer shape that
+        // refusal exists to avoid. ImageCompareOptions is ARCANE_API-exported,
+        // so a direct in-process caller (ArcaneTests) owns the same
+        // precondition.
         std::optional<std::uint64_t> fromRatio;
         if (options.maxDiffPixelRatio.has_value())
         {

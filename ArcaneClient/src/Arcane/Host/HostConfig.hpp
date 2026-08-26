@@ -148,7 +148,12 @@ namespace Arcane
         // default -- which means a budget of ZERO differing pixels
         // (Playwright's own default). When both are set the SMALLER budget
         // wins (ImageCompareOptions' own contract). Refused without
-        // --compare, same as --bless.
+        // --compare, same as --bless. maxDiffPixelRatio is additionally
+        // RANGE-refused at parse time -- finite, and in [0, 1] -- because it
+        // reaches an unsigned narrowing cast in ImageCompare.cpp where a
+        // negative/NaN/huge double is undefined behaviour rather than a
+        // saturating clamp (final-review I-1). A value present here is
+        // therefore always a usable fraction; downstream need not re-check it.
         std::optional<std::uint64_t> maxDiffPixels;
         std::optional<double>        maxDiffPixelRatio;
 

@@ -544,6 +544,107 @@ TEST_CASE("host: --compare/--bless/--max-diff-pixels/--max-diff-pixel-ratio roun
     CHECK(*outcome.config->maxDiffPixelRatio == Catch::Approx(0.001));
 }
 
+// ---------------------------------------------------------------------------
+// Final-review I-1. --max-diff-pixel-ratio is the one Rule-3 hole this otherwise
+// exhaustive file had: its value flows unchecked into
+// `static_cast<std::uint64_t>(expectedArea * ratio)` (ImageCompare.cpp:503),
+// where a negative, non-finite, or out-of-uint64-range double is UNDEFINED
+// BEHAVIOUR ([conv.fpint]) rather than a saturating clamp. The consequence is
+// not abstract: `--max-diff-pixel-ratio 1e30` means "forgive everything" and can
+// silently produce a budget of ZERO -- the strictest verdict from the loosest
+// request, indistinguishable to an agent from a genuine regression.
+//
+// WOULD THESE FAIL IF THE THING THEY NAME WERE WRONG?
+//   * Delete the range check   -> the refused half fails (Parse hands back a
+//                                 config for -1 / 1e30 / 1.0001).
+//   * CLAMP instead of refuse  -> the refused half fails for the same reason;
+//                                 clamping returns a config with a fudged value.
+//   * Write it as `> 0.0`      -> the accepted half fails on "0" (an explicit
+//                                 zero budget is a legal request, and is what an
+//                                 unset budget already means).
+//   * Write it as `< 1.0`      -> the accepted half fails on "1"/"1.0", the
+//                                 upper endpoint ("every pixel may differ").
+// Non-vacuity of the out-of-range half is pinned by the --fixed-dt control
+// below: it proves Cli's own NumericOk (Cli.cpp:69-89) hands "1e30" straight
+// through, so the refusal being tested here can only be coming from
+// HostConfig's new check and not from the numeric parse underneath it.
+TEST_CASE("host: --max-diff-pixel-ratio is range-refused at parse time, not clamped", "[host]")
+{
+    auto withRatio = [](const std::string& value) {
+        return Run({ "--offscreen", "--frames", "10", "--settle", "30",
+                     "--report", "r.json", "--compare", "runtime-scene",
+                     "--max-diff-pixel-ratio", value });
+    };
+
+    SECTION("out of range is REFUSED (exit 2), and no config comes back") {
+        // Every one of these is a token std::from_chars consumes whole as a
+        // double, so each reaches the new check rather than dying in Cli.
+        for (const char* bad : { "-1", "-0.5", "-0.0001", "1.0001", "2", "1e30" }) {
+            CAPTURE(bad);
+            const auto o = withRatio(bad);
+            CHECK_FALSE(o.config.has_value());
+            CHECK(o.exitCode == 2);
+        }
+    }
+
+    SECTION("non-finite is REFUSED (exit 2)") {
+        // from_chars accepts the inf/nan spellings (and a leading '-'), so these
+        // ARE numeric tokens as far as Cli is concerned -- MEASURED, not assumed:
+        // running the built ArcaneRuntime.exe with `--max-diff-pixel-ratio nan`
+        // prints HostConfig's OWN "wants a finite fraction in [0, 1]" message,
+        // not Cli's "expects a number". So this section is not vacuous either:
+        // without the new check these would sail through to the narrowing cast.
+        for (const char* bad : { "nan", "inf", "-inf", "infinity" }) {
+            CAPTURE(bad);
+            const auto o = withRatio(bad);
+            CHECK_FALSE(o.config.has_value());
+            CHECK(o.exitCode == 2);
+        }
+    }
+
+    SECTION("in range is ACCEPTED, BOTH endpoints included") {
+        // 0 is a legal explicit request (it is also what an unset budget means)
+        // and 1 is the upper endpoint -- the ratio is a fraction of the
+        // reference's AREA, so 1 already means "every pixel may differ".
+        for (const char* good : { "0", "0.0", "0.001", "0.5", "1", "1.0" }) {
+            CAPTURE(good);
+            const auto o = withRatio(good);
+            REQUIRE(o.config.has_value());
+            REQUIRE(o.config->maxDiffPixelRatio.has_value());
+            CHECK(*o.config->maxDiffPixelRatio >= 0.0);
+            CHECK(*o.config->maxDiffPixelRatio <= 1.0);
+        }
+    }
+
+    SECTION("CONTROL: Cli's numeric parse itself accepts 1e30 on a Double option") {
+        // --fixed-dt is the other CliType::Double option and carries no upper
+        // bound. If this ever starts failing, the "out of range is REFUSED"
+        // section above has gone vacuous -- the refusal would be coming from
+        // NumericOk, not from the range check this case exists to pin.
+        const auto o = Run({ "--offscreen", "--frames", "1", "--fixed-dt", "1e30" });
+        REQUIRE(o.config.has_value());
+        CHECK(o.config->fixedDtSeconds == Catch::Approx(1e30));
+    }
+}
+
+// The budgets are refused WITHOUT --compare (that is the case above this block),
+// so the range refusal must not be reachable ahead of that refusal -- otherwise
+// `--max-diff-pixel-ratio -1` with no --compare would report the wrong mistake.
+TEST_CASE("host: an out-of-range ratio without --compare still reports the --compare mistake",
+          "[host]")
+{
+    // Both are exit 2; what this pins is that Parse does not stop caring about
+    // the missing --compare just because the value is also out of range. The
+    // ordering is only observable through stderr, so this asserts the weaker
+    // fact that BOTH orderings agree on: still refused, still exit 2, still no
+    // config -- i.e. the new check never turns a two-fault command line into a
+    // parse SUCCESS.
+    const auto o = Run({ "--offscreen", "--frames", "10", "--settle", "30",
+                         "--report", "r.json", "--max-diff-pixel-ratio", "-1" });
+    CHECK_FALSE(o.config.has_value());
+    CHECK(o.exitCode == 2);
+}
+
 TEST_CASE("host: --compare/--bless default off, maxDiff budgets default unset", "[host]")
 {
     const char* argv[] = { "ArcaneRuntime" };
