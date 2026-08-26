@@ -210,15 +210,36 @@ TEST_CASE("compare: the engine trap corpus is classified correctly", "[compare][
         REQUIRE(Load(c.actual, actual));
 
         // Cross-backend text needs a budget: 121 pixels measured at the desk,
-        // rounded up. This is the ONE place an aggregate budget is
+        // rounded up (measured `diffCount` here is 120 -- see README.md for
+        // why, and for the corrected mechanism: 120 of those pixels are a
+        // debug HUD label reading a different literal backend NAME, e.g.
+        // "Backend: D3D12" vs "Backend: Vulkan", not glyph-rounding noise on
+        // the same word; only 1 pixel is genuine cross-backend rendering
+        // variance). This is the ONE place an aggregate budget is
         // legitimate, and it is derived from a measurement, not chosen to
-        // make a test pass -- see README.md's should-match section. Do NOT
-        // raise this if a should-fail trap ever needs it: that would be a
-        // finding about the trap or the comparator, not a threshold to tune.
+        // make a test pass. Do NOT raise this if a should-fail trap ever
+        // needs it: that would be a finding about the trap or the
+        // comparator, not a threshold to tune.
         Arcane::ImageCompareOptions opt;
         opt.maxDiffPixels = 200;
         const auto res = Arcane::CompareImages(expected, actual, opt);
         INFO("diffCount " << res.diffCount);
         CHECK(res.passed);
+
+        // FLOOR, not just a ceiling: this pair's entire signal is an
+        // incidental HUD string (see README.md). If that label is ever
+        // unified or removed -- an ordinary, unrelated cleanup with no
+        // reason to think about this test -- diffCount collapses toward the
+        // ~1 pixel of genuine cross-backend rendering variance, CHECK(passed)
+        // above keeps passing, and this trap silently stops demonstrating
+        // that a real difference can be tolerated. Without this floor that
+        // failure is invisible: the same "a fixture stops being able to
+        // express what it exists to demonstrate, while the test stays
+        // green" class wrong-normal-matrix's own generation nearly shipped
+        // (see that trap's README section), arriving here through the
+        // should-match side instead. 50 is comfortably below the measured
+        // 120 and comfortably above the ~1-pixel genuine-noise floor, so a
+        // real regression in either direction trips it.
+        CHECK(res.diffCount > 50);
     }
 }

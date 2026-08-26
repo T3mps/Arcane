@@ -32,6 +32,24 @@ without (actual) the component. Census confirms it: `meshBound`/`meshReferenced`
 **What it proves:** the coarsest regression this gate exists to catch -- geometry that
 silently stops drawing.
 
+**A byte-identity worth explaining, not hiding.** `missing-mesh-expected.png` is git-blob-
+identical (`git hash-object` -> `203b6049...`) to `one-pixel-text-shift-expected.png`
+(itself Plan A's `desk_off.png`, copied verbatim, see below). This is NOT a copy-paste
+shortcut: both are independently-run `ArcaneRuntime.exe --project ReferenceProject
+--offscreen --backend dx12 --frames 60 --settle 30` captures of the SAME unmodified,
+committed scene, two days apart, on the same desk GPU. `--settle` freezes the simulated
+clock once `--frames 60` is reached and only repeats the capture (never advancing sim time)
+until two consecutive frames match byte-for-byte AND the shader compiler is idle -- so the
+simulated content at convergence is pinned to "60 simulated frames of this exact scene"
+regardless of how many settle repeats (67, 68, or Plan A's 62) it took to prove that
+convergence. A GPU render with no randomness, no wall-clock-driven animation, and an
+identical scene/engine/driver is a deterministic function of its inputs, so bit-identical
+output across two independent runs is the expected result, not a coincidence. Verified
+directly rather than argued: re-ran the exact same command a THIRD time, in a fresh process
+on 2026-08-26, and its output (`git hash-object`) matched both existing files exactly. The
+committed `missing-mesh-expected.png` is unchanged (replacing it with an identical file
+would be a no-op); this paragraph and its fresh third-run proof are the resolution.
+
 ## should-fail/wrong-normal-matrix
 
 **What was broken:** `ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.cpp:867`'s call
@@ -130,14 +148,54 @@ failure and is entirely an artifact of not checking `postBound` first.
 desk evidence:
 `.superpowers/sdd/2026-08-23-agent-verification-offscreen-hosts/evidence/desk-2026-08-24/desk_off.png`
 (dx12, -> `one-pixel-text-shift-expected.png`) and `desk_off_vk.png` (Vulkan, ->
-`one-pixel-text-shift-actual.png`). Both are `ArcaneEditor.exe` offscreen captures at the
-SAME fully-converged census (`meshBound`/`spriteBound`/`postBound` all true on both
-sides, per their sibling `.json` reports) -- the only variable is graphics backend.
+`one-pixel-text-shift-actual.png`). Both are `ArcaneRuntime.exe` offscreen captures (its
+own ImGui debug HUD -- `ImGui::Begin("ArcaneRuntime")` in `RuntimeFrame.cpp`'s `BuildHud`,
+NOT `ArcaneEditor.exe` -- an earlier draft of this file misattributed the host) at the SAME
+fully-converged census (`meshBound`/`spriteBound`/`postBound` all true on both sides, per
+their sibling `.json` reports) -- the only variable is graphics backend.
 
-**What it proves:** 121 ImGui glyph pixels flip `(16,14,16)` <-> `(255,255,255)` between
-D3D12 and Vulkan text rasterization, in both directions, confined to the ImGui overlay
-region -- not the 3D scene. This is legitimate backend-specific glyph rounding, not a
-rendering regression, and the gate must NOT flag it: a comparator that catches 121
-one-off text pixels gets its budget loosened by whoever hits it next, until it stops
-catching anything. The conformance test's `maxDiffPixels = 200` budget for this one pair
-is derived from this measurement (121, rounded up), not chosen to make the test pass.
+**CORRECTED 2026-08-26, after review.** The first pass at this file described the 121
+differing pixels as "ImGui glyph pixels" flipping under cross-backend text rasterization --
+that was wrong about the mechanism, and the corrected picture is better news than the
+original one. A pixel-level diff (both images, RGBA, exact) shows:
+
+- **120 of the 121 pixels** sit in one 9-row band, `x 131-171, y 89-97` -- the HUD's
+  `ImGui::Text("Backend: %s", ...)` line (`RuntimeFrame.cpp:292`). Cropped and zoomed, the
+  two images read `Backend: D3D12` and `Backend: Vulkan` -- **two different words**, not one
+  word antialiased two different ways. The colour histogram inside that band is a hard
+  binary flip between background and glyph foreground (not partial-coverage blending), which
+  is the fingerprint of different *characters*, not rounding on the same characters.
+- **Exactly 1 pixel**, `(872, 241)`, is genuine cross-backend rendering variance: the two
+  images differ by a single green-channel unit (164 vs 163) on a rotated sprite's edge --
+  antialiasing coverage rounding a hair differently between the two rasterizers, the only
+  pixel in the whole 1280x720 frame where that's true.
+
+**So the corrected fact this trap demonstrates is: offscreen scene content is consistent
+across D3D12 and Vulkan to within about ONE pixel, not 121** -- the renderer is far more
+cross-backend-deterministic than Plan A's desk measurement implied. Plan A located the 121
+pixels correctly (same coordinates, same report) but misattributed their cause; the label
+text is the reason 120 of them exist, not glyph rasterization.
+
+**Why 120, not 121, differs from Plan A's own count of "121 measured at the desk":** the
+desk's 121 already included this same borderline pixel at `(872, 241)`. This corpus's
+measured `diffCount` from `Arcane::CompareImages` is **120** because that one-unit
+green-channel difference falls under the comparator's per-channel/perceptual threshold and
+is not counted as "differing" by the comparator's own rules -- it is a real, tiny pixel
+difference that the tool correctly treats as noise, not a different capture round or any
+other unexplained cause.
+
+**What it proves, and the risk that made this trap load-bearing rather than decorative:**
+a debug HUD reporting a different literal backend name is exactly the kind of "difference"
+a comparator must tolerate -- it is not a rendering regression, and a gate that flags it
+gets its budget loosened by whoever hits it next, until it stops catching anything. But
+that also means this trap's entire signal (120 of its 121 differing pixels) comes from an
+incidental HUD string, not from the 3D scene the corpus is otherwise about. If that HUD
+label is ever unified or removed (an ordinary, unrelated cleanup with no reason to think
+about this test), `diffCount` collapses from 120 to ~1, `CHECK(passed)` keeps passing, and
+the trap silently stops demonstrating anything -- the same failure class `wrong-normal-matrix`
+almost shipped as a should-fail trap that could never fire, just arriving from the
+should-match side instead. `ImageCompareConformanceTest.cpp`'s should-match loop therefore
+also asserts `CHECK(result.diffCount > 50)` alongside `CHECK(result.passed)`: this pair must
+keep genuinely differing by a comparator-visible amount, or it is no longer demonstrating
+that a real difference can be tolerated. The conformance test's `maxDiffPixels = 200` budget
+is unchanged, derived from Plan A's 121 (rounded up), not chosen to make the test pass.
