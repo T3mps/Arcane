@@ -84,8 +84,17 @@ material to what the Hub view may honestly claim:
 
 ### What the inventory decides
 
-Three tests. Each would have flipped the verdict had it gone the other way;
-none did.
+**Two discriminators and a partition — not three tests.** The framing this
+section originally opened with ("three tests, each would have flipped the
+verdict") was **retracted 2026-08-26**; the weights table at the end of this
+section is the authoritative statement, and this paragraph now matches it.
+In summary: **Test C is the only fully independent discriminator**; **Test B is
+falsifiable but partial**, returning "not zero" for the orchestration;
+**Test A is corroborating**, and does not return zero when applied cold to the
+raw inventory; and **the partition** — which routes per-repo CI glue out before
+any test runs — is load-bearing, and is argued below rather than assumed.
+Each of B and C would have flipped the verdict had it gone the other way;
+neither did.
 
 **Test A — the doctor test, which is the codebase's own.** `PackagesView.svelte`
 defines a package as *"optional capability, and the dependencies each one
@@ -95,10 +104,17 @@ project content** — PNGs and an INI that live inside the project, are versione
 with it, and were produced by it. They are content in exactly the sense a scene
 or a texture is content. A doctor cannot install `References/runtime-scene.png`:
 there is nowhere to fetch it from. It does not exist until this project makes
-it. Rows 10–12 are checked-in scripts and the engine's own build prerequisites.
-**Zero rows are things a doctor could report missing and then install.** Had
-even one been a tool, a service, a port, an environment variable, or a version
-floor, the verdict would be "package". None is.
+it. Rows 10–12 are the **per-repo CI glue** that the partition routes out below.
+They are **not** simply "checked-in scripts and the engine's own build
+prerequisites", which is what this paragraph asserted before 2026-08-26 and
+which corrected row 12 falsifies: the four-lane matrix's both-drivers
+requirement is genuinely doctor-checkable and is **not** needed to build Arcane
+at all.
+
+**Across the rows this test is left holding — 1 through 9 — zero are things a
+doctor could report missing and then install.** Had even one of those been a
+tool, a service, a port, an environment variable, or a version floor, the
+verdict would be "package". None is.
 
 **Test A is CORROBORATING, not independently decisive.** Stated plainly, because
 this document previously implied otherwise. Its "zero" reads zero only *after*
@@ -143,7 +159,7 @@ not carrying a dependency; it is carrying **state**. That is the whole finding
 in one sentence.
 
 **The partition — argued rather than assumed, because it is the load-bearing
-step.** Before any of the three tests runs, Servitor is split into three
+step.** Before any of Tests A–C runs, Servitor is split into three
 buckets: **(i)** the engine mode, **(ii)** the consuming project's authored
 content, and **(iii)** per-repo CI glue — `scripts/golden-gate.ps1`, the Jenkins
 stage, and their prerequisites (rows 10–12). Bucket (iii) *is* optional and *is*
@@ -237,16 +253,29 @@ therefore in-process. That single move took most of what "the Playwright half"
 would have contained and put it in the browser, so to speak. What is left on the
 package side of the line is a corpus of images, and images are content.
 
-**Three sharpening tests, in the order they should be applied.** These are
-generalized from the Servitor case above and are the operative form of the rule:
+**How to apply the rule: partition first, then two discriminators.** Generalized
+from the Servitor case above, and ordered by what that case showed is actually
+load-bearing — **not** as three co-equal tests, which is the framing this spec
+retracted on 2026-08-26:
 
-1. **The doctor test.** Name a check a doctor could run for this candidate that
-   returns *missing*, and name what it would then install. If you cannot name
-   both halves, it is not a package.
-2. **The machine-state test.** Does it add any requirement on the *machine* over
-   the engine baseline? Project content never does.
-3. **The bootstrap test.** Can the capability produce its own dependency by
-   being run? If so, that dependency is state, not a dependency.
+0. **PARTITION FIRST, and argue it.** Split the candidate into what ships with
+   the engine, what is the consuming project's own content, and what is per-repo
+   CI glue. This step decides more than the tests below do, so it must be argued
+   every time and never assumed — and it must be **falsifiable**: state what
+   would have to become true for a bucket to move. See "The partition" above for
+   the worked instance.
+1. **The bootstrap test — the strongest discriminator.** Can the capability
+   produce its own dependency by being run? If so, that dependency is *state*,
+   not a dependency.
+2. **The machine-state test — falsifiable, but apply it PER BUCKET.** Does it add
+   any requirement on the *machine* over the engine baseline? Project content
+   never does. It can return "zero" for one bucket and "not zero" for another,
+   and reporting only the favourable half is exactly how a false claim gets
+   shipped — that is what happened here, and the correction is above.
+3. **The doctor test — corroborating, not decisive.** Name a check a doctor could
+   run that returns *missing*, and name what it would then install. If you cannot
+   name both halves, it is not a package. Expect this to read "zero" only *after*
+   0–2 have run; applied cold to a raw inventory it does not discriminate.
 
 ### Two consequences, carried forward and still binding
 

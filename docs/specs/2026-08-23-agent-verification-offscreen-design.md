@@ -190,20 +190,38 @@ This design draws the same line, and it falls exactly on the existing plan split
 **ANSWERED 2026-08-26 (Plan B, Task 13). Servitor is a mode plus a corpus. It is
 not a package.** The open question this table carried is closed, with an
 inventory of every dependency taken from the code as built —
-`docs/specs/2026-08-25-package-tiering-design.md`, "Step 1". Three tests decided
-it, and each would have flipped the verdict had it gone the other way:
-**(a)** zero rows are things a doctor could report missing and then install —
-every non-shipping row is authored project content or a checked-in CI script;
-**(b)** Servitor adds zero requirements on the *machine* over the engine
-baseline, since anything that can run `ArcaneEditor` can already run
-`--compare`; **(c)** its only "install" action is `--bless`, a flag on the mode
-itself, so the capability manufactures its own alleged dependency — which makes
-that dependency **state**, not a dependency. The honest residue is
-`scripts/golden-gate.ps1` and the Jenkins stage, which *are* optional and
-dependency-bearing but are **per-repo CI glue**, not per-project, and live in
-this repo rather than in any project. Multiplayer remains the only real package
-on the board, and it is unbuilt. That spec also carries the standalone
-mode/package rule, the `*.arcpkg` format, and the doctor contract.
+`docs/specs/2026-08-25-package-tiering-design.md`, "Step 1". **Two
+discriminators and a partition decided it.** Corrected 2026-08-26: an earlier
+revision of this paragraph said "three tests, each would have flipped the
+verdict", and claimed under (a) that "every non-shipping row is authored project
+content or a checked-in CI script". That spec has retracted the first, and the
+second is **false** against its own corrected row 12, which answers **"Yes, all
+of them"** to whether the four-lane matrix's prerequisites are doctor-checkable.
+
+**(a) The partition — load-bearing, and argued rather than assumed.** Rows
+10–12 — `scripts/golden-gate.ps1`, the Jenkins stage, and their prerequisites —
+are routed out as **per-repo CI glue** *before* any test runs. They **are**
+optional, they **are** dependency-bearing, and row 12's items **are**
+doctor-checkable (including a machine carrying **both** a D3D12 and a Vulkan
+driver, which building Arcane does not require). What disqualifies them is not
+that there is nothing to check: it is that a package is something a project
+**acquires**, while CI glue is something a repo **operates**. No project
+installs them, declares them in `packages: []`, or gains capability from them.
+
+**(b) The machine-state test — falsifiable, and partial.** For the **mode and
+the corpus**, Servitor adds zero machine requirements over the engine baseline:
+anything that can run `ArcaneEditor` can already run `--compare`. Applied to the
+**orchestration** it returns **"not zero"** — which is precisely why (a) is
+doing work this test cannot.
+
+**(c) The bootstrap test — the only fully independent discriminator.** Its only
+"install" action is `--bless`, a flag on the mode itself, so the capability
+manufactures its own alleged dependency — which makes that dependency
+**state**, not a dependency.
+
+Multiplayer remains the only real package on the board, and it is unbuilt. That
+spec also carries the standalone mode/package rule, the `*.arcpkg` format, and
+the doctor contract.
 
 The decisive test is the third row, and it is the codebase's own. `ArcaneHub`'s
 Packages surface defines a package as *"optional capability, and the
@@ -213,6 +231,17 @@ precisely *because* it needs PostgreSQL, Docker, and the Account and Combat
 services (`ArcaneHub/src/lib/views/PackagesView.svelte`). Plan A needs nothing
 but the engine. There is nothing for a doctor to install, so it is not a
 package; it is a mode.
+
+> **PARTLY SUPERSEDED 2026-08-26 (Task 13): "the decisive test is the third row"
+> is NOT true, and Task 13 retracted it.** The doctor row is **corroborating**,
+> not decisive — it reads "zero" only after the machine-state carve-out and the
+> partition have already run, and applied cold to a raw inventory it does not
+> discriminate at all. The decisive work is done by the **bootstrap** test (the
+> capability manufactures its own dependency, so that dependency is state) and
+> by the **partition** (per-repo CI glue is operated by a repo, not acquired by
+> a project). What survives here unchanged is the *definition* being quoted and
+> the Multiplayer/Plan A conclusions, both of which still hold. See the
+> weights table in `docs/specs/2026-08-25-package-tiering-design.md`.
 
 Two consequences bind Plan A:
 
@@ -351,16 +380,37 @@ of the five did not land as written and the reasons are the finding:
    spec (`<engine>/Packages/*/*.arcpkg`, engine-scoped) so the work is defined
    the day a real package exists.
 5. **A written rule for where the line falls.** Landed, as a standalone citable
-   rule with three sharpening tests, in the new spec.
+   rule in the new spec — stated as **partition first, then two
+   discriminators** (bootstrap, then machine-state, with the doctor test
+   corroborating). An earlier revision of this line said "three sharpening
+   tests"; that framing was retracted 2026-08-26.
 
-**The paper validation did its job.** Expressing Multiplayer required a
-`kind: "env"` that Servitor never exercised -- `APHELYON_INTERNAL_SECRET`, which
-a Release Auth build refuses to start without. The same format run at Servitor
-yields an **empty** `requires`, which is the verdict. It also surfaced one
-bounded gap left unfixed on purpose: `kind: "tool"` for `docker` cannot express
+**The paper validation did its job, within limits the new spec now states.**
+Expressing Multiplayer required a `kind: "env"` that Servitor never exercised --
+`APHELYON_INTERNAL_SECRET`, which a Release Auth build refuses to start without.
+The same format run at Servitor yields an **empty** `requires`, which is the
+verdict.
+
+**Corrected 2026-08-26 — two claims made here were too strong.** First, `env`
+was **surfaced rather than invented**: `Gacha/scripts/doctor.bat:90-102` already
+checked `VCPKG_ROOT`, an environment variable, filed under the *vcpkg tool*
+item, so the exercise recovered a distinction the derivation had folded away.
+Second, the Servitor result is a **degenerate** one — an empty array is what any
+format returns for a candidate with no dependencies — so it is a *negative
+control*, not a second description. Four of the five kinds came from Aphelyon's
+doctor and the fifth from Aphelyon's server, and the format was then validated
+against Aphelyon's server: **one ecosystem's vocabulary, written down
+coherently. A genuinely independent second consumer is still owed.**
+
+It also surfaced one bounded gap: `kind: "tool"` for `docker` cannot express
 that the *image* must be `aphelyon/postgres:16` (custom, carrying `pg_partman`)
-rather than stock `postgres:16`. A future `kind: "image"` is the shape that
-wants; inventing it on one unbuilt example is not.
+rather than stock `postgres:16`. **`kind: "image"` is declined — and the reason
+given here originally ("inventing it on one unbuilt example is not") was
+inconsistent, since `env` was added on exactly one unbuilt example. The real
+reason is that `tool` + `probe` already generalizes it**
+(`probe: ["docker","image","inspect","aphelyon/postgres:16"]`), and a dedicated
+`image` kind would add container-runtime-specific vocabulary to an otherwise
+runtime-agnostic set.
 
 **One deliverable the directive did not name** was banked separately by the user
 on 2026-08-25 and is also discharged: four questions about Unreal's
