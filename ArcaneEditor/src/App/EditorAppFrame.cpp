@@ -17,14 +17,17 @@
 #include "Viewport/ViewportImGuiInput.hpp"
 
 #include <Arcane/Assets/Assets.hpp>      // Arcane::WritePngRgba (RenderSceneToViewport's capture block)
+#include <Arcane/Assets/ImageCompare.hpp>   // --compare (Task 9): PixelData/ImageCompareOptions/CompareImages; also pulls in ImageIo.hpp's LoadPngRgba
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
+#include <Arcane/Host/ReferenceImages.hpp>   // --compare/--bless (Task 9): ResolveReference (MainLoop's pre-loop fail-fast)
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
+#include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/MeshSubmissionSystem.hpp>   // CollectMeshInstances (ArmGraphViewportFrame's opaque 3D pass, F2a Task 10)
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
@@ -61,6 +64,22 @@ namespace Arcane::Editor
 {
     namespace
     {
+        // --compare / --bless (Task 9). Own private copy, matching
+        // RuntimeApp.cpp's (which explains the reasoning in full): this is a
+        // FILE PATH COMPONENT ("dx12"/"vulkan", matching HostConfig.cpp's
+        // --backend Choices() and the shipped ReferenceProject fixtures
+        // byte-for-byte), never Arcane::ToString(backend) ("D3D12"/"Vulkan",
+        // the human-facing log/report label used elsewhere in this file).
+        // Not shared with RuntimeApp.cpp's copy because the two live in
+        // different DLLs/exes with no common host-tier TU to hold it -- see
+        // this task's own dispatch for why a third copy (EditorApp.cpp's
+        // ShutdownGraphPath also needs one) was the pragmatic choice over
+        // inventing shared plumbing for four lines.
+        const char* CompareBackendName(Arcane::GraphicsBackend backend)
+        {
+            return backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12";
+        }
+
         // Undo/redo keybind scancodes (see FrameInput's shortcut phase). Hoisted to
         // file scope -- pure cleanup, values unchanged (verified against SDL_scancode.h).
         constexpr uint32_t kScLCtrl  = 224;  // SDL_SCANCODE_LCTRL
@@ -184,6 +203,74 @@ namespace Arcane::Editor
         // Boot is over; anything the watchdog reports from here on belongs to
         // the frame loop, not to a stale boot stage.
         Arcane::Diagnostics::SetPhase("editor frame loop");
+
+        // ===== --compare / --bless (Task 9) =================================
+        // Resolve the reference BEFORE the settle loop starts, mirroring
+        // RuntimeApp::MainLoop's own pre-loop block (Finding 3 of the Task 8
+        // dispatch audit) EXACTLY: a reference that does not exist will not
+        // start existing after N wasted settle attempts, so a missing/
+        // undecodable reference fails FAST here, at ZERO frames rendered,
+        // rather than entering the loop with an invalid m_referencePixels
+        // and spending the whole --settle budget reporting "could not
+        // compare" on every attempt. CreateGraphVehicles has already
+        // succeeded by the time Main() calls this function, so
+        // ShutdownGraphPath's own `if (!ChromeGraph() && ...) return;` guard
+        // does not swallow the report this fail-fast path still owes -- see
+        // that function for the bless/settle/report folding this run's exit
+        // (4, "compare-missing-reference") funnels through.
+        if (!m_config.compareReference.empty())
+        {
+            const std::filesystem::path projectRoot =
+                (m_runtime && m_runtime->CurrentProject()) ? m_runtime->CurrentProject()->Root()
+                                                            : std::filesystem::path{};
+            const char* const backendName = CompareBackendName(m_config.backend);
+            m_compareResolution = Arcane::ResolveReference(projectRoot, m_config.compareReference,
+                                                            backendName);
+
+            if (m_compareResolution.level == Arcane::ReferenceLevel::None)
+            {
+                if (!m_config.bless)
+                {
+                    ARC_ERROR("--compare '{}': no reference image on disk for backend '{}' -- "
+                              "re-run with --bless to create one",
+                              m_config.compareReference, backendName);
+                    m_compareMissingFatal = true;
+                    m_graphExit = 4;
+                    ShutdownGraphPath();
+                    return;
+                }
+                // else: --bless is present -- the normal FIRST bless. Fall
+                // through with m_compareRequested false below (Finding 4 of
+                // the Task 8 audit): there is nothing yet to compare
+                // against, and the conjunct would be disabled for the whole
+                // run regardless.
+            }
+            else if (!m_config.bless)
+            {
+                // A real reference exists and this run is not overwriting
+                // it -- load it for the settle loop's compare conjunct.
+                if (!Arcane::LoadPngRgba(m_compareResolution.path, m_referencePixels.width,
+                                          m_referencePixels.height, m_referencePixels.rgba) ||
+                    !m_referencePixels.Valid())
+                {
+                    ARC_ERROR("--compare '{}': reference '{}' exists but could not be decoded -- "
+                              "treating it as missing (re-run with --bless to replace it)",
+                              m_config.compareReference, m_compareResolution.path.string());
+                    m_compareMissingFatal = true;
+                    m_graphExit = 4;
+                    ShutdownGraphPath();
+                    return;
+                }
+            }
+            // else: a reference exists but --bless will overwrite it -- also
+            // nothing to load; m_compareRequested stays false either way.
+        }
+
+        // Finding 4 (Task 8 audit): disabled outright whenever --bless is
+        // set, regardless of whether m_compareResolution actually found
+        // anything -- see the member's own comment (EditorApp.hpp) for why
+        // blessing must not also gate convergence.
+        m_compareRequested = !m_config.compareReference.empty() && !m_config.bless;
 
         while (ls.running)
         {
@@ -1278,23 +1365,24 @@ namespace Arcane::Editor
     // second copy invites: that host's gate read `screenshotPath` ALONE, so
     // `--report` with pixel probes and no `--screenshot` ran, exited 0, wrote a
     // well-formed JSON, and reported "no capture set" for every probe -- a
-    // silent success an agent reads as a pass. RuntimeFrame.cpp now arms on
+    // silent success an agent reads as a pass. RuntimeFrame.cpp arms on
     // capture-WANTED (`!screenshotPath.empty() || !reportPath.empty()`).
     //
-    // THIS HOST'S ANSWER IS DELIBERATELY THE NARROWER ONE, and the difference
-    // is not an oversight: ArcaneEditor implements no --report at all
-    // (`grep -n reportPath ArcaneEditor/src` finds nothing outside this
-    // comment), so ORing reportPath in here would arm a readback, a device
-    // idle and a PNG-less pixel copy that nothing in this process ever reads --
-    // trading one silent no-op for a slower one. The silent-success hole is
-    // closed at the OTHER end instead, where it can actually be closed: main()
-    // now REFUSES --report/--probe/--settle on this host with a message naming
-    // them as unimplemented, so an agent cannot get exit 0 and an absent report
-    // out of ArcaneEditor. Wire --report here and this predicate must grow the
-    // second clause the same day.
+    // TASK 9: THIS HOST'S GATE IS NOW THE SAME TWO-CLAUSE ONE, no longer the
+    // narrower `--screenshot` alone this comment used to defend. --report is
+    // wired (PresentChromeFrame's settle branch, ShutdownGraphPath's
+    // VerifyReport), so a bare `--report r.json` with no `--screenshot` must
+    // still arm the chrome readback -- without the OR, that combination would
+    // arm nothing, and the report's capture section would silently read "no
+    // capture set" even though the run converged cleanly. `--probe` is
+    // deliberately NOT a third clause here: it stays refused at main.cpp, and
+    // this host evaluates no probes, so widening this predicate for it would
+    // arm a readback nothing downstream reads -- see main.cpp's own refusal
+    // comment. Wire --probe here and both places must grow together the
+    // same day.
     static bool CaptureWanted(const Arcane::HostConfig& cfg) noexcept
     {
-        return !cfg.screenshotPath.empty();
+        return !cfg.screenshotPath.empty() || !cfg.reportPath.empty();
     }
 
     void EditorApp::RenderSceneToViewport()
@@ -2677,18 +2765,32 @@ namespace Arcane::Editor
         // editor is inside this one target by construction. The runtime already
         // composites its own ImGui HUD into an offscreen capture the same way.
         //
-        // THE LAST FRAME ONLY, by the same `+1` arithmetic RenderSceneToViewport
-        // uses and for the same reason: phase 20's EndFrame is what increments
-        // m_frameCount, and it has not run yet this iteration. `maxFrames != 0`
-        // matches both other hosts -- without --frames there is no last frame --
-        // and --offscreen cannot be passed without --frames anyway (HostConfig
-        // refuses it at parse time).
+        // THE LAST BASE FRAME, AND EVERY SETTLE ATTEMPT AFTER IT. By the same
+        // `+1` arithmetic RenderSceneToViewport uses and for the same reason:
+        // phase 20's EndFrame is what increments m_frameCount, and it has not
+        // run yet this iteration. `maxFrames != 0` matches both other hosts --
+        // without --frames there is no last frame -- and --offscreen cannot be
+        // passed without --frames anyway (HostConfig refuses it at parse
+        // time).
+        //
+        // --settle N (Task 9): this predicate's NAME still says "the last
+        // frame", and under an ordinary (non-settle) run it is exactly that --
+        // the ordinary branch below stops the loop (via EndFrame) the moment
+        // it fires. Under --settle it stays true for EVERY frame from here
+        // on, because m_frameCount only grows (see EndFrame's own comment) --
+        // which is exactly what is wanted: each such frame is one more settle
+        // attempt, and the settle branch below -- not this predicate -- is
+        // what decides when the loop actually ends (converged, or the
+        // attempt budget spent). This is the SAME identity
+        // RuntimeFrame::RenderGraph's willBeLastFrame states for the
+        // runtime's own capture arm: "arm every frame past the base budget"
+        // and "arm the one last frame" are one expression, not two.
         const bool offscreenChrome = ChromeGraph()->IsOffscreen();
-        const bool captureThisFrame = offscreenChrome &&
-                                      CaptureWanted(m_config) &&
-                                      m_config.maxFrames != 0 &&
-                                      (m_frameCount + 1) >= m_config.maxFrames;
-        frame.capture = captureThisFrame;
+        const bool pastBase = offscreenChrome &&
+                              CaptureWanted(m_config) &&
+                              m_config.maxFrames != 0 &&
+                              (m_frameCount + 1) >= m_config.maxFrames;
+        frame.capture = pastBase;
 
         // A non-null `imgui` is what declares the HUD node at all
         // (DeclareGraphFrame gates the host HUD on exactly that), and the
@@ -2730,7 +2832,31 @@ namespace Arcane::Editor
         // the frame that was JUST submitted -- reading them any later risks the
         // next frame's Begin/Draw overwriting the vehicle's transient state
         // first. Reached only on Presented: both other outcomes returned above.
-        if (captureThisFrame)
+        if (!pastBase)
+            return true;
+
+        // ===== --settle N (Task 9) ==========================================
+        // Everything from here down is RuntimeFrame::CaptureTail's settle
+        // branch, ported rather than reinvented -- Step 1 of this task's own
+        // brief. Two shapes:
+        //   * settleAttempts == 0 -- the ORDINARY single-shot tail, unchanged
+        //     from Task 8/11: one readback, one screenshot, done.
+        //   * settleAttempts != 0 -- one more ATTEMPT: compare this readback
+        //     against the PREVIOUS attempt's (byte-equal), conjoin the shader
+        //     compiler's IsIdle() (a stability predicate is not the
+        //     QUIESCENCE one this mode needs -- see RuntimeFrame.cpp's own
+        //     comment on why), and -- when --compare is running -- conjoin a
+        //     reference match. Converged: write the screenshot (if any) and
+        //     stash the agreed capture. Not yet: stash THIS attempt as the
+        //     new baseline and keep going. Budget spent without converging:
+        //     stop with m_settleConverged left false and m_captureRead left
+        //     false -- no screenshot, no report SetCapture, an honest
+        //     absence rather than a frame this run never actually agreed on.
+        // The loop's actual STOP decision is EndFrame's, reading
+        // m_settleConverged / m_settleAttemptsUsed -- this function always
+        // returns true from here down (a chrome frame WAS presented this
+        // iteration), exactly like the ordinary tail always did.
+        if (m_config.settleAttempts == 0)
         {
             std::uint32_t cw = 0, ch = 0;
             std::vector<unsigned char> pixels;
@@ -2741,16 +2867,155 @@ namespace Arcane::Editor
                 // the same wording, so one grep finds every host's version.
                 ARC_WARN("screenshot FAILED: {} (no capture landed)", m_config.screenshotPath);
             }
-            else if (Arcane::WritePngRgba(m_config.screenshotPath, cw, ch, pixels.data()))
-            {
-                ARC_INFO("screenshot written: {} ({}x{}, composited editor frame -- "
-                         "chrome, panels and viewport)", m_config.screenshotPath, cw, ch);
-            }
             else
             {
-                ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
+                if (!m_config.screenshotPath.empty())
+                {
+                    if (Arcane::WritePngRgba(m_config.screenshotPath, cw, ch, pixels.data()))
+                    {
+                        ARC_INFO("screenshot written: {} ({}x{}, composited editor frame -- "
+                                 "chrome, panels and viewport)", m_config.screenshotPath, cw, ch);
+                    }
+                    else
+                    {
+                        ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
+                    }
+                }
+
+                // Stashed for VerifyReport regardless of --screenshot,
+                // mirroring RuntimeFrame::CaptureTail's non-settle tail
+                // exactly: a bare `--report` with no `--screenshot` still
+                // needs these for SetCapture.
+                m_captureWidth  = cw;
+                m_captureHeight = ch;
+                m_captureRgba   = std::move(pixels);
+                m_captureRead   = true;
             }
+            return true;
         }
+
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> actual;
+        const bool read = ChromeGraph()->ReadCapture(w, h, actual);
+        // Counted here, beside the readback -- NEVER off m_frameCount (see
+        // EndFrame's own comment on why: a Skipped chrome present returns
+        // false above and never reaches this line, so a counter tied to
+        // frame advancement could spin forever on exactly that path, where
+        // the runtime's cannot).
+        ++m_settleAttemptsUsed;
+
+        if (!read)
+        {
+            ARC_WARN("--settle attempt {}/{}: capture FAILED (no readback landed this frame)",
+                     m_settleAttemptsUsed, m_config.settleAttempts);
+        }
+        else
+        {
+            const bool byteEqual = m_previousCaptureValid &&
+                                    w == m_previousCaptureWidth && h == m_previousCaptureHeight &&
+                                    actual == m_previousCaptureRgba;
+            const bool idle = m_shaderCompiler ? m_shaderCompiler->IsIdle() : true;
+
+            // PLAN B (Task 8, ported here by Task 9): the comparison is a
+            // THIRD conjunct, evaluated HERE -- inside the loop -- and not
+            // after it. m_compareRequested is false whenever --bless was
+            // given (EditorApp.hpp's own comment), so `matches` stays its
+            // default `true` on any run that never asked for --compare, or
+            // that paired it with --bless -- this conjunct degrades to
+            // Plan A's `byteEqual && idle` in both cases, exactly like the
+            // runtime's.
+            bool matches = true;
+            if (byteEqual && idle && m_compareRequested)
+            {
+                Arcane::PixelData actualPixels;
+                actualPixels.width  = w;
+                actualPixels.height = h;
+                actualPixels.rgba   = actual;
+                Arcane::ImageCompareOptions compareOptions;
+                compareOptions.maxDiffPixels     = m_config.maxDiffPixels;
+                compareOptions.maxDiffPixelRatio = m_config.maxDiffPixelRatio;
+                m_compareResult    = Arcane::CompareImages(m_referencePixels, actualPixels,
+                                                            compareOptions);
+                matches            = m_compareResult.passed;
+                m_compareEvaluated = true;
+            }
+
+            if (byteEqual && idle && matches)
+            {
+                m_settleConverged = true;
+                ARC_INFO("--settle: CONVERGED after {} attempt(s) -- frame {} matches frame {} "
+                         "byte-for-byte ({}x{}), compiler idle", m_settleAttemptsUsed,
+                         m_frameCount + 1, m_frameCount, w, h);
+
+                // The exact pixels the composited editor showed -- same as
+                // the ordinary tail above -- this IS the converged capture.
+                if (!m_config.screenshotPath.empty())
+                {
+                    if (Arcane::WritePngRgba(m_config.screenshotPath, w, h, actual.data()))
+                    {
+                        ARC_INFO("screenshot written: {} ({}x{}, composited editor frame -- "
+                                 "chrome, panels and viewport)", m_config.screenshotPath, w, h);
+                    }
+                    else
+                    {
+                        ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
+                    }
+                }
+
+                m_captureWidth  = w;
+                m_captureHeight = h;
+                m_captureRgba   = std::move(actual);
+                m_captureRead   = true;
+                return true;
+            }
+
+            if (byteEqual && idle && !matches)
+            {
+                // Stable, quiescent, and WRONG -- keep spinning rather than
+                // fail fast, the same reasoning RuntimeFrame::CaptureTail
+                // gives (a non-_WIN32 IsIdle() stub can be vacuously true,
+                // making the reference goal the only honest signal left).
+                ARC_WARN("--compare attempt {}/{}: converged pixels do not match reference "
+                         "'{}' -- {}", m_settleAttemptsUsed, m_config.settleAttempts,
+                         m_config.compareReference, m_compareResult.errorMessage);
+            }
+
+            if (byteEqual && !idle)
+            {
+                // The pixels agree but the compiler is not done -- exactly
+                // the case Task 10's runtime fix closes: NOT counted as
+                // converged.
+                ARC_WARN("--settle attempt {}/{}: frame {} matches frame {} byte-for-byte, but "
+                         "the shader compiler is not idle yet (still pending/in-flight/"
+                         "undrained) -- not counted as converged",
+                         m_settleAttemptsUsed, m_config.settleAttempts, m_frameCount + 1,
+                         m_frameCount);
+            }
+
+            // Not settled yet -- either the bytes genuinely differed, or they
+            // matched but the compiler still has outstanding work. Either
+            // way THIS frame becomes the baseline the NEXT attempt compares
+            // against.
+            m_previousCaptureWidth  = w;
+            m_previousCaptureHeight = h;
+            m_previousCaptureRgba   = std::move(actual);
+            m_previousCaptureValid  = true;
+        }
+
+        if (m_settleAttemptsUsed >= m_config.settleAttempts)
+        {
+            // NON-CONVERGENCE. FAIL EXPLICITLY: m_settleConverged stays
+            // false (EndFrame reads it to stop the loop; ShutdownGraphPath
+            // reads it to fold exitReason "settle-not-converged"/
+            // "compare-failed" into m_graphExit) and m_captureRead is
+            // deliberately left false -- no --screenshot is written, and the
+            // report's SetCapture is never called, so an agent reading
+            // either artifact gets an honest ABSENCE rather than a frame
+            // this run never actually agreed on.
+            ARC_ERROR("--settle: NOT CONVERGED after {} attempt(s) -- two consecutive captures "
+                      "never compared byte-equal with the compiler idle", m_settleAttemptsUsed);
+        }
+
         return true;
     }
 
@@ -2812,6 +3077,29 @@ namespace Arcane::Editor
         if (m_plugin) m_plugin->Poll();
 
         ++m_frameCount;
-        if (m_config.maxFrames != 0 && m_frameCount >= m_config.maxFrames) ls.running = false;
+
+        // --settle N (Task 9). Once a settle loop is running, m_frameCount
+        // reaching maxFrames no longer means "stop" -- it means "the base
+        // budget is spent and PresentChromeFrame is now taking settle
+        // attempts", which keeps happening every further iteration
+        // (m_frameCount keeps growing past maxFrames the same way
+        // RuntimeFrame::CaptureTail's io.frameCount does; nothing else in
+        // this host reads "past maxFrames" as anything but a stop signal,
+        // so that growth is harmless). The loop's ACTUAL end is decided by
+        // PresentChromeFrame's settle branch alone, through
+        // m_settleConverged / m_settleAttemptsUsed -- both set beside the
+        // READBACK there, never off this counter (see PresentChromeFrame's
+        // own comment on why: it returns false on a Skipped chrome present,
+        // which never reaches EndFrame at all, so tying attempts to frame
+        // advancement could spin forever on exactly that path).
+        if (m_config.settleAttempts != 0)
+        {
+            if (m_settleConverged || m_settleAttemptsUsed >= m_config.settleAttempts)
+                ls.running = false;
+        }
+        else if (m_config.maxFrames != 0 && m_frameCount >= m_config.maxFrames)
+        {
+            ls.running = false;
+        }
     }
 }

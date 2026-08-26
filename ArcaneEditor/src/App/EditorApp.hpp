@@ -22,6 +22,9 @@
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Host/OffscreenVehicle.hpp>   // the --offscreen chrome vehicle (m_offscreenChrome)
+#include <Arcane/Host/ReferenceImages.hpp>    // --compare/--bless (Task 9): ReferenceResolution
+#include <Arcane/Host/VerifyReport.hpp>       // --report (Task 9): VerifyReport
+#include <Arcane/Assets/ImageCompare.hpp>     // --compare (Task 9): PixelData/ImageCompareResult
 #include "Panels/AssetBrowser.hpp"
 #include "Panels/ConsoleBuffer.hpp"
 #include "Panels/DiagnosticStore.hpp"
@@ -303,13 +306,32 @@ namespace Arcane::Editor
         // The recorder has no standalone "read this texture" entry point, so
         // piggybacking on the already-declared frame is the only shape that
         // exists.
+        //
+        // --settle N (Task 9): also where the WHOLE LOOP decides it is done,
+        // once the base --frames budget is spent -- NOT `m_frameCount >=
+        // maxFrames` alone any more (that stays the whole story only when
+        // --settle was never requested). PresentChromeFrame's settle branch
+        // owns readback attempts and counts them off m_settleAttemptsUsed,
+        // never off this function's frame counter (a Skipped chrome
+        // present -- routine under --offscreen too -- does not reach here
+        // at all, so tying attempts to frame advancement can spin forever;
+        // see PresentChromeFrame's own comment). This is what makes "arm
+        // every frame past the base budget" and "arm the one last frame"
+        // the same expression there, exactly like RuntimeFrame::RenderGraph's
+        // willBeLastFrame.
         void EndFrame(LoopState& ls);
 
         // ---- THE EXIT-CODE FOLD ---------------------------------------------
         // The editor's counterpart of RuntimeApp::m_graphExit + its
         // ShutdownGraphPath, and deliberately the same codes and the same
-        // precedence (1 > 2): 1 = a graph frame FAILED (it says WHERE the run
-        // died), 2 = RenderErrorCount GREW across the run, teardown included.
+        // precedence (1 > 2 > 3 > 4): 1 = a graph frame FAILED (it says WHERE
+        // the run died), 2 = RenderErrorCount GREW across the run, teardown
+        // included, 3 = --settle N never converged (Task 9), 4 = --compare
+        // named a missing/undecodable reference (fail-fast, before the loop
+        // even starts) or a converged --bless run failed to WRITE its
+        // reference -- see main.cpp's exit-code table for the full accounting
+        // and the deliberate reuse of 3 against the pre-boot double-open
+        // guard's own code.
         //
         // Both CONTEXTS fold into the one code -- a viewport frame that could
         // not be recorded (RenderSceneToViewport, phase 10) and a chrome frame
@@ -561,6 +583,80 @@ namespace Arcane::Editor
         std::optional<Arcane::PluginHost> m_plugin;                 // destructs before m_runtime
         FramePerf                         m_perf;
         std::uint64_t                     m_frameCount = 0;
+
+        // ---- --settle/--report/--compare (Task 9): the editor's
+        // verification surface. Mirrors RuntimeApp.hpp's own block
+        // field-for-field -- see that header's comments for the full
+        // reasoning on each; only the ones worth restating for the editor's
+        // own shape are repeated here. PresentChromeFrame (EditorAppFrame.
+        // cpp) owns the whole settle loop, ported from RuntimeFrame.cpp's
+        // CaptureTail; EditorApp::MainLoop's pre-loop block resolves
+        // --compare's reference, mirroring RuntimeApp::MainLoop's own; and
+        // ShutdownGraphPath (EditorApp.cpp) folds settle/bless into
+        // m_graphExit and writes the VerifyReport, mirroring RuntimeApp::
+        // ShutdownGraphPath.
+
+        // THE LAST-FRAME CAPTURE. Filled once a capture is either the
+        // ordinary single-shot (--settle not requested) or the settle
+        // loop's converged attempt -- never a mid-settle working capture
+        // (see m_previousCapture* below for that). False on a run that
+        // never asked for --screenshot/--report, that broke out early, or
+        // whose settle loop never converged.
+        bool                                  m_captureRead   = false;
+        std::uint32_t                         m_captureWidth  = 0, m_captureHeight = 0;
+        std::vector<unsigned char>            m_captureRgba;
+
+        // --settle N. The WORKING comparison baseline (churns every
+        // attempt, compared against the NEXT one) plus the attempt budget's
+        // running state -- see PresentChromeFrame, a direct port of
+        // RuntimeFrame::CaptureTail's settle branch. m_settleConverged is
+        // what ShutdownGraphPath reads to fold exitReason
+        // "settle-not-converged" into m_graphExit (3, matching RuntimeApp's
+        // own code for the identical fact). Both stay at their defaults on
+        // a run that never asked for --settle, which must never read as a
+        // failure.
+        std::vector<unsigned char>            m_previousCaptureRgba;
+        std::uint32_t                         m_previousCaptureWidth = 0, m_previousCaptureHeight = 0;
+        bool                                  m_previousCaptureValid = false;
+        // uint64_t, matching HostConfig::settleAttempts' own width, for the
+        // same overflow reason RuntimeApp.hpp's twin field documents.
+        std::uint64_t                         m_settleAttemptsUsed   = 0;
+        bool                                  m_settleConverged      = false;
+
+        // --compare / --bless. Resolved ONCE, before the settle loop starts
+        // -- EditorApp::MainLoop's pre-loop block, mirroring RuntimeApp::
+        // MainLoop's own resolve-before-the-loop site (Finding 3 of the
+        // Task 8 dispatch audit: a missing reference fails FAST, at zero
+        // frames rendered, rather than spending the whole --settle budget
+        // reporting "could not compare" on every attempt).
+        Arcane::ReferenceResolution           m_compareResolution;
+        // The reference pixels the settle loop's compare conjunct reads.
+        // Left default/invalid whenever --compare was not given, or --bless
+        // disables the conjunct entirely (see m_compareRequested below).
+        Arcane::PixelData                     m_referencePixels;
+        // Whether the settle loop's convergence predicate grows its THIRD
+        // conjunct this run -- true only when --compare was given AND
+        // --bless was NOT (computed once, in MainLoop's pre-loop block,
+        // from HostConfig::compareReference/::bless). See RuntimeApp.hpp's
+        // FrameIo::compareRequested comment for why a --bless run must
+        // disable this rather than gate on it: blessing exists to REPLACE
+        // the reference, so the stale one on disk must never also be the
+        // convergence goal.
+        bool                                  m_compareRequested     = false;
+        // The MOST RECENT CompareImages() verdict -- overwritten every
+        // settle attempt that actually evaluates the conjunct.
+        Arcane::ImageCompareResult            m_compareResult;
+        // Whether m_compareResult was ever actually written by a real
+        // CompareImages() call this run.
+        bool                                  m_compareEvaluated     = false;
+        // Set true ONLY by MainLoop's pre-loop resolution, when --compare
+        // named a reference that does not exist on disk (or exists but
+        // failed to decode) and --bless was not given -- the fail-fast
+        // path. ShutdownGraphPath reads this to fold exitReason
+        // "compare-missing-reference" into m_graphExit (4) rather than
+        // falling through the ordinary settle/frames-complete
+        // classification.
+        bool                                  m_compareMissingFatal  = false;
 
         // ---- Boot state (EditorApp::Create/Init) ----------------------------
         // Deliberately declared HERE, outside the m_gpu/m_runtime/m_plugin

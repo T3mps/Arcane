@@ -59,16 +59,31 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //         code 1 it is ungated, so it can fire on any run.
 //   3  -- PRE-BOOT, from THIS function: this project is already open in
 //         another live editor (the direct-launch double-open guard below;
-//         the rival is focused before returning). This is code 3's ONLY
-//         meaning -- nothing post-boot produces it.
+//         the rival is focused before returning).
+//   3  -- (Task 9) --settle N never converged (two consecutive captures
+//         never compared byte-equal with the compiler idle, within the
+//         attempt budget) -- exitReason "settle-not-converged" or
+//         "compare-failed" in the JSON report. Same code RuntimeApp uses
+//         for the identical fact (RuntimeApp.cpp's ShutdownGraphPath) --
+//         see the collision note below for why this reuses 3 rather than
+//         claiming a fresh number.
+//   4  -- (Task 9) --compare named a reference that does not exist on disk
+//         (or exists but failed to decode) and --bless was not given --
+//         exitReason "compare-missing-reference", zero frames rendered
+//         (EditorApp::MainLoop's pre-loop resolve-and-fail-fast, mirroring
+//         RuntimeApp::MainLoop's own). ALSO --bless converged but failed to
+//         WRITE the reference -- exitReason "compare-failed" then. Same
+//         code RuntimeApp uses for both facts.
 //
-// THE COLLISION, named rather than left for a reader to rediscover: exit code 2
-// means TWO DIFFERENT THINGS depending on WHEN in the run it fires, and
-// ArcaneHub's launch.rs decoder (BOOT_WATCHDOG, 2 seconds) reads whichever one
-// arrives inside that window. A run that reaches EditorApp::Run() at all has
-// already cleared the pre-boot refusals THIS function performs, so from there
-// on a 2 means the later thing above -- but the Hub cannot tell the difference
-// from the outside, and would misreport a fast one.
+// THE COLLISIONS, named rather than left for a reader to rediscover:
+//
+// Exit code 2 means TWO DIFFERENT THINGS depending on WHEN in the run it
+// fires, and ArcaneHub's launch.rs decoder (BOOT_WATCHDOG, 2 seconds) reads
+// whichever one arrives inside that window. A run that reaches
+// EditorApp::Run() at all has already cleared the pre-boot refusals THIS
+// function performs, so from there on a 2 means the later thing above -- but
+// the Hub cannot tell the difference from the outside, and would misreport a
+// fast one.
 //
 // NO GUARD CAN CLOSE IT, and launch.rs does not pretend otherwise. The NRI
 // frame graph is the only render path, unconditionally, so code 2 can fire on
@@ -77,6 +92,20 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 // key on. So launch.rs's code-2 arm names BOTH meanings -- project gate or
 // render error -- rather than confidently reporting an engine/abi refusal that
 // was never involved.
+//
+// Exit code 3 gained a SECOND meaning with Task 9, for the same reason code 2
+// already has two: matching RuntimeApp's own m_graphExit numbering (3 =
+// settle-not-converged, 4 = compare-missing-reference/bless-write-failed) so
+// the two hosts' internal fold logic stays one vocabulary, rather than
+// minting editor-only numbers RuntimeApp does not share, outweighs avoiding a
+// reuse of 3 the double-open guard already claimed. UNLIKE code 2's
+// collision, though, THIS one cannot actually confuse a caller in practice:
+// the pre-boot double-open guard fires before Diagnostics::Install, with no
+// project ever opened and no report ever requested, while the post-boot
+// settle-not-converged code requires a full boot, an --offscreen --settle
+// run, and a report/screenshot artifact this task writes -- the two
+// preconditions cannot both hold in one invocation, and a caller told which
+// command it ran already knows which meaning applies.
 //
 // ===== WHICH SHARED HostConfig FLAGS THIS HOST ACTUALLY HONOURS ==============
 // The table above is exhaustive about EXIT CODES; this is the separate,
@@ -101,13 +130,28 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          io.IniFilename null, so a run can neither read a
 //                          machine-local layout nor write one back.
 //                          Requires --frames N (HostConfig refuses otherwise).
-//   --report / --probe  -- REFUSED at launch on this host, loudly. These three
-//   --settle               make a scripted caller expect an ARTEFACT (a JSON
-//                          report, a settled capture) that this host does not
-//                          produce -- and exit 0 with no artefact is precisely
-//                          the silent success an agent misreads as a pass.
-//                          Parsing them and shrugging would be worse than
-//                          refusing. ArcaneRuntime honours all three.
+//   --settle / --report -- HONOURED as of Task 9 (the editor's verification
+//   --compare / --bless    surface): PresentChromeFrame's capture arm is the
+//                          SAME three-conjunct predicate (byte-equal &&
+//                          shader-compiler-idle && [reference-match])
+//                          RuntimeFrame::CaptureTail uses, ported rather than
+//                          reinvented, and ShutdownGraphPath writes the same
+//                          VerifyReport schema (schemaVersion 2) the runtime
+//                          does -- see both functions' own comments. The one
+//                          divergence from the runtime is structural, not a
+//                          gap: this host implements no --probe (below), so
+//                          the report's `probes` array is always empty and
+//                          there is no `pick` field -- `census` is unaffected,
+//                          being carried unconditionally on both hosts.
+//   --probe             -- REFUSED at launch on this host, loudly (see below
+//                          main()). A scripted caller asking for a pixel/pick
+//                          probe would otherwise get exit 0 and a report with
+//                          no matching entry -- the same silent-success shape
+//                          Task 8 found on the runtime (a --report with pixel
+//                          probes and no --screenshot ran, exited 0, and
+//                          reported "no capture set" for every probe).
+//                          Parsing it and shrugging would be worse than
+//                          refusing. ArcaneRuntime honours it.
 //   --scene              -- REFUSED at launch on this host (final-fix-wave
 //                          audit; this table used to claim it was honoured,
 //                          which was FALSE -- HostConfig::sceneOverride has
@@ -202,16 +246,26 @@ int main(int argc, char** argv)
     }
 
     // THE HostConfig FLAGS THIS HOST DOES NOT IMPLEMENT, refused here rather
-    // than silently ignored -- Task 12's silent-inertness audit widened this
-    // from three flags to five (--pick-probe and --perf joined below). HostConfig
-    // is SHARED with ArcaneRuntime, so all five parse cleanly on this exe and
-    // would otherwise let a scripted run exit 0 having done nothing useful --
-    // the exact silent-success shape Task 8 paid to find on the runtime (a
-    // --report with pixel probes and no --screenshot ran, exited 0, and
-    // reported "no capture set" for every probe). An agent reads exit 0 plus a
-    // missing/unchanged result as a pass, so the refusal is the fix; wiring any
-    // of them into this host is a later task, and it must delete the matching
-    // line here on the same day.
+    // than silently ignored. HostConfig is SHARED with ArcaneRuntime, so
+    // every one of these parses cleanly on this exe and would otherwise let
+    // a scripted run exit 0 having done nothing useful -- the exact
+    // silent-success shape Task 8 paid to find on the runtime (a --report
+    // with pixel probes and no --screenshot ran, exited 0, and reported "no
+    // capture set" for every probe). An agent reads exit 0 plus a
+    // missing/unchanged result as a pass, so the refusal is the fix; wiring
+    // any of them into this host is a later task, and it must delete the
+    // matching line here on the same day.
+    //
+    // TASK 9 DELETES --report AND --settle FROM THIS CONDITION -- exactly
+    // the "delete the matching line here on the same day" the comment above
+    // promised. --compare/--bless need no line of their own: HostConfig.cpp
+    // refuses either one without --settle already (a shared, parse-time
+    // gate), so lifting --settle transitively lifts them too. --probe STAYS
+    // REFUSED, on its own condition below now rather than folded into this
+    // one: it is not this task's title, and ArcaneEditor implements no probe
+    // evaluation at all -- folding a three-flag OR into one message was
+    // exactly what made it easy to delete two-thirds of it without noticing
+    // the third had to stay.
     //
     // AHEAD OF Diagnostics::Install BELOW, and that placement is load-bearing
     // rather than tidy: an early `return` taken AFTER Install leaves the hang
@@ -225,18 +279,18 @@ int main(int argc, char** argv)
     // turned out to be worse than a documentation mismatch, so THIS task
     // fixed both of them too, by calling Diagnostics::Shutdown() before their
     // `return`s rather than moving them -- zero behaviour cost, and it does
-    // not touch ArcaneHub's exit-code contract for either one. The two
-    // refusals ADDED here (--pick-probe, --perf) still go ahead of Install
-    // instead, matching this block's existing shape rather than adding a
-    // third flavour of fix to one function.
-    if (!parsed.config->reportPath.empty() || !parsed.config->probes.empty() ||
-        parsed.config->settleAttempts != 0)
+    // not touch ArcaneHub's exit-code contract for either one. The refusal
+    // below (--probe) still goes ahead of Install instead, matching this
+    // block's existing shape rather than adding a third flavour of fix to
+    // one function.
+    if (!parsed.config->probes.empty())
     {
         std::fprintf(stderr,
-            "Arcane Editor: --report / --probe / --settle are not implemented on this host.\n"
-            "  This exe would exit 0 having produced none of them, which is worse than\n"
-            "  refusing. Use ArcaneRuntime for observation reports; ArcaneEditor supports\n"
-            "  --offscreen --frames N --screenshot <png> for a composited editor capture.\n");
+            "Arcane Editor: --probe is not implemented on this host.\n"
+            "  This exe would exit 0 having produced no probe entries, which is worse than\n"
+            "  refusing. Use ArcaneRuntime for pixel/pick probes; ArcaneEditor supports\n"
+            "  --offscreen --frames N --settle N --report <json> --screenshot <png>\n"
+            "  --compare <name> [--bless] for a composited editor capture and verification.\n");
         return 2;
     }
 #if !defined(ARCANE_DIST)

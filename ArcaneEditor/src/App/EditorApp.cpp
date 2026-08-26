@@ -30,6 +30,8 @@
 #include "Documents/SpriteDocument.hpp"
 
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Host/ReferenceImages.hpp>   // --compare/--bless (Task 9): ResolveReference/BlessReference/DiffArtifactPath
+#include <Arcane/Host/VerifyReport.hpp>      // --report (Task 9): VerifyReport
 #include <Arcane/Base/Assert.hpp>   // ARC_ASSERT (StageEditorShell's context tripwire)
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::ReadFile (crashReportFactory/Peek, beside materialFactory)
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::RetargetDumpDir (RetargetDumpDir, beside RetargetLayoutIni)
@@ -1811,6 +1813,19 @@ namespace Arcane::Editor
         m_retiredDocPreviews.clear();
     }
 
+    namespace
+    {
+        // --compare / --bless (Task 9). Own private copy -- see
+        // EditorAppFrame.cpp's identical helper (used by MainLoop's pre-loop
+        // resolve) for the full reasoning; ShutdownGraphPath below needs the
+        // same file-path-component spelling to re-resolve a just-blessed
+        // reference and to build the diff-artifact path.
+        const char* CompareBackendName(Arcane::GraphicsBackend backend)
+        {
+            return backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12";
+        }
+    }
+
     // ===================================================================
     // THE PROJECT SWITCH'S RENDER TEARDOWN -- SwitchProject's
     // "switch_teardown" stage, and it is deliberately the
@@ -2094,6 +2109,241 @@ namespace Arcane::Editor
             // run died and outranks the errors it produced on the way out.
             if (m_graphExit == 0)
                 m_graphExit = 2;
+        }
+
+        // --settle N (Task 9): FAIL EXPLICITLY on non-convergence -- checked
+        // HERE, not only inside the --report block below, because an agent
+        // that checks only the PROCESS EXIT CODE (never opens the JSON) must
+        // still see this fail. m_settleConverged/m_settleAttemptsUsed are
+        // only meaningful when settle was actually requested
+        // (m_config.settleAttempts != 0); a run that never asked for it
+        // leaves both at their defaults, which must never read as a
+        // failure. Precedence 1/2 > 3, matching RuntimeApp::ShutdownGraphPath:
+        // a run that already failed for a REAL reason keeps that reason --
+        // this only ever promotes an otherwise-clean exit code.
+        const bool settleFailed = m_config.settleAttempts != 0 && !m_settleConverged;
+        if (settleFailed && m_graphExit == 0)
+            m_graphExit = 3;
+
+        // --compare / --bless (Task 9). NOT nested inside the `--report`
+        // block below: --settle only requires --screenshot OR --report
+        // (HostConfig.cpp), so a run can legally pair --compare/--bless with
+        // --screenshot and no --report at all -- the PNG this writes must
+        // land regardless of whether a JSON report was ever asked for.
+        //
+        // Finding 4 of the Task 8 dispatch audit (mirrored here verbatim): a
+        // --bless run's settle loop converges on byteEqual && idle ALONE --
+        // the compare conjunct is disabled for the whole run
+        // (m_compareRequested) -- so m_captureRead here means exactly "the
+        // settle loop converged", and THIS is where that converged capture
+        // actually becomes the new reference. Never attempted when
+        // settleFailed (nothing converged to bless) or when --bless was not
+        // given at all.
+        bool compareBlessed     = false;
+        bool compareWriteFailed = false;
+        if (m_config.bless && !m_config.compareReference.empty() && m_captureRead)
+        {
+            if (Arcane::BlessReference(m_compareResolution, m_captureWidth, m_captureHeight,
+                                       m_captureRgba.data()))
+            {
+                compareBlessed = true;
+                ARC_INFO("--bless: wrote reference '{}' ({}x{}) -> {}", m_config.compareReference,
+                         m_captureWidth, m_captureHeight, m_compareResolution.blessTarget.string());
+            }
+            else
+            {
+                compareWriteFailed = true;
+                ARC_ERROR("--bless: failed to write reference to {}",
+                          m_compareResolution.blessTarget.string());
+                if (m_graphExit == 0)
+                    m_graphExit = 4;
+            }
+        }
+
+        // THE REPORT (Task 9), written LAST in this function so exitReason
+        // below can read the FINAL m_graphExit -- including the fold just
+        // above, which only settles after the vehicle is gone. WriteTo never
+        // touches m_graphExit itself, so this call only DESCRIBES what
+        // already happened; Run()'s tail still decides the process exit code
+        // exactly as it did before this task.
+        //
+        // Guarded on reportPath alone (HostConfig.hpp's "Empty = off"): a
+        // bare `--report` still writes a valid report (run identity +
+        // whatever AddCensus below always contributes). This host writes no
+        // `probes` entries and no `pick` field, ever -- --probe stays
+        // refused at main.cpp, so ParseProbe/Evaluate have nothing to do
+        // here; the report's `probes` array is simply left at its default
+        // empty state, matching what an agent would see from a runtime run
+        // that also passed no --probe.
+        if (!m_config.reportPath.empty())
+        {
+            const bool completedAllFrames =
+                m_config.maxFrames != 0 && m_frameCount >= m_config.maxFrames;
+
+            // Reuses the SAME vocabulary this function's own m_graphExit
+            // comment (EditorApp.hpp) documents (1 = a graph frame failed,
+            // 2 = RenderErrorCount grew) -- this is not a new
+            // classification, just the existing one spelled into the
+            // exit-reason string VerifyReport carries. Precedence mirrors
+            // RuntimeApp::ShutdownGraphPath's exactly, including checking
+            // m_compareMissingFatal and settleFailed BEFORE
+            // completedAllFrames: a non-converged settle run has
+            // m_frameCount >= m_config.maxFrames by construction (settle
+            // attempts only ever run after the base budget is spent), so
+            // completedAllFrames reads true regardless of whether the run
+            // actually converged -- left unguarded this would silently fall
+            // through to "frames-complete", hiding exactly the failure this
+            // mode exists to catch.
+            std::string exitReason = "frames-complete";
+            if (Arcane::GpuDeviceLostObserved())
+                exitReason = "device-lost";
+            else if (m_graphExit == 1)
+                exitReason = "render-failed";
+            else if (m_graphExit == 2)
+                exitReason = "validation-errors";
+            else if (m_compareMissingFatal)
+                exitReason = "compare-missing-reference";
+            else if (settleFailed)
+                exitReason = m_compareEvaluated ? "compare-failed" : "settle-not-converged";
+            else if (compareBlessed)
+                exitReason = "compare-blessed";
+            else if (compareWriteFailed)
+                exitReason = "compare-failed";
+            else if (!completedAllFrames)
+                exitReason = "stopped-early";
+
+            Arcane::VerifyReport report;
+            report.SetRun(Arcane::ToString(m_config.backend), m_frameCount, exitReason);
+
+            // Only set when a readback actually landed and became the
+            // agreed-on capture this run (the ordinary single-shot tail, or
+            // a converged settle attempt) -- an early exit, a run that asked
+            // for neither --screenshot nor --report, or an unconverged
+            // settle run all leave this false, and SetCapture is skipped so
+            // Brightness/Luma/Rgba-style consumers see an honest "no capture
+            // set" rather than a phantom frame. (This host evaluates no such
+            // probes itself -- see the `probes` note above -- but the same
+            // capture section feeds Servitor-side tooling the runtime's
+            // report already does.)
+            if (m_captureRead)
+                report.SetCapture(m_captureWidth, m_captureHeight, m_captureRgba);
+
+            // The census is carried whether or not a `census` PROBE was
+            // asked for, matching RuntimeApp::ShutdownGraphPath's own
+            // comment on why: ToJson's top-level "census" field reads
+            // AddCensus's values directly, and Materials() is a live,
+            // on-demand read -- so populating it always costs nothing
+            // extra, and it is unaffected by --probe staying refused on
+            // this host.
+            if (m_resolver)
+            {
+                const Arcane::SceneRenderResolver::MaterialCensus census = m_resolver->Materials();
+                report.AddCensus(census.spriteReferenced, census.spriteBound,
+                                  census.postReferenced, census.postBound,
+                                  census.meshReferenced, census.meshBound);
+            }
+
+            // The --compare verdict (Task 9), ported from RuntimeApp::
+            // ShutdownGraphPath verbatim (structure and field meanings
+            // unchanged -- see that function's own comments for the full
+            // reasoning on each branch). Emitted ONLY when a comparison was
+            // actually requested, so an agent can tell "not asked" from
+            // "asked and passed".
+            if (!m_config.compareReference.empty())
+            {
+                const char* const backendName = CompareBackendName(m_config.backend);
+                const std::filesystem::path projectRoot =
+                    (m_runtime && m_runtime->CurrentProject()) ? m_runtime->CurrentProject()->Root()
+                                                                : std::filesystem::path{};
+
+                const auto levelName = [](Arcane::ReferenceLevel level) -> std::string
+                {
+                    switch (level)
+                    {
+                        case Arcane::ReferenceLevel::Shared:  return "shared";
+                        case Arcane::ReferenceLevel::Backend: return "backend";
+                        default:                               return "none";
+                    }
+                };
+
+                std::string   resolvedLevel = levelName(m_compareResolution.level);
+                std::string   referencePath = m_compareResolution.path.string();
+                bool          passed            = false;
+                std::uint64_t diffCount         = 0;
+                double        diffRatio         = 0.0;
+                std::uint64_t maxDiffPixelsUsed = 0;
+                bool          sizesMismatch     = false;
+                std::string   diffPath;
+                std::string   errorMessage;
+
+                if (m_compareMissingFatal)
+                {
+                    errorMessage = "no reference image on disk; re-run with --bless to create one";
+                }
+                else if (compareBlessed)
+                {
+                    // m_compareResolution was captured BEFORE the write, so
+                    // its level is stale for a first bless (was None, is now
+                    // Shared) -- re-resolve so the report describes where
+                    // the reference actually ended up.
+                    const Arcane::ReferenceResolution after =
+                        Arcane::ResolveReference(projectRoot, m_config.compareReference,
+                                                  backendName);
+                    resolvedLevel = levelName(after.level);
+                    referencePath = after.path.string();
+                    passed        = true;   // the reference now IS the capture, by construction
+                }
+                else if (compareWriteFailed)
+                {
+                    errorMessage = "the settle loop converged, but writing the blessed reference "
+                                   "to '" + m_compareResolution.blessTarget.string() + "' failed";
+                }
+                else if (m_compareEvaluated)
+                {
+                    passed            = m_compareResult.passed;
+                    diffCount         = m_compareResult.diffCount;
+                    diffRatio         = m_compareResult.diffRatio;
+                    maxDiffPixelsUsed = m_compareResult.maxDiffPixelsUsed;
+                    sizesMismatch     = m_compareResult.sizesMismatch;
+                    errorMessage      = m_compareResult.errorMessage;
+
+                    if (!passed && !m_compareResult.diffRgba.empty())
+                    {
+                        const std::filesystem::path artifact =
+                            Arcane::DiffArtifactPath(projectRoot, m_config.compareReference,
+                                                      backendName);
+                        if (!artifact.empty())
+                        {
+                            if (Arcane::WritePngRgba(artifact, m_compareResult.width,
+                                                      m_compareResult.height,
+                                                      m_compareResult.diffRgba.data()))
+                                diffPath = artifact.string();
+                            else
+                                ARC_ERROR("--compare: failed to write diff artifact to {}",
+                                          artifact.string());
+                        }
+                    }
+                }
+                else
+                {
+                    errorMessage = "the settle loop never reached a stable, idle frame, so no "
+                                   "comparison ever ran";
+                }
+
+                report.SetCompare(m_config.compareReference, resolvedLevel, referencePath, passed,
+                                   diffCount, diffRatio, maxDiffPixelsUsed, sizesMismatch, diffPath,
+                                   errorMessage);
+            }
+
+            // No probe specs, ever, on this host -- Evaluate() is
+            // deliberately not called: m_probes stays its default empty
+            // array either way (ToJson emits `"probes": []`), and calling
+            // it with nothing to evaluate would only dress up a no-op as a
+            // step. --probe stays refused at main.cpp (Task 9, Finding B).
+            if (report.WriteTo(m_config.reportPath))
+                ARC_INFO("report written: {}", m_config.reportPath);
+            else
+                ARC_ERROR("failed to write report to '{}'", m_config.reportPath);
         }
     }
 

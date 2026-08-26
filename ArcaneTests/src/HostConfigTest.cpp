@@ -554,3 +554,25 @@ TEST_CASE("host: --compare/--bless default off, maxDiff budgets default unset", 
     CHECK_FALSE(o.config->maxDiffPixels.has_value());
     CHECK_FALSE(o.config->maxDiffPixelRatio.has_value());
 }
+
+TEST_CASE("host: the editor accepts the same verification flags the runtime does", "[host]")
+{
+    // HostConfig is SHARED, so this only pins that Parse itself accepts these
+    // flags on an argv[0] of "ArcaneEditor" -- it is NOT a claim about
+    // ArcaneEditor/src/main.cpp's own per-host refusal table, which this
+    // test exe does not compile (EditorApp*.cpp / main.cpp are not part of
+    // ArcaneTests) and therefore cannot observe either way. Task 9 lifts
+    // --report/--settle (and, transitively, --compare/--bless) out of that
+    // table while leaving --probe refused there -- see main.cpp's own
+    // disposition comment for that split. The real proof the refusal was
+    // actually lifted is running the ArcaneEditor.exe binary itself (this
+    // task's Steps 5/6), not this test.
+    const char* argv[] = { "ArcaneEditor", "--project", "ReferenceProject",
+                           "--offscreen", "--frames", "60", "--settle", "30",
+                           "--report", "r.json", "--compare", "editor-ui" };
+    const auto outcome = Arcane::HostConfig::Parse(12, const_cast<char**>(argv));
+    REQUIRE(outcome.config.has_value());
+    CHECK(outcome.config->settleAttempts == 30);
+    CHECK(outcome.config->compareReference == "editor-ui");
+    CHECK(outcome.config->reportPath == "r.json");
+}
