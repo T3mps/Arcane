@@ -17,9 +17,15 @@
   // place of the hardcoded array below. It is not, because the inventory that
   // task ran found there is nothing to discover: Servitor -- the one package
   // this list existed to anticipate -- turned out NOT to be a package at all.
-  // Every part of it either ships in every build or is the consuming project's
-  // own authored content, and a doctor can install neither. So the honest
-  // outcome was to state the rule rather than build a registry over zero
+  // It partitions into THREE buckets, not two: the engine mode (ships in every
+  // build), the consuming project's own authored reference corpus, and per-repo
+  // CI glue -- scripts/golden-gate.ps1 plus the Jenkins stage. A doctor can
+  // install neither of the first two; the third is excluded by an ARGUED
+  // partition, not by that clause -- CI glue is something a repo OPERATES, not
+  // something a project ACQUIRES: it arrives by git clone with no version of
+  // its own, no project could name it in packages: [], and its prerequisites
+  // describe a CI agent's role rather than a project's dependencies. So the
+  // honest outcome was to state the rule rather than build a registry over zero
   // entries. Multiplayer remains a real package, and remains unbuilt.
   // See docs/specs/2026-08-25-package-tiering-design.md (the rule, the *.arcpkg
   // format, the doctor contract, and the evidence for the Servitor verdict).

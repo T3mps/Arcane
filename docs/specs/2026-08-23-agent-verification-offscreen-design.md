@@ -6,6 +6,21 @@ Tiered 2026-08-23: the offscreen mode ships in the engine, the harness ships as
 the **Servitor** package. See "Tiering" below.
 Supersedes nothing. Follows F2a (`docs/plans/2026-08-22-f2a-scene-3d-vocabulary.md`).
 
+> **RETRACTED 2026-08-26 (Plan B, Task 13) — the status line above states the
+> answer this branch went on to disprove.** "The harness ships as the
+> **Servitor** package" is FALSE. Servitor is a **mode plus a corpus**, not a
+> package: the offscreen mode, its capture, its comparator, its blessing and its
+> report JSON all ship unconditionally in every build; what a project adds is
+> its own authored reference corpus under `Verify/References/` (produced by
+> `--bless`, i.e. state rather than a dependency); and the orchestration that
+> was expected to remain package-shaped turned out to be **per-repo CI glue**
+> (`scripts/golden-gate.ps1` + the Jenkins stage), excluded by an argued
+> partition. A doctor has nothing to report missing and nothing to install.
+> Evidence: `docs/specs/2026-08-25-package-tiering-design.md`. The line is left
+> standing rather than rewritten, per this file's amend-don't-rewrite
+> convention — see the ANSWERED note under the Tiering table, the retraction at
+> "`:439`", and the two dated blocks in "The agent-facing surface".
+
 ---
 
 ## Why
@@ -446,6 +461,23 @@ tradition its comparators use (Sikuli, Applitools Eyes, Argos, Wraith,
 Nightwatch), and unlike both it is unclaimed. Two obvious neighbours are not:
 **Stagehand** is Browserbase's AI browser-automation SDK, and **Golem** is
 already two separate test-automation frameworks.
+
+> **CORRECTED 2026-08-26 (Plan B, Task 13): "The package is named Servitor" is
+> retracted — THERE IS NO PACKAGE TO NAME.** Task 13's inventory concluded that
+> Servitor is a **mode plus a corpus**: everything it was expected to contain
+> resolved to engine-side code that ships in every build, the consuming
+> project's own authored reference corpus, or per-repo CI glue. See the
+> RETRACTED block at the top of this file and
+> `docs/specs/2026-08-25-package-tiering-design.md`.
+>
+> **What survives is the NAME and the argument for it.** The occult-servitor
+> reasoning, the agency-vs-vision tradition, and the unclaimed-name check are
+> all still sound and still the reason this vocabulary is used — for the *mode
+> and its corpus* rather than for a package. The paragraph is left standing
+> rather than rewritten so the naming argument stays readable; only the noun
+> "package" is withdrawn. The next paragraph's ruling is unaffected and was
+> right for a second reason nobody had yet: engine flags stay generic and
+> unprefixed, which is exactly what a mode-not-a-package requires.
 
 Engine flags stay generic and unprefixed -- `--offscreen`, not `--servitor-*`.
 Chrome does not namespace `--headless` for Playwright's benefit, and the mode
