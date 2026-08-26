@@ -2832,6 +2832,35 @@ namespace Arcane::Editor
         // the frame that was JUST submitted -- reading them any later risks the
         // next frame's Begin/Draw overwriting the vehicle's transient state
         // first. Reached only on Presented: both other outcomes returned above.
+        //
+        // DEFENSIVE (mirrors RuntimeFrame.cpp:710-723 exactly -- fix round 1,
+        // item 5, there): HostConfig::Parse already refuses --settle without
+        // --screenshot/--report at parse time, so `m_config.settleAttempts
+        // != 0 && !CaptureWanted(m_config)` should be unreachable from any
+        // real command line. But `pastBase` folds CaptureWanted in as one of
+        // its conjuncts, so in that state `pastBase` can NEVER become true no
+        // matter how many frames run -- `if (!pastBase) return true;` below
+        // would then fire every single iteration forever, m_settleAttemptsUsed
+        // would never advance (it lives past that early return), and neither
+        // EndFrame's `m_settleConverged` nor its `m_settleAttemptsUsed >=
+        // m_config.settleAttempts` check could ever become true either. That
+        // is an unstoppable run -- the exact hazard --offscreen's own
+        // --frames-required refusal exists to prevent -- if some caller ever
+        // builds a HostConfig bypassing Parse (a test, a future embedder).
+        // Fail CLOSED rather than hang: force the budget to its own limit so
+        // EndFrame's check trips on the very next call, the same "stop now"
+        // effect RuntimeFrame::CaptureTail's own `return true` (which directly
+        // controls its while condition) gets for free there.
+        if (m_config.settleAttempts != 0 && !CaptureWanted(m_config))
+        {
+            ARC_ERROR("--settle has nothing to compare against (--screenshot and --report are "
+                      "both empty) -- this should have been refused at parse time; stopping "
+                      "rather than spinning forever");
+            m_settleConverged    = false;
+            m_settleAttemptsUsed = m_config.settleAttempts;
+            return true;
+        }
+
         if (!pastBase)
             return true;
 

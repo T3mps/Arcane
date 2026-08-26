@@ -98,14 +98,41 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 // settle-not-converged, 4 = compare-missing-reference/bless-write-failed) so
 // the two hosts' internal fold logic stays one vocabulary, rather than
 // minting editor-only numbers RuntimeApp does not share, outweighs avoiding a
-// reuse of 3 the double-open guard already claimed. UNLIKE code 2's
-// collision, though, THIS one cannot actually confuse a caller in practice:
-// the pre-boot double-open guard fires before Diagnostics::Install, with no
-// project ever opened and no report ever requested, while the post-boot
-// settle-not-converged code requires a full boot, an --offscreen --settle
-// run, and a report/screenshot artifact this task writes -- the two
-// preconditions cannot both hold in one invocation, and a caller told which
-// command it ran already knows which meaning applies.
+// reuse of 3 the double-open guard already claimed. A HUMAN running one
+// deliberate command line knows which precondition applied and is never
+// actually confused -- the pre-boot double-open guard fires before
+// Diagnostics::Install, with no project ever opened and no report ever
+// requested, while the post-boot settle-not-converged/compare-failed code
+// requires a full boot and an --offscreen --settle run.
+//
+// A SCRIPTED CALLER LOOPING COMMAND-LINE COMBINATIONS CANNOT ASSUME THAT,
+// though (Task 12's golden-gate harness is exactly this caller: it cannot
+// know from outside whether a stale editor process is holding a project
+// lock in CI) -- so the disambiguator has to be a FACT ON DISK, not an
+// assumption about which command was run:
+//
+//     THE DISAMBIGUATOR IS REPORT-FILE EXISTENCE. A pre-boot double-open
+//     refusal never reaches EditorApp::Run() -- let alone MainLoop -- so it
+//     writes NO report at all, regardless of whether --report was passed.
+//     A post-boot settle-not-converged/compare-failed exit, by construction,
+//     only ever happens on a run that got as far as ShutdownGraphPath's
+//     report block, which ALWAYS writes to --report's path when that flag
+//     was given (see that function -- the write is unconditional on reaching
+//     the block, independent of whether the run converged). So: exit 3 with
+//     --report on the command line and the named file MISSING means the
+//     pre-boot refusal; exit 3 with the file PRESENT (and its exitReason
+//     naming one of the two post-boot facts) means the settle/compare one.
+//
+// THIS IS ALSO THE GENERAL RULE, not a special case invented for this one
+// collision: RuntimeApp already collapses two distinct facts onto its own
+// exit 3 (a non-converged settle vs. a converged-but-mismatched --compare)
+// and two onto its own exit 4 (a missing/undecodable reference vs. a bless
+// that converged but failed to write) -- see this file's own table above.
+// A caller that wants to know WHAT HAPPENED, on either host, should always
+// read `exitReason` out of the JSON report rather than trust the raw
+// process exit code alone; report-file existence is simply that same rule
+// extended one step further back, to cover the one exit-3 case where the
+// JSON that would explain it might not exist yet.
 //
 // ===== WHICH SHARED HostConfig FLAGS THIS HOST ACTUALLY HONOURS ==============
 // The table above is exhaustive about EXIT CODES; this is the separate,
