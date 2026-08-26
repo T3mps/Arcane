@@ -2160,6 +2160,45 @@ namespace Arcane::Editor
             }
         }
 
+        // THE DIFF ARTIFACT (Task 9; HOISTED OUT of the --report block by
+        // final-review I-2, in lockstep with RuntimeApp::ShutdownGraphPath --
+        // see that function's fuller comment for the reasoning). It sits here,
+        // beside the bless write, because --settle requires --screenshot OR
+        // --report, so `--compare X --settle N --screenshot out.png` with no
+        // --report is legal and used to produce NO diff image at all. The path
+        // is carried into SetCompare below when a report WAS asked for; when it
+        // was not, the PNG still lands on disk.
+        //
+        // The guard reproduces the report block's if/else-if chain exactly, so
+        // the two sites stay provably in step.
+        std::string compareDiffPath;
+        if (!m_config.compareReference.empty() && !m_compareMissingFatal && !compareBlessed
+            && !compareWriteFailed && m_compareEvaluated && !m_compareResult.passed
+            && !m_compareResult.diffRgba.empty())
+        {
+            const std::filesystem::path diffProjectRoot =
+                (m_runtime && m_runtime->CurrentProject()) ? m_runtime->CurrentProject()->Root()
+                                                           : std::filesystem::path{};
+            const std::filesystem::path artifact =
+                Arcane::DiffArtifactPath(diffProjectRoot, m_config.compareReference,
+                                         CompareBackendName(m_config.backend));
+            // Empty means DiffArtifactPath REFUSED the name (path-traversal
+            // guard) -- never write a path it declined.
+            if (!artifact.empty())
+            {
+                if (Arcane::WritePngRgba(artifact, m_compareResult.width, m_compareResult.height,
+                                         m_compareResult.diffRgba.data()))
+                {
+                    compareDiffPath = artifact.string();
+                    ARC_INFO("--compare: diff artifact written to {}", compareDiffPath);
+                }
+                else
+                {
+                    ARC_ERROR("--compare: failed to write diff artifact to {}", artifact.string());
+                }
+            }
+        }
+
         // THE REPORT (Task 9), written LAST in this function so exitReason
         // below can read the FINAL m_graphExit -- including the fold just
         // above, which only settles after the vehicle is gone. WriteTo never
@@ -2307,22 +2346,13 @@ namespace Arcane::Editor
                     sizesMismatch     = m_compareResult.sizesMismatch;
                     errorMessage      = m_compareResult.errorMessage;
 
-                    if (!passed && !m_compareResult.diffRgba.empty())
-                    {
-                        const std::filesystem::path artifact =
-                            Arcane::DiffArtifactPath(projectRoot, m_config.compareReference,
-                                                      backendName);
-                        if (!artifact.empty())
-                        {
-                            if (Arcane::WritePngRgba(artifact, m_compareResult.width,
-                                                      m_compareResult.height,
-                                                      m_compareResult.diffRgba.data()))
-                                diffPath = artifact.string();
-                            else
-                                ARC_ERROR("--compare: failed to write diff artifact to {}",
-                                          artifact.string());
-                        }
-                    }
+                    // The write itself happens ABOVE, outside this --report
+                    // block (final-review I-2) -- the diff PNG must land
+                    // whether or not a JSON report was asked for. All that is
+                    // left here is to REPORT where it went; empty means it was
+                    // never written (a pass, or a refused/failed path), exactly
+                    // what this field meant before the hoist.
+                    diffPath = compareDiffPath;
                 }
                 else
                 {
