@@ -180,12 +180,30 @@ install is the driver, the comparator, the golden corpus and the runner that
 
 This design draws the same line, and it falls exactly on the existing plan split:
 
-| | **Engine** (Plan A) | **Servitor** (Plans B + C) |
+| | **Engine** (Plan A) | **Servitor** — ~~a package (Plans B + C)~~ **a MODE plus a CORPUS** (answered 2026-08-26) |
 |---|---|---|
-| What | `--offscreen`, fixed timestep, `ReadCapture`-sourced capture, probes, the report JSON, **+ the comparison cascade and blessing** (amended 2026-08-25) | ~~comparator cascade~~, backend-keyed reference corpus, script tier, actionability, trace bundles, **+ orchestration, reference-tree lifecycle, CI reporting, the doctor** (amended 2026-08-25) |
-| Ships | always, in every build | optional, installed per project |
-| External deps a doctor must check | **none** | reference-image corpus, per-backend/platform golden tree, script runner |
-| Analogue | `chrome --headless` | Playwright |
+| What | `--offscreen`, fixed timestep, `ReadCapture`-sourced capture, probes, the report JSON, **+ the comparison cascade and blessing** (amended 2026-08-25) | ~~comparator cascade~~, ~~backend-keyed reference corpus~~, ~~script tier~~, ~~actionability~~, ~~trace bundles~~, ~~orchestration, reference-tree lifecycle, CI reporting, the doctor~~ — **all of it resolved to one of three things: engine-side code, the consuming project's own authored content, or per-repo CI glue** (answered 2026-08-26) |
+| Ships | always, in every build | **also always, in every build.** The per-project part is a blessed reference corpus, which is *content*, not an install |
+| External deps a doctor must check | **none** | **none.** Not "few" — zero, across a 14-row inventory |
+| Analogue | `chrome --headless` | ~~Playwright~~ — **also `chrome --headless`.** The golden corpus is the analogue of a project's own test fixtures, not of Playwright |
+
+**ANSWERED 2026-08-26 (Plan B, Task 13). Servitor is a mode plus a corpus. It is
+not a package.** The open question this table carried is closed, with an
+inventory of every dependency taken from the code as built —
+`docs/specs/2026-08-25-package-tiering-design.md`, "Step 1". Three tests decided
+it, and each would have flipped the verdict had it gone the other way:
+**(a)** zero rows are things a doctor could report missing and then install —
+every non-shipping row is authored project content or a checked-in CI script;
+**(b)** Servitor adds zero requirements on the *machine* over the engine
+baseline, since anything that can run `ArcaneEditor` can already run
+`--compare`; **(c)** its only "install" action is `--bless`, a flag on the mode
+itself, so the capability manufactures its own alleged dependency — which makes
+that dependency **state**, not a dependency. The honest residue is
+`scripts/golden-gate.ps1` and the Jenkins stage, which *are* optional and
+dependency-bearing but are **per-repo CI glue**, not per-project, and live in
+this repo rather than in any project. Multiplayer remains the only real package
+on the board, and it is unbuilt. That spec also carries the standalone
+mode/package rule, the `*.arcpkg` format, and the doctor contract.
 
 The decisive test is the third row, and it is the codebase's own. `ArcaneHub`'s
 Packages surface defines a package as *"optional capability, and the
@@ -213,6 +231,11 @@ Two consequences bind Plan A:
 Servitor is intended as the Hub's **first real package** -- the entry that
 replaces the placeholder's "not built yet".
 
+> **SUPERSEDED 2026-08-26 (Task 13). It is not a package, and it did not replace
+> the placeholder.** The placeholder stands, now stating the rule instead of
+> listing Servitor as planned. Multiplayer is the Hub's first real package, and
+> it is unbuilt. See the ANSWERED note under the table above.
+
 #### AMENDED 2026-08-25 (Plan B) -- the comparator moves engine-side, and this line is convention, not mechanism
 
 Three corrections to this section, all made before Plan B's first task.
@@ -238,6 +261,17 @@ that checks a project actually has a blessed corpus. Plan C's script tier will
 likely land engine-side too, for the same in-process reason. Whether Servitor is
 a *package* or a *mode plus CI glue* is now an open question that Plan B is
 expected to answer with evidence, not prose.
+
+> **ANSWERED 2026-08-26 (Task 13): a mode plus a corpus, with the CI glue
+> per-repo.** This paragraph was still one step too generous. It supposed that
+> "orchestration and policy" would remain package-shaped once the comparator
+> moved. The inventory says otherwise: the reference tree's lifecycle IS
+> `--bless`, which ships; CI reporting IS `scripts/golden-gate.ps1` plus the
+> Jenkinsfile stage, which live in **this repo** and are installed by no
+> project; and the doctor "that checks a project actually has a blessed corpus"
+> would be checking the project's **own content**, which is not what a doctor
+> is for. Full evidence:
+> `docs/specs/2026-08-25-package-tiering-design.md`.
 
 **3. This line is maintained by convention and by the JSON seam -- there is no
 mechanism.** Verified 2026-08-25: `ArcaneHub/src/lib/components/Sidebar.svelte:32`
@@ -269,6 +303,76 @@ Docker) in the Gacha repo, and its dependency shape is the inverse of
 Servitor's. The manifest must be able to express both without either being
 built to fit it. A manifest that can only describe the package it was extracted
 from has not been formalized.
+
+#### DISCHARGED 2026-08-26 (Task 13) -- what landed, and one factual correction
+
+The directive above is discharged by
+**`docs/specs/2026-08-25-package-tiering-design.md`**. Item by item, because two
+of the five did not land as written and the reasons are the finding:
+
+1. **A package manifest format.** Landed -- `*.arcpkg`, JSON, `formatVersion`,
+   with `requires` entries in a **closed set of checkable kinds**
+   (`tool`/`service`/`tree`/`env`, plus a reserved-and-unexercised `package`).
+2. **A `packages: []` declaration in `.arcproj`.** Landed, on
+   `ReferenceProject.arcproj`, **empty and truthfully so**. `formatVersion`
+   stays at **1**: the field is optional and its absence means the same as `[]`.
+   The engine deliberately does **not** parse it -- packages are a tooling-tier
+   concept, and consequence 1 above forbids the engine tier growing
+   optional-capability machinery. Safe because `RewriteManifest` is a
+   read-modify-write over `ordered_json`, and covered by a running test
+   (`ArcaneTests/src/ProjectManifestTest.cpp` round-trips an unknown top-level
+   key through the guid self-heal and `SetBootScene`, asserting both value and
+   key order survive).
+3. **A doctor contract.** Landed as a **contract**, and nothing was built.
+   **FACTUAL CORRECTION: `scripts/setup.ps1` does not exist in this
+   repository.** Arcane's `scripts/` holds `check-faults.ps1`,
+   `gen_icons_lucide.py`, `generate.bat`, `golden-gate.ps1`, `launch.bat`,
+   `launch.ps1`, `setup-vcpkg-deps.bat`, `sync-astra.ps1`. The orchestrator
+   named above lives in the **Aphelyon/Gacha repo**
+   (`Gacha/scripts/setup.ps1` + `scripts/doctor.bat`, with `Setup.exe` as a
+   Tauri GUI over it). `PackagesView.svelte`'s comment repeated the same error
+   and has been corrected too. It is a **precedent and reference
+   implementation, in another repository** -- not a dependency, and Arcane must
+   not take one on. The "drive the same orchestrator rather than growing a
+   second one" discipline is honoured by **building nothing**. Its real
+   contribution was the `pass`/`warn`/`fail` + message shape (its own
+   `@@WIZ doctor item=… status=… msg=…` protocol) and four of the five
+   `requires` kinds, which were **derived from its eight live checks** rather
+   than invented.
+4. **A registry-driven Hub Packages view.** **Did NOT land, deliberately.** The
+   Hub has no command that can discover or parse a manifest, so this was new
+   Rust work -- and the inventory found **zero** manifests to discover, because
+   Servitor is not a package. A registry over zero entries is machinery
+   pretending to be a feature. The view instead **states the rule**, lists
+   Multiplayer's real requirements as *listed, not checked*, and carries a
+   "Not a package" row for Servitor with the reasoning. The placeholder's own
+   discipline -- no fake install buttons, because a disabled "Install" is a
+   worse lie than a sentence -- is intact. Discovery is **specified** in the new
+   spec (`<engine>/Packages/*/*.arcpkg`, engine-scoped) so the work is defined
+   the day a real package exists.
+5. **A written rule for where the line falls.** Landed, as a standalone citable
+   rule with three sharpening tests, in the new spec.
+
+**The paper validation did its job.** Expressing Multiplayer required a
+`kind: "env"` that Servitor never exercised -- `APHELYON_INTERNAL_SECRET`, which
+a Release Auth build refuses to start without. The same format run at Servitor
+yields an **empty** `requires`, which is the verdict. It also surfaced one
+bounded gap left unfixed on purpose: `kind: "tool"` for `docker` cannot express
+that the *image* must be `aphelyon/postgres:16` (custom, carrying `pg_partman`)
+rather than stock `postgres:16`. A future `kind: "image"` is the shape that
+wants; inventing it on one unbuilt example is not.
+
+**One deliverable the directive did not name** was banked separately by the user
+on 2026-08-25 and is also discharged: four questions about Unreal's
+screenshot-comparison system that Playwright structurally cannot answer, in
+`docs/research/2026-08-26-unreal-screenshot-comparison-research.md`. Public Epic
+documentation only, never engine source. It changed **nothing** here -- Playwright
+remains the reference of record and bit-parity remains a Global Constraint -- and
+banked three findings for future plans. The most load-bearing: Epic requires a
+screenshot to satisfy `delay` **and** `frame_delay` -- *both* a time bound and a
+frame bound -- which independently corroborates the fix shape for the OWED
+`--settle` defect, whose whole problem is an attempt budget standing in for a
+time budget.
 
 ---
 
