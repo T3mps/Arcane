@@ -162,3 +162,63 @@ TEST_CASE("compare: every should-fail fixture is caught, SSIM traps included", "
         CHECK_FALSE(res.diffRgba.empty());
     }
 }
+
+TEST_CASE("compare: the engine trap corpus is classified correctly", "[compare][conformance]")
+{
+    // Engine-shaped traps, additive on top of Playwright's. These are the
+    // regressions this gate actually exists to catch -- a missing mesh, a
+    // wrong normal matrix, an unbound post chain -- plus one pair that must
+    // NOT be caught (cross-backend text), because a gate that flags
+    // legitimate glyph rounding gets loosened until it stops catching
+    // anything. Provenance for every pair: ReferenceProject/Verify/Traps/README.md.
+    const std::filesystem::path traps("ReferenceProject/Verify/Traps");
+
+    // SELF-DEFENSE, deliberately duplicating the shape of the two Playwright
+    // presence/exactness checks above (see their comments for why this is
+    // NOT redundant to remove): each TEST_CASE here must be self-defending in
+    // isolation. Without this REQUIRE, a missing or unstaged traps/ directory
+    // (e.g. the exe run from the wrong working directory, or a build that
+    // predates Task 11's premake widening) makes CasesUnder come back empty
+    // and BOTH loops below iterate zero times -- reporting PASSED with zero
+    // assertions rather than failing loudly. Task 6's own fix round added
+    // exactly this guard to exactly this shape of test after a negative
+    // control proved the unguarded version passes vacuously; this trap corpus
+    // gets the same guard from day one rather than waiting for its own
+    // negative control to rediscover the hole.
+    const auto shouldFail  = CasesUnder(traps / "should-fail");
+    const auto shouldMatch = CasesUnder(traps / "should-match");
+    REQUIRE(shouldFail.size()  == 3);
+    REQUIRE(shouldMatch.size() == 1);
+
+    for (const auto& c : shouldFail)
+    {
+        Arcane::PixelData expected, actual;
+        INFO("trap " << c.label);
+        REQUIRE(Load(c.expected, expected));
+        REQUIRE(Load(c.actual, actual));
+
+        const auto res = Arcane::CompareImages(expected, actual);
+        INFO("diffCount " << res.diffCount);
+        CHECK_FALSE(res.passed);
+    }
+
+    for (const auto& c : shouldMatch)
+    {
+        Arcane::PixelData expected, actual;
+        INFO("trap " << c.label);
+        REQUIRE(Load(c.expected, expected));
+        REQUIRE(Load(c.actual, actual));
+
+        // Cross-backend text needs a budget: 121 pixels measured at the desk,
+        // rounded up. This is the ONE place an aggregate budget is
+        // legitimate, and it is derived from a measurement, not chosen to
+        // make a test pass -- see README.md's should-match section. Do NOT
+        // raise this if a should-fail trap ever needs it: that would be a
+        // finding about the trap or the comparator, not a threshold to tune.
+        Arcane::ImageCompareOptions opt;
+        opt.maxDiffPixels = 200;
+        const auto res = Arcane::CompareImages(expected, actual, opt);
+        INFO("diffCount " << res.diffCount);
+        CHECK(res.passed);
+    }
+}

@@ -703,14 +703,22 @@ project "ArcaneTests"
         -- project's own COPYDIR two screens up, and ArcaneEditor's/
         -- ArcaneRuntime's matching lines) -- GoldenImageTest.cpp's
         -- "[golden]" case is a CHEAP, no-GPU text check of this ONE file and
-        -- nothing else under ReferenceProject/ is read from this exe. A
-        -- narrow {COPYFILE} rather than mirroring the full {COPYDIR}: a
-        -- later golden-image case that wants the project's REFERENCE IMAGES
-        -- too (Verify/References/...) will need to widen this to the full
-        -- directory copy -- see that task's own audit before assuming this
-        -- one line is enough.
+        -- nothing else under ReferenceProject/Saved/ is read from this exe.
         '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Saved"',
         '{COPYFILE} "%{wks.location}/ReferenceProject/Saved/verify-layout.ini" "%{cfg.buildtarget.directory}/ReferenceProject/Saved/verify-layout.ini"',
+        -- Task 11 (plan-b comparator): the engine trap corpus. Task 10's own
+        -- comment (above, now narrowed) predicted this would need widening
+        -- "once Task 12's [gpu][golden] cases want staged reference images" --
+        -- it arrived one task early instead, because ImageCompareConformance
+        -- Test.cpp's trap case (Step 3) reads ReferenceProject/Verify/Traps/
+        -- by a relative path from this exe's own directory, same as the
+        -- playwright-fixtures COPYDIR above. Staged as a NAMED subtree
+        -- (Verify/, not the whole ReferenceProject) rather than mirroring the
+        -- host exes' full {COPYDIR}: nothing else under ReferenceProject/ is
+        -- read from this exe today. When Task 12 lands its own References/
+        -- images under this same Verify/ tree, this one line already covers
+        -- them -- no further widening needed.
+        '{COPYDIR} "%{wks.location}/ReferenceProject/Verify" "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         -- Vendored dxc trio (minus dxc.exe): the runtime compile service
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
         '{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
