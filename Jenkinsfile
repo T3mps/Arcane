@@ -71,9 +71,27 @@ pipeline {
                     // configuration it is about to run, since that folder is
                     // a single slot shared across configs) before launching
                     // anything, so no separate step is needed here for that.
+                    //
+                    // ORDER IS LOAD-BEARING: RELEASE THEN DEBUG, never the
+                    // reverse. Whichever config runs LAST is the one that
+                    // wins the single Binaries/ slot, and the very next
+                    // stage -- "ReferenceProject (SDK build)", pre-existing
+                    // and unmodified -- does a PLAIN (non-Rebuild) `msbuild
+                    // /p:Configuration=Debug` on it, then "Scripted
+                    // GPU-verify" launches the Debug ArcaneRuntime.exe
+                    // against whatever that produced. A plain build on an
+                    // already-current Debug tree can silently no-op ("all
+                    // outputs up-to-date") rather than actually rebuild, so
+                    // if this stage left the slot in RELEASE state, that
+                    // next stage would hand the Debug host a stale Release
+                    // ReferenceGame.dll -- the exact single-slot staleness
+                    // class this script's own /t:Rebuild exists to prevent,
+                    // reintroduced one stage downstream. Running Release
+                    // first and Debug last leaves the slot in the state the
+                    // rest of the pipeline already assumes.
                     steps {
-                        bat 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\golden-gate.ps1 -Configuration Debug'
                         bat 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\golden-gate.ps1 -Configuration Release'
+                        bat 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\golden-gate.ps1 -Configuration Debug'
                     }
                     post {
                         // Diff artifacts land under EACH exe's own directory
