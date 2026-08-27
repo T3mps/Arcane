@@ -479,6 +479,52 @@ Write-Host "=== golden-gate summary ($Configuration) ===" -ForegroundColor Cyan
 $results | Format-Table -AutoSize -Wrap
 
 $knownRed = @($results | Where-Object { $_.Verdict -eq 'KNOWN-RED' })
+
+# ---- THE MACHINE-READABLE VERDICT. ----
+#
+# WHY THIS EXISTS. This gate's whole purpose is to be consumed by an AGENT --
+# that is what the arc it belongs to was built for. But until now the ONLY
+# signals it emitted were a process exit code and English prose, and the exit
+# code IS 0 WHETHER OR NOT AN ADVISORY LANE IS RED. So a consumer doing the
+# obvious thing -- run the gate, check the exit code -- reads green and
+# concludes the editor rendering was verified. It was not. The banner above is
+# loud to a human skimming a log and completely silent to anything parsing one.
+#
+# Found by a desk pass on 2026-08-26, by asking what THIS TOOL'S ACTUAL
+# CONSUMER sees rather than what a person sees. A default channel that omits
+# the one fact that qualifies the result is not neutral -- it reports a
+# falsehood to everyone who trusts it.
+#
+# So: one aggregated file, per configuration, next to the build output. The
+# field that matters is `advisoryFailures` -- nonzero means "exit 0 does NOT
+# mean everything was verified". Consumers should assert on `gatePassed` AND
+# `advisoryFailures`, never on the exit code alone.
+$summary = [pscustomobject]@{
+    schemaVersion    = 1
+    configuration    = $Configuration
+    advisoryLanes    = @($AdvisoryLanes)
+    gatePassed       = (-not $anyFailure)   # hard-gating lanes only
+    advisoryFailures = $knownRed.Count      # >0 => exit 0 is NOT a clean bill of health
+    lanes            = @($results | ForEach-Object {
+        [pscustomobject]@{
+            combo    = $_.Combo
+            verdict  = $_.Verdict
+            advisory = ($_.Verdict -eq 'KNOWN-RED')
+            detail   = $_.Detail
+        }
+    })
+}
+$summaryPath = Join-Path $repoRoot "bin\$configDirName\golden-gate-summary.json"
+try {
+    $summaryDir = Split-Path -Parent $summaryPath
+    if (-not (Test-Path $summaryDir)) { New-Item -ItemType Directory -Path $summaryDir -Force | Out-Null }
+    $summary | ConvertTo-Json -Depth 5 | Set-Content -Path $summaryPath -Encoding UTF8
+    Write-Host "golden-gate: machine-readable verdict -> $summaryPath" -ForegroundColor Cyan
+} catch {
+    # Never let summary-writing decide the gate's verdict; say so and continue.
+    Write-Host "golden-gate: WARNING -- could not write $summaryPath ($($_.Exception.Message))" -ForegroundColor Yellow
+}
+
 if ($knownRed.Count -gt 0) {
     # Second printing, deliberately: the first was ~200 lines of build output
     # ago. The summary is the part a CI reader actually scrolls to.

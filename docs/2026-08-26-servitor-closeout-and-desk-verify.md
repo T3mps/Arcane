@@ -143,6 +143,40 @@ executes.
 The switch itself is the tracking artifact; when defects 1 and 2 are fixed, delete it. It is
 reversible in one flag.
 
+## 3b. Consuming the gate from an agent — read the summary, never the exit code
+
+**`golden-gate.ps1` exits 0 whether or not an advisory lane is red.** That is by design (an
+advisory lane must not fail the build), but it means the exit code alone cannot tell you
+whether the editor rendering was actually verified. Before 2026-08-27 the only signal that
+distinguished the two was English prose on stdout — loud to a human skimming a Jenkins log,
+completely silent to anything parsing one.
+
+The gate now writes an aggregated verdict to:
+
+```
+bin/<Configuration>-windows-x86_64-md/golden-gate-summary.json
+```
+
+```json
+{
+  "schemaVersion": 1,
+  "configuration": "Debug",
+  "advisoryLanes": ["ArcaneEditor"],
+  "gatePassed": true,
+  "advisoryFailures": 2,
+  "lanes": [ { "combo": "...", "verdict": "PASS|KNOWN-RED|FAIL", "advisory": false, "detail": "..." } ]
+}
+```
+
+**The contract: assert on `gatePassed` AND `advisoryFailures`, never on the exit code alone.**
+`gatePassed: true` with `advisoryFailures: 2` is exactly the state that exit 0 cannot express —
+the hard-gating lanes passed, and two lanes were not verified at all. When the owed defects
+land and `-AdvisoryLanes` is deleted, `advisoryFailures` goes to 0 and the two agree again.
+
+This was found by asking what the tool's *actual consumer* sees rather than what a person
+sees. A default channel that omits the one fact qualifying the result is not neutral — it
+reports a falsehood to everyone who trusts it.
+
 ## 3a. The bless workflow trap — measured 2026-08-26, document it wherever blessing is described
 
 **`--bless` writes to the level the reference RESOLVED FROM, and that is not the repo unless
