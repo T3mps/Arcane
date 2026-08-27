@@ -100,6 +100,32 @@ load-bearing site is the resolver's material-binding decision at **`SceneRenderR
 with the new flag meaning, and rewriting them would be churn. **This requires an audit, not a
 blind sweep** — see "Method".
 
+**Scope, measured 2026-08-27 during planning — the earlier figure in this spec was wrong.**
+An earlier revision said "395 code uses". That counted `ThirdParty/`, where the Vulkan headers
+alone carry ~119. The real figures:
+
+| | |
+|---|---|
+| `headless` in non-ThirdParty code | **228** lines |
+| …co-occurring with device/backend/GPU vocabulary (**the colliding sense**) | **112** |
+| …remainder (no-window sense, **left alone**) | 116 |
+| files containing **both** `--offscreen` and `headless` | **8** |
+| identifiers (not comments) carrying the word | **`PumpHeadless()`** (2 sites), 2 `TEST_CASE` name strings, 1 filename |
+
+So the colliding sense is **not** a minority to be teased out — it is roughly half, and it is the
+dominant sense in engine code (NRI, audio, `Runtime`, `GpuInstrumentation`,
+`DeviceCreationVulkan`). **USER DECISION 2026-08-27: rename all ~112 of them**, across ~40
+files, so the word means exactly one thing everywhere — chosen over confining the rename to the
+8 files where both meanings coexist.
+
+The work is overwhelmingly **comment text**: the only code-shaped changes are `PumpHeadless()`
+→ `PumpDeviceless()` and two test-case name strings.
+
+**The 8 co-occurring files are the highest-risk review surface** — they are where a line's sense
+is genuinely ambiguous, because both meanings are live in the same file:
+`HostConfig.hpp`, `NriGraphContext.{cpp,hpp}`, `EditorApp.cpp`, `ArcaneEditor/src/main.cpp`,
+`RuntimeApp.cpp`, `RuntimeFrame.cpp`, `HostConfigTest.cpp`.
+
 ### 3. The CLI/config surface renames; the render-technique layer does not
 
 - **Renamed:** the flag (`--headless`), and `HostConfig::offscreen` → `HostConfig::headless`.
@@ -142,9 +168,9 @@ count that had gone stale inside the document stating it.)
 |---|---|---|
 | `--offscreen`, **live** sites | **144** | rename to `--headless` |
 | `--offscreen`, **historical** docs (`docs/plans/*`, the 08-23 and 08-25 specs, the rulings record) | **70** | **leave** (decision 4) |
-| `headless` in code (`.cpp`/`.hpp`) | **395** | **audit**, rename only the device-less sense |
+| `headless` in NON-ThirdParty code | **228** (112 device-sense, 116 no-window) | **audit**, rename the 112 device-sense to `deviceless` |
 | `headless` in `docs/` | 588 across 148 files | **leave** (historical), except live operational docs |
-| `headless` in `ThirdParty/` | 16 | **leave** |
+| `headless` in `ThirdParty/` | ~167 (mostly Vulkan headers) | **leave** |
 | `offscreen` everywhere (all senses) | **1400** tracked, **803** in code | of which only the 144 live flag sites change; the rest **stays** (decision 3) |
 
 ### Callers that MUST land in the removal commit
@@ -185,9 +211,11 @@ caller that turns a "hard break lands atomically" claim into a broken tree.
 
 ## Method
 
-1. **Audit before renaming.** Classify all 395 code uses of "headless" into *device-less sense*
-   (rename) and *no-window sense* (leave). A blind `sed` would rename both and destroy the
-   distinction this arc exists to create.
+1. **Audit before renaming.** Classify all **228** non-ThirdParty code uses of "headless" into
+   *device-less sense* (rename, ~112) and *no-window sense* (leave, ~116). A blind `sed` would
+   rename both and destroy the distinction this arc exists to create. The discriminator: does the
+   sentence mean **no GPU device** (rename) or **no window / no UI** (leave)? The 8 files holding
+   both meanings need line-by-line judgment; the rest are usually uniform per file.
 2. **Flag rename and internal rename are separate commits.** One is a user-visible contract
    change; the other is internal vocabulary. Reviewing them together hides both.
 3. **The removal and its callers are ONE commit.** A commit where `--offscreen` is gone but
