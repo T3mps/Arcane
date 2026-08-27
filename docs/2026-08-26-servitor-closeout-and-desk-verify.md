@@ -288,6 +288,87 @@ keeping: fold the two `CompareBackendName` copies into one exported helper with 
 exhaustive `switch` on the next host-tier touch, and batch the doc-consistency minors into
 a single pass.
 
+## 6. ARC 2 SCOPE — everything that must close before the automation tooling is done
+
+Written 2026-08-27 as the single input to arc 2's spec, because until now this list lived
+across three documents and one conversation. **Arc 1 is the `--headless` rename**
+(`docs/specs/2026-08-27-headless-rename-design.md`, plan at
+`docs/plans/2026-08-27-headless-rename.md`); **arc 2 is everything below.**
+
+### 6.1 The four owed engine defects — §3 above has the full mechanisms
+
+1. **`--settle` counts attempts against a millisecond-denominated condition.** Fix: add
+   `--settle-timeout <ms>`; bail only when **both** bounds are spent
+   (`attemptsUsed >= attempts AND elapsed >= timeout`). Unreal requires `delay` **and**
+   `frame_delay` — "both … must be met" — and **neither reference bounds by attempts alone**
+   (Playwright bounds by time). Needs a default; 5000 ms was proposed, not settled.
+2. **The editor's verify capture depends on `Saved/Diagnostics/`.** Fix: give `Project::Open`
+   an **options struct** (`mountDiagnostics`, default true), threaded from `HostConfig` through
+   `Runtime::OpenProject`. Verified during design: `Project::Open(path, onProgress)` has **no**
+   awareness of `HostConfig`, so this is a real engine-API change, not a local conditional —
+   `Runtime.cpp:394`, `EditorAppProject.cpp:545` are the call sites. The struct is intended to
+   absorb future per-open engine settings (user direction).
+3. **`settleAttemptsUsed` absent from `VerifyReport`.** Fix: `schemaVersion` 2→3, an **honest
+   count** (the editor stops via a separate flag instead of forcing the counter to its budget —
+   today the runtime leaves it at 0 in the same defensive branch where the editor forces it to
+   the limit), **plus `settleBailReason`** (converged / attempts-exhausted / timeout /
+   capture-failed). Modelled on Unreal, where a non-pass carries a mandatory `Reason` and stays
+   visible. Once defect 1 adds a second bound there are two exhaustion modes, so a bare count is
+   ambiguous. `VerifyReportTest.cpp` asserts the report parses without linking the engine —
+   keep that property.
+4. **`--fixed-dt nan`** (`HostConfig.cpp:170`, the `<= 0.0` guard) — same UB class as the
+   `--max-diff-pixel-ratio` bug fixed in `92792847`. One line.
+
+### 6.2 A fifth defect, found while re-reviewing arc 1's spec
+
+5. **`ArcaneHub`'s `golden_run()` keys on vocabulary the engine does not have.**
+   `ArcaneHub/src-tauri/src/launch.rs:104` is `extra.iter().any(|a| a.starts_with("--golden-"))`,
+   and **no `--golden-*` flag exists anywhere** in ArcaneClient, ArcaneRuntime, ArcaneEditor or
+   ArcaneTests. The real vocabulary is `--headless`/`--offscreen`, `--settle`, `--compare`,
+   `--report`. So the guard at `launch.rs:335` (`Some(3) if !golden`) **always** matches, and a
+   genuine golden compare failure is reported to the user as *"that project is already open in
+   another editor"*; the correct arm at `:338` is **unreachable**. Its tests
+   (`golden_run_sees_golden_vocabulary_only`, `launch.rs:585`) pass because they assert on the
+   same retired vocabulary — **a test that cannot fail.** The fix must key on flags the engine
+   actually registers, and its test must assert against those.
+
+   **Sequencing note:** arc 1 renames `--offscreen` → `--headless`, so fix this *after* arc 1
+   or it will be written against a flag name that is about to change.
+
+### 6.3 The close-out actions those unblock
+
+6. **Re-bless `editor-ui`** — legitimate *only once defect 2 lands* and its input is
+   deterministic. Doing it before is what §3 defect 2 explicitly forbids.
+7. **Delete `-AdvisoryLanes` and its Jenkinsfile argument** once defects 1 and 2 land and both
+   editor lanes go green. `golden-gate.ps1`'s own header says *"WHEN BOTH LAND, DELETE
+   -AdvisoryLanes AND the Jenkinsfile argument that passes it. This switch IS the tracking
+   item."* `advisoryFailures` in `golden-gate-summary.json` should then read 0.
+8. **`Write-OwedDefects` hardcodes editor-specific text** regardless of the lane named — cosmetic
+   while ArcaneEditor is the only advisory lane, wrong the moment a second is added. Dies with
+   item 7 if that happens first.
+
+### 6.4 Deferred minors to triage — see §4
+
+The five parked from the final fix wave, of which **`ArcaneTests/src/HostConfigTest.cpp` (~`:625`)
+is the one to fix first**: a case *named* "still reports the `--compare` mistake" that asserts
+only refusal and exit 2, so it passes under either ordering. Plus the twenty triaged "ship",
+with two batching notes worth honouring: fold the two `CompareBackendName` copies into one
+exported helper with an exhaustive `switch` on the next host-tier touch, and batch the
+doc-consistency minors into a single pass.
+
+### 6.5 Evidence still outstanding
+
+- **The Jenkins pipeline has never run `-AdvisoryLanes`.** Both GitHub Actions lanes are green,
+  but the self-hosted pipeline has not exercised the advisory path once. Its first run is the
+  only real evidence for whether that ruling holds — and if items 1, 2 and 7 land first, the
+  question dissolves before it is ever answered. Either outcome is fine; what is not fine is
+  assuming it works.
+- **Named so they are not assumed closed** (§2's section F): `FastStats` memory at 4K is
+  arithmetic, not a measured run; the **Linux `IsIdle()` stub still returns `true`
+  unconditionally**, which will silently degrade `--settle` on that platform — and it interacts
+  directly with defect 1, since a timeout bound would become the *only* real signal there; mesh
+  picking is still unimplemented (`CollectPickables` has no `MeshRenderer` view).
+
 ## 5. What the arc proved, in one paragraph
 
 The comparator is a port of Playwright's image comparison, validated against **Playwright's
