@@ -38,6 +38,13 @@ Specs: `docs/specs/2026-08-23-agent-verification-offscreen-design.md`,
   is not in this repository** — `test.arcscene` belongs to the Gacha/Aphelyon game project.
   The reference scene here is `ReferenceProject/Content/scenes/main.arcscene`, and the mesh
   entity is **`MeshCube`** (it carries the `Arcane::MeshRenderer`).
+- **Section D says "three windowed `[gpu]` runs". `ArcaneTests.exe "[gpu]"` NO LONGER OPENS A
+  WINDOW AT ALL** — Plan A moved that GPU work offscreen, which was the point of the arc.
+  Measured 2026-08-27: three full `[gpu]` runs (62002 assertions / 25 cases each) produced
+  **zero** `Window created` lines, and the cases log `vehicle ready: … -- no window, no
+  swapchain` themselves. **A clean `check-faults.ps1` after those runs therefore proves
+  nothing about the driver fault**, which only ever fired with a real window and a d3d12
+  swapchain. See §2a for the procedure that actually exercises the trigger.
 
 The reason for the inversion is worth keeping: the 121 "cross-backend pixels" recorded in
 Plan A were **never** glyph-rasterisation variance. 120 of them are a debug HUD label whose
@@ -142,6 +149,38 @@ executes.
 **The cost of this decision, stated plainly: an advisory lane is one people stop reading.**
 The switch itself is the tracking artifact; when defects 1 and 2 are fixed, delete it. It is
 reversible in one flag.
+
+## 2a. Section D — the corrected driver-reproduction procedure
+
+The fault being hunted is `nvwgf2umx.dll +0x1203ce` — the **NVIDIA D3D12 user-mode driver**.
+It fired seven times in one ~14-hour window on 2026-07-09/10 and has been silent since,
+because from 2026-07-10 the standing rule was "run GPU work at the physical desk". **The
+trigger was never removed, only avoided.** Machine context when it fired: `parsecd` + Parsec
+Virtual Display Adapter + Virtual Desktop Monitor. `~[gpu]` was immune even then — no windows,
+no devices.
+
+So reproduction needs three things the offscreen suite cannot supply: **a real window, a d3d12
+swapchain, and Parsec active.** Use a windowed host run, not `ArcaneTests`:
+
+```
+:: with Parsec running and the virtual display active
+cd D:\dev\starworks\Arcane
+bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject --frames 600 --backend dx12
+bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject --frames 600 --backend dx12
+bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject --frames 600 --backend dx12
+scripts\check-faults.ps1 -Days 1
+```
+
+Confirm each run logs `Window created: 'Arcane Runtime' …` — that line is the evidence the
+trigger condition was actually present. **No such line means the run did not test anything**,
+which is exactly how the first attempt produced a misleading clean result.
+
+`--backend dx12` is deliberate: the faulting module is the D3D12 UMD. A vulkan run does not
+exercise it. `--frames 600` gives the window real time on screen rather than a flash.
+
+A clean `check-faults.ps1` **after runs that logged `Window created`** closes Section D
+validly. Anything matching `nv*`/`amd*`/`ati*` is the trigger reproduced after six weeks
+quiet, and is its own finding rather than part of this close-out.
 
 ## 3b. Consuming the gate from an agent — read the summary, never the exit code
 
