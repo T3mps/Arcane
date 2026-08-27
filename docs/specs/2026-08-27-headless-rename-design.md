@@ -113,10 +113,21 @@ alone carry ~119. The real figures:
 | identifiers (not comments) carrying the word | **`PumpHeadless()`** (2 sites), 2 `TEST_CASE` name strings, 1 filename |
 
 So the colliding sense is **not** a minority to be teased out — it is roughly half, and it is the
-dominant sense in engine code (NRI, audio, `Runtime`, `GpuInstrumentation`,
-`DeviceCreationVulkan`). **USER DECISION 2026-08-27: rename all ~112 of them**, across ~40
-files, so the word means exactly one thing everywhere — chosen over confining the rename to the
-8 files where both meanings coexist.
+dominant sense in engine code (NRI, audio, `Runtime`, `GpuInstrumentation`). **USER DECISION
+2026-08-27: rename all ~112 of them**, across ~40 files, so the word means exactly one thing
+everywhere — chosen over confining the rename to the 8 files where both meanings coexist.
+
+**Correction, made after execution (2026-08-27).** That list originally also named
+`DeviceCreationVulkan`, and it did not belong there. Both of that file's hits
+(`DeviceCreationVulkan.cpp:48,50` — *"Surface extensions are requested even for headless
+devices … keep one code path for both headless tests and windowed swapchains"*) are the
+**no-window / no-surface** sense, explicitly contrasted against "windowed swapchains", and both
+were correctly LEFT during execution; two reviewers verified this at source. Every other name in
+the list did carry the device sense and stands. **Why it was wrong matters more than the entry**:
+the list came from a *proxy* — "headless" co-occurring with device/backend/GPU vocabulary — which
+a Vulkan **device-creation** file matches on its path and its neighbouring code no matter what
+its sentences mean. That is the same failure mode as the plan's broken Step-5 grep. A proxy for
+the sense is not the sense; only reading the sentence is.
 
 The work is overwhelmingly **comment text**: the only code-shaped changes are `PumpHeadless()`
 → `PumpDeviceless()` and two test-case name strings.
@@ -172,6 +183,17 @@ count that had gone stale inside the document stating it.)
 | `headless` in `docs/` | 588 across 148 files | **leave** (historical), except live operational docs |
 | `headless` in `ThirdParty/` | ~167 (mostly Vulkan headers) | **leave** |
 | `offscreen` everywhere (all senses) | **1400** tracked, **803** in code | of which only the 144 live flag sites change; the rest **stays** (decision 3) |
+| non-flag **mode-sense** surfaces (`j["mode"] = "offscreen"`, `wantsOffscreenOnly`, "the offscreen vocabulary", prose "an offscreen run") | **not enumerated** | **scope gap — see note** |
+
+**Scope-gap note, added after execution.** Until that last row was added this table enumerated
+only the FLAG, so nothing in this spec or the plan directed anyone at the places the **mode** is
+named in the technique's word *without the flag being present*. Those sites were never missed by
+execution — they were never in scope, and nobody noticed the scope was narrower than decision 3,
+which draws its line at mode-versus-technique and not at the flag. The prose and string sites
+were swept in the final fix wave; `j["mode"] = "offscreen"` is deliberately deferred to the
+`schemaVersion` 2→3 arc (recorded at `docs/2026-08-26-servitor-closeout-and-desk-verify.md`
+§6.1 item 3) because it is a wire value; `wantsOffscreenOnly` stays under decision 3's
+internal-vocabulary clause.
 
 ### Callers that MUST land in the removal commit
 
@@ -249,7 +271,7 @@ caller, and because it is the same class of drift this rename exists to end.
 **`ArcaneHub`'s `golden_run()` keys on vocabulary the engine does not have.**
 `launch.rs:104` is `extra.iter().any(|a| a.starts_with("--golden-"))`, but **no `--golden-*`
 flag exists anywhere in ArcaneClient, ArcaneRuntime, ArcaneEditor or ArcaneTests.** The engine's
-actual golden vocabulary is `--offscreen`, `--settle`, `--compare`, `--report`. `--golden-*` is
+actual golden vocabulary is `--headless`, `--settle`, `--compare`, `--report`. `--golden-*` is
 retired vocabulary from a pre-Plan-A design.
 
 Consequence: the guard at `launch.rs:335`, `Some(3) if !golden`, **always** matches. A post-boot

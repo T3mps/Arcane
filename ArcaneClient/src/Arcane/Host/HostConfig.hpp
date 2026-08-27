@@ -31,7 +31,7 @@ namespace Arcane
         // WHAT was on screen, so "the scene renders" stayed a desk-only claim and a
         // scene that drew every sprite as a single pixel (the 2026-07-30 TypeContext
         // bug) looked identical to a healthy run in the log. Pairs with --frames:
-        // `--frames 60 --screenshot out.png` is a headless visual check.
+        // `--frames 60 --screenshot out.png` is an unattended visual check.
         //
         // Captures the BACKBUFFER, after tonemap and ImGui -- the actual pixels a
         // player sees, not an intermediate the eye never gets.
@@ -47,7 +47,7 @@ namespace Arcane
         // (Chrome: "creates, but doesn't display, any platform windows"), so a
         // user or agent reaching for the obvious flag finds it. The word was
         // only unavailable while the engine spent it on DEVICE-LESS, which this
-        // mode is not; that sense is now spelled `deviceless`, and the flag's
+        // mode is not; that sense is now spelled `device-less`, and the flag's
         // previous spelling was REMOVED outright -- no alias, refused as an
         // unknown argument (docs/specs/2026-08-27-headless-rename-design.md).
         //

@@ -442,7 +442,7 @@ int main(int argc, char** argv)
     // another project". The Arcane Hub is the normal entry point and always passes
     // --project; this is the fallback for anyone who runs the exe directly.
     //
-    // Both flags remain bypasses ON PURPOSE: CI and the headless
+    // Both flags remain bypasses ON PURPOSE: CI and the scripted
     // `--project <p> --frames N` harness depend on --project, and --plugin is the
     // engine-dev path (hosting a plugin without a project).
     // Task 12 fix, MEASURED rather than left as the theorised "actually exits

@@ -10,7 +10,7 @@ Intermediate/
 Saved/*
 # The --headless layout seed. Shared by every agent run on every machine, so
 # it must be committed rather than machine-local: it is the one thing that
-# makes an offscreen editor capture reproducible across desks.
+# makes a headless editor capture reproducible across desks.
 !Saved/verify-layout.ini
 
 # Golden harness failure artifacts -- the golden PNG itself IS committed;

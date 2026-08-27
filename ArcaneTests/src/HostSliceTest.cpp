@@ -1,4 +1,4 @@
-// The host slice's HEADLESS remainder.
+// The host slice's DEVICE-LESS remainder.
 //
 // A NAMED COVERAGE GAP: nothing in ArcaneTests drives a loaded plugin's render
 // submission all the way to a GPU surface. That would be an NRI RenderGraph
@@ -12,7 +12,7 @@
 
 #include "Helpers/TestTypeContext.hpp"
 
-// Headless: the input-store path the host wires in its frame loop (SetInputSnapshot ->
+// Device-less: the input-store path the host wires in its frame loop (SetInputSnapshot ->
 // Input()). No device needed -- the plugin reads input through Runtime::Input(), so
 // the host's per-frame store must round-trip the snapshot verbatim. ([sandbox] so it
 // runs alongside the rest of the v2 sandbox wiring under ~[gpu].)

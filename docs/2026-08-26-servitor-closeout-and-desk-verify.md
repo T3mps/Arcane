@@ -316,6 +316,18 @@ across three documents and one conversation. **Arc 1 is the `--headless` rename*
    visible. Once defect 1 adds a second bound there are two exhaustion modes, so a bare count is
    ambiguous. `VerifyReportTest.cpp` asserts the report parses without linking the engine —
    keep that property.
+
+   **Also owed in that same `ToJson()`, recorded here by arc 1 rather than fixed:**
+   `VerifyReport.cpp:516` emits `j["mode"] = "offscreen"` — the MODE's machine-readable name
+   spelled in the TECHNIQUE's word, and the only inversion of arc 1's mode-versus-technique
+   decision that a MACHINE reads. Arc 1 left the value alone **deliberately**: it is a wire value
+   on the Servitor boundary, and changing it without a `schemaVersion` bump is precisely the
+   silent contract drift this defect exists to end. This item already bumps `schemaVersion` 2→3
+   and edits this same function, so it is the one cheap place to spell it `"headless"`. In scope
+   with it: the rationale comments at `VerifyReport.cpp:510` and `VerifyReport.hpp:144`, and the
+   two pins at `VerifyReportTest.cpp:73` and `:159`. No other tracked consumer keys on the string
+   (checked 2026-08-27); the `mode`-bearing JSON under `.superpowers/` is captured evidence, not
+   a consumer.
 4. **`--fixed-dt nan`** (`HostConfig.cpp:170`, the `<= 0.0` guard) — same UB class as the
    `--max-diff-pixel-ratio` bug fixed in `92792847`. One line.
 
@@ -332,9 +344,10 @@ across three documents and one conversation. **Arc 1 is the `--headless` rename*
    same retired vocabulary — **a test that cannot fail.** The fix must key on flags the engine
    actually registers, and its test must assert against those.
 
-   **Sequencing note:** arc 1 renamed this flag to `--headless` (see
-   `docs/specs/2026-08-27-headless-rename-design.md`), so fix this *after* arc 1
-   or it will be written against a flag name that no longer exists.
+   **Sequencing note:** the first entry in that real vocabulary, `--headless`, is arc 1's
+   rename of the mode flag; its previous spelling was **removed outright, no alias** (see
+   `docs/specs/2026-08-27-headless-rename-design.md`). So write the fix *after* arc 1, or the
+   new guard keys on a flag name that no longer exists.
 
 ### 6.3 The close-out actions those unblock
 

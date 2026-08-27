@@ -374,7 +374,7 @@ Write-Host "NOT COVERED by this script, and named so they are not assumed closed
 Write-Host "  * Section D -- driver reproduction: three WINDOWED [gpu] runs with Parsec"
 Write-Host "    active, then scripts\check-faults.ps1 -Days 1. A negative result closes"
 Write-Host "    it validly. Deliberately not automated: windowed GPU runs are the thing"
-Write-Host "    the whole offscreen mode exists to avoid."
+Write-Host "    the whole headless mode exists to avoid."
 Write-Host "  * Section E -- cross-format parity (offscreen vs windowed). Optional, and"
 Write-Host "    deliberately not automated for the same reason."
 Write-Host "  * FastStats memory at 4K is arithmetic, not a measured run."

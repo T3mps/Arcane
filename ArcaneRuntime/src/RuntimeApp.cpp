@@ -114,8 +114,8 @@ bool RuntimeApp::StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx)
     // happen HERE, in this module, because Astra's slot is per-module.
     Astra::SetTypeContext(m_typeContext);
     // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
-    // until quit). The scripted "ArcaneRuntime --frames N" GPU-verify is headless -> false ->
-    // miniaudio's null backend (no real device grabbed on a CI box).
+    // until quit). The scripted "ArcaneRuntime --frames N" GPU-verify is not interactive ->
+    // false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
     m_runtime.emplace(m_typeContext, m_config.maxFrames == 0);
 
     // Populate ctx for the SHARED type_context_install / project_open /

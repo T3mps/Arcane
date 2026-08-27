@@ -59,6 +59,15 @@ namespace Arcane
         // table). This is the one flag that stays a no-op on purpose, because
         // refusing it would break exactly the backward-compatibility case it
         // exists for. Do not "fix" this into a refusal later.
+        //
+        // The retired capture-mode flag `--headless` replaced went the OTHER
+        // way -- removed outright, no alias -- and the two policies are
+        // consistent rather than contradictory: a MODE flag with a working
+        // replacement is worth a loud break, because accepting and ignoring the
+        // old spelling would have silently downgraded every scripted capture to
+        // a windowed run (see HostConfig.hpp's `headless` comment). A flag that
+        // does nothing has nothing to downgrade and no replacement to point at,
+        // so refusing it would cost a boot and buy the caller nothing.
         cli.Flag  ("nri-graph",      "DEPRECATED, accepted and ignored: the NRI frame graph is "
                                      "the only render path. Kept so existing scripts and saved "
                                      "launch args do not fail to boot.");

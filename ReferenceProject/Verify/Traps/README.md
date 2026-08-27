@@ -9,7 +9,7 @@ difference that is legitimate variation, not a regression (cross-backend text ro
 Each pair is `<name>-expected.png` (the correct/blessed state) and `<name>-actual.png`
 (the deliberately broken or differently-configured state). `should-fail/` pairs must be
 CAUGHT by `Arcane::CompareImages` (i.e. `.passed == false`); `should-match/` must PASS.
-All renders are `ReferenceProject`, offscreen, D3D12, 1280x720, unless stated otherwise.
+All renders are `ReferenceProject`, headless, D3D12, 1280x720, unless stated otherwise.
 
 Provenance matters here more than in most fixture corpora: every `should-fail` pair below
 was produced by a TEMPORARY, REVERTED edit to a committed file (the scene, a mesh asset,
@@ -110,7 +110,7 @@ states -- which is precisely why `SceneRenderResolver`'s census (`meshBound`,
 afterthought. Comparing across a mismatched census state manufactures a "regression" that
 is actually just two different, both-correct moments of the same convergence process.
 
-**How:** both renders are offscreen, D3D12, **no `--settle`** (deliberately -- see below):
+**How:** both renders are headless, D3D12, **no `--settle`** (deliberately -- see below):
 
 ```
 ArcaneRuntime.exe --project ReferenceProject --headless --backend dx12 --frames 120 --screenshot unbound-post-expected.png

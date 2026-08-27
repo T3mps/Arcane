@@ -70,7 +70,7 @@ TEST_CASE("host config: --nri-graph still composes with the run vocabulary", "[h
 // vocabulary (--project / --plugin / --scene) is disjoint from the runtime's
 // usual one, and this is what proves the two compose.
 //
-// As with the case above, this is the only headless coverage available: the
+// As with the case above, this is the only coverage available: the
 // editor's boot lives in EditorApp.cpp, which is not compiled into this exe,
 // and everything past the flag needs a window and a real device.
 TEST_CASE("host config: --nri-graph composes with the EDITOR's launch vocabulary", "[host][nri]") {
@@ -102,7 +102,7 @@ TEST_CASE("host config: --nri-graph composes with the EDITOR's launch vocabulary
 // The pick/outline probe. Guarded like --nri-graph
 // (both are DEV scaffolding registered inside HostConfig.cpp's
 // `#if !defined(ARCANE_DIST)` block), and, like it, the parse round-trip is the
-// ONLY headless coverage the flag can have: everything past it needs a window,
+// ONLY coverage the flag can have: everything past it needs a window,
 // a device and a scene.
 //
 // THE POINT of testing the refusals rather than just the happy path: the flag's
@@ -418,7 +418,7 @@ TEST_CASE("hostconfig: --settle 1 is refused -- one attempt has nothing to compa
     CHECK(two.config->settleAttempts == 2u);
 }
 
-TEST_CASE("hostconfig: --settle N parses and composes with the rest of the offscreen vocabulary", "[hostconfig]")
+TEST_CASE("hostconfig: --settle N parses and composes with the rest of the headless vocabulary", "[hostconfig]")
 {
     const auto out = ParseArgs({ "h.exe", "--headless", "--frames", "30", "--backend", "vulkan",
                                  "--settle", "25", "--screenshot", "s.png", "--report", "r.json",

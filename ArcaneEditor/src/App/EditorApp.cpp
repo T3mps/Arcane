@@ -276,8 +276,8 @@ namespace Arcane::Editor
         // (always-miss at best, aliasing a different component's bytes at worst).
         Astra::SetTypeContext(m_typeContext);
         // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
-        // until quit). The scripted "ArcaneEditor --frames N" GPU-verify is headless -> false
-        // -> miniaudio's null backend (no real device grabbed on a CI box).
+        // until quit). The scripted "ArcaneEditor --frames N" GPU-verify is not interactive
+        // -> false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
         m_runtime.emplace(m_typeContext, m_config.maxFrames == 0);
 
         // Populate ctx for the SHARED type_context_install / project_open /
@@ -505,7 +505,7 @@ namespace Arcane::Editor
         }
 
         // Scene-in-a-panel viewport vehicle. The device is up by here in both
-        // the interactive host and a headless `--frames N` run (which only
+        // the interactive host and a `--frames N` run (which only
         // differs in the audio backend).
         //
         // THIS STAGE CREATES NOTHING. The
@@ -2416,11 +2416,11 @@ namespace Arcane::Editor
         // call (the guard `!m_layoutIniPath.empty() && io.IniFilename` a
         // project switch flushes through): that call fires at OnProjectOpened,
         // BEFORE the frame loop has drawn a single panel, and it is flatly
-        // UNREACHABLE under --headless (RetargetLayoutIni's offscreen branch
+        // UNREACHABLE under --headless (RetargetLayoutIni's headless branch
         // clears m_layoutIniPath, nulls io.IniFilename, and returns ahead of
         // it). Dumping there would capture whatever was on disk before this
         // run touched anything -- not "the live layout", and not reachable
-        // offscreen at all, which is the one mode this flag exists for.
+        // headless at all, which is the one mode this flag exists for.
         //
         // Runs UNCONDITIONALLY relative to --headless/windowed, matching
         // HostConfig.hpp's own comment on dumpLayoutPath:
