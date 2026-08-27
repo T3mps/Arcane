@@ -3,7 +3,7 @@
 // OffscreenVehicle: the same device -> NRI wrap -> graph context recipe
 // NriGraphPixelTest.cpp's MakeVehicle uses, promoted out of test-only code so
 // any host (not just [gpu] tests) can build a device with NO WINDOW and NO
-// SWAPCHAIN. This is the missing piece for --offscreen: CreateOffscreen()
+// SWAPCHAIN. This is the missing piece for --headless: CreateOffscreen()
 // only BORROWS a device, and until now the only thing that created one for
 // it to borrow was the pixel test's private helper.
 //

@@ -848,7 +848,7 @@ namespace Arcane
         // queue.
         //
         // A HOST THAT RENDERS AND NEVER PRESENTS BREAKS THAT ASSUMPTION, and
-        // it is a host this engine now has (ArcaneRuntime --offscreen). With
+        // it is a host this engine now has (ArcaneRuntime --headless). With
         // no presenting context there is no publisher at all, so Diagnostics'
         // `g_gpuBeatSeen` never arms and the GPU-stall watchdog stays disabled
         // for the whole run -- a GPU hang produces NO capture. That is not a

@@ -191,8 +191,8 @@ TEST_CASE("host config: --pick-probe still requires --frames, no longer requires
 // blaming a short run or an out-of-range pixel -- neither of which happened.
 // Refuse the combination at parse time until the offscreen pick is driven per
 // frame through FrameDesc::pickPixel.
-TEST_CASE("host config: --pick-probe with --offscreen is refused at parse time", "[host][nri]") {
-    const auto both = Run({"--offscreen", "--frames", "60", "--pick-probe", "640,360"});
+TEST_CASE("host config: --pick-probe with --headless is refused at parse time", "[host][nri]") {
+    const auto both = Run({"--headless", "--frames", "60", "--pick-probe", "640,360"});
     REQUIRE_FALSE(both.config.has_value());
     CHECK(both.exitCode == 2);
 
@@ -203,9 +203,9 @@ TEST_CASE("host config: --pick-probe with --offscreen is refused at parse time",
     REQUIRE(probeOnly.config.has_value());
     CHECK(probeOnly.config->pickProbe);
 
-    const auto offscreenOnly = Run({"--offscreen", "--frames", "60"});
+    const auto offscreenOnly = Run({"--headless", "--frames", "60"});
     REQUIRE(offscreenOnly.config.has_value());
-    CHECK(offscreenOnly.config->offscreen);
+    CHECK(offscreenOnly.config->headless);
     CHECK_FALSE(offscreenOnly.config->pickProbe);
 }
 #endif
@@ -227,7 +227,7 @@ TEST_CASE("host config: --nri-graph is accepted and ignored in every configurati
     CHECK(with.exitCode == without.exitCode);
 }
 
-// --offscreen / --fixed-dt / --probe / --report. UNGUARDED (not behind
+// --headless / --fixed-dt / --probe / --report. UNGUARDED (not behind
 // ARCANE_DIST): offscreen agent verification must work in Release and Dist,
 // not just dev builds.
 namespace {
@@ -237,27 +237,27 @@ namespace {
     }
 }
 
-TEST_CASE("hostconfig: --offscreen collects probes and a report path", "[hostconfig]")
+TEST_CASE("hostconfig: --headless collects probes and a report path", "[hostconfig]")
 {
-    const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+    const auto out = ParseArgs({ "h.exe", "--headless", "--frames", "5",
                                  "--probe", "luma@640,360", "--probe", "census",
                                  "--report", "r.json" });
     REQUIRE(out.exitCode == 0);
     REQUIRE(out.config.has_value());
-    CHECK(out.config->offscreen);
+    CHECK(out.config->headless);
     CHECK(out.config->reportPath == "r.json");
     REQUIRE(out.config->probes.size() == 2);
     CHECK(out.config->probes[0] == "luma@640,360");
 }
 
-TEST_CASE("hostconfig: --fixed-dt defaults to 1/60 under --offscreen", "[hostconfig]")
+TEST_CASE("hostconfig: --fixed-dt defaults to 1/60 under --headless", "[hostconfig]")
 {
-    const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "1" });
+    const auto out = ParseArgs({ "h.exe", "--headless", "--frames", "1" });
     REQUIRE(out.exitCode == 0);
     CHECK(out.config->fixedDtSeconds == Catch::Approx(1.0 / 60.0));
 }
 
-TEST_CASE("hostconfig: --fixed-dt without --offscreen is REFUSED, not ignored", "[hostconfig]")
+TEST_CASE("hostconfig: --fixed-dt without --headless is REFUSED, not ignored", "[hostconfig]")
 {
     const auto out = ParseArgs({ "h.exe", "--fixed-dt", "0.016" });
     CHECK(out.exitCode == 2);
@@ -272,11 +272,11 @@ TEST_CASE("hostconfig: --fixed-dt without --offscreen is REFUSED, not ignored", 
 // misfiring on every ordinary run that never mentioned the flag.
 TEST_CASE("hostconfig: fixedDtSupplied distinguishes an explicit default from an absent flag", "[hostconfig]")
 {
-    const auto absent = ParseArgs({ "h.exe", "--offscreen", "--frames", "1" });
+    const auto absent = ParseArgs({ "h.exe", "--headless", "--frames", "1" });
     REQUIRE(absent.config.has_value());
     CHECK_FALSE(absent.config->fixedDtSupplied);
 
-    const auto explicitDefault = ParseArgs({ "h.exe", "--offscreen", "--frames", "1",
+    const auto explicitDefault = ParseArgs({ "h.exe", "--headless", "--frames", "1",
                                               "--fixed-dt", "0.0166666666666666666" });
     REQUIRE(explicitDefault.config.has_value());
     CHECK(explicitDefault.config->fixedDtSupplied);
@@ -285,7 +285,7 @@ TEST_CASE("hostconfig: fixedDtSupplied distinguishes an explicit default from an
 
 TEST_CASE("hostconfig: --probe without --frames is refused", "[hostconfig]")
 {
-    const auto out = ParseArgs({ "h.exe", "--offscreen", "--probe", "census" });
+    const auto out = ParseArgs({ "h.exe", "--headless", "--probe", "census" });
     CHECK(out.exitCode == 2);
 }
 
@@ -293,7 +293,7 @@ TEST_CASE("hostconfig: --probe without --frames is refused", "[hostconfig]")
 // completion, and exit 0 with the bad spec simply absent from the report --
 // no error, no artifact. Refused HERE, at parse time, reusing ParseProbe's
 // own error text (VerifyReport.hpp) rather than a second vocabulary for the
-// same mistake. Caught before the --offscreen/--frames gates further down,
+// same mistake. Caught before the --headless/--frames gates further down,
 // so it fires even on a command line missing both of those too.
 TEST_CASE("hostconfig: a malformed --probe is refused at parse time", "[hostconfig]")
 {
@@ -307,12 +307,12 @@ TEST_CASE("hostconfig: a malformed --probe is refused at parse time", "[hostconf
     };
     for (const auto& spec : bad)
     {
-        const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "5", "--probe", spec[0].c_str() });
+        const auto out = ParseArgs({ "h.exe", "--headless", "--frames", "5", "--probe", spec[0].c_str() });
         CHECK_FALSE(out.config.has_value());
         CHECK(out.exitCode == 2);
     }
 
-    // Fires even without --offscreen/--frames -- a syntax error does not need
+    // Fires even without --headless/--frames -- a syntax error does not need
     // either flag to already be wrong.
     const auto bare = ParseArgs({ "h.exe", "--probe", "bogus@1,2" });
     CHECK_FALSE(bare.config.has_value());
@@ -320,13 +320,13 @@ TEST_CASE("hostconfig: a malformed --probe is refused at parse time", "[hostconf
 
     // A well-formed probe alongside a malformed one still refuses the whole
     // command line -- there is no partial acceptance.
-    const auto mixed = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+    const auto mixed = ParseArgs({ "h.exe", "--headless", "--frames", "5",
                                     "--probe", "census", "--probe", "bogus@1,2" });
     CHECK_FALSE(mixed.config.has_value());
     CHECK(mixed.exitCode == 2);
 
     // A genuinely well-formed probe list is unaffected.
-    const auto good = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+    const auto good = ParseArgs({ "h.exe", "--headless", "--frames", "5",
                                    "--probe", "luma@640,360", "--probe", "census" });
     REQUIRE(good.config.has_value());
     CHECK(good.exitCode == 0);
@@ -334,32 +334,32 @@ TEST_CASE("hostconfig: a malformed --probe is refused at parse time", "[hostconf
 
 TEST_CASE("hostconfig: a non-positive --fixed-dt is refused", "[hostconfig]")
 {
-    const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "1", "--fixed-dt", "0" });
+    const auto out = ParseArgs({ "h.exe", "--headless", "--frames", "1", "--fixed-dt", "0" });
     CHECK(out.exitCode == 2);
 }
 
 // THE UNSTOPPABLE-PROCESS REFUSAL. A windowed run has two exits the frame loop
 // honours: the window's close button, and the `quit` input action -- which
 // needs the window FOCUSED to deliver a key. An unmapped window has neither,
-// so a bare --offscreen with maxFrames == 0 runs until something outside the
+// so a bare --headless with maxFrames == 0 runs until something outside the
 // process reaps it. In the agent workflow this mode exists for, that is a
 // process the spawner cannot stop by any means it owns.
 // --settle N (Task 10). UNGUARDED like the block above: offscreen agent
 // verification must work in Release and Dist, not just dev builds.
 TEST_CASE("hostconfig: --settle defaults to 0 (off)", "[hostconfig]")
 {
-    const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "1", "--screenshot", "s.png" });
+    const auto out = ParseArgs({ "h.exe", "--headless", "--frames", "1", "--screenshot", "s.png" });
     REQUIRE(out.exitCode == 0);
     REQUIRE(out.config.has_value());
     CHECK(out.config->settleAttempts == 0u);
 
-    // The bare defaults case (no --offscreen at all) carries the same 0.
+    // The bare defaults case (no --headless at all) carries the same 0.
     const auto bare = ParseArgs({ "h.exe" });
     REQUIRE(bare.config.has_value());
     CHECK(bare.config->settleAttempts == 0u);
 }
 
-TEST_CASE("hostconfig: --settle without --offscreen is refused, not ignored", "[hostconfig]")
+TEST_CASE("hostconfig: --settle without --headless is refused, not ignored", "[hostconfig]")
 {
     const auto out = ParseArgs({ "h.exe", "--settle", "10", "--frames", "5", "--screenshot", "s.png" });
     CHECK(out.exitCode == 2);
@@ -372,16 +372,16 @@ TEST_CASE("hostconfig: --settle without --offscreen is refused, not ignored", "[
 // know when to stop.
 TEST_CASE("hostconfig: --settle requires --screenshot or --report", "[hostconfig]")
 {
-    const auto neither = ParseArgs({ "h.exe", "--offscreen", "--frames", "5", "--settle", "10" });
+    const auto neither = ParseArgs({ "h.exe", "--headless", "--frames", "5", "--settle", "10" });
     CHECK(neither.exitCode == 2);
     CHECK_FALSE(neither.config.has_value());
 
-    const auto withScreenshot = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+    const auto withScreenshot = ParseArgs({ "h.exe", "--headless", "--frames", "5",
                                             "--settle", "10", "--screenshot", "s.png" });
     REQUIRE(withScreenshot.config.has_value());
     CHECK(withScreenshot.config->settleAttempts == 10u);
 
-    const auto withReport = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+    const auto withReport = ParseArgs({ "h.exe", "--headless", "--frames", "5",
                                         "--settle", "10", "--report", "r.json" });
     REQUIRE(withReport.config.has_value());
     CHECK(withReport.config->settleAttempts == 10u);
@@ -392,7 +392,7 @@ TEST_CASE("hostconfig: --settle requires --screenshot or --report", "[hostconfig
 // check just above.
 TEST_CASE("hostconfig: an explicit --settle 0 is refused", "[hostconfig]")
 {
-    const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+    const auto out = ParseArgs({ "h.exe", "--headless", "--frames", "5",
                                  "--settle", "0", "--report", "r.json" });
     CHECK(out.exitCode == 2);
     CHECK_FALSE(out.config.has_value());
@@ -406,13 +406,13 @@ TEST_CASE("hostconfig: an explicit --settle 0 is refused", "[hostconfig]")
 // message, since "0 means off" would be a wrong explanation for why 1 fails.
 TEST_CASE("hostconfig: --settle 1 is refused -- one attempt has nothing to compare against", "[hostconfig]")
 {
-    const auto one = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+    const auto one = ParseArgs({ "h.exe", "--headless", "--frames", "5",
                                  "--settle", "1", "--report", "r.json" });
     CHECK(one.exitCode == 2);
     CHECK_FALSE(one.config.has_value());
 
     // 2 is the smallest legal value -- the boundary this refusal draws.
-    const auto two = ParseArgs({ "h.exe", "--offscreen", "--frames", "5",
+    const auto two = ParseArgs({ "h.exe", "--headless", "--frames", "5",
                                  "--settle", "2", "--report", "r.json" });
     REQUIRE(two.config.has_value());
     CHECK(two.config->settleAttempts == 2u);
@@ -420,7 +420,7 @@ TEST_CASE("hostconfig: --settle 1 is refused -- one attempt has nothing to compa
 
 TEST_CASE("hostconfig: --settle N parses and composes with the rest of the offscreen vocabulary", "[hostconfig]")
 {
-    const auto out = ParseArgs({ "h.exe", "--offscreen", "--frames", "30", "--backend", "vulkan",
+    const auto out = ParseArgs({ "h.exe", "--headless", "--frames", "30", "--backend", "vulkan",
                                  "--settle", "25", "--screenshot", "s.png", "--report", "r.json",
                                  "--probe", "census" });
     REQUIRE(out.exitCode == 0);
@@ -431,19 +431,19 @@ TEST_CASE("hostconfig: --settle N parses and composes with the rest of the offsc
     CHECK(out.config->reportPath == "r.json");
 }
 
-TEST_CASE("hostconfig: --offscreen without --frames is refused", "[hostconfig]")
+TEST_CASE("hostconfig: --headless without --frames is refused", "[hostconfig]")
 {
-    const auto bare = ParseArgs({ "h.exe", "--offscreen" });
+    const auto bare = ParseArgs({ "h.exe", "--headless" });
     CHECK(bare.exitCode == 2);
     CHECK_FALSE(bare.config.has_value());
 
     // --frames 0 is the SAME state spelled explicitly (0 == "run until quit"),
     // and it must not slip past a check written against the default.
-    const auto zero = ParseArgs({ "h.exe", "--offscreen", "--frames", "0" });
+    const auto zero = ParseArgs({ "h.exe", "--headless", "--frames", "0" });
     CHECK(zero.exitCode == 2);
     CHECK_FALSE(zero.config.has_value());
 
-    // ...and the refusal is about --offscreen ONLY. A windowed open-ended run
+    // ...and the refusal is about --headless ONLY. A windowed open-ended run
     // still has its close button, so it stays legal -- this is exactly the
     // pairing that would break if the check were written against maxFrames
     // alone.
@@ -451,12 +451,29 @@ TEST_CASE("hostconfig: --offscreen without --frames is refused", "[hostconfig]")
     REQUIRE(windowed.config.has_value());
     CHECK(windowed.exitCode == 0);
     CHECK(windowed.config->maxFrames == 0);
-    CHECK_FALSE(windowed.config->offscreen);
+    CHECK_FALSE(windowed.config->headless);
+}
+
+// --offscreen was RENAMED to --headless (2026-08-27), hard break, no alias.
+// This case exists because the rename could otherwise HALF-LAND: --headless
+// added, --offscreen never removed, every existing caller still working, and
+// nothing to show the job was unfinished. It asserts the removal, which is
+// the part with no other witness.
+TEST_CASE("host config: --offscreen is gone and is refused as unknown", "[hostconfig]")
+{
+    const auto old = Run({"--offscreen", "--frames", "60"});
+    REQUIRE_FALSE(old.config.has_value());
+    CHECK(old.exitCode == 2);
+
+    // ...and the replacement does what the old flag did.
+    const auto now = Run({"--headless", "--frames", "60"});
+    REQUIRE(now.config.has_value());
+    CHECK(now.config->headless);
 }
 
 // ---- Task 8: --compare / --bless -----------------------------------------
 
-TEST_CASE("host: --compare requires --offscreen and --settle", "[host]")
+TEST_CASE("host: --compare requires --headless and --settle", "[host]")
 {
     // A comparison against an unconverged frame is a frame number, not a
     // verdict -- the same reasoning that already gates --settle behind
@@ -466,12 +483,12 @@ TEST_CASE("host: --compare requires --offscreen and --settle", "[host]")
         CHECK_FALSE(Arcane::HostConfig::Parse(3, const_cast<char**>(argv)).config.has_value());
     }
     {
-        const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+        const char* argv[] = { "ArcaneRuntime", "--headless", "--frames", "10",
                                "--compare", "runtime-scene" };
         CHECK_FALSE(Arcane::HostConfig::Parse(6, const_cast<char**>(argv)).config.has_value());
     }
     {
-        const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+        const char* argv[] = { "ArcaneRuntime", "--headless", "--frames", "10",
                                "--settle", "30", "--report", "r.json",
                                "--compare", "runtime-scene" };
         const auto outcome = Arcane::HostConfig::Parse(10, const_cast<char**>(argv));
@@ -483,7 +500,7 @@ TEST_CASE("host: --compare requires --offscreen and --settle", "[host]")
 TEST_CASE("host: --bless without --compare is refused, not ignored", "[host]")
 {
     // Rule 3, silent inertness: a flag that does nothing must say so.
-    const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+    const char* argv[] = { "ArcaneRuntime", "--headless", "--frames", "10",
                            "--settle", "30", "--report", "r.json", "--bless" };
     CHECK_FALSE(Arcane::HostConfig::Parse(9, const_cast<char**>(argv)).config.has_value());
 }
@@ -496,7 +513,7 @@ TEST_CASE("host: --bless without --compare is refused, not ignored", "[host]")
 // HostConfig.cpp.
 TEST_CASE("host: --compare with an explicit empty value is refused, not silently disabled", "[host]")
 {
-    const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+    const char* argv[] = { "ArcaneRuntime", "--headless", "--frames", "10",
                            "--settle", "30", "--report", "r.json",
                            "--compare", "" };
     CHECK_FALSE(Arcane::HostConfig::Parse(10, const_cast<char**>(argv)).config.has_value());
@@ -509,7 +526,7 @@ TEST_CASE("host: --compare with an explicit empty value is refused, not silently
 // ReferenceImagesTest.cpp's own "refused, not resolved" case already pins.
 TEST_CASE("host: --compare refuses an unsafe reference name at parse time", "[host]")
 {
-    const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+    const char* argv[] = { "ArcaneRuntime", "--headless", "--frames", "10",
                            "--settle", "30", "--report", "r.json",
                            "--compare", "../evil" };
     CHECK_FALSE(Arcane::HostConfig::Parse(10, const_cast<char**>(argv)).config.has_value());
@@ -517,12 +534,12 @@ TEST_CASE("host: --compare refuses an unsafe reference name at parse time", "[ho
 
 TEST_CASE("host: --max-diff-pixels/--max-diff-pixel-ratio require --compare", "[host]")
 {
-    const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+    const char* argv[] = { "ArcaneRuntime", "--headless", "--frames", "10",
                            "--settle", "30", "--report", "r.json",
                            "--max-diff-pixels", "5" };
     CHECK_FALSE(Arcane::HostConfig::Parse(9, const_cast<char**>(argv)).config.has_value());
 
-    const char* argv2[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+    const char* argv2[] = { "ArcaneRuntime", "--headless", "--frames", "10",
                             "--settle", "30", "--report", "r.json",
                             "--max-diff-pixel-ratio", "0.01" };
     CHECK_FALSE(Arcane::HostConfig::Parse(9, const_cast<char**>(argv2)).config.has_value());
@@ -530,7 +547,7 @@ TEST_CASE("host: --max-diff-pixels/--max-diff-pixel-ratio require --compare", "[
 
 TEST_CASE("host: --compare/--bless/--max-diff-pixels/--max-diff-pixel-ratio round-trip", "[host]")
 {
-    const char* argv[] = { "ArcaneRuntime", "--offscreen", "--frames", "10",
+    const char* argv[] = { "ArcaneRuntime", "--headless", "--frames", "10",
                            "--settle", "30", "--report", "r.json",
                            "--compare", "runtime-scene", "--bless",
                            "--max-diff-pixels", "5", "--max-diff-pixel-ratio", "0.001" };
@@ -571,7 +588,7 @@ TEST_CASE("host: --compare/--bless/--max-diff-pixels/--max-diff-pixel-ratio roun
 TEST_CASE("host: --max-diff-pixel-ratio is range-refused at parse time, not clamped", "[host]")
 {
     auto withRatio = [](const std::string& value) {
-        return Run({ "--offscreen", "--frames", "10", "--settle", "30",
+        return Run({ "--headless", "--frames", "10", "--settle", "30",
                      "--report", "r.json", "--compare", "runtime-scene",
                      "--max-diff-pixel-ratio", value });
     };
@@ -621,7 +638,7 @@ TEST_CASE("host: --max-diff-pixel-ratio is range-refused at parse time, not clam
         // bound. If this ever starts failing, the "out of range is REFUSED"
         // section above has gone vacuous -- the refusal would be coming from
         // NumericOk, not from the range check this case exists to pin.
-        const auto o = Run({ "--offscreen", "--frames", "1", "--fixed-dt", "1e30" });
+        const auto o = Run({ "--headless", "--frames", "1", "--fixed-dt", "1e30" });
         REQUIRE(o.config.has_value());
         CHECK(o.config->fixedDtSeconds == Catch::Approx(1e30));
     }
@@ -639,7 +656,7 @@ TEST_CASE("host: an out-of-range ratio without --compare still reports the --com
     // fact that BOTH orderings agree on: still refused, still exit 2, still no
     // config -- i.e. the new check never turns a two-fault command line into a
     // parse SUCCESS.
-    const auto o = Run({ "--offscreen", "--frames", "10", "--settle", "30",
+    const auto o = Run({ "--headless", "--frames", "10", "--settle", "30",
                          "--report", "r.json", "--max-diff-pixel-ratio", "-1" });
     CHECK_FALSE(o.config.has_value());
     CHECK(o.exitCode == 2);
@@ -669,7 +686,7 @@ TEST_CASE("host: the editor accepts the same verification flags the runtime does
     // actually lifted is running the ArcaneEditor.exe binary itself (this
     // task's Steps 5/6), not this test.
     const char* argv[] = { "ArcaneEditor", "--project", "ReferenceProject",
-                           "--offscreen", "--frames", "60", "--settle", "30",
+                           "--headless", "--frames", "60", "--settle", "30",
                            "--report", "r.json", "--compare", "editor-ui" };
     const auto outcome = Arcane::HostConfig::Parse(12, const_cast<char**>(argv));
     REQUIRE(outcome.config.has_value());

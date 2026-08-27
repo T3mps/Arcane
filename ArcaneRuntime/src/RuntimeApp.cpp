@@ -354,11 +354,11 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
 void RuntimeApp::MainLoop()
 {
     // WALL-CLOCK BASELINES, consulted only in HOST-WINDOW mode: RuntimeFrame
-    // ::AdvanceSim branches on io.config.offscreen and does not call
-    // steady_clock::now() at all under --offscreen, using
+    // ::AdvanceSim branches on io.config.headless and does not call
+    // steady_clock::now() at all under --headless, using
     // m_config.fixedDtSeconds for both frameDt and simDt instead (see that
     // function's comments) -- so these two starting stamps go unread for the
-    // whole of an --offscreen run. Still initialised unconditionally: the
+    // whole of a --headless run. Still initialised unconditionally: the
     // branch lives in RuntimeFrame.cpp, not here, and an uninitialised
     // steady_clock::time_point read on the windowed path's first frame would
     // be undefined behavior, not merely wrong.
@@ -372,7 +372,7 @@ void RuntimeApp::MainLoop()
     // ShaderLibrary to poll"). It predates that comment (compare
     // docs/superpowers/plans/2026-06-14-arcane-m5-plugin-host.md's
     // lastShaderPoll, which DID poll a ShaderLibrary once a second). Carries
-    // no timing decision either way, so it needs no --offscreen branch.
+    // no timing decision either way, so it needs no --headless branch.
     auto lastShaderPoll = simPrev;
     bool running = true;
 
@@ -383,7 +383,7 @@ void RuntimeApp::MainLoop()
     // vehicle below creates the first and only one. WINDOWED, that device
     // carries a swapchain over the HOST's window, which it borrows and must
     // not outlive (m_graphContext is declared after m_gpu, so it is destroyed
-    // first). OFFSCREEN (--offscreen), the vehicle is an OffscreenVehicle
+    // first). OFFSCREEN (--headless), the vehicle is an OffscreenVehicle
     // instead: still one device, still the real frame graph, but with no
     // window handle and no swapchain anywhere in it. Exactly one of the two
     // is built per run, and everything downstream reaches it through Graph().
@@ -411,7 +411,7 @@ void RuntimeApp::MainLoop()
     // same gap the vehicle always had. Show() also RAISES, which is the
     // launch reveal this host owes exactly once.
     //
-    // ...AND IT IS SKIPPED ENTIRELY UNDER --offscreen. The window still
+    // ...AND IT IS SKIPPED ENTIRELY UNDER --headless. The window still
     // EXISTS -- GpuContext creates it hidden (GpuContext.hpp's Create
     // comment) -- so ImGuiLayer, InputDevices and the event pump keep
     // working unchanged; it is simply never mapped, and no swapchain is ever
@@ -422,10 +422,10 @@ void RuntimeApp::MainLoop()
     // a window the compositor has never mapped is the backend-specific corner
     // a desk-only machine cannot pre-clear. The offscreen vehicle builds no
     // surface at all, which sidesteps the corner instead of walking into it.
-    if (!m_config.offscreen)
+    if (!m_config.headless)
         m_gpu->Win().Show();
 
-    if (m_config.offscreen)
+    if (m_config.headless)
     {
         // THE EXTENT, from the same place the windowed path's initial extent
         // comes from: the window's own pixel size. NriGraphContext::Init
@@ -495,7 +495,7 @@ void RuntimeApp::MainLoop()
         // be the gate.
         //
         // THIS HOST IS ENTITLED TO ASSERT IT because it knows its own
-        // topology: under --offscreen it built exactly ONE graph context and
+        // topology: under --headless it built exactly ONE graph context and
         // there is no presenting one (the reveal above was skipped and
         // m_graphContext stays null). The editor, which holds a chrome context
         // AND a viewport context over one device, must never call this -- and
@@ -627,7 +627,7 @@ void RuntimeApp::MainLoop()
     {
         .gpu             = m_gpu.get(),
         // THE LIVE VEHICLE, resolved once, here -- so the frame body never
-        // branches on --offscreen to find its graph. See Graph().
+        // branches on --headless to find its graph. See Graph().
         .graph           = &graph,
         .resolver        = m_resolver ? &*m_resolver : nullptr,
         .runtime         = &*m_runtime,
@@ -847,7 +847,7 @@ void RuntimeApp::ShutdownGraphPath()
         if (const std::optional<Arcane::ProbeSpec> pickSpec = Arcane::FirstPickProbe(m_config.probes))
         {
             // GUARANTEED offscreen (Fix 3, final fix wave): HostConfig::Parse's
-            // wantsOffscreenOnly gate refuses --report without --offscreen,
+            // wantsOffscreenOnly gate refuses --report without --headless,
             // unconditionally, for every host, so this function can never be
             // reached with a windowed run. A WINDOWED branch used to sit here
             // (a pick@ probe on a windowed run) -- it was already unreachable
@@ -859,9 +859,9 @@ void RuntimeApp::ShutdownGraphPath()
             // explainable-away; asserted, not just assumed, so a future change
             // to that gate fails loudly here instead of silently reviving a
             // mode this code no longer understands.
-            ARC_ASSERT(m_config.offscreen, "ShutdownGraphPath's pick@ resolution reached with a "
-                                            "windowed run -- HostConfig::Parse's --report-requires-"
-                                            "--offscreen gate should make this unreachable");
+            ARC_ASSERT(m_config.headless, "ShutdownGraphPath's pick@ resolution reached with a "
+                                          "windowed run -- HostConfig::Parse's --report-requires-"
+                                          "--headless gate should make this unreachable");
 
             PickResolution res;
             res.armedX = pickSpec->x;
@@ -1114,7 +1114,7 @@ void RuntimeApp::ShutdownGraphPath()
         // one spelled into the exit-reason string VerifyReport carries.
         // "frames-complete" is what a normal run reports; "stopped-early"
         // covers any exit this function was not told the reason for (e.g. an
-        // interactive quit -- unreachable under --offscreen today, but this
+        // interactive quit -- unreachable under --headless today, but this
         // call site is unconditional and must not lie about a mode it does
         // not recognise).
         std::string exitReason = "frames-complete";
@@ -1163,8 +1163,8 @@ void RuntimeApp::ShutdownGraphPath()
         Arcane::VerifyReport report;
         // No `offscreen` argument (Fix 3, final fix wave): SetRun no longer
         // takes one -- this whole block is only ever reached with
-        // m_config.offscreen == true, guaranteed by HostConfig::Parse's
-        // wantsOffscreenOnly gate (--report requires --offscreen,
+        // m_config.headless == true, guaranteed by HostConfig::Parse's
+        // wantsOffscreenOnly gate (--report requires --headless,
         // unconditionally, for every host). See VerifyReport.hpp's SetRun
         // comment for the full reasoning.
         report.SetRun(Arcane::ToString(m_config.backend), m_frameCount, exitReason);

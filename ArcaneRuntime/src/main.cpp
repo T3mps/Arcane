@@ -78,9 +78,9 @@ int main(int argc, char** argv)
     // return above stays free of any window on purpose. Never fails boot --
     // BootSplashWindow's whole contract is "every error path degrades to no
     // splash, silently".
-    // ...UNLESS --offscreen, where the whole point is that this process maps
+    // ...UNLESS --headless, where the whole point is that this process maps
     // no window. The splash is a real WS_POPUP on its own thread, so
-    // constructing it unconditionally would make "--offscreen" a lie for the
+    // constructing it unconditionally would make "--headless" a lie for the
     // ~seconds boot takes -- the one window an offscreen run would still
     // flash on screen. std::optional is what it takes: BootSplashWindow's
     // only constructor takes an image path and there is no "disabled" state,
@@ -91,7 +91,7 @@ int main(int argc, char** argv)
     // the identical pattern. Destruction order is unchanged -- `app` still
     // lives in the nested scope below and is destroyed before this object.
     std::optional<Arcane::BootSplashWindow> splash;
-    if (!parsed.config->offscreen)
+    if (!parsed.config->headless)
         splash.emplace("data/images/arcane_logo.png");
 
     // Scoped so ~RuntimeApp runs while the watchdog is still armed, then joined

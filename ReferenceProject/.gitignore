@@ -8,7 +8,7 @@ Intermediate/
 # that excludes the CONTENTS. Everything else under Saved/, directories
 # included, is still ignored exactly as before.
 Saved/*
-# The --offscreen layout seed. Shared by every agent run on every machine, so
+# The --headless layout seed. Shared by every agent run on every machine, so
 # it must be committed rather than machine-local: it is the one thing that
 # makes an offscreen editor capture reproducible across desks.
 !Saved/verify-layout.ini

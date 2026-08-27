@@ -509,7 +509,7 @@ namespace Arcane
         j["backend"]         = m_backend;
         // Always "offscreen" -- Fix 3 (final fix wave) removed the "windowed"
         // value from this contract: HostConfig::Parse refuses --report
-        // without --offscreen unconditionally, so no live run can ever
+        // without --headless unconditionally, so no live run can ever
         // produce anything else. Kept as a field (not just implied) because
         // an out-of-process consumer -- the Servitor package this JSON is the
         // boundary for -- should not have to infer the run kind from absence.

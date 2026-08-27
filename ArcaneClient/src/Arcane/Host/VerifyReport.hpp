@@ -136,7 +136,7 @@ namespace Arcane
         // NO `offscreen` PARAMETER (final fix wave, Fix 3 -- reconciling
         // windowed --report): this report can only ever describe an offscreen
         // run. HostConfig::Parse's wantsOffscreenOnly gate refuses --report
-        // without --offscreen, unconditionally, for every host -- so
+        // without --headless, unconditionally, for every host -- so
         // ArcaneRuntime's one real call site (RuntimeApp.cpp's
         // ShutdownGraphPath) could never have reached this with a windowed
         // run. A `bool offscreen` parameter that is provably always true is

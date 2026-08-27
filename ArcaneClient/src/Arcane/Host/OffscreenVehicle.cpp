@@ -27,7 +27,7 @@ namespace Arcane
         // RenderErrorCount is the WHOLE verdict an agent gets -- there is no
         // human watching a window to notice what a narrower validation
         // surface would miss. Leaving any of these three off here would make
-        // --offscreen quietly weaker than windowed, silently undermining
+        // --headless quietly weaker than windowed, silently undermining
         // every verification built on top of it.
         //
         // enableD3D12DebugLayer's legality here is guaranteed only for

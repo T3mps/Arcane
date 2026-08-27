@@ -18,10 +18,10 @@ namespace Arcane
         cli.Option("scene",   "", "asset Guid to boot instead of the manifest's bootScene (empty = follow the manifest)");
         cli.Option("screenshot", "", "write the last rendered frame to this PNG before exiting (pairs with --frames)");
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
-        cli.Flag  ("offscreen",          "render with no window shown and no swapchain; "
+        cli.Flag  ("headless",           "render with no window shown and no swapchain; "
                                          "pairs with --frames/--probe/--report");
         cli.Option("fixed-dt", "0.0166666666666666666", "seconds per simulated frame "
-                                         "(--offscreen only)").Type(CliType::Double);
+                                         "(--headless only)").Type(CliType::Double);
         cli.Option("probe", "",          "repeatable: brightness@x,y | luma@x,y | rgba@x,y | pick@x,y | census").Many();
         cli.Option("report", "",         "write the observation report to this JSON path");
         cli.Option("dump-layout", "", "write the live ImGui layout to this .ini at shutdown "
@@ -30,13 +30,13 @@ namespace Arcane
         cli.Option("settle", "0",        "repeat the capture (render clock frozen) until two consecutive "
                                          "frames compare byte-equal AND the shader compiler is idle, "
                                          "up to N attempts (0 = off, 1 is refused -- needs >= 2; "
-                                         "--offscreen only; needs --screenshot or --report)").Type(CliType::Uint);
+                                         "--headless only; needs --screenshot or --report)").Type(CliType::Uint);
         // --compare / --bless (Task 8). Registered beside --settle: the
         // comparison is a THIRD conjunct in that same convergence predicate,
         // not a separate mode -- see HostConfig.hpp's compareReference comment.
         cli.Option("compare", "",        "compare the converged capture against reference image "
                                          "<name>, resolved from <project>/Verify/References "
-                                         "(--offscreen + --settle only)");
+                                         "(--headless + --settle only)");
         cli.Flag  ("bless",              "accept the converged capture AS the reference "
                                          "--compare names, writing to the level it resolved "
                                          "from; exits 0 (--compare only)");
@@ -85,7 +85,7 @@ namespace Arcane
         cfg.sceneOverride = r.Get("scene");
         cfg.screenshotPath = r.Get("screenshot");
         cfg.printEngineInfo = r.Flag("print-engine-info");
-        cfg.offscreen      = r.Flag("offscreen");
+        cfg.headless       = r.Flag("headless");
         cfg.fixedDtSeconds = r.GetAs<double>("fixed-dt");
         cfg.fixedDtSupplied = r.Supplied("fixed-dt");
         cfg.probes         = r.GetMany("probe");
@@ -99,7 +99,7 @@ namespace Arcane
         // from the report: no error, no artifact, invisible unless a caller
         // diffs the probe list against the output by hand. Rule 3 (refuse,
         // don't silently skip) applies at THIS boundary just as much as it
-        // does to --screenshot/--offscreen/--settle above and below. Reuses
+        // does to --screenshot/--headless/--settle above and below. Reuses
         // ParseProbe's own error text (VerifyReport.hpp) rather than a second
         // vocabulary for the same mistake.
         for (const std::string& rawProbe : cfg.probes)
@@ -156,10 +156,10 @@ namespace Arcane
         const bool wantsOffscreenOnly = !cfg.probes.empty() || !cfg.reportPath.empty()
                                       || r.Supplied("fixed-dt") || r.Supplied("settle")
                                       || r.Supplied("compare");
-        if (wantsOffscreenOnly && !cfg.offscreen)
+        if (wantsOffscreenOnly && !cfg.headless)
         {
             std::fprintf(stderr, "error: --fixed-dt/--probe/--report/--settle/--compare require "
-                                 "--offscreen\n");
+                                 "--headless\n");
             return { std::nullopt, 2 };
         }
         if (!cfg.probes.empty() && cfg.maxFrames == 0)
@@ -167,7 +167,7 @@ namespace Arcane
             std::fprintf(stderr, "error: --probe requires --frames N (the capture lands on the last frame)\n");
             return { std::nullopt, 2 };
         }
-        if (cfg.offscreen && cfg.fixedDtSeconds <= 0.0)
+        if (cfg.headless && cfg.fixedDtSeconds <= 0.0)
         {
             std::fprintf(stderr, "error: --fixed-dt wants a positive number of seconds\n");
             return { std::nullopt, 2 };
@@ -243,7 +243,7 @@ namespace Arcane
         }
         // --compare needs a CONVERGED frame to be a verdict rather than a
         // frame number, so it requires --settle, which itself already requires
-        // --offscreen and --screenshot/--report.
+        // --headless and --screenshot/--report.
         if (!cfg.compareReference.empty() && cfg.settleAttempts == 0)
         {
             std::fprintf(stderr, "error: --compare requires --settle (comparing an unconverged "
@@ -299,25 +299,25 @@ namespace Arcane
                          r.Get("max-diff-pixel-ratio").c_str());
             return { std::nullopt, 2 };
         }
-        // AN OPEN-ENDED OFFSCREEN RUN CANNOT BE STOPPED, and that is a
+        // AN OPEN-ENDED HEADLESS RUN CANNOT BE STOPPED, and that is a
         // stronger claim than "it is inconvenient". A windowed run has two
         // exits the frame loop honours -- the window's close button
         // (WindowEvents::quitRequested) and the `quit` input action, which
-        // needs the window FOCUSED to deliver a key. --offscreen never maps
+        // needs the window FOCUSED to deliver a key. --headless never maps
         // the window, so it has neither: no titlebar to click and nothing the
         // keyboard can reach. maxFrames == 0 therefore means "run forever,
         // killable only from outside the process".
         //
         // That is exactly backwards for the workflow this mode exists for. An
-        // agent spawning a bare `--offscreen` spawns a process it cannot stop
+        // agent spawning a bare `--headless` spawns a process it cannot stop
         // by any means it owns, and it will sit there until something else
         // reaps it. Refuse at parse time -- the same treatment, and the same
         // idiom, --probe and --screenshot already get one screen up.
-        if (cfg.offscreen && cfg.maxFrames == 0)
+        if (cfg.headless && cfg.maxFrames == 0)
         {
-            std::fprintf(stderr, "error: --offscreen requires --frames N (an unmapped window has no "
+            std::fprintf(stderr, "error: --headless requires --frames N (an unmapped window has no "
                                  "close button and cannot be focused for the quit action, so an "
-                                 "open-ended offscreen run has no way to stop itself)\n");
+                                 "open-ended run has no way to stop itself)\n");
             return { std::nullopt, 2 };
         }
 
@@ -393,9 +393,9 @@ namespace Arcane
                 // Temporary by intent: when the offscreen pick is driven
                 // per frame through FrameDesc::pickPixel, this refusal is what
                 // gets deleted.
-                if (cfg.offscreen)
+                if (cfg.headless)
                 {
-                    std::fprintf(stderr, "error: --pick-probe does not work with --offscreen yet "
+                    std::fprintf(stderr, "error: --pick-probe does not work with --headless yet "
                                          "(an offscreen context declines the fixed probe pixel, so "
                                          "no readback would ever land and the run would report a "
                                          "miss it never measured)\n");

@@ -24,7 +24,7 @@ had its `Arcane::MeshRenderer` component removed entirely (Identity + Transform 
 Rendered, then the scene file was reverted (`git checkout --`) and the runtime's staged
 copy restored to match.
 
-**How:** `ArcaneRuntime.exe --project ReferenceProject --offscreen --backend dx12
+**How:** `ArcaneRuntime.exe --project ReferenceProject --headless --backend dx12
 --frames 60 --settle 30 --screenshot <name>.png` against the scene with (expected) and
 without (actual) the component. Census confirms it: `meshBound`/`meshReferenced` go from
 1/1 to 0/0, everything else (`spriteBound`, `postBound`) unchanged.
@@ -36,7 +36,7 @@ silently stops drawing.
 identical (`git hash-object` -> `203b6049...`) to `one-pixel-text-shift-expected.png`
 (itself Plan A's `desk_off.png`, copied verbatim, see below). This is NOT a copy-paste
 shortcut: both are independently-run `ArcaneRuntime.exe --project ReferenceProject
---offscreen --backend dx12 --frames 60 --settle 30` captures of the SAME unmodified,
+--headless --backend dx12 --frames 60 --settle 30` captures of the SAME unmodified,
 committed scene, two days apart, on the same desk GPU. `--settle` freezes the simulated
 clock once `--frames 60` is reached and only repeats the capture (never advancing sim time)
 until two consecutive frames match byte-for-byte AND the shader compiler is idle -- so the
@@ -113,8 +113,8 @@ is actually just two different, both-correct moments of the same convergence pro
 **How:** both renders are offscreen, D3D12, **no `--settle`** (deliberately -- see below):
 
 ```
-ArcaneRuntime.exe --project ReferenceProject --offscreen --backend dx12 --frames 120 --screenshot unbound-post-expected.png
-ArcaneRuntime.exe --project ReferenceProject --offscreen --backend dx12 --frames 60  --screenshot unbound-post-actual.png
+ArcaneRuntime.exe --project ReferenceProject --headless --backend dx12 --frames 120 --screenshot unbound-post-expected.png
+ArcaneRuntime.exe --project ReferenceProject --headless --backend dx12 --frames 60  --screenshot unbound-post-actual.png
 ```
 
 Measured census (`--report`, same run):

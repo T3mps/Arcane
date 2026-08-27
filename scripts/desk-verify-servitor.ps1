@@ -258,7 +258,7 @@ if ($Phase -eq 'All' -or $Phase -eq 'B') {
                 $blessReport = Join-Path $savedVerify "bless-runtime-scene-$backend-report.json"
                 $blessArgs = @(
                     '--project', $sourceProject,
-                    '--offscreen',
+                    '--headless',
                     '--backend', $backend,
                     '--frames', '60',
                     '--settle', '30',

@@ -42,19 +42,30 @@ namespace Arcane
         // must stamp into a new .arcproj -- see HostBoot::EngineInfoJson.
         bool            printEngineInfo = false;
 
-        // Render the real frame graph with NO window shown and NO swapchain. Not
-        // "--headless": that word already means DEVICE-LESS in this codebase
-        // (SceneRenderResolver.hpp:211), and this mode is device-ful.
+        // --headless. Render the real frame graph with NO window shown and NO
+        // swapchain. Named for what every comparable tool calls this mode
+        // (Chrome: "creates, but doesn't display, any platform windows"), so a
+        // user or agent reaching for the obvious flag finds it. The word was
+        // only unavailable while the engine spent it on DEVICE-LESS, which this
+        // mode is not; that sense is now spelled `deviceless`, and the flag's
+        // previous spelling was REMOVED outright -- no alias, refused as an
+        // unknown argument (docs/specs/2026-08-27-headless-rename-design.md).
+        //
+        // "Offscreen" survives as the name of the TECHNIQUE, deliberately:
+        // OffscreenVehicle, CreateOffscreen(), IsOffscreen(), the [offscreen]
+        // log tag. --headless is the MODE a caller asks for; rendering to an
+        // offscreen target with no swapchain is HOW it is delivered, and that
+        // is the more precise word for that layer.
         //
         // REQUIRES --frames N, refused at parse time otherwise: an unmapped
         // window has no close button and cannot be focused for the `quit`
-        // action, so an open-ended offscreen run has no exit of its own. It
+        // action, so an open-ended headless run has no exit of its own. It
         // also REFUSES --pick-probe, which an offscreen context declines to
         // arm. Both refusals carry their full reasoning at the check in the
         // .cpp.
-        bool            offscreen = false;
+        bool            headless = false;
 
-        // Fixed simulation delta, seconds. --offscreen only, refused elsewhere. The
+        // Fixed simulation delta, seconds. --headless only, refused elsewhere. The
         // host loop is otherwise wall-clock (RuntimeApp.cpp:331), which makes
         // `--frames N` advance the sim by however long those N frames happened to
         // take -- different on a loaded CI box than an idle desk.
@@ -75,7 +86,7 @@ namespace Arcane
         // VerifyReport, not here: the kinds are that component's vocabulary.
         std::vector<std::string> probes;
 
-        // --settle N. --offscreen only, refused elsewhere -- same idiom as
+        // --settle N. --headless only, refused elsewhere -- same idiom as
         // fixedDtSeconds above -- and requires --screenshot or --report too
         // (RuntimeFrame.cpp's CaptureTail has nowhere to land the comparison
         // otherwise, and the loop would never know when to stop). 0 = off.
@@ -171,7 +182,7 @@ namespace Arcane
         // Deliberately NOT folded into HostConfig.cpp's wantsOffscreenOnly
         // predicate: windowed authoring is the NATURAL flow (arrange the
         // panels by hand, dump, inspect), and Step 2 of the task that added
-        // this ALSO requires it to work under --offscreen, where the point
+        // this ALSO requires it to work under --headless, where the point
         // is authoring a seed with no windowed session at all. It must work
         // in both -- adding it to that predicate would refuse the windowed
         // case for no reason.

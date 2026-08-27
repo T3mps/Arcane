@@ -103,7 +103,7 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 // actually confused -- the pre-boot double-open guard fires before
 // Diagnostics::Install, with no project ever opened and no report ever
 // requested, while the post-boot settle-not-converged/compare-failed code
-// requires a full boot and an --offscreen --settle run.
+// requires a full boot and a --headless --settle run.
 //
 // A SCRIPTED CALLER LOOPING COMMAND-LINE COMBINATIONS CANNOT ASSUME THAT,
 // though (Task 12's golden-gate harness is exactly this caller: it cannot
@@ -142,13 +142,13 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //   --project/--plugin/--frames/--backend/--no-vsync -- honoured.
 //   --screenshot        -- honoured. WINDOWED it captures the VIEWPORT panel's
 //                          texture, not the editor window (so the Inspector and
-//                          the asset browser are not in it). Under --offscreen
+//                          the asset browser are not in it). Under --headless
 //                          it captures the COMPOSITED EDITOR FRAME instead --
 //                          chrome, docking, panels, and the viewport texture
 //                          inside its panel -- off the offscreen chrome
 //                          context's colour target (EditorAppFrame.cpp's
 //                          PresentChromeFrame).
-//   --offscreen         -- honoured. No window is ever mapped and no swapchain
+//   --headless          -- honoured. No window is ever mapped and no swapchain
 //                          is built anywhere: the chrome context becomes an
 //                          OffscreenVehicle (EditorApp::CreateGraphVehicles),
 //                          the boot splash below is not constructed at all, and
@@ -160,12 +160,12 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //   --dump-layout <path> -- HONOURED as of Task 10 (plan-b comparator): write
 //                          the LIVE ImGui layout to <path> at shutdown
 //                          (EditorApp::Shutdown, unconditionally on
-//                          --offscreen -- ImGui::SaveIniSettingsToDisk never
+//                          --headless -- ImGui::SaveIniSettingsToDisk never
 //                          consults io.IniFilename, so it writes to the given
 //                          path even though that pointer is null offscreen).
 //                          This is the authoring half of the committed
 //                          ReferenceProject/Saved/verify-layout.ini seed:
-//                          `--project ReferenceProject --offscreen --frames N
+//                          `--project ReferenceProject --headless --frames N
 //                          --dump-layout out.ini` produces a file with REAL
 //                          EditorDockHost dock-node ids, no windowed session
 //                          required. THE ONE FLAG THIS HOST HONOURS THAT
@@ -331,7 +331,7 @@ int main(int argc, char** argv)
             "Arcane Editor: --probe is not implemented on this host.\n"
             "  This exe would exit 0 having produced no probe entries, which is worse than\n"
             "  refusing. Use ArcaneRuntime for pixel/pick probes; ArcaneEditor supports\n"
-            "  --offscreen --frames N --settle N --report <json> --screenshot <png>\n"
+            "  --headless --frames N --settle N --report <json> --screenshot <png>\n"
             "  --compare <name> [--bless] for a composited editor capture and verification.\n");
         return 2;
     }
@@ -505,9 +505,9 @@ int main(int argc, char** argv)
     // lock check) returns before this line specifically so none of them pays
     // for a window they might not need. Never fails boot -- BootSplashWindow's
     // whole contract is "every error path degrades to no splash, silently".
-    // ...UNLESS --offscreen, where the whole point is that this process maps
+    // ...UNLESS --headless, where the whole point is that this process maps
     // no window. The splash is a real WS_POPUP on its own thread, so
-    // constructing it unconditionally would make "--offscreen" a lie for the
+    // constructing it unconditionally would make "--headless" a lie for the
     // ~seconds boot takes -- the one window an offscreen run would still
     // flash on screen. std::optional is what it takes: BootSplashWindow's
     // only constructor takes an image path and there is no "disabled" state,
@@ -517,7 +517,7 @@ int main(int argc, char** argv)
     // (m_splash)`). Destruction order is unchanged -- `app` still lives in the
     // nested scope below and is destroyed before this object.
     std::optional<Arcane::BootSplashWindow> splash;
-    if (!parsed.config->offscreen)
+    if (!parsed.config->headless)
         splash.emplace("data/images/arcane_logo.png");
 
     // Scoped so ~EditorApp -- the load-bearing teardown sequence -- runs while

@@ -346,7 +346,7 @@ foreach ($combo in $combos) {
 
     $exeArgs = @(
         '--project', 'ReferenceProject',
-        '--offscreen',
+        '--headless',
         '--backend', $backend,
         '--frames', '60',
         '--settle', '30',

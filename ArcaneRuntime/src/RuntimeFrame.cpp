@@ -40,12 +40,12 @@ namespace
     // the graph's own canvas is a TRANSIENT sized to that target inside
     // BuildFrame -- so the target is the single source of truth, not a proxy
     // for one. Windowed that target is the swapchain over the host's one
-    // window; under --offscreen it is the vehicle's persistent output texture.
+    // window; under --headless it is the vehicle's persistent output texture.
     //
     // READ MODE-AGNOSTICALLY, and that is not a style choice: this used to be
     // `io.graph->Swap().Width()/Height()`, and an offscreen context HAS NO
     // SWAPCHAIN, so that read would have faulted on frame 1 of every
-    // --offscreen run. SurfaceWidth/SurfaceHeight are the accessors
+    // --headless run. SurfaceWidth/SurfaceHeight are the accessors
     // NriGraphContext documents as "the mode-agnostic reading of
     // Swap().Width()/Height(), which an offscreen context cannot answer" --
     // the same pair PumpAndResize below already reads for its before/after
@@ -97,7 +97,7 @@ bool PumpAndResize(FrameIo& io)
     // There is one graphics device, and AT MOST one swapchain: windowed, it
     // binds THIS window -- DXGI allows only one flip-model swapchain per
     // HWND, so a second presentation surface would force a second window
-    // and this line would have to choose between them. Under --offscreen
+    // and this line would have to choose between them. Under --headless
     // there is no swapchain at all, and the window below is never mapped --
     // but it still EXISTS and is still the object ImGui's platform backend
     // and the input stack were initialised against, so it is still pumped,
@@ -107,7 +107,7 @@ bool PumpAndResize(FrameIo& io)
     Arcane::Window& eventWindow = io.gpu->Win();
     const Arcane::WindowEvents events = eventWindow.PumpEvents();
     if (events.quitRequested) return true;
-    // A RESIZE IS A PRESENTATION EVENT, AND --offscreen HAS NO PRESENTATION.
+    // A RESIZE IS A PRESENTATION EVENT, AND --headless HAS NO PRESENTATION.
     //
     // NriGraphContext::Resize is documented HOST-WINDOW MODE ONLY and refuses
     // an offscreen context through the LATCHED error seam -- which is a grown
@@ -162,7 +162,7 @@ bool PumpAndResize(FrameIo& io)
             }
         }
     }
-    // Left ungated for --offscreen, deliberately: IsMinimized reads
+    // Left ungated for --headless, deliberately: IsMinimized reads
     // SDL_WINDOW_MINIMIZED, which a never-shown window does not carry (hidden
     // and minimized are different SDL window states), so this is false for the
     // whole of an offscreen run and the skip below is unreachable there. It
@@ -194,20 +194,20 @@ void AdvanceSim(FrameIo& io)
     // compile race has resolved, and CaptureTail's byte-equal comparison
     // would never converge on anything. Computed once, read by both the
     // frameDt and simDt branches below.
-    const bool settleHold = io.config.offscreen && io.config.settleAttempts != 0 &&
+    const bool settleHold = io.config.headless && io.config.settleAttempts != 0 &&
                              io.config.maxFrames != 0 && io.frameCount >= io.config.maxFrames;
 
     // Input: sample SDL state, evaluate actions. Must precede ImGui BeginFrame
     // so capture flags are set before the evaluator reads them.
     {
-        // FIXED under --offscreen, wall-clock otherwise -- and steady_clock::
+        // FIXED under --headless, wall-clock otherwise -- and steady_clock::
         // now() is not even CALLED in the fixed branch, deliberately: this
         // frameDt does not stay local to input. It becomes io.lastFrameDt/
         // io.hostClock below, which PrepareFrame hands the scene resolver as
         // FrameInfo::dt/now -- the Time/DeltaTime the material globals report
         // to every bound shader (SceneRenderResolver.cpp, Batcher2D::
         // SetGlobals). A wall-clock frameDt here would leak straight into
-        // anything an .arcmat animates by time, so two --offscreen runs of
+        // anything an .arcmat animates by time, so two --headless runs of
         // the same `--frames N` could still render different pixels even
         // with the RunLoop sim held fixed below -- this is every bit as
         // sim-advancing as that one is, just for the render side instead of
@@ -217,7 +217,7 @@ void AdvanceSim(FrameIo& io)
         {
             frameDt = 0.0;   // see settleHold's own comment above
         }
-        else if (io.config.offscreen)
+        else if (io.config.headless)
         {
             frameDt = io.config.fixedDtSeconds;
         }
@@ -246,7 +246,7 @@ void AdvanceSim(FrameIo& io)
     // Sim advance: clamp dt, drive RunLoop with plugin callbacks interleaved.
     {
         // THE SITE the plan calls out by name ("the sim-advance site that
-        // consumes simPrev"): FIXED under --offscreen, for the same reason
+        // consumes simPrev"): FIXED under --headless, for the same reason
         // HostConfig.hpp's fixedDtSeconds comment gives. simDt reaches
         // RunLoop::Advance below, i.e. FixedUpdateAll/UpdateAll -- gameplay
         // -- so a wall-clock simDt means `--frames 5` advances the sim by
@@ -260,7 +260,7 @@ void AdvanceSim(FrameIo& io)
         {
             simDt = 0.0;   // see settleHold's own comment above AdvanceSim's input block
         }
-        else if (io.config.offscreen)
+        else if (io.config.headless)
         {
             simDt = io.config.fixedDtSeconds;
         }
@@ -338,7 +338,7 @@ void PrepareFrame(FrameIo& io)
 // DeclareGraphFrame; each bracketed stage is dropped by passing the
 // FrameDesc field that carries it as null (see that struct).
 //
-// UNDER --offscreen the frame's SHAPE is identical -- same declaration,
+// UNDER --headless the frame's SHAPE is identical -- same declaration,
 // same node census -- and only its two ends differ: the tonemap writes
 // the vehicle's imported output instead of an acquired backbuffer, and
 // Execute runs with no swapchain, so it acquires nothing and presents
@@ -411,7 +411,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     graphFrame.imgui = io.gpu->Imgui().RenderToDrawData();
 
     // THE FRAME'S EXTENT, from the one surface this run has (see
-    // FrameExtent): the graph swapchain's, or -- under --offscreen -- the
+    // FrameExtent): the graph swapchain's, or -- under --headless -- the
     // vehicle's persistent output texture. Read once and used for the
     // batcher's viewport AND the scene camera's fit, so those two can
     // never be fitted to different rectangles -- and it is the same
@@ -447,7 +447,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // frameWidth/frameHeight above, which IS the vehicle's own surface
     // extent (FrameExtent -- the swapchain's, or the offscreen output's).
     // In practice this block is windowed-only regardless: --pick-probe is
-    // refused at parse time alongside --offscreen (HostConfig.cpp), because
+    // refused at parse time alongside --headless (HostConfig.cpp), because
     // an offscreen context declines to arm the fixed probe pixel.
     if (io.config.pickProbe)
     {

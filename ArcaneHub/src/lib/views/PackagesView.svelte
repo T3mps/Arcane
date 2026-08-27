@@ -128,7 +128,7 @@
     </div>
     <p class="hint">
       Listed here because this surface used to claim otherwise. The
-      <span class="mono">--offscreen</span> mode, its capture, its comparator
+      <span class="mono">--headless</span> mode, its capture, its comparator
       and its report JSON all ship unconditionally; what a project adds is a
       blessed reference-image corpus under
       <span class="mono">Verify/References/</span>, which is that project's own

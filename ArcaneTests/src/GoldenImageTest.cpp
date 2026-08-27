@@ -88,7 +88,7 @@ TEST_CASE("golden: the committed layout seed names windows this editor actually 
 //     exe cannot even OPEN those assets, let alone shade them identically;
 //   * every real host frame ALSO carries the debug HUD (RuntimeFrame.cpp's
 //     BuildHud: an "ArcaneRuntime" ImGui window, unconditionally, in every
-//     build config, in both windowed and --offscreen runs) baked into the
+//     build config, in both windowed and --headless runs) baked into the
 //     same captured pixels -- confirmed by this very task's Finding A, which
 //     is why runtime-scene needed a backend-specific override at all. That
 //     window's code lives in ArcaneRuntime/src/ (the .exe's OWN sources,

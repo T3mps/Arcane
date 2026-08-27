@@ -21,7 +21,7 @@
 #include <Arcane/Host/BootSequence.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>
-#include <Arcane/Host/OffscreenVehicle.hpp>   // the --offscreen chrome vehicle (m_offscreenChrome)
+#include <Arcane/Host/OffscreenVehicle.hpp>   // the --headless chrome vehicle (m_offscreenChrome)
 #include <Arcane/Host/ReferenceImages.hpp>    // --compare/--bless (Task 9): ReferenceResolution
 #include <Arcane/Host/VerifyReport.hpp>       // --report (Task 9): VerifyReport
 #include <Arcane/Assets/ImageCompare.hpp>     // --compare (Task 9): PixelData/ImageCompareResult
@@ -152,7 +152,7 @@ namespace Arcane::Editor
         bool       CreateGraphVehicles();
 
         // THE LIVE CHROME CONTEXT, resolved in ONE place so no call site
-        // branches on --offscreen to find it. Exactly one of the two members
+        // branches on --headless to find it. Exactly one of the two members
         // below is ever non-null (CreateGraphVehicles builds one or the
         // other): m_graphChrome, the host-window context with a swapchain over
         // m_gpu->Win(), or m_offscreenChrome, an OffscreenVehicle that owns its
@@ -313,7 +313,7 @@ namespace Arcane::Editor
         // --settle was never requested). PresentChromeFrame's settle branch
         // owns readback attempts and counts them off m_settleAttemptsUsed,
         // never off this function's frame counter (a Skipped chrome
-        // present -- routine under --offscreen too -- does not reach here
+        // present -- routine under --headless too -- does not reach here
         // at all, so tying attempts to frame advancement can spin forever;
         // see PresentChromeFrame's own comment). This is what makes "arm
         // every frame past the base budget" and "arm the one last frame"
@@ -438,7 +438,7 @@ namespace Arcane::Editor
         // the whole sequence and the argument for the split.
         std::unique_ptr<Arcane::NriGraphContext> m_graphChrome;
 
-        // THE --offscreen TWIN of m_graphChrome, and the ONLY one of the pair
+        // THE --headless TWIN of m_graphChrome, and the ONLY one of the pair
         // that is non-null under that flag. It owns a native device + NRI wrap
         // + an offscreen NriGraphContext (OffscreenVehicle), so it is a
         // strictly LARGER object than m_graphChrome -- which merely borrows the

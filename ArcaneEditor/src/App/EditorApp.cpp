@@ -930,7 +930,7 @@ namespace Arcane::Editor
 
     void EditorApp::RetargetLayoutIni()
     {
-        // ===== PINNED UNDER --offscreen, AHEAD OF EVERYTHING ELSE ============
+        // ===== PINNED UNDER --headless, AHEAD OF EVERYTHING ELSE =============
         // The per-project layout is USER STATE: it differs per machine, it is
         // whatever this desk last arranged, and the flush below WRITES IT BACK
         // on every project switch (and ~ImGuiLayer saves it again at exit). An
@@ -958,7 +958,7 @@ namespace Arcane::Editor
         // absent path is a silent no-op inside ImGui, landing on those same
         // built-in defaults. Degraded, never broken, and still deterministic:
         // the file is either committed or absent for every run alike.
-        if (m_config.offscreen)
+        if (m_config.headless)
         {
             ImGuiIO& io    = ImGui::GetIO();
             io.IniFilename = nullptr;               // never read, never written
@@ -973,12 +973,12 @@ namespace Arcane::Editor
             if (std::filesystem::exists(seed, seedEc))
             {
                 ImGui::LoadIniSettingsFromDisk(seed.string().c_str());
-                ARC_INFO("--offscreen: layout PINNED to the committed seed {} "
+                ARC_INFO("--headless: layout PINNED to the committed seed {} "
                          "(io.IniFilename null -- never read, never written)", seed.string());
             }
             else
             {
-                ARC_WARN("--offscreen: no layout seed at {} -- falling back to ImGui's built-in "
+                ARC_WARN("--headless: no layout seed at {} -- falling back to ImGui's built-in "
                          "defaults (deterministic, but not the authored layout)", seed.string());
             }
             return;
@@ -1012,7 +1012,7 @@ namespace Arcane::Editor
         // yet, and saving here would write an EMPTY settings file over the
         // legacy exe-dir imgui.ini before the seed below could read it.
         //
-        // UNREACHABLE UNDER --offscreen: the pin at the top of this function
+        // UNREACHABLE UNDER --headless: the pin at the top of this function
         // returns before this line, and it leaves m_layoutIniPath EMPTY and
         // io.IniFilename NULL -- so even a hypothetical fall-through fails
         // both halves of the condition. That is the Step 2 guard, held by an
@@ -1439,7 +1439,7 @@ namespace Arcane::Editor
     // context is after boot, and the offscreen one cannot precede it: it
     // BORROWS the device the chrome context creates.
     // See the declaration: one place resolves the live chrome context, so no
-    // call site branches on --offscreen to find it. Exactly one member is ever
+    // call site branches on --headless to find it. Exactly one member is ever
     // non-null; both null before CreateGraphVehicles and after ShutdownGraphPath.
     Arcane::NriGraphContext* EditorApp::ChromeGraph() const noexcept
     {
@@ -1461,7 +1461,7 @@ namespace Arcane::Editor
         // else. Show() also RAISES, which is the launch reveal this host owes
         // exactly once.
         //
-        // ...AND IT IS SKIPPED ENTIRELY UNDER --offscreen, exactly as
+        // ...AND IT IS SKIPPED ENTIRELY UNDER --headless, exactly as
         // RuntimeApp::MainLoop skips its own. The window still EXISTS --
         // GpuContext creates it hidden -- so ImGuiLayer, InputDevices and the
         // event pump keep working unchanged, and io.DisplaySize still resolves
@@ -1474,7 +1474,7 @@ namespace Arcane::Editor
         // backend-specific corner a desk-only machine cannot pre-clear. The
         // offscreen vehicle below builds no surface at all, which sidesteps
         // the corner instead of walking into it.
-        if (!m_config.offscreen)
+        if (!m_config.headless)
             m_gpu->Win().Show();
 
         // THE LATCH BASELINE, taken HERE rather than at
@@ -1491,7 +1491,7 @@ namespace Arcane::Editor
         // process-wide slot with no owner identity, so a second armer would be
         // harmless but a second DISARMER would unplug this one's chain. That
         // gating lives inside CreateOffscreen; nothing here may disturb it.
-        if (m_config.offscreen)
+        if (m_config.headless)
         {
             // THE EXTENT, from the same place the windowed path's comes from:
             // the window's own pixel size. NriGraphContext::Init hands the
@@ -1530,7 +1530,7 @@ namespace Arcane::Editor
             // offscreen vehicle. THIS HOST MUST NOT, and the reason is stated
             // at that call site: the contract is "this offscreen context is
             // the ONLY graph context in this process", and the editor can
-            // never satisfy it. Even under --offscreen it holds FOUR graph
+            // never satisfy it. Even under --headless it holds FOUR graph
             // contexts -- this chrome one, the viewport
             // (BuildGraphViewportContext), and one apiece for any open
             // ShaderEditorDocument / MeshDocument preview -- so publishing
@@ -1540,7 +1540,7 @@ namespace Arcane::Editor
             // from one device timeline against a threshold set by another.
             //
             // The class CANNOT enforce this; it is caller contract only. So
-            // the cost is named rather than papered over: under --offscreen
+            // the cost is named rather than papered over: under --headless
             // the editor's GPU-stall watchdog is OFF, a wedged GPU produces
             // no diagnostics capture, and closing that gap needs a different
             // rule ("the frame-driving context publishes") that does not
@@ -2086,7 +2086,7 @@ namespace Arcane::Editor
         // declaration-order one it replaces.
         m_viewportTargets.graph.reset();
         m_graphChrome.reset();
-        // The --offscreen twin, released in the same statement group and for
+        // The --headless twin, released in the same statement group and for
         // the same reason -- exactly one of the two was ever built, and
         // resetting the null one is a no-op. It is destroyed AFTER
         // m_viewportTargets.graph because the viewport context BORROWS the
@@ -2416,16 +2416,16 @@ namespace Arcane::Editor
         // call (the guard `!m_layoutIniPath.empty() && io.IniFilename` a
         // project switch flushes through): that call fires at OnProjectOpened,
         // BEFORE the frame loop has drawn a single panel, and it is flatly
-        // UNREACHABLE under --offscreen (RetargetLayoutIni's offscreen branch
+        // UNREACHABLE under --headless (RetargetLayoutIni's offscreen branch
         // clears m_layoutIniPath, nulls io.IniFilename, and returns ahead of
         // it). Dumping there would capture whatever was on disk before this
         // run touched anything -- not "the live layout", and not reachable
         // offscreen at all, which is the one mode this flag exists for.
         //
-        // Runs UNCONDITIONALLY relative to --offscreen/windowed, matching
+        // Runs UNCONDITIONALLY relative to --headless/windowed, matching
         // HostConfig.hpp's own comment on dumpLayoutPath:
         // ImGui::SaveIniSettingsToDisk(path) never reads io.IniFilename (which
-        // IS null here under --offscreen) -- it always writes to the path it
+        // IS null here under --headless) -- it always writes to the path it
         // is GIVEN. Gated on m_gpu, not m_frameCount: a null m_gpu means no
         // ImGui context was ever created (a failed Create()), and
         // SaveIniSettingsToDisk dereferences the current context

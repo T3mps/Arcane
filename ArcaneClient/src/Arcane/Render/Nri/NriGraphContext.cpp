@@ -1835,7 +1835,7 @@ namespace Arcane
         // retires, this context's work included (they share the queue).
         //
         // What changed is that the engine now has a host that RENDERS AND
-        // NEVER PRESENTS (ArcaneRuntime --offscreen). "The presenting context
+        // NEVER PRESENTS (ArcaneRuntime --headless). "The presenting context
         // publishes" covered every case while every device-ful host presented;
         // it covers nothing when there is no presenting context, and the
         // result was not a false positive but NO GPU-stall coverage at all --

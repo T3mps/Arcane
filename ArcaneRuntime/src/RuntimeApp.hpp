@@ -12,7 +12,7 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/GpuContext.hpp>
 #include <Arcane/Host/ReferenceImages.hpp>  // --compare/--bless (Task 8): ReferenceResolution
-#include <Arcane/Host/OffscreenVehicle.hpp>   // --offscreen's vehicle: device + NRI wrap + offscreen graph context, no window, no swapchain
+#include <Arcane/Host/OffscreenVehicle.hpp>   // --headless's vehicle: device + NRI wrap + offscreen graph context, no window, no swapchain
 #include <Arcane/Host/FramePerf.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Host/BootSequence.hpp>
@@ -98,13 +98,13 @@ private:
     // RenderGraph. LIVE ON EVERY WINDOWED RUN, in every configuration
     // including Dist -- this is null on a failed boot (MainLoop's
     // `if (!m_graphContext)` returns before the loop starts) AND on every
-    // --offscreen run, where m_offscreen below is the vehicle instead.
+    // --headless run, where m_offscreen below is the vehicle instead.
     //
     // NOT #if-guarded: the type is compiled into the engine DLL in every
     // configuration (it is ordinary Render/Nri source), and a
     // preprocessor-guarded MEMBER would force every use site in MainLoop's
     // frame body to grow a guard of its own -- which is exactly how a
-    // Dist-only compile break gets introduced. --offscreen is a RUNTIME
+    // Dist-only compile break gets introduced. --headless is a RUNTIME
     // choice for the same reason: a mode gated on a macro would not exist in
     // Release or Dist, and this arc needs it in all three.
     //
@@ -114,7 +114,7 @@ private:
     // so it must be gone before that window is.
     std::unique_ptr<Arcane::NriGraphContext> m_graphContext;
 
-    // THE OTHER RENDER HALF, and the two are MUTUALLY EXCLUSIVE: --offscreen
+    // THE OTHER RENDER HALF, and the two are MUTUALLY EXCLUSIVE: --headless
     // builds this one and leaves m_graphContext null. It owns its own native
     // device + NRI wrap + an offscreen NriGraphContext that renders into a
     // texture it owns -- no window handle, no surface, no swapchain, nothing
@@ -209,7 +209,7 @@ private:
     // uint64_t, matching HostConfig::settleAttempts' own width (fix round 1,
     // item 4) -- a narrower counter compared against a wider budget could
     // silently WRAP on an absurd --settle value, reintroducing the
-    // unstoppable-run hazard --offscreen's own --frames-required refusal
+    // unstoppable-run hazard --headless's own --frames-required refusal
     // exists to prevent.
     std::uint64_t                         m_settleAttemptsUsed   = 0;
     bool                                  m_settleConverged      = false;

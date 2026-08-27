@@ -145,7 +145,7 @@ TEST_CASE("verify: rgba probe reads all four channels", "[verify]")
 // Fix 3 (final fix wave): "windowed" is GONE, not just untested. It used to
 // be reachable only by calling SetRun's old bool `offscreen` parameter with
 // false directly -- never through any live host, since HostConfig::Parse
-// refuses --report without --offscreen unconditionally, for every host. That
+// refuses --report without --headless unconditionally, for every host. That
 // made "windowed" a value an out-of-process consumer (the Servitor package
 // this JSON is the boundary for) would have had to handle for a state no
 // real run could ever produce. SetRun no longer takes the parameter at all,

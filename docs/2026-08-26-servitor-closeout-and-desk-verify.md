@@ -113,7 +113,7 @@ owed to a future plan.
    MILLISECONDS.** It waits on shader-compiler idle; at ~3.3 ms/attempt the whole 30-attempt
    budget elapses in ~100 ms, so a fast enough build bails before compilation drains.
    Confirmed at code level: no sleep, no wait, no pump between attempts, and no vsync under
-   `--offscreen` (`ArcaneRuntime/src/RuntimeFrame.cpp` settle loop; `EditorAppFrame.cpp` is
+   `--headless` (`ArcaneRuntime/src/RuntimeFrame.cpp` settle loop; `EditorAppFrame.cpp` is
    a line-for-line port). **This is a mode-wide design flaw, not an editor bug** — the
    runtime simply has not crossed the line yet. It makes the gate quietly timing-dependent
    on build configuration, which is why the Release editor lane fails.
@@ -243,7 +243,7 @@ commit:
 ```
 cd D:\dev\starworks\Arcane\bin\Debug-windows-x86_64-md\ArcaneRuntime
 .\ArcaneRuntime.exe --project D:\dev\starworks\Arcane\ReferenceProject `
-    --offscreen --backend dx12 --frames 60 --settle 30 `
+    --headless --backend dx12 --frames 60 --settle 30 `
     --report ReferenceProject\Saved\Verify\bless.json `
     --compare runtime-scene --bless
 ```
@@ -324,7 +324,7 @@ across three documents and one conversation. **Arc 1 is the `--headless` rename*
 5. **`ArcaneHub`'s `golden_run()` keys on vocabulary the engine does not have.**
    `ArcaneHub/src-tauri/src/launch.rs:104` is `extra.iter().any(|a| a.starts_with("--golden-"))`,
    and **no `--golden-*` flag exists anywhere** in ArcaneClient, ArcaneRuntime, ArcaneEditor or
-   ArcaneTests. The real vocabulary is `--headless`/`--offscreen`, `--settle`, `--compare`,
+   ArcaneTests. The real vocabulary is `--headless`, `--settle`, `--compare`,
    `--report`. So the guard at `launch.rs:335` (`Some(3) if !golden`) **always** matches, and a
    genuine golden compare failure is reported to the user as *"that project is already open in
    another editor"*; the correct arm at `:338` is **unreachable**. Its tests
@@ -332,8 +332,9 @@ across three documents and one conversation. **Arc 1 is the `--headless` rename*
    same retired vocabulary — **a test that cannot fail.** The fix must key on flags the engine
    actually registers, and its test must assert against those.
 
-   **Sequencing note:** arc 1 renames `--offscreen` → `--headless`, so fix this *after* arc 1
-   or it will be written against a flag name that is about to change.
+   **Sequencing note:** arc 1 renamed this flag to `--headless` (see
+   `docs/specs/2026-08-27-headless-rename-design.md`), so fix this *after* arc 1
+   or it will be written against a flag name that no longer exists.
 
 ### 6.3 The close-out actions those unblock
 

@@ -409,7 +409,7 @@ namespace Arcane::Editor
         // this window. The VIEWPORT's offscreen output is NOT resized here at
         // all -- it tracks the panel, not the window, and phase 8 owns it.
         //
-        // NOT UNDER --offscreen: there is no swapchain to resize, the window is
+        // NOT UNDER --headless: there is no swapchain to resize, the window is
         // never mapped so a real resize event cannot arrive, and
         // NriGraphContext::Resize is HOST-WINDOW MODE ONLY (ResizeOffscreen is
         // the offscreen twin, and it is NOT wanted here either -- the offscreen
@@ -1450,7 +1450,7 @@ namespace Arcane::Editor
             // `maxFrames != 0` matches the runtime: both capture on the LAST
             // frame, and without --frames there is no last frame.
             //
-            // AND NOT UNDER --offscreen, which is the whole point of Task 11:
+            // AND NOT UNDER --headless, which is the whole point of Task 11:
             // there the screenshot is the COMPOSITED EDITOR FRAME, captured off
             // the chrome context in PresentChromeFrame (phase 19) -- panels,
             // docking, asset browser and this viewport's texture inside its
@@ -1464,7 +1464,7 @@ namespace Arcane::Editor
             const bool isCaptureLastFrame = m_config.maxFrames != 0 &&
                                             (m_frameCount + 1) >= m_config.maxFrames &&
                                             CaptureWanted(m_config) &&
-                                            !m_config.offscreen;
+                                            !m_config.headless;
             vp.capture = isCaptureLastFrame;
 
             const Arcane::NriGraphContext::FrameOutcome outcome =
@@ -2743,14 +2743,14 @@ namespace Arcane::Editor
         Arcane::NriGraphContext::FrameDesc frame;
         frame.imgui = chrome;
 
-        // ===== THE --offscreen FORK, AND THE FULL-FRAME CAPTURE ==============
+        // ===== THE --headless FORK, AND THE FULL-FRAME CAPTURE ===============
         // The absence table above says an editor screenshot has never
         // contained a chrome pixel: `frame.capture` was never set here, and
         // every capture path read the VIEWPORT's texture instead -- so the
         // Inspector, the asset browser and the docking chrome were invisible in
         // every editor PNG ever taken (main.cpp's flag table records it).
         //
-        // Under --offscreen that is now false ON PURPOSE, and the table above
+        // Under --headless that is now false ON PURPOSE, and the table above
         // is amended by this block rather than contradicted by it: this context
         // has NO SWAPCHAIN, so "the backbuffer" it captures is the offscreen
         // colour target the whole composited editor was just drawn into --
@@ -2769,7 +2769,7 @@ namespace Arcane::Editor
         // `+1` arithmetic RenderSceneToViewport uses and for the same reason:
         // phase 20's EndFrame is what increments m_frameCount, and it has not
         // run yet this iteration. `maxFrames != 0` matches both other hosts --
-        // without --frames there is no last frame -- and --offscreen cannot be
+        // without --frames there is no last frame -- and --headless cannot be
         // passed without --frames anyway (HostConfig refuses it at parse
         // time).
         //
@@ -2844,7 +2844,7 @@ namespace Arcane::Editor
         // would never advance (it lives past that early return), and neither
         // EndFrame's `m_settleConverged` nor its `m_settleAttemptsUsed >=
         // m_config.settleAttempts` check could ever become true either. That
-        // is an unstoppable run -- the exact hazard --offscreen's own
+        // is an unstoppable run -- the exact hazard --headless's own
         // --frames-required refusal exists to prevent -- if some caller ever
         // builds a HostConfig bypassing Parse (a test, a future embedder).
         // Fail CLOSED rather than hang: force the budget to its own limit so

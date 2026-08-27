@@ -8,7 +8,7 @@
 //
 // THE SHAPE, so a reader can see it rather than reconstruct it:
 //   * ONE WINDOW IS PUMPED, always the host's. Windowed, the render half
-//     borrows this exact window and presents into it; under --offscreen the
+//     borrows this exact window and presents into it; under --headless the
 //     window exists but is never shown, and the pump keeps running because
 //     ImGui and the input stack are wired to it either way.
 //   * ONE RESIZE, `io.graph->Resize`, to that window's one presentation
@@ -71,11 +71,11 @@ namespace Arcane::RuntimeFrame
         // ---- the pointers MainLoop already owned ----------------------------
         Arcane::GpuContext*          gpu;       // never null once MainLoop is running
         // THE LIVE VEHICLE, and never null: MainLoop builds exactly one of
-        // m_graphContext (windowed) / m_offscreen (--offscreen) and RETURNS
+        // m_graphContext (windowed) / m_offscreen (--headless) and RETURNS
         // before the frame loop if that build failed, so by the time any
         // function below runs there is a vehicle. Which of the two it is, is
         // resolved once at the binding site (RuntimeApp::Graph()) -- the frame
-        // body does not branch on --offscreen to find its graph, and asks
+        // body does not branch on --headless to find its graph, and asks
         // IsOffscreen() only where the vehicle's own API genuinely differs.
         Arcane::NriGraphContext*     graph;
         Arcane::SceneRenderResolver* resolver;  // null iff the boot scene published none
@@ -157,7 +157,7 @@ namespace Arcane::RuntimeFrame
         // item 4): a uint32_t counter compared against a uint64_t budget would
         // silently WRAP on an absurd `--settle` value larger than 2^32, turning
         // "run until convergence or N attempts" back into the unstoppable-process
-        // hazard --offscreen's own --frames-required refusal exists to prevent.
+        // hazard --headless's own --frames-required refusal exists to prevent.
         std::uint64_t&              settleAttemptsUsed;
         bool&                       settleConverged;
         // ShaderCompiler::IsIdle() (fix round 1, item 1): byte-equal consecutive
@@ -267,7 +267,7 @@ namespace Arcane::RuntimeFrame
     // false (MainLoop `continue`s).
     //
     // ONE window: the host's. Its resize goes to that window's one
-    // presentation surface and to nothing else -- and under --offscreen there
+    // presentation surface and to nothing else -- and under --headless there
     // IS no such surface, so the resize is dropped rather than forwarded.
     bool PumpAndResize(FrameIo& io);
 
