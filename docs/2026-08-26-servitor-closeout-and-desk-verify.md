@@ -19,7 +19,7 @@ Specs: `docs/specs/2026-08-23-agent-verification-offscreen-design.md`,
 
 ---
 
-## 1. Two corrections to Plan B's own Task 14 checklist
+## 1. Three corrections to Plan B's own Task 14 checklist
 
 **Read these before running the checklist, or a correct result will read as a failure.**
 
@@ -34,6 +34,10 @@ Specs: `docs/specs/2026-08-23-agent-verification-offscreen-design.md`,
   holds `Verify/References/runtime-scene.png` *and* `Verify/References/vulkan/runtime-scene.png`
   (split), with `editor-ui.png` shared. The plan predicted wrong; check against the
   inversion.
+- **Checklist A, bullet 2** says to break "the mesh entity in `test.arcscene`". **That file
+  is not in this repository** — `test.arcscene` belongs to the Gacha/Aphelyon game project.
+  The reference scene here is `ReferenceProject/Content/scenes/main.arcscene`, and the mesh
+  entity is **`MeshCube`** (it carries the `Arcane::MeshRenderer`).
 
 The reason for the inversion is worth keeping: the 121 "cross-backend pixels" recorded in
 Plan A were **never** glyph-rasterisation variance. 120 of them are a debug HUD label whose
@@ -43,8 +47,30 @@ backend-consistent than Plan A recorded.
 
 ## 2. The desk pass
 
-Run Plan B's Task 14 checklist (sections A–F of that plan), with §1's two corrections
-applied. Its shape:
+**Run `scripts\desk-verify-servitor.ps1`.** It automates the mechanical half of Task 14 —
+the gate runs, the deliberate break, the restore, and the timed bless round-trip — and stops
+at each point that genuinely needs your eyes, marked `>> YOUR CALL:`. It applies §1's three
+corrections itself, so you are not checking against stale expectations.
+
+```
+cd D:\dev\starworks\Arcane
+scripts\desk-verify-servitor.ps1                      # phases A, B, C
+scripts\desk-verify-servitor.ps1 -Phase A             # one phase at a time
+scripts\desk-verify-servitor.ps1 -Configuration Release
+```
+
+Two safety properties it holds, deliberately: **it never blesses `editor-ui`** (owed defect
+2 — its input is written by the thing under test, so a bless manufactures a pass and destroys
+the evidence), and **it never leaves the tree dirty** — every mutation is inside `try/finally`,
+restored with `git checkout --`, and it asserts `ReferenceProject/` is clean before it exits.
+Ctrl-C is safe.
+
+Budget 20–40 minutes: each gate invocation does an unconditional `/t:Rebuild` of
+ReferenceProject (the single-slot `Binaries/` precondition) plus four host launches, and the
+run makes several. Do not walk away during the phase B timing step — observing it *is* the
+test.
+
+The underlying checklist is sections A–F of Plan B's Task 14. Its shape:
 
 - **A — the gate does what it claims.** Including: deliberately break something visible,
   re-run, and confirm it fails with a legible diff. *A gate never observed failing is not
