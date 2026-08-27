@@ -925,7 +925,7 @@ TEST_CASE("mesh: the nearer cube occludes the farther one whichever order they a
 // 9. THE NORMAL MATRIX (NRI Phase 4 Task 8, F2a) -- a non-uniformly-scaled
 //    instance's normals must go through the INVERSE TRANSPOSE, not the upper
 //    3x3 mesh.hlsl's vs_main applied before this task. MeshNodeTest.cpp pins
-//    NormalMatrixFor's analytic answer headlessly; this is the one place that
+//    NormalMatrixFor's analytic answer device-lessly; this is the one place that
 //    can prove the SHADER HALF actually consumes it.
 //
 //    A plain cube cannot exercise this at all: every one of its face normals
@@ -1013,10 +1013,10 @@ namespace
 
         // THE LIGHT IS SET FROM THE SAME FUNCTION THE SHADER MUST MATCH. This
         // is deliberate, not circular: NormalMatrixFor is pinned analytically,
-        // headlessly, against hand-worked numbers in MeshNodeTest.cpp. What
+        // device-lessly, against hand-worked numbers in MeshNodeTest.cpp. What
         // THIS case adds is proof the shader's OWN computation (mesh.hlsl's
         // vs_main, run on a real GPU) agrees with the CPU's -- which no
-        // headless test can show.
+        // device-less test can show.
         //
         //   correct = inverseTranspose(diag(8,1,1)) * normalize(1,0,1)
         //           = diag(1/8,1,1) * (0.7071, 0, 0.7071) = (0.0884, 0, 0.7071)

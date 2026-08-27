@@ -94,7 +94,7 @@ namespace Arcane
         [[nodiscard]] ARCANE_API bool IsArmed() noexcept;
 
         // The backend Arm() installed, or null when not armed. Exposed so a
-        // headless case can state the slot-identity property
+        // device-less case can state the slot-identity property
         // (ActiveGpuCrashBackend() == ArmedBackend()) rather than merely
         // "something is installed".
         [[nodiscard]] ARCANE_API IGpuCrashBackend* ArmedBackend() noexcept;

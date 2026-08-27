@@ -2,7 +2,7 @@
 // route. Retained, LRU-budgeted beside
 // the bytes/json caches, keyed by the resolved Guid -> path: decode-once,
 // cache-hit on repeat access, memoized failure on a bad/unresolvable id or a
-// corrupt file. Headless throughout -- Assets::Create() takes no device and
+// corrupt file. Device-less throughout -- Assets::Create() takes no device and
 // PixelsFor never needed one (that is the entire point of this seam).
 
 #include <catch2/catch_test_macros.hpp>

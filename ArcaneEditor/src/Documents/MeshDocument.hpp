@@ -299,7 +299,7 @@ namespace Arcane::Editor
         std::shared_ptr<MeshDocument*> m_anchor;
 
         // This document's own offscreen preview vehicle -- null in every
-        // headless test (Services carries no device there) and whenever
+        // device-less test (Services carries no device there) and whenever
         // CreateOffscreen itself refuses (already logged).
         std::unique_ptr<Arcane::NriGraphContext> m_preview;
 

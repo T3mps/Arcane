@@ -498,7 +498,7 @@ namespace Arcane
     // 7's first fix round, which made a differently-formatted canvas a silent
     // mismatch with no diagnostic.)
     //
-    // `context` is a POINTER because the headless [nri] frame-shape cases drive
+    // `context` is a POINTER because the device-less [nri] frame-shape cases drive
     // the real declarations with no device: with a null context every
     // declaration is identical and the exec fn does nothing, which is exactly
     // what makes those cases able to fail when this function's DECLARATIONS

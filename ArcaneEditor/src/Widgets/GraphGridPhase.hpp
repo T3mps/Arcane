@@ -5,7 +5,7 @@
 // track the nodes 1:1 and a zoom grow out of the point the editor zoomed about,
 // and (at the bottom of this file) the drawing itself.
 //
-// IT HAS NO DEVICE DEPENDENCY. That is what lets a headless test drive the
+// IT HAS NO DEVICE DEPENDENCY. That is what lets a device-less test drive the
 // whole grid, and what keeps it out of every TU that merely opens a document.
 
 #include <imgui.h>   // DrawGraphGridFallback draws the lattice with ImDrawList
@@ -56,7 +56,7 @@ namespace Arcane::Editor
     // THE GRID'S WHOLE MEMORY
     // ===================================================================
     // PURE: no device, no ImGui, no NRI, which is what makes it the piece of
-    // the grid a headless test can drive. The rationale for every line is at
+    // the grid a device-less test can drive. The rationale for every line is at
     // UpdatePhase below; read it there.
     struct GraphGridPhase
     {

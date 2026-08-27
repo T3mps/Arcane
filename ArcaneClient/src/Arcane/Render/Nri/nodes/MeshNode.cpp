@@ -923,7 +923,7 @@ namespace Arcane
             [context, scene](RenderGraphNodeContext& nodeContext)
             {
                 if (!context)
-                    return;   // headless declaration-shape drive: no device, nothing to record
+                    return;   // device-less declaration-shape drive: no device, nothing to record
                 if (MeshNode* node = context->Mesh())
                     node->Record(nodeContext, scene, context->FrameSlot());
             });

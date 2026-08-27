@@ -1110,7 +1110,7 @@ namespace Arcane
             [context, width, height](RenderGraphNodeContext& nodeContext)
             {
                 if (!context)
-                    return;   // headless declaration-shape drive
+                    return;   // device-less declaration-shape drive
                 if (PickNode* pick = context->Pick())
                     pick->Record(nodeContext, width, height, context->FrameSlot());
             });
@@ -1138,7 +1138,7 @@ namespace Arcane
             [context, ids, readback, width, height](RenderGraphNodeContext& nodeContext)
             {
                 if (!context)
-                    return;   // headless declaration-shape drive
+                    return;   // device-less declaration-shape drive
                 if (PickNode* pick = context->Pick())
                     pick->RecordReadback(nodeContext, *ids, *readback,
                                           // THIS FRAME's probe pixel, which
@@ -1182,7 +1182,7 @@ namespace Arcane
             [context, seed, ids, width, height](RenderGraphNodeContext& nodeContext)
             {
                 if (!context)
-                    return;   // headless declaration-shape drive
+                    return;   // device-less declaration-shape drive
                 if (OutlineNode* node = context->Outline())
                     node->RecordSeed(nodeContext, ids, *seed,
                                       // THE HOVER CURSOR, which is a DIFFERENT
@@ -1234,7 +1234,7 @@ namespace Arcane
                 [context, targets, source, step, jump, width, height](RenderGraphNodeContext& nodeContext)
                 {
                     if (!context)
-                        return;   // headless declaration-shape drive
+                        return;   // device-less declaration-shape drive
                     if (OutlineNode* node = context->Outline())
                         node->RecordJfa(nodeContext, step, jump, source, (*targets)[step],
                                          width, height, context->FrameSlot());
@@ -1271,7 +1271,7 @@ namespace Arcane
             [context, field, target, width, height](RenderGraphNodeContext& nodeContext)
             {
                 if (!context)
-                    return;   // headless declaration-shape drive
+                    return;   // device-less declaration-shape drive
                 if (OutlineNode* node = context->Outline())
                     node->RecordComposite(nodeContext, field, target, width, height,
                                            context->FrameSlot());

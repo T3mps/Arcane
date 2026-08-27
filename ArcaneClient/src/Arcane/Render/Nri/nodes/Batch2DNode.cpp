@@ -344,7 +344,7 @@ namespace Arcane
         // kMaxSpriteTextures name: a pool's sizes are fixed at creation and a
         // single set cannot be freed, so the numbers are decided up front
         // rather than discovered mid-frame. The arithmetic itself is PoolSizes()
-        // -- pure, public and headlessly pinned, because this device call is the
+        // -- pure, public and device-lessly pinned, because this device call is the
         // only thing standing between a wrong constant and a mid-frame
         // allocation failure at the desk.
         const nri::DescriptorPoolDesc poolDesc = PoolSizes();
@@ -955,7 +955,7 @@ namespace Arcane
 
         // THE LAYOUT -- see SpriteMaterialLayout (and THE REGISTER-SPACE RULE in
         // this file's header) for the whole of its shape and its reasoning. It
-        // is a separate object so the headless [nri] cases can assert that shape
+        // is a separate object so the device-less [nri] cases can assert that shape
         // without a device.
         SpriteMaterialLayout layout2D;
         layout2D.Build(cbSize, textureCount);
@@ -1557,7 +1557,7 @@ namespace Arcane
             [context, drained](RenderGraphNodeContext& nodeContext)
             {
                 if (!context)
-                    return;   // headless declaration-shape drive: no device, nothing to record
+                    return;   // device-less declaration-shape drive: no device, nothing to record
                 if (Batch2DNode* node = context->Batch2D())
                     node->Record(nodeContext, drained, kCanvasFormat, context->FrameSlot());
             });

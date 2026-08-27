@@ -40,7 +40,7 @@ namespace Arcane::Audio
 
 		// Per-frame main-thread tick. Reclaims finished fire-and-forget voices
 		// (non-looping one-shots whose end-callback has flagged them) so their
-		// slots do not leak. On a headless (noDevice) engine there is no audio
+		// slots do not leak. On a device-less (noDevice) engine there is no audio
 		// thread advancing playback, so a positive dtSeconds also read-and-discards
 		// that much audio time to let one-shots reach their end (and fire their
 		// callbacks); with a real device the device thread drives mixing and no

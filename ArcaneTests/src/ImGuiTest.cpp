@@ -1,5 +1,5 @@
 // ImGui arrival gate: core compiles into the DLL's workspace flavor and a
-// context round-trips headlessly (the headless smoke).
+// context round-trips device-lessly (the device-less smoke).
 //
 // ImGuiLayer has ONE flavor: RenderToDrawData() is its only renderer entry
 // point, and the frame graph's ImGuiNriNode is the only thing that ever draws
@@ -14,7 +14,7 @@
 
 #include <imgui.h>
 
-TEST_CASE("imgui: context creates headlessly", "[imgui]")
+TEST_CASE("imgui: context creates device-lessly", "[imgui]")
 {
     IMGUI_CHECKVERSION();
     ImGuiContext* ctx = ImGui::CreateContext();
@@ -23,7 +23,7 @@ TEST_CASE("imgui: context creates headlessly", "[imgui]")
     io.DisplaySize = ImVec2(640, 360);
     unsigned char* pixels = nullptr;
     int w = 0, h = 0;
-    // GetTexDataAsRGBA32 deliberately precedes NewFrame here: this headless
+    // GetTexDataAsRGBA32 deliberately precedes NewFrame here: this device-less
     // smoke builds the atlas eagerly (legacy-but-present in 1.92 -- under
     // RendererHasTextures the atlas would otherwise build lazily on render).
     io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);  // builds default font

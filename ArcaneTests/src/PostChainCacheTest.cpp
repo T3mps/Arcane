@@ -1,4 +1,4 @@
-// PostChainCache headless coverage (post arc, slice 2): every refusal happens
+// PostChainCache device-less coverage (post arc, slice 2): every refusal happens
 // BEFORE a compile is submitted, so these run without a device or an
 // initialized compiler -- the request simply never exposes a bound chain.
 //

@@ -164,7 +164,7 @@ namespace Arcane
     // before the frame's command buffer opens.
     //
     // `context` may be null -- see AddBatch2DNode's signature note; a null
-    // context is the headless declaration-shape drive the [nri] frame-shape
+    // context is the device-less declaration-shape drive the [nri] frame-shape
     // cases use, where every declaration is identical and only the exec fn is
     // inert.
     ARCANE_API void AddImGuiNode(RenderGraph& graph, NriGraphContext* context, RgTexture target,

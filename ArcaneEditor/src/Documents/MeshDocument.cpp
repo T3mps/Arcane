@@ -413,7 +413,7 @@ namespace Arcane::Editor
         }
         else if (!m_services.nriDevice || !m_services.hostConfig)
         {
-            // The headless-test case, and any real session with no NRI
+            // The device-less test case, and any real session with no NRI
             // device at all -- EnsurePreviewContext() never even attempted
             // CreateOffscreen (fix-round Finding 3: this branch used to also
             // catch the two cases below, which DO have a device).

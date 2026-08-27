@@ -5,7 +5,7 @@
 // PURE AND DEVICE-FREE -- no NRI, no NriDevice, no GPU type anywhere in this
 // file or its .cpp. Same discipline GraphGridPhase
 // (ArcaneEditor/src/Widgets/GraphGridPhase.hpp) follows, and for the same
-// reason: it is what lets a headless test drive the whole builder without a
+// reason: it is what lets a device-less test drive the whole builder without a
 // device.
 //
 // PROCEDURAL GEOMETRY ON PURPOSE -- mesh IMPORT (cgltf and friends) is a

@@ -73,7 +73,7 @@ namespace Arcane
             Runtime* runtime = nullptr;
 
             // The frame batcher registered materials bind into. Null (a
-            // headless host or a test) disables material binding; sprite
+            // device-less host or a test) disables material binding; sprite
             // resolution still works. Material binding is the whole of what
             // this field does: there is no texture-eviction hook, because
             // nothing here holds a device object to evict.
@@ -208,7 +208,7 @@ namespace Arcane
             // chain is still reachable to a caller that wants it, through the
             // published MeshTable/MeshMaterialTable resources.
             //
-            // Unlike the sprite pair, this one CAN report bound in a headless
+            // Unlike the sprite pair, this one CAN report bound in a device-less
             // census: neither mesh cache compiles anything, so Refresh's mesh
             // sweep is ungated on the compiler and the batcher
             // (SceneRenderResolver.cpp's (1b)).

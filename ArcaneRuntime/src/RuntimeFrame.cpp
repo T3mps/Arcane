@@ -276,7 +276,7 @@ void AdvanceSim(FrameIo& io)
             [&](double dt)          { io.plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ io.plugin->UpdateAll(dt, a); });
         // Reclaim finished fire-and-forget SFX voices each frame (and, on the
-        // headless null backend, advance audio time so one-shots actually end).
+        // device-less null backend, advance audio time so one-shots actually end).
         io.runtime->AudioSystem().Update(simDt);
         io.perf.Add(io.perf.accSim, t0, io.perf.Now());
     }

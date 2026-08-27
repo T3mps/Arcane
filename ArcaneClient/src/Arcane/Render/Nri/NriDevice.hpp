@@ -99,7 +99,7 @@ namespace Arcane
         // Backend-dispatching convenience over the two above.
         static std::unique_ptr<NriDevice> Wrap(const NativeDeviceOwner& native);
 
-        // The NONE backend, for HEADLESS TESTS ONLY (Task 6's [nri] graph
+        // The NONE backend, for DEVICE-LESS TESTS ONLY (Task 6's [nri] graph
         // executor integration cases). It is the one carve-out from the
         // wrapper-path rule stated at the top of this file: nriCreateDevice
         // is a review defect for a REAL backend, but NONE has no native
@@ -168,7 +168,7 @@ namespace Arcane
         // hazard NriGraphContext.hpp's TWO CONTEXTS, TWO LANES block describes:
         // a Debug nondecreasing assert, or a reap against a foreign fence.
         //
-        // The headless [nri] cases DO drive it by hand (Bury/Reap/Drain with
+        // The device-less [nri] cases DO drive it by hand (Bury/Reap/Drain with
         // their own values) -- as a plain, conveniently-owned Graveyard, which
         // is all it is.
         [[nodiscard]] Graveyard& Graves() { return m_graveyard; }

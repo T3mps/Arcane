@@ -1,4 +1,4 @@
-// RenderGraph: headless [nri] coverage of the pure declaration invariants and
+// RenderGraph: device-less [nri] coverage of the pure declaration invariants and
 // of Compile()'s derived barriers, transient lifetimes and pool-slot
 // assignment. The cases in this first section use no nri device and never call
 // Execute(); the executor's own section starts further down. See
@@ -576,7 +576,7 @@ TEST_CASE("rendergraph: a handle minted before Reset() also stays stale when the
 // =====================================================================
 // Task 4 -- Compile(): derived barriers, transient lifetimes, pool slots.
 //
-// Every case below is headless and device-free: Compile() is pure, so the
+// Every case below is device-less and device-free: Compile() is pure, so the
 // whole barrier-derivation surface is unit-testable without a GPU. The
 // usage->state rows come first (they are what every other case is written
 // against), then the barrier-edge rules, then lifetimes/pool slots, then
@@ -1759,7 +1759,7 @@ TEST_CASE("rendergraph compile: barrier resourceIndex is a decoded slot, not an 
 // Task 5 -- NriUploadRing: per-frame-slot upload arenas.
 //
 // RingLayout is the pure bump-allocator math NriUploadRing wraps -- no NRI
-// device, fully headless. NriUploadRing itself creates a REAL persistent-
+// device, fully device-less. NriUploadRing itself creates a REAL persistent-
 // mapped nri::Buffer per slot at Init(), which fails outright on the NONE
 // backend (ImplNONE's MapBuffer returns null unconditionally -- see
 // NriUploadRing.hpp's file header), so it -- and BeginFrame()/Allocate()/
@@ -2412,7 +2412,7 @@ TEST_CASE("rendergraph exec: a retired pool texture is buried AFTER every view n
     // textures (PostChainNode, TonemapNode, OutlineNode). It does exactly what
     // their SyncPoolEpoch does and nothing else: compare the graph's epoch,
     // and on a move bury every cached view at DebugSubmitCount(). The real
-    // nodes cannot be built headlessly (they need a live device, a pipeline
+    // nodes cannot be built device-lessly (they need a live device, a pipeline
     // cache and shader bytecode), so this case pins the MECHANISM and its
     // ORDER; that NriGraphContext::BuildFrame drives the real three at
     // declaration time is inspection-verified, like the Dist guards.
@@ -3188,7 +3188,7 @@ TEST_CASE("rendergraph exec: a graph whose Execute ENTERED and FAILED buries its
     // "entered, realized, never submitted" state a mid-Execute device loss
     // leaves behind, and the only one a NONE device can be made to produce
     // (every NONE Create* succeeds, so the all-or-nothing cleanup inside
-    // EnsureExecutionResources itself cannot be driven headlessly).
+    // EnsureExecutionResources itself cannot be driven device-lessly).
     const std::uint64_t before = Arcane::RenderErrorCount();
 
     auto device = Arcane::NriDevice::CreateNoneForTests();
@@ -3289,7 +3289,7 @@ TEST_CASE("imgui-nri: both invalidation variants evict the pointer-keyed entry a
         pipelines.Bind(*device);
 
         // Never dereferenced: the bytecode reaches NRI only through
-        // GetGraphics, which no headless path here calls. Non-empty is all
+        // GetGraphics, which no device-less path here calls. Non-empty is all
         // Init checks.
         const std::uint8_t vsBytes[4] = { 1, 2, 3, 4 };
         const std::uint8_t psBytes[4] = { 5, 6, 7, 8 };
@@ -3799,7 +3799,7 @@ namespace
 {
     // Records what the graph path asked of a crash backend, and reports a
     // NativeDevice() that is deliberately not the graph's -- the vehicle's
-    // two-device shape, headlessly.
+    // two-device shape, device-lessly.
     class MarkerSpyBackend final : public Arcane::IGpuCrashBackend
     {
     public:
@@ -3860,7 +3860,7 @@ TEST_CASE("rendergraph exec: a crash backend on ANOTHER device gets CPU breadcru
 
     // Any address that is not this graph's native device. (A NONE device's is
     // null, so the gate is closed here for BOTH reasons -- which is the honest
-    // headless approximation of the vehicle: never open by accident.)
+    // device-less approximation of the vehicle: never open by accident.)
     int                     foreignDevice = 0;
     MarkerSpyBackend        spy(&foreignDevice);
     ScopedGpuCrashBackend   backendGuard(&spy);
@@ -3895,7 +3895,7 @@ TEST_CASE("rendergraph exec: a crash backend on ANOTHER device gets CPU breadcru
 // ======================================================================
 // NriGraphContext itself needs a window, a device and a swapchain, so it is
 // desk-only. Its DECLARATIONS are not: Compile() is pure, so the frame's exact
-// node/usage shape can be pinned headlessly. That is what makes "the clear
+// node/usage shape can be pinned device-lessly. That is what makes "the clear
 // frame presents, and a capture frame copies before it presents" a checked
 // property rather than a desk observation.
 //
@@ -3986,7 +3986,7 @@ TEST_CASE("nri graph frame: a capture frame copies the backbuffer BEFORE it pres
     shape.canvasWidth   = 320;
     shape.canvasHeight  = 200;
     shape.capture       = true;
-    // ImportBuffer stores the pointer without dereferencing it, so a headless
+    // ImportBuffer stores the pointer without dereferencing it, so a device-less
     // drive can declare the real capture node with no staging buffer at all.
     shape.captureBuffer = nullptr;
     shape.captureBytes  = 4096;
@@ -4040,7 +4040,7 @@ TEST_CASE("nri graph frame: a capture frame copies the backbuffer BEFORE it pres
 //
 // RgFrameShape::offscreenOutput is a bare nri::Texture* and ImportTexture
 // stores it WITHOUT dereferencing (RenderGraph::ImportTextureInternal), so a
-// headless drive can declare the real node with a stand-in pointer -- the same
+// device-less drive can declare the real node with a stand-in pointer -- the same
 // licence the capture cases take with shape.captureBuffer.
 // ======================================================================
 namespace
@@ -4366,7 +4366,7 @@ TEST_CASE("nri graph frame: the canvas transient is swapchain-sized RGBA16F and 
 //
 // Same drive as the cases above -- Arcane::DeclareGraphFrame with a null
 // context -- so the nodes, the reads/writes and the derived barrier chain are
-// the REAL ones. What makes that possible headlessly is that the post nodes'
+// the REAL ones. What makes that possible device-lessly is that the post nodes'
 // DECLARATIONS depend on the chain's per-pass WIRING and on nothing else: the
 // bytecode, the template and the values are PostChainNode::PrepareChain's
 // business, and PrepareChain only runs when there is a context (a device).
@@ -5022,7 +5022,7 @@ TEST_CASE("nri pipeline cache: caller-contract breaches are refused and latched,
 // =========================================================================
 // Task 9: REGISTERED SPRITE MATERIALS in Batch2DNode.
 //
-// What can be pinned headlessly and what cannot. The material path's GPU half
+// What can be pinned device-lessly and what cannot. The material path's GPU half
 // -- the constant-buffer arena's mapping, the descriptor-set writes, the PSOs
 // and the draws -- is unreachable here for the reason NriUploadRing's header
 // states: ImplNONE's MapBuffer returns null unconditionally, so
@@ -6808,7 +6808,7 @@ TEST_CASE("pick geometry: ONE emitter feeds both recorders -- id k+1, back-to-fr
 }
 
 // ======================================================================
-// TEXTURES ARE NOT GRAPH RESOURCES, and what that leaves headlessly provable
+// TEXTURES ARE NOT GRAPH RESOURCES, and what that leaves device-lessly provable
 // -- READ THIS BEFORE TRUSTING THE CASES BELOW.
 //
 // A sprite's own texture is REAL on the graph path: a drained span
@@ -6838,7 +6838,7 @@ TEST_CASE("pick geometry: ONE emitter feeds both recorders -- id k+1, back-to-fr
 // passes straight to CreateDescriptorPool). Those are real coverage of real
 // production code, and both carry failures a device cannot show.
 //
-// WHAT HAS NO EXECUTED HEADLESS COVERAGE, AND WHY -- DESK DEBT.
+// WHAT HAS NO EXECUTED DEVICE-LESS COVERAGE, AND WHY -- DESK DEBT.
 // EnsureSpriteSet, EnsureMaterialVariant, WriteMaterialSet and Record's
 // variant scan are NOT executed by any case in the ~[gpu] gate, and cannot be:
 // Batch2DNode::Create fails on the NONE backend by construction, because

@@ -1,8 +1,8 @@
 // Slice 9 diagnostic + regression: drive the REAL ShaderEditorDocument::Draw()
-// for a GRAPH-OWNED document through a headless ImGui frame (null backend --
+// for a GRAPH-OWNED document through a device-less ImGui frame (null backend --
 // no window, no GPU; software font atlas). This is the exact path the desk
 // crash took (New Graph Material -> doc opens -> first canvas frame), which no
-// other headless test exercises: the imgui-node-editor canvas only runs inside
+// other device-less test exercises: the imgui-node-editor canvas only runs inside
 // a live ImGui frame.
 
 #include <catch2/catch_test_macros.hpp>
@@ -20,7 +20,7 @@
 using namespace Arcane;
 using namespace Arcane::Editor;
 
-TEST_CASE("Graph document survives headless ImGui frames", "[editor][graphcanvas]")
+TEST_CASE("Graph document survives device-less ImGui frames", "[editor][graphcanvas]")
 {
     // The New-Graph-Material seed: Color wired to Output (EditorApp's shape).
     MaterialGraph g;
@@ -58,7 +58,7 @@ TEST_CASE("Graph document survives headless ImGui frames", "[editor][graphcanvas
     data.snippet = gen.snippet;
     data.graph = std::move(g);
 
-    // Headless ImGui: no backend; a 1x1 white font texture satisfies NewFrame.
+    // Device-less ImGui: no backend; a 1x1 white font texture satisfies NewFrame.
     IMGUI_CHECKVERSION();
     ImGuiContext* prev = ImGui::GetCurrentContext();
     ImGuiContext* ctx = ImGui::CreateContext();

@@ -61,7 +61,7 @@ namespace Arcane
         // caller already passes a context explicitly; making it required means the
         // compiler enforces that instead of convention.
         //
-        // enableAudioDevice: opt into a real OS audio device. Defaults false (headless:
+        // enableAudioDevice: opt into a real OS audio device. Defaults false (device-less:
         // tests/servers/tools and the scripted "ArcaneRuntime --frames N" verify use the null
         // backend). An interactive host passes true; the real->null fallback still applies.
         explicit Runtime(Astra::TypeContext* externalContext, bool enableAudioDevice = false);

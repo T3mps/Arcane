@@ -231,7 +231,7 @@ namespace Arcane
     // setter above. The slot is last-writer-wins and
     // Render/Nri/NriDiagnostics::Arm/Disarm is its one writer, so "arming
     // installed one" and "a second arm left it alone" are properties a
-    // headless case can only state if it can read the slot
+    // device-less case can only state if it can read the slot
     // (NriDiagnosticsTest pins both). Production code has no business reading
     // it: the hook exists to be CALLED by RenderErrorLatch, by nobody
     // else.

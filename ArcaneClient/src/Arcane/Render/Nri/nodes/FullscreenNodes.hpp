@@ -99,7 +99,7 @@ namespace Arcane
     // =====================================================================
     // The pipeline-layout SHAPE one fullscreen material pass needs, as a
     // standalone buildable object rather than a block of locals inside
-    // PostChainNode -- so the [nri] tests can pin it on a headless device.
+    // PostChainNode -- so the [nri] tests can pin it on a device-less backend.
     // The sprite twin is SpriteMaterialLayout (Batch2DNode.hpp); the two
     // differ because the two TEMPLATES differ, and the differences are the
     // whole reason this is its own type:

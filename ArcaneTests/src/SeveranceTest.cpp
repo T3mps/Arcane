@@ -1,4 +1,4 @@
-// THE SEVERANCE -- headless proof that the frame's DATA-SUPPLY side needs no
+// THE SEVERANCE -- device-less proof that the frame's DATA-SUPPLY side needs no
 // graphics device.
 //
 // Three producers are exercised without one. Device-free is not a mode they are
@@ -14,7 +14,7 @@
 //     any chain object needing to exist: the cache never gated the desc publish
 //     on one being possible.
 //
-// Why headless is the right home for this: everything above is CPU work over
+// Why device-less is the right home for this: everything above is CPU work over
 // bytes. The half that genuinely needs a device -- that a device-CARRYING
 // batcher records the same spans -- HAS NO COVERAGE AT ALL today. That is a
 // named gap, not an oversight.

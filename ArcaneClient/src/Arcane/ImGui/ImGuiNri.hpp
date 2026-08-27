@@ -266,7 +266,7 @@ namespace Arcane
         // for which this is the ONLY way to reach the user-texture half of the
         // cache at all -- RenderDrawData allocates from the upload ring first,
         // and NONE's MapBuffer refuses, so an Init'd ring does not exist on the
-        // one backend the headless gate can drive.
+        // one backend the device-less gate can drive.
         bool EnsureUserTexture(nri::Texture* texture);
 
         // Records `drawData` into an ALREADY-OPEN raster pass whose single

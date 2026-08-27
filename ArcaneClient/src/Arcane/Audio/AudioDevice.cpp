@@ -347,7 +347,7 @@ namespace Arcane::Audio
 		// advances when the host ticks. Read-and-discard dtSeconds of audio so
 		// non-looping voices actually reach their end and fire OnVoiceEnd. The
 		// engine is f32; a small scratch buffer is read in chunks and thrown away.
-		void PumpHeadless(double dtSeconds)
+		void PumpDeviceless(double dtSeconds)
 		{
 			const ma_uint32 sr = ma_engine_get_sample_rate(&engine);
 			const ma_uint32 ch = ma_engine_get_channels(&engine);
@@ -433,7 +433,7 @@ namespace Arcane::Audio
 		}
 
 		m_impl->initialized = true;
-		m_impl->hasDevice = desc.enableDevice;   // null backend => headless; Update pumps time
+		m_impl->hasDevice = desc.enableDevice;   // null backend => device-less; Update pumps time
 		m_impl->assets = assets;
 		m_impl->mainThreadId = std::this_thread::get_id();   // pins the main-thread contract
 
@@ -772,11 +772,11 @@ namespace Arcane::Audio
 
 		m_impl->AssertMainThread();
 
-		// Headless engines have no audio thread, so advance playback ourselves so
+		// Device-less engines have no audio thread, so advance playback ourselves so
 		// one-shots reach their end and fire OnVoiceEnd. With a real device the
 		// device thread drives mixing -- pumping here would double-consume frames.
 		if (!m_impl->hasDevice)
-			m_impl->PumpHeadless(dtSeconds);
+			m_impl->PumpDeviceless(dtSeconds);
 
 		m_impl->ReapEndedVoices();
 	}

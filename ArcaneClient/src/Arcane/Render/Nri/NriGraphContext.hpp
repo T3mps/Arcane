@@ -803,7 +803,7 @@ namespace Arcane
         // THE VIEWPORT DRAG-STORM is the motion that exercises all of this at
         // once -- resize the panel continuously while the chrome context keeps
         // presenting -- and it is the only way to see most of it: every part is
-        // either headless-invisible (a real sampler reading real texels) or
+        // either device-less-invisible (a real sampler reading real texels) or
         // once-per-resize. Watch for, in order of what each would prove:
         //   * VK validation on a destroyed VkImageView/VkImage -- the ordering
         //     above went wrong, or the invalidate was skipped entirely;
@@ -823,7 +823,7 @@ namespace Arcane
         //     smooth than the host-window drag-storm; what would be a FINDING is
         //     a stall that persists after the drag ends (the size guard in (i)
         //     above is missing) or one on a drag that never changes the size.
-        // NOTE WHAT THE HEADLESS GATE CANNOT SEE HERE: NONE's DeviceWaitIdle is
+        // NOTE WHAT THE DEVICE-LESS GATE CANNOT SEE HERE: NONE's DeviceWaitIdle is
         // a bare SUCCESS with no effect, so no [nri] case can observe that the
         // idle was issued at all -- an edit that silently dropped it would stay
         // green. VK synchronization validation at D3b is what would catch it,
@@ -1338,7 +1338,7 @@ namespace Arcane
     };
 
     // =====================================================================
-    // THE FRAME'S SHAPE, as a free function both the vehicle and the headless
+    // THE FRAME'S SHAPE, as a free function both the vehicle and the device-less
     // [nri] tests DRIVE.
     //
     // NriGraphContext::BuildFrame is a two-line wrapper over
@@ -1363,7 +1363,7 @@ namespace Arcane
         // The HOST_READBACK staging buffer the capture node copies into. It is
         // IMPORTED rather than created as a transient because the graph
         // realizes transients in MemoryLocation::DEVICE, which can never be
-        // mapped. May be null when `capture` is false (and headlessly even when
+        // mapped. May be null when `capture` is false (and device-lessly even when
         // it is true -- ImportBuffer stores the pointer without dereferencing).
         nri::Buffer*  captureBuffer = nullptr;
         std::uint64_t captureBytes  = 0;
@@ -1381,7 +1381,7 @@ namespace Arcane
         // it red.
         //
         // Held as a bare nri::Texture* and never dereferenced at declaration
-        // time (ImportTexture only records it), which is what lets the headless
+        // time (ImportTexture only records it), which is what lets the device-less
         // [nri] cases drive the real offscreen shape with a stand-in pointer --
         // the same licence `captureBuffer` above takes.
         nri::Texture* offscreenOutput = nullptr;
@@ -1391,7 +1391,7 @@ namespace Arcane
         // its bytecode and values are PostChainNode::PrepareChain's business.
         // Honoured only when `stage` includes the chain (Batch drops it).
         //
-        // A headless drive can point this at a PostChainDesc carrying nothing
+        // A device-less drive can point this at a PostChainDesc carrying nothing
         // but `passes[i].inputs` -- the declarations depend on the wiring and
         // on nothing else, which is what lets the [nri] frame-shape cases
         // exercise the real chain shape with no device.
@@ -1401,7 +1401,7 @@ namespace Arcane
         // The ONLY thing about that chain the declarations depend on is this
         // flag and the canvas extent -- the drawables, the selection and the
         // probe pixel are all RECORD-time data that travels through
-        // NriGraphContext -- which is exactly what lets the headless [nri]
+        // NriGraphContext -- which is exactly what lets the device-less [nri]
         // cases drive the real shape with a null context.
         //
         // Independent of how the scene is sliced, deliberately: nulling
@@ -1415,7 +1415,7 @@ namespace Arcane
         // FrameDesc::imgui is non-null -- and the declarations depend on this
         // flag and on nothing else: the
         // ImDrawData itself is RECORD-time data that travels through
-        // NriGraphContext, which is what lets the headless [nri] cases drive
+        // NriGraphContext, which is what lets the device-less [nri] cases drive
         // the real shape with a null context.
         bool imgui = false;
 
@@ -1455,7 +1455,7 @@ namespace Arcane
         // per-instance transforms and tints, the camera and the one directional
         // light are all consumed by MeshNode at Record time.
         //
-        // A headless drive can point this at a MeshSceneDesc carrying one
+        // A device-less drive can point this at a MeshSceneDesc carrying one
         // instance with a null `mesh`: the DECLARATIONS depend on the scene
         // being non-empty and on nothing else, which is what lets the [nri]
         // frame-shape cases exercise the real mesh pass with no device.

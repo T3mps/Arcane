@@ -1141,7 +1141,7 @@ namespace Arcane
 
         // Whatever this graph's own timeline has retired is safe to free. On
         // the NONE backend GetFenceValue is hard-wired to 0, so this reaps
-        // only value-0 burials -- headless tests feed the graveyard their own
+        // only value-0 burials -- device-less tests feed the graveyard their own
         // values by hand.
         //
         // OWN FENCE, OWN LANE. This is the pairing the whole lane exists for:

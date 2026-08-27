@@ -290,7 +290,7 @@ TEST_CASE("AudioDevice reclaims finished one-shot voices; keeps looping ones", "
 
     // A non-looping one-shot, playing. Before the fix nothing ever reclaimed it,
     // so the VoiceSlot stayed alive forever (the leak). Now Update advances the
-    // headless engine past the clip's end, the end-callback flags the slot, and
+    // device-less engine past the clip's end, the end-callback flags the slot, and
     // the same Update reaps it.
     PlayDesc oneShot;   // loop defaults to false, starts playing
     VoiceHandle voice = audio.Play(sound, oneShot);

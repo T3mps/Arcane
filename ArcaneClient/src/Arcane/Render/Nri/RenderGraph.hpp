@@ -27,7 +27,7 @@
 //                        that calls nri::CoreInterface::CmdBarrier.
 //
 // Keep that split: a device call creeping into Compile()'s TU would make
-// the derivation impure and untestable headless, which is what every Task-4
+// the derivation impure and untestable device-less, which is what every Task-4
 // test depends on.
 //
 // Execution order = declaration order. Phase 2 does not reorder, cull, or
@@ -703,7 +703,7 @@ namespace Arcane
         // one-frame delay makes "views are buried before the textures they
         // view" hold across a pool reshape (see m_retiredPool). Non-zero only
         // between the Execute() that reshaped the pool and the next one; a
-        // headless [nri] case reads it to pin exactly that window.
+        // device-less [nri] case reads it to pin exactly that window.
         [[nodiscard]] std::size_t DebugRetiredPoolCount() const noexcept { return m_retiredPool.size(); }
 
         // Physical transients ever created by this graph, monotonically.

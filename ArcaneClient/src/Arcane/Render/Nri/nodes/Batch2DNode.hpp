@@ -131,7 +131,7 @@ namespace Arcane
     // =====================================================================
     // The pipeline-layout SHAPE a registered sprite material needs, as a
     // standalone buildable object rather than a block of locals inside
-    // Batch2DNode -- so the [nri] tests can pin it on a headless device.
+    // Batch2DNode -- so the [nri] tests can pin it on a device-less backend.
     //
     // What they pin is THE REGISTER-SPACE RULE stated at the top of this file:
     // the layout carries root CONSTANTS only, so `rootRegisterSpace` and the
@@ -329,7 +329,7 @@ namespace Arcane
         // error or a wrong pixel -- it is an allocation that fails part-way
         // through a frame at the desk, after which that material or texture
         // silently draws with the white texel. No device can show that the
-        // numbers agree; a headless case can, and does ([nri], RenderGraphTest).
+        // numbers agree; a device-less case can, and does ([nri], RenderGraphTest).
         [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes() noexcept;
 
     private:
@@ -529,7 +529,7 @@ namespace Arcane
     // RenderGraphBuilder, and a builder exists only inside a node's setup fn --
     // so the first node to touch the canvas is necessarily the one that creates
     // it. Hence extent in, handle out. `context` is a POINTER because the
-    // headless [nri] frame-shape test drives the real declarations with no
+    // device-less [nri] frame-shape test drives the real declarations with no
     // device: with a null context every declaration is identical and the exec
     // fn does nothing, which is exactly what makes that test able to fail when
     // this function's DECLARATIONS change.

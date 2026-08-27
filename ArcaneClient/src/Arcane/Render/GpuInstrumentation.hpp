@@ -64,8 +64,8 @@ namespace Arcane
     // call.
     ARCANE_API void SetActiveGpuCrashBackend(IGpuCrashBackend* backend) noexcept;
 
-    // The installed backend, or null. Null is ORDINARY, not an error: a headless
-    // device, a backend that failed to arm, a test.
+    // The installed backend, or null. Null is ORDINARY, not an error: a device-less
+    // host, a backend that failed to arm, a test.
     [[nodiscard]] ARCANE_API IGpuCrashBackend* ActiveGpuCrashBackend() noexcept;
 
     // Clear the slot ONLY if it still holds `backend`; returns whether it

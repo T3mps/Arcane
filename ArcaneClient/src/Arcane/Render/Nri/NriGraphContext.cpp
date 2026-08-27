@@ -1268,7 +1268,7 @@ namespace Arcane
             // returns 0 for a chain it cannot honour -- which this then
             // declares nothing for, rather than declaring passes whose exec fn
             // would leave their targets holding undefined pool contents.
-            // Headlessly it is the wiring alone, clamped to the same cap.
+            // Device-lessly it is the wiring alone, clamped to the same cap.
             std::uint32_t passCount = (std::uint32_t)std::min<std::size_t>(
                 shape.post->passes.size(), PostChainNode::kMaxPasses);
             if (context)
@@ -1401,7 +1401,7 @@ namespace Arcane
             [context, backbuffer, captureHandle](RenderGraphNodeContext& ctx)
             {
                 if (!context)
-                    return;   // headless declaration-shape drive
+                    return;   // device-less declaration-shape drive
 
                 nri::Texture* source = ctx.Resolve(backbuffer);
                 nri::Buffer*  dest   = ctx.Resolve(*captureHandle);
@@ -1474,7 +1474,7 @@ namespace Arcane
         if (m_outline)  m_outline->SyncPoolEpoch(*m_graph);
 
         // Thin on purpose: the frame's SHAPE lives in DeclareGraphFrame so the
-        // headless [nri] frame-shape cases drive the real declarations instead
+        // device-less [nri] frame-shape cases drive the real declarations instead
         // of transcribing them (see that function's comment block). The handles
         // it returns belong to the nodes that use them -- each exec fn already
         // captured what it needs -- so nothing here holds a per-frame handle
@@ -1502,7 +1502,7 @@ namespace Arcane
         shape.pickOutline   = frame.pickOutline && m_pick && m_outline;
         // Same belt-and-braces for the HUD: draw data for THIS frame and a
         // node that was actually built. The stage gate lives inside
-        // DeclareGraphFrame, beside the post chain's, so the headless
+        // DeclareGraphFrame, beside the post chain's, so the device-less
         // frame-shape cases exercise the real rule.
         shape.imgui         = frame.imgui != nullptr && m_imguiHud != nullptr;
         // ...and for the game HUD, against ITS node (Task 9). A driver that

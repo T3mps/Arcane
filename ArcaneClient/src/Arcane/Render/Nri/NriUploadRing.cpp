@@ -131,13 +131,13 @@ namespace Arcane
             // returns null unconditionally, so THIS is the line that makes
             // Init() fail on the NONE backend -- by construction, not a
             // special case. See the file header: nothing past this point is
-            // reachable from a headless [nri]~[gpu] test.
+            // reachable from a device-less [nri]~[gpu] test.
             slot.cpu = core.MapBuffer(*slot.buffer, 0, nri::WHOLE_SIZE);
             if (!slot.cpu)
             {
                 ARC_ERROR("[nri] NriUploadRing::Init: MapBuffer failed -- the NONE backend "
                           "cannot persistently map (ImplNONE.cpp); this method must only be "
-                          "reached from a [gpu] desk run, never a headless [nri]~[gpu] test");
+                          "reached from a [gpu] desk run, never a device-less [nri]~[gpu] test");
                 Destroy();
                 return false;
             }

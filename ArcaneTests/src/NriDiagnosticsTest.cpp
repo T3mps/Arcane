@@ -1,4 +1,4 @@
-// NriDiagnostics: the crash chain armed by whichever device exists. Headless
+// NriDiagnostics: the crash chain armed by whichever device exists. Device-less
 // -- [nri], inside the ~[gpu] dev gate.
 //
 // WHAT IS AND IS NOT REACHABLE HERE, stated up front because the split is the
@@ -200,7 +200,7 @@ TEST_CASE("nri diagnostics: the graph heartbeat's value stream reaches the stall
     {
         ++fence;
         // The real seam, on the real path: exported, callable with no
-        // Diagnostics::Install (a headless host never arms the watchdog), and
+        // Diagnostics::Install (a device-less host never arms the watchdog), and
         // publishing the same value the rule below is fed.
         Arcane::NriDiagnostics::PublishHeartbeat(fence);
         if (rule.Poll(fence, now)) ++reports;
@@ -445,7 +445,7 @@ TEST_CASE("nri diagnostics: an armed NRI chain fills a real report's GPU section
 // ResetGpuDeviceLost(); NriDiagnostics::Arm is the SECOND arming site (and
 // after Task 6 the only one), so it owes the same pair.
 //
-// The property is reachable headlessly because the observer touches no device
+// The property is reachable device-lessly because the observer touches no device
 // at all: latch -> Diagnostics::WriteReport -> NoteGpuDeviceLost. So the hook
 // can be FIRED here, through the same read-back the arming cases use, and "a
 // second loss after a re-arm still writes a report" is an exact statement

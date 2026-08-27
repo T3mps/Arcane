@@ -14,7 +14,7 @@
 // Two halves, split for testability (the plan's Step 1 TDD requirement):
 //
 //   - RingLayout: pure bump-allocator math over ONE frame slot's byte
-//     range. No NRI, no device -- fully unit-testable headless, in
+//     range. No NRI, no device -- fully unit-testable device-less, in
 //     RenderGraphTest.cpp's "[nri]" cases. This is what every test drives
 //     directly.
 //   - NriUploadRing: the thin NRI-facing wrapper. Owns
@@ -25,7 +25,7 @@
 // null UNCONDITIONALLY, so NriUploadRing::Init() FAILS on the NONE backend
 // by construction -- every method here that touches a real nri::Buffer/
 // nri::Device is therefore a [gpu] desk-verify item, never exercised by a
-// headless [nri]~[gpu] test. Do not add a device-backed unit test for this
+// device-less [nri]~[gpu] test. Do not add a device-backed unit test for this
 // half; there is nothing for it to run against in CI or at the desk's own
 // dev-loop gate. (BeginFrame()/Allocate()/HighWater() touch no NRI call
 // directly, but they only ever operate on slots Init() populated -- calling
@@ -54,7 +54,7 @@ namespace Arcane
     // range. Every method here is deterministic and touches nothing but its
     // own four counters. NriUploadRing owns kSwapchainFramesInFlight of
     // these; nothing else needs to, but nothing stops a caller from using
-    // one standalone (which is exactly what the headless tests do).
+    // one standalone (which is exactly what the device-less tests do).
     // -----------------------------------------------------------------
     class ARCANE_API RingLayout
     {

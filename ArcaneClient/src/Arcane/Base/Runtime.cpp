@@ -172,10 +172,10 @@ namespace Arcane
             schedulers = std::make_unique<SystemSchedulers>(sched);
             loop       = std::make_unique<RunLoop>(*registry, *schedulers, loopCfg);
 
-            // Headless gating for the real OS audio device. There is no headless signal
+            // Device-less gating for the real OS audio device. There is no device-less signal
             // reachable here: Runtime holds no render device at all since Task 9
             // deleted the bridge, and neither this ctor nor HostConfig
-            // carried a headless flag. So the host states its intent through a ctor flag --
+            // carried a device-less flag. So the host states its intent through a ctor flag --
             // enableAudioDevice (default false). Tests, servers, tools, and the scripted
             // "ArcaneRuntime --frames N" GPU-verify leave it false and get the noDevice null backend;
             // an interactive host passes true. AudioDeviceDesc::enableDevice defaults false

@@ -1,4 +1,4 @@
-// THE HOST SLICE'S HEADLESS HALF: the host-side shapes, exercised with NO
+// THE HOST SLICE'S DEVICE-LESS HALF: the host-side shapes, exercised with NO
 // graphics device of any kind.
 //
 // What is here:
@@ -92,7 +92,7 @@ TEST_CASE("nri landing: the editor's graph-mode frame tail -- Begin then discard
 
     // The atlas, eagerly: this flavor installs no renderer backend, so nothing
     // would otherwise service the 1.92 texture protocol. Same recipe as the
-    // case below and as ImGuiTest's headless smoke.
+    // case below and as ImGuiTest's device-less smoke.
     {
         unsigned char* pixels = nullptr;
         int aw = 0, ah = 0;
@@ -198,9 +198,9 @@ TEST_CASE("nri landing: the graph ImGuiLayer pins its own context across Begin/R
     REQUIRE(owned != nullptr);
 
     // Build the atlas eagerly: this flavor installs NO renderer backend (the
-    // graph's ImGuiNriNode is the renderer, and it is not in play headlessly),
+    // graph's ImGuiNriNode is the renderer, and it is not in play device-lessly),
     // so nothing would otherwise service the 1.92 texture protocol. Same
-    // recipe as ImGuiTest's headless smoke.
+    // recipe as ImGuiTest's device-less smoke.
     {
         unsigned char* pixels = nullptr;
         int aw = 0, ah = 0;

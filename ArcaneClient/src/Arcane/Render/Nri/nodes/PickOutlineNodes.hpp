@@ -232,7 +232,7 @@ namespace Arcane
 
         // The staging buffer the graph IMPORTS, and its size. Null/0 before a
         // successful Create -- ImportBuffer stores the pointer without
-        // dereferencing it, so a headless declaration drive is fine with null.
+        // dereferencing it, so a device-less declaration drive is fine with null.
         [[nodiscard]] nri::Buffer*  ReadbackBuffer() const noexcept { return m_readback; }
         [[nodiscard]] std::uint64_t ReadbackBytes()  const noexcept { return m_readbackBytes; }
 
@@ -552,7 +552,7 @@ namespace Arcane
 
     // =====================================================================
     // The declarators. Each takes `context` as a POINTER for the same reason
-    // AddBatch2DNode does: the headless [nri] frame-shape cases drive the REAL
+    // AddBatch2DNode does: the device-less [nri] frame-shape cases drive the REAL
     // declarations with no device, and a null context makes only the exec fns
     // inert.
     // =====================================================================

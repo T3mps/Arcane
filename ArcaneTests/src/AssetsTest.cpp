@@ -3,7 +3,7 @@
 // the staging repack.
 //
 // THE FACADE IS DEVICE-FREE. It hands out decoded pixels, bytes and json; it
-// owns no GPU texture and takes no device, so everything here is headless.
+// owns no GPU texture and takes no device, so everything here is device-less.
 //
 // COVERAGE GAP, named rather than left implicit: nothing proves a PNG reaches
 // the GPU as an sRGB texture that copies back byte-true. That needs a

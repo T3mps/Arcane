@@ -16,7 +16,7 @@
 #include <Arcane/Serialization/SceneAsset.hpp>   // kSceneJsonVersion, kSceneExt
 
 // The scene-content case below stitches and compiles ReferenceProject's
-// shipped .arcmat files -- no device involved, the same headless
+// shipped .arcmat files -- no device involved, the same device-less
 // [shadercompile] idiom MaterialSourceTest uses.
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
@@ -829,7 +829,7 @@ TEST_CASE("ReferenceProject's scene census reports the sprite and post materials
     // Nested scope: the resolver's header contract is that it destructs BEFORE
     // the Runtime it publishes non-owning table pointers through.
     {
-        // Deliberately headless -- no batcher, no device, no compile service.
+        // Deliberately device-less -- no batcher, no device, no compile service.
         // Those disable BINDING (Refresh's `materialsReady`), which is part of
         // what lets this case assert referenced-without-bound.
         //
@@ -885,7 +885,7 @@ TEST_CASE("ReferenceProject's scene census reports the sprite and post materials
 }
 
 // --- the reference scene's mesh content, THROUGH the render caches ---------
-// THE ONLY HEADLESS PROOF THAT THE RENDER CACHES CONSUME THIS PROJECT'S
+// THE ONLY DEVICE-LESS PROOF THAT THE RENDER CACHES CONSUME THIS PROJECT'S
 // CONTENT, rather than merely that its scene data parses. Task 11's
 // assertions read the FILES (ids, component fields, LoadMeshAsset); the
 // census case above reads the scene with no project open on the Runtime, so
@@ -936,7 +936,7 @@ TEST_CASE("ReferenceProject's mesh and its default material resolve into the ren
         resolver.Refresh(frame);
 
         // The census, now against a project that can actually resolve: this is
-        // the referenced==bound answer the headless gate could never give
+        // the referenced==bound answer the device-less gate could never give
         // before, and it is available at all only because neither mesh cache
         // compiles anything (no device or compile service is needed).
         const auto census = resolver.Materials();
@@ -983,7 +983,7 @@ TEST_CASE("ReferenceProject's mesh and its default material resolve into the ren
 
 // --- the reference scene's material content ------------------------------
 // The two .arcmat assets the scene references are AUTHORED CONTENT, and nothing
-// else in the headless suite would notice a hand-edit that broke them: a
+// else in the device-less suite would notice a hand-edit that broke them: a
 // mistyped //@param or a snippet that no longer compiles surfaces as an
 // unshaded quad / a missing post chain at the desk, one GPU round trip later.
 // This case stitches both through the real engine templates and runs DXC over

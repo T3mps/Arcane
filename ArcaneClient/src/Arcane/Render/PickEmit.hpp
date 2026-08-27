@@ -7,7 +7,7 @@
 // canvas pixels, ready for the id-pass VS. The k-th appended drawable (0-based)
 // gets hit-proxy id k+1; PickEntityForId inverts that mapping (id 0 == background).
 //
-// Pure, headless-testable: no GPU, no render device. This is the emitter half
+// Pure, device-less-testable: no GPU, no render device. This is the emitter half
 // of the hit-proxy pass; PickBuffer (a later task) owns the R32_UINT target,
 // the entity_id.hlsl pipeline, and the readback.
 //
@@ -169,7 +169,7 @@ namespace Arcane
     // edited -- the same reasoning that keeps ONE Batcher2D feeding the 2D
     // path.
     //
-    // Pure and headless: no render device, no graphics API at all.
+    // Pure and device-less: no render device, no graphics API at all.
     // =====================================================================
 
     // Per-vertex data for the id pass, matching entity_id.hlsl's VSInput. The

@@ -65,7 +65,7 @@ namespace Arcane
     {
         // WHICH backend, and WHICH of the frame's two draw datas -- see
         // ImGuiNodeSlot. Captured as a bool so both lambdas carry one byte
-        // rather than re-deciding, and so the null-context (headless) drive
+        // rather than re-deciding, and so the null-context (device-less) drive
         // differs in the node NAME alone.
         const bool gameUi = slot == ImGuiNodeSlot::GameUi;
         // Distinct names: a node name is what a compile error, a barrier dump
@@ -105,7 +105,7 @@ namespace Arcane
             [context, target, gameUi](RenderGraphNodeContext& nodeContext)
             {
                 if (!context)
-                    return;   // headless declaration-shape drive
+                    return;   // device-less declaration-shape drive
                 if (ImGuiNriNode* node = gameUi ? context->ImGuiGame() : context->ImGuiHud())
                     node->Record(nodeContext,
                                  gameUi ? context->CurrentGameUiDrawData()

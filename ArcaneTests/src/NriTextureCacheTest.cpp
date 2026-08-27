@@ -124,7 +124,7 @@ TEST_CASE("nri texture cache: with no supply installed at all, Resolve misses qu
     REQUIRE(cache != nullptr);
 
     // The frame driver installs the supply right after Create; a vehicle that
-    // has not yet (or a headless drive) must degrade, not crash.
+    // has not yet (or a device-less drive) must degrade, not crash.
     CHECK(cache->Resolve(kIdA) == nullptr);
     CHECK(cache->View(kIdA) == nullptr);
     CHECK(cache->ResidentCount() == 0);

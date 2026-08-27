@@ -1,6 +1,6 @@
 // Task 6 (Phase 4): pins Arcane/Render/MeshBuilder.hpp's two procedural
 // generators. Pure geometry -- no device, no NRI, no Registry -- exactly the
-// "headless, no device" contract the header itself states.
+// "device-less, no device" contract the header itself states.
 //
 // The properties this file MUST hold (task-6-brief.md, Step 1):
 //   1. BuildCube: 24 vertices / 36 indices (per-face normals need split

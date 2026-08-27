@@ -1,6 +1,6 @@
 // NRI substrate: result-check discipline (ARC_NRI_CHECK/NriCheckImpl), the
 // callback-to-latch wiring (MakeNriCallbacks), and the one-line identity log
-// (LogNriIdentity). Headless -- [nri], inside the ~[gpu] dev gate.
+// (LogNriIdentity). Device-less -- [nri], inside the ~[gpu] dev gate.
 //
 // Include order matters in this file: NRI's Extensions/NRIDeviceCreation.h
 // declares nri::Message with an enumerator literally named ERROR, and
@@ -128,13 +128,13 @@ TEST_CASE("nri: NONE-backend device lifecycle via MakeNriCallbacks/LogNriIdentit
 // SCAFFOLDING with a planned deletion point: Phase 1's own hand-rolled
 // triangle scaffold was retired at Task 13, once the frame-graph vehicle
 // (--nri-graph) rendered real content through NRI. This pair of cases is a
-// DELIBERATE carry-forward past that point -- it is the only headless-
+// DELIBERATE carry-forward past that point -- it is the only device-less-
 // adjacent [gpu] proof that the wrap itself (native device -> NRI, both
 // backends) still works, which nothing else in the tree currently covers --
 // and goes away at Phase 5, once the wrapper path is covered by something
 // that draws.
 //
-// Headless coverage of the wrap is impossible by construction -- wrapping
+// Device-less coverage of the wrap is impossible by construction -- wrapping
 // needs a REAL native device, which is precisely what [gpu] means here. What
 // these prove at the desk: our creation half produces a device NRI accepts
 // through the WRAPPER entry point (never nriCreateDevice), the post-wrap

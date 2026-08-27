@@ -14,7 +14,7 @@
 //   2. A UNIFORM scale leaves a normal's DIRECTION unchanged, so
 //      NriGraphPixelTest.cpp's existing (Task 7) [pixel] mesh cases -- which
 //      light an unscaled cube -- cannot regress silently: a normal-matrix bug
-//      that broke the uniform case too would show here first, headless.
+//      that broke the uniform case too would show here first, device-less.
 //   3. A SINGULAR model matrix (a collapsed/zero-scaled axis) returns
 //      IDENTITY, not NaN -- a NaN clip position is undefined behaviour on the
 //      GPU rather than a wrong picture, the same class of guard
@@ -70,7 +70,7 @@ TEST_CASE("NormalMatrixFor leaves a uniformly-scaled normal's direction "
     // unconditionally (every instance, not just non-uniformly-scaled ones).
     // NriGraphPixelTest.cpp's existing mesh [pixel] cases light an UNSCALED
     // cube and would not notice a normal-matrix regression confined to the
-    // uniform/identity case -- this headless case is what catches that one.
+    // uniform/identity case -- this device-less case is what catches that one.
     const glm::mat4 model = glm::scale(glm::mat4(1.0f), glm::vec3(3.0f, 3.0f, 3.0f));
     const glm::mat3 normalMatrix = Arcane::NormalMatrixFor(model);
 

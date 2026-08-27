@@ -616,7 +616,7 @@ namespace Arcane
                           + " -- raise kCbMaxBytes");
 
         // THE LAYOUT -- see FullscreenMaterialLayout for the whole of its shape
-        // and its reasoning. A separate object so the headless [nri] cases can
+        // and its reasoning. A separate object so the device-less [nri] cases can
         // assert that shape without a device.
         FullscreenMaterialLayout layout;
         layout.Build(cbSize, textureCount, chainInputs);
@@ -1030,7 +1030,7 @@ namespace Arcane
                                 std::uint32_t width, std::uint32_t height)
     {
         // Defensive, not expected: PrepareChain returns m_passes.size(), which
-        // IS desc.passes.size(), and the headless drive clamps to kMaxPasses.
+        // IS desc.passes.size(), and the device-less drive clamps to kMaxPasses.
         passCount = (std::uint32_t)std::min<std::size_t>(passCount, desc.passes.size());
         if (passCount == 0)
             return scene;
@@ -1086,7 +1086,7 @@ namespace Arcane
                 [context, targets, sources, p](RenderGraphNodeContext& nodeContext)
                 {
                     if (!context)
-                        return;   // headless declaration-shape drive
+                        return;   // device-less declaration-shape drive
                     if (PostChainNode* node = context->PostChain())
                         node->Record(nodeContext, p, sources, (*targets)[p], context->FrameSlot());
                 });
@@ -1501,7 +1501,7 @@ namespace Arcane
             [context, source, backbuffer](RenderGraphNodeContext& nodeContext)
             {
                 if (!context)
-                    return;   // headless declaration-shape drive
+                    return;   // device-less declaration-shape drive
                 if (TonemapNode* node = context->Tonemap())
                     node->Record(nodeContext, source, *backbuffer, context->FrameSlot());
             });
