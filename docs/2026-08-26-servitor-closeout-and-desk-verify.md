@@ -12,6 +12,12 @@ This document exists because the arc's working record — the SDD ledger at
 that gets deleted once the plan closes. Everything below would die with it. The plans and
 specs it refers to are in git; the ledger is not.
 
+**Every decision made on your behalf is in
+`docs/2026-08-27-servitor-rulings-record.md`** — all 69 rulings, verbatim, in the order made,
+each with its reasoning and what it costs if wrong. The method requires a running plan to rule
+on conflicts rather than stall, so those rulings are the judgment calls that would otherwise
+have been yours. Read that file if you read nothing else here; anything in it can be reversed.
+
 Plans: `docs/plans/2026-08-23-agent-verification-offscreen-hosts.md` (Plan A),
 `docs/plans/2026-08-25-plan-b-servitor-comparator.md` (Plan B).
 Specs: `docs/specs/2026-08-23-agent-verification-offscreen-design.md`,
