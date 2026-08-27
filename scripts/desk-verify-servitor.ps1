@@ -100,11 +100,54 @@ function Set-MeshCubeBroken {
     if ($broken -eq $json) { throw "Mutation did not apply -- refusing to continue with an unbroken scene." }
     Set-Content -Path $scene -Value $broken -Encoding UTF8 -NoNewline
     Write-Host "   MeshCube position x: 0.4 -> 0.6 (scene deliberately broken)" -ForegroundColor Yellow
+
+    # ---- AND STAGE IT, THEN PROVE IT LANDED. ----
+    #
+    # THE FIRST VERSION OF THIS SCRIPT DID NOT DO THIS AND WAS THEREFORE A TEST
+    # THAT COULD NOT FAIL. The hosts do not read the repo-root scene: premake's
+    # host postbuilds ({COPYDIR} ReferenceProject -> the exe directory,
+    # premake5.lua:355 and :430) stage the whole tree beside each exe, the hosts
+    # run there with `--project ReferenceProject`, and that staged copy is
+    # refreshed ONLY when the host itself builds. So editing the source scene
+    # and running the gate compared a pristine render against a pristine
+    # reference and reported diffCount=0 -- a green that meant nothing.
+    #
+    # golden-gate.ps1 now restages Content/ itself. This does it too, and then
+    # asserts it, so the desk pass does not silently depend on which version of
+    # the gate is on disk. An assertion is the only thing separating this from
+    # the failure it is here to catch.
+    foreach ($h in @('ArcaneRuntime', 'ArcaneEditor')) {
+        $dest = Join-Path $repoRoot "bin\$configDir\$h\ReferenceProject\Content"
+        if (Test-Path $dest) {
+            Copy-Item -Path (Join-Path $repoRoot 'ReferenceProject\Content\*') -Destination $dest -Force -Recurse
+        }
+    }
+    $stagedScene = Join-Path $repoRoot "bin\$configDir\ArcaneRuntime\ReferenceProject\Content\scenes\main.arcscene"
+    if (-not (Test-Path $stagedScene)) {
+        throw "No staged scene at $stagedScene -- build the hosts once so the postbuild stages ReferenceProject, then re-run."
+    }
+    $srcHash    = (Get-FileHash $scene -Algorithm MD5).Hash
+    $stagedHash = (Get-FileHash $stagedScene -Algorithm MD5).Hash
+    if ($srcHash -ne $stagedHash) {
+        throw "STAGED SCENE DOES NOT MATCH THE BROKEN SOURCE. The hosts would render the old scene and the gate would pass on a break -- refusing to report a meaningless result. Staged: $stagedScene"
+    }
+    Write-Host "   staged to both host dirs and verified (md5 $($srcHash.Substring(0,8)))" -ForegroundColor Green
 }
 
 function Restore-Scene {
     & git -C $repoRoot checkout -- $sceneRelative
-    Write-Host "   scene restored from git." -ForegroundColor Green
+    # RESTAGE THE RESTORED SCENE TOO. Without this the repo goes clean while the
+    # staged copies stay broken, so `git status` says everything is fine and the
+    # next gate run -- this script's or anyone else's -- fails against a scene
+    # nobody can see. A restore that only restores what git tracks is not a
+    # restore.
+    foreach ($h in @('ArcaneRuntime', 'ArcaneEditor')) {
+        $dest = Join-Path $repoRoot "bin\$configDir\$h\ReferenceProject\Content"
+        if (Test-Path $dest) {
+            Copy-Item -Path (Join-Path $repoRoot 'ReferenceProject\Content\*') -Destination $dest -Force -Recurse
+        }
+    }
+    Write-Host "   scene restored from git, and restaged to both host dirs." -ForegroundColor Green
 }
 
 Write-Head "Servitor desk verify -- $Configuration"
@@ -215,6 +258,24 @@ if ($Phase -eq 'All' -or $Phase -eq 'B') {
         Write-Host ""
         Write-Host "-- restoring the scene AND the blessed references --" -ForegroundColor DarkCyan
         & git -C $repoRoot checkout -- $sceneRelative $refsRelative
+        Restore-Scene   # restages Content/ as well -- git alone leaves the staged copies broken
+
+        # UNDO THE BLESS IN THE STAGED TREE TOO. --bless writes to the level the
+        # reference RESOLVED FROM, and the hosts resolve against the staged
+        # ReferenceProject beside the exe -- so a bless may never dirty the repo
+        # at all, which would make the `git checkout` above a silent no-op while
+        # a blessed reference stayed on disk. The gate deliberately does not
+        # restage Verify/ (it must not trample a bless), so nothing else would
+        # ever undo it, and the NEXT gate run would pass against a reference
+        # blessed from a deliberately broken scene. That is a green for the
+        # wrong reason, left behind by a verification step.
+        foreach ($h in @('ArcaneRuntime', 'ArcaneEditor')) {
+            $destVerify = Join-Path $repoRoot "bin\$configDir\$h\ReferenceProject\Verify"
+            if (Test-Path $destVerify) {
+                Copy-Item -Path (Join-Path $repoRoot 'ReferenceProject\Verify\*') -Destination $destVerify -Force -Recurse
+            }
+        }
+        Write-Host "   staged Verify/ restored from the repo (undoes the bless)." -ForegroundColor Green
         Assert-CleanReferenceProject
         Write-Host ""
         Write-Host "BLESS ROUND-TRIP ELAPSED: $([math]::Round($sw.Elapsed.TotalMinutes, 1)) minutes" -ForegroundColor Yellow

@@ -245,8 +245,43 @@ foreach ($stageHost in @('ArcaneRuntime', 'ArcaneEditor')) {
         Write-Error "restaging FAILED -- $stagedDll does not exist after the copy."
         exit 1
     }
+
+    # ---- Content/ HAS THE IDENTICAL HAZARD, and it stayed unfixed until a desk
+    #      pass tripped over it (2026-08-26). The reasoning above stopped at the
+    #      DLL because a CRT mismatch was the symptom being chased -- but the
+    #      postbuild this block mirrors stages the WHOLE tree, and Content/ is
+    #      refreshed on exactly the same schedule: only when the HOST builds.
+    #
+    #      MEASURED: a deliberate, plainly visible edit to
+    #      ReferenceProject/Content/scenes/main.arcscene (MeshCube moved)
+    #      produced diffCount=0 on BOTH backends, because the hosts were still
+    #      rendering an 18-hour-old staged scene. A GATE THAT CANNOT SEE A
+    #      CONTENT CHANGE CANNOT GATE CONTENT: every green it reports after a
+    #      scene edit is green about the PREVIOUS scene.
+    #
+    #      Verify/ is deliberately NOT restaged here. It holds the reference
+    #      PNGs, which are also --bless's destination; refreshing them from the
+    #      repo on every run would silently discard a bless the caller just
+    #      made. The asymmetry is the point: Content/ is an INPUT the gate must
+    #      read fresh, Verify/ is state the gate must not trample.
+    $stagedContent = Join-Path $repoRoot "bin\$configDirName\$stageHost\ReferenceProject\Content"
+    if (-not (Test-Path $stagedContent)) {
+        New-Item -ItemType Directory -Path $stagedContent -Force | Out-Null
+    }
+    Copy-Item -Path (Join-Path $referenceProjectDir 'Content\*') -Destination $stagedContent -Force -Recurse
+
+    # Assert the copy actually took. A silent no-op here restores exactly the
+    # blindness this block exists to remove.
+    $sourceScene = Join-Path $referenceProjectDir 'Content\scenes\main.arcscene'
+    $stagedScene = Join-Path $stagedContent 'scenes\main.arcscene'
+    if ((Test-Path $sourceScene) -and (Test-Path $stagedScene)) {
+        if ((Get-FileHash $sourceScene -Algorithm MD5).Hash -ne (Get-FileHash $stagedScene -Algorithm MD5).Hash) {
+            Write-Error "restaging FAILED -- staged scene still differs from source after the copy ($stagedScene)."
+            exit 1
+        }
+    }
 }
-Write-Host "-- ReferenceGame.dll restaged beside both hosts --" -ForegroundColor Green
+Write-Host "-- ReferenceGame.dll + Content/ restaged beside both hosts --" -ForegroundColor Green
 
 $results = @()
 $anyFailure = $false
@@ -299,6 +334,15 @@ foreach ($combo in $combos) {
     $stderrPath = Join-Path $savedVerifyDir "golden-gate-$hostName-$backend-stderr.txt"
     $stdoutPath = Join-Path $savedVerifyDir "golden-gate-$hostName-$backend-stdout.txt"
     if (Test-Path $reportPath) { Remove-Item $reportPath -Force }
+
+    # The STALE DIFF goes too, for the same reason the stale report does, and
+    # it was left out until a desk pass was misled by it (2026-08-26): the run
+    # passed, wrote no diff, and the diff PNG sitting at the expected path from
+    # an EARLIER failing run was presented as this run's evidence. A leftover
+    # artifact that looks like output is worse than no output, because nobody
+    # doubts it. Removing it makes "no diff on disk" mean exactly that.
+    $staleDiff = Join-Path $savedVerifyDir "$reference-$backend-diff.png"
+    if (Test-Path $staleDiff) { Remove-Item $staleDiff -Force }
 
     $exeArgs = @(
         '--project', 'ReferenceProject',
