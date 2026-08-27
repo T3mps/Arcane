@@ -143,6 +143,47 @@ executes.
 The switch itself is the tracking artifact; when defects 1 and 2 are fixed, delete it. It is
 reversible in one flag.
 
+## 3a. The bless workflow trap — measured 2026-08-26, document it wherever blessing is described
+
+**`--bless` writes to the level the reference RESOLVED FROM, and that is not the repo unless
+you make it be.**
+
+The hosts run from their own output directory, and `--project ReferenceProject` there resolves
+to the **staged** tree that premake's host postbuild copies beside each exe
+(`premake5.lua:355`, `:430`). So the natural move — copy `golden-gate.ps1`'s invocation, add
+`--bless` — blesses a build artifact:
+
+- measured: the staged PNG's mtime moved, the committed reference's did not, and `git status`
+  stayed clean. Nothing to commit, and no sign anything went wrong.
+- worse, it is silently lossy: the next host build's `{COPYDIR}` overwrites the staged file
+  from the repo, discarding the bless.
+
+**Point `--project` at the source tree instead** — verified to write the file you actually
+commit:
+
+```
+cd D:\dev\starworks\Arcane\bin\Debug-windows-x86_64-md\ArcaneRuntime
+.\ArcaneRuntime.exe --project D:\dev\starworks\Arcane\ReferenceProject `
+    --offscreen --backend dx12 --frames 60 --settle 30 `
+    --report ReferenceProject\Saved\Verify\bless.json `
+    --compare runtime-scene --bless
+```
+
+`--settle` also **requires** `--screenshot` or `--report`; omit both and the host refuses with
+exit 2 and says so. That refusal is correct behaviour, not a bug.
+
+This is a workflow trap rather than an engine defect, but it lands squarely on the question
+Task 14 section B exists to answer — *is blessing cheap enough that nobody disables the gate?*
+A bless that appears to succeed, cannot be committed, and evaporates on the next build is not
+cheap.
+
+**An open design question, deliberately not decided here:** `golden-gate.ps1` restages
+`Content/` but not `Verify/`, so that it cannot trample a bless. If blessing is always
+supposed to target the source tree, then restaging `Verify/` too would be the more coherent
+model — the repo becomes the single source of truth and the staged tree a pure build
+artifact — and it would make the trap above fail loudly and immediately instead of silently
+and later. That is a judgment call for the engine's owner.
+
 ## 4. Parked findings
 
 Five minors were introduced by the final fix wave and parked rather than fixed, because the

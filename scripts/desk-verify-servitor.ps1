@@ -226,12 +226,43 @@ if ($Phase -eq 'All' -or $Phase -eq 'B') {
             foreach ($backend in @('dx12', 'vulkan')) {
                 Write-Host ""
                 Write-Host "-- bless runtime-scene / $backend --" -ForegroundColor DarkCyan
+                # DERIVED FROM golden-gate.ps1's OWN exeArgs, PLUS --bless and
+                # NOTHING ELSE CHANGED. The first version of this retyped the
+                # list from memory and dropped --report, and the host refused:
+                # "--settle requires --screenshot or --report (it compares
+                # captured frames; with neither, there is nowhere to land the
+                # result and the run would never know when to stop)". A correct
+                # refusal that cost a whole desk run. When a working invocation
+                # already exists, copy it and add one flag.
+                # ---- --project POINTS AT THE SOURCE TREE HERE, NOT THE STAGED
+                #      ONE, AND THAT IS THE WHOLE POINT OF THIS STEP. ----
+                #
+                # MEASURED 2026-08-26. --bless writes to the level the reference
+                # RESOLVED FROM. Run the gate's own invocation (`--project
+                # ReferenceProject`, relative, from the exe directory) and the
+                # blessed PNG lands in the STAGED tree under bin/ -- verified:
+                # staged mtime moved, the committed reference did not, and
+                # `git status` stayed clean. Nobody can commit that, and the
+                # next host build's postbuild ({COPYDIR} ReferenceProject)
+                # OVERWRITES IT FROM THE REPO, silently discarding the bless.
+                #
+                # Pointing --project at the source tree makes the reference
+                # resolve from, and the bless write to, the file you actually
+                # commit -- verified the same way: repo mtime moved.
+                #
+                # This is a WORKFLOW TRAP, not an engine defect: the natural
+                # move is to copy the gate's command and add --bless, and that
+                # quietly blesses a build artifact. Worth documenting wherever
+                # the bless workflow is described.
+                $sourceProject = Join-Path $repoRoot 'ReferenceProject'
+                $blessReport = Join-Path $savedVerify "bless-runtime-scene-$backend-report.json"
                 $blessArgs = @(
-                    '--project', 'ReferenceProject',
+                    '--project', $sourceProject,
                     '--offscreen',
                     '--backend', $backend,
                     '--frames', '60',
                     '--settle', '30',
+                    '--report', $blessReport,
                     '--compare', 'runtime-scene',
                     '--bless'
                 )
@@ -244,6 +275,20 @@ if ($Phase -eq 'All' -or $Phase -eq 'B') {
                     Write-Host "   blessed." -ForegroundColor Green
                 }
             }
+
+            # The bless above wrote the SOURCE reference. The gate reads the
+            # STAGED one, and deliberately does not restage Verify/ (it must not
+            # trample a bless). So stand in for what really closes that loop in
+            # practice -- commit the reference, rebuild, postbuild restages it.
+            # Without this the round-trip cannot pass and the failure would be
+            # an artifact of this script, not a finding about blessing.
+            foreach ($h in @('ArcaneRuntime', 'ArcaneEditor')) {
+                $destVerify = Join-Path $repoRoot "bin\$configDir\$h\ReferenceProject\Verify"
+                if (Test-Path $destVerify) {
+                    Copy-Item -Path (Join-Path $repoRoot 'ReferenceProject\Verify\*') -Destination $destVerify -Force -Recurse
+                }
+            }
+            Write-Host "   blessed reference staged to both hosts (stands in for commit + rebuild)." -ForegroundColor DarkGray
 
             $b2 = Invoke-Gate "B2 -- after blessing, the gate should pass again"
             if ($b2.ExitCode -eq 0) {
