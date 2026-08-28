@@ -38,6 +38,35 @@ namespace Arcane
         TimeoutBound,   // both spent; the TIME budget is what governed
     };
 
+    // Whether the settle loop ever reached a VERDICT -- it converged, or it
+    // gave up on a bound. FALSE means the loop never got that far: the run died
+    // AHEAD of the settle phase entirely (a missing or undecodable --compare
+    // reference fails fast at RuntimeApp::MainLoop's pre-loop resolve, and
+    // device-lost / render-failed / validation-errors all exit the same way),
+    // so no attempt was taken, no time was spent, and NO BOUND GOVERNED
+    // ANYTHING.
+    //
+    // Shared, rather than spelled out at each of its three call sites, for the
+    // same reason SettleBailDecision below is: the two hosts and the report
+    // writer must agree, and this arc exists precisely because two hosts
+    // disagreed about a settle fact. A copy per site is a copy that can drift.
+    //
+    // The report reads this to decide whether to emit its settle keys AT ALL.
+    // Naming a bound on a run that never settled would emit "timeout-bound" --
+    // a directive to raise --settle-timeout -- for a run whose actual problem
+    // was, say, a missing reference file, which is exactly the false-report-an-
+    // agent-trusts failure the absence contract exists to prevent.
+    //
+    // captureFailed is deliberately NOT a disjunct here: it is a QUALIFIER on a
+    // bail (both hosts write it only inside the bail branch, from
+    // !previousCaptureValid), never a verdict of its own, so it cannot stand
+    // without one. On every reachable input the two spellings agree; defining
+    // it this way merely makes the incoherent combination fail safe.
+    [[nodiscard]] constexpr bool SettleVerdictReached(bool converged, SettleBail bail) noexcept
+    {
+        return converged || bail != SettleBail::Keep;
+    }
+
     // Returns Keep until BOTH bounds are spent. Once both are, names the bound
     // that GOVERNED -- the one whose knob would actually change the outcome --
     // rather than the one that happened to be checked first.

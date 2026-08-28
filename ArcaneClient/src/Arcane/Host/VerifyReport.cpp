@@ -233,6 +233,15 @@ namespace Arcane
     void VerifyReport::SetSettle(std::uint64_t attemptsUsed, bool converged, SettleBail bail,
                                   bool captureFailed)
     {
+        // NO VERDICT, NOTHING TO SAY -- see SetSettle's doc comment. The loop
+        // neither converged nor gave up on a bound, so it never ran far enough
+        // to have a fact worth stating: m_settleSet stays false and ToJson
+        // emits neither key. Refused here as well as at both call sites so a
+        // future host cannot reintroduce a "timeout-bound" on a run that never
+        // spent a timeout.
+        if (!SettleVerdictReached(converged, bail))
+            return;
+
         m_settleSet           = true;
         m_settleAttemptsUsed  = attemptsUsed;
         m_settleConverged     = converged;

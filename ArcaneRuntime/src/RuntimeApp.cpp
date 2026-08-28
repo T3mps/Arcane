@@ -1182,10 +1182,21 @@ void RuntimeApp::ShutdownGraphPath()
             report.SetCapture(m_captureWidth, m_captureHeight, m_captureRgba);
 
         // The --settle verdict (Task 3), previously visible ONLY in this
-        // process's log. Emitted only when settle was actually asked for: the
-        // three members below are meaningless otherwise, and VerifyReport's
-        // absence contract means an uncalled SetSettle emits no settle keys at
-        // all -- the honest answer for a run that never settled.
+        // process's log. TWO conditions, not one. Settle has to have been asked
+        // for -- the members below are meaningless otherwise -- AND the loop
+        // has to have reached a verdict.
+        //
+        // THE SECOND CONDITION IS NOT REDUNDANT. This function also runs for
+        // runs that died AHEAD of the settle loop: MainLoop fails fast on a
+        // missing or undecodable --compare reference (see m_compareMissingFatal
+        // in the exitReason chain above), and device-lost / render-failed /
+        // validation-errors exit the same way. Those runs still have
+        // settleAttempts != 0 while m_settleBail is untouched at Keep, so
+        // guarding on the count alone would report settleAttemptsUsed 0 with
+        // settleBailReason "timeout-bound" -- telling an agent to raise
+        // --settle-timeout for a run that never spent one and whose real fault
+        // exitReason already names. VerifyReport::SetSettle refuses such a call
+        // itself; this guard states the intent where the facts live.
         //
         // m_settleAttemptsUsed is passed AS MEASURED, never m_config.settleAttempts.
         // Neither host may substitute the budget for the count; the editor host
@@ -1193,7 +1204,8 @@ void RuntimeApp::ShutdownGraphPath()
         // was reconciled in this same commit rather than after it -- an absent
         // field is an honest gap, a present wrong one is a false report an
         // agent will trust.
-        if (m_config.settleAttempts != 0)
+        if (m_config.settleAttempts != 0
+            && Arcane::SettleVerdictReached(m_settleConverged, m_settleBail))
         {
             report.SetSettle(m_settleAttemptsUsed, m_settleConverged, m_settleBail,
                               m_settleCaptureFailed);

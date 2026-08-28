@@ -2273,6 +2273,14 @@ namespace Arcane::Editor
             // report, silently, because absence is a legal state in this
             // contract.
             //
+            // TWO conditions, mirroring the runtime's: settle asked for, AND
+            // the loop actually reached a verdict. This host has the identical
+            // ahead-of-the-loop exits (m_compareMissingFatal in the exitReason
+            // chain just above, device-lost, render-failed,
+            // validation-errors), which leave m_settleBail at Keep -- guarding
+            // on the count alone would report "timeout-bound" for a run that
+            // never spent a timeout.
+            //
             // m_settleAttemptsUsed is passed AS MEASURED. It is honest now:
             // PresentChromeFrame's defensive branch used to stop the loop by
             // forging it to m_config.settleAttempts, and Task 2 replaced that
@@ -2281,7 +2289,8 @@ namespace Arcane::Editor
             // LIE on this host, which is worse than the field's absence: an
             // absent field is an honest gap, a present wrong one is a false
             // report an agent will trust.
-            if (m_config.settleAttempts != 0)
+            if (m_config.settleAttempts != 0
+                && Arcane::SettleVerdictReached(m_settleConverged, m_settleBail))
             {
                 report.SetSettle(m_settleAttemptsUsed, m_settleConverged, m_settleBail,
                                   m_settleCaptureFailed);

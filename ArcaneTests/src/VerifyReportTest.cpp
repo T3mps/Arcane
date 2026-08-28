@@ -781,7 +781,13 @@ TEST_CASE("verify report: schemaVersion 3 carries settle facts and the headless 
     CHECK(doc["settleBailReason"] == "timeout-bound");
 }
 
-TEST_CASE("verify report: a converged run reports its real count, not its budget", "[verify]")
+// NOT "reports its real count, not its budget" (fix round 1, item 4): this TU
+// links neither host, and VerifyReport never sees a budget -- SetSettle(7, ...)
+// yielding 7 is argument pass-through, so a case with that title could not fail
+// for the reason the title gives. The budget-forging hazard lives in the hosts
+// and is desk-checked there. What this case CAN pin is the converged ->
+// "converged" mapping and that the count round-trips into the JSON at all.
+TEST_CASE("verify report: a converged run maps to \"converged\" and round-trips its count", "[verify]")
 {
     Arcane::VerifyReport r;
     r.SetRun("D3D12", 60, "frames-complete");
@@ -831,19 +837,43 @@ TEST_CASE("verify report: a broken capture path OUTRANKS whichever bound was spe
     CHECK(doc["settleBailReason"] == "capture-failed");
 }
 
-TEST_CASE("verify report: zero attempts is a REPORTED fact, not an absent one", "[verify]")
+TEST_CASE("verify report: a run that died BEFORE the settle loop emits no settle keys", "[verify]")
 {
-    // The honest-count contract's edge: a host that called SetSettle at all
-    // asked for --settle, so the keys must be PRESENT even when the count is
-    // zero. Only a host that never called it may omit them -- otherwise "0
-    // attempts taken" would be indistinguishable from "settle was never
-    // requested", which is the exact confusion the absence contract exists to
-    // prevent.
+    // FIX ROUND 1, ITEM 1 -- the case that used to emit a FALSE "timeout-bound".
+    // A --compare reference that is missing or undecodable fails FAST, at
+    // RuntimeApp::MainLoop's pre-loop resolve, before the settle loop runs even
+    // once; device-lost, render-failed and validation-errors all exit the same
+    // way. Such a run still has settleAttempts != 0, but the bail decision was
+    // never evaluated, so SettleBail is untouched at Keep. Guarding emission on
+    // the attempt count alone reported settleAttemptsUsed 0 with a
+    // settleBailReason of "timeout-bound" -- an instruction to raise
+    // --settle-timeout on a run that never spent one, for a fault that was
+    // actually a missing file.
+    //
+    // No verdict, no keys. exitReason carries what really happened.
     Arcane::VerifyReport r;
-    r.SetRun("dx12", 0, "settle-not-converged");
-    r.SetSettle(0, /*converged=*/false, Arcane::SettleBail::Keep, /*captureFailed=*/true);
+    r.SetRun("dx12", 0, "compare-missing-reference");
+    r.SetSettle(0, /*converged=*/false, Arcane::SettleBail::Keep, /*captureFailed=*/false);
     const auto doc = nlohmann::json::parse(r.ToJson());
-    REQUIRE(doc.contains("settleAttemptsUsed"));
-    CHECK(doc["settleAttemptsUsed"] == 0);
-    CHECK(doc["settleBailReason"] == "capture-failed");
+    CHECK_FALSE(doc.contains("settleAttemptsUsed"));
+    CHECK_FALSE(doc.contains("settleBailReason"));
+    // The run's own account of itself is untouched -- absence here costs an
+    // agent nothing it did not already have.
+    CHECK(doc["exitReason"] == "compare-missing-reference");
+}
+
+TEST_CASE("verify report: captureFailed alone is not a verdict", "[verify]")
+{
+    // captureFailed is a QUALIFIER on a bail, not a verdict of its own: both
+    // hosts write it only inside the bail branch, so SettleBail::Keep with
+    // captureFailed set is an incoherent pair no run can produce ("no readback
+    // landed when we gave up" + "we never gave up"). Pinned because the ranking
+    // in ToJson puts captureFailed FIRST, and it would be easy to conclude from
+    // that it can stand alone. It cannot -- the no-verdict rule wins.
+    Arcane::VerifyReport r;
+    r.SetRun("dx12", 12, "stopped-early");
+    r.SetSettle(3, /*converged=*/false, Arcane::SettleBail::Keep, /*captureFailed=*/true);
+    const auto doc = nlohmann::json::parse(r.ToJson());
+    CHECK_FALSE(doc.contains("settleAttemptsUsed"));
+    CHECK_FALSE(doc.contains("settleBailReason"));
 }

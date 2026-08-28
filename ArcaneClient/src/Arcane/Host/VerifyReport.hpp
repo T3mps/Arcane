@@ -290,7 +290,22 @@ namespace Arcane
         // contract SetCapture and SetCompare already uphold, so an agent can
         // tell "settle was never asked for" from "asked, and took 0 attempts".
         // Both hosts call this from their report path whenever
-        // HostConfig::settleAttempts != 0, and only then.
+        // HostConfig::settleAttempts != 0 AND the loop actually reached a
+        // verdict, and only then.
+        //
+        // A NO-VERDICT CALL RECORDS NOTHING, and that is a contract rather than
+        // a silent drop: when SettleVerdictReached(converged, bail) is false the
+        // loop neither converged nor gave up on a bound, so there is no settle
+        // fact to state and BOTH keys stay absent. That happens on any run that
+        // dies AHEAD of the settle phase -- a missing --compare reference
+        // (RuntimeApp::MainLoop's fail-fast resolve), device-lost,
+        // render-failed, validation-errors. Enforced HERE, not only at the two
+        // call sites, so a third host cannot reintroduce the defect: without
+        // it, such a run reported settleAttemptsUsed 0 alongside a
+        // settleBailReason of "timeout-bound" -- telling an agent to raise
+        // --settle-timeout when no timeout had been spent and the real fault
+        // was a missing file. exitReason already carries what actually
+        // happened, so nothing an agent needs is lost by staying silent here.
         //
         //   attemptsUsed  -- the REAL number of settle attempts taken, never a
         //                    budget. This is the field the whole task exists
