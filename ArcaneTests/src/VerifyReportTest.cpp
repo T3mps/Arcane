@@ -68,9 +68,9 @@ TEST_CASE("verify: a brightness probe reads the capture and lands in the JSON", 
     // package, which parses this file without linking the engine -- so the
     // version is part of the contract, not decoration -- bumped to 2 by
     // Task 8's --compare/--bless block.
-    CHECK(doc["schemaVersion"] == 2);
+    CHECK(doc["schemaVersion"] == 3);
     CHECK(doc["backend"] == "D3D12");
-    CHECK(doc["mode"] == "offscreen");
+    CHECK(doc["mode"] == "headless");
     CHECK(doc["framesRendered"] == 5);
     CHECK(doc["exitReason"] == "frames-complete");
     REQUIRE(doc["probes"].size() == 2);
@@ -150,13 +150,20 @@ TEST_CASE("verify: rgba probe reads all four channels", "[verify]")
 // this JSON is the boundary for) would have had to handle for a state no
 // real run could ever produce. SetRun no longer takes the parameter at all,
 // so this is now a compile-time guarantee, not just a runtime one -- ToJson
-// always emits "offscreen".
-TEST_CASE("verify: mode is always offscreen -- there is no windowed report", "[verify]")
+// always emits one value.
+//
+// THAT VALUE IS NOW "headless", not "offscreen" (schemaVersion 3): the MODE is
+// named --headless on every host's command line, and "offscreen" is the
+// TECHNIQUE that mode happens to render with (CreateOffscreen, IsOffscreen).
+// A wire value an out-of-process consumer switches on must carry the mode's
+// own word, and a schemaVersion bump is exactly the versioned moment at which
+// changing one is legitimate.
+TEST_CASE("verify: mode is always headless -- there is no windowed report", "[verify]")
 {
     Arcane::VerifyReport rep;
     rep.SetRun("D3D12", 42, "window-closed");
     const auto doc = nlohmann::json::parse(rep.ToJson());
-    CHECK(doc["mode"] == "offscreen");
+    CHECK(doc["mode"] == "headless");
     CHECK(doc["framesRendered"] == 42);
     CHECK(doc["exitReason"] == "window-closed");
 }
@@ -649,7 +656,7 @@ TEST_CASE("verify: WriteTo round-trips through disk", "[verify]")
     in.close();
 
     const auto doc = nlohmann::json::parse(contents.str());
-    CHECK(doc["schemaVersion"] == 2);
+    CHECK(doc["schemaVersion"] == 3);
     CHECK(doc["framesRendered"] == 3);
 
     std::remove(path.c_str());
@@ -668,12 +675,12 @@ TEST_CASE("verify: WriteTo fails, does not throw, when the path cannot be opened
 
 // ---- Task 8: --compare/--bless inside the settle loop, report schema 2 ----
 
-TEST_CASE("verify: the report schema is version 2 once compare exists", "[verify]")
+TEST_CASE("verify: the report schema is version 3 once settle facts exist", "[verify]")
 {
     Arcane::VerifyReport r;
     r.SetRun("dx12", 60, "frames-complete");
     const auto doc = nlohmann::json::parse(r.ToJson());
-    CHECK(doc["schemaVersion"] == 2);
+    CHECK(doc["schemaVersion"] == 3);
 }
 
 TEST_CASE("verify: a run with no --compare emits NO compare block", "[verify]")
@@ -754,4 +761,89 @@ TEST_CASE("verify: a --bless run's compare block reports a pass at the level it 
     CHECK(doc["exitReason"] == "compare-blessed");
     CHECK(doc["compare"]["passed"] == true);
     CHECK(doc["compare"]["resolvedLevel"] == "shared");
+}
+
+// ---- Task 3: schemaVersion 3 -- the settle facts, and the headless mode ----
+
+TEST_CASE("verify report: schemaVersion 3 carries settle facts and the headless mode", "[verify]")
+{
+    Arcane::VerifyReport r;
+    r.SetRun("D3D12", 60, "frames-complete");
+    r.SetSettle(94, /*converged=*/false, Arcane::SettleBail::TimeoutBound,
+                /*captureFailed=*/false);
+    const auto doc = nlohmann::json::parse(r.ToJson());
+
+    CHECK(doc["schemaVersion"] == 3);
+    // The MODE's machine-readable name, in the mode's own word. Changed on this
+    // bump because a schemaVersion bump is exactly when a wire value may change.
+    CHECK(doc["mode"] == "headless");
+    CHECK(doc["settleAttemptsUsed"] == 94);
+    CHECK(doc["settleBailReason"] == "timeout-bound");
+}
+
+TEST_CASE("verify report: a converged run reports its real count, not its budget", "[verify]")
+{
+    Arcane::VerifyReport r;
+    r.SetRun("D3D12", 60, "frames-complete");
+    r.SetSettle(7, /*converged=*/true, Arcane::SettleBail::Keep, /*captureFailed=*/false);
+    const auto doc = nlohmann::json::parse(r.ToJson());
+    CHECK(doc["settleAttemptsUsed"] == 7);
+    CHECK(doc["settleBailReason"] == "converged");
+}
+
+TEST_CASE("verify report: settle keys are ABSENT when settle was never asked for", "[verify]")
+{
+    // Absence-is-absence, the same contract SetCapture and SetCompare uphold:
+    // an agent must be able to tell "not asked" from "asked and converged".
+    Arcane::VerifyReport r;
+    r.SetRun("D3D12", 60, "frames-complete");
+    const auto doc = nlohmann::json::parse(r.ToJson());
+    CHECK_FALSE(doc.contains("settleAttemptsUsed"));
+    CHECK_FALSE(doc.contains("settleBailReason"));
+}
+
+TEST_CASE("verify report: the attempts bound is named when it governed", "[verify]")
+{
+    // The two bounds are DIFFERENT KNOBS -- "attempts-bound" says raise
+    // --settle, "timeout-bound" says raise --settle-timeout. A report that
+    // named the wrong one would send an agent to the knob that cannot help.
+    Arcane::VerifyReport r;
+    r.SetRun("vulkan", 60, "settle-not-converged");
+    r.SetSettle(30, /*converged=*/false, Arcane::SettleBail::AttemptsBound,
+                /*captureFailed=*/false);
+    const auto doc = nlohmann::json::parse(r.ToJson());
+    CHECK(doc["settleAttemptsUsed"] == 30);
+    CHECK(doc["settleBailReason"] == "attempts-bound");
+}
+
+TEST_CASE("verify report: a broken capture path OUTRANKS whichever bound was spent", "[verify]")
+{
+    // No readback ever landed, so the loop never had two frames to compare and
+    // NEITHER bound got a fair test. "capture-failed" is a different fact from
+    // "the scene never stabilised" -- one is a broken capture path, the other a
+    // genuinely unstable scene, and an agent has to tell them apart. So it wins
+    // the ternary even though the bail decision itself still names a bound.
+    Arcane::VerifyReport r;
+    r.SetRun("dx12", 60, "settle-not-converged");
+    r.SetSettle(30, /*converged=*/false, Arcane::SettleBail::AttemptsBound,
+                /*captureFailed=*/true);
+    const auto doc = nlohmann::json::parse(r.ToJson());
+    CHECK(doc["settleBailReason"] == "capture-failed");
+}
+
+TEST_CASE("verify report: zero attempts is a REPORTED fact, not an absent one", "[verify]")
+{
+    // The honest-count contract's edge: a host that called SetSettle at all
+    // asked for --settle, so the keys must be PRESENT even when the count is
+    // zero. Only a host that never called it may omit them -- otherwise "0
+    // attempts taken" would be indistinguishable from "settle was never
+    // requested", which is the exact confusion the absence contract exists to
+    // prevent.
+    Arcane::VerifyReport r;
+    r.SetRun("dx12", 0, "settle-not-converged");
+    r.SetSettle(0, /*converged=*/false, Arcane::SettleBail::Keep, /*captureFailed=*/true);
+    const auto doc = nlohmann::json::parse(r.ToJson());
+    REQUIRE(doc.contains("settleAttemptsUsed"));
+    CHECK(doc["settleAttemptsUsed"] == 0);
+    CHECK(doc["settleBailReason"] == "capture-failed");
 }

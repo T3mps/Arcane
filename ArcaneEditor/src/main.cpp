@@ -178,10 +178,13 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          shader-compiler-idle && [reference-match])
 //                          RuntimeFrame::CaptureTail uses, ported rather than
 //                          reinvented, and ShutdownGraphPath writes the same
-//                          VerifyReport schema (schemaVersion 2) the runtime
-//                          does -- see both functions' own comments. The one
-//                          divergence from the runtime is structural, not a
-//                          gap: this host implements no --probe (below), so
+//                          VerifyReport schema (schemaVersion 3) the runtime
+//                          does -- settle facts included, and reconciled with
+//                          the runtime's in the same commit that added them,
+//                          so `settleAttemptsUsed` means the same thing on
+//                          both hosts. See both functions' own comments. The
+//                          one divergence from the runtime is structural, not
+//                          a gap: this host implements no --probe (below), so
 //                          the report's `probes` array is always empty and
 //                          there is no `pick` field -- `census` is unaffected,
 //                          being carried unconditionally on both hosts.

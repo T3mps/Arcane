@@ -639,6 +639,16 @@ namespace Arcane::Editor
         // HONEST (it stays the REAL count), which matters to anything
         // reporting the attempts actually taken.
         bool                                  m_settleAborted        = false;
+        // Whether NO readback EVER landed across the whole settle phase, so the
+        // loop never had two frames to compare and NEITHER bound got a fair
+        // test. A DIFFERENT FACT from "captured fine, never agreed": one is a
+        // broken capture path, the other a genuinely unstable scene, and they
+        // have different fixes. Written once, at the bail, and carried into
+        // VerifyReport::SetSettle, whose emitted `settleBailReason` ranks it
+        // ABOVE the governing bound for exactly that reason. Stays false on a
+        // run that converged (convergence requires a readback) and on one that
+        // never asked for --settle at all.
+        bool                                  m_settleCaptureFailed  = false;
 
         // --compare / --bless. Resolved ONCE, before the settle loop starts
         // -- EditorApp::MainLoop's pre-loop block, mirroring RuntimeApp::

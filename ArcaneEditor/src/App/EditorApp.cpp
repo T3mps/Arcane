@@ -2267,6 +2267,26 @@ namespace Arcane::Editor
             if (m_captureRead)
                 report.SetCapture(m_captureWidth, m_captureHeight, m_captureRgba);
 
+            // The --settle verdict (Task 3), ported from RuntimeApp::
+            // ShutdownGraphPath's twin call site -- BOTH hosts must emit these
+            // keys or the schema-3 fields are simply absent from every editor
+            // report, silently, because absence is a legal state in this
+            // contract.
+            //
+            // m_settleAttemptsUsed is passed AS MEASURED. It is honest now:
+            // PresentChromeFrame's defensive branch used to stop the loop by
+            // forging it to m_config.settleAttempts, and Task 2 replaced that
+            // with m_settleAborted -- `++m_settleAttemptsUsed` is the only
+            // write left. Reporting the forged value would have made this JSON
+            // LIE on this host, which is worse than the field's absence: an
+            // absent field is an honest gap, a present wrong one is a false
+            // report an agent will trust.
+            if (m_config.settleAttempts != 0)
+            {
+                report.SetSettle(m_settleAttemptsUsed, m_settleConverged, m_settleBail,
+                                  m_settleCaptureFailed);
+            }
+
             // The census is carried whether or not a `census` PROBE was
             // asked for, matching RuntimeApp::ShutdownGraphPath's own
             // comment on why: ToJson's top-level "census" field reads

@@ -656,6 +656,7 @@ void RuntimeApp::MainLoop()
         .settleStartedAt       = m_settleStartedAt,
         .settleElapsedMs       = m_settleElapsedMs,
         .settleBail            = m_settleBail,
+        .settleCaptureFailed   = m_settleCaptureFailed,
         // Fix round 1, item 1: the SAME instance SceneRenderResolver::Services
         // already points at (StageSpriteTables's `rs.compiler = &m_shaderCompiler`)
         // -- CaptureTail reads its IsIdle() to conjoin quiescence into
@@ -1179,6 +1180,24 @@ void RuntimeApp::ShutdownGraphPath()
         // report an honest "no capture set" rather than a phantom frame.
         if (m_captureRead)
             report.SetCapture(m_captureWidth, m_captureHeight, m_captureRgba);
+
+        // The --settle verdict (Task 3), previously visible ONLY in this
+        // process's log. Emitted only when settle was actually asked for: the
+        // three members below are meaningless otherwise, and VerifyReport's
+        // absence contract means an uncalled SetSettle emits no settle keys at
+        // all -- the honest answer for a run that never settled.
+        //
+        // m_settleAttemptsUsed is passed AS MEASURED, never m_config.settleAttempts.
+        // Neither host may substitute the budget for the count; the editor host
+        // used to (it forged the counter to stop its loop), which is why that
+        // was reconciled in this same commit rather than after it -- an absent
+        // field is an honest gap, a present wrong one is a false report an
+        // agent will trust.
+        if (m_config.settleAttempts != 0)
+        {
+            report.SetSettle(m_settleAttemptsUsed, m_settleConverged, m_settleBail,
+                              m_settleCaptureFailed);
+        }
 
         // The census is carried whether or not a `census` PROBE was asked
         // for -- ToJson's top-level "census" field and a `census` probe

@@ -3067,6 +3067,14 @@ namespace Arcane::Editor
                                                   Arcane::kSettleIntervalMs);
         if (m_settleBail != Arcane::SettleBail::Keep)
         {
+            // No readback EVER landed, so the loop never had two frames to
+            // compare -- a different fact from "captured fine, never agreed"
+            // (a broken capture path vs a genuinely unstable scene). Line-for-
+            // line RuntimeFrame::CaptureTail's own, for the same reason: Task
+            // 3's report ranks it ABOVE the governing bound, because it means
+            // neither bound ever got a fair test.
+            m_settleCaptureFailed = !m_previousCaptureValid;
+
             // NON-CONVERGENCE. FAIL EXPLICITLY: m_settleConverged stays
             // false (EndFrame reads it to stop the loop; ShutdownGraphPath
             // reads it to fold exitReason "settle-not-converged"/

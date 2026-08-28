@@ -875,6 +875,16 @@ bool CaptureTail(FrameIo& io)
                                                    Arcane::kSettleIntervalMs);
         if (io.settleBail != Arcane::SettleBail::Keep)
         {
+            // No readback EVER landed, so the loop never had two frames to
+            // compare. That is a different fact from "captured fine, never
+            // agreed", and an agent needs to tell them apart: one is a broken
+            // capture path, the other a genuinely unstable scene. Recorded HERE
+            // -- at the bail, before anything else can touch the baseline --
+            // and ranked ABOVE the governing bound by the report (Task 3,
+            // VerifyReport::SetSettle), precisely because it means neither
+            // bound ever got a fair test.
+            io.settleCaptureFailed = !io.previousCaptureValid;
+
             // NON-CONVERGENCE. FAIL EXPLICITLY rather than hand back
             // whatever the last attempt happened to render: io.settleConverged
             // stays false (RuntimeApp::ShutdownGraphPath reads it to set

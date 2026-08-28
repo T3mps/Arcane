@@ -171,6 +171,13 @@ namespace Arcane::RuntimeFrame
         std::chrono::steady_clock::time_point& settleStartedAt;
         std::uint64_t&              settleElapsedMs;
         Arcane::SettleBail&         settleBail;
+        // Set at the bail: true iff no readback EVER landed, so the loop never
+        // had two frames to compare and neither bound got a fair test. Bound
+        // through here (rather than derived later from previousCaptureValid,
+        // which CaptureTail keeps mutating) so ShutdownGraphPath reports the
+        // state AS IT WAS when the loop gave up -- Task 3's
+        // VerifyReport::SetSettle reads it.
+        bool&                       settleCaptureFailed;
         // ShaderCompiler::IsIdle() (fix round 1, item 1): byte-equal consecutive
         // captures are a STABILITY predicate ("nothing rendered differently
         // between these two samples"), not the QUIESCENCE predicate this mode

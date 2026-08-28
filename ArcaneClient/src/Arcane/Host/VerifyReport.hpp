@@ -29,6 +29,12 @@
 // that would be correct for LUMINANCE (Y), which this is deliberately not.
 
 #include <Arcane/Base/Api.hpp>
+// SettleBail, the --settle bail decision (Task 2). Header-only and constexpr
+// -- <cstdint> is its ONLY include -- so pulling it in here adds no link
+// dependency and leaves this component's standalone-parse property intact:
+// VerifyReportTest.cpp still parses this report's JSON without linking a
+// renderer, which is the Servitor boundary this whole file exists to hold.
+#include <Arcane/Host/SettleBound.hpp>
 
 #include <Json.hpp>
 
@@ -134,18 +140,26 @@ namespace Arcane
         // gpu-stall watchdog verdict, etc).
         //
         // NO `offscreen` PARAMETER (final fix wave, Fix 3 -- reconciling
-        // windowed --report): this report can only ever describe an offscreen
+        // windowed --report): this report can only ever describe a headless
         // run. HostConfig::Parse's wantsOffscreenOnly gate refuses --report
         // without --headless, unconditionally, for every host -- so
         // ArcaneRuntime's one real call site (RuntimeApp.cpp's
         // ShutdownGraphPath) could never have reached this with a windowed
         // run. A `bool offscreen` parameter that is provably always true is
         // not a fact worth carrying; ToJson's "mode" field reflects that by
-        // always emitting "offscreen" rather than branching on a value that
-        // can never be anything else. Older revisions of this component
-        // modelled a "windowed" mode for a code path RuntimeApp.cpp never
-        // actually had a way to reach -- see the plan's Task 9 desk item F,
-        // which describes a scenario the parse-time gate makes unrunnable.
+        // always emitting ONE value rather than branching on a state that can
+        // never be anything else. Older revisions of this component modelled a
+        // "windowed" mode for a code path RuntimeApp.cpp never actually had a
+        // way to reach -- see the plan's Task 9 desk item F, which describes a
+        // scenario the parse-time gate makes unrunnable.
+        //
+        // THAT VALUE IS "headless" as of schemaVersion 3 (it was "offscreen"):
+        // the MODE is spelled --headless on every host's command line, and
+        // "offscreen" is the TECHNIQUE it renders with (CreateOffscreen,
+        // IsOffscreen -- both keep the word, deliberately). A wire value an
+        // out-of-process consumer switches on has to carry the mode's own
+        // word, and a schemaVersion bump is exactly the versioned moment at
+        // which changing one is legitimate rather than a silent break.
         void SetRun(std::string backend, std::uint64_t framesRendered,
                     std::string exitReason);
 
@@ -270,6 +284,44 @@ namespace Arcane
                         std::uint64_t maxDiffPixels, bool sizesMismatch,
                         std::string diffPath, std::string errorMessage);
 
+        // The --settle verdict (Task 3). Emitted as `settleAttemptsUsed` +
+        // `settleBailReason` ONLY when this was actually called -- a run
+        // without --settle emits NEITHER key, the same absence-must-be-absence
+        // contract SetCapture and SetCompare already uphold, so an agent can
+        // tell "settle was never asked for" from "asked, and took 0 attempts".
+        // Both hosts call this from their report path whenever
+        // HostConfig::settleAttempts != 0, and only then.
+        //
+        //   attemptsUsed  -- the REAL number of settle attempts taken, never a
+        //                    budget. This is the field the whole task exists
+        //                    for: it lived only in logs before, and the editor
+        //                    host used to FORGE it to the budget as its way of
+        //                    stopping the loop (EditorAppFrame.cpp's defensive
+        //                    branch, now a separate m_settleAborted flag).
+        //                    Shipping the field without reconciling that would
+        //                    have made this report LIE on one host, which is
+        //                    strictly worse than the field's absence: an absent
+        //                    field is an honest gap, a present wrong one is a
+        //                    false report an agent will trust.
+        //   converged     -- whether two consecutive captures ever compared
+        //                    byte-equal with the shader compiler idle (and,
+        //                    under --compare, matched the reference).
+        //   bail          -- WHICH bound governed the give-up decision
+        //                    (Arcane/Host/SettleBound.hpp). Reported so the
+        //                    caller is told which knob would actually change
+        //                    the outcome: "attempts-bound" says raise --settle,
+        //                    "timeout-bound" says raise --settle-timeout. A
+        //                    converged run carries SettleBail::Keep -- there is
+        //                    no governing bound on a run that never gave up.
+        //   captureFailed -- no readback EVER landed, so the loop never had two
+        //                    frames to compare and NEITHER bound got a fair
+        //                    test. OUTRANKS the bound in the emitted reason for
+        //                    exactly that reason: "the capture path is broken"
+        //                    and "the scene never stabilised" are different
+        //                    facts with different fixes.
+        void SetSettle(std::uint64_t attemptsUsed, bool converged, SettleBail bail,
+                       bool captureFailed);
+
         // Evaluates every spec against whatever SetCapture/AddCensus/SetPick were
         // given before this call, and appends one JSON entry per spec.
         // Callable more than once (specs accumulate) -- there is no reset,
@@ -336,6 +388,16 @@ namespace Arcane
         bool          m_compareSizesMismatch  = false;
         std::string   m_compareDiffPath;
         std::string   m_compareErrorMessage;
+
+        // The --settle verdict (Task 3) -- see SetSettle's own comment. As
+        // everywhere else in this component, m_settleSet is what gates
+        // emission, so "never asked" and "asked, 0 attempts" stay distinct
+        // rather than collapsing into the same zero.
+        bool          m_settleSet           = false;
+        std::uint64_t m_settleAttemptsUsed  = 0;
+        bool          m_settleConverged     = false;
+        SettleBail    m_settleBail          = SettleBail::Keep;
+        bool          m_settleCaptureFailed = false;
 
         // Already-evaluated probe entries, in Evaluate() call order.
         nlohmann::json m_probes = nlohmann::json::array();

@@ -221,6 +221,16 @@ private:
     std::chrono::steady_clock::time_point m_settleStartedAt{};
     std::uint64_t                         m_settleElapsedMs      = 0;
     Arcane::SettleBail                    m_settleBail           = Arcane::SettleBail::Keep;
+    // Whether NO readback EVER landed across the whole settle phase, so the
+    // loop never had two frames to compare and NEITHER bound got a fair
+    // test. A DIFFERENT FACT from "captured fine, never agreed": one is a
+    // broken capture path, the other a genuinely unstable scene, and they
+    // have different fixes. Written once, at the bail, and carried into
+    // VerifyReport::SetSettle, whose emitted `settleBailReason` ranks it
+    // ABOVE the governing bound for exactly that reason. Stays false on a
+    // run that converged (convergence requires a readback) and on one that
+    // never asked for --settle at all.
+    bool                                  m_settleCaptureFailed  = false;
 
     // --compare / --bless (Task 8). Resolved ONCE, before the settle loop
     // starts (Finding 3 of the Task 8 dispatch audit -- see MainLoop's own

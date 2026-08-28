@@ -230,6 +230,16 @@ namespace Arcane
         m_compareErrorMessage  = std::move(errorMessage);
     }
 
+    void VerifyReport::SetSettle(std::uint64_t attemptsUsed, bool converged, SettleBail bail,
+                                  bool captureFailed)
+    {
+        m_settleSet           = true;
+        m_settleAttemptsUsed  = attemptsUsed;
+        m_settleConverged     = converged;
+        m_settleBail          = bail;
+        m_settleCaptureFailed = captureFailed;
+    }
+
     void VerifyReport::Evaluate(const std::vector<ProbeSpec>& specs)
     {
         for (const auto& spec : specs)
@@ -505,15 +515,31 @@ namespace Arcane
         // (`compare`) is a contract change, not a silent addition -- this
         // JSON is the boundary Servitor parses without linking the engine,
         // and VerifyReportTest.cpp pins that it parses standalone.
-        j["schemaVersion"]   = 2;
+        //
+        // Bumped 2 -> 3 by Task 3 of the owed-defects arc, for TWO changes
+        // that had to ship together: the settle facts below became reportable
+        // (`settleAttemptsUsed` / `settleBailReason` -- they existed only in
+        // logs, so an out-of-process agent could not see WHY a run gave up),
+        // and `mode` changed VALUE. A version bump is the one moment at which
+        // an existing wire value may legitimately change; doing it at any
+        // other time is a silent break for a consumer that parses this
+        // without linking us.
+        j["schemaVersion"]   = 3;
         j["backend"]         = m_backend;
-        // Always "offscreen" -- Fix 3 (final fix wave) removed the "windowed"
+        // Always "headless" -- Fix 3 (final fix wave) removed the "windowed"
         // value from this contract: HostConfig::Parse refuses --report
         // without --headless unconditionally, so no live run can ever
         // produce anything else. Kept as a field (not just implied) because
         // an out-of-process consumer -- the Servitor package this JSON is the
         // boundary for -- should not have to infer the run kind from absence.
-        j["mode"]            = "offscreen";
+        //
+        // The value was "offscreen" through schemaVersion 2. The MODE is
+        // spelled --headless on every host's command line; "offscreen" is the
+        // TECHNIQUE that mode renders with, and keeps the word everywhere it
+        // genuinely describes the technique (CreateOffscreen, IsOffscreen,
+        // kGraphOffscreenFormat). A machine-readable field a consumer
+        // switches on must carry the mode's own name, so it now does.
+        j["mode"]            = "headless";
         j["framesRendered"]  = m_framesRendered;
         j["exitReason"]      = m_exitReason;
 
@@ -542,6 +568,26 @@ namespace Arcane
                               { "sizesMismatch", m_compareSizesMismatch },
                               { "diffPath",      m_compareDiffPath },
                               { "errorMessage",  m_compareErrorMessage } };
+        }
+
+        // The --settle verdict (Task 3). ABSENT unless SetSettle was called --
+        // both keys or neither, exactly like `capture` and `compare` above --
+        // so "settle was never asked for" can never be read as "asked, and
+        // took 0 attempts".
+        if (m_settleSet)
+        {
+            j["settleAttemptsUsed"] = m_settleAttemptsUsed;
+            // captureFailed OUTRANKS the bound: it means no readback ever
+            // landed, so the loop never had two frames to compare and NEITHER
+            // bound got a fair test. Naming a bound there would send the caller
+            // to a knob that cannot help. converged outranks the bound too,
+            // because a converged run carries SettleBail::Keep -- there is no
+            // governing bound to name on a run that never gave up.
+            j["settleBailReason"]   =
+                m_settleCaptureFailed                      ? "capture-failed"
+              : m_settleConverged                          ? "converged"
+              : m_settleBail == SettleBail::AttemptsBound   ? "attempts-bound"
+                                                           : "timeout-bound";
         }
 
         j["probes"] = m_probes;
