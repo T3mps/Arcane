@@ -71,9 +71,27 @@ shape ([UE 5.4 `AutomationScreenshotOptions`](https://dev.epicgames.com/document
 > the frame delay must be met** before the screenshot is taken."*
 
 Epic denominates its two bounds in different units — seconds and frames — evidently having found
-neither sufficient alone. **Scope of that citation, stated because it matters:** Unreal's
-conjunction is a **wait before a single capture**, not a poll. It corroborates the *shape* of the
-fix. It does **not** decide how to pace a retry loop, because Unreal has no retry loop.
+neither sufficient alone.
+
+**Scope of that citation, stated because it matters, and re-verified against Epic's own docs
+2026-08-28.** Unreal's conjunction is a **wait before a single capture**, not a poll. The
+[Screenshot Comparison Tool](https://dev.epicgames.com/documentation/en-us/unreal-engine/screenshot-comparison-tool-in-unreal-engine)
+describes `delay` as *"The delay before the screenshot will be taken"* and documents **no polling,
+no repeated captures, no waiting for stability across frames, and no retry mechanism**. Its
+tolerance settings are post-capture adjustments to the comparison, not re-capture. The
+[`AutomationLibrary`](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/class/AutomationLibrary?application_version=5.4)
+surface is `take_automation_screenshot*` plus `compare_image_against_reference` — there is no
+retry entry point at all, and both `get_default_screenshot_options_for_gameplay` and
+`..._for_rendering` default to `delay=0.2` seconds.
+
+**That 0.2 s is the tell.** Epic's entire settle budget is 200 ms, because their determinism comes
+from *suppressing* nondeterminism at capture (`disable_noisy_rendering_features`,
+`override_time_to` with delta time zero) rather than from waiting for asynchronous work to drain.
+We took the other road — the settle loop — so their delay value is **not** transferable to our
+timeout, and this spec does not treat it as such.
+
+So Unreal corroborates the *shape* of the fix. It does **not** decide how to pace a retry loop,
+because Unreal has no retry loop to pace.
 
 A disjunction (bail when *either* bound is spent) was considered and rejected: it still bails the
 moment attempts run out, which is the defect.
@@ -117,12 +135,34 @@ non-converging run consumes ~94 attempts. **The flag's help text must be reworde
 
 | constant | value | provenance |
 |---|---|---|
-| `--settle-timeout` default | **5000 ms** | **Inherited.** Playwright's `toHaveScreenshot` timeout *"Defaults to `timeout` in `TestConfig.expect`"*, and [`TestConfig.expect`](https://playwright.dev/docs/api/class-testconfig) defaults to 5000 ms. |
-| poll interval | **50 ms** | **Ours.** Playwright documents no retry cadence anywhere in its API reference, and Unreal has no poll to pace. This is a judgment call, not a citation. |
+| `--settle-timeout` default | **5000 ms** | **Inherited.** `toHaveScreenshot`'s timeout *"Defaults to `timeout` in `TestConfig.expect`"*, and [Playwright's configuration docs](https://playwright.dev/docs/test-configuration) state *"Web first assertions like `expect(locator).toHaveText()` have a separate timeout of **5 seconds** by default"* (distinct from the 30 s per-test timeout). |
+| poll interval | **50 ms** | **Ours** — but chosen against a documented alternative, not into a vacuum. See below. |
 
 Recording both as if they were inherited would be false provenance. The standing rule this arc
 works under is: **defer to the reference implementations where they have made a decision; where
 they are silent, choose and say that we chose.**
+
+**Correction, made 2026-08-28 while re-verifying this spec.** An earlier revision claimed
+Playwright *"documents no retry cadence anywhere in its API reference."* **That was too strong and
+is wrong.** Playwright documents a cadence for its explicit polling helpers
+([`expect.poll` / `expect.toPass`](https://playwright.dev/docs/test-assertions)): `intervals`
+*"Defaults to `[100, 250, 500, 1000]`"* — an **escalating backoff**, not a fixed interval. What it
+does not document is a cadence for the *auto-retrying assertions*, `toHaveScreenshot` among them;
+those state only a total timeout.
+
+**We are therefore rejecting a real, sourced alternative rather than filling a vacuum, and the
+reason is our second bound.** Playwright's polling helpers carry **only a time bound and no
+attempt count**, which is what makes backoff safe there. Ours carries an attempt floor
+(decision 2). Adopting `[100, 250, 500, 1000]` under a `--settle 30` floor means 29 inter-probe
+waits — `100 + 250 + 500 + 26 × 1000 = 26,850 ms ≈ 26.9 s` **per lane**. The attempt bound would
+dominate the 5000 ms timeout by more than fivefold, and a four-lane gate would spend ~107 s in
+settle where a fixed interval spends ~20 s — roughly **1.5 minutes added to every gate run**. A
+fixed 50 ms interval keeps 30 attempts inside ~1.6 s, so the timeout stays the governing bound,
+which is the entire point of the conjunction.
+
+**If the desk pass shows 50 ms is too aggressive** — too many rendered frames for the value
+returned — escalating backoff with a low cap is the documented fallback, and it now has a
+citation rather than needing to be re-derived.
 
 ### 4. `settleBailReason` names the BINDING bound, not the tripped one
 
