@@ -100,8 +100,13 @@ const BOOT_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(2);
 /// `--frames` is likewise NOT evidence and is deliberately absent: on its own
 /// it cannot produce a post-boot 2 or 3, so counting it only suppressed a
 /// correct pre-boot diagnosis on short scripted runs.
+///
+/// `--compare` is the only flag that can produce a post-boot exit 3: it is
+/// what asks for a golden comparison at all. `--headless`, `--settle` and
+/// `--report` are all reachable without one, and `--frames` on its own cannot
+/// produce a post-boot 2 or 3, which is why none of them is evidence here.
 fn golden_run(extra: &[String]) -> bool {
-    extra.iter().any(|a| a.starts_with("--golden-"))
+    extra.iter().any(|a| a == "--compare" || a.starts_with("--compare="))
 }
 
 pub fn now_utc_iso() -> String {
@@ -582,12 +587,21 @@ mod tests {
     }
 
     #[test]
-    fn golden_run_sees_golden_vocabulary_only() {
-        assert!(golden_run(&args(&["--golden-capture", "D:/out"])));
-        assert!(golden_run(&args(&["--golden-compare", "D:/out"])));
-        assert!(golden_run(&args(&["--frames", "5", "--golden-stage", "batch"])));
-        // The realistic desk pairing.
-        assert!(golden_run(&args(&["--frames", "3", "--golden-capture", "D:/g"])));
+    fn golden_run_keys_on_flags_the_engine_actually_registers() {
+        // --compare is the ONLY flag that can produce a post-boot exit 3.
+        assert!(golden_run(&args(&["--compare", "runtime-scene"])));
+        assert!(golden_run(&args(&["--headless", "--frames", "60", "--compare", "editor-ui"])));
+
+        // THE BUG THIS PINS: --golden-* is retired vocabulary that no engine
+        // binary registers. Keying on it made the exit-3 guard always match,
+        // so a real compare failure was reported as "already open in another
+        // editor" and the correct arm was unreachable.
+        assert!(!golden_run(&args(&["--golden-capture", "D:/out"])));
+
+        // Neither is --frames evidence on its own -- it cannot produce a
+        // post-boot 2 or 3, which is why it was deliberately absent before.
+        assert!(!golden_run(&args(&["--frames", "5"])));
+        assert!(!golden_run(&args(&[])));
     }
 
     #[test]
