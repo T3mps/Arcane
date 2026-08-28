@@ -2886,13 +2886,16 @@ namespace Arcane::Editor
         //     comment on why), and -- when --compare is running -- conjoin a
         //     reference match. Converged: write the screenshot (if any) and
         //     stash the agreed capture. Not yet: stash THIS attempt as the
-        //     new baseline and keep going. Budget spent without converging:
-        //     stop with m_settleConverged left false and m_captureRead left
-        //     false -- no screenshot, no report SetCapture, an honest
-        //     absence rather than a frame this run never actually agreed on.
+        //     new baseline and keep going. BOTH bounds spent without
+        //     converging: stop with m_settleConverged left false and
+        //     m_captureRead left false -- no screenshot, no report SetCapture,
+        //     an honest absence rather than a frame this run never agreed on.
         // The loop's actual STOP decision is EndFrame's, reading
-        // m_settleConverged / m_settleAttemptsUsed -- this function always
-        // returns true from here down (a chrome frame WAS presented this
+        // m_settleConverged / m_settleAborted / m_settleBail -- NEVER the
+        // attempt count, which is only ONE HALF of the bail conjunction
+        // (Arcane/Host/SettleBound.hpp); re-deriving a bound from it would
+        // reinstate the defect that conjunction exists to close. This function
+        // always returns true from here down (a chrome frame WAS presented this
         // iteration), exactly like the ordinary tail always did.
         if (m_config.settleAttempts == 0)
         {
@@ -3162,12 +3165,15 @@ namespace Arcane::Editor
         // RuntimeFrame::CaptureTail's io.frameCount does; nothing else in
         // this host reads "past maxFrames" as anything but a stop signal,
         // so that growth is harmless). The loop's ACTUAL end is decided by
-        // PresentChromeFrame's settle branch alone, through
-        // m_settleConverged / m_settleAttemptsUsed -- both set beside the
-        // READBACK there, never off this counter (see PresentChromeFrame's
-        // own comment on why: it returns false on a Skipped chrome present,
-        // which never reaches EndFrame at all, so tying attempts to frame
-        // advancement could spin forever on exactly that path).
+        // PresentChromeFrame alone, through m_settleConverged / m_settleBail
+        // -- both set beside the READBACK there, never off this counter (see
+        // PresentChromeFrame's own comment on why: it returns false on a
+        // Skipped chrome present, which never reaches EndFrame at all, so
+        // tying attempts to frame advancement could spin forever on exactly
+        // that path) -- plus m_settleAborted, which that function's defensive
+        // fail-closed branch raises BEFORE any attempt is taken. The attempt
+        // COUNT is not among them: it is one half of a conjunction, and this
+        // is the site where reading it alone would undo the fix.
         if (m_config.settleAttempts != 0)
         {
             // The bail is a CONJUNCTION now, and PresentChromeFrame has already

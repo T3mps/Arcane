@@ -6,6 +6,26 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 #include <Arcane/Host/HostConfig.hpp>
+
+// --- stderr capture (see StderrCapture below for WHY this is here) ----------
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <system_error>
+#if defined(_WIN32)
+    #include <io.h>
+    #define ARCTEST_DUP    _dup
+    #define ARCTEST_DUP2   _dup2
+    #define ARCTEST_CLOSE  _close
+    #define ARCTEST_FILENO _fileno
+#else
+    #include <unistd.h>
+    #define ARCTEST_DUP    dup
+    #define ARCTEST_DUP2   dup2
+    #define ARCTEST_CLOSE  close
+    #define ARCTEST_FILENO fileno
+#endif
 namespace {
     Arcane::HostConfig::ParseOutcome Run(std::vector<std::string> args) {
         std::vector<char*> argv; argv.push_back(const_cast<char*>("ArcaneRuntime"));
@@ -716,6 +736,97 @@ TEST_CASE("host: the editor accepts the same verification flags the runtime does
     CHECK(outcome.config->reportPath == "r.json");
 }
 
+namespace {
+    // Everything written to stderr while this object lives is captured.
+    //
+    // WHY: HostConfig::Parse returns exit 2 for EVERY refusal, so a case that
+    // asserts only on the exit code passes whether or not the rule it names is
+    // the one that actually fired. Two of the --settle-timeout cases below are
+    // exactly that shape, and a test that cannot fail for the reason it names
+    // is worse than no test -- it is a false green. The message is the only
+    // thing that distinguishes one refusal from another, so the message is what
+    // gets asserted.
+    //
+    // RAII, restoring on EVERY path (normal return, early return, exception):
+    // ArcaneTests runs in RANDOM ORDER across 1200+ cases, so a redirect that
+    // leaked would silently swallow the whole remaining suite's diagnostics.
+    class StderrCapture
+    {
+    public:
+        StderrCapture()
+        {
+            std::fflush(stderr);
+            m_savedFd = ARCTEST_DUP(ARCTEST_FILENO(stderr));
+            m_path    = std::filesystem::temp_directory_path() /
+                        ("arcane_hostconfig_stderr_" + std::to_string(NextId()) + ".txt");
+            FILE* redirected = nullptr;
+#if defined(_WIN32)
+            if (freopen_s(&redirected, m_path.string().c_str(), "w", stderr) != 0)
+                redirected = nullptr;
+#else
+            redirected = std::freopen(m_path.string().c_str(), "w", stderr);
+#endif
+            m_ok = (m_savedFd != -1 && redirected != nullptr);
+        }
+        StderrCapture(const StderrCapture&)            = delete;
+        StderrCapture& operator=(const StderrCapture&) = delete;
+        ~StderrCapture()
+        {
+            Restore();
+            std::error_code ec;
+            std::filesystem::remove(m_path, ec);   // best effort; must not throw
+        }
+        [[nodiscard]] bool Ok() const noexcept { return m_ok; }
+        // Restores FIRST, so the text is read -- and any CHECK on it reported --
+        // with stderr already back to normal.
+        std::string Text()
+        {
+            Restore();
+            std::ifstream in(m_path, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(in)),
+                                std::istreambuf_iterator<char>());
+        }
+    private:
+        static int NextId() { static int n = 0; return ++n; }
+        void Restore() noexcept
+        {
+            if (m_restored) return;
+            m_restored = true;
+            std::fflush(stderr);
+            if (m_savedFd != -1)
+            {
+                ARCTEST_DUP2(m_savedFd, ARCTEST_FILENO(stderr));
+                ARCTEST_CLOSE(m_savedFd);
+                m_savedFd = -1;
+            }
+            std::clearerr(stderr);
+        }
+        int                   m_savedFd  = -1;
+        bool                  m_ok       = false;
+        bool                  m_restored = false;
+        std::filesystem::path m_path;
+    };
+
+    struct RunWithStderr
+    {
+        Arcane::HostConfig::ParseOutcome outcome;
+        std::string                      err;
+        bool                             captured = false;
+    };
+
+    // A SECOND helper BESIDE Run(), deliberately not a change to Run() itself:
+    // ~50 existing cases call that one and none of them want a redirect.
+    RunWithStderr RunCapturingStderr(std::vector<std::string> args)
+    {
+        RunWithStderr r;
+        StderrCapture cap;
+        r.outcome  = Run(std::move(args));
+        r.captured = cap.Ok();
+        r.err      = cap.Text();
+        return r;
+    }
+}
+
 TEST_CASE("host config: --settle-timeout parses and defaults to 5000", "[hostconfig]")
 {
     const auto def = Run({ "--headless", "--frames", "60", "--settle", "30",
@@ -737,34 +848,49 @@ TEST_CASE("host config: --settle-timeout requires --settle", "[hostconfig]")
     // A timeout on a loop that never runs is a caller error, and this file
     // refuses those loudly rather than ignoring them.
     //
-    // This case IS discriminating: --headless is present, so the only refusal
-    // that can reject this command line is the new --settle-timeout-requires-
-    // --settle one. Contrast the sibling case below.
-    const auto o = Run({ "--headless", "--frames", "60", "--settle-timeout", "250",
-                         "--screenshot", "s.png" });
-    REQUIRE_FALSE(o.config.has_value());
-    CHECK(o.exitCode == 2);
+    // --headless is present, so wantsOffscreenOnly cannot be what rejects this
+    // -- and the stderr assertion nails it down further, because every refusal
+    // in HostConfig::Parse exits 2 and the exit code alone proves nothing.
+    const auto o = RunCapturingStderr({ "--headless", "--frames", "60",
+                                        "--settle-timeout", "250", "--screenshot", "s.png" });
+    REQUIRE_FALSE(o.outcome.config.has_value());
+    CHECK(o.outcome.exitCode == 2);
+    REQUIRE(o.captured);
+    CHECK(o.err.find("--settle-timeout requires --settle") != std::string::npos);
 }
 
 TEST_CASE("host config: --settle-timeout requires --headless", "[hostconfig]")
 {
-    // Joins --fixed-dt/--probe/--report/--settle/--compare in the
-    // wantsOffscreenOnly set: a settle timeout in a windowed run is
+    // --settle-timeout joins --fixed-dt/--probe/--report/--settle/--compare in
+    // the wantsOffscreenOnly set: a settle timeout in a windowed run is
     // meaningless for the same reason --settle already is.
     //
-    // HONEST LIMIT -- this case CANNOT discriminate WHICH refusal fired. The
-    // command line carries --settle 30, and --settle ALREADY trips
-    // wantsOffscreenOnly without --headless on its own; both refusals return
-    // exit 2, and Run() does not capture stderr, so no assertion available
-    // here can tell the pre-existing --settle rejection apart from the
-    // --settle-timeout one this task added. It is kept because the CONTRACT
-    // it pins is real (this command line must be refused), but it must NOT be
-    // presented as proof that the wantsOffscreenOnly edit works. Dropping
-    // --settle would not fix that either: the run would then be refused by
-    // the "--settle-timeout requires --settle" rule instead. Discriminating
-    // between the two needs stderr capture, which this helper does not do.
-    const auto o = Run({ "--frames", "60", "--settle", "30", "--settle-timeout", "250",
-                         "--screenshot", "s.png" });
-    REQUIRE_FALSE(o.config.has_value());
-    CHECK(o.exitCode == 2);
+    // THERE IS DELIBERATELY NO --settle ON THIS COMMAND LINE. With one, --settle
+    // would trip wantsOffscreenOnly all by itself and this case could not fail
+    // even if the --settle-timeout clause were reverted -- it would be a false
+    // green. Without it, ONLY the new clause can route this run to the
+    // --headless refusal: revert the clause and Parse falls through to the
+    // "requires --settle" refusal instead. Both exit 2, so the MESSAGE is the
+    // only thing that can tell the two apart, which is what is asserted here.
+    const auto o = RunCapturingStderr({ "--frames", "60", "--settle-timeout", "250",
+                                        "--screenshot", "s.png" });
+    REQUIRE_FALSE(o.outcome.config.has_value());
+    CHECK(o.outcome.exitCode == 2);
+    REQUIRE(o.captured);
+    CHECK(o.err.find("require --headless")  != std::string::npos);   // the offscreen-only gate
+    CHECK(o.err.find("--settle-timeout")    != std::string::npos);   // named in its flag list
+    CHECK(o.err.find("requires --settle")   == std::string::npos);   // NOT the sibling refusal
+}
+
+TEST_CASE("host config: --settle-timeout 0 is ACCEPTED, unlike --settle 0", "[hostconfig]")
+{
+    // 0 means "no time bound": the conjunction degrades to the old
+    // attempts-only behaviour rather than becoming unsatisfiable, so it is a
+    // legal value carrying a real meaning. --settle 0 IS refused (0 there means
+    // "off", which omitting the flag already says). The two zeroes must not be
+    // collapsed into one "zero is refused" rule.
+    const auto o = Run({ "--headless", "--frames", "60", "--settle", "30",
+                         "--settle-timeout", "0", "--screenshot", "s.png" });
+    REQUIRE(o.config.has_value());
+    CHECK(o.config->settleTimeoutMs == 0u);
 }

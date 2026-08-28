@@ -56,7 +56,30 @@ namespace Arcane
     {
         if (attemptsUsed < attempts || elapsedMs < timeoutMs)
             return SettleBail::Keep;
-        return (attempts * intervalMs >= timeoutMs) ? SettleBail::AttemptsBound
-                                                    : SettleBail::TimeoutBound;
+        // "Does the attempt budget outlast the timeout?", asked by DIVISION and
+        // never as `attempts * intervalMs >= timeoutMs`. That product OVERFLOWS
+        // uint64_t on a large --settle -- attempts = 2^63 at a 2ms interval
+        // wraps to exactly 0 -- and would then name the TIMEOUT as governing on
+        // a run the attempt budget plainly dominates, sending the caller to the
+        // wrong knob. Same overflow class the uint64_t counter widths in both
+        // hosts already exist to avoid, and reachable the same way: a caller
+        // passing an absurd attempt count.
+        //
+        // attempts * intervalMs >= timeoutMs  <=>  attempts >= ceil(timeoutMs / intervalMs).
+        // The ceiling avoids the usual (a + b - 1) / b trick, which carries an
+        // overflow of its very own.
+        if (intervalMs == 0)
+        {
+            // A zero interval is a legal argument, and it means attempts consume
+            // no time at all -- so the attempt budget can only be said to
+            // outlast the timeout when there is no timeout to outlast. This is
+            // exactly what the product form answered here (0 >= timeoutMs).
+            return (timeoutMs == 0) ? SettleBail::AttemptsBound
+                                    : SettleBail::TimeoutBound;
+        }
+        const std::uint64_t attemptsNeeded =
+            timeoutMs / intervalMs + ((timeoutMs % intervalMs != 0) ? 1u : 0u);
+        return (attempts >= attemptsNeeded) ? SettleBail::AttemptsBound
+                                            : SettleBail::TimeoutBound;
     }
 }

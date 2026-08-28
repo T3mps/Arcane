@@ -29,8 +29,10 @@ namespace Arcane
                                       "verify-layout.ini seed)");
         cli.Option("settle", "0",        "repeat the capture (render clock frozen) until two consecutive "
                                          "frames compare byte-equal AND the shader compiler is idle, "
-                                         "for AT LEAST N attempts (0 = off, 1 is refused -- needs >= 2; "
-                                         "--headless only; needs --screenshot or --report)").Type(CliType::Uint);
+                                         "for AT LEAST N attempts -- it gives up only once BOTH N attempts "
+                                         "and --settle-timeout milliseconds are spent (0 = off, 1 is "
+                                         "refused -- needs >= 2; --headless only; needs --screenshot "
+                                         "or --report)").Type(CliType::Uint);
         cli.Option("settle-timeout", "5000", "milliseconds the settle loop must ALSO spend before "
                                          "giving up; it bails only when the attempt budget AND "
                                          "this timeout are both spent (0 = no time bound; "

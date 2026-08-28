@@ -702,8 +702,13 @@ bool CaptureTail(FrameIo& io)
     // resource state -- a shader compile landing, a texture upload completing
     // -- which is exactly the race this mode exists to pin down. Each
     // attempt's capture is compared to the IMMEDIATELY PRECEDING one; two
-    // byte-equal in a row is convergence. io.config.settleAttempts bounds how
-    // long a non-converging run spins.
+    // byte-equal in a row is convergence. How long a NON-converging run spins
+    // is bounded by a CONJUNCTION, not by the attempt count alone: it gives up
+    // only once io.config.settleAttempts attempts AND io.config.settleTimeoutMs
+    // milliseconds are BOTH spent, paced at kSettleIntervalMs between attempts
+    // (Arcane/Host/SettleBound.hpp). Bounding it by attempts alone WAS the
+    // defect -- the quiescence being waited on is denominated in milliseconds,
+    // so an attempt count is the wrong unit to express the wait in.
     // =========================================================================
     if (io.config.settleAttempts != 0)
     {
