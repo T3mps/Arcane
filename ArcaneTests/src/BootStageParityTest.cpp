@@ -12,9 +12,11 @@
 #include <string>
 #include <system_error>
 #include <vector>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope/WriteFile (the openOptions wiring test needs a REAL .arcdiag)
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Host/BootSequence.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
@@ -329,4 +331,105 @@ TEST_CASE("RuntimeStages' project_open .run() peeks splash.showProgress before O
     CHECK(splash.ShowProgress());            // peek + post-open re-set agree
 
     splash.Close();
+}
+
+// ---- ProjectOpenOptions: the verify-run diag:// opt-out ---------------------
+//
+// HostBoot::OpenOptionsFor is the ONE rule three hosts' population sites share
+// (RuntimeApp::Run, EditorApp::Init, EditorApp::SwitchProject). Pinned as a
+// table because the predicate is a conjunction of a bool and two "is this
+// string empty" tests -- exactly the shape that gets hand-copied wrong.
+TEST_CASE("OpenOptionsFor declines diag:// only for a headless verify run", "[boot][project]")
+{
+    auto wants = [](bool headless, const char* compare, const char* report)
+    {
+        Arcane::HostConfig cfg;
+        cfg.headless         = headless;
+        cfg.compareReference = compare;
+        cfg.reportPath       = report;
+        return Arcane::HostBoot::OpenOptionsFor(cfg).mountDiagnostics;
+    };
+
+    // The ordinary developer session, windowed or not: diag:// is real content.
+    CHECK(wants(false, "", ""));
+    CHECK(wants(true,  "", ""));
+
+    // A windowed run is NEVER a verify run, whatever else is asked for.
+    CHECK(wants(false, "editor-ui", ""));
+    CHECK(wants(false, "",          "r.json"));
+
+    // The three verify shapes -- compare, report, or both -- all decline.
+    CHECK_FALSE(wants(true, "editor-ui", ""));
+    CHECK_FALSE(wants(true, "",          "r.json"));
+    CHECK_FALSE(wants(true, "editor-ui", "r.json"));
+}
+
+// THE WIRING TEST. A defaulted parameter that nothing populates compiles and
+// unit-tests perfectly while the golden gate stays exactly as red as it was --
+// so this runs the REAL stage body and checks the mount it produced, for BOTH
+// stage lists: EditorStages takes CoreStages' shared project_open body (the
+// editor lane's actual boot path), RuntimeStages overrides it with its own.
+// The two are separate closures in ProjectBoot.cpp; a fix applied to one only
+// is precisely the miss this catches.
+//
+// Checks the REGISTRY as well as the mount: Project.cpp's single `if` guards a
+// Mount AND an AddContent, and AddContent is the half that feeds the Assets
+// panel -- i.e. the half the golden image actually sees.
+TEST_CASE("project_open forwards BootContext::openOptions to Runtime::OpenProject", "[boot][project]")
+{
+    const auto dir = TempProjectDir("open_options");
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":)"
+        << static_cast<int>(Arcane::kGamePluginABIVersion) << "}}";
+
+    // Pre-existing crash history, exactly what the defect enumerated.
+    const std::filesystem::path diagDir = dir / "Saved" / "Diagnostics";
+    std::error_code ec;
+    std::filesystem::create_directories(diagDir, ec);
+    Arcane::Diag::Envelope env;
+    env.guid = Arcane::Guid::Generate();
+    env.kind = "gpu-stall";
+    REQUIRE(Arcane::Diag::WriteFile(env, diagDir / "x.arcdiag"));
+
+    const std::string projectPath = dir.string();
+
+    enum class Host { Editor, Runtime };
+    auto runStage = [&](Host host, bool mountDiagnostics)
+    {
+        Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+        Arcane::BootSplashWindow splash("");
+        Arcane::HostBoot::BootContext ctx{};
+        ctx.runtime     = &rt;
+        ctx.splash      = &splash;
+        ctx.projectPath = projectPath.c_str();
+        ctx.moduleName  = "Test";
+        ctx.openOptions.mountDiagnostics = mountDiagnostics;
+
+        std::vector<Arcane::BootStage> stages = host == Host::Editor
+            ? Arcane::HostBoot::EditorStages(ctx)
+            : Arcane::HostBoot::RuntimeStages(ctx);
+        const Arcane::BootStage* stage = FindStage(stages, "project_open");
+        REQUIRE(stage != nullptr);
+        REQUIRE(stage->run());
+
+        const Arcane::Project* proj = rt.CurrentProject();
+        REQUIRE(proj != nullptr);
+        const bool mounted    = proj->Mounts().HasMount("diag");
+        const bool registered = proj->Registry().Resolve(env.guid).has_value();
+        splash.Close();
+        return std::pair<bool, bool>{mounted, registered};
+    };
+
+    for (const Host host : { Host::Editor, Host::Runtime })
+    {
+        // Default context: unchanged behaviour -- mounted AND scanned.
+        const auto on = runStage(host, true);
+        CHECK(on.first);
+        CHECK(on.second);
+
+        // Opted out: neither, with the report still sitting on disk.
+        const auto off = runStage(host, false);
+        CHECK_FALSE(off.first);
+        CHECK_FALSE(off.second);
+    }
 }

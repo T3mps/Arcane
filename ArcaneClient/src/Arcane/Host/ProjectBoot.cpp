@@ -199,7 +199,8 @@ namespace Arcane::HostBoot
                     return true;   // no --project: nothing to open, not a failure
                 if (ctx.runtime->OpenProject(ctx.projectPath,
                         [scanDetail](std::size_t done, std::size_t total)
-                        { ReportScanProgress(*scanDetail, done, total); }))
+                        { ReportScanProgress(*scanDetail, done, total); },
+                        ctx.openOptions))
                     return true;
                 ARC_WARN("{}: --project '{}' failed to open; using data/ + --plugin fallback",
                          ctx.moduleName ? ctx.moduleName : "HostBoot", ctx.projectPath);
@@ -326,7 +327,8 @@ namespace Arcane::HostBoot
 
                 if (ctx.runtime->OpenProject(ctx.projectPath,
                         [scanDetail](std::size_t done, std::size_t total)
-                        { ReportScanProgress(*scanDetail, done, total); }))
+                        { ReportScanProgress(*scanDetail, done, total); },
+                        ctx.openOptions))
                 {
                     // Re-set from the ADOPTED manifest (not just the peek above):
                     // authoritative over the peek in the (practically impossible,

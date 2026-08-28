@@ -12,6 +12,7 @@
 #include <Arcane/Base/Runtime.hpp>       // Runtime::ResetRegistry/Registry (BootScene)
 #include <Arcane/Config/Config.hpp>
 #include <Arcane/Host/BootSequence.hpp>  // BootStage/BootThread/BootPolicy (CoreStages)
+#include <Arcane/Host/HostConfig.hpp>     // HostConfig (OpenOptionsFor -- the ONE verify-run diag:// rule)
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // kGamePluginABIVersion (engine identity probe)
 #include <Arcane/Project/AssetId.hpp>            // AssetId::FromGuid (BootSceneFile)
@@ -344,6 +345,27 @@ namespace Arcane::HostBoot
         return Detail::ApplySceneFile(runtime, BootSceneFile(project, id));
     }
 
+    // THE ONE RULE for whether a host wants diag:// mounted, derived from its
+    // parsed command line. Lives here, as a shared free function, because it
+    // has THREE population sites -- RuntimeApp::Run, EditorApp::Init and
+    // EditorApp::SwitchProject -- and three hand-copied predicates would drift
+    // silently: the editor lane is the one that actually matters, and a miss
+    // there leaves the golden gate exactly as red as it was while every unit
+    // test still passes.
+    //
+    // A run declines the mount only when it is a VERIFY run: headless AND
+    // producing an artifact that a comparison or a report will read
+    // (--compare or --report). An ordinary headless run keeps diag:// -- it is
+    // real content a developer may want -- and no windowed session is ever
+    // affected. See ProjectOpenOptions.hpp for the defect this closes.
+    inline ProjectOpenOptions OpenOptionsFor(const HostConfig& cfg)
+    {
+        ProjectOpenOptions opts;
+        opts.mountDiagnostics =
+            !(cfg.headless && (!cfg.compareReference.empty() || !cfg.reportPath.empty()));
+        return opts;
+    }
+
     // What a boot stage needs to do its work. Pointers are host-owned and
     // outlive the sequence; null members mean "that facility is absent in this
     // host", which stages must tolerate (the parity tests build one with all
@@ -361,6 +383,13 @@ namespace Arcane::HostBoot
         // the --project-failed warning both need to say which host they ran
         // in. Null degrades to a generic "HostBoot" label, never a crash.
         const char*       moduleName  = nullptr;
+
+        // Per-open engine settings forwarded to Runtime::OpenProject by the
+        // project_open stage body (and by its RuntimeStages override). Populated
+        // by each host from its own HostConfig via OpenOptionsFor above; the
+        // default here is the ordinary every-mount open, so a context built
+        // without one (the parity tests) behaves exactly as before.
+        ProjectOpenOptions openOptions{};
     };
 
     // THE CANONICAL BOOT SEQUENCE. Both hosts take this LIST whole: the ids,

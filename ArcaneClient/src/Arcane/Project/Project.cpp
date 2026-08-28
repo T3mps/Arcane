@@ -176,7 +176,8 @@ namespace Arcane
     }
 
     std::optional<Project> Project::Open(const std::filesystem::path& pathOrFile,
-                                         AssetRegistry::ScanProgressFn onProgress)
+                                         AssetRegistry::ScanProgressFn onProgress,
+                                         ProjectOpenOptions opts)
     {
         std::error_code ec;
 
@@ -244,8 +245,17 @@ namespace Arcane
         // RegisterAsset lists this same root as a candidate unconditionally,
         // regardless of whether it existed at open time, and mounts it
         // there if this branch never did.)
+        // opts.mountDiagnostics == false declines this WHOLE branch -- both the
+        // mount and the AddContent below. A verify run opts out so its capture
+        // cannot show the machine's own crash history in the Assets panel; see
+        // ProjectOpenOptions.hpp. Deliberately gated HERE, above the
+        // is_directory probe, so an opted-out open does not even stat the
+        // directory. NOTE the boundary this does NOT cover: RegisterAsset
+        // (below) still lists this root unconditionally, so a run that ITSELF
+        // writes a report mid-session can still mount diag:// -- out of scope,
+        // the defect is enumeration of PRE-EXISTING crash history at open time.
         const std::filesystem::path diagDir = root / "Saved" / "Diagnostics";
-        if (std::filesystem::is_directory(diagDir, ec))
+        if (opts.mountDiagnostics && std::filesystem::is_directory(diagDir, ec))
         {
             proj.m_mounts.Mount("diag", diagDir);
             proj.m_registry.AddContent(diagDir, "diag");

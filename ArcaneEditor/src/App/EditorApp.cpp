@@ -1358,6 +1358,14 @@ namespace Arcane::Editor
         m_bootCtx.projectPath = m_config.projectPath.c_str();
         m_bootCtx.pluginPath  = m_config.pluginPath.c_str();
         m_bootCtx.moduleName  = "ArcaneEditor.exe";
+        // Per-open engine settings, from THIS host's parsed command line. THE
+        // EDITOR LANE OF THE GOLDEN GATE RUNS THROUGH HERE: a verify run
+        // (--headless with --compare/--report) declines the diag:// mount, so
+        // the Assets panel in the captured frame cannot enumerate this
+        // machine's own crash history -- the 24-pixel scrollbar-thumb diff
+        // that demoted editor-ui to advisory. Same shared rule the runtime
+        // host uses (HostBoot::OpenOptionsFor), never a second copy.
+        m_bootCtx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
 
         // Spec sec 6: the editor ALWAYS shows boot progress, regardless of any
         // opened project's manifest (project_open's shared CoreStages body

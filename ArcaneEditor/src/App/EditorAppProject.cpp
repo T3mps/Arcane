@@ -633,6 +633,12 @@ namespace Arcane::Editor
         ctx.projectPath = pathStr.c_str();
         ctx.pluginPath  = m_config.pluginPath.c_str();
         ctx.moduleName  = "ArcaneEditor.exe";
+        // Same shared rule the boot path uses (EditorApp::Init) -- a live
+        // in-session switch must not re-mount diag:// under a verify run
+        // either, or the opt-out would hold only until the first switch.
+        // Forwarded explicitly by the project_open body below, which is
+        // REPLACED here rather than inherited from CoreStages.
+        ctx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
 
         std::vector<Arcane::BootStage> all = Arcane::HostBoot::EditorStages(ctx);
         if (!PatchHostStages(all))
@@ -777,7 +783,12 @@ namespace Arcane::Editor
             projectOpen.dependsOn = { "switch_teardown" };
             projectOpen.policy    = Arcane::BootPolicy::Fatal;
             const std::shared_ptr<Arcane::BootStageDetail> scanDetail = projectOpen.detail;
-            projectOpen.run = [this, &path, scanDetail]
+            // openOptions is captured BY VALUE (ctx is a local of this function and
+            // this stage body replaces CoreStages', so it cannot read ctx.openOptions
+            // the way the inherited body does) -- the struct is a bool, copying it is
+            // free, and a value capture cannot dangle.
+            const Arcane::ProjectOpenOptions openOptions = ctx.openOptions;
+            projectOpen.run = [this, &path, scanDetail, openOptions]
             {
                 // scanDetail is unconditionally attached by CoreStages' own
                 // Make("project_open", ...) call, so this is never null in
@@ -785,7 +796,7 @@ namespace Arcane::Editor
                 // detail box here is harmless (OpenProject just runs without a
                 // progress callback) and not worth a hard failure.
                 if (!scanDetail)
-                    return m_runtime->OpenProject(path);
+                    return m_runtime->OpenProject(path, {}, openOptions);
                 return m_runtime->OpenProject(path,
                     [scanDetail](std::size_t done, std::size_t total)
                     {
@@ -794,7 +805,8 @@ namespace Arcane::Editor
                             return;
                         scanDetail->Set("Scanning content... " + std::to_string(done) +
                                          " / " + std::to_string(total));
-                    });
+                    },
+                    openOptions);
             };
             stages.push_back(std::move(projectOpen));
         }

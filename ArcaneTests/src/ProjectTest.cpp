@@ -4,6 +4,8 @@
 
 #include <Arcane/Project/Project.hpp>
 
+#include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope/WriteFile -- the mountDiagnostics case needs a REAL .arcdiag
+
 #include <Arcane/Plugin/PluginABI.hpp>
 
 #include <Json.hpp>
@@ -451,4 +453,54 @@ TEST_CASE("EditorLock::RivalPid exempts this process and ignores stale locks", "
     stale.start ^= 1;
     WriteFile(Arcane::EditorLock::FileFor(dir), Arcane::EditorLock::ToJson(stale));
     CHECK_FALSE(Arcane::EditorLock::RivalPid(dir).has_value());
+}
+
+// The verify-capture determinism defect: the editor's Assets panel enumerates
+// <root>/Saved/Diagnostics -- a directory the editor ITSELF writes crash and
+// hang captures into -- so the golden reference image moved with the machine's
+// failure history (24 anti-aliased pixels of the Assets scrollbar thumb, at
+// byte-identical coordinates on both backends). ProjectOpenOptions is the
+// per-open opt-out; see ProjectOpenOptions.hpp for why it lives in the engine.
+//
+// Asserts on BOTH halves of Project.cpp's diag:// branch: one `if` guards a
+// Mounts().Mount AND a Registry().AddContent. HasMount() alone CANNOT tell
+// "gated both" from "gated only the Mount" -- and AddContent is the half that
+// actually feeds the Assets panel, i.e. the half the golden image sees. The
+// Registry().Resolve check below is therefore the load-bearing one.
+TEST_CASE("Project::Open honours mountDiagnostics", "[project]")
+{
+    const auto dir = TempDir("open_diag_opt_out");
+    WriteFile(dir / "Aphelyon.arcproj",
+              R"({ "formatVersion": 1, "name": "Aphelyon", "engine": { "abi": 4 } })");
+    std::filesystem::create_directories(dir / "Content");
+
+    // A REAL report on disk, exactly as Diagnostics::WriteReportImpl leaves one.
+    // An empty Saved/Diagnostics would mount but register nothing, and so could
+    // not distinguish the two halves of the branch at all.
+    const std::filesystem::path diagDir = dir / "Saved" / "Diagnostics";
+    std::filesystem::create_directories(diagDir);
+    Arcane::Diag::Envelope env;
+    env.guid = Arcane::Guid::Generate();
+    env.kind = "gpu-stall";
+    REQUIRE(Arcane::Diag::WriteFile(env, diagDir / "x.arcdiag"));
+
+    // Default: the mount IS registered, and the report IS in the registry.
+    auto withDiag = Arcane::Project::Open(dir);
+    REQUIRE(withDiag.has_value());
+    CHECK(withDiag->Mounts().HasMount("diag"));
+    CHECK(withDiag->Registry().Resolve(env.guid).has_value());
+
+    // Opted out: neither, even though the directory -- and a report inside it --
+    // is right there. This is what makes the editor's verify capture independent
+    // of the machine's crash history.
+    Arcane::ProjectOpenOptions opts;
+    opts.mountDiagnostics = false;
+    auto without = Arcane::Project::Open(dir, {}, opts);
+    REQUIRE(without.has_value());
+    CHECK_FALSE(without->Mounts().HasMount("diag"));
+    CHECK_FALSE(without->Registry().Resolve(env.guid).has_value());
+
+    // The opt-out is SCOPED to diag:// -- game:// must be unaffected, or the
+    // fix has broken asset resolution rather than narrowed it.
+    CHECK(without->Mounts().HasMount("game"));
 }

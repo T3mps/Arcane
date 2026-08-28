@@ -9,6 +9,7 @@
 #include <Arcane/Guid.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>   // AssetRegistry::ScanProgressFn (OpenProject's progress param) -- light header, not Project.hpp
+#include <Arcane/Project/ProjectOpenOptions.hpp>   // ProjectOpenOptions (OpenProject's opts param) -- also light, also not Project.hpp
 #include <Arcane/Sim/RunLoop.hpp>
 #include <Arcane/Sim/SystemSchedulers.hpp>
 
@@ -99,8 +100,14 @@ namespace Arcane
         // is the seam project_open's boot-stage body (ProjectBoot.cpp) uses to
         // surface "Scanning content... N / M" while a project's content tree
         // is being scanned.
+        //
+        // `opts` is likewise forwarded verbatim to Project::Open -- the seam a
+        // host uses to decline the diag:// mount for a deterministic verify
+        // capture (HostBoot::OpenOptionsFor, ProjectBoot.hpp). Defaulted, so no
+        // existing caller changes.
         bool OpenProject(const std::filesystem::path& pathOrFile,
-                         AssetRegistry::ScanProgressFn onProgress = {});
+                         AssetRegistry::ScanProgressFn onProgress = {},
+                         ProjectOpenOptions opts = {});
 
         // The open project, or nullptr when none is open (no-project fallback mode).
         const Project* CurrentProject() const noexcept;

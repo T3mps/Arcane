@@ -10,6 +10,7 @@
 #include <Arcane/Project/AssetRegistry.hpp>
 #include <Arcane/Project/MountTable.hpp>
 #include <Arcane/Project/ProjectManifest.hpp>
+#include <Arcane/Project/ProjectOpenOptions.hpp>
 
 #include <filesystem>
 #include <optional>
@@ -36,8 +37,15 @@ namespace Arcane
         // AddContent below: that folding is comparatively small, and the
         // primary Content/ scan is what a boot splash's "Scanning content..."
         // line is about.
+        //
+        // `opts` (defaulted) carries the per-open engine settings that are NOT
+        // properties of the project itself -- today just mountDiagnostics, the
+        // diag:// opt-out a deterministic verify capture needs; see
+        // ProjectOpenOptions.hpp. Defaulted so all 41 existing call sites keep
+        // their old behaviour untouched.
         static std::optional<Project> Open(const std::filesystem::path& pathOrFile,
-                                           AssetRegistry::ScanProgressFn onProgress = {});
+                                           AssetRegistry::ScanProgressFn onProgress = {},
+                                           ProjectOpenOptions opts = {});
 
         // Resolve `pathOrFile` (a project folder OR a direct .arcproj file) to
         // the single .arcproj it names -- the exact rule Open() itself uses

@@ -1381,6 +1381,10 @@ int RuntimeApp::Run()
     ctx.projectPath = m_config.projectPath.c_str();
     ctx.pluginPath  = m_config.pluginPath.c_str();
     ctx.moduleName  = "ArcaneRuntime.exe";
+    // Per-open engine settings, from THIS host's parsed command line. One
+    // shared rule (HostBoot::OpenOptionsFor) so the runtime and the editor
+    // cannot drift on when a verify run declines the diag:// mount.
+    ctx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
 
     // Spec sec 6 default: the runtime host shows no boot progress until an
     // opened project's own manifest opts in (project_open's ProjectBoot.cpp
