@@ -715,3 +715,56 @@ TEST_CASE("host: the editor accepts the same verification flags the runtime does
     CHECK(outcome.config->compareReference == "editor-ui");
     CHECK(outcome.config->reportPath == "r.json");
 }
+
+TEST_CASE("host config: --settle-timeout parses and defaults to 5000", "[hostconfig]")
+{
+    const auto def = Run({ "--headless", "--frames", "60", "--settle", "30",
+                           "--screenshot", "s.png" });
+    REQUIRE(def.config.has_value());
+    // 5000ms is INHERITED from Playwright's expect timeout, not invented here.
+    // The 50ms poll interval beside it (Arcane::kSettleIntervalMs) is OURS --
+    // the two do NOT share a provenance, and must never be cited as if they do.
+    CHECK(def.config->settleTimeoutMs == 5000u);
+
+    const auto set = Run({ "--headless", "--frames", "60", "--settle", "30",
+                           "--settle-timeout", "250", "--screenshot", "s.png" });
+    REQUIRE(set.config.has_value());
+    CHECK(set.config->settleTimeoutMs == 250u);
+}
+
+TEST_CASE("host config: --settle-timeout requires --settle", "[hostconfig]")
+{
+    // A timeout on a loop that never runs is a caller error, and this file
+    // refuses those loudly rather than ignoring them.
+    //
+    // This case IS discriminating: --headless is present, so the only refusal
+    // that can reject this command line is the new --settle-timeout-requires-
+    // --settle one. Contrast the sibling case below.
+    const auto o = Run({ "--headless", "--frames", "60", "--settle-timeout", "250",
+                         "--screenshot", "s.png" });
+    REQUIRE_FALSE(o.config.has_value());
+    CHECK(o.exitCode == 2);
+}
+
+TEST_CASE("host config: --settle-timeout requires --headless", "[hostconfig]")
+{
+    // Joins --fixed-dt/--probe/--report/--settle/--compare in the
+    // wantsOffscreenOnly set: a settle timeout in a windowed run is
+    // meaningless for the same reason --settle already is.
+    //
+    // HONEST LIMIT -- this case CANNOT discriminate WHICH refusal fired. The
+    // command line carries --settle 30, and --settle ALREADY trips
+    // wantsOffscreenOnly without --headless on its own; both refusals return
+    // exit 2, and Run() does not capture stderr, so no assertion available
+    // here can tell the pre-existing --settle rejection apart from the
+    // --settle-timeout one this task added. It is kept because the CONTRACT
+    // it pins is real (this command line must be refused), but it must NOT be
+    // presented as proof that the wantsOffscreenOnly edit works. Dropping
+    // --settle would not fix that either: the run would then be refused by
+    // the "--settle-timeout requires --settle" rule instead. Discriminating
+    // between the two needs stderr capture, which this helper does not do.
+    const auto o = Run({ "--frames", "60", "--settle", "30", "--settle-timeout", "250",
+                         "--screenshot", "s.png" });
+    REQUIRE_FALSE(o.config.has_value());
+    CHECK(o.exitCode == 2);
+}

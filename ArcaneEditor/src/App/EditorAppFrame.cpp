@@ -2841,23 +2841,32 @@ namespace Arcane::Editor
         // its conjuncts, so in that state `pastBase` can NEVER become true no
         // matter how many frames run -- `if (!pastBase) return true;` below
         // would then fire every single iteration forever, m_settleAttemptsUsed
-        // would never advance (it lives past that early return), and neither
-        // EndFrame's `m_settleConverged` nor its `m_settleAttemptsUsed >=
-        // m_config.settleAttempts` check could ever become true either. That
+        // would never advance (it lives past that early return), and none of
+        // EndFrame's stop conditions -- m_settleConverged, or m_settleBail
+        // leaving Keep -- could ever become true either, because BOTH are
+        // written by the settle branch that early return skips. That
         // is an unstoppable run -- the exact hazard --headless's own
         // --frames-required refusal exists to prevent -- if some caller ever
         // builds a HostConfig bypassing Parse (a test, a future embedder).
-        // Fail CLOSED rather than hang: force the budget to its own limit so
-        // EndFrame's check trips on the very next call, the same "stop now"
-        // effect RuntimeFrame::CaptureTail's own `return true` (which directly
+        // Fail CLOSED rather than hang: raise m_settleAborted, which EndFrame
+        // reads as an unconditional stop -- the same "stop now" effect
+        // RuntimeFrame::CaptureTail's own `return true` (which directly
         // controls its while condition) gets for free there.
+        //
+        // THIS USED TO FORGE THE COUNTER (m_settleAttemptsUsed =
+        // m_config.settleAttempts) so EndFrame's attempts-only check would
+        // trip. That trick DIED with the bail conjunction: once the loop also
+        // requires the TIME bound to be spent, saturating the attempt count
+        // stops nothing at all, and the unstoppable run this branch exists to
+        // prevent would come straight back. A dedicated flag also leaves
+        // m_settleAttemptsUsed telling the truth about attempts actually taken.
         if (m_config.settleAttempts != 0 && !CaptureWanted(m_config))
         {
             ARC_ERROR("--settle has nothing to compare against (--screenshot and --report are "
                       "both empty) -- this should have been refused at parse time; stopping "
                       "rather than spinning forever");
-            m_settleConverged    = false;
-            m_settleAttemptsUsed = m_config.settleAttempts;
+            m_settleConverged = false;
+            m_settleAborted   = true;
             return true;
         }
 
@@ -2932,6 +2941,16 @@ namespace Arcane::Editor
         // frame advancement could spin forever on exactly that path, where
         // the runtime's cannot).
         ++m_settleAttemptsUsed;
+
+        // Stamp the settle phase's own start on its FIRST attempt, and measure
+        // from there. NOT from process start: that would charge boot, project
+        // open and the whole --frames budget against the convergence budget,
+        // making the timeout depend on how long the scene took to load.
+        if (m_settleAttemptsUsed == 1)
+            m_settleStartedAt = std::chrono::steady_clock::now();
+        m_settleElapsedMs = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - m_settleStartedAt).count());
 
         if (!read)
         {
@@ -3031,7 +3050,19 @@ namespace Arcane::Editor
             m_previousCaptureValid  = true;
         }
 
-        if (m_settleAttemptsUsed >= m_config.settleAttempts)
+        // THE BAIL IS A CONJUNCTION (see Arcane/Host/SettleBound.hpp): both the
+        // attempt budget AND the timeout must be spent. Line-for-line the same
+        // decision RuntimeFrame::CaptureTail makes -- the two loops stay
+        // equivalent, which is why the predicate lives in a shared header
+        // rather than being spelled out twice.
+        //
+        // UNLIKE the runtime, this function ALWAYS returns true; the loop's
+        // actual stop decision lives in EndFrame, which reads m_settleBail
+        // (and m_settleAborted) rather than re-deriving a bound of its own.
+        m_settleBail = Arcane::SettleBailDecision(m_settleAttemptsUsed, m_config.settleAttempts,
+                                                  m_settleElapsedMs, m_config.settleTimeoutMs,
+                                                  Arcane::kSettleIntervalMs);
+        if (m_settleBail != Arcane::SettleBail::Keep)
         {
             // NON-CONVERGENCE. FAIL EXPLICITLY: m_settleConverged stays
             // false (EndFrame reads it to stop the loop; ShutdownGraphPath
@@ -3041,8 +3072,24 @@ namespace Arcane::Editor
             // report's SetCapture is never called, so an agent reading
             // either artifact gets an honest ABSENCE rather than a frame
             // this run never actually agreed on.
-            ARC_ERROR("--settle: NOT CONVERGED after {} attempt(s) -- two consecutive captures "
-                      "never compared byte-equal with the compiler idle", m_settleAttemptsUsed);
+            //
+            // The GOVERNING bound is named, not merely the one that tripped, so
+            // the caller knows which knob would actually change the outcome.
+            ARC_ERROR("--settle: NOT CONVERGED after {} attempt(s) / {} ms -- two consecutive "
+                      "captures never compared byte-equal with the compiler idle ({})",
+                      m_settleAttemptsUsed, m_settleElapsedMs,
+                      m_settleBail == Arcane::SettleBail::AttemptsBound
+                          ? "attempt budget governed -- raise --settle"
+                          : "timeout governed -- raise --settle-timeout");
+        }
+        else
+        {
+            // PACING. Without this the loop spins as fast as the chrome can
+            // present, so the time bound could never be reached by anything but
+            // a slow frame -- the interval is what makes the timeout a real
+            // budget rather than a formality. 50ms is OURS, not inherited; see
+            // kSettleIntervalMs.
+            std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::kSettleIntervalMs));
         }
 
         return true;
@@ -3123,7 +3170,15 @@ namespace Arcane::Editor
         // advancement could spin forever on exactly that path).
         if (m_config.settleAttempts != 0)
         {
-            if (m_settleConverged || m_settleAttemptsUsed >= m_config.settleAttempts)
+            // The bail is a CONJUNCTION now, and PresentChromeFrame has already
+            // evaluated it into m_settleBail -- re-deriving an attempts-only
+            // bound HERE would silently reinstate the very defect the shared
+            // predicate exists to close, because this is where the editor's
+            // loop actually stops (PresentChromeFrame always returns true).
+            // m_settleAborted is the defensive fail-closed path's own stop, and
+            // must be honoured unconditionally: it fires before any attempt is
+            // ever taken, so neither bound of the conjunction can be spent.
+            if (m_settleConverged || m_settleAborted || m_settleBail != Arcane::SettleBail::Keep)
                 ls.running = false;
         }
         else if (m_config.maxFrames != 0 && m_frameCount >= m_config.maxFrames)

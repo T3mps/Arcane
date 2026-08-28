@@ -134,6 +134,17 @@ namespace Arcane
         // RuntimeApp.cpp's ShutdownGraphPath.
         std::uint64_t settleAttempts = 0;
 
+        // --settle-timeout MS. The TIME half of settle's bail conjunction; the
+        // loop gives up only when BOTH this and settleAttempts are spent (see
+        // Arcane/Host/SettleBound.hpp). 0 means "no time bound", degrading to
+        // the old attempts-only behaviour rather than becoming unsatisfiable.
+        //
+        // 5000 is INHERITED: Playwright's toHaveScreenshot timeout "Defaults to
+        // timeout in TestConfig.expect", and that default is 5 seconds. The
+        // 50ms poll interval beside it (kSettleIntervalMs) is OURS -- do not
+        // present the two as having the same provenance.
+        std::uint64_t settleTimeoutMs = 5000;
+
         // --compare <name>. A bare reference NAME, resolved through
         // Arcane::ResolveReference against the project root. Empty = no
         // comparison. Refused without --settle, refused on an explicit empty

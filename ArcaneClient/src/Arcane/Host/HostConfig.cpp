@@ -29,8 +29,12 @@ namespace Arcane
                                       "verify-layout.ini seed)");
         cli.Option("settle", "0",        "repeat the capture (render clock frozen) until two consecutive "
                                          "frames compare byte-equal AND the shader compiler is idle, "
-                                         "up to N attempts (0 = off, 1 is refused -- needs >= 2; "
+                                         "for AT LEAST N attempts (0 = off, 1 is refused -- needs >= 2; "
                                          "--headless only; needs --screenshot or --report)").Type(CliType::Uint);
+        cli.Option("settle-timeout", "5000", "milliseconds the settle loop must ALSO spend before "
+                                         "giving up; it bails only when the attempt budget AND "
+                                         "this timeout are both spent (0 = no time bound; "
+                                         "--settle only)").Type(CliType::Uint);
         // --compare / --bless (Task 8). Registered beside --settle: the
         // comparison is a THIRD conjunct in that same convergence predicate,
         // not a separate mode -- see HostConfig.hpp's compareReference comment.
@@ -121,6 +125,7 @@ namespace Arcane
             }
         }
         cfg.settleAttempts = r.GetAs<std::uint64_t>("settle");
+        cfg.settleTimeoutMs = r.GetAs<std::uint64_t>("settle-timeout");
         // --compare / --bless (Task 8). maxDiffPixels/maxDiffPixelRatio stay
         // nullopt unless EXPLICITLY supplied -- r.GetAs<>() on an unsupplied
         // Option resolves its registered default ("", which GetAs would
@@ -164,11 +169,11 @@ namespace Arcane
         // question: did the command line contain this option.
         const bool wantsOffscreenOnly = !cfg.probes.empty() || !cfg.reportPath.empty()
                                       || r.Supplied("fixed-dt") || r.Supplied("settle")
-                                      || r.Supplied("compare");
+                                      || r.Supplied("settle-timeout") || r.Supplied("compare");
         if (wantsOffscreenOnly && !cfg.headless)
         {
-            std::fprintf(stderr, "error: --fixed-dt/--probe/--report/--settle/--compare require "
-                                 "--headless\n");
+            std::fprintf(stderr, "error: --fixed-dt/--probe/--report/--settle/--settle-timeout/"
+                                 "--compare require --headless\n");
             return { std::nullopt, 2 };
         }
         if (!cfg.probes.empty() && cfg.maxFrames == 0)
@@ -208,6 +213,15 @@ namespace Arcane
             std::fprintf(stderr, "error: --settle needs at least 2 attempts to compare (one "
                                  "capture has nothing to compare against, so it would ALWAYS "
                                  "fail to converge)\n");
+            return { std::nullopt, 2 };
+        }
+        // A timeout bounds a loop that --settle turns on. Supplying one without
+        // the other is a caller error, refused rather than ignored -- the same
+        // treatment --max-diff-pixels gets without --compare.
+        if (r.Supplied("settle-timeout") && cfg.settleAttempts == 0)
+        {
+            std::fprintf(stderr, "error: --settle-timeout requires --settle (it bounds the settle "
+                                 "loop, which --settle is what turns on)\n");
             return { std::nullopt, 2 };
         }
         // Settle compares CAPTURED frames (RuntimeFrame.cpp's CaptureTail) -- with

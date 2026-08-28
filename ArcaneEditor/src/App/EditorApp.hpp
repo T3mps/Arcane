@@ -22,6 +22,7 @@
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Host/OffscreenVehicle.hpp>   // the --headless chrome vehicle (m_offscreenChrome)
+#include <Arcane/Host/SettleBound.hpp>        // --settle's bail conjunction: SettleBail (mirrors RuntimeApp.hpp)
 #include <Arcane/Host/ReferenceImages.hpp>    // --compare/--bless (Task 9): ReferenceResolution
 #include <Arcane/Host/VerifyReport.hpp>       // --report (Task 9): VerifyReport
 #include <Arcane/Assets/ImageCompare.hpp>     // --compare (Task 9): PixelData/ImageCompareResult
@@ -622,6 +623,22 @@ namespace Arcane::Editor
         // same overflow reason RuntimeApp.hpp's twin field documents.
         std::uint64_t                         m_settleAttemptsUsed   = 0;
         bool                                  m_settleConverged      = false;
+        // The TIME half of the bail conjunction, mirroring RuntimeApp's own
+        // trio field-for-field (Arcane/Host/SettleBound.hpp). Elapsed is
+        // measured from the FIRST settle attempt, never from process start.
+        std::chrono::steady_clock::time_point m_settleStartedAt{};
+        std::uint64_t                         m_settleElapsedMs      = 0;
+        Arcane::SettleBail                    m_settleBail           = Arcane::SettleBail::Keep;
+        // THE DEFENSIVE STOP, as its own flag rather than as a forged attempt
+        // count. PresentChromeFrame's fail-closed branch used to stop the loop
+        // by assigning m_settleAttemptsUsed = m_config.settleAttempts, which
+        // worked only while the bail was attempts-ONLY: under the conjunction
+        // that assignment stops nothing, because the TIME bound is still
+        // unspent -- the unstoppable run it exists to prevent would come
+        // straight back. A separate flag also keeps m_settleAttemptsUsed
+        // HONEST (it stays the REAL count), which matters to anything
+        // reporting the attempts actually taken.
+        bool                                  m_settleAborted        = false;
 
         // --compare / --bless. Resolved ONCE, before the settle loop starts
         // -- EditorApp::MainLoop's pre-loop block, mirroring RuntimeApp::

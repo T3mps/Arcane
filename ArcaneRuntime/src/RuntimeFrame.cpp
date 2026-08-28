@@ -729,6 +729,16 @@ bool CaptureTail(FrameIo& io)
         const bool read = io.graph->ReadCapture(w, h, actual);
         ++io.settleAttemptsUsed;
 
+        // Stamp the settle phase's own start on its FIRST attempt, and measure
+        // from there. NOT from process start: that would charge boot, project
+        // open and the whole --frames budget against the convergence budget,
+        // making the timeout depend on how long the scene took to load.
+        if (io.settleAttemptsUsed == 1)
+            io.settleStartedAt = std::chrono::steady_clock::now();
+        io.settleElapsedMs = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - io.settleStartedAt).count());
+
         if (!read)
         {
             // Same "a miss is not a bad frame" contract ReadCapture documents
@@ -850,7 +860,15 @@ bool CaptureTail(FrameIo& io)
             io.previousCaptureValid  = true;
         }
 
-        if (io.settleAttemptsUsed >= io.config.settleAttempts)
+        // THE BAIL IS A CONJUNCTION (see Arcane/Host/SettleBound.hpp): both the
+        // attempt budget AND the timeout must be spent. Counting attempts alone
+        // was the defect -- the condition being waited on (compiler quiescence)
+        // is denominated in MILLISECONDS, and with no pacing a 30-attempt budget
+        // was spent in ~100ms, long before background compilation could drain.
+        io.settleBail = Arcane::SettleBailDecision(io.settleAttemptsUsed, io.config.settleAttempts,
+                                                   io.settleElapsedMs, io.config.settleTimeoutMs,
+                                                   Arcane::kSettleIntervalMs);
+        if (io.settleBail != Arcane::SettleBail::Keep)
         {
             // NON-CONVERGENCE. FAIL EXPLICITLY rather than hand back
             // whatever the last attempt happened to render: io.settleConverged
@@ -860,10 +878,22 @@ bool CaptureTail(FrameIo& io)
             // --screenshot is written, and the report's SetCapture is never
             // called, so an agent reading either artifact gets an honest
             // ABSENCE rather than a frame this run never actually agreed on.
-            ARC_ERROR("--settle: NOT CONVERGED after {} attempt(s) -- two consecutive captures "
-                      "never compared byte-equal with the compiler idle", io.settleAttemptsUsed);
+            //
+            // The GOVERNING bound is named, not merely the one that tripped, so
+            // the caller knows which knob would actually change the outcome.
+            ARC_ERROR("--settle: NOT CONVERGED after {} attempt(s) / {} ms -- two consecutive "
+                      "captures never compared byte-equal with the compiler idle ({})",
+                      io.settleAttemptsUsed, io.settleElapsedMs,
+                      io.settleBail == Arcane::SettleBail::AttemptsBound
+                          ? "attempt budget governed -- raise --settle"
+                          : "timeout governed -- raise --settle-timeout");
             return true;   // stop the loop -- the run failed, but it must still stop
         }
+        // PACING. Without this the loop spins as fast as the GPU can render, so
+        // the time bound could never be reached by anything but a slow frame --
+        // the interval is what makes the timeout a real budget rather than a
+        // formality. 50ms is OURS, not inherited; see kSettleIntervalMs.
+        std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::kSettleIntervalMs));
         return false;   // keep going: one more attempt next frame
     }
 

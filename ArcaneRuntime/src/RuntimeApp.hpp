@@ -4,6 +4,7 @@
 // process exit code. Member declaration order m_gpu -> m_runtime -> m_plugin is
 // the TEARDOWN CONTRACT (destruct reverse: plugin Unload while the DLL is still
 // mapped -> runtime -> the render stack inside GpuContext -> window last). PRESENTATION-FREE + C++23-clean.
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -15,6 +16,7 @@
 #include <Arcane/Host/OffscreenVehicle.hpp>   // --headless's vehicle: device + NRI wrap + offscreen graph context, no window, no swapchain
 #include <Arcane/Host/FramePerf.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
+#include <Arcane/Host/SettleBound.hpp>   // --settle's bail conjunction: SettleBail
 #include <Arcane/Host/BootSequence.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>
@@ -213,6 +215,12 @@ private:
     // exists to prevent.
     std::uint64_t                         m_settleAttemptsUsed   = 0;
     bool                                  m_settleConverged      = false;
+    // The TIME half of the bail conjunction -- see FrameIo's own field
+    // comments in RuntimeFrame.hpp for why elapsed is measured from the FIRST
+    // settle attempt rather than from process start.
+    std::chrono::steady_clock::time_point m_settleStartedAt{};
+    std::uint64_t                         m_settleElapsedMs      = 0;
+    Arcane::SettleBail                    m_settleBail           = Arcane::SettleBail::Keep;
 
     // --compare / --bless (Task 8). Resolved ONCE, before the settle loop
     // starts (Finding 3 of the Task 8 dispatch audit -- see MainLoop's own

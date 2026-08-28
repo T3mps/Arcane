@@ -36,6 +36,7 @@
 #include <Arcane/Host/GpuContext.hpp>
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
+#include <Arcane/Host/SettleBound.hpp>               // --settle's bail conjunction: SettleBail/SettleBailDecision/kSettleIntervalMs
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>       // dev-only --crash-gpu N (kPassName only; RenderGraph fires through NriDiagnostics::FireFault)
@@ -160,6 +161,16 @@ namespace Arcane::RuntimeFrame
         // hazard --headless's own --frames-required refusal exists to prevent.
         std::uint64_t&              settleAttemptsUsed;
         bool&                       settleConverged;
+        // THE TIME HALF of settle's bail conjunction (see Arcane/Host/
+        // SettleBound.hpp). settleStartedAt is stamped on the FIRST attempt and
+        // settleElapsedMs measured from there -- NOT from process start: that
+        // would charge boot, project open and the whole --frames budget against
+        // the convergence budget, making the timeout depend on how long the
+        // scene took to load. settleBail records WHICH bound governed, so the
+        // caller is told which knob to turn (and Task 3 can report it).
+        std::chrono::steady_clock::time_point& settleStartedAt;
+        std::uint64_t&              settleElapsedMs;
+        Arcane::SettleBail&         settleBail;
         // ShaderCompiler::IsIdle() (fix round 1, item 1): byte-equal consecutive
         // captures are a STABILITY predicate ("nothing rendered differently
         // between these two samples"), not the QUIESCENCE predicate this mode
