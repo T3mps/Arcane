@@ -338,6 +338,27 @@ TEST_CASE("hostconfig: a non-positive --fixed-dt is refused", "[hostconfig]")
     CHECK(out.exitCode == 2);
 }
 
+// --fixed-dt nan/inf is the SAME undefined-behaviour class as the
+// --max-diff-pixel-ratio bug fixed in 92792847: Cli's NumericOk only asks
+// whether from_chars can consume the token, and it accepts "nan" and "inf".
+// The value then flows into the frame loop's clock arithmetic, where a NaN dt
+// poisons every downstream accumulation silently -- the run exits 0 having
+// simulated nothing coherent, which is the worst failure an agent can read.
+TEST_CASE("host config: --fixed-dt refuses non-finite values", "[hostconfig]")
+{
+    for (const char* bad : { "nan", "inf", "-inf" })
+    {
+        const auto o = Run({ "--headless", "--frames", "60", "--fixed-dt", bad });
+        CAPTURE(bad);
+        REQUIRE_FALSE(o.config.has_value());
+        CHECK(o.exitCode == 2);
+    }
+    // The existing positive-value contract still holds.
+    const auto ok = Run({ "--headless", "--frames", "60", "--fixed-dt", "0.008" });
+    REQUIRE(ok.config.has_value());
+    CHECK(ok.config->fixedDtSeconds == Catch::Approx(0.008));
+}
+
 // THE UNSTOPPABLE-PROCESS REFUSAL. A windowed run has two exits the frame loop
 // honours: the window's close button, and the `quit` input action -- which
 // needs the window FOCUSED to deliver a key. An unmapped window has neither,

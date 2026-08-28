@@ -176,9 +176,14 @@ namespace Arcane
             std::fprintf(stderr, "error: --probe requires --frames N (the capture lands on the last frame)\n");
             return { std::nullopt, 2 };
         }
-        if (cfg.headless && cfg.fixedDtSeconds <= 0.0)
+        // `<= 0.0` alone does NOT reject NaN: every comparison against NaN is
+        // false, so `nan <= 0.0` is false and the value flowed straight through
+        // into the frame clock. Same UB class as --max-diff-pixel-ratio's range
+        // bug (fixed in 92792847), and refused the same way -- at the parse
+        // boundary, not clamped.
+        if (cfg.headless && (!std::isfinite(cfg.fixedDtSeconds) || cfg.fixedDtSeconds <= 0.0))
         {
-            std::fprintf(stderr, "error: --fixed-dt wants a positive number of seconds\n");
+            std::fprintf(stderr, "error: --fixed-dt wants a positive, finite number of seconds\n");
             return { std::nullopt, 2 };
         }
         // "Was --settle supplied" mirrors --fixed-dt's own r.Supplied() reasoning
