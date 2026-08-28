@@ -5,7 +5,7 @@ TEST_CASE("offscreen vehicle builds a device with no window (d3d12)", "[gpu][off
 {
     Arcane::HostConfig cfg;
     cfg.backend   = Arcane::GraphicsBackend::D3D12;
-    cfg.headless = true;
+    cfg.headless  = true;
 
     auto v = Arcane::OffscreenVehicle::Create(cfg, 256, 128);
     REQUIRE(v != nullptr);
@@ -18,7 +18,7 @@ TEST_CASE("offscreen vehicle builds a device with no window (vulkan)", "[gpu][of
 {
     Arcane::HostConfig cfg;
     cfg.backend   = Arcane::GraphicsBackend::Vulkan;
-    cfg.headless = true;
+    cfg.headless  = true;
 
     auto v = Arcane::OffscreenVehicle::Create(cfg, 256, 128);
     REQUIRE(v != nullptr);

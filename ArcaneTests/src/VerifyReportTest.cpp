@@ -1,5 +1,5 @@
 // VerifyReport: probe parsing, evaluation against a captured frame, and JSON
-// emission -- the pure-CPU half of the offscreen-verify path (no GPU, no
+// emission -- the pure-CPU half of the headless-verify path (no GPU, no
 // device, no window; [verify] never touches [gpu]). This is the boundary
 // between the engine tier and the separate Servitor package, which parses
 // the JSON this produces without linking the engine.

@@ -576,7 +576,7 @@ TEST_CASE("rendergraph: a handle minted before Reset() also stays stale when the
 // =====================================================================
 // Task 4 -- Compile(): derived barriers, transient lifetimes, pool slots.
 //
-// Every case below is device-less and device-free: Compile() is pure, so the
+// Every case below is device-less: Compile() is pure, so the
 // whole barrier-derivation surface is unit-testable without a GPU. The
 // usage->state rows come first (they are what every other case is written
 // against), then the barrier-edge rules, then lifetimes/pool slots, then

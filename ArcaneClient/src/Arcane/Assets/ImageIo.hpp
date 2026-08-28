@@ -1,6 +1,6 @@
 #pragma once
 
-// Pure CPU PNG I/O: device-free, device-less image codec layer. Split from
+// Pure CPU PNG I/O: device-free image codec layer. Split from
 // Assets.hpp so a device-free consumer (an image comparator, a thumbnail
 // writer) can decode and encode without pulling in the cached-asset
 // infrastructure.

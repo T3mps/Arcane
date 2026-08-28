@@ -165,7 +165,7 @@ bool PumpAndResize(FrameIo& io)
     // Left ungated for --headless, deliberately: IsMinimized reads
     // SDL_WINDOW_MINIMIZED, which a never-shown window does not carry (hidden
     // and minimized are different SDL window states), so this is false for the
-    // whole of an offscreen run and the skip below is unreachable there. It
+    // whole of a --headless run and the skip below is unreachable there. It
     // would be harmless even if it fired -- a skipped frame is routine -- so
     // there is nothing to gate.
     if (eventWindow.IsMinimized())

@@ -508,7 +508,7 @@ int main(int argc, char** argv)
     // ...UNLESS --headless, where the whole point is that this process maps
     // no window. The splash is a real WS_POPUP on its own thread, so
     // constructing it unconditionally would make "--headless" a lie for the
-    // ~seconds boot takes -- the one window an offscreen run would still
+    // ~seconds boot takes -- the one window a --headless run would still
     // flash on screen. std::optional is what it takes: BootSplashWindow's
     // only constructor takes an image path and there is no "disabled" state,
     // and every consumer downstream is already null-tolerant by contract

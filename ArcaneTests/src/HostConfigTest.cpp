@@ -203,10 +203,10 @@ TEST_CASE("host config: --pick-probe with --headless is refused at parse time", 
     REQUIRE(probeOnly.config.has_value());
     CHECK(probeOnly.config->pickProbe);
 
-    const auto offscreenOnly = Run({"--headless", "--frames", "60"});
-    REQUIRE(offscreenOnly.config.has_value());
-    CHECK(offscreenOnly.config->headless);
-    CHECK_FALSE(offscreenOnly.config->pickProbe);
+    const auto headlessOnly = Run({"--headless", "--frames", "60"});
+    REQUIRE(headlessOnly.config.has_value());
+    CHECK(headlessOnly.config->headless);
+    CHECK_FALSE(headlessOnly.config->pickProbe);
 }
 #endif
 // UNGUARDED, deliberately: every case above this point that touches
@@ -228,7 +228,7 @@ TEST_CASE("host config: --nri-graph is accepted and ignored in every configurati
 }
 
 // --headless / --fixed-dt / --probe / --report. UNGUARDED (not behind
-// ARCANE_DIST): offscreen agent verification must work in Release and Dist,
+// ARCANE_DIST): headless agent verification must work in Release and Dist,
 // not just dev builds.
 namespace {
     Arcane::HostConfig::ParseOutcome ParseArgs(std::vector<const char*> args)
@@ -344,7 +344,7 @@ TEST_CASE("hostconfig: a non-positive --fixed-dt is refused", "[hostconfig]")
 // so a bare --headless with maxFrames == 0 runs until something outside the
 // process reaps it. In the agent workflow this mode exists for, that is a
 // process the spawner cannot stop by any means it owns.
-// --settle N (Task 10). UNGUARDED like the block above: offscreen agent
+// --settle N (Task 10). UNGUARDED like the block above: headless agent
 // verification must work in Release and Dist, not just dev builds.
 TEST_CASE("hostconfig: --settle defaults to 0 (off)", "[hostconfig]")
 {

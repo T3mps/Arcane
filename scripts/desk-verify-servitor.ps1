@@ -347,7 +347,7 @@ if ($Phase -eq 'All' -or $Phase -eq 'B') {
 # =====================================================================
 if ($Phase -eq 'All' -or $Phase -eq 'C') {
     Write-Head "PHASE C -- layout seed and a clean tree after an editor session"
-    Write-Host "The offscreen editor capture should show the SEEDED layout, visibly"
+    Write-Host "The headless editor capture should show the SEEDED layout, visibly"
     Write-Host "different from BuildDefaultLayout."
     $editorRef = Join-Path $repoRoot 'ReferenceProject\Verify\References\editor-ui.png'
     Write-Host ""

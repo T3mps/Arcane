@@ -1,5 +1,5 @@
 // PluginHost: versioned copy-and-load, ABI check, last-good rollback, hot swap.
-// Device-less -- no window/device. Uses the HotReloadPlugin V1/V2/Bad DLLs copied
+// No window, no device. Uses the HotReloadPlugin V1/V2/Bad DLLs copied
 // next to ArcaneTests.exe (relative paths; run the exe FROM its output dir).
 
 #include <catch2/catch_test_macros.hpp>

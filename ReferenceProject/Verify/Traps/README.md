@@ -148,7 +148,7 @@ failure and is entirely an artifact of not checking `postBound` first.
 desk evidence:
 `.superpowers/sdd/2026-08-23-agent-verification-offscreen-hosts/evidence/desk-2026-08-24/desk_off.png`
 (dx12, -> `one-pixel-text-shift-expected.png`) and `desk_off_vk.png` (Vulkan, ->
-`one-pixel-text-shift-actual.png`). Both are `ArcaneRuntime.exe` offscreen captures (its
+`one-pixel-text-shift-actual.png`). Both are `ArcaneRuntime.exe` headless captures (its
 own ImGui debug HUD -- `ImGui::Begin("ArcaneRuntime")` in `RuntimeFrame.cpp`'s `BuildHud`,
 NOT `ArcaneEditor.exe` -- an earlier draft of this file misattributed the host) at the SAME
 fully-converged census (`meshBound`/`spriteBound`/`postBound` all true on both sides, per
