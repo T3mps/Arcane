@@ -1457,9 +1457,10 @@ int RuntimeApp::Run()
     // the run died), 2 = RenderErrorCount GREW (a validation error fired,
     // which explains a bad capture rather than the reverse), 3 = --settle N
     // never converged (Task 10 -- two consecutive captures never compared
-    // byte-equal within the attempt budget). The lower number wins -- see
-    // ShutdownGraphPath. They can fire on ANY run, the render path being
-    // unconditional, so 0 here means no graph failure occurred.
+    // byte-equal before the bail CONJUNCTION fired: BOTH the attempt budget
+    // and --settle-timeout spent, never either alone). The lower number
+    // wins -- see ShutdownGraphPath. They can fire on ANY run, the render
+    // path being unconditional, so 0 here means no graph failure occurred.
     if (m_graphExit != 0) return m_graphExit;
     return 0;
 }

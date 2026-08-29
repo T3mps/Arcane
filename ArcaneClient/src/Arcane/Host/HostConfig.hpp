@@ -108,9 +108,9 @@ namespace Arcane
         // ordinary --frames budget above is spent, FREEZE the render/sim
         // clock (RuntimeFrame.cpp's AdvanceSim) and keep re-rendering that
         // same instant -- so nothing but async resource state can still
-        // change frame to frame -- capturing again each time, for up to N
-        // attempts, until two CONSECUTIVE captures compare BYTE-EQUAL AND
-        // the shader compiler reports IsIdle() (fix round 1, item 1 -- byte
+        // change frame to frame -- capturing again each time, paced by
+        // kSettleIntervalMs, until two CONSECUTIVE captures compare BYTE-EQUAL
+        // AND the shader compiler reports IsIdle() (fix round 1, item 1 -- byte
         // equality alone is a STABILITY predicate, not the QUIESCENCE one
         // this mode actually needs: Drain() is not clock-gated, only Submit's
         // debounce dispatch is, so two frozen frames can agree while a
@@ -121,6 +121,13 @@ namespace Arcane
         // un-frozen frames would never converge on anything -- every frame
         // would legitimately differ regardless of whether the compile race
         // has resolved.
+        //
+        // N IS THE ATTEMPT HALF OF THE BAIL CONJUNCTION, never a standalone
+        // cap. The loop gives up only when BOTH N and settleTimeoutMs are
+        // spent -- settleTimeoutMs's own comment, further down in this same
+        // struct, states the identical rule, and Arcane/Host/SettleBound.hpp
+        // is the shared predicate both hosts call. A bare N stops nothing on
+        // its own.
         //
         // Byte equality, never a tolerance: same mode, same format, same
         // capture path every attempt, so an honest bitwise compare is

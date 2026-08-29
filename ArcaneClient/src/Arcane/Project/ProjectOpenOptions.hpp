@@ -15,6 +15,25 @@
 //
 // Intended to absorb future per-open engine settings -- this is a struct on
 // purpose, not a bool wearing a struct's clothes.
+//
+// BEFORE ADDING THE FIRST NON-TRIVIALLY-COPYABLE FIELD, REVISIT THE BY-VALUE
+// SIGNATURES. This struct crosses the ARCANE_API DLL boundary BY VALUE --
+// Project::Open and Runtime::OpenProject both take `ProjectOpenOptions opts`
+// (Project.hpp, Runtime.hpp), and both are exported. That is free today and
+// deliberately so: one bool, trivially copyable, no allocation, so the copy is
+// a register move and the layout is stable across the boundary. It stops being
+// free the moment a field owns memory (a std::string, a std::vector, an
+// std::function). Passing such a type by value across a DLL edge means the
+// caller's allocator constructs it and the callee's destroys it -- the
+// mismatched-CRT hazard this engine's host/plugin split already has to
+// respect. And any field addition changes the struct's SIZE, which is an ABI
+// break for every already-compiled plugin that calls either function.
+//
+// So the next field is the decision point, not a later cleanup: either keep
+// the struct trivially copyable, or change both signatures to
+// `const ProjectOpenOptions&` and bump the plugin ABI in the same commit. The
+// note lives HERE, where that field will actually be added, rather than in a
+// plan nobody re-reads.
 
 namespace Arcane
 {

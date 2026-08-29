@@ -72,11 +72,32 @@ namespace Arcane
     // rather than the one that happened to be checked first.
     //
     // With a fixed interval the governing bound is a property of the arguments,
-    // not of the run: the attempt budget is reached at ~attempts * intervalMs,
-    // so whichever of that and timeoutMs is larger is what the loop waited for.
-    // A caller told "attempts-bound" should raise --settle; one told
-    // "timeout-bound" should raise --settle-timeout. That is the whole point of
-    // reporting it.
+    // not of the run: the attempt budget buys roughly attempts * intervalMs of
+    // wall time, so whichever of that and timeoutMs is larger is what the loop
+    // waited for. A caller told "attempts-bound" should raise --settle; one
+    // told "timeout-bound" should raise --settle-timeout. That is the whole
+    // point of reporting it.
+    //
+    // WHERE "roughly" COMES FROM, named rather than left to a tilde -- this
+    // arc exists because an instrument overstated what it measured. Per attempt
+    // both hosts run, in this order: bump the counter, SAMPLE elapsedMs,
+    // compare, call THIS, and only then sleep(intervalMs) (RuntimeFrame.cpp's
+    // settle branch and EditorAppFrame.cpp's line-for-line twin). Two
+    // consequences, in OPPOSITE directions:
+    //
+    //  * The sample sits BEFORE that attempt's pacing sleep, so at attempt N
+    //    only N-1 sleeps have happened. attempts * intervalMs therefore
+    //    OVER-credits the budget by exactly one interval.
+    //  * Real elapsed also carries N frames of render time, which is not
+    //    modelled here at all and varies per machine. That UNDER-credits it.
+    //
+    // The two partly cancel and both are small against the 5000ms default, so
+    // the arithmetic below is deliberately LEFT AS IS rather than "corrected"
+    // to (attempts - 1): making one term exact while the other stays absent
+    // would claim a precision this model does not have. What it feeds is only
+    // a LABEL -- WHICH bound to name once both are spent. WHETHER the loop
+    // bails is decided on the first line of the body below, from the MEASURED
+    // attemptsUsed and elapsedMs, and is unaffected by any of this.
     [[nodiscard]] constexpr SettleBail SettleBailDecision(std::uint64_t attemptsUsed,
                                                           std::uint64_t attempts,
                                                           std::uint64_t elapsedMs,

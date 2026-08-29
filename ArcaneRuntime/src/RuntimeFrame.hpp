@@ -131,7 +131,8 @@ namespace Arcane::RuntimeFrame
         // ---- --settle N (Task 10) --------------------------------------------
         // The PREVIOUS settle attempt's capture -- kept only long enough to
         // compare against the NEXT one (CaptureTail's byte-equal check) -- plus
-        // the attempt budget's running state. Distinct storage from
+        // the running state of BOTH halves of the bail conjunction (the attempt
+        // counter here, the clock below). Distinct storage from
         // captureRead/captureWidth/captureHeight/captureRgba just above: those
         // four hold the FINAL, agreed-on capture (only ever written once
         // convergence -- or the ordinary Task 8 single-shot capture -- has
@@ -335,11 +336,14 @@ namespace Arcane::RuntimeFrame
     // settle attempt per call, until two consecutive captures compare
     // byte-equal AND io.compiler.IsIdle() (fix round 1, item 1 -- byte-equal
     // alone is a stability predicate, not the quiescence one this mode needs;
-    // see FrameIo::compiler's comment) (converged: true is returned, the
-    // captured pixels are published the same way Task 8's tail does) or the
-    // attempt budget is spent (non-convergence: true is returned too -- the
-    // loop MUST still stop -- but io.captureRead is deliberately left false
-    // and no --screenshot is written, so nothing downstream can mistake an
-    // unconverged run for a converged one).
+    // see FrameIo::compiler's comment) -- converged: true is returned and the
+    // captured pixels are published the same way Task 8's tail does -- or the
+    // bail CONJUNCTION fires: BOTH the attempt budget AND --settle-timeout
+    // spent, never either alone (Arcane/Host/SettleBound.hpp's
+    // SettleBailDecision, which this calls, is what decides, and it also names
+    // WHICH bound governed). On that non-convergence true is returned too --
+    // the loop MUST still stop -- but io.captureRead is deliberately left
+    // false and no --screenshot is written, so nothing downstream can mistake
+    // an unconverged run for a converged one.
     bool CaptureTail(FrameIo& io);
 }

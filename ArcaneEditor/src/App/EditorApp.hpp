@@ -608,10 +608,11 @@ namespace Arcane::Editor
         std::vector<unsigned char>            m_captureRgba;
 
         // --settle N. The WORKING comparison baseline (churns every
-        // attempt, compared against the NEXT one) plus the attempt budget's
-        // running state -- see PresentChromeFrame, a direct port of
-        // RuntimeFrame::CaptureTail's settle branch. m_settleConverged is
-        // what ShutdownGraphPath reads to fold exitReason
+        // attempt, compared against the NEXT one) plus the running state of
+        // BOTH halves of the bail conjunction (the attempt counter here, the
+        // clock in the trio just below) -- see PresentChromeFrame, a direct
+        // port of RuntimeFrame::CaptureTail's settle branch. m_settleConverged
+        // is what ShutdownGraphPath reads to fold exitReason
         // "settle-not-converged" into m_graphExit (3, matching RuntimeApp's
         // own code for the identical fact). Both stay at their defaults on
         // a run that never asked for --settle, which must never read as a

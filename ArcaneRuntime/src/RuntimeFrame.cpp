@@ -605,7 +605,8 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // EVERY frame from here on (io.frameCount only grows), which is exactly
     // what is wanted: each such frame is one more settle attempt, and
     // CaptureTail -- not this predicate -- is what decides when the loop
-    // actually ends (converged, or the attempt budget spent). No settle-
+    // actually ends (converged, or the bail conjunction fired: BOTH the
+    // attempt budget and --settle-timeout spent). No settle-
     // specific arming logic is needed here as a result: MainLoop's while
     // condition already stops calling this function once CaptureTail says
     // so, so "arm every frame past the base budget" and "arm the one last
@@ -838,7 +839,8 @@ bool CaptureTail(FrameIo& io)
                 // reference goal is the ONLY signal left that can separate
                 // "still loading" from "genuinely wrong" -- so spending the
                 // remaining attempts is what keeps that platform honest. The
-                // attempt budget below still bounds how long this can spin.
+                // bail conjunction below still bounds how long this can spin
+                // (attempt budget AND --settle-timeout, never either alone).
                 ARC_WARN("--compare attempt {}/{}: converged pixels do not match reference "
                          "'{}' -- {}", io.settleAttemptsUsed, io.config.settleAttempts,
                          io.config.compareReference, io.compareResult.errorMessage);

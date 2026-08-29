@@ -2780,8 +2780,9 @@ namespace Arcane::Editor
         // on, because m_frameCount only grows (see EndFrame's own comment) --
         // which is exactly what is wanted: each such frame is one more settle
         // attempt, and the settle branch below -- not this predicate -- is
-        // what decides when the loop actually ends (converged, or the
-        // attempt budget spent). This is the SAME identity
+        // what decides when the loop actually ends (converged, or the bail
+        // conjunction fired: BOTH the attempt budget and --settle-timeout
+        // spent). This is the SAME identity
         // RuntimeFrame::RenderGraph's willBeLastFrame states for the
         // runtime's own capture arm: "arm every frame past the base budget"
         // and "arm the one last frame" are one expression, not two.
