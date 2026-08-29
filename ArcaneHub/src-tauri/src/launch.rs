@@ -82,10 +82,10 @@ const BOOT_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(2);
 /// Hub sees only the code, and any exit inside BOOT_WATCHDOG looks pre-boot.
 ///
 /// ONLY CODE 3 IS DECIDABLE FROM THE ARGS, which is why this predicate covers
-/// it alone. A post-boot 3 requires golden mode, and golden flags are DEV/DESK
-/// vocabulary this Hub never passes on its own -- the only route is a user
-/// deliberately saving them into a project's extra launch args. So their
-/// presence is real evidence.
+/// it alone. A post-boot 3 requires a golden COMPARE or a --settle run, and
+/// both are DEV/DESK vocabulary this Hub never passes on its own -- the only
+/// route is a user deliberately saving them into a project's extra launch
+/// args. So their presence is real evidence.
 ///
 /// CODE 2 HAS NO SUCH PREDICATE AND MUST NOT BE GIVEN ONE. This function's
 /// ancestor also guarded code 2, keying on `--frames`/`--golden-`/`--nri-graph`
@@ -101,12 +101,39 @@ const BOOT_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(2);
 /// it cannot produce a post-boot 2 or 3, so counting it only suppressed a
 /// correct pre-boot diagnosis on short scripted runs.
 ///
-/// `--compare` is the only flag that can produce a post-boot exit 3: it is
-/// what asks for a golden comparison at all. `--headless`, `--settle` and
-/// `--report` are all reachable without one, and `--frames` on its own cannot
-/// produce a post-boot 2 or 3, which is why none of them is evidence here.
+/// TWO flags can produce a post-boot exit 3, and this keys on BOTH:
+///
+///  * `--compare` -- it is what asks for a golden comparison at all.
+///  * `--settle`  -- both hosts fold settle NON-CONVERGENCE into exit 3 on
+///    their own, with no compare anywhere in sight:
+///    `RuntimeApp.cpp`'s ShutdownGraphPath (`settleFailed && m_graphExit == 0`
+///    `-> 3`) and `EditorApp.cpp`'s line-for-line twin. The editor's own exit
+///    table (`ArcaneEditor/src/main.cpp`) names `settle-not-converged` and
+///    `compare-failed` under the SAME code.
+///
+/// CORRECTION, 2026-08-28 (final review). This comment, and the arc spec's
+/// Decision 8, both claimed `--compare` was "the only flag that can produce a
+/// post-boot exit 3". THAT IS FALSE. Saved args of
+/// `--headless --frames 60 --settle 30 --report r.json` that fail to converge
+/// exit 3 with no `--compare` token present, and were reported to the user as
+/// "that project is already open in another editor" -- the exact misreport
+/// this predicate exists to eliminate, merely narrowed rather than closed.
+///
+/// MATCHING IS EXACT-OR-`=`, NEVER A BARE PREFIX. `--settle-timeout` is a REAL
+/// flag this same arc added (HostConfig.cpp registers `settle` AND
+/// `settle-timeout`), and a bare `starts_with("--settle")` would swallow it --
+/// so a run that merely widened the settle TIME bound would read as evidence
+/// of a settle run. Both `--flag value` and `--flag=value` are engine-accepted
+/// forms (ArcaneCore `Cli.cpp` splits on the first `=` before the long lookup),
+/// so both spellings are covered for each flag.
+///
+/// `--headless` and `--report` stay NON-evidence: both are reachable without
+/// either exit-3 route. `--frames` stays non-evidence for the reason above.
 fn golden_run(extra: &[String]) -> bool {
-    extra.iter().any(|a| a == "--compare" || a.starts_with("--compare="))
+    extra.iter().any(|a| {
+        a == "--compare" || a.starts_with("--compare=")
+            || a == "--settle" || a.starts_with("--settle=")
+    })
 }
 
 pub fn now_utc_iso() -> String {
@@ -588,9 +615,34 @@ mod tests {
 
     #[test]
     fn golden_run_keys_on_flags_the_engine_actually_registers() {
-        // --compare is the ONLY flag that can produce a post-boot exit 3.
+        // --compare is ONE of the two routes to a post-boot exit 3: it is what
+        // asks for a golden comparison at all.
         assert!(golden_run(&args(&["--compare", "runtime-scene"])));
+        assert!(golden_run(&args(&["--compare=runtime-scene"])));
         assert!(golden_run(&args(&["--headless", "--frames", "60", "--compare", "editor-ui"])));
+
+        // THE OTHER ROUTE, and the bug the final review caught: BOTH hosts fold
+        // settle non-convergence into exit 3 with no --compare involved
+        // (RuntimeApp.cpp's ShutdownGraphPath and EditorApp.cpp's twin). These
+        // exact saved args used to be decoded as "already open in another
+        // editor" -- the very misreport this predicate exists to eliminate.
+        assert!(golden_run(&args(&["--settle", "30"])));
+        assert!(golden_run(&args(&["--settle=30"])));
+        assert!(golden_run(&args(&[
+            "--headless", "--frames", "60", "--settle", "30", "--report", "r.json"
+        ])));
+
+        // THE TRAP, and the reason the match is exact-or-`=` and never a bare
+        // prefix: --settle-timeout is a REAL flag (HostConfig.cpp registers it
+        // beside --settle). It widens the settle TIME bound; on its own it is
+        // NOT a settle run -- HostConfig refuses it without --settle -- so it
+        // must not read as exit-3 evidence. A starts_with("--settle") would
+        // make every one of these pass wrongly.
+        assert!(!golden_run(&args(&["--settle-timeout", "5000"])));
+        assert!(!golden_run(&args(&["--settle-timeout=5000"])));
+        assert!(!golden_run(&args(&["--headless", "--settle-timeout", "5000"])));
+        // ...while the pair TOGETHER is evidence, on the --settle token alone.
+        assert!(golden_run(&args(&["--settle", "30", "--settle-timeout", "5000"])));
 
         // THE BUG THIS PINS: --golden-* is retired vocabulary that no engine
         // binary registers. Keying on it made the exit-3 guard always match,
@@ -602,6 +654,11 @@ mod tests {
         // post-boot 2 or 3, which is why it was deliberately absent before.
         assert!(!golden_run(&args(&["--frames", "5"])));
         assert!(!golden_run(&args(&[])));
+
+        // --headless and --report are reachable without either exit-3 route,
+        // so neither is evidence by itself.
+        assert!(!golden_run(&args(&["--headless"])));
+        assert!(!golden_run(&args(&["--headless", "--frames", "60", "--report", "r.json"])));
     }
 
     #[test]

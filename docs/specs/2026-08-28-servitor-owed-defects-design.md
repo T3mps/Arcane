@@ -253,6 +253,28 @@ The replacement is **`--compare`** — the only flag that can produce a post-boo
 function's own doc comment already states the principle it violates: *"`--frames` is likewise NOT
 evidence and is deliberately absent: on its own it cannot produce a post-boot 2 or 3."*
 
+> **Correction, 2026-08-28 (final review).** The claim above that `--compare` is *"the only flag
+> that can produce a post-boot exit 3"* is **false**, and the claim is left standing above rather
+> than rewritten so the next reader sees what was corrected. **Both hosts fold settle
+> non-convergence into exit 3 independently of `--compare`**:
+> `ArcaneRuntime/src/RuntimeApp.cpp:1009-1011` (`settleFailed && m_graphExit == 0 -> 3`, where
+> `settleFailed` reads only `m_config.settleAttempts != 0 && !m_settleConverged`) and the
+> line-for-line twin at `ArcaneEditor/src/App/EditorApp.cpp:2132-2133`. The editor's own exit
+> table at `ArcaneEditor/src/main.cpp:63-65` ALREADY documented it in prose: exit 3 carries
+> exitReason `settle-not-converged` **or** `compare-failed`. So saved args of
+> `--headless --frames 60 --settle 30 --report r.json` that never converge exit 3 with no
+> `--compare` token anywhere, and were decoded as *"already open in another editor"* — the exact
+> misreport Decision 8 exists to eliminate, merely **narrowed** rather than closed.
+>
+> `golden_run` therefore keys on `--compare` **or** `--settle`. **The match must be exact-or-`=`,
+> never a bare prefix:** `--settle-timeout` is a real flag THIS ARC ADDED (Decision 2), and a
+> `starts_with("--settle")` would swallow it, making a run that merely widened the settle TIME
+> bound read as exit-3 evidence. Both `--flag value` and `--flag=value` are engine-accepted forms
+> (`ArcaneCore/src/Arcane/Cli/Cli.cpp:146,158`), so both spellings are covered for each flag. The
+> replacement test pins the trap with an assertion that `--settle-timeout 5000` alone does NOT
+> make `golden_run` true — verified capable of failing by mutation (bare prefix — test fails;
+> `--settle` disjunct removed — test fails).
+
 Its existing test, `golden_run_sees_golden_vocabulary_only` (`:585`), passes by asserting the same
 retired vocabulary — **a test that cannot fail.** The replacement test must assert against flags
 the engine actually registers, and must be capable of failing.

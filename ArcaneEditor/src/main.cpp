@@ -61,12 +61,17 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //         another live editor (the direct-launch double-open guard below;
 //         the rival is focused before returning).
 //   3  -- (Task 9) --settle N never converged (two consecutive captures
-//         never compared byte-equal with the compiler idle, within the
-//         attempt budget) -- exitReason "settle-not-converged" or
-//         "compare-failed" in the JSON report. Same code RuntimeApp uses
-//         for the identical fact (RuntimeApp.cpp's ShutdownGraphPath) --
-//         see the collision note below for why this reuses 3 rather than
-//         claiming a fresh number.
+//         never compared byte-equal with the compiler idle before the bail
+//         CONJUNCTION fired: BOTH the attempt budget AND --settle-timeout
+//         spent, never either alone -- Arcane/Host/SettleBound.hpp) --
+//         exitReason "settle-not-converged" or "compare-failed" in the JSON
+//         report. Same code RuntimeApp uses for the identical fact
+//         (RuntimeApp.cpp's ShutdownGraphPath) -- see the collision note
+//         below for why this reuses 3 rather than claiming a fresh number.
+//         NOTE FOR ARGUMENT DECODERS (ArcaneHub launch.rs golden_run): this
+//         line is the evidence that --compare is NOT the only route to a
+//         post-boot 3. A --settle run with no --compare anywhere reaches
+//         this arm, so a predicate keying on --compare alone under-detects.
 //   4  -- (Task 9) --compare named a reference that does not exist on disk
 //         (or exists but failed to decode) and --bless was not given --
 //         exitReason "compare-missing-reference", zero frames rendered
