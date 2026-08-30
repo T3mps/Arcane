@@ -66,33 +66,6 @@ pipeline {
                     // both backends, the way an agent would, and fails the
                     // build on any HARD-GATING comparison regressing.
                     //
-                    // -AdvisoryLanes ArcaneEditor -- READ scripts/golden-gate.ps1's
-                    // "THE ADVISORY LANES" header before touching this. The two
-                    // editor lanes are red on two OWED ENGINE DEFECTS this gate
-                    // itself found (--settle counts attempts against a
-                    // millisecond-denominated condition; the editor's verify
-                    // capture enumerates Saved/Diagnostics/, which the editor
-                    // writes crash captures into). They still RUN, still print
-                    // their full verdicts, and their diffs are still archived
-                    // below -- they just do not decide the exit code.
-                    //
-                    // Shipping them HARD-RED instead would cost more than a red
-                    // box. These are SEQUENTIAL nested stages: a failing `bat`
-                    // fails this stage and aborts the enclosing stage('Windows'),
-                    // so 'ReferenceProject (SDK build)' and 'Scripted GPU-verify'
-                    // below -- both pre-existing, both currently working --
-                    // would never run again until the owed defects land. It
-                    // would also defeat the Release-then-Debug ordering this
-                    // very stage calls load-bearing (see below), because Release
-                    // is the failing invocation, so the Debug one that restores
-                    // the single-slot Binaries/ would never execute.
-                    //
-                    // THE SWITCH IS THE TRACKING ARTIFACT: when both owed
-                    // defects land, delete the argument here and the parameter
-                    // in the script. The editor lanes must NEVER be dropped from
-                    // the script's $combos -- a lane that is not run cannot tell
-                    // anyone when the fix works.
-                    //
                     // scripts/golden-gate.ps1 enforces its own precondition
                     // (a fresh ReferenceProject/Binaries/ rebuild for the
                     // configuration it is about to run, since that folder is
@@ -117,8 +90,8 @@ pipeline {
                     // first and Debug last leaves the slot in the state the
                     // rest of the pipeline already assumes.
                     steps {
-                        bat 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\golden-gate.ps1 -Configuration Release -AdvisoryLanes ArcaneEditor'
-                        bat 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\golden-gate.ps1 -Configuration Debug   -AdvisoryLanes ArcaneEditor'
+                        bat 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\golden-gate.ps1 -Configuration Release'
+                        bat 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\golden-gate.ps1 -Configuration Debug'
                     }
                     post {
                         // Diff artifacts land under EACH exe's own directory
@@ -128,14 +101,10 @@ pipeline {
                         // way a failing lane's diff image survives the
                         // workspace being wiped for the next build).
                         //
-                        // `always`, NOT `failure` -- and that change is a
-                        // direct consequence of -AdvisoryLanes above. An
-                        // advisory lane fails WITHOUT failing the stage, so a
-                        // failure-only archive would silently drop exactly the
-                        // artifacts the advisory marker promises to keep: the
-                        // editor diffs, on the only builds where they exist.
-                        // The cost is a few PNGs archived on a green build;
-                        // allowEmptyArchive keeps a genuinely clean run quiet.
+                        // `always`, NOT `failure`: archiveArtifacts with
+                        // allowEmptyArchive captures whatever diff PNGs
+                        // golden-gate.ps1 left on disk, at negligible cost
+                        // on a clean run.
                         always {
                             archiveArtifacts artifacts: 'bin/**/ReferenceProject/Saved/Verify/*.png',
                                               allowEmptyArchive: true

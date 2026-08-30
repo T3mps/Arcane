@@ -81,7 +81,7 @@ function Invoke-Gate([string]$why) {
     Write-Host ""
     Write-Host "-- running golden-gate ($Configuration) -- $why" -ForegroundColor DarkCyan
     $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $gate `
-        -Configuration $Configuration -AdvisoryLanes ArcaneEditor 2>&1 | Out-String
+        -Configuration $Configuration 2>&1 | Out-String
     $code = $LASTEXITCODE
     Write-Host $out
     return @{ ExitCode = $code; Text = $out }
@@ -161,10 +161,8 @@ Assert-CleanReferenceProject
 # =====================================================================
 if ($Phase -eq 'All' -or $Phase -eq 'A') {
     Write-Head "PHASE A1 -- baseline: the gate passes on an unmodified tree"
-    Write-Host "EXPECTED (this is the corrected expectation -- the plan's text is stale):"
-    Write-Host "  exit 0, TWO passing ArcaneRuntime comparisons (dx12 + vulkan),"
-    Write-Host "  and TWO ArcaneEditor lanes reporting ADVISORY / KNOWN-RED."
-    Write-Host "  The plan says 'four passing comparisons'. That is NO LONGER TRUE."
+    Write-Host "EXPECTED: exit 0, FOUR passing comparisons -- both ArcaneRuntime"
+    Write-Host "  lanes (dx12 + vulkan) and both ArcaneEditor lanes (dx12 + vulkan)."
 
     $a1 = Invoke-Gate "A1 baseline"
     if ($a1.ExitCode -ne 0) {
@@ -173,7 +171,6 @@ if ($Phase -eq 'All' -or $Phase -eq 'A') {
         exit 1
     }
     Write-Host "A1 PASS -- gate exit 0 on a clean tree." -ForegroundColor Green
-    Write-Ask "Did the two ArcaneEditor lanes print the OWED DEFECTS banner, and was it loud enough that you would actually notice it in a Jenkins log? If not, say so -- that is the stated cost of shipping them advisory, and it is one flag to reverse."
 
     Write-Head "PHASE A2 -- a gate never observed failing is not a gate"
     Write-Host "Breaking the scene, re-running, and asserting the RUNTIME lanes fail."
