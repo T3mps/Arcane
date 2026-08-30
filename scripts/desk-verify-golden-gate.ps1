@@ -1,10 +1,16 @@
-# desk-verify-servitor.ps1 -- automates the mechanical half of Plan B's Task 14.
+# desk-verify-golden-gate.ps1 -- the desk half of the golden-image gate.
 #
-# Task 14 is the USER's acceptance checkpoint and needs a display and a real
-# GPU, which is why it is not in CI. But most of its steps are mechanical:
-# run the gate, break something, watch it fail, restore, bless, time it. This
-# script does those and leaves you the parts that genuinely need eyes and a
-# judgment call.
+# scripts/golden-gate.ps1 is the gate itself and runs in CI (see the
+# Jenkinsfile). THIS script is the part CI cannot do: it needs a display and a
+# real GPU, and it answers two questions a green gate never answers on its own.
+#
+#   1. CAN THE GATE FAIL? A gate never observed failing is not a gate. Phase A2
+#      breaks the scene on purpose, asserts the runtime lanes go red, restores.
+#   2. IS BLESSING CHEAP? Phase B times a full break -> fail -> bless -> pass
+#      round-trip. A gate nobody can cheaply bless gets switched off in week one.
+#
+# Everything else is mechanical setup around those two, and it leaves you the
+# parts that genuinely need eyes and a judgment call.
 #
 # WHAT IT WILL NOT DO, on purpose:
 #   * Phase B's automated bless round-trip covers runtime-scene only -- that
@@ -26,9 +32,9 @@
 #     ReferenceProject/ is clean. Ctrl-C is safe.
 #
 # Usage:
-#   scripts\desk-verify-servitor.ps1                    # phases A, B, C
-#   scripts\desk-verify-servitor.ps1 -Phase A           # one phase
-#   scripts\desk-verify-servitor.ps1 -Configuration Release
+#   scripts\desk-verify-golden-gate.ps1                    # phases A, B, C
+#   scripts\desk-verify-golden-gate.ps1 -Phase A           # one phase
+#   scripts\desk-verify-golden-gate.ps1 -Configuration Release
 #
 # TIME: each gate run does an unconditional /t:Rebuild of ReferenceProject
 # (the single-slot Binaries/ precondition) plus four host launches. A full
@@ -159,7 +165,7 @@ function Restore-Scene {
     Write-Host "   scene restored from git, and restaged to both host dirs." -ForegroundColor Green
 }
 
-Write-Head "Servitor desk verify -- $Configuration"
+Write-Head "Golden-gate desk verify -- $Configuration"
 Write-Host "Repo:  $repoRoot"
 Write-Host "Gate:  $gate"
 Write-Host "Scene: $scene"
@@ -391,4 +397,7 @@ Write-Host "  * FastStats memory at 4K is arithmetic, not a measured run."
 Write-Host "  * The Linux IsIdle() stub still returns true unconditionally."
 Write-Host "  * Mesh picking is still unimplemented (CollectPickables has no MeshRenderer view)."
 Write-Host ""
-Write-Host "See docs\2026-08-26-servitor-closeout-and-desk-verify.md for the owed defects."
+Write-Host "The five owed automation defects this script was written alongside are"
+Write-Host "all CLOSED as of 2026-08-30, and -AdvisoryLanes is deleted: all four lanes"
+Write-Host "now hard-gate. Assert on gatePassed and the per-lane verdict in"
+Write-Host "golden-gate-summary.json -- advisoryFailures no longer exists."

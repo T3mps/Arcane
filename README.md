@@ -49,6 +49,67 @@ cd ..
 bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject
 ```
 
+## Automation
+
+Two layers, both owned by the engine and both in `scripts/`.
+
+**`ArcaneTests`** is the unit/integration suite. Run it **from its own directory** -- it resolves
+data relative to the working directory and runs in random order:
+
+```bat
+cd bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe ~[gpu]
+```
+
+`~[gpu]` is the standing dev-loop filter: it excludes the 25 GPU-touching cases. It does **not**
+exclude `[golden]` or `[mesh]`, which carry no `[gpu]` tag, are CPU-side, and are part of the
+baseline.
+
+**`scripts/golden-gate.ps1`** is the golden-image gate, and it is what covers what the suite
+cannot: that the engine still *renders* the same picture. It runs four lanes -- ArcaneRuntime and
+ArcaneEditor, each on D3D12 and Vulkan -- launching the real hosts headless against
+`ReferenceProject` and comparing each capture against a blessed reference.
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -Configuration Debug
+type bin\Debug-windows-x86_64-md\golden-gate-summary.json
+```
+
+It runs in CI from the `Jenkinsfile` on a GPU agent; GitHub Actions builds and runs `ArcaneTests`
+only.
+
+**The machine-readable contract is `golden-gate-summary.json`. Assert on `gatePassed` and the
+per-lane `verdict` -- never on the exit code.**
+
+### Blessing a reference
+
+When a rendering change is intentional, re-bless. `--bless` accepts the converged capture as the
+reference `--compare` names, writing to the level it resolved from:
+
+```bat
+bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject ^
+  --headless --backend dx12 --frames 60 --settle 30 --report r.json --compare runtime-scene --bless
+```
+
+Two things that are easy to get wrong:
+
+- **`--report` (or `--screenshot`) is required.** `--settle` is refused without one, because it
+  compares captured frames and otherwise has nowhere to land the result.
+- **A bless must be restaged before the gate can see it.** `golden-gate.ps1` deliberately does not
+  restage `Verify/` -- it must not trample a bless -- so copy `ReferenceProject\Verify\*` into
+  `bin\<config>\{ArcaneRuntime,ArcaneEditor}\ReferenceProject\Verify\` after blessing.
+  `scripts\desk-verify-golden-gate.ps1` does this for you.
+
+`runtime-scene` is backend-split (Vulkan has its own override); `editor-ui` is a shared reference,
+so bless it once.
+
+### `scripts/desk-verify-golden-gate.ps1`
+
+The desk half, for what CI cannot check: that the gate **can fail** (it breaks the scene on
+purpose and asserts the lanes go red) and that blessing is **cheap** (it times a full
+break -> fail -> bless -> pass round-trip). Needs a display and a real GPU. Every mutation is
+inside `try/finally` and restored with `git checkout --`, so Ctrl-C is safe.
+
 ## Using the engine as an SDK
 
 External game projects consume the engine in place through the `ARCANE_SDK`
