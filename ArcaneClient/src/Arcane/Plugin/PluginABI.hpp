@@ -333,7 +333,41 @@ namespace Arcane
     //     same way PostProcess/Identity/Hidden were (v7 above), so
     //     Scene::kSceneJsonVersion (Serialization/SceneSerializer.hpp:62)
     //     stays at 3.
-    inline constexpr uint32_t kGamePluginABIVersion = 17;
+    // v18 (2026-08-30, arc 2): the automation-tooling close-out moved three
+    //     ARCANE_API surfaces. Checked against the same "does this actually
+    //     corrupt a mixed pairing" bar the v7, v16-amended and v17 entries
+    //     apply -- and unlike v17, TWO of these are genuine LAYOUT changes, so
+    //     this one clears that bar rather than resting on desk legibility:
+    //       * `HostConfig` (Host/HostConfig.hpp:13, an ARCANE_API STRUCT)
+    //         gained `settleTimeoutMs` (uint64). Layout. A v17 module holding
+    //         one by value disagrees with the host about its SIZE.
+    //       * `VerifyReport` (Host/VerifyReport.hpp:134, an ARCANE_API CLASS)
+    //         gained SetSettle plus five members, and its JSON went
+    //         schemaVersion 2 -> 3 with `mode` changing value "offscreen" ->
+    //         "headless". Layout, and a WIRE contract change besides -- the
+    //         version field is what announces it, which is the whole reason a
+    //         wire value may move on a bump and not otherwise.
+    //       * `Project::Open` and `Runtime::OpenProject` each gained a
+    //         DEFAULTED third parameter, `ProjectOpenOptions`. Defaulted is a
+    //         source-compatibility convenience only: it changes the MANGLED
+    //         NAME either way, so a module built against the v17 header that
+    //         referenced either symbol fails IMPORT RESOLUTION at load. That
+    //         is loud and immediate, not a silent misread -- but it is exactly
+    //         what this gate exists to catch before LoadLibrary rather than
+    //         after.
+    //     Additive and harmless on their own, recorded so the list is complete:
+    //     `ProjectOpenOptions` (Project/ProjectOpenOptions.hpp) and
+    //     `SettleBound.hpp` are new headers -- the latter is constexpr-only and
+    //     pulls in nothing but <cstdint>; `BootContext` gained a field, but
+    //     Host/ProjectBoot.hpp is consumed by the two HOSTS and ArcaneTests and
+    //     by no game module.
+    //     MEASURED, not assumed: nothing in ReferenceProject's game module
+    //     references HostConfig, VerifyReport, ProjectBoot, Project::Open or
+    //     OpenProject, so no module in the tree breaks on this bump.
+    //     THE SCENE FILE FORMAT DID NOT MOVE: Scene::kSceneJsonVersion stays
+    //     at 3. ReferenceProject and Gacha's Game are restamped with this
+    //     change, the same precedent v16 and v17 set.
+    inline constexpr uint32_t kGamePluginABIVersion = 18;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
