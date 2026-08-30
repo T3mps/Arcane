@@ -7,11 +7,20 @@
 # judgment call.
 #
 # WHAT IT WILL NOT DO, on purpose:
-#   * It never blesses editor-ui. OWED DEFECT 2 is that the editor capture
-#     depends on the machine's crash history (its Assets panel enumerates
-#     Saved/Diagnostics/, which the editor itself writes into). Re-blessing
-#     goes green today and red at the next crashed run, so blessing it would
-#     manufacture a pass and destroy the evidence. Runtime-scene only.
+#   * Phase B's automated bless round-trip covers runtime-scene only -- that
+#     is this phase's scope, not a ban on blessing editor-ui. OWED DEFECT 2
+#     (the editor's verify capture depending on the machine's crash history
+#     via Saved/Diagnostics/) is CLOSED: ProjectOpenOptions now keeps that
+#     capture off diag://, so a deliberate editor-ui re-bless is legitimate --
+#     the user did exactly this at the desk on 2026-08-30 (commit 97abd074).
+#     A manual bless is:
+#       ArcaneEditor.exe --project ReferenceProject --headless --backend dx12
+#         --frames 60 --settle 30 --report <path> --compare editor-ui --bless
+#     (--report or --screenshot is REQUIRED -- --settle refuses without one;
+#     the plan's own version of this command omits it and cannot run). Then
+#     restage the blessed reference to both hosts the same way Phase B does
+#     below for runtime-scene -- golden-gate.ps1 deliberately does not
+#     restage Verify/ itself.
 #   * It never leaves the tree dirty. Every mutation is inside try/finally and
 #     restored with `git checkout --`, and the last thing it does is assert
 #     ReferenceProject/ is clean. Ctrl-C is safe.
@@ -204,8 +213,12 @@ if ($Phase -eq 'All' -or $Phase -eq 'A') {
 if ($Phase -eq 'All' -or $Phase -eq 'B') {
     Write-Head "PHASE B -- the bless round-trip, timed"
     Write-Host "Break -> gate fails -> --bless -> gate passes. Runtime-scene ONLY:"
-    Write-Host "editor-ui is never blessed here (owed defect 2 -- its input is written"
-    Write-Host "by the thing under test, so a bless manufactures a pass)."
+    Write-Host "editor-ui is out of scope for this automated round-trip (it"
+    Write-Host "covers runtime-scene only) -- NOT because blessing it would"
+    Write-Host "manufacture a pass. Defect 2 (editor capture depending on the"
+    Write-Host "machine's crash history) is CLOSED via ProjectOpenOptions, so a"
+    Write-Host "deliberate manual editor-ui re-bless is legitimate -- see the"
+    Write-Host "header comment above for the command."
     Write-Host ""
     Write-Host "THE SPEC'S WARNING, which this step exists to test: a gate nobody can"
     Write-Host "cheaply bless gets switched off in the first week. Time it honestly."
