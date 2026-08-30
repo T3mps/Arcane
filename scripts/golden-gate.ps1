@@ -163,10 +163,23 @@ foreach ($stageHost in @('ArcaneRuntime', 'ArcaneEditor')) {
     #      repo on every run would silently discard a bless the caller just
     #      made. The asymmetry is the point: Content/ is an INPUT the gate must
     #      read fresh, Verify/ is state the gate must not trample.
+    #      MIRROR, NOT MERGE. `Copy-Item -Force -Recurse` overwrites what both
+    #      trees share and SILENTLY KEEPS anything the staged tree has that the
+    #      source does not, so "restaged" delivered "the source's files PLUS
+    #      whatever has accumulated" -- which is not reading fresh, whatever the
+    #      paragraph above claims. Measured 2026-08-30: a stray
+    #      `New Mesh.arcmesh` (untracked, absent from source, left behind by an
+    #      editor session's + Mesh button) sat in BOTH staged hosts. Nothing
+    #      sorts the asset list -- neither AssetRegistry's
+    #      recursive_directory_iterator nor the Assets panel -- so one extra row
+    #      at the top shifted every row below it and moved the editor-ui golden
+    #      image by 8152 pixels, on both backends, deterministically. It cost a
+    #      full desk round to find. Clearing first is what makes the claim true.
     $stagedContent = Join-Path $repoRoot "bin\$configDirName\$stageHost\ReferenceProject\Content"
-    if (-not (Test-Path $stagedContent)) {
-        New-Item -ItemType Directory -Path $stagedContent -Force | Out-Null
+    if (Test-Path $stagedContent) {
+        Remove-Item -Path $stagedContent -Recurse -Force
     }
+    New-Item -ItemType Directory -Path $stagedContent -Force | Out-Null
     Copy-Item -Path (Join-Path $referenceProjectDir 'Content\*') -Destination $stagedContent -Force -Recurse
 
     # Assert the copy actually took. A silent no-op here restores exactly the
