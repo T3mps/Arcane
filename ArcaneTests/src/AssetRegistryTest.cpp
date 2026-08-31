@@ -303,12 +303,47 @@ TEST_CASE("AssetRegistry::All() is ordered deterministically, not by hash", "[pr
     Arcane::AssetRegistry reg;
     reg.ScanContent(dir, "game");
 
+    // A genuine mount-path TIE, needed to exercise the Guid tiebreak itself:
+    // m_byGuid keys on Guid, not on mount path, so AddContent never rejects
+    // two DISTINCT ids that resolve to the identical "<scheme>://<relative>"
+    // string -- only a duplicate ID (not a duplicate PATH) is warned-and-kept-
+    // first (AddFile, AssetRegistry.cpp). Eight separate single-file content
+    // roots, each holding one "tie.arcmat", folded in under the SAME "game"
+    // scheme used above: every one of the eight resolves to the identical
+    // mount path "game://tie.arcmat", so these eight rows can be placed in
+    // order ONLY by the Guid tiebreak -- an implementation that dropped the
+    // tiebreak (comparing solely by mount path) could not distinguish them
+    // and would leave their relative order to hash-bucket iteration, same
+    // 1/8! odds of accidentally already being ascending-guid as the block
+    // above relies on for mount path.
+    // Digits 0/9/a-f (disjoint from the 1-8 used above, so no id collides with
+    // the block above and triggers the UNRELATED duplicate-ID-kept-first path
+    // instead of registering all sixteen).
+    const auto tieRoot = TempDir("all_deterministic_order_ties");
+    const char* tieGuids[] = {
+        "ffffffff-ffff-4fff-8fff-ffffffffffff", "99999999-9999-4999-8999-999999999999",
+        "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "00000000-0000-4000-8000-000000000000",
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    };
+    for (int i = 0; i < 8; ++i)
+    {
+        const auto sub = tieRoot / std::to_string(i);
+        std::filesystem::create_directories(sub);
+        std::ofstream(sub / "tie.arcmat", std::ios::binary)
+            << R"({ "id": ")" << tieGuids[i] << R"(" })";
+    }
+    for (int i = 0; i < 8; ++i)
+        reg.AddContent(tieRoot / std::to_string(i), "game");
+
     const auto all = reg.All();
-    REQUIRE(all.size() == 8);
+    REQUIRE(all.size() == 16);
 
     // THE PROPERTY: sortedness over a TOTAL key makes the sequence a function
     // of the content alone -- independent of hash and insertion order -- which
     // is what makes the editor-ui golden image reproducible on any machine.
+    // With the mount-path tie above in the mix, this assertion can only pass
+    // if the Guid tiebreak is actually applied, not merely present in source.
     CHECK(std::is_sorted(all.begin(), all.end(),
         [](const std::pair<Arcane::Guid, std::string>& a,
            const std::pair<Arcane::Guid, std::string>& b)
