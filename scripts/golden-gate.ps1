@@ -72,29 +72,61 @@
 #       exists to rule out elsewhere. The shipped interface always mutates,
 #       so "run it against an unmutated tree" cannot be done literally; the
 #       interface-only equivalent is to make the mutated render compare
-#       CLEAN by blessing the mutated state as its own reference:
+#       CLEAN by blessing the mutated state as its own reference.
+#
+#       The first version of this procedure blessed
+#       ReferenceProject/Verify/References itself while the scene was
+#       mutated, then reverted only the scene -- leaving those four blessed
+#       PNGs modified in the SOURCE tree, which the dirty-tree precheck
+#       above (:207-215) then refuses to run against. Written and broken in
+#       the same commit. The procedure below blesses the STAGED copies
+#       instead, which that precheck never looks at, so the tree stays
+#       clean throughout:
 #         1. `git status --porcelain -- ReferenceProject` must be empty.
-#         2. By hand, apply the exact -SelfTest edit to
-#            ReferenceProject/Content/scenes/main.arcscene (MeshCube's
-#            Arcane::Transform position, first element, 0.4 -> 0.6), then
-#            restage Content/ beside both hosts the way the loop below does.
-#         3. Re-bless all four references against that mutated scene (see
-#            desk-verify-golden-gate.ps1's header for the manual --bless
-#            command shape -- --report or --screenshot is required with
-#            --settle).
-#         4. `git checkout -- ReferenceProject/Content/scenes/main.arcscene`
-#            to put the SOURCE back to 0.4, leaving the four references
-#            blessed at the MUTATED (0.6) state.
-#         5. Run `-SelfTest`. It mutates 0.4 -> 0.6 again -- now matching
-#            what step 3 just blessed -- so all four lanes render the
-#            mutated scene and compare PASS against it. EXPECTED: this
-#            script prints "SELF-TEST FAILED -- the gate did NOT notice a
-#            broken scene." and exits 1. That failure is the proof.
-#         6. `git checkout -- ReferenceProject` to drop both the temporary
-#            references and the source edit, then confirm
-#            `git status --porcelain -- ReferenceProject` is clean again.
-#       Not run as part of shipping this switch -- owed to whoever runs
-#       -SelfTest for real the first time.
+#         2. By hand, apply the exact -SelfTest edit -- MeshCube's
+#            Arcane::Transform position, first element, 0.4 -> 0.6 -- to
+#            BOTH staged scene copies, never the git-tracked source:
+#              bin\<Config>-windows-x86_64-md\ArcaneRuntime\ReferenceProject\Content\scenes\main.arcscene
+#              bin\<Config>-windows-x86_64-md\ArcaneEditor\ReferenceProject\Content\scenes\main.arcscene
+#         3. Bless three reference slots against that mutated render,
+#            running each host FROM ITS OWN EXE DIRECTORY with
+#            `--project ReferenceProject` (relative, so it resolves to the
+#            staged tree just edited, not the source). editor-ui is a
+#            SHARED slot (one editor-ui.png serves both backends);
+#            runtime-scene is backend-split:
+#              ArcaneRuntime.exe --project ReferenceProject --headless --backend dx12   --frames 60 --settle 30 --report <path> --compare runtime-scene --bless
+#              ArcaneRuntime.exe --project ReferenceProject --headless --backend vulkan --frames 60 --settle 30 --report <path> --compare runtime-scene --bless
+#              ArcaneEditor.exe  --project ReferenceProject --headless --backend dx12   --frames 60 --settle 30 --report <path> --compare editor-ui    --bless
+#            (--report or --screenshot is REQUIRED -- --settle refuses
+#            without one.) This is the key move: Verify/ is deliberately
+#            never restaged by the staging loop below (:304-308), so a
+#            bless made against the staged tree PERSISTS across the
+#            -SelfTest run in step 4 instead of being clobbered by it.
+#         4. Run `-SelfTest`. It mutates the SOURCE 0.4 -> 0.6 and restages
+#            it, so every lane now renders the same 0.6 state step 3 just
+#            blessed against, and all four report PASS on a scene that is,
+#            by construction, broken. EXPECTED: this script prints
+#            "SELF-TEST FAILED -- the gate did NOT notice a broken scene."
+#            and exits 1. That failure is the proof.
+#         5. Restore: copy ReferenceProject/Verify/References back over
+#            both staged trees (undoing step 3's bless) and delete the
+#            scratch --report files from step 3. Confirm with an ordinary
+#            `golden-gate.ps1 -Configuration Debug` run that all four lanes
+#            are green again.
+#
+#       RUN, 2026-08-31, Debug, both backends, on real GPU hardware.
+#       Forward direction: the ordinary -SelfTest run drove all four lanes
+#       to FAIL by exitReason=compare-failed -- runtime lanes 11799
+#       differing pixels, editor lanes 4080 -- and printed "SELF-TEST
+#       PASSED -- all 4 lane(s) launched and caught the broken scene", exit
+#       0. The lanes failed by genuinely COMPARING, not by erroring and not
+#       via the exe-not-found path. Control direction: with the staged
+#       references blessed against the mutated state (steps 1-3 above), all
+#       four lanes reported PASS on a broken scene and the assertion
+#       correctly refused to call that a pass -- "SELF-TEST FAILED", exit
+#       1. Afterwards the tree was verified restored: all six staged
+#       reference PNGs md5-identical to the committed source, `git status`
+#       clean, and an ordinary gate run green on all four lanes.
 #
 # Exit 0 iff every HARD-GATING comparison resolves to a confirmed PASS. Exit 1
 # otherwise (a genuine mismatch, a missing/undecodable reference, or a run
@@ -587,7 +619,16 @@ $summaryPath = Join-Path $repoRoot "bin\$configDirName\$summaryFileName"
 try {
     $summaryDir = Split-Path -Parent $summaryPath
     if (-not (Test-Path $summaryDir)) { New-Item -ItemType Directory -Path $summaryDir -Force | Out-Null }
-    $summary | ConvertTo-Json -Depth 5 | Set-Content -Path $summaryPath -Encoding UTF8
+    # NOT `Set-Content -Encoding UTF8`: under Windows PowerShell 5.1 that
+    # encoding emits a UTF-8 BOM, so both summary files would start with
+    # EF BB BF and a stock JSON reader -- e.g. Python's json.load, the exact
+    # "AGENT" consumer this file exists for -- fails with
+    # "JSONDecodeError: Expecting value: line 1 column 1 (char 0)".
+    # PowerShell's own ConvertFrom-Json tolerates the BOM, which is exactly
+    # why this went unnoticed. WriteAllText with a BOM-less UTF8Encoding
+    # writes the same bytes without it. $summaryPath is already absolute
+    # (built off $repoRoot via Join-Path above), which WriteAllText requires.
+    [System.IO.File]::WriteAllText($summaryPath, ($summary | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
     Write-Host "golden-gate: machine-readable verdict -> $summaryPath" -ForegroundColor Cyan
 } catch {
     # Never let summary-writing decide the gate's verdict; say so and continue.
