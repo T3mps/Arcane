@@ -58,8 +58,15 @@
 #       PRECONDITIONS. (1) ReferenceProject/ must be clean: this mode
 #       refuses to start otherwise, because its restore ends in
 #       `git checkout --`, which would otherwise silently discard whatever
-#       uncommitted edits were sitting in Content/. (2) It assumes the
-#       ORDINARY gate already passes on the tree it is about to mutate -- in
+#       uncommitted edits were sitting in Content/. SELF-HEAL EXCEPTION: if
+#       the only dirty path is main.arcscene, and it is EXACTLY this mode's
+#       own 0.4 -> 0.6 mutation (checked via git's own diff output, never a
+#       raw string compare -- the file is CRLF, the committed blob LF), it
+#       is healed via the same `git checkout --` and the run continues,
+#       since that is unmistakably a prior -SelfTest killed before its own
+#       `finally` ran; anything less exact still refuses, unchanged. (2) It
+#       assumes the ORDINARY gate already passes on the tree it is about to
+#       mutate -- in
 #       the Jenkins pipeline this holds because the self-test stage runs
 #       immediately after a green "Golden gate" stage on the same agent, but
 #       -SelfTest does NOT verify that baseline itself. Run it against an
@@ -236,25 +243,110 @@ Write-Host "-- ReferenceProject rebuilt for $Configuration --" -ForegroundColor 
 #      was there before -- including a desk user's own in-progress edits to
 #      main.arcscene. desk-verify-golden-gate.ps1's Assert-CleanReferenceProject
 #      (:80-90) guards exactly this; this mode originally shipped without
-#      it, so the guard is added here, ahead of everything else. ----
+#      it, so the guard is added here, ahead of everything else.
+#
+#      SELF-HEAL EXCEPTION, for exactly one shape of dirt: a PRIOR -SelfTest
+#      run killed abruptly (taskkill, a hung/crashed host, power loss) never
+#      gets to run its own `finally` (:541-575), so its 0.4 -> 0.6 scene
+#      mutation can be left sitting in the tree -- and this precheck would
+#      otherwise wedge every later run until a human runs `git checkout` by
+#      hand. If the ONLY dirty path is main.arcscene, and it is EXACTLY that
+#      mutation -- confirmed via `git diff --numstat` (1 insertion, 1
+#      deletion), `git diff -U0` (the one removed line reads "0.4", the one
+#      added line reads "0.6", whitespace/trailing-comma tolerant), and a
+#      regex re-check that the working file's MeshCube Arcane::Transform
+#      block still shows the mutated 0.6 -- it is healed with the same `git
+#      checkout --` this mode already uses to restore, and the run
+#      continues. This checks git's OWN normalised diff output, never a raw
+#      string compare: main.arcscene is `i/lf w/crlf attr/text=auto`, so the
+#      committed blob is LF and the working file is CRLF, and comparing
+#      contents directly would never match -- a heal that can never fire is
+#      worse than none. Anything less exact -- more than one dirty path, a
+#      different file, a different value, an edit outside MeshCube's own
+#      block, an untracked file, a STAGED change -- still refuses, exactly
+#      as before. ----
+$sceneRelative = 'ReferenceProject/Content/scenes/main.arcscene'
+$scenePath     = Join-Path $repoRoot 'ReferenceProject\Content\scenes\main.arcscene'
 if ($SelfTest) {
-    $preDirty = & git -C $repoRoot status --porcelain -- ReferenceProject
+    $preDirty = @(& git -C $repoRoot status --porcelain -- ReferenceProject)
     if ($preDirty) {
-        Write-Error ("-SelfTest: refusing to run -- ReferenceProject/ is NOT clean, and this mode's " +
-            "mutate-then-'git checkout --' restore cycle would silently discard whatever is there " +
-            "now. Commit, stash, or discard these changes first, then re-run:`n" + ($preDirty -join "`n"))
-        exit 1
+        $healEligible = $false
+
+        # Condition 1: exactly one dirty path, an UNSTAGED modification
+        # (" M ", never "M  " -- a staged change still refuses) of
+        # main.arcscene itself.
+        if (($preDirty.Count -eq 1) -and
+            ($preDirty[0] -match ('^ M ' + [Regex]::Escape($sceneRelative) + '$'))) {
+
+            # Condition 2: git's own numstat -- exactly 1 insertion, 1 deletion.
+            $numstat = @(& git -C $repoRoot diff --numstat -- $sceneRelative)
+            if (($numstat.Count -eq 1) -and ($numstat[0] -match '^(\d+)\s+(\d+)\s+')) {
+                $insCount = [int]$Matches[1]
+                $delCount = [int]$Matches[2]
+                if ($insCount -eq 1 -and $delCount -eq 1) {
+
+                    # Condition 3: git's own -U0 diff (normalises line endings) --
+                    # exactly one removed "0.4" and one added "0.6".
+                    $diffLines    = @(& git -C $repoRoot diff -U0 -- $sceneRelative)
+                    $removedLines = @($diffLines | Where-Object { $_ -match '^-(?!--)' })
+                    $addedLines   = @($diffLines | Where-Object { $_ -match '^\+(?!\+\+)' })
+                    if ($removedLines.Count -eq 1 -and $addedLines.Count -eq 1) {
+                        $removedValue = $removedLines[0].Substring(1).Trim().TrimEnd(',').Trim()
+                        $addedValue   = $addedLines[0].Substring(1).Trim().TrimEnd(',').Trim()
+                        if ($removedValue -eq '0.4' -and $addedValue -eq '0.6') {
+
+                            # Condition 4: the changed element is MeshCube's OWN --
+                            # not some other entity that happens to hold a 0.4.
+                            $workingText = Get-Content $scenePath -Raw
+                            if ($workingText -match '(?s)"name":\s*"MeshCube".*?"Arcane::Transform":\s*\{\s*"position":\s*\[\s*0\.6') {
+                                $healEligible = $true
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($healEligible) {
+            Write-Host ""
+            Write-Host "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
+            Write-Host "-SelfTest: FOUND RESIDUE FROM A PREVIOUSLY-KILLED -SelfTest RUN." -ForegroundColor Red
+            Write-Host "ReferenceProject/Content/scenes/main.arcscene still carries this mode's own" -ForegroundColor Red
+            Write-Host "MeshCube 0.4 -> 0.6 mutation -- an earlier -SelfTest run was killed (taskkill," -ForegroundColor Red
+            Write-Host "a crashed/hung host, or power loss) before its own 'finally' could restore it." -ForegroundColor Red
+            Write-Host "Restoring it now via 'git checkout --' and continuing." -ForegroundColor Red
+            Write-Host "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
+            & git -C $repoRoot checkout -- $sceneRelative
+            $postHealDirty = & git -C $repoRoot status --porcelain -- ReferenceProject
+            if ($postHealDirty) {
+                Write-Error ("-SelfTest: auto-heal of $sceneRelative did NOT clean the tree -- refusing " +
+                    "to continue. Remaining status:`n" + ($postHealDirty -join "`n"))
+                exit 1
+            }
+            Write-Host "-- -SelfTest: residue healed, ReferenceProject/ is clean -- continuing --" -ForegroundColor Green
+        } else {
+            Write-Error ("-SelfTest: refusing to run -- ReferenceProject/ is NOT clean, and this mode's " +
+                "mutate-then-'git checkout --' restore cycle would silently discard whatever is there " +
+                "now. Commit, stash, or discard these changes first, then re-run:`n" + ($preDirty -join "`n"))
+            exit 1
+        }
     }
 }
 
 # ---- -SelfTest: break the scene, so the lanes have something to catch. ----
 # R12: git checkout's pathspec needs FORWARD slashes -- a backslash pathspec
 # is a silent no-op there (see the restore block near the end of this
-# script). Join-Path wants its native backslash form. Keep both, the way
-# desk-verify-golden-gate.ps1 does (:56, :65).
-$sceneRelative = 'ReferenceProject/Content/scenes/main.arcscene'
-$scenePath     = Join-Path $repoRoot 'ReferenceProject\Content\scenes\main.arcscene'
-$broken        = $null
+# script, and the self-heal block just above). Join-Path wants its native
+# backslash form. Keep both, the way desk-verify-golden-gate.ps1 does
+# (:56, :65). $sceneRelative/$scenePath are now defined above the precheck
+# so the self-heal block can share them instead of duplicating the path.
+#
+# The two STAGED scene copies under
+# bin\<Config>-windows-x86_64-md\{ArcaneRuntime,ArcaneEditor}\ReferenceProject\Content\
+# need no healing of their own: the staging loop below unconditionally
+# deletes and re-copies Content/ beside both hosts on every run, so any
+# stale staged copy is always overwritten before a single lane launches.
+$broken = $null
 if ($SelfTest) {
     # The SAME mutation desk-verify-golden-gate.ps1's Set-MeshCubeBroken uses
     # (scripts\desk-verify-golden-gate.ps1:105-117) -- MeshCube's
