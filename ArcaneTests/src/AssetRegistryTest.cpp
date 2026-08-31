@@ -340,10 +340,13 @@ TEST_CASE("AssetRegistry::All() is ordered deterministically, not by hash", "[pr
     REQUIRE(all.size() == 16);
 
     // THE PROPERTY: sortedness over a TOTAL key makes the sequence a function
-    // of the content alone -- independent of hash and insertion order -- which
-    // is what makes the editor-ui golden image reproducible on any machine.
-    // With the mount-path tie above in the mix, this assertion can only pass
-    // if the Guid tiebreak is actually applied, not merely present in source.
+    // of the content alone -- independent of hash and insertion order -- the
+    // CONTRACT All() documents for its callers, current and future (see
+    // All()'s own comment, AssetRegistry.cpp, for what that contract is
+    // actually for -- corrected 2026-08-30, it is not "changes the editor-ui
+    // golden image"). With the mount-path tie above in the mix, this
+    // assertion can only pass if the Guid tiebreak is actually applied, not
+    // merely present in source.
     CHECK(std::is_sorted(all.begin(), all.end(),
         [](const std::pair<Arcane::Guid, std::string>& a,
            const std::pair<Arcane::Guid, std::string>& b)
@@ -351,4 +354,8 @@ TEST_CASE("AssetRegistry::All() is ordered deterministically, not by hash", "[pr
             if (a.second != b.second) return a.second < b.second;
             return a.first < b.first;
         }));
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::remove_all(tieRoot, ec);
 }

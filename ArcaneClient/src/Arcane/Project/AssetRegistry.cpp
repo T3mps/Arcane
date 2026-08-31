@@ -397,9 +397,19 @@ namespace Arcane
         // DETERMINISTIC ORDER, and it is load-bearing. m_byGuid is an
         // unordered_map, so the walk above tracks guid HASHES and insertion
         // history: two trees holding identical files enumerate them
-        // differently. The editor's Assets panel renders this order and the
-        // panel sits inside the editor-ui golden capture, so an unsorted
-        // walk makes that image machine-dependent -- measured 2026-08-30.
+        // differently. All() publishes a CONTRACT -- a total order that is a
+        // function of content alone -- so a future consumer inherits
+        // determinism instead of having to remember it. Today's two
+        // consumers (AssetBrowser's BuildAssetEntries, which re-sorts by
+        // (name, mountPath) itself; EditorAppProject's
+        // MintOrReuseSpriteForTexture, which only acts at matches == 1) are
+        // both order-insensitive, so this is not a fix to a live rendering
+        // defect -- it closes a LATENT one: BuildAssetEntries' comparator
+        // stops being total once two guids share a mount path, which
+        // AddContent permits (dedupes by id, not path) but Project::Open
+        // never triggers (every root gets its own scheme). Corrected
+        // 2026-08-30 -- the prior "changes the editor-ui golden image" claim
+        // here was unproven and false; do not re-litigate it.
         // Sorted by mount path (what the panel displays), Guid breaking ties
         // so the order is TOTAL. std::string's operator< goes through
         // char_traits::compare -- byte-wise, NOT locale-aware -- so the result
