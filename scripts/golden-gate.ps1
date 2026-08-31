@@ -66,10 +66,11 @@
 #       already-red tree and it reports a false PASS, for the same reason a
 #       control group that started broken proves nothing.
 #
-#       THE OWED CONTROL RUN. Nothing has ever proven this mode's OWN
-#       assertion logic is capable of reporting FAILED -- a self-test that
-#       can only ever pass is exactly the defect the arc it belongs to
-#       exists to rule out elsewhere. The shipped interface always mutates,
+#       THE CONTROL RUN. Nothing had ever proven this mode's OWN assertion
+#       logic was capable of reporting FAILED -- a self-test that can only
+#       ever pass is exactly the defect the arc it belongs to exists to
+#       rule out elsewhere -- which is why the procedure below was run.
+#       The shipped interface always mutates,
 #       so "run it against an unmutated tree" cannot be done literally; the
 #       interface-only equivalent is to make the mutated render compare
 #       CLEAN by blessing the mutated state as its own reference.
