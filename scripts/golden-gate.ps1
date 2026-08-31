@@ -41,15 +41,29 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts\golden-gate.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -Configuration Release
+#   powershell -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -SelfTest
+#       Prove the gate can FAIL: break the scene, assert all four lanes go red,
+#       restore. The ONE mode that writes to the tree -- Content/ only, never
+#       Verify/, never a bless, always restored in a finally. Writes its
+#       verdict to golden-gate-selftest-summary.json (NOT golden-gate-summary.json,
+#       so it never overwrites a green build's gatePassed=true artifact).
 #
 # Exit 0 iff every HARD-GATING comparison resolves to a confirmed PASS. Exit 1
 # otherwise (a genuine mismatch, a missing/undecodable reference, or a run
-# whose outcome could not be determined at all).
+# whose outcome could not be determined at all). -SelfTest INVERTS this: it
+# exits 0 iff all four lanes went FAIL as expected (see its own exit block).
 #
 # Windows PowerShell 5.1 compatible.
 
 param(
-    [string]$Configuration = 'Debug'
+    [string]$Configuration = 'Debug',
+    # SELF-TEST: prove this gate is CAPABLE OF FAILING. A gate never observed
+    # failing is not a gate. Mutates ReferenceProject's scene, runs the four
+    # lanes, and asserts ALL FOUR go FAIL -- then restores. This is the ONE
+    # mode in which this script writes to the tree; it touches Content/ only,
+    # never Verify/, never blesses, and restores in a finally block so an
+    # error or a Ctrl-C still leaves the tree clean.
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -133,6 +147,42 @@ Write-Host "-- ReferenceProject rebuilt for $Configuration --" -ForegroundColor 
 #      BEFORE LoadLibrary. On a fresh CI agent it is worse: the staged copy can
 #      be absent entirely. So mirror the postbuild here, for exactly the two
 #      hosts this script launches.
+
+# ---- -SelfTest: break the scene, so the lanes have something to catch. ----
+# R12: git checkout's pathspec needs FORWARD slashes -- a backslash pathspec
+# is a silent no-op there (see the restore block near the end of this
+# script). Join-Path wants its native backslash form. Keep both, the way
+# desk-verify-golden-gate.ps1 does (:56, :65).
+$sceneRelative = 'ReferenceProject/Content/scenes/main.arcscene'
+$scenePath     = Join-Path $repoRoot 'ReferenceProject\Content\scenes\main.arcscene'
+if ($SelfTest) {
+    # The SAME mutation desk-verify-golden-gate.ps1's Set-MeshCubeBroken uses
+    # (scripts\desk-verify-golden-gate.ps1:105-117) -- MeshCube's
+    # Arcane::Transform position, first element, 0.4 -> 0.6. One mutation
+    # vocabulary, not two: a second one would drift from this one exactly the
+    # way hand-copied logic drifted elsewhere in this tree.
+    #
+    # The regex is anchored to MeshCube's own entity block and capped to ONE
+    # replacement ([Regex]::Replace's trailing count arg): main.arcscene also
+    # has an unrelated "0.45" literal (:164) that a loosely-anchored global
+    # -replace would corrupt into 0.65, mutating the scene a second,
+    # undeclared way.
+    $sceneText = Get-Content $scenePath -Raw
+    if ($sceneText -notmatch '(?s)"name":\s*"MeshCube".*?"Arcane::Transform":\s*\{\s*"position":\s*\[\s*0\.4') {
+        Write-Error "-SelfTest: could not find MeshCube's Arcane::Transform position at 0.4 in $sceneRelative -- the fixture moved; fix this script rather than reporting a pass."
+        exit 1
+    }
+    $broken = [Regex]::Replace($sceneText,
+        '(?s)("name":\s*"MeshCube".*?"Arcane::Transform":\s*\{\s*"position":\s*\[\s*)0\.4',
+        '${1}0.6', 1)
+    if ($broken -eq $sceneText) {
+        Write-Error "-SelfTest: mutation did not apply to $sceneRelative -- refusing to run the lanes against an unbroken scene."
+        exit 1
+    }
+    Set-Content -Path $scenePath -Value $broken -Encoding UTF8 -NoNewline
+    Write-Host "-- -SelfTest: scene deliberately broken (MeshCube position x: 0.4 -> 0.6) --" -ForegroundColor Yellow
+}
+
 foreach ($stageHost in @('ArcaneRuntime', 'ArcaneEditor')) {
     $stagedBinaries = Join-Path $repoRoot "bin\$configDirName\$stageHost\ReferenceProject\Binaries"
     if (-not (Test-Path $stagedBinaries)) {
@@ -252,7 +302,10 @@ foreach ($combo in $combos) {
         '--settle', '30',
         '--report', $reportPath,
         '--compare', $reference
-        # deliberately NO --bless -- this script only ever CHECKS.
+        # deliberately NO --bless -- this script only ever CHECKS what the
+        # hosts render. (-SelfTest's one exception, mutating Content/, is a
+        # source-tree edit made before any host launches, and is restored
+        # before this script exits -- it is not a --bless.)
     )
 
     # Run from the exe's OWN directory: plugin DLLs, shaders and
@@ -387,7 +440,15 @@ $summary = [pscustomobject]@{
         }
     })
 }
-$summaryPath = Join-Path $repoRoot "bin\$configDirName\golden-gate-summary.json"
+# R20: under -SelfTest, write to a SEPARATE file. Task 5 runs the self-test
+# stage immediately after the ordinary gate stage on the same agent, so an
+# in-place write here would overwrite a green build's gatePassed=true summary
+# with an inverted one -- and every documented consumer of this gate is told
+# to assert on gatePassed in golden-gate-summary.json. Do not suppress the
+# write instead: the per-lane detail is exactly what makes a self-test
+# failure diagnosable.
+$summaryFileName = if ($SelfTest) { 'golden-gate-selftest-summary.json' } else { 'golden-gate-summary.json' }
+$summaryPath = Join-Path $repoRoot "bin\$configDirName\$summaryFileName"
 try {
     $summaryDir = Split-Path -Parent $summaryPath
     if (-not (Test-Path $summaryDir)) { New-Item -ItemType Directory -Path $summaryDir -Force | Out-Null }
@@ -396,6 +457,43 @@ try {
 } catch {
     # Never let summary-writing decide the gate's verdict; say so and continue.
     Write-Host "golden-gate: WARNING -- could not write $summaryPath ($($_.Exception.Message))" -ForegroundColor Yellow
+}
+
+# ---- -SelfTest: every lane must have NOTICED. ----
+# R11: this block sits HERE -- after the try/catch above closes, before
+# $anyFailure is checked below -- and nowhere else. In -SelfTest mode all
+# four lanes FAIL by design, so $anyFailure is $true; placing this block
+# after the ordinary exit paths would make it dead code that never restores
+# the mutated scene, leaving a corrupted main.arcscene in the tree. Placing
+# it inside the try above is worse: that catch exists specifically to stop
+# summary I/O from deciding the verdict, and it would swallow this block's
+# own errors too.
+if ($SelfTest) {
+    # Restore FIRST, in a finally-equivalent position, so a failed assertion
+    # below still leaves the tree clean.
+    try {
+        $notFailed = @($results | Where-Object { $_.Verdict -ne 'FAIL' })
+        if ($notFailed.Count -gt 0) {
+            Write-Host ""
+            Write-Host "SELF-TEST FAILED -- the gate did NOT notice a broken scene." -ForegroundColor Red
+            $notFailed | ForEach-Object { Write-Host "  $($_.Combo) reported $($_.Verdict)" -ForegroundColor Red }
+            Write-Host "A gate that cannot fail is not a gate. Fix the gate, not this check." -ForegroundColor Red
+            $selfTestOk = $false
+        } else {
+            Write-Host ""
+            Write-Host "SELF-TEST PASSED -- all $($results.Count) lane(s) caught the broken scene." -ForegroundColor Green
+            $selfTestOk = $true
+        }
+    } finally {
+        # R12: forward slashes -- see the mutation block above for why a
+        # backslash pathspec here would silently no-op.
+        & git -C $repoRoot checkout -- $sceneRelative
+        $dirty = & git -C $repoRoot status --porcelain -- $sceneRelative
+        if ($dirty) { Write-Error "-SelfTest: FAILED TO RESTORE $sceneRelative -- fix by hand before continuing."; exit 1 }
+        Write-Host "-- -SelfTest: scene restored --" -ForegroundColor DarkGray
+    }
+    # The self-test INVERTS the ordinary verdict: red lanes are the pass.
+    if ($selfTestOk) { exit 0 } else { exit 1 }
 }
 
 if ($anyFailure) {
