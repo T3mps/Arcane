@@ -1,7 +1,7 @@
 name: CI
 
-# Manifold2D-style hosted windows lane: generate, build Debug+Release, run the
-# suite EXCLUDING [gpu] (hosted runners have no capable GPU). The Jenkins
+# Manifold2D-style hosted windows lane: generate, build Debug+Release+Dist, run
+# the suite EXCLUDING [gpu] (hosted runners have no capable GPU). The Jenkins
 # multibranch pipeline on windows-1 is the full gate (3 configs, [gpu] tests,
 # the --frames scripted verify).
 
@@ -52,10 +52,17 @@ jobs:
       - name: Build Release
         run: msbuild Arcane.slnx /p:Configuration=Release /m /nologo /v:minimal
 
+      - name: Build Dist
+        run: msbuild Arcane.slnx /p:Configuration=Dist /m /nologo /v:minimal
+
       - name: Test Debug (~[gpu])
         working-directory: bin/Debug-windows-x86_64-md/ArcaneTests
         run: .\ArcaneTests.exe "~[gpu]"
 
       - name: Test Release (~[gpu])
         working-directory: bin/Release-windows-x86_64-md/ArcaneTests
+        run: .\ArcaneTests.exe "~[gpu]"
+
+      - name: Test Dist (~[gpu])
+        working-directory: bin/Dist-windows-x86_64-md/ArcaneTests
         run: .\ArcaneTests.exe "~[gpu]"
