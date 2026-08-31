@@ -92,7 +92,8 @@ namespace Arcane
         std::optional<std::string> Resolve(const Guid& id) const;
 
         // Snapshot of every (guid, mount path) pair -- the asset browser's feed.
-        // Unordered (map iteration order); presentation sorts as it likes.
+        // Ordered: ascending mount path, Guid breaking ties, so the sequence is
+        // total and a function of content alone -- never of hash or insertion order.
         std::vector<std::pair<Guid, std::string>> All() const;
 
         std::size_t Count() const { return m_byGuid.size(); }

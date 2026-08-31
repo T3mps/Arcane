@@ -394,6 +394,24 @@ namespace Arcane
         out.reserve(m_byGuid.size());
         for (const auto& [id, mountPath] : m_byGuid)
             out.emplace_back(id, mountPath);
+        // DETERMINISTIC ORDER, and it is load-bearing. m_byGuid is an
+        // unordered_map, so the walk above tracks guid HASHES and insertion
+        // history: two trees holding identical files enumerate them
+        // differently. The editor's Assets panel renders this order and the
+        // panel sits inside the editor-ui golden capture, so an unsorted
+        // walk makes that image machine-dependent -- measured 2026-08-30.
+        // Sorted by mount path (what the panel displays), Guid breaking ties
+        // so the order is TOTAL. std::string's operator< goes through
+        // char_traits::compare -- byte-wise, NOT locale-aware -- so the result
+        // is identical on every machine. A locale-aware sort would reintroduce
+        // exactly the machine-dependence this removes.
+        std::sort(out.begin(), out.end(),
+                  [](const std::pair<Guid, std::string>& a,
+                     const std::pair<Guid, std::string>& b)
+                  {
+                      if (a.second != b.second) return a.second < b.second;
+                      return a.first < b.first;
+                  });
         return out;
     }
 }

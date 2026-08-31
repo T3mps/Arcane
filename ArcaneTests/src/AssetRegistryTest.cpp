@@ -2,7 +2,7 @@
 // callback). The rest of AssetRegistry's behaviour (id resolution, native vs.
 // imported-binary routing, mount-path shape) is already covered by
 // AssetBrowserTest.cpp/MaterialAssetTest.cpp -- this file is scoped to the
-// progress-callback addition only. CPU-only.
+// progress-callback addition and All()'s deterministic ordering. CPU-only.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -13,8 +13,10 @@
 
 #include <Panels/DiagnosticStore.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -277,4 +279,41 @@ TEST_CASE("Project::Open with no Saved/Diagnostics mounts nothing and does not f
 
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
+}
+
+TEST_CASE("AssetRegistry::All() is ordered deterministically, not by hash", "[project]")
+{
+    const auto dir = TempDir("all_deterministic_order");
+
+    // Eight assets whose NAMES sort alphabetically but whose GUIDs deliberately
+    // do not. m_byGuid is keyed by Guid, so an unordered_map walk tracks the
+    // guid hash and has ~1/40320 odds of coming out name-sorted by luck --
+    // which is what makes this test capable of failing against the old code.
+    const char* names[] = { "h", "c", "a", "f", "b", "g", "d", "e" };
+    const char* guids[] = {
+        "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222",
+        "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444",
+        "55555555-5555-4555-8555-555555555555", "66666666-6666-4666-8666-666666666666",
+        "77777777-7777-4777-8777-777777777777", "88888888-8888-4888-8888-888888888888",
+    };
+    for (int i = 0; i < 8; ++i)
+        std::ofstream(dir / (std::string(names[i]) + ".arcmat"), std::ios::binary)
+            << R"({ "id": ")" << guids[i] << R"(" })";
+
+    Arcane::AssetRegistry reg;
+    reg.ScanContent(dir, "game");
+
+    const auto all = reg.All();
+    REQUIRE(all.size() == 8);
+
+    // THE PROPERTY: sortedness over a TOTAL key makes the sequence a function
+    // of the content alone -- independent of hash and insertion order -- which
+    // is what makes the editor-ui golden image reproducible on any machine.
+    CHECK(std::is_sorted(all.begin(), all.end(),
+        [](const std::pair<Arcane::Guid, std::string>& a,
+           const std::pair<Arcane::Guid, std::string>& b)
+        {
+            if (a.second != b.second) return a.second < b.second;
+            return a.first < b.first;
+        }));
 }
