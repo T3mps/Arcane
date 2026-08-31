@@ -78,8 +78,17 @@ type bin\Debug-windows-x86_64-md\golden-gate-summary.json
 It runs in CI from the `Jenkinsfile` on a GPU agent; GitHub Actions builds and runs `ArcaneTests`
 only.
 
+`golden-gate.ps1 -SelfTest` proves the gate is capable of failing: it deliberately breaks
+`ReferenceProject`'s scene, asserts all four lanes go red, and restores in a `try/finally` that
+covers the whole mutation-to-restore window, not just its tail. The Jenkins pipeline runs it on
+`main`/`milestone/*` only, immediately after the ordinary "Golden gate" stage on the same agent --
+the property it proves belongs to the gate itself, which changes rarely, so it does not need to run
+on every branch.
+
 **The machine-readable contract is `golden-gate-summary.json`. Assert on `gatePassed` and the
-per-lane `verdict` -- never on the exit code.**
+per-lane `verdict` -- never on the exit code.** `-SelfTest` writes a SEPARATE
+`golden-gate-selftest-summary.json` in the same directory (also carrying `"selfTest": true`), so a
+self-test run never overwrites a green build's `gatePassed: true` artifact.
 
 ### Blessing a reference
 
@@ -105,8 +114,9 @@ so bless it once.
 
 ### `scripts/desk-verify-golden-gate.ps1`
 
-The desk half, for what CI cannot check: that the gate **can fail** (it breaks the scene on
-purpose and asserts the lanes go red) and that blessing is **cheap** (it times a full
+The desk half. CI now proves the gate **can fail** too (`golden-gate.ps1 -SelfTest`, above, on
+`main`/`milestone/*`) -- this script's Phase A covers the same ground locally, with eyes on it, on
+ANY branch. What only this script still covers: that blessing is **cheap** (Phase B times a full
 break -> fail -> bless -> pass round-trip). Needs a display and a real GPU. Every mutation is
 inside `try/finally` and restored with `git checkout --`, so Ctrl-C is safe.
 

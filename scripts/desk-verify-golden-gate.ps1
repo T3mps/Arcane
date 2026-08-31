@@ -1,11 +1,14 @@
 # desk-verify-golden-gate.ps1 -- the desk half of the golden-image gate.
 #
 # scripts/golden-gate.ps1 is the gate itself and runs in CI (see the
-# Jenkinsfile). THIS script is the part CI cannot do: it needs a display and a
-# real GPU, and it answers two questions a green gate never answers on its own.
+# Jenkinsfile, which now also runs `golden-gate.ps1 -SelfTest` on
+# main/milestone/*). THIS script needs a display and a real GPU, so it
+# remains the one that answers these two questions locally, on ANY branch,
+# with eyes on it:
 #
 #   1. CAN THE GATE FAIL? A gate never observed failing is not a gate. Phase A2
 #      breaks the scene on purpose, asserts the runtime lanes go red, restores.
+#      (CI now asserts this too, via -SelfTest, but only on main/milestone.)
 #   2. IS BLESSING CHEAP? Phase B times a full break -> fail -> bless -> pass
 #      round-trip. A gate nobody can cheaply bless gets switched off in week one.
 #
