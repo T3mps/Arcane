@@ -111,6 +111,20 @@ pipeline {
                         }
                     }
                 }
+                stage('Golden gate self-test') {
+                    // A gate never observed failing is not a gate. This breaks
+                    // the scene on purpose and asserts all four lanes catch it.
+                    //
+                    // main/milestone ONLY: the property under test belongs to
+                    // the GATE, which changes rarely, and the Golden gate
+                    // stage above already runs the four-lane gate TWICE
+                    // (Release then Debug) -- this is a third run, so the
+                    // added cost is roughly +50%, not a doubling.
+                    when { anyOf { branch 'main'; branch 'milestone/*' } }
+                    steps {
+                        bat 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\golden-gate.ps1 -Configuration Debug -SelfTest'
+                    }
+                }
                 stage('ReferenceProject (SDK build)') {
                     // The in-repo external-project consumer: its own premake
                     // workspace over build/arcane.lua -> Binaries/ReferenceGame.dll.
