@@ -37,7 +37,7 @@ Two findings from the addendum set the whole shape:
 **The facts exist; nothing names them.** That is what this arc supplies, and it is why the arc's
 centre is a vocabulary rather than new plumbing.
 
-### In scope (11 items)
+### In scope (10 items)
 
 | # | Item | Source |
 |---|---|---|
@@ -51,7 +51,13 @@ centre is a vocabulary rather than new plumbing.
 | 8 | Preflight readiness gate | Tier 2.10 |
 | 9 | Engine-assertion routing into Catch2 | addendum D.4 |
 | 10 | Progress bound distinct from duration bound | addendum D.4 |
-| 11 | `--fixed-dt nan` validation | shelved servitor-arc defect, folded into #7 |
+
+**Removed from scope during planning, 2026-09-01:** a `--fixed-dt nan` validation item. It is
+**already implemented** at `ArcaneClient/src/Arcane/Host/HostConfig.cpp:191-195`
+(`!std::isfinite(cfg.fixedDtSeconds) || cfg.fixedDtSeconds <= 0.0`), with a comment spelling out
+the NaN reasoning. Two memory notes disagreed about whether it was owed and the spec took the
+stale one. What survives is only the requirement that **`--fixed-time` be given the same
+validation** — see 5.2.
 
 ### Out of scope
 
@@ -230,11 +236,19 @@ but scoped to axes we actually have:
 | Field | Required | Meaning |
 |---|---|---|
 | `target` | yes | a gate lane label (`"runtime/d3d12"`) or a Catch2 test-name / tag pattern |
-| `backends` | no | `["d3d12","vulkan"]`; absent means all |
+| `backends` | no | `["dx12","vulkan"]`; absent means all |
 | `hosts` | no | `["runtime","editor"]`; absent means all |
 | `configurations` | no | `["Debug","Release","Dist"]`; absent means all |
 | `reason` | yes | free text — there is no tracker to link to |
 | `expires` | yes | ISO `YYYY-MM-DD` |
+
+**Backend spelling is `dx12` / `vulkan`** — the CLI's own vocabulary
+(`HostConfig.cpp:12`, `.Choices({ "dx12", "vulkan" })`) and the gate's lane labels
+(`golden-gate.ps1:167-170`). Note three spellings exist in the tree: the CLI's `dx12`, the
+report's `D3D12` (`ToString(GraphicsBackend)`, `GraphicsBackend.cpp:9`), and the enumerator
+`GraphicsBackend::D3D12`. The exclusion file uses the CLI spelling because that is what a person
+types; matching is case-insensitive and accepts `d3d12` as an alias for `dx12` so the other
+spelling is not a silent miss.
 
 **The expiry is enforced by the same run that honours the entry.** Past its date, the
 *exclusion* is reported `Failed` — not the thing it excludes. It surfaces in both places:
@@ -333,6 +347,19 @@ own named fact. The comparison doc's section 1 already ruled on this.
 pins the step. UE's equivalent is `OverrideTimeTo`, applied at
 `AutomationBlueprintFunctionLibrary.cpp:198-202` under the comment *"Turn off time the ultimate
 source of noise."*
+
+**Why it is worth having when `--fixed-dt` already makes a run deterministic:** it decouples scene
+time from the FRAME COUNT. Today `Time` is `frames x fixedDt`, so changing `--frames 60` to
+`--frames 90` re-shades anything animated on `Time` — `ReferenceProject`'s `PulseSprite` computes
+`sin(Time * PulseSpeed)` — and silently invalidates a blessed reference.
+
+**The seam, found during planning.** Do NOT pin the accumulators: `io.hostClock`
+(`RuntimeFrame.cpp:235`) and `m_editorClock` (`EditorAppFrame.cpp:1291`) each serve TWO purposes —
+the scene's `Time` and the shader-compile / material-watch debounce clocks
+(`RuntimeFrame.cpp:770`, `EditorApp.hpp:1145`, `EditorAppProject.cpp:204-206`) — and a frozen
+clock would break the latter. Override **only** where the value is handed to the scene, which is
+a single assignment in each host: `frame.now` at `RuntimeFrame.cpp:321` and
+`EditorAppFrame.cpp:1296`. The accumulators keep advancing, untouched.
 
 Since the task touches that parser anyway, **fold in the shelved `--fixed-dt nan` defect**: both
 flags reject non-finite and negative values rather than accepting them and producing a run whose
