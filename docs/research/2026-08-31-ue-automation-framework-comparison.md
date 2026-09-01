@@ -235,3 +235,394 @@ fallback chain (needs a second axis); brightness-window / IgnoreColors; Smoke/pr
 **the highest-value unexplored area — `Programs/LowLevelTests/`, which is UE's CATCH2 harness.**
 `ArcaneTests` is Catch2, so their Catch2 integration is the most directly comparable thing in the
 whole tree and was never opened.
+
+---
+
+# ADDENDUM — 2026-09-01: the three unread areas, read from source
+
+Closes the three items this doc's own "What was NOT read" section named as
+highest-value: `Programs/LowLevelTests/` (UE's Catch2 harness), the CVar list behind
+`bDisableNoisyRenderingFeatures`, and `ScreenShotManager`'s fallback resolution. Same tree
+(`.example/UnrealEngine-release/`, UE 5.6.1); paths below are relative to `Engine/Source/`
+unless noted. Nothing above is retracted.
+
+---
+
+## A. UE's Catch2 harness — the most directly comparable code in their tree
+
+`Programs/LowLevelTests/` is only the *test targets* (`FoundationTests`, `MathCoreTests`,
+`StateStreamTests`). The harness is `Developer/LowLevelTestsRunner/` — **2,847 lines of C++**
+(`wc -l` over its `.cpp`/`.h`) plus an 801-line `README.md` that is the best-written artifact
+in the whole comparison.
+
+### A.1 The runner is thin — and ours is thinner still
+
+`Private/TestRunner.cpp:290-338` (`RunTests`) is the whole entry point:
+
+```
+ReadAndAppendAdditionalArgs(exe path)   :307   <- command line may come from a FILE
+ParseCommandLine                        :316
+SleepOnInit                             :318
+GlobalSetup                             :320
+Catch::Session().run(...)               :336   (via RunCatchSession, :283-286)
+ON_SCOPE_EXIT { GlobalTeardown; Terminate; UnloadModulesAtShutdown; RequestEngineExit; GLog->TearDown }  :322-334
+```
+
+Ours is `ArcaneTests/src/test_main.cpp:18-34`: pin the shared Astra TypeContext, pin
+`Arcane.dll`'s module slot via a throwaway `Runtime`, `return Catch::Session().run(argc, argv)`.
+Same shape. **We have no equivalent of their steps 1, 2, 3, or the teardown scope** — and three
+of those four are worth having (below).
+
+### A.2 THE FINDING: engine assertions are routed INTO Catch2, not around it
+
+Two mechanisms, both absent from ours:
+
+- **`GError` swap** — `Private/TestRunner.cpp:218-225` replaces the platform error device with
+  `FTestRunnerOutputDeviceError`, whose `Serialize` (`Private/TestRunnerOutputDeviceError.cpp:12-18`)
+  builds a `Catch::AssertionHandler` and calls `handleMessage(ResultWas::ExplicitFailure, ...)`.
+  Its own comment: *"report error back to catch otherwise failed `check`'s don't fail the tests"*.
+- **`ensure` forwarding** — `Private/TestRunner.cpp:229-235` hooks
+  `FCoreDelegates::OnHandleSystemEnsure` and pushes `GErrorHist` into
+  `Catch::getResultCapture().handleMessage(...)` as an `ExplicitFailure`. Comment: *"forward
+  unhandled `ensure` to catch to force tests to fail. test will continue to execute"*.
+
+**We have `ARC_ASSERT` / `ARC_VERIFY` / `ARC_ENSURE` (`ArcaneClient/src/Arcane/Base/Assert.hpp:21-23`,
+forwarding to Mosaic) and no equivalent routing.** Today an engine assertion firing inside a test
+is whatever Mosaic does with it — not a Catch2 assertion failure attributed to the running test
+case. That is a genuine attribution gap, not a stylistic difference.
+
+### A.3 And the inverse: asserting that an assertion FIRES
+
+`Public/TestMacros/Assertions.h:9-30` gives eight macros:
+
+```
+REQUIRE_ENSURE / CHECK_ENSURE / REQUIRE_ENSURE_MSG / CHECK_ENSURE_MSG
+REQUIRE_CHECK  / REQUIRE_CHECK_MSG / REQUIRE_CHECK_SLOW / REQUIRE_CHECK_SLOW_MSG
+```
+
+Each wraps the expression in an `FEnsureScope` / `FCheckScope` (`Runtime/Core/Public/Tests/`),
+runs it, and fails Catch2 if `scope.GetCount() == 0` — *"Expected failure of `check` not
+received"* (`:66`). The `_MSG` variants also match the message text (`:79`).
+
+This is **`NegativeFilter` at the assertion level** — the first-class slot section 7 identified,
+implemented. Our `-SelfTest` proves the *gate* can fail; this proves an individual *guard* fires.
+Complementary, not substitutes.
+
+### A.4 Their timeout is a LOG LINE parsed by a string match in C#
+
+`Private/TestListeners/EventListener.cpp:29-50` spawns a detached thread on the first test case
+(`:75-77`) that sleeps `GetTimeoutMinutes()` and then, if the test name has not changed,
+`UE_CLOG(..., Error, TEXT("Timeout detected: Test case \"%hs\" has been running for more than
+%d minute(s)"), ...)` (`:40-41`).
+
+It does **not** abort anything. Termination is Gauntlet's, via
+`Programs/AutomationTool/LowLevelTests/Tests/Gauntlet.LowLevelTestNode.cs:370-384`:
+`Line.Contains("Timeout detected")`.
+
+Two things to take from this and one not to:
+
+- **Do not take** the design: a cross-language contract carried by an English log substring,
+  where the C++ side cannot enforce anything. Also `TimeoutThread = new std::thread(...)`
+  (`:77`) is never joined or deleted and its body is `while (true)` — a leaked thread per run.
+- **Do take** the *distinction* it implies, which appears properly on the C# side (A.6): a
+  **progress/inactivity** bound is not a **total-duration** bound.
+- **Do take** the per-test granularity. Our timeouts are per-phase (`--settle-timeout`); we have
+  no "this one test case has hung" signal at all.
+
+### A.5 Their reporter is hand-written because their Catch2 is old — ours is not
+
+`Private/UnrealReporter.cpp:25-163` is a custom `StreamingReporterBase` registered as
+`CATCH_REGISTER_REPORTER("unreal", FUnrealReporter)` (`:163`), emitting a minimal
+`<testrun>/<testcase>/<failure>/<result success= duration=>` XML. It sets
+`shouldRedirectStdOut = true` and `shouldReportAllAssertions = true` (`:34-35`) and emits
+`skipped="true"` for skipped cases (`:76-81`).
+
+**Why they wrote it:** their vendored Catch2 is `ThirdParty/Catch2/v3.4.0` (also `v3.0.1` and a
+legacy `2.13.6`). Ours is **3.15.0** (`ThirdParty/Catch2/extras/catch_amalgamated.hpp:7571-7573`)
+— eleven minors ahead — and ships a built-in `JsonReporter`
+(`extras/catch_amalgamated.hpp:14113`). We do not need to write one.
+
+Two more places our newer Catch2 makes a UE-style fork unnecessary:
+
+- UE **forked Catch2** to add `catch_active_test.{hpp,cpp}` and the `GROUP_*` lifecycle
+  (`ThirdParty/Catch2/v3.4.0/src/catch2/catch_active_test.hpp`, `catch_test_group_info.hpp`,
+  `interfaces/catch_interfaces_group.hpp`,
+  `internal/catch_test_group_event_registry_impl.hpp` — none exist upstream). Their
+  `getActiveTestName()` (`catch_active_test.cpp:18-23`) is available to us unforked as
+  `IResultCapture::getCurrentTestName()` (`catch_amalgamated.hpp:1129`).
+  **If a future task wants the running test's name, do not fork Catch2.**
+- **Zero tests already fails for us.** `Config::zeroTestsCountAsSuccess()`
+  (`extras/catch_amalgamated.cpp:911`) is driven by `--allow-running-no-tests`
+  (`:3586-3587`), off by default. UE has to enforce the same property by hand (A.6).
+
+### A.6 The verdict machine — `Gauntlet.LowLevelTestNode.cs`, and it corroborates our rule
+
+`Programs/AutomationTool/LowLevelTests/Tests/Gauntlet.LowLevelTestNode.cs:170-330` (`StopTest`)
+is the closest analogue to our `golden-gate.ps1` verdict block. Its precedence:
+
+| Order | Condition | Verdict | Reason string |
+|---|---|---|---|
+| 1 | `WasKilled` && (`MaxDuration` \|\| already TimedOut) | `TimedOut` | "Timed Out" (`:250-254`) |
+| 2 | `WasKilled` otherwise | `Failed` | "Process was killed by Gauntlet with reason {InReason}" (`:257-258`) |
+| 3 | `ExitCode != 0` | `Failed` | "Process exited with exit code {N}" (`:261-265`) |
+| 4 | report copy threw | `Failed` | **"Unable to read test report"** (`:266-270`) |
+| 5 | report present | parse it (`:271-307`) | "Tests passed/failed according to xml report" |
+| 6 | no report | exit code decides | **"(no report to parse)"** (`:308-320`) |
+
+**The absence of a report is its own named outcome at two different levels** — a copy that
+failed (4) and a report that was never requested (6) get different strings. This is an
+independent arrival at the rule our gate already holds
+(`scripts/golden-gate.ps1:589-606`: *"COULD NOT DETERMINE pass/fail... treat this as
+unresolved"*). Two codebases, same conclusion, reached separately.
+
+**And the vacuity guard, mechanised** — `Utility/LowLevelTests.ReportParser.cs:41-54`:
+
+```csharp
+return NrOverallResultsFailures == 0 && NrOverallResultsCasesFailures == 0
+    && NrOverallResultsSuccesses > 0 && NrOverallResultsCasesSuccesses > 0;
+```
+
+Initialised to `-1` (`:36-39`), so a missing `<OverallResults>` element yields `false`; an
+unparseable document sets `IsValid = false` and short-circuits (`:22-33`). **A run that passed
+nothing is not a pass.** This is `feedback_default_values_are_not_measurements` written as code.
+
+**Their console path is much weaker — do not copy it.** `Utility/LowLevelTests.LogParser.cs:135`:
+`TestResults.Passed = string.IsNullOrEmpty(TestCaseResult.Failed) || Convert.ToInt32(...) == 0;`
+— if the regex finds a total-cases line but no `N failed` line, that reads as PASS. The XML path
+has the property; the regex path is a fallback that quietly lacks it.
+
+**The inactivity watchdog** (`:145-163`) is separate from `MaxDuration` (`:36`, 30 min): if no
+new log lines arrive for `Timeout + 0.5` minutes, `TestResult.TimedOut`. Progress and duration
+are two different bounds. We have neither at the process level.
+
+### A.7 Command-line composition — two cheap ideas
+
+`RunLowLevelTests.cs:1019-1049` assembles the child command line once, then sets
+`CanAlterCommandArgs = false` (`:1077`) so nothing downstream can mutate it. Notable flags:
+
+- `--filenames-as-tags` (`:1034`) — Catch2 auto-tags every case with its source filename, so
+  `-# [#ImageCompareCascadeTest]` selects a file. Free in our Catch2, unused by us.
+- `--durations=no` (`:1019`), `--out=<report path>` (`:1032`), `--debug --log` (`:1043-1044`)
+- `--buildmachine` gated on `Environment.GetEnvironmentVariable("IsBuildMachine") == "1"` (`:1049-1051`)
+
+`Private/TestRunner.cpp:94-184` is the child's side. The parse rule is worth stating exactly:
+**every unrecognised argument falls through to Catch2** (`:179`), everything after `--extra-args`
+goes to the application (`:116`), and `--break` is appended unconditionally (`:183`). And
+`ReadAndAppendAdditionalArgs` (`:307`) lets the whole command line come from a file next to the
+exe — a device-farm affordance we do not need.
+
+### A.8 Test-target knobs (README, "Test Target Rules Reference")
+
+`TestTargetRules` exposes `bUsePlatformFileStub` (swap `FPlatformFile` for an IO-disabling mock),
+`bMockEngineDefaults`, `bNeverCompileAgainstEngine` / `CoreUObject` / `ApplicationCore` /
+`Editor`, and `bWithLowLevelTestsOverride`. `TestModuleRules.TestMetadata` carries `TestName`,
+`TestShortName`, `ReportType`, **`Disabled`**, `InitialExtraArgs`, `HasAfterSteps`, `UsesCatch2`,
+`PlatformTags`, `PlatformCompilationExtraArgs`, `PlatformsRunUnsupported`.
+
+`Public/TestHarness.h:98-102` also gives `DISABLED_TEST_CASE` / `DISABLED_SCENARIO` /
+`DISABLED_SECTION`, which **compile the body out entirely** rather than skipping at runtime — a
+third disabling mechanism alongside the `Disabled` metadata flag and the excludelist of section 2.
+Three mechanisms for one concept is not a model to copy; the excludelist (ticket-linked,
+config-driven) is still the right one.
+
+`Public/TestCommon/Expectations.h` (435 lines) is a compatibility shim mapping the old
+`TestEqual(What, Actual, Expected)` AutomationTest vocabulary onto `FAIL_CHECK`, with
+`CHECK_EQUALS`/`CHECK_NOT_EQUALS` macros at `:430-433`. It lives in an **anonymous namespace in a
+header** (`:18`) — one copy per TU. Migration scaffolding, not a design.
+
+### A.9 Their runner self-test is two cases
+
+`Tests/SelfTests.cpp:10-25`: `SKIP` works; `getActiveTestName`/`Tags` return the right strings.
+This **confirms** section 9's corrected claim — Gauntlet's `SelfTest/` unit-tests the parts, and
+this file tests two runner behaviours. Neither breaks the subject and asserts the gate goes red.
+`-SelfTest` remains ours alone.
+
+---
+
+## B. The CVar list behind `bDisableNoisyRenderingFeatures`
+
+`Developer/FunctionalTesting/Private/AutomationBlueprintFunctionLibrary.cpp`.
+
+`FAutomationTestScreenshotEnvSetup` declares thirteen `FConsoleVariableSwapperTempl` members by
+CVar name at `:238-250`. `Setup()` (`:258-317`) applies them:
+
+**When `bDisableNoisyRenderingFeatures` (`:264-273`):**
+
+| CVar | Value |
+|---|---|
+| `r.AntiAliasingMethod` | 0 |
+| `r.DefaultFeature.AutoExposure` | 0 |
+| `r.DefaultFeature.MotionBlur` | 0 |
+| `r.MotionBlurQuality` | 0 |
+| `r.SSR.Quality` | 0 |
+| `r.ContactShadows` | 0 |
+| `r.EyeAdaptationQuality` | 0 |
+| `r.TonemapperGamma` | 2.2 |
+
+**Else when `bDisableTonemapping` (`:275-279`):** `r.EyeAdaptationQuality` 0, `r.TonemapperGamma`
+2.2. Note the `else if` — the tonemapping flag is only reachable when the noisy-features flag is
+off, which is exactly what its `EditCondition = "!bDisableNoisyRenderingFeatures"` metadata says
+(`Public/AutomationScreenshotOptions.h:155`).
+
+**Unconditionally, on every screenshot (`:281-296`):**
+
+| CVar | Value | Purpose (their comment) |
+|---|---|---|
+| `r.DynamicRes.TestScreenPercentage` | 0 | "Completely disable dynamic resolution" |
+| `r.DynamicRes.OperationMode` | 0 | idem, plus an `EmitDynamicResolutionEvent` End/Begin frame pair (`:288-289`) to force the change to take |
+| `r.ScreenPercentage` | 100 | "Forces ScreenPercentage=100" |
+| `r.SecondaryScreenPercentage.GameViewport` | 100 | **"Ignore High-DPI settings"** |
+
+The mechanism is `FConsoleVariableSwapperTempl::Set` (`:106-137`), which records `OriginalValue`
+on first touch and writes with **`SetWithCurrentPriority`** — *"I need these overrides to
+supersede anything the user does while taking the shot"* (`:135`). `Restore()` (`:139-152`,
+called from `FAutomationTestScreenshotEnvSetup::Restore` at `:319-352`) writes the original back
+at the same priority.
+
+### Two cautions that matter more than the list
+
+1. **A declared knob is not an applied knob.** `TonemapperSharpen` (`r.Tonemapper.Sharpen`) is
+   constructed at `:246` and declared at `Public/AutomationBlueprintFunctionLibrary.h:301`. It is
+   **never `Set`**, and its `Restore()` is commented out at `:331`. Thirteen declared, twelve
+   applied — and nothing in the type system or a test notices.
+2. **The per-view path is dead code.** `FAutomationViewExtension::SetupViewFamily` (`:181-228`)
+   has an `if (Options.bDisableNoisyRenderingFeatures)` block at `:204-221` whose body is
+   **entirely commented out**, and the same for `bDisableTonemapping` at `:223-227`. The live
+   show-flag path reads a separate `UAutomationViewSettings` asset (`:183-196`) — a different
+   input from the boolean. The declared option and the mechanism that once implemented it drifted
+   apart, and the abandoned half was left in place looking implemented.
+
+   This is `feedback_instrument_blind_spots` in someone else's tree: the declared instrument
+   became the definition of done, and nobody re-derived what it actually reached.
+
+**`OverrideTimeTo` is live**, and it is in the view extension, not the CVars:
+`InViewFamily.Time = FGameTime::CreateUndilated(Options.OverrideTimeTo, 0.0f)` (`:198-202`),
+under the comment *"Turn off time the ultimate source of noise."* Section 5's determinism-lever
+claim stands, and now has its implementation site.
+
+**What this means for us.** We render offscreen with a fixed timestep and no post stack to speak
+of, so most of the list has no counterpart yet. Two do:
+`r.SecondaryScreenPercentage.GameViewport = 100` is a **DPI-independence guarantee at capture
+time**, and `r.ScreenPercentage = 100` a **resolution-independence** one. When F4 gives the
+editor its own camera and viewport, the capture path needs both properties stated somewhere — and
+the lesson above says: state them where something can *check* they were applied, not as a list of
+names in a constructor.
+
+---
+
+## C. `ScreenShotManager`'s fallback resolution
+
+`Developer/ScreenShotComparisonTools/Private/ScreenShotManager.cpp`.
+
+### C.1 The path shape
+
+`GetApprovedFolderForImageWithOptions` (`:98-134`):
+
+```
+non-confidential (:125):  <Project>/Test/Screenshots/<Context>/<ShotName>/<Platform>/<RHI_FeatureLevel>/
+confidential     (:121):  <Project>/Platforms/<Platform>/Test/Screenshots/<Context>/<ShotName>/<RHI_FeatureLevel>/
+```
+
+`GetIdealApprovedFolderForImage` (`:136-140`) is that call with the project's default
+confidentiality option. "Ideal" is a named concept: *the folder this image would live in if a
+reference existed for exactly this platform and RHI*.
+
+### C.2 The four-step resolution — and what it logs
+
+`FindApprovedFiles` (`:142-235`):
+
+1. Search the ideal path (`:157`).
+2. If empty **and** `bUseConfidentialPlatformPaths`, retry the non-confidential path (`:162-167`).
+3. Walk a **chain**, not a single hop (`:171-223`): `FallbackPlatforms.Find(CurrentPlatformRHI)`
+   (`:180`) maps child to parent; on a hit, `CurrentPlatformRHI` becomes the parent (`:186`) and
+   the loop repeats. The key is split on `/` into `Platform` and `RHI_FeatureLevel`, then on `_`
+   into RHI and feature level (`:188-207`) — a one-component value means feature-level-only, no
+   RHI (`:200-206`). Success logs `"Using fallback images from %s"` (`:215`).
+4. If still empty, log **every path tried**: `"Couldn't Find any fallback images, tried the
+   following paths:"` then one line per entry of the `TriedPaths` array (`:227-231`), which
+   `FindImages` appends to on every attempt (`:147`).
+
+The chain is built at startup by `BuildFallbackPlatformsListFromConfig` (`:796-...`, called from
+`:51`), merging the project's `ScreenshotFallbackPlatforms` with
+`UScreenShotComparisonSettings::GetAllPlatformSettings()` (`:801-803`).
+
+**Step 4 is the finding.** An absent reference is reported *with the search space that failed to
+produce it*. That is the mechanised form of Tier 1 item 4's `compare-missing-reference` absence:
+not "no reference", but "no reference, and here are the N paths I looked in, in order".
+
+**One hazard, do not inherit:** the `while (ApprovedImages.Num() == 0)` loop (`:178`) exits only
+when `Find` misses. A config cycle (A to B to A) never terminates. If we adopt a chain, the walk
+needs a visited set or a depth bound.
+
+### C.3 The result knows which reference it used
+
+`Public/ImageComparer.h`:
+
+- `IsNew()` (`:400-403`) — `ApprovedFilePath.IsEmpty()`: there was no reference at all.
+- `IsIdeal()` (`:409-412`) — `FPaths::GetPath(ApprovedFilePath) == IdealApprovedFolderPath`:
+  the reference used was this platform's own, not an inherited one.
+- `AreSimilar()` (`:417-425`) — **returns `false` when `IsNew()`**, before any tolerance check.
+  A missing reference is never a pass. Ours holds the same rule from the other side
+  (`VerifyReport.hpp:255-264`: `resolvedLevel "none"` must "NEVER [be conflated] with a
+  zero-difference pass"), but ours states it in a comment for the caller to honour, while theirs
+  is a method that cannot be got around.
+
+`IsNew()` and `AreSimilar()` travel as **separate booleans** to the controller
+(`Developer/AutomationController/Private/AutomationControllerManager.cpp:511-534`, including the
+log line `"(IsNew=%d, AreSimilar=%d)"` at `:530-533`) — two facts, never collapsed into one
+verdict. And a non-ideal comparison renames the report's approved artifact to
+`Approved_<Platform>_<RHI>.png` (`ScreenShotManager.cpp:419-425`) so the provenance of the
+reference is visible in the output directory itself.
+
+**Passing against a fallback reference is a third state, and it is neither PASS nor FAIL.** We
+have exactly this today, unnamed: `resolvedLevel` is `"none" | "shared" | "backend"`
+(`VerifyReport.hpp:255-258`), so `"shared"` *is* our fallback level — a lane can pass against the
+shared `editor-ui` reference while its backend-specific reference does not exist, and
+`golden-gate.ps1` reports that as an unqualified `PASS` (`scripts/golden-gate.ps1:579-581` reads
+`exitReason` and `compare.passed`, and never reads `resolvedLevel`). **The field exists; the gate
+does not look at it.**
+
+### C.4 A versioned result with a supported RANGE
+
+`Public/ImageComparer.h:352-358`: `int32 Version`, `CurrentVersion = 3`,
+`OldestSupportedVersion = 2`, with `IsValid()` (`:385`) checking
+`Version >= Oldest && Version <= Current` and `SetInvalid()` (`:392-395`) stamping 0.
+
+Ours has `schemaVersion` as a single number. A **range** plus a validity predicate is the better
+shape for the Servitor boundary `VerifyReport.hpp` describes: it lets a consumer say "I understand
+2..3" rather than "I understand 3", and gives a deliberate way to mark a result unreadable. Cheap,
+and it costs nothing to adopt at the next bump.
+
+---
+
+## D. What the addendum changes about the proposed scope
+
+Nothing above is removed. Four changes:
+
+1. **Tier 1 item 1 (verdict vocabulary) gains a fifth value and a second consumer.** Beyond
+   `Failed` vs "could not run", section C.3 shows **passed-against-a-fallback** is its own state,
+   and we already carry the datum (`resolvedLevel`) without grading it. And it is not only the
+   gate: GitHub Actions runs `ArcaneTests.exe "~[gpu]"` with **no reporter at all**
+   (`.github/workflows/ci.yml:59-68`), so its only signal is the process exit code — the exact
+   thing our own gate's rule forbids relying on. Jenkins does better (`Jenkinsfile:54-55`,
+   `-r junit::out=...`) but nothing asserts on the counts.
+2. **Tier 1 item 4 (host witness) gets a shape.** The pieces to imitate are
+   `Gauntlet.LowLevelTestNode.cs`'s verdict precedence (A.6), the `successes > 0` vacuity guard
+   (`ReportParser.cs:54`), and `TriedPaths` (`ScreenShotManager.cpp:227-231`). All three are small
+   and all three are properties our current surface lacks.
+3. **Tier 2 item 6 (telemetry) has a first customer and a free mechanism.** The baseline we track
+   by hand — 52298 assertions / 1277 cases — is exactly
+   `TelemetryData{Measurement, Unit, Baseline}`. Our Catch2 3.15's `JsonReporter`
+   (`catch_amalgamated.hpp:14113`) emits the counts already; UE had to hand-write a reporter
+   because 3.4.0 could not.
+4. **Two NEW candidates, both Tier 2, neither derivable from the earlier read:**
+   - **Engine-assertion routing (A.2/A.3).** `ARC_ASSERT`/`ARC_VERIFY`/`ARC_ENSURE` firing inside
+     a test case should fail *that case*, and there should be a `REQUIRE_ARC_ASSERT`-style macro
+     to assert a guard fires. This is the single largest capability gap the addendum found.
+   - **A progress bound distinct from a duration bound (A.4/A.6).** Per-test-case, and at the
+     process level for host lanes.
+
+**Withdrawn from consideration:** UE's custom Catch2 reporter (we have `JsonReporter`), their
+Catch2 fork for active-test info (we have `getCurrentTestName()`), their log-substring timeout
+contract, their third disabling mechanism (`DISABLED_TEST_CASE`), and their console-report parser
+(`LogParser.cs:135` lacks the property its XML sibling has).
