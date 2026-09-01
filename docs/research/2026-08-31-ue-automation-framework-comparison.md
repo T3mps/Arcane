@@ -32,7 +32,17 @@ Color), NOT part of the main compare path.
 - `IgnoreAntiAliasing` (32,32,32,32, 64,96, **true**,false, 0.02, 0.02)
 - `IgnoreColors`       (16,16,16,16, 16,240, false,**true**, 0.02, 0.02)
 
-**Epic's default is zero-tolerance, same as ours.** Relaxation is opt-in and NAMED.
+**CORRECTED 2026-09-01 (was: "Epic's default is zero-tolerance, same as ours") — that was
+wrong.** `DefaultIgnoreNothing` is the strictest PRESET, but it is not what the screenshot path
+selects. `FAutomationScreenshotOptions`'s default ctor
+(`Developer/FunctionalTesting/Public/AutomationScreenshotOptions.h:73-90`) sets
+`Tolerance(EComparisonTolerance::Zero)` **but also `MaximumLocalError(0.10f)`,
+`MaximumGlobalError(0.02f)` and `bIgnoreAntiAliasing(true)`** — only the PER-CHANNEL colour
+tolerance is zero; the spatial budgets are 10% local / 2% global. And when a screenshot's
+metadata carries no tolerance rules at all, `FScreenShotManager::CompareScreenshot` falls back to
+`FImageTolerance::DefaultIgnoreLess` with `IgnoreAntiAliasing = true`
+(`ScreenShotComparisonTools/Private/ScreenShotManager.cpp:274-276`) — looser still.
+**Our zero budget is materially stricter than Epic's, in both directions.**
 
 ### THE knob we lack — spatial concentration
 
@@ -61,9 +71,15 @@ Richer than the doc-derived research could see:
 - **`RHIs` scopes by RHI AND FEATURE LEVEL** — `ETEST_RHI_Options` (DX11/DX12/Vulkan/Metal/Null)
   x `ETEST_RHI_FeatureLevel_Options` (SM5/SM6); `NumRHIType()` (`:215`) counts how many
   dimensions must match.
-- **The reason composes beautified text + a TICKET string**
-  (`Private/AutomationTestExcludelist.cpp:53-79`, `BeautifiedReason + FullTicketString`).
-  Exclusions are tied to tracker entries — that is what stops them becoming permanent.
+- **The reason MAY compose beautified text + a ticket string** — `UpdateReason`
+  (`Private/AutomationTestExcludelist.cpp:49-83`) concatenates `BeautifiedReason + FullTicketString`.
+  **CORRECTED 2026-09-01 (was: "Exclusions are tied to tracker entries — that is what stops them
+  becoming permanent"). That claim was mine, not Epic's, and the source does not support it.**
+  The ticket is OPTIONAL (`if (TaskTrackerTicketId.IsEmpty()) { Reason = BeautifiedReason; }`,
+  `:51-54`), the whole function is `#if WITH_EDITOR` so a hand-edited config entry never passes
+  through it, `Reason` is a bare `FName` never validated as non-empty (`Public/...h:170-172`), and
+  **there is no expiry, deadline or review concept anywhere in the mechanism.** Nothing stops a UE
+  exclusion becoming permanent. Treat their entry as a SCOPING model only.
 - Config-driven (`UCLASS(config = Engine, defaultconfig)`), enforced at
   `FAutomationWorkerModule::IsTestExcluded`
   (`Runtime/AutomationWorker/Private/AutomationWorkerModule.cpp:578`, called `:657`), yielding a
@@ -154,9 +170,18 @@ Plus **`Disabled`** (`:108`) — "fast disabling of tests without commenting cod
 
 Two matter to us:
 
-- **`NonNullRHI` is a declared CAPABILITY REQUIREMENT the runner checks.** Our `[gpu]` conflated
-  a (now-retired) driver hazard with a baseline-comparability convention — the exact confusion
-  that cost 2026-08-31.
+- **`NonNullRHI` is a declared capability requirement — but CORRECTED 2026-09-01, it is NOT a
+  device probe and it does NOT report a skip.** `FAutomationTestFramework::GetValidTestNames`
+  (`Runtime/Core/Private/Misc/AutomationTest.cpp:772-805`) decides `bUsingNullRHI` from
+  `-nullrhi` on the command line, `IsRunningCommandlet()` or `IsRunningDedicatedServer()` — its own
+  comment says so: *"@todo: Handle this correctly... For now, assume Null RHI is only used for
+  commandlets, servers, and when the command line specifies to use it."* It never asks the machine
+  whether an adapter exists. Failing `bPassesFeatureRequirements` (`:805`) removes the test from the
+  ENUMERATED LIST, so the run silently omits it rather than reporting it omitted — the same vacuity
+  their own `successes > 0` guard exists to catch. **Take the declared-requirement IDEA; the
+  mechanism to build is a real probe plus a reported skip, which is strictly better than this.**
+  Our `[gpu]` conflated a (now-retired) driver hazard with a baseline-comparability convention —
+  the exact confusion that cost 2026-08-31.
 - **`NegativeFilter` — "tests whose correct expected outcome is failure"** — a first-class slot
   for what `-SelfTest` is.
 
@@ -244,7 +269,8 @@ Closes the three items this doc's own "What was NOT read" section named as
 highest-value: `Programs/LowLevelTests/` (UE's Catch2 harness), the CVar list behind
 `bDisableNoisyRenderingFeatures`, and `ScreenShotManager`'s fallback resolution. Same tree
 (`.example/UnrealEngine-release/`, UE 5.6.1); paths below are relative to `Engine/Source/`
-unless noted. Nothing above is retracted.
+unless noted. **A 2026-09-01 verification pass against UE source subsequently retracted four
+claims made above; each is marked CORRECTED in place, and they are listed together in section E.**
 
 ---
 
@@ -626,3 +652,79 @@ Nothing above is removed. Four changes:
 Catch2 fork for active-test info (we have `getCurrentTestName()`), their log-substring timeout
 contract, their third disabling mechanism (`DISABLED_TEST_CASE`), and their console-report parser
 (`LogParser.cs:135` lacks the property its XML sibling has).
+
+---
+
+## E. Verification pass, 2026-09-01 — four claims retracted
+
+Before planning Arc A, every UE claim this design leans on was re-checked **at the source**
+rather than trusted from this doc. Four did not survive. Three were mine, one was a misreading of
+which default the code selects. All are corrected in place above; they are collected here so a
+reader who already absorbed the earlier text knows exactly what moved.
+
+**The pattern in all four: I read the artifact that was easiest to find — a preset table, a
+function that composes a ticket string, a flag's declaration — and reported it as the thing the
+system actually does, without following through to the call site that selects it.** That is
+`feedback_verify_dont_relay` and `feedback_name_the_artifact_before_arguing_from_it` in one.
+
+### E.1 "Epic's default is zero-tolerance, same as ours" — FALSE (was §1)
+
+`DefaultIgnoreNothing` is the strictest entry in the preset table, and I reported the table's
+strictest row as the system's default. The screenshot path does not select it.
+`FAutomationScreenshotOptions`'s default ctor (`AutomationScreenshotOptions.h:73-90`) pairs
+`EComparisonTolerance::Zero` with **`MaximumLocalError(0.10f)`, `MaximumGlobalError(0.02f)` and
+`bIgnoreAntiAliasing(true)`**, and the metadata-absent fallback is `DefaultIgnoreLess` +
+`IgnoreAntiAliasing` (`ScreenShotManager.cpp:274-276`).
+
+Only the per-channel colour tolerance is zero. **Our zero budget is materially stricter than
+Epic's** — the comparison under-claimed us in one direction while over-claiming them in another.
+
+### E.2 "Exclusions are tied to tracker entries — that is what stops them becoming permanent" — UNSUPPORTED (was §2)
+
+That sentence was editorialising, not something the source says or enforces. `UpdateReason`
+(`AutomationTestExcludelist.cpp:49-83`) makes the ticket **optional**, lives entirely under
+`#if WITH_EDITOR` so a hand-edited config never passes through it, writes into a bare `FName`
+`Reason` that is never validated as non-empty, and **there is no expiry, deadline or review
+concept anywhere in the mechanism**.
+
+Consequence for Arc A: its mandatory, checked expiry is **not a substitute for something UE has**
+— it is an addition UE lacks. The spec must not cite Epic as precedent for the property.
+
+### E.3 "`NonNullRHI` is a declared capability requirement the runner checks" — OVERSTATED (was §7)
+
+Two ways. `GetValidTestNames` (`AutomationTest.cpp:772-805`) derives `bUsingNullRHI` from the
+`-nullrhi` switch, `IsRunningCommandlet()` or `IsRunningDedicatedServer()` — never from the
+device — and the code says so itself (*"@todo: Handle this correctly"*). And a test failing
+`bPassesFeatureRequirements` is dropped from the enumerated list, so the run **silently omits it**
+rather than reporting a skip.
+
+Consequence for Arc A: the runner-side probe plus reported `SKIP` is not "UE's `NonNullRHI`
+shape" — it is strictly better than it on both counts.
+
+### E.4 "UE's block-size arithmetic must not be inherited uncritically" — WRONG, they got it right
+
+This one would have produced a worse implementation. I assumed `CompareWidth / 10` truncated and
+warned that the far edge would index past 99. It does not: `ImageComparer.cpp:311-312` uses
+**`FMath::RoundFromZero(CompareWidth / 10.0)`**, which for positive input is `ceil`
+(`Runtime/Core/Public/Math/UnrealMathUtility.h:2269-2277`). Ceil sizing keeps
+`(extent-1) / blockSize` at 9 for every extent, so indices stay in `[0,99]` by construction.
+
+**Ceil is the correct fix, and it is better than the truncate-and-clamp I was about to specify** —
+clamping would pile the remainder into the last block and inflate its score. A `max(1, ...)` guard
+against a zero extent is still ours to add; UE has no such guard.
+
+### E.5 Three smaller refinements (not retractions)
+
+- **`IsReadyToStart()` has a two-level contract** (`Gauntlet.TestNode.cs:145-150`): return false
+  for "not ready yet", *throw* for "will never be ready". Arc A's preflight implements the second
+  half only; the retry half is device-farm machinery we do not want.
+- **`TelemetryData.Baseline` defaults to `0`** (`Gauntlet.TestReport.cs:105`), so "no baseline"
+  and "baseline of zero" are the same value — `feedback_default_values_are_not_measurements` in
+  their own telemetry type. Ours must be optional-absent.
+- **The size-mismatch path does not quite "discard" the comparison** (`ImageComparer.cpp:401-410`):
+  it compares the overlap, marks out-of-bounds pixels as errors and counts them, then *overwrites*
+  `MaxLocalDifference` and `GlobalDifference` with `1.0`. The delta image and its path survive. The
+  verdict is thrown away; the artifact is not.
+- Their compare loop is a `ParallelFor` over columns with `InterlockedIncrement` on both
+  accumulators (`:316-381`). Ours is serial, so a plain array suffices — but the block accumulator
+  becomes shared state the day that changes.

@@ -9,6 +9,11 @@ list behind `bDisableNoisyRenderingFeatures`, `ScreenShotManager`'s fallback res
 that doc before this one; it carries the `file:line` evidence this design argues from and is not
 restated here.
 
+**Every UE claim this design leans on was re-verified at the source on 2026-09-01, before
+planning.** Four did not survive and are retracted in that doc's section E; the three that
+affected this design are corrected in place below (exclusion rationale, capability probe,
+block-size arithmetic). Where this spec now differs from Epic, it says so.
+
 **This is Arc A of two.** Arc B is the host-level witness harness (Tier 1 item 4), split out
 because it is the only item needing a new buildable thing and because it would assert against
 the vocabulary Arc A defines. See "Arc B handoff" at the end.
@@ -238,10 +243,18 @@ but scoped to axes we actually have:
   including GitHub Actions;
 - a synthetic lane in the gate.
 
-This is what makes the mechanism a mechanism. `feedback_time_boxed_stances_need_checked_expiry`
-is explicit that a stated expiry without a check is not one, and UE's own justification for
-ticket-linking (`AutomationTestExcludelist.cpp:53-79`) is that it is *what stops exclusions
-becoming permanent*. Having no tracker, a checked date is the substitute.
+This is what makes the mechanism a mechanism, and
+`feedback_time_boxed_stances_need_checked_expiry` is explicit that a stated expiry without a check
+is not one.
+
+**Do not cite UE as precedent for this property — it does not have it.** The 2026-09-01
+verification pass (research doc §E.2) retracted the earlier claim that Epic ties exclusions to
+tracker entries "to stop them becoming permanent". In fact the ticket is optional
+(`AutomationTestExcludelist.cpp:51-54`), the composing function is `#if WITH_EDITOR` only so a
+hand-edited config never passes through it, `Reason` is a bare `FName` never validated as
+non-empty, and **there is no expiry, deadline or review concept anywhere in their mechanism**.
+Their entry is a good SCOPING model and nothing more; the expiry is ours and is the part that
+makes it safe to have at all.
 
 **A malformed file is a refusal, not "no exclusions."** A parse error that silently disables the
 whole mechanism is the failure class `ParseProbe` already refuses by precedent
@@ -260,9 +273,16 @@ probing both backends at startup would pay for device creation on runs that touc
 `RequireBackend(GraphicsBackend)` helper calls `SKIP(...)` when the backend is unavailable.
 
 Once it exists, GitHub Actions drops `~[gpu]` and reports honest skips rather than a filter that
-silently omits 53 tagged sites. This is UE's `NonNullRHI` shape
-(`Runtime/Core/Public/Misc/AutomationTest.h:85`): a declared capability requirement the runner
-checks, rather than a tag the caller has to remember to filter on.
+silently omits 53 tagged sites.
+
+**This borrows UE's IDEA and rejects its mechanism.** `NonNullRHI`
+(`Runtime/Core/Public/Misc/AutomationTest.h:102`) is a declared capability requirement, but the
+verification pass (research doc §E.3) found it is decided from the `-nullrhi` switch,
+`IsRunningCommandlet()` or `IsRunningDedicatedServer()` — never from the device, as its own
+`@todo` admits (`Runtime/Core/Private/Misc/AutomationTest.cpp:772-782`) — and that a test failing
+the check is dropped from the **enumerated list**, so the run silently omits it
+(`:805`). A real probe plus a reported `SKIP` is better on both counts, and avoids reproducing
+the vacuity their own `successes > 0` guard exists to catch.
 
 **Included in the same sweep — retired prose still in-tree.**
 `ArcaneTests/src/NriGraphPixelTest.cpp:47-48` still reads *"`[gpu]` MEANS DESK, AND THESE HAVE
@@ -287,10 +307,13 @@ Two correctness notes that are not obvious from the UE source:
 - The loop runs in **padded** coordinates (`y` from `pad` to `r1.height - pad`,
   `ImageCompare.cpp:317-319`) and already computes `dx`/`dy` for the diff image. The block hash
   must use `dx`/`dy` against the **unpadded** extent, or every block is offset by the pad.
-- `extent / 10` truncates, so the far edge indexes past 99 whenever the extent is not a multiple
-  of ten. Block size is `max(1, extent/10)` and the index is clamped to 99. UE's
-  `(Y/BlockSizeY)*10 + (X/BlockSizeX)` has the same shape and the arithmetic must not be
-  inherited uncritically.
+- **Block size is `ceil(extent / 10)`, not `extent / 10`.** UE gets this right and the earlier
+  draft of this spec got it wrong (research doc §E.4): `ImageComparer.cpp:311-312` uses
+  `FMath::RoundFromZero(CompareWidth / 10.0)`, which for positive input is `ceil`
+  (`UnrealMathUtility.h:2269-2277`). Ceil sizing keeps `(extent-1) / blockSize` at 9 for **every**
+  extent, so indices stay in `[0,99]` by construction — no clamp needed, and no clamp wanted,
+  since clamping would pile the remainder into the last block and inflate its score. Add a
+  `max(1, ...)` guard against a zero extent, which UE lacks.
 
 **Budget ruling.** `ImageCompareOptions::maxLocalDiffRatio` is `std::optional<double>`, default
 unset, and **when unset it is not evaluated**. The existing rule — "if neither budget is set the
@@ -299,8 +322,9 @@ strict local gate would be pure redundancy. Local concentration only bites once 
 the aggregate budget. But `maxLocalDifference` is **reported as a fact on every comparison**
 regardless, so it is measurable long before anything gates on it.
 
-**Not adopted:** UE's size-mismatch policy, which forces `local = global = 1.0` and discards the
-comparison (`ImageComparer.cpp:401-413`). We pad, still compare, and report the mismatch as its
+**Not adopted:** UE's size-mismatch policy, which compares the overlap, marks out-of-bounds pixels
+as errors, and then *overwrites* both scores with `1.0` (`ImageComparer.cpp:401-410`) — the
+verdict is thrown away, though the delta artifact survives. We pad, still compare, and report the mismatch as its
 own named fact. The comparison doc's section 1 already ruled on this.
 
 ### 5.2 Absolute-time pinning, and the owed `--fixed-dt` defect
@@ -383,8 +407,11 @@ The C# side of UE's design has this shape correctly — `MaxDuration` at
 ### 6.3 Telemetry with unit and baseline
 
 `{name, value, unit, baseline}` records, modelled on
-`Gauntlet/Framework/Base/Gauntlet.TestReport.cs:97`, emitted into `golden-gate-summary.json` and
-a companion for the test suite. **The baseline lives in a committed file**, so a count regression
+`Gauntlet/Framework/Base/Gauntlet.TestReport.cs:97-114`, emitted into `golden-gate-summary.json`
+and a companion for the test suite. **`baseline` is optional-absent, not zero-defaulted** — UE's
+`TelemetryData` defaults it to `0` (`:105`), which makes "no baseline" and "baseline of zero" the
+same value; that is `feedback_default_values_are_not_measurements` inside their own telemetry
+type, and the same absence-must-be-absence rule this design applies everywhere else. **The baseline lives in a committed file**, so a count regression
 is a diff rather than a memory note. This retires "52298 assertions / 1277 cases, tracked by hand"
 into something the repo checks.
 
@@ -404,7 +431,10 @@ Relatedly: if a future task wants the running test's name, `IResultCapture::getC
 - **Preflight**: all lanes' preconditions are checked *before* any launches — exes present,
   `ReferenceProject` staged, exclusions file parses. A precondition failure reports `NotRun` for
   every affected lane up front rather than being discovered lane by lane. This is
-  `IsReadyToStart()` (`Gauntlet.TestNode.cs:150`) formalised for our shape.
+  `IsReadyToStart()` (`Gauntlet.TestNode.cs:145-150`) formalised for our shape — **and only half
+  of it**: their contract is two-level, returning false for "not ready yet" and *throwing* for
+  "will never be ready". We implement the second half only. The retry half is device-farm
+  machinery, and a lane that might become ready later is not a state a single-machine gate has.
 
 ---
 
