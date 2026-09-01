@@ -192,3 +192,101 @@ TEST_CASE("compare: an INTERIOR window exercises Sum's subtraction branches", "[
     CHECK(s.VarianceC2(1, 1, 3, 2) == Approx(28.0 / 6.0));
     CHECK(s.Covariance(1, 1, 3, 2) == Approx(-28.0 / 6.0));
 }
+
+// ---- spatial concentration -------------------------------------------------
+// The whole point of the knob: two images with the SAME aggregate diffCount
+// must score DIFFERENTLY when one concentrates its differences and the other
+// scatters them. An aggregate budget cannot tell a broken widget from noise.
+namespace
+{
+    // 100x100 opaque white.
+    std::vector<unsigned char> WhiteImage100()
+    {
+        std::vector<unsigned char> img(100 * 100 * 4, 255);
+        return img;
+    }
+
+    void PaintBlack(std::vector<unsigned char>& img, std::uint32_t x, std::uint32_t y)
+    {
+        const std::size_t i = (static_cast<std::size_t>(y) * 100 + x) * 4;
+        img[i + 0] = 0; img[i + 1] = 0; img[i + 2] = 0; img[i + 3] = 255;
+    }
+}
+
+TEST_CASE("image compare: concentrated and scattered diffs score differently", "[assets][compare]")
+{
+    const auto expected = WhiteImage100();
+
+    // 100 differing pixels packed into ONE 10x10 block (block 0: x,y in [0,10)).
+    auto concentrated = WhiteImage100();
+    for (std::uint32_t y = 0; y < 10; ++y)
+        for (std::uint32_t x = 0; x < 10; ++x)
+            PaintBlack(concentrated, x, y);
+
+    // 100 differing pixels, one per block, spread across all 100 blocks.
+    auto scattered = WhiteImage100();
+    for (std::uint32_t by = 0; by < 10; ++by)
+        for (std::uint32_t bx = 0; bx < 10; ++bx)
+            PaintBlack(scattered, bx * 10 + 5, by * 10 + 5);
+
+    Arcane::PixelData exp{ 100, 100, expected };
+    Arcane::PixelData con{ 100, 100, concentrated };
+    Arcane::PixelData sca{ 100, 100, scattered };
+
+    const auto rc = Arcane::CompareImages(exp, con);
+    const auto rs = Arcane::CompareImages(exp, sca);
+
+    // Same aggregate count...
+    CHECK(rc.diffCount == rs.diffCount);
+    // ...but the concentrated one fills its block entirely (100/100 = 1.0)
+    // while the scattered one puts 1 pixel in each (1/100 = 0.01).
+    CHECK(rc.maxLocalDifference == Catch::Approx(1.0));
+    CHECK(rs.maxLocalDifference == Catch::Approx(0.01));
+}
+
+TEST_CASE("image compare: identical images have zero local difference", "[assets][compare]")
+{
+    const auto img = WhiteImage100();
+    Arcane::PixelData a{ 100, 100, img };
+    const auto r = Arcane::CompareImages(a, a);
+    CHECK(r.diffCount == 0);
+    CHECK(r.maxLocalDifference == Catch::Approx(0.0));
+}
+
+TEST_CASE("image compare: a non-multiple-of-ten extent stays in range", "[assets][compare]")
+{
+    // 105 is not a multiple of 10. With ceil sizing, blockSize is 11, so index
+    // 100/11 = 9 -- in range (and, since block 9 is the array's LAST slot,
+    // this is the strongest in-range check available: idx (9*10+9)=99, the
+    // final valid element). With truncation blockSize would be 10 and 100/10
+    // = 10, past the 100-block array -- so this pixel still discriminates
+    // ceil from truncation; any dx/dy in [100,104] would (100/10 through
+    // 104/10 are all 10 under truncation).
+    //
+    // NOT pixel (104,104) -- the literal last pixel of the image. That one
+    // sits ON the cascade's checkerboard padding boundary in BOTH axes at
+    // once: Compare()'s stage-3 variance window has radius 1, and touches
+    // padding once dx or dy exceeds 103 (dx=104 puts x=119, whose radius-1
+    // window reaches x=120, the first padding column). With padding touched
+    // on both axes, var1 != 0 (checkerboard breaks the expected-image
+    // uniformity the fast path needs) AND the 31x31 SSIM window is ~73%
+    // padding, which correlates near-perfectly between expected/actual and
+    // dilutes the one real pixel enough that SSIM ~= 0.998, comfortably over
+    // the 0.99 antialiasing threshold -- so the single corner pixel is never
+    // counted as a difference at all, independent of this task's change (see
+    // ImageCompareCascadeTest.cpp's "Hole A" comment for the same phenomenon
+    // hitting stage 3 alone at radius 1). Staying inside dx,dy <= 103 keeps
+    // the radius-1 window entirely real, so var1 == 0 fires deterministically
+    // and stage 3 catches it before SSIM ever runs.
+    std::vector<unsigned char> a(105 * 105 * 4, 255);
+    std::vector<unsigned char> b = a;
+    const std::size_t target = (static_cast<std::size_t>(100) * 105 + 100) * 4;
+    b[target + 0] = 0; b[target + 1] = 0; b[target + 2] = 0;
+
+    Arcane::PixelData pa{ 105, 105, a };
+    Arcane::PixelData pb{ 105, 105, b };
+    const auto r = Arcane::CompareImages(pa, pb);
+    CHECK(r.diffCount == 1);
+    // One pixel in an 11x11 block.
+    CHECK(r.maxLocalDifference == Catch::Approx(1.0 / 121.0));
+}

@@ -22,6 +22,7 @@
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Assets/ImageIo.hpp>
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -183,11 +184,18 @@ namespace Arcane
     // ARGUMENT ORDER IS SIGNIFICANT. dE94 is asymmetric and the grey is drawn
     // from `expected`; calling this (actual, expected) produces a different
     // number.
+    //
+    // `localBlocks`, if not null, receives per-block mismatch counts over a
+    // 10x10 spatial grid of the compared extent (block index
+    // (dy/blockH)*10 + (dx/blockW), block size ceil(extent/10)). Supplied by
+    // CompareImages to derive maxLocalDifference; a direct caller that only
+    // wants the aggregate count leaves it null.
     [[nodiscard]] ARCANE_API std::uint64_t Compare(
         const unsigned char* expected, const unsigned char* actual,
         unsigned char* diff,
         std::uint32_t width, std::uint32_t height,
-        const CompareOptions& options = {});
+        const CompareOptions& options = {},
+        std::array<std::uint64_t, 100>* localBlocks = nullptr);
 
     // ---- image-level entry point (comparators.ts) ------------------------
     //
@@ -205,6 +213,15 @@ namespace Arcane
         std::optional<std::uint64_t> maxDiffPixels;
         std::optional<double>        maxDiffPixelRatio;
         double maxColorDeltaE94 = 1.0;
+
+        // Spatial concentration budget: the fraction of ONE 10x10-grid block
+        // that may differ. DEFAULT UNSET, and when unset it is NOT EVALUATED --
+        // the aggregate rule above ("if neither is set the budget is ZERO")
+        // already fails on a single differing pixel, so a strict local gate
+        // would be pure redundancy. This only bites once someone relaxes the
+        // aggregate budget. maxLocalDifference is REPORTED either way, so the
+        // measurement exists long before anything gates on it.
+        std::optional<double> maxLocalDiffRatio;
     };
 
     struct ImageCompareResult
@@ -212,6 +229,10 @@ namespace Arcane
         bool          passed = false;
         std::uint64_t diffCount = 0;
         double        diffRatio = 0.0;
+        // Largest per-block mismatch fraction over the 10x10 grid, in [0,1].
+        // 500 scattered pixels and 500 forming one broken widget have the same
+        // diffCount; this is what tells them apart.
+        double        maxLocalDifference = 0.0;
         std::uint64_t maxDiffPixelsUsed = 0;   // the budget actually applied
         bool          sizesMismatch = false;
         std::uint32_t width = 0, height = 0;   // the compared (padded) extent

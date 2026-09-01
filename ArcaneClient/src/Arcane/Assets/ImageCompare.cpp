@@ -1,6 +1,7 @@
 #include <Arcane/Assets/ImageCompare.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 
@@ -293,7 +294,8 @@ namespace Arcane
     std::uint64_t Compare(const unsigned char* expected, const unsigned char* actual,
                           unsigned char* diff,
                           std::uint32_t width, std::uint32_t height,
-                          const CompareOptions& options)
+                          const CompareOptions& options,
+                          std::array<std::uint64_t, 100>* localBlocks)
     {
         const std::uint32_t pad =
             static_cast<std::uint32_t>(std::max(kVarianceWindowRadius, kSsimWindowRadius));
@@ -313,6 +315,28 @@ namespace Arcane
         std::optional<FastStats> fastR, fastG, fastB;
 
         std::uint64_t diffCount = 0;
+
+        // Block sizing is CEIL, not truncation. With ceil, (extent-1)/blockSize
+        // is 9 for every extent, so the index stays in [0,99] by construction
+        // and needs no clamp -- and a clamp would be actively wrong, piling the
+        // remainder into the last block and inflating its score. max(1u, ...)
+        // guards a degenerate zero extent.
+        const std::uint32_t blockW =
+            std::max(1u, static_cast<std::uint32_t>((width  + 9u) / 10u));
+        const std::uint32_t blockH =
+            std::max(1u, static_cast<std::uint32_t>((height + 9u) / 10u));
+        if (localBlocks)
+            localBlocks->fill(0);
+
+        // Hashes on the DIFF-IMAGE coordinates (dx, dy), not the padded r1
+        // coordinates -- r1 carries a pad border that would offset every block.
+        const auto bump = [&](std::uint32_t dx, std::uint32_t dy)
+        {
+            if (!localBlocks) return;
+            const std::size_t idx =
+                static_cast<std::size_t>(dy / blockH) * 10u + (dx / blockW);
+            ++(*localBlocks)[idx];
+        };
 
         for (std::uint32_t y = pad; y < r1.height - pad; ++y)
         {
@@ -381,6 +405,7 @@ namespace Arcane
                 {
                     if (diff) DrawPixel(diff, width, dx, dy, 255, 0, 0);
                     ++diffCount;
+                    bump(dx, dy);
                     continue;
                 }
 
@@ -403,6 +428,7 @@ namespace Arcane
                 {
                     if (diff) DrawPixel(diff, width, dx, dy, 255, 0, 0);
                     ++diffCount;
+                    bump(dx, dy);
                 }
             }
         }
@@ -484,8 +510,23 @@ namespace Arcane
 
         CompareOptions cascade;
         cascade.maxColorDeltaE94 = options.maxColorDeltaE94;
+        std::array<std::uint64_t, 100> localBlocks{};
         result.diffCount = Compare(expectedPixels, actualPixels, diff.data(),
-                                   width, height, cascade);
+                                   width, height, cascade, &localBlocks);
+
+        // The largest block's mismatch fraction. Block area uses the same ceil
+        // sizing Compare used, so the two cannot disagree about the divisor.
+        {
+            const std::uint32_t blockW = std::max(1u, (width  + 9u) / 10u);
+            const std::uint32_t blockH = std::max(1u, (height + 9u) / 10u);
+            const double blockArea =
+                static_cast<double>(blockW) * static_cast<double>(blockH);
+            std::uint64_t worst = 0;
+            for (const std::uint64_t n : localBlocks)
+                worst = std::max(worst, n);
+            result.maxLocalDifference =
+                blockArea > 0.0 ? static_cast<double>(worst) / blockArea : 0.0;
+        }
 
         // comparators.ts:96-102 -- if both knobs are set take the smaller; if
         // neither is set the budget is zero. The ratio is against EXPECTED's
@@ -544,9 +585,20 @@ namespace Arcane
                                   " of all image pixels) are different.";
         }
 
-        if (!pixelsMismatchError.empty() || !sizesMismatchError.empty())
+        // Only evaluated when the caller set it -- see the option's comment.
+        std::string localMismatchError;
+        if (options.maxLocalDiffRatio.has_value() &&
+            result.maxLocalDifference > *options.maxLocalDiffRatio)
         {
-            result.errorMessage = sizesMismatchError + pixelsMismatchError;
+            localMismatchError = "one 10x10-grid block differs by " +
+                                 FormatRatio2(result.maxLocalDifference) +
+                                 ", above the local budget of " +
+                                 FormatRatio2(*options.maxLocalDiffRatio) + ".";
+        }
+
+        if (!pixelsMismatchError.empty() || !sizesMismatchError.empty() || !localMismatchError.empty())
+        {
+            result.errorMessage = sizesMismatchError + pixelsMismatchError + localMismatchError;
             result.diffRgba = std::move(diff);
             result.passed = false;
         }
