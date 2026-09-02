@@ -730,6 +730,11 @@ project "ArcaneTests"
         '{MKDIR} "%{cfg.buildtarget.directory}/D3D12"',
         '{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/D3D12Core.dll" "%{cfg.buildtarget.directory}/D3D12/D3D12Core.dll"',
         '{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/d3d12SDKLayers.dll" "%{cfg.buildtarget.directory}/D3D12/d3d12SDKLayers.dll"',
+        -- The exclusion list is repo-level config that BOTH consumers read: this
+        -- suite (ExclusionExpiryTest) and golden-gate.ps1. Staged beside the exe
+        -- because tests run FROM the exe dir. An edit therefore needs a rebuild
+        -- to take effect here, same as data/ and playwright-fixtures/ above.
+        '{COPYFILE} "%{wks.location}/scripts/automation-exclusions.json" "%{cfg.buildtarget.directory}/automation-exclusions.json"',
     }
 
     defines {
