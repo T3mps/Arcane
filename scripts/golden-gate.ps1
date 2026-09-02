@@ -163,12 +163,32 @@ $configDirName = "$Configuration-windows-x86_64-md"
 Write-Host "=== golden-gate: $Configuration ===" -ForegroundColor Cyan
 
 # ---- The four combinations. ----
+# ExpectedLevel: which reference this lane is SUPPOSED to resolve against.
+# Nothing in the report can infer this -- a resolvedLevel of "shared" looks
+# identical whether that was the design or an oversight -- so it is declared
+# here and compared in the verdict block below. A lane declaring "shared" and
+# resolving "shared" is a plain Passed, not PassedOnFallback.
 $combos = @(
-    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'dx12' }
-    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'vulkan' }
-    @{ Host = 'ArcaneEditor'; Exe = 'ArcaneEditor.exe'; Reference = 'editor-ui'; Backend = 'dx12' }
-    @{ Host = 'ArcaneEditor'; Exe = 'ArcaneEditor.exe'; Reference = 'editor-ui'; Backend = 'vulkan' }
+    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'dx12';   ExpectedLevel = 'backend' }
+    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'vulkan'; ExpectedLevel = 'backend' }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui';     Backend = 'dx12';   ExpectedLevel = 'shared'  }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui';     Backend = 'vulkan'; ExpectedLevel = 'shared'  }
 )
+
+# THE VERDICT VOCABULARY. This literal set is the PowerShell half of a contract
+# whose other half is Arcane::Verdict (ArcaneClient/src/Arcane/Host/Verdict.hpp),
+# pinned by VerdictTest.cpp. PowerShell cannot include that header, so the two
+# are pinned independently and -SelfTest asserts this one. Change either and the
+# other must change in the same commit.
+$script:VerdictNames = @(
+    'Passed', 'PassedOnFallback', 'Failed', 'Errored', 'NotRun', 'Skipped', 'Indeterminate'
+)
+# Green SATISFIES the gate. Skipped is deliberately absent: it does not fail a
+# gate, but it must not count toward "at least one lane passed" either, or an
+# all-skipped run reports success having verified nothing.
+$script:GreenVerdicts = @('Passed', 'PassedOnFallback')
+# Any of these makes the gate red.
+$script:RedVerdicts   = @('Failed', 'Errored', 'NotRun', 'Indeterminate')
 
 # ---- THE PRECONDITION: rebuild ReferenceProject/Binaries/ for THIS config,
 #      unconditionally, before a single host is launched. ----
@@ -465,13 +485,13 @@ try {
 
     $results = @()
     $anyFailure = $false
-    $exeMissingCount = 0   # -SelfTest's assertion needs to know whether every lane genuinely launched, not just whether its Verdict is FAIL (see the assertion block below) -- a lane that never launched never had the chance to notice anything.
 
     foreach ($combo in $combos) {
         $hostName = $combo.Host
         $exeName = $combo.Exe
         $reference = $combo.Reference
         $backend = $combo.Backend
+        $expectedLevel = $combo.ExpectedLevel
         $label = "$hostName/$backend/$reference"
 
         $exeDir = Join-Path $repoRoot "bin\$configDirName\$hostName"
@@ -486,9 +506,11 @@ try {
             # it DEAD CODE -- a single missing exe aborted the whole gate instead of
             # recording FAIL for this lane and testing the other three. The intent
             # was always "record it and carry on"; this is what actually does that.
+            # NotRun, not Failed: this lane never got the chance to notice
+            # anything. That distinction used to be carried by a bespoke
+            # $exeMissingCount, which the vocabulary now makes unnecessary.
             Write-Host "$exePath does not exist -- build Arcane.slnx for $Configuration first." -ForegroundColor Red
-            $results += [pscustomobject]@{ Combo = $label; Verdict = 'FAIL'; Detail = "exe not found: $exePath" }
-            $exeMissingCount++
+            $results += [pscustomobject]@{ Combo = $label; Verdict = 'NotRun'; Detail = "exe not found: $exePath"; SkipReason = $null }
             $anyFailure = $true
             continue
         }
@@ -537,8 +559,9 @@ try {
         $exitCode = $proc.ExitCode
 
         $reportExists = Test-Path $reportPath
-        $verdict = 'FAIL'
+        $verdict = 'Indeterminate'
         $detail = ''
+        $skipReason = $null
         $diffPathToReport = $null
 
         if ($reportExists) {
@@ -550,7 +573,9 @@ try {
             try {
                 $report = Get-Content $reportPath -Raw | ConvertFrom-Json
             } catch {
-                $verdict = 'FAIL'
+                # Indeterminate: a report we cannot read tells us nothing about
+                # the render, which is not the same as the render being wrong.
+                $verdict = 'Indeterminate'
                 $detail = "report at $reportPath exists but failed to parse as JSON: $($_.Exception.Message)"
                 $report = $null
             }
@@ -558,8 +583,16 @@ try {
             if ($report) {
                 $exitReason = $report.exitReason
                 $comparePassed = $false
+                $resolvedLevel = ''
+                $maxLocal = 'n/a'
                 if ($report.PSObject.Properties.Name -contains 'compare') {
                     $comparePassed = [bool]$report.compare.passed
+                    if ($report.compare.PSObject.Properties.Name -contains 'resolvedLevel') {
+                        $resolvedLevel = [string]$report.compare.resolvedLevel
+                    }
+                    if ($report.compare.PSObject.Properties.Name -contains 'maxLocalDifference') {
+                        $maxLocal = $report.compare.maxLocalDifference
+                    }
                     if ($report.compare.PSObject.Properties.Name -contains 'diffPath' -and $report.compare.diffPath) {
                         # diffPath is `artifact.string()` built from Project::Root()
                         # (ReferenceImages.cpp), which is normally ABSOLUTE. PowerShell's
@@ -576,14 +609,33 @@ try {
                     }
                 }
 
-                if ($exitReason -eq 'frames-complete' -and $comparePassed) {
-                    $verdict = 'PASS'
-                    $detail = "exitReason=$exitReason diffCount=$($report.compare.diffCount)"
-                } else {
-                    $verdict = 'FAIL'
+                # Precedence, first match wins. Mirrors the spec's section 2.
+                if ($exitReason -in @('device-lost', 'render-failed', 'validation-errors', 'gpu-stall')) {
+                    # The subject ran and then DIED. Not the same next action as
+                    # a pixel mismatch, which is why it is not Failed.
+                    $verdict = 'Errored'
+                    $detail = "exitReason=$exitReason -- the host died before it could answer"
+                }
+                elseif ($exitReason -eq 'compare-missing-reference') {
+                    # The render may be perfectly correct; there was nothing to
+                    # check it against. Red, but NOT "the render is wrong".
+                    $verdict = 'Indeterminate'
+                    $detail = "exitReason=$exitReason -- no reference existed to compare against"
+                }
+                elseif ($exitReason -eq 'frames-complete' -and $comparePassed) {
+                    if ($resolvedLevel -and $resolvedLevel -ne $expectedLevel) {
+                        $verdict = 'PassedOnFallback'
+                        $detail = "exitReason=$exitReason diffCount=$($report.compare.diffCount) maxLocalDifference=$maxLocal resolvedLevel=$resolvedLevel (expected $expectedLevel)"
+                    } else {
+                        $verdict = 'Passed'
+                        $detail = "exitReason=$exitReason diffCount=$($report.compare.diffCount) maxLocalDifference=$maxLocal resolvedLevel=$resolvedLevel"
+                    }
+                }
+                else {
+                    $verdict = 'Failed'
                     $diffCount = if ($report.PSObject.Properties.Name -contains 'compare') { $report.compare.diffCount } else { 'n/a' }
                     $errorMessage = if ($report.PSObject.Properties.Name -contains 'compare') { $report.compare.errorMessage } else { '' }
-                    $detail = "exitReason=$exitReason comparePassed=$comparePassed diffCount=$diffCount errorMessage='$errorMessage'"
+                    $detail = "exitReason=$exitReason comparePassed=$comparePassed diffCount=$diffCount maxLocalDifference=$maxLocal errorMessage='$errorMessage'"
                 }
             }
         } else {
@@ -592,7 +644,7 @@ try {
             # disk, permissions). "Could not determine" is the honest verdict,
             # and stderr is the one place a write failure's ARC_ERROR line
             # would have landed, so surface it rather than guessing.
-            $verdict = 'FAIL'
+            $verdict = 'Indeterminate'
             $stderrText = ''
             if (Test-Path $stderrPath) { $stderrText = (Get-Content $stderrPath -Raw).Trim() }
             $detail = "no report was written at $reportPath (process exit code $exitCode) -- COULD NOT DETERMINE pass/fail; " +
@@ -615,11 +667,14 @@ try {
             $diffPathToReport = Join-Path $exeDir "ReferenceProject\Saved\Verify\$reference-$backend-diff.png"
         }
 
-        if ($verdict -eq 'PASS') {
-            Write-Host "PASS -- $label ($detail)" -ForegroundColor Green
+        if ($verdict -in $script:GreenVerdicts) {
+            $colour = if ($verdict -eq 'Passed') { 'Green' } else { 'Yellow' }
+            Write-Host "$verdict -- $label ($detail)" -ForegroundColor $colour
+        } elseif ($verdict -eq 'Skipped') {
+            Write-Host "Skipped -- $label ($skipReason)" -ForegroundColor DarkGray
         } else {
             $anyFailure = $true
-            Write-Host "FAIL -- $label" -ForegroundColor Red
+            Write-Host "$verdict -- $label" -ForegroundColor Red
             Write-Host "  $detail" -ForegroundColor Red
             if (Test-Path $diffPathToReport) {
                 Write-Host "  DIFF ARTIFACT: $diffPathToReport" -ForegroundColor Yellow
@@ -628,7 +683,7 @@ try {
             }
         }
 
-        $results += [pscustomobject]@{ Combo = $label; Verdict = $verdict; Detail = $detail }
+        $results += [pscustomobject]@{ Combo = $label; Verdict = $verdict; Detail = $detail; SkipReason = $skipReason }
     }
 } finally {
     if ($SelfTest) {
@@ -683,16 +738,27 @@ $results | Format-Table -AutoSize -Wrap
 # So: one aggregated file, per configuration, next to the build output.
 # Consumers should assert on `gatePassed` and the per-lane `verdict` fields,
 # never on the exit code alone.
+# gatePassed: at least one lane actually PASSED, and no lane is red. The
+# "at least one" half is the vacuity guard -- without it a run where every
+# lane was skipped or excluded reports success having verified nothing.
+$greenCount = @($results | Where-Object { $_.Verdict -in $script:GreenVerdicts }).Count
+$redCount   = @($results | Where-Object { $_.Verdict -in $script:RedVerdicts }).Count
+$gatePassed = ($greenCount -gt 0) -and ($redCount -eq 0)
+
 $summary = [pscustomobject]@{
-    schemaVersion = 1
+    # 2: `verdict` widened from PASS/FAIL to the seven-value vocabulary, and
+    # `skipReason` was added. `gatePassed` keeps its name, type and meaning and
+    # remains the safe single thing for a consumer to assert on.
+    schemaVersion = 2
     configuration = $Configuration
-    gatePassed    = (-not $anyFailure)
+    gatePassed    = $gatePassed
     selfTest      = [bool]$SelfTest
     lanes         = @($results | ForEach-Object {
         [pscustomobject]@{
-            combo   = $_.Combo
-            verdict = $_.Verdict
-            detail  = $_.Detail
+            combo      = $_.Combo
+            verdict    = $_.Verdict
+            detail     = $_.Detail
+            skipReason = $_.SkipReason
         }
     })
 }
@@ -743,10 +809,10 @@ try {
 # this tail. By the time this block runs, main.arcscene is ALREADY back to
 # its committed state; this block only grades what the four lanes reported.
 if ($SelfTest) {
-    # Review pass 2026-08-31, Important #2: 'FAIL' is an umbrella, and only
-    # some of what it covers means "the gate noticed a broken render."
-    # exe-not-found (manufactured before any host launches -- see
-    # $exeMissingCount above) and a short $results count (fewer lanes ran
+    # Review pass 2026-08-31, Important #2: the old umbrella 'FAIL' covered
+    # things that did NOT mean "the gate noticed a broken render." The verdict
+    # vocabulary now names them: exe-not-found is NotRun (manufactured before
+    # any host launches), and a short $results count (fewer lanes ran
     # than $combos declares) both mean the self-test never got the chance to
     # prove anything -- reporting PASS on either would be exactly the
     # vacuous self-test this mode exists to rule out. A POST-BOOT error (a
@@ -754,10 +820,18 @@ if ($SelfTest) {
     # comparing) still counts as noticing, per the spec -- this does not
     # weaken that rule, it only excludes lanes that never got as far as
     # trying.
-    $notFailed = @($results | Where-Object { $_.Verdict -ne 'FAIL' })
-    if ($exeMissingCount -gt 0) {
+    # Ruling 18 (Task 9): these two reads consumed the OLD vocabulary. The
+    # bespoke $exeMissingCount is gone -- NotRun carries that fact now -- and
+    # `-ne 'FAIL'` would match every lane once no verdict is ever the literal
+    # 'FAIL', silently inverting this assertion. Task 12 rewrites this block
+    # for per-verdict reachability; this keeps it HONEST in the meantime,
+    # because a commit must leave the tree working.
+    $neverLaunched = @($results | Where-Object { $_.Verdict -eq 'NotRun' }).Count
+    # "Did not notice" = went GREEN on a deliberately broken scene.
+    $notFailed = @($results | Where-Object { $_.Verdict -in $script:GreenVerdicts })
+    if ($neverLaunched -gt 0) {
         Write-Host ""
-        Write-Host "SELF-TEST FAILED -- $exeMissingCount lane(s) never launched (exe not found). A lane that never ran never had the chance to notice anything; this run proves nothing about the gate." -ForegroundColor Red
+        Write-Host "SELF-TEST FAILED -- $neverLaunched lane(s) never launched (exe not found). A lane that never ran never had the chance to notice anything; this run proves nothing about the gate." -ForegroundColor Red
         $selfTestOk = $false
     } elseif ($results.Count -ne $combos.Count) {
         Write-Host ""
@@ -778,10 +852,14 @@ if ($SelfTest) {
     if ($selfTestOk) { exit 0 } else { exit 1 }
 }
 
-if ($anyFailure) {
-    Write-Host "golden-gate: FAILED" -ForegroundColor Red
+if (-not $gatePassed) {
+    if ($greenCount -eq 0) {
+        Write-Host "golden-gate: FAILED -- NO lane passed. $($results.Count) lane(s) ran; a gate that verified nothing is not a green gate." -ForegroundColor Red
+    } else {
+        Write-Host "golden-gate: FAILED -- $redCount lane(s) red." -ForegroundColor Red
+    }
     exit 1
 }
 
-Write-Host "golden-gate: all four comparisons PASSED" -ForegroundColor Green
+Write-Host "golden-gate: $greenCount lane(s) passed, 0 red" -ForegroundColor Green
 exit 0
