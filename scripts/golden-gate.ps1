@@ -486,6 +486,29 @@ try {
     $results = @()
     $anyFailure = $false
 
+    # ---- PREFLIGHT. Check every lane's preconditions BEFORE launching any. ----
+    # Without this, a missing exe for lane 4 is discovered only after lanes 1-3
+    # have each spent a full host launch. This is the "will never be ready" half
+    # of Gauntlet's IsReadyToStart contract; the "not ready yet" half is retry
+    # machinery for device farms and is deliberately not implemented.
+    $preflightFailures = @{}
+    foreach ($combo in $combos) {
+        $label = "$($combo.Host)/$($combo.Backend)/$($combo.Reference)"
+        $exeDir  = Join-Path $repoRoot "bin\$configDirName\$($combo.Host)"
+        $exePath = Join-Path $exeDir $combo.Exe
+        if (-not (Test-Path $exePath)) {
+            $preflightFailures[$label] = "exe not found: $exePath"
+        }
+    }
+    if ($preflightFailures.Count -gt 0) {
+        Write-Host ""
+        Write-Host "-- PREFLIGHT: $($preflightFailures.Count) of $($combos.Count) lane(s) cannot run --" -ForegroundColor Red
+        foreach ($k in $preflightFailures.Keys) {
+            Write-Host "   $k -- $($preflightFailures[$k])" -ForegroundColor Red
+        }
+        Write-Host "   Build first:  msbuild Arcane.slnx /p:Configuration=$Configuration /m" -ForegroundColor Yellow
+    }
+
     foreach ($combo in $combos) {
         $hostName = $combo.Host
         $exeName = $combo.Exe
@@ -500,17 +523,12 @@ try {
         Write-Host ""
         Write-Host "-- $label --" -ForegroundColor Cyan
 
-        if (-not (Test-Path $exePath)) {
-            # Write-Host, NOT Write-Error: $ErrorActionPreference = 'Stop' (above)
-            # makes Write-Error TERMINATING, which made the three lines that follow
-            # it DEAD CODE -- a single missing exe aborted the whole gate instead of
-            # recording FAIL for this lane and testing the other three. The intent
-            # was always "record it and carry on"; this is what actually does that.
-            # NotRun, not Failed: this lane never got the chance to notice
-            # anything. That distinction used to be carried by a bespoke
-            # $exeMissingCount, which the vocabulary now makes unnecessary.
-            Write-Host "$exePath does not exist -- build Arcane.slnx for $Configuration first." -ForegroundColor Red
-            $results += [pscustomobject]@{ Combo = $label; Verdict = 'NotRun'; Detail = "exe not found: $exePath"; SkipReason = $null }
+        # The decision was already made in the preflight above -- this only
+        # records it. NotRun, not Failed: the lane never got the chance to
+        # notice anything, a distinction a bespoke $exeMissingCount used to
+        # carry and the vocabulary now makes unnecessary.
+        if ($preflightFailures.ContainsKey($label)) {
+            $results += [pscustomobject]@{ Combo = $label; Verdict = 'NotRun'; Detail = $preflightFailures[$label]; SkipReason = $null }
             $anyFailure = $true
             continue
         }
@@ -553,9 +571,48 @@ try {
         # Run from the exe's OWN directory: plugin DLLs, shaders and
         # ReferenceProject/ are all staged relative to it (launch.ps1's own
         # header comment carries the same rule for the same reason).
+        # TWO INDEPENDENT BOUNDS. Total duration answers "is this run too long";
+        # inactivity answers "has it stopped making progress". They are different
+        # questions -- a host looping silently trips the second while the first
+        # still has budget -- and the failure names WHICH bound was hit, so the
+        # caller is told which knob would change the outcome (the same rule
+        # SettleBail already follows).
+        $totalBudgetSec      = 600
+        $inactivityBudgetSec = 120
+
         $proc = Start-Process -FilePath $exePath -ArgumentList $exeArgs -WorkingDirectory $exeDir `
-            -NoNewWindow -Wait -PassThru `
+            -NoNewWindow -PassThru `
             -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+
+        $startedAt = Get-Date
+        $lastSize  = -1
+        $lastGrew  = Get-Date
+        $timeoutBound = $null
+        while (-not $proc.HasExited) {
+            Start-Sleep -Milliseconds 500
+            $size = 0
+            if (Test-Path $stdoutPath) { $size = (Get-Item $stdoutPath).Length }
+            if ($size -ne $lastSize) { $lastSize = $size; $lastGrew = Get-Date }
+
+            if (((Get-Date) - $startedAt).TotalSeconds -gt $totalBudgetSec) {
+                $timeoutBound = "total-duration ($totalBudgetSec s)"
+                break
+            }
+            if (((Get-Date) - $lastGrew).TotalSeconds -gt $inactivityBudgetSec) {
+                $timeoutBound = "inactivity ($inactivityBudgetSec s with no new output)"
+                break
+            }
+        }
+
+        if ($timeoutBound) {
+            try { $proc.Kill() } catch { }
+        }
+        # WaitForExit() before reading ExitCode, on BOTH paths: Start-Process
+        # -PassThru without -Wait can hand back a Process whose ExitCode is not
+        # yet populated even once HasExited reads true, and after a Kill() the
+        # exit is asynchronous. This costs nothing when the process is already
+        # gone and removes the race either way.
+        $proc.WaitForExit(10000) | Out-Null
         $exitCode = $proc.ExitCode
 
         $reportExists = Test-Path $reportPath
@@ -564,7 +621,15 @@ try {
         $skipReason = $null
         $diffPathToReport = $null
 
-        if ($reportExists) {
+        if ($timeoutBound) {
+            # A killed host may still have written a partial report, but the
+            # bound that stopped it is the more useful fact, so it wins. Naming
+            # WHICH bound is the point: "raise --frames" and "the host stopped
+            # progressing" are different problems.
+            $verdict = 'Errored'
+            $detail = "killed after exceeding its $timeoutBound bound -- raise that bound, or find why the host stopped progressing"
+        }
+        elseif ($reportExists) {
             # THE DISAMBIGUATOR'S PRESENT DIRECTION: a report on disk means this
             # run got at least as far as ShutdownGraphPath's report block, so
             # exitReason is the authoritative fact -- read it, never the raw
@@ -707,6 +772,12 @@ try {
             } else {
                 Write-Host "  (no diff artifact on disk at the expected path: $diffPathToReport)" -ForegroundColor Yellow
             }
+            # Every failure names the exact command that reproduces it. The gate
+            # reported lane names and diff paths but never "run this", which put
+            # the burden of reconstructing an eight-argument invocation on
+            # whoever is already dealing with a red build.
+            $quoted = ($exeArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
+            Write-Host "  REPRODUCE:  cd `"$exeDir`"; .\$exeName $quoted" -ForegroundColor Cyan
         }
 
         $results += [pscustomobject]@{ Combo = $label; Verdict = $verdict; Detail = $detail; SkipReason = $skipReason }
