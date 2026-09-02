@@ -279,6 +279,19 @@ namespace Arcane
         constexpr std::int64_t kVarianceWindowRadius = 1;    // 3x3
         constexpr double       kSsimAntialiasing     = 0.99;
 
+        // Block sizing for the 10x10 spatial-concentration grid: CEIL, not
+        // truncation. With ceil, (extent-1)/blockSize is 9 for every extent,
+        // so the index stays in [0,99] by construction and needs no clamp --
+        // a clamp would be actively wrong, piling the remainder into the last
+        // block and inflating its score. max(1u, ...) guards a degenerate
+        // zero extent. Shared by Compare() (array-index divisor) and
+        // CompareImages() (block-area divisor) so the two cannot desync --
+        // see maxLocalDifference's comment.
+        std::uint32_t CeilBlockExtent(std::uint32_t extent) noexcept
+        {
+            return std::max(1u, (extent + 9u) / 10u);
+        }
+
         void DrawPixel(unsigned char* diff, std::uint32_t width,
                        std::uint32_t x, std::uint32_t y,
                        unsigned char r, unsigned char g, unsigned char b) noexcept
@@ -316,15 +329,9 @@ namespace Arcane
 
         std::uint64_t diffCount = 0;
 
-        // Block sizing is CEIL, not truncation. With ceil, (extent-1)/blockSize
-        // is 9 for every extent, so the index stays in [0,99] by construction
-        // and needs no clamp -- and a clamp would be actively wrong, piling the
-        // remainder into the last block and inflating its score. max(1u, ...)
-        // guards a degenerate zero extent.
-        const std::uint32_t blockW =
-            std::max(1u, static_cast<std::uint32_t>((width  + 9u) / 10u));
-        const std::uint32_t blockH =
-            std::max(1u, static_cast<std::uint32_t>((height + 9u) / 10u));
+        // See CeilBlockExtent's comment for the sizing rationale.
+        const std::uint32_t blockW = CeilBlockExtent(width);
+        const std::uint32_t blockH = CeilBlockExtent(height);
         if (localBlocks)
             localBlocks->fill(0);
 
@@ -514,18 +521,17 @@ namespace Arcane
         result.diffCount = Compare(expectedPixels, actualPixels, diff.data(),
                                    width, height, cascade, &localBlocks);
 
-        // The largest block's mismatch fraction. Block area uses the same ceil
-        // sizing Compare used, so the two cannot disagree about the divisor.
+        // The largest block's mismatch fraction. Uses the SAME CeilBlockExtent
+        // Compare() used for its array-index divisor, so the two cannot
+        // disagree -- blockArea is always >= 1.0 (CeilBlockExtent's own
+        // max(1u, ...) guard), so there is no zero-area case to special-case.
         {
-            const std::uint32_t blockW = std::max(1u, (width  + 9u) / 10u);
-            const std::uint32_t blockH = std::max(1u, (height + 9u) / 10u);
-            const double blockArea =
-                static_cast<double>(blockW) * static_cast<double>(blockH);
+            const double blockArea = static_cast<double>(CeilBlockExtent(width)) *
+                                     static_cast<double>(CeilBlockExtent(height));
             std::uint64_t worst = 0;
             for (const std::uint64_t n : localBlocks)
                 worst = std::max(worst, n);
-            result.maxLocalDifference =
-                blockArea > 0.0 ? static_cast<double>(worst) / blockArea : 0.0;
+            result.maxLocalDifference = static_cast<double>(worst) / blockArea;
         }
 
         // comparators.ts:96-102 -- if both knobs are set take the smaller; if

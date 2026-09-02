@@ -240,8 +240,8 @@ TEST_CASE("image compare: concentrated and scattered diffs score differently", "
     CHECK(rc.diffCount == rs.diffCount);
     // ...but the concentrated one fills its block entirely (100/100 = 1.0)
     // while the scattered one puts 1 pixel in each (1/100 = 0.01).
-    CHECK(rc.maxLocalDifference == Catch::Approx(1.0));
-    CHECK(rs.maxLocalDifference == Catch::Approx(0.01));
+    CHECK(rc.maxLocalDifference == Approx(1.0));
+    CHECK(rs.maxLocalDifference == Approx(0.01));
 }
 
 TEST_CASE("image compare: identical images have zero local difference", "[assets][compare]")
@@ -250,7 +250,7 @@ TEST_CASE("image compare: identical images have zero local difference", "[assets
     Arcane::PixelData a{ 100, 100, img };
     const auto r = Arcane::CompareImages(a, a);
     CHECK(r.diffCount == 0);
-    CHECK(r.maxLocalDifference == Catch::Approx(0.0));
+    CHECK(r.maxLocalDifference == Approx(0.0));
 }
 
 TEST_CASE("image compare: a non-multiple-of-ten extent stays in range", "[assets][compare]")
@@ -288,5 +288,63 @@ TEST_CASE("image compare: a non-multiple-of-ten extent stays in range", "[assets
     const auto r = Arcane::CompareImages(pa, pb);
     CHECK(r.diffCount == 1);
     // One pixel in an 11x11 block.
-    CHECK(r.maxLocalDifference == Catch::Approx(1.0 / 121.0));
+    CHECK(r.maxLocalDifference == Approx(1.0 / 121.0));
+}
+
+// ---- maxLocalDiffRatio gating -----------------------------------------------
+// The measurement (maxLocalDifference) is reported unconditionally, but the
+// GATE built on top of it is new decision logic and must be exercised in
+// both directions, the same way ImageCompareCascadeTest.cpp's "when BOTH
+// knobs are set" test exercises the sibling maxDiffPixels/maxDiffPixelRatio
+// interaction: an aggregate budget generous enough to forgive the pixel
+// count on its own, so only the local gate can be the thing that passes or
+// fails the comparison.
+
+TEST_CASE("image compare: maxLocalDiffRatio passes when every block is under budget", "[assets][compare]")
+{
+    const auto expected = WhiteImage100();
+
+    // 10 pixels, one per block along the diagonal -- every touched block
+    // sees exactly 1/100 = 0.01 local difference.
+    auto actual = WhiteImage100();
+    for (std::uint32_t i = 0; i < 10; ++i)
+        PaintBlack(actual, i * 10 + 5, i * 10 + 5);
+
+    Arcane::PixelData exp{ 100, 100, expected };
+    Arcane::PixelData act{ 100, 100, actual };
+
+    Arcane::ImageCompareOptions options;
+    options.maxDiffPixels = 100;       // aggregate budget forgives all 10
+    options.maxLocalDiffRatio = 0.5;   // 0.01 is comfortably under this
+
+    const auto r = Arcane::CompareImages(exp, act, options);
+    CHECK(r.passed);
+    CHECK(r.maxLocalDifference == Approx(0.01));
+    CHECK(r.errorMessage.empty());
+}
+
+TEST_CASE("image compare: maxLocalDiffRatio fails a block over budget and names it in errorMessage", "[assets][compare]")
+{
+    const auto expected = WhiteImage100();
+
+    // A whole 10x10 block filled solid: 100/100 = 1.0 local difference.
+    auto actual = WhiteImage100();
+    for (std::uint32_t y = 0; y < 10; ++y)
+        for (std::uint32_t x = 0; x < 10; ++x)
+            PaintBlack(actual, x, y);
+
+    Arcane::PixelData exp{ 100, 100, expected };
+    Arcane::PixelData act{ 100, 100, actual };
+
+    Arcane::ImageCompareOptions options;
+    options.maxDiffPixels = 1000;      // aggregate budget generously forgives
+                                        // the 100 differing pixels -- ONLY the
+                                        // local gate can fail this comparison.
+    options.maxLocalDiffRatio = 0.5;   // 1.0 exceeds this
+
+    const auto r = Arcane::CompareImages(exp, act, options);
+    CHECK_FALSE(r.passed);
+    CHECK(r.maxLocalDifference == Approx(1.0));
+    CHECK(r.errorMessage.find("one 10x10-grid block differs by 1.00") != std::string::npos);
+    CHECK(r.errorMessage.find("above the local budget of 0.50") != std::string::npos);
 }
