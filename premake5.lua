@@ -673,11 +673,17 @@ project "ArcaneTests"
     -- canvas calls it, and that TU source-compiles into the tests.
     links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "NRI", "Manifold2D", "imgui-node-editor" }
 
-    -- The suite's job includes exercising the engine's own guards, so they must
-    -- be live in EVERY config -- otherwise the assert-routing cases exist only
-    -- in Debug and the three configs' assertion counts drift apart for a reason
-    -- that has nothing to do with coverage. Scoped to this project: the hosts
-    -- are untouched and keep their normal per-config behaviour.
+    -- MOSAIC_ENSURE/MOSAIC_ENSURE_ALWAYS (most of AssertRoutingTest.cpp) are
+    -- defined UNCONDITIONALLY, outside the MOSAIC_ASSERTS_ACTIVE gate this
+    -- define controls (Mosaic/Assert.hpp:227-247) -- those cases were never
+    -- at risk of per-config drift. MOSAIC_ASSERT/MOSAIC_VERIFY are what this
+    -- define actually keeps alive: they compile out entirely under NDEBUG
+    -- (Assert.hpp:193-198) unless forced on, and AssertRoutingTest.cpp's
+    -- fatal-guard-class case exercises MOSAIC_ASSERT -- without this define
+    -- that ONE case would silently vanish in Release/Dist while the rest of
+    -- [assert] kept passing, which is exactly the kind of drift that is easy
+    -- to miss. Scoped to this project: the hosts are untouched and keep
+    -- their normal per-config behaviour.
     defines { "MOSAIC_ENABLE_ASSERTS" }
 
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad" }

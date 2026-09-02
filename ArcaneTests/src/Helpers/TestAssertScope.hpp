@@ -12,6 +12,19 @@
 // The handler returns AssertAction::Continue, never Break: an unattended test
 // process must not execute an int3, which is the same reasoning Mosaic's own
 // IsDebuggerPresent guard gives (Assert.hpp:53-62).
+//
+// THREAD PRECONDITION -- NOT ENFORCED: Handler() below mutates s_active's
+// m_count/m_lastMessage/m_lastExpression with no synchronization, and
+// s_active is a plain (non-atomic) pointer. Mosaic::detail::g_assertHandler
+// is a process/module-global slot, not thread-local, so Handler() runs on
+// WHATEVER thread fires a guard while a scope is alive. ArcaneAssertScope
+// therefore requires every guard it observes to fire on the constructing
+// thread only. If a guard instead fires on another thread while a scope is
+// alive, this is a genuine data race, not merely a wrong count: concurrent
+// unsynchronized writes to std::string are undefined behaviour. This is safe
+// for every test in this file (all single-threaded); it is deliberately NOT
+// hardened with atomics/a mutex/thread_local here, since the right choice
+// among those depends on a multi-threaded use this scope does not have yet.
 
 #include <Mosaic/Assert.hpp>
 

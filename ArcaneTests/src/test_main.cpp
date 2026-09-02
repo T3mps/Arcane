@@ -32,9 +32,15 @@ int main(int argc, char* argv[]) {
         Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
     }
     // Route this module's Mosaic guard failures through the engine logger, the
-    // same as a host does. Without it a guard firing inside a test goes to
-    // Mosaic's DefaultAssertHandler -- which reports Break, and on an
-    // unattended runner that is the wrong answer.
+    // same as a host does. This does NOT change whether a FATAL guard aborts:
+    // both Mosaic::detail::DefaultAssertHandler (Mosaic/Assert.hpp:96-119) and
+    // the installed MosaicAssertHandlerImpl (Assert.cpp:12-26) unconditionally
+    // return AssertAction::Break, so FailFatal's abort() fires either way --
+    // this call installs neither more nor less of a Break than the default.
+    // What it actually buys is WHERE the failure is reported: through the
+    // engine logger (the same sink/format an unattended CI run already
+    // captures) instead of Mosaic's raw stderr fallback, so a guard failure
+    // -- fatal or not -- is diagnosable from the run's normal log output.
     Arcane::Assert::InstallMosaicHandler();
 
     return Catch::Session().run(argc, argv);
