@@ -586,13 +586,33 @@ try {
 
         $startedAt = Get-Date
         $lastSize  = -1
+        $lastCpu   = [TimeSpan]::Zero
         $lastGrew  = Get-Date
         $timeoutBound = $null
         while (-not $proc.HasExited) {
             Start-Sleep -Milliseconds 500
+
+            # PROGRESS = stdout grew OR the process burned CPU. stdout ALONE is
+            # not a progress signal for this workload: these hosts emit nothing
+            # per-frame during the phase this bound guards. RuntimeFrame.cpp has
+            # no unconditional per-frame logging (its ARC_WARN/ARC_INFO calls are
+            # gated behind --settle attempts, which only begin once the --frames
+            # budget is already spent), RuntimeApp.cpp logs only discrete
+            # start/end events, and ShaderCompiler's cache is in-process only so
+            # every launch recompiles from scratch. A cold or GPU-contended lane
+            # is therefore EXPECTED to sit silent -- killing it and calling it
+            # inactivity would be the gate lying about why the lane failed.
+            # TotalProcessorTime advances for a working process and stays flat
+            # for a wedged one, which is the question this bound actually asks.
             $size = 0
             if (Test-Path $stdoutPath) { $size = (Get-Item $stdoutPath).Length }
-            if ($size -ne $lastSize) { $lastSize = $size; $lastGrew = Get-Date }
+            $cpu = $lastCpu
+            try { $cpu = $proc.TotalProcessorTime } catch { }
+            if ($size -ne $lastSize -or $cpu -gt $lastCpu) {
+                $lastSize = $size
+                $lastCpu  = $cpu
+                $lastGrew = Get-Date
+            }
 
             if (((Get-Date) - $startedAt).TotalSeconds -gt $totalBudgetSec) {
                 $timeoutBound = "total-duration ($totalBudgetSec s)"
@@ -612,8 +632,17 @@ try {
         # yet populated even once HasExited reads true, and after a Kill() the
         # exit is asynchronous. This costs nothing when the process is already
         # gone and removes the race either way.
-        $proc.WaitForExit(10000) | Out-Null
-        $exitCode = $proc.ExitCode
+        $exited = $proc.WaitForExit(10000)
+        if (-not $exited) {
+            # A process that survived Kill() would make $proc.ExitCode throw
+            # InvalidOperationException, and under $ErrorActionPreference =
+            # 'Stop' that aborts the ENTIRE gate instead of reddening one lane.
+            # One wedged lane must not cost the other three their verdicts.
+            $exitCode = -1
+            if (-not $timeoutBound) { $timeoutBound = "unkillable (still running 10 s after Kill())" }
+        } else {
+            $exitCode = $proc.ExitCode
+        }
 
         $reportExists = Test-Path $reportPath
         $verdict = 'Indeterminate'
