@@ -70,6 +70,57 @@ TEST_CASE("exclusions: malformed input is REFUSED, not treated as empty", "[host
     CHECK_FALSE(Arcane::ParseExclusions(
         R"([{"target":"x","reason":"y","expires":"31-12-2026"}])", err).has_value());
     CHECK(err.find("expires") != std::string::npos);
+
+    err.clear();
+    // Out-of-range month. IsExpired is a lexicographic compare, so a
+    // transposed "13" would otherwise sort silently between real 2026 and
+    // 2027 dates instead of raising a parse error -- exactly the silent
+    // extension the mandatory-expiry mechanism exists to prevent.
+    CHECK_FALSE(Arcane::ParseExclusions(
+        R"([{"target":"x","reason":"y","expires":"2026-13-01"}])", err).has_value());
+    CHECK(err.find("expires") != std::string::npos);
+
+    err.clear();
+    // Out-of-range day.
+    CHECK_FALSE(Arcane::ParseExclusions(
+        R"([{"target":"x","reason":"y","expires":"2026-01-32"}])", err).has_value());
+    CHECK(err.find("expires") != std::string::npos);
+
+    err.clear();
+    // Zero month / zero day are out of range too (1-12, 1-31; not 0-based).
+    CHECK_FALSE(Arcane::ParseExclusions(
+        R"([{"target":"x","reason":"y","expires":"2026-00-15"}])", err).has_value());
+    CHECK(err.find("expires") != std::string::npos);
+
+    err.clear();
+    // Missing target alone (the other two entries in the required trio were
+    // already exercised individually above).
+    CHECK_FALSE(Arcane::ParseExclusions(
+        R"([{"reason":"y","expires":"2026-12-31"}])", err).has_value());
+    CHECK(err.find("target") != std::string::npos);
+
+    err.clear();
+    // Wrong-typed required field.
+    CHECK_FALSE(Arcane::ParseExclusions(
+        R"([{"target":123,"reason":"y","expires":"2026-12-31"}])", err).has_value());
+    CHECK_FALSE(err.empty());
+
+    err.clear();
+    // A scoping axis that isn't an array.
+    CHECK_FALSE(Arcane::ParseExclusions(
+        R"([{"target":"x","reason":"y","expires":"2026-12-31","backends":"vulkan"}])", err).has_value());
+    CHECK_FALSE(err.empty());
+
+    err.clear();
+    // A scoping axis array containing a non-string.
+    CHECK_FALSE(Arcane::ParseExclusions(
+        R"([{"target":"x","reason":"y","expires":"2026-12-31","backends":[1]}])", err).has_value());
+    CHECK_FALSE(err.empty());
+
+    err.clear();
+    // An array entry that isn't an object.
+    CHECK_FALSE(Arcane::ParseExclusions("[42]", err).has_value());
+    CHECK_FALSE(err.empty());
 }
 
 TEST_CASE("exclusions: matching scopes by backend, host and configuration", "[host][exclusions]")

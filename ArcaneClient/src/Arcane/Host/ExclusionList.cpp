@@ -35,9 +35,24 @@ namespace Arcane
             if (s[4] != '-' || s[7] != '-') return false;
             for (const std::size_t i : { 0u, 1u, 2u, 3u, 5u, 6u, 8u, 9u })
                 if (!std::isdigit(static_cast<unsigned char>(s[i]))) return false;
+            // Bounded range checks only -- month 1-12, day 1-31. No calendar or
+            // leap-year awareness (e.g. "2026-02-30" is intentionally accepted):
+            // the goal is refusing a value that cannot sort meaningfully as a
+            // date at all (IsExpired's lexicographic compare would otherwise
+            // place an out-of-range month, e.g. a transposed "13", silently
+            // between real 2026 and 2027 dates), not full calendar validation.
+            const int month = (s[5] - '0') * 10 + (s[6] - '0');
+            const int day   = (s[8] - '0') * 10 + (s[9] - '0');
+            if (month < 1 || month > 12) return false;
+            if (day < 1 || day > 31) return false;
             return true;
         }
 
+        // Case-insensitivity is deliberately applied to ALL THREE axes, not just
+        // backend (the only one the brief called out by name) -- host and
+        // configuration spellings are equally free-text in the config, and a
+        // "debug" vs "Debug" mismatch would be the same silent-miss failure
+        // class the case-insensitive backend matching exists to prevent.
         bool AxisMatches(const std::vector<std::string>& allowed, std::string_view value, bool backend)
         {
             if (allowed.empty()) return true;   // omitted means ALL
