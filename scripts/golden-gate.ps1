@@ -609,18 +609,44 @@ try {
                     }
                 }
 
-                # Precedence, first match wins. Mirrors the spec's section 2.
-                if ($exitReason -in @('device-lost', 'render-failed', 'validation-errors', 'gpu-stall')) {
+                # Precedence, first match wins. Mirrors the spec's section 2,
+                # with two corrections made against the PRODUCER (RuntimeApp.cpp
+                # :1124-1165, mirrored in EditorApp.cpp) rather than the spec:
+                #
+                #  1. "gpu-stall" is NOT in this list, though the spec's section 1
+                #     lists it as an eighth exitReason. It is not one. It is a
+                #     crash-envelope KIND produced by Diagnostics::DeriveKind
+                #     (Diagnostics.cpp:214) in a separate .arcdiag structure, and
+                #     is never assigned to VerifyReport's exitReason. A branch
+                #     that matches nothing is a declared knob that is never
+                #     applied -- the exact defect this arc exists to abolish --
+                #     so it is omitted deliberately. Do not re-add it from the
+                #     spec. Errored stays reachable via the three below.
+                #  2. Three reasons that mean "could not tell" used to fall
+                #     through to Failed. See the Indeterminate branch below.
+                if ($exitReason -in @('device-lost', 'render-failed', 'validation-errors')) {
                     # The subject ran and then DIED. Not the same next action as
                     # a pixel mismatch, which is why it is not Failed.
                     $verdict = 'Errored'
                     $detail = "exitReason=$exitReason -- the host died before it could answer"
                 }
-                elseif ($exitReason -eq 'compare-missing-reference') {
-                    # The render may be perfectly correct; there was nothing to
-                    # check it against. Red, but NOT "the render is wrong".
+                elseif ($exitReason -in @('compare-missing-reference', 'settle-not-converged', 'stopped-early', 'compare-blessed')) {
+                    # The render may be perfectly correct; nothing established
+                    # otherwise. Red, but NOT "the render is wrong" -- and the
+                    # distinction is the reason this vocabulary exists.
+                    #   compare-missing-reference: no reference to compare against.
+                    #   settle-not-converged:      the compare NEVER RAN. RuntimeApp.cpp:1158
+                    #                              picks this over "compare-failed" precisely
+                    #                              when m_compareEvaluated is false. The gate
+                    #                              passes --settle 30 on every lane, so this is
+                    #                              live, not hypothetical.
+                    #   stopped-early:             the run ended before the frame budget, so the
+                    #                              capture is not of the frame we asked about.
+                    #   compare-blessed:           a --bless run verified nothing. The gate never
+                    #                              blesses, so this is unreachable here -- but
+                    #                              mapping it to Failed would simply be false.
                     $verdict = 'Indeterminate'
-                    $detail = "exitReason=$exitReason -- no reference existed to compare against"
+                    $detail = "exitReason=$exitReason -- ran, but nothing established the render's correctness"
                 }
                 elseif ($exitReason -eq 'frames-complete' -and $comparePassed) {
                     if ($resolvedLevel -and $resolvedLevel -ne $expectedLevel) {
