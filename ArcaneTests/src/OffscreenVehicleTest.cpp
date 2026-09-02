@@ -1,8 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Host/OffscreenVehicle.hpp>
 
+#include "Helpers/GpuCapability.hpp"
+
 TEST_CASE("offscreen vehicle builds a device with no window (d3d12)", "[gpu][offscreen]")
 {
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+
     Arcane::HostConfig cfg;
     cfg.backend   = Arcane::GraphicsBackend::D3D12;
     cfg.headless  = true;
@@ -16,6 +20,8 @@ TEST_CASE("offscreen vehicle builds a device with no window (d3d12)", "[gpu][off
 
 TEST_CASE("offscreen vehicle builds a device with no window (vulkan)", "[gpu][offscreen]")
 {
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::Vulkan);
+
     Arcane::HostConfig cfg;
     cfg.backend   = Arcane::GraphicsBackend::Vulkan;
     cfg.headless  = true;

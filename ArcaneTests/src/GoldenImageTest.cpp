@@ -27,6 +27,8 @@
 #include <string>
 #include <vector>
 
+#include "Helpers/GpuCapability.hpp"
+
 TEST_CASE("golden: the committed layout seed names windows this editor actually submits",
           "[golden]")
 {
@@ -133,6 +135,8 @@ namespace
 
     GoldenPixelVehicle MakeGoldenVehicle()
     {
+        ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+
         GoldenPixelVehicle v;
 
         Arcane::RenderDeviceDesc desc;

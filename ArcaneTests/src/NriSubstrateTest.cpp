@@ -27,6 +27,8 @@
 #include <stdexcept>
 #include <vector>
 
+#include "Helpers/GpuCapability.hpp"
+
 TEST_CASE("nri: ARC_NRI_CHECK on SUCCESS returns true and does not bump RenderErrorCount", "[nri]")
 {
     const uint64_t before = Arcane::RenderErrorCount();
@@ -152,6 +154,8 @@ namespace
 {
     void CheckNriWrapSmoke(Arcane::GraphicsBackend backend)
     {
+        ARC_REQUIRE_BACKEND(backend);
+
         // before/after rather than ResetRenderErrorCount: this case is not
         // meant to trip the shared 0/0 latch, so it must not touch it either.
         const uint64_t before = Arcane::RenderErrorCount();
