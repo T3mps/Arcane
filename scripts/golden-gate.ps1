@@ -162,6 +162,36 @@ $configDirName = "$Configuration-windows-x86_64-md"
 
 Write-Host "=== golden-gate: $Configuration ===" -ForegroundColor Cyan
 
+#   VERDICT REACHABILITY. A value no synthetic condition can produce does not
+#   belong in the vocabulary. Each is reachable as follows -- the first is
+#   automated by -SelfTest; the rest are manual recipes, each OBSERVED once
+#   during this arc rather than merely asserted:
+#     Failed            -- `-SelfTest` (MeshCube position x: 0.4 -> 0.6)
+#     NotRun            -- rename a host exe aside; the preflight reports it up front
+#     Indeterminate     -- delete the lane's reference image, which makes the host
+#                          exit `compare-missing-reference`. IT MUST BE THE STAGED
+#                          COPY under bin/<config>/<host>/ReferenceProject/Verify/
+#                          References/, not the source tree: the hosts read the
+#                          staged references, so deleting the source alone changes
+#                          nothing. And EVERY LEVEL of the fallback chain must go:
+#                          removing only vulkan/runtime-scene.png makes the lane
+#                          resolve the SHARED runtime-scene.png and report Failed
+#                          (the vulkan render genuinely differs from it -- which is
+#                          why a backend-specific reference exists at all). Both
+#                          wrong recipes were tried before this one; neither was
+#                          guessed.
+#     Skipped           -- add a live entry to scripts/automation-exclusions.json
+#     PassedOnFallback  -- a lane whose ExpectedLevel is 'backend' but which resolves
+#                          the shared reference. ArcaneRuntime/dx12/runtime-scene does
+#                          this today: there is no dx12/runtime-scene.png, only
+#                          vulkan/. It is observed on every ordinary run.
+#     Errored           -- exceed a launch bound, so the host is killed and the bound
+#                          names itself. NOT via "gpu-stall": that string is a
+#                          Diagnostics crash-envelope KIND, never a VerifyReport
+#                          exitReason, so it cannot reach this cascade. See the
+#                          Errored branch's own comment.
+#     Passed            -- the ordinary green run
+#
 # ---- The four combinations. ----
 # ExpectedLevel: which reference this lane is SUPPOSED to resolve against.
 # Nothing in the report can infer this -- a resolvedLevel of "shared" looks
@@ -1043,18 +1073,45 @@ if ($SelfTest) {
     # comparing) still counts as noticing, per the spec -- this does not
     # weaken that rule, it only excludes lanes that never got as far as
     # trying.
-    # Ruling 18 (Task 9): these two reads consumed the OLD vocabulary. The
-    # bespoke $exeMissingCount is gone -- NotRun carries that fact now -- and
-    # `-ne 'FAIL'` would match every lane once no verdict is ever the literal
-    # 'FAIL', silently inverting this assertion. Task 12 rewrites this block
-    # for per-verdict reachability; this keeps it HONEST in the meantime,
-    # because a commit must leave the tree working.
-    $neverLaunched = @($results | Where-Object { $_.Verdict -eq 'NotRun' }).Count
-    # "Did not notice" = went GREEN on a deliberately broken scene.
-    $notFailed = @($results | Where-Object { $_.Verdict -in $script:GreenVerdicts })
-    if ($neverLaunched -gt 0) {
+    # THE OTHER HALF OF THE WIRE CONTRACT. VerdictTest.cpp pins Arcane::Verdict's
+    # string set; this pins the copy this script carries. PowerShell cannot
+    # include the header, so the two are pinned independently and must be changed
+    # in the same commit. Sourced from the BUILT EXE so it cannot go stale
+    # against a rebuilt engine.
+    $verdictProbe = Join-Path $repoRoot "bin\$configDirName\ArcaneTests\ArcaneTests.exe"
+    if (Test-Path $verdictProbe) {
+        # Run FROM the exe directory, like every other invocation of this suite:
+        # fixtures and data/ are staged relative to it.
+        Push-Location (Split-Path -Parent $verdictProbe)
+        try {
+            $probeOut = & $verdictProbe "[verdict]" 2>&1 | Out-String
+            $probeCode = $LASTEXITCODE
+        } finally {
+            Pop-Location
+        }
+        if ($probeCode -ne 0) {
+            Write-Host "SELF-TEST FAILED -- the [verdict] cases do not pass, so this script's copy of the vocabulary cannot be trusted." -ForegroundColor Red
+            Write-Host $probeOut
+            $selfTestOk = $false
+        }
+    } else {
+        Write-Host "SELF-TEST: WARNING -- ArcaneTests.exe absent, cannot cross-check the verdict vocabulary." -ForegroundColor Yellow
+    }
+
+    # The ordinary -SelfTest mutation breaks the scene, so every lane that ran
+    # must report Failed -- the verdict meaning "the subject ran and did not meet
+    # its contract". NotRun, Skipped, Indeterminate and Errored all mean the lane
+    # never got to notice anything, and reporting a pass on any of them would be
+    # exactly the vacuous self-test this mode exists to rule out. That
+    # distinction used to need a bespoke $exeMissingCount; the vocabulary now
+    # carries it, so this asserts on Failed DIRECTLY rather than on "not green".
+    $notFailed = @($results | Where-Object { $_.Verdict -ne 'Failed' })
+    $unknown   = @($results | Where-Object { $_.Verdict -notin $script:VerdictNames })
+
+    if ($unknown.Count -gt 0) {
         Write-Host ""
-        Write-Host "SELF-TEST FAILED -- $neverLaunched lane(s) never launched (exe not found). A lane that never ran never had the chance to notice anything; this run proves nothing about the gate." -ForegroundColor Red
+        Write-Host "SELF-TEST FAILED -- $($unknown.Count) lane(s) reported a verdict outside the declared vocabulary:" -ForegroundColor Red
+        $unknown | ForEach-Object { Write-Host "  $($_.Combo) reported '$($_.Verdict)'" -ForegroundColor Red }
         $selfTestOk = $false
     } elseif ($results.Count -ne $combos.Count) {
         Write-Host ""
