@@ -1078,6 +1078,11 @@ if ($SelfTest) {
     # include the header, so the two are pinned independently and must be changed
     # in the same commit. Sourced from the BUILT EXE so it cannot go stale
     # against a rebuilt engine.
+    # Its OWN flag, deliberately NOT $selfTestOk: the lane-grading cascade below
+    # ends in an else that assigns $selfTestOk unconditionally, so writing the
+    # probe result there would be silently clobbered whenever the hosts behave
+    # normally -- which is EXACTLY the drift case this probe exists to catch.
+    $vocabOk = $true
     $verdictProbe = Join-Path $repoRoot "bin\$configDirName\ArcaneTests\ArcaneTests.exe"
     if (Test-Path $verdictProbe) {
         # Run FROM the exe directory, like every other invocation of this suite:
@@ -1092,7 +1097,7 @@ if ($SelfTest) {
         if ($probeCode -ne 0) {
             Write-Host "SELF-TEST FAILED -- the [verdict] cases do not pass, so this script's copy of the vocabulary cannot be trusted." -ForegroundColor Red
             Write-Host $probeOut
-            $selfTestOk = $false
+            $vocabOk = $false
         }
     } else {
         Write-Host "SELF-TEST: WARNING -- ArcaneTests.exe absent, cannot cross-check the verdict vocabulary." -ForegroundColor Yellow
@@ -1122,6 +1127,13 @@ if ($SelfTest) {
         Write-Host "SELF-TEST FAILED -- the gate did NOT notice a broken scene." -ForegroundColor Red
         $notFailed | ForEach-Object { Write-Host "  $($_.Combo) reported $($_.Verdict)" -ForegroundColor Red }
         Write-Host "A gate that cannot fail is not a gate. Fix the gate, not this check." -ForegroundColor Red
+        $selfTestOk = $false
+    } elseif (-not $vocabOk) {
+        # The lanes graded correctly, but the wire contract is broken. Without
+        # this arm the else below would report PASSED over the top of the
+        # probe's own FAILED line -- healthy hosts masking a drifted vocabulary.
+        Write-Host ""
+        Write-Host "SELF-TEST FAILED -- the lanes graded correctly, but the vocabulary pin above did not hold. Arcane::Verdict and this script have drifted apart." -ForegroundColor Red
         $selfTestOk = $false
     } else {
         Write-Host ""
