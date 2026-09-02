@@ -673,6 +673,13 @@ project "ArcaneTests"
     -- canvas calls it, and that TU source-compiles into the tests.
     links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "NRI", "Manifold2D", "imgui-node-editor" }
 
+    -- The suite's job includes exercising the engine's own guards, so they must
+    -- be live in EVERY config -- otherwise the assert-routing cases exist only
+    -- in Debug and the three configs' assertion counts drift apart for a reason
+    -- that has nothing to do with coverage. Scoped to this project: the hosts
+    -- are untouched and keep their normal per-config behaviour.
+    defines { "MOSAIC_ENABLE_ASSERTS" }
+
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad" }
 
     -- The test exe loads ArcaneClient.dll from its own directory.

@@ -5,6 +5,7 @@
 
 #include "Helpers/TestTypeContext.hpp"
 
+#include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Astra/Core/TypeContext.hpp>
 
@@ -30,5 +31,11 @@ int main(int argc, char* argv[]) {
     {
         Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
     }
+    // Route this module's Mosaic guard failures through the engine logger, the
+    // same as a host does. Without it a guard firing inside a test goes to
+    // Mosaic's DefaultAssertHandler -- which reports Break, and on an
+    // unattended runner that is the wrong answer.
+    Arcane::Assert::InstallMosaicHandler();
+
     return Catch::Session().run(argc, argv);
 }
