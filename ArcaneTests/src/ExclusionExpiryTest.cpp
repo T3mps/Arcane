@@ -7,21 +7,45 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Host/ExclusionList.hpp>
 
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
 
+namespace
+{
+    constexpr const char* kExclusionsPath = "automation-exclusions.json";
+}
+
 TEST_CASE("automation exclusions: the file parses and none has expired", "[exclusions][meta]")
 {
-    // Staged beside the exe by the ArcaneTests postbuild step. An ABSENT file
-    // legitimately means "no exclusions" and is not a failure; a PRESENT but
-    // malformed one is.
-    std::ifstream in("automation-exclusions.json", std::ios::binary);
+    // Staged beside the exe by the ArcaneTests postbuild step (COPYFILE from
+    // scripts/automation-exclusions.json). Tests run FROM the exe directory
+    // (the plan's Global Constraints: "fixtures, shaders and data/ are staged
+    // relative to it"), and this postbuild copy is unconditional, so the file
+    // is ALWAYS supposed to be here. Its absence therefore does NOT mean "no
+    // exclusions declared" -- it means STAGING IS BROKEN (wrong working
+    // directory, the postbuild step removed, a future premake change to
+    // cfg.buildtarget.directory) and must be loud: silently treating "not
+    // found" as "nothing excluded" would let this guard quietly stop running
+    // forever, which is precisely the failure mode Task 6 exists to close.
+    std::ifstream in(kExclusionsPath, std::ios::binary);
     if (!in)
     {
-        SUCCEED("no automation-exclusions.json staged -- no exclusions declared");
-        return;
+        FAIL("automation-exclusions.json was not found at \""
+             << std::filesystem::absolute(kExclusionsPath).string()
+             << "\". The ArcaneTests postbuild step stages this file next to "
+                "the exe unconditionally, so its absence means the staging "
+                "is BROKEN -- not that no exclusions are declared. Check the "
+                "working directory this binary was launched from (tests run "
+                "FROM the exe directory) and the ArcaneTests "
+                "postbuildcommands COPYFILE in premake5.lua.");
     }
+    // Binary mode + whole-buffer slurp: fine today (this repo's file is
+    // always "[]" or LF-only JSON), and nlohmann's parser (behind
+    // ParseExclusions) treats CRLFs as insignificant whitespace, so a real
+    // entry authored on Windows would still parse correctly -- no need to
+    // text-mode this read.
     std::ostringstream ss;
     ss << in.rdbuf();
 
