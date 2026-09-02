@@ -486,6 +486,45 @@ try {
     $results = @()
     $anyFailure = $false
 
+    # ---- EXCLUSIONS. Loaded once; a malformed file is a REFUSAL. ----
+    # An ABSENT file legitimately means "no exclusions". A PRESENT but malformed
+    # one is refused rather than silently treated as empty -- a parse error that
+    # disabled the whole mechanism would hide every entry in it.
+    $exclusionsPath = Join-Path $repoRoot 'scripts\automation-exclusions.json'
+    $exclusions = @()
+    $expiredExclusions = @()
+    $today = (Get-Date).ToString('yyyy-MM-dd')
+    if (Test-Path $exclusionsPath) {
+        try {
+            $parsed = Get-Content $exclusionsPath -Raw | ConvertFrom-Json
+        } catch {
+            Write-Host "automation-exclusions.json is present but not valid JSON: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "Refusing to run -- a malformed exclusion file must not read as 'no exclusions'." -ForegroundColor Red
+            exit 1
+        }
+        if ($null -ne $parsed) {
+            $exclusions = @($parsed)
+            foreach ($e in $exclusions) {
+                foreach ($required in @('target', 'reason', 'expires')) {
+                    # PARENTHESISED deliberately. Unary -not binds tighter than
+                    # -contains, so `-not $e.PSObject.Properties.Name -contains $required`
+                    # parses as `($false) -contains $required` -- always false, so the
+                    # missing-property half would never fire.
+                    if ((-not ($e.PSObject.Properties.Name -contains $required)) -or (-not $e.$required)) {
+                        Write-Host "automation-exclusions.json: every entry needs a non-empty '$required'. Refusing to run." -ForegroundColor Red
+                        exit 1
+                    }
+                }
+                if ($e.expires -notmatch '^\d{4}-\d{2}-\d{2}$') {
+                    Write-Host "automation-exclusions.json: 'expires' must be an ISO date YYYY-MM-DD, got '$($e.expires)'. Refusing to run." -ForegroundColor Red
+                    exit 1
+                }
+                # Lexicographic compare -- that is why the ISO format is mandatory.
+                if ($today -gt $e.expires) { $expiredExclusions += $e }
+            }
+        }
+    }
+
     # ---- PREFLIGHT. Check every lane's preconditions BEFORE launching any. ----
     # Without this, a missing exe for lane 4 is discovered only after lanes 1-3
     # have each spent a full host launch. This is the "will never be ready" half
@@ -522,6 +561,40 @@ try {
 
         Write-Host ""
         Write-Host "-- $label --" -ForegroundColor Cyan
+
+        $excluded = $null
+        foreach ($e in $exclusions) {
+            if ($e.target -ne $label) { continue }
+            # An omitted axis means ALL, never NONE. d3d12 aliases dx12 so the
+            # report's spelling is not a silent miss.
+            $bMatch = $true; $hMatch = $true; $cMatch = $true
+            if (($e.PSObject.Properties.Name -contains 'backends') -and $e.backends) {
+                $want = @($e.backends | ForEach-Object { $v = "$_".ToLower(); if ($v -eq 'd3d12') { 'dx12' } else { $v } })
+                $have = $backend.ToLower(); if ($have -eq 'd3d12') { $have = 'dx12' }
+                $bMatch = $want -contains $have
+            }
+            if (($e.PSObject.Properties.Name -contains 'hosts') -and $e.hosts) {
+                $hMatch = @($e.hosts | ForEach-Object { "$_".ToLower() }) -contains $hostName.ToLower()
+            }
+            if (($e.PSObject.Properties.Name -contains 'configurations') -and $e.configurations) {
+                $cMatch = @($e.configurations | ForEach-Object { "$_".ToLower() }) -contains $Configuration.ToLower()
+            }
+            if ($bMatch -and $hMatch -and $cMatch) { $excluded = $e; break }
+        }
+        if ($excluded) {
+            # Checked before the exe even has to exist: an excluded lane needs
+            # no binary. Skipped does not fail the gate -- but it does not
+            # satisfy it either, so an all-excluded run is still red.
+            $results += [pscustomobject]@{
+                Combo = $label; Verdict = 'Skipped'
+                Detail = "excluded until $($excluded.expires)"
+                SkipReason = "$($excluded.reason) (expires $($excluded.expires))"
+            }
+            Write-Host ""
+            Write-Host "-- $label --" -ForegroundColor Cyan
+            Write-Host "Skipped -- $($excluded.reason) (expires $($excluded.expires))" -ForegroundColor DarkGray
+            continue
+        }
 
         # The decision was already made in the preflight above -- this only
         # records it. NotRun, not Failed: the lane never got the chance to
@@ -656,7 +729,14 @@ try {
             # WHICH bound is the point: "raise --frames" and "the host stopped
             # progressing" are different problems.
             $verdict = 'Errored'
-            $detail = "killed after exceeding its $timeoutBound bound -- raise that bound, or find why the host stopped progressing"
+            if ($timeoutBound -like 'unkillable*') {
+                # Folded in from Task 10's review: the shared template below reads
+                # "raise that bound", which is not the action for an unkillable
+                # process. Actionable failure text is the point of this arc.
+                $detail = "the host survived Kill() -- $timeoutBound. Find what is holding the process open (a stuck driver call or a debugger attach are the usual causes)."
+            } else {
+                $detail = "killed after exceeding its $timeoutBound bound -- raise that bound, or find why the host stopped progressing"
+            }
         }
         elseif ($reportExists) {
             # THE DISAMBIGUATOR'S PRESENT DIRECTION: a report on disk means this
@@ -810,6 +890,23 @@ try {
         }
 
         $results += [pscustomobject]@{ Combo = $label; Verdict = $verdict; Detail = $detail; SkipReason = $skipReason }
+    }
+
+    # A stale exclusion is ITSELF the failure -- not the thing it excludes. This
+    # is what makes the expiry a mechanism rather than a date in a comment.
+    # Reported as a synthetic lane so it appears in the machine-readable summary
+    # exactly like any other verdict, and counts toward $redCount.
+    foreach ($e in $expiredExclusions) {
+        $results += [pscustomobject]@{
+            Combo = "automation-exclusions/$($e.target)"
+            Verdict = 'Failed'
+            Detail = "exclusion EXPIRED on $($e.expires) (today is $today) -- reason was: $($e.reason). Either the problem is fixed (delete the entry) or it is not (give it a new date and a fresh justification)."
+            SkipReason = $null
+        }
+        $anyFailure = $true
+        Write-Host ""
+        Write-Host "Failed -- automation-exclusions/$($e.target)" -ForegroundColor Red
+        Write-Host "  EXPIRED on $($e.expires), today is $today. Reason was: $($e.reason)" -ForegroundColor Red
     }
 } finally {
     if ($SelfTest) {
