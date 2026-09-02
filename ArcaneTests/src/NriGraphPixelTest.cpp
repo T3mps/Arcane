@@ -1,4 +1,5 @@
-// NODE-LEVEL PIXEL CORRECTNESS for the NRI frame graph -- [gpu], DESK ONLY.
+// NODE-LEVEL PIXEL CORRECTNESS for the NRI frame graph -- [gpu], outside the
+// ~[gpu] baseline set.
 //
 // ===== WHY THIS FILE EXISTS ==================================================
 // Without it the suite's entire [gpu] coverage is TWO cases, both in
@@ -44,18 +45,17 @@
 // one CreateOffscreen must be given. NriSubstrateTest.cpp's wrap smoke carries
 // the same rule for the same reason.
 //
-// ===== [gpu] MEANS DESK, AND THESE HAVE NOT BEEN RUN =========================
-// The agent gate is `ArcaneTests.exe "~[gpu]"`, so nothing here executes there;
-// what the gate DOES prove about this file is that it compiles and links, which
-// is not nothing (every API contract below is checked by the compiler). The
-// pixel assertions themselves are UNRUN as committed. Run them at the desk:
+// ===== [gpu] MEANS "NEEDS AN ADAPTER, AND IS OUTSIDE THE ~[gpu] BASELINE" ====
+// The desk-only ban was RETIRED on 2026-08-31: these cases have since run
+// clean on both backends (62002 assertions / 25 cases), on the same driver
+// build the old note blamed. They render OFFSCREEN -- no window, no swapchain --
+// so the windowed-present hazard that note described was never reachable from
+// here. CI runs the full unfiltered suite (Jenkinsfile).
 //
-//     cd bin\Debug-windows-x86_64-md\ArcaneTests
-//     ArcaneTests.exe "[pixel]"                 # both backends
-//     ArcaneTests.exe "[pixel][d3d12]"          # one backend
-//
-// A first run that fails is far more likely to be a wrong expectation here than
-// a renderer defect -- read the failure before believing it.
+// `~[gpu]` survives as a BASELINE-COMPARABILITY convention so recorded figures
+// stay comparable -- never cite it as a safety gate. Whether a machine can
+// actually run these is now answered by ARC_REQUIRE_BACKEND, which SKIPS with a
+// stated reason rather than silently omitting.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -79,6 +79,8 @@
 #include <optional>
 #include <span>         // FrameDesc::pickables / ::selectedIds are spans
 #include <vector>
+
+#include "Helpers/GpuCapability.hpp"
 
 namespace
 {
@@ -207,6 +209,7 @@ namespace
 {
     void CheckCaptureRoundTrip(Arcane::GraphicsBackend backend)
     {
+        ARC_REQUIRE_BACKEND(backend);
         const std::uint64_t before = Arcane::RenderErrorCount();
         PixelVehicle v = MakeVehicle(backend);
 
@@ -252,6 +255,7 @@ namespace
 {
     void CheckCaptureRefusesWithoutACaptureFrame(Arcane::GraphicsBackend backend)
     {
+        ARC_REQUIRE_BACKEND(backend);
         PixelVehicle v = MakeVehicle(backend);
 
         Arcane::NriGraphContext::FrameDesc frame;
@@ -292,6 +296,7 @@ namespace
 {
     void CheckBatchedRectLandsInItsRectangle(Arcane::GraphicsBackend backend)
     {
+        ARC_REQUIRE_BACKEND(backend);
         const std::uint64_t before = Arcane::RenderErrorCount();
         PixelVehicle v = MakeVehicle(backend);
 
@@ -388,6 +393,7 @@ namespace
 
     void CheckPickIdPass(Arcane::GraphicsBackend backend)
     {
+        ARC_REQUIRE_BACKEND(backend);
         const std::uint64_t before = Arcane::RenderErrorCount();
 
         Arcane::NriGraphContext::NodeSet nodes;
@@ -454,6 +460,7 @@ namespace
 {
     void CheckProbeTicketRidesWithTheId(Arcane::GraphicsBackend backend)
     {
+        ARC_REQUIRE_BACKEND(backend);
         Arcane::NriGraphContext::NodeSet nodes;
         nodes.pickOutline = true;
 
@@ -558,6 +565,7 @@ namespace
 
     void CheckSelectionOutlineTracesOnlyTheSelection(Arcane::GraphicsBackend backend)
     {
+        ARC_REQUIRE_BACKEND(backend);
         const std::uint64_t before = Arcane::RenderErrorCount();
 
         Arcane::NriGraphContext::NodeSet nodes;
@@ -636,6 +644,7 @@ namespace
 {
     void CheckFrameIsByteDeterministic(Arcane::GraphicsBackend backend)
     {
+        ARC_REQUIRE_BACKEND(backend);
         const std::uint64_t before = Arcane::RenderErrorCount();
 
         auto capture = [&](std::uint32_t& w, std::uint32_t& h)
@@ -754,6 +763,7 @@ namespace
     // ---- 8a: a lit cube covers the centre and the corners stay background ---
     void CheckMeshCubeCoversTheCentre(Arcane::GraphicsBackend backend)
     {
+        ARC_REQUIRE_BACKEND(backend);
         const std::uint64_t before = Arcane::RenderErrorCount();
 
         // 2 m on a side at the origin, seen from 4 m away through a 60-degree
@@ -833,6 +843,7 @@ namespace
     // the two owns a shared pixel.
     void CheckNearMeshOccludesFar(Arcane::GraphicsBackend backend)
     {
+        ARC_REQUIRE_BACKEND(backend);
         const std::uint64_t before = Arcane::RenderErrorCount();
 
         // Geometry chosen so the two silhouettes are nested with room to spare
@@ -983,6 +994,7 @@ namespace
 
     void CheckNonUniformScaleNormalMatchesAnalyticLambert(Arcane::GraphicsBackend backend)
     {
+        ARC_REQUIRE_BACKEND(backend);
         const std::uint64_t before = Arcane::RenderErrorCount();
 
         // ---- THE KNOWN-GOOD REFERENCE: an unscaled cube, axis-aligned

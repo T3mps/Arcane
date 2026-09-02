@@ -1,6 +1,6 @@
 // NRI substrate: result-check discipline (ARC_NRI_CHECK/NriCheckImpl), the
 // callback-to-latch wiring (MakeNriCallbacks), and the one-line identity log
-// (LogNriIdentity). Device-less -- [nri], inside the ~[gpu] dev gate.
+// (LogNriIdentity). Device-less -- [nri], inside the ~[gpu] baseline set.
 //
 // Include order matters in this file: NRI's Extensions/NRIDeviceCreation.h
 // declares nri::Message with an enumerator literally named ERROR, and
@@ -123,7 +123,7 @@ TEST_CASE("nri: NONE-backend device lifecycle via MakeNriCallbacks/LogNriIdentit
 }
 
 // ---------------------------------------------------------------------------
-// Task 7: the wrap smoke -- [gpu], NOT part of the ~[gpu] dev gate.
+// Task 7: the wrap smoke -- [gpu], outside the ~[gpu] baseline set.
 //
 // SCAFFOLDING with a planned deletion point: Phase 1's own hand-rolled
 // triangle scaffold was retired at Task 13, once the frame-graph vehicle

@@ -1,5 +1,5 @@
 // NriDiagnostics: the crash chain armed by whichever device exists. Device-less
-// -- [nri], inside the ~[gpu] dev gate.
+// -- [nri], inside the ~[gpu] baseline set.
 //
 // WHAT IS AND IS NOT REACHABLE HERE, stated up front because the split is the
 // whole reason these cases look the way they do:

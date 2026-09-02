@@ -1948,7 +1948,7 @@ TEST_CASE("uploadring layout: high-water tracks the peak cursor across multiple 
 
 // =========================================================================
 // THE EXECUTOR. NONE-backend integration -- still "[nri]", still inside the
-// ~[gpu] dev gate.
+// ~[gpu] baseline set.
 //
 // What a NONE device buys and what it does not. ImplNONE.cpp answers every
 // CoreInterface entry these cases drive (CreateCommittedTexture/Buffer,

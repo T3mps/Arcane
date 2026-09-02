@@ -1,7 +1,7 @@
 // NRI substrate: the device capability snapshot (NriDeviceCaps). Proves
 // FinishWrap queries nri::DeviceDesc's tiers/features exactly once and the
 // snapshot is populated (not left at NriDeviceCaps's construction defaults
-// by a missed query). Device-less -- [nri], inside the ~[gpu] dev gate.
+// by a missed query). Device-less -- [nri], inside the ~[gpu] baseline set.
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
 
