@@ -894,3 +894,43 @@ TEST_CASE("host config: --settle-timeout 0 is ACCEPTED, unlike --settle 0", "[ho
     REQUIRE(o.config.has_value());
     CHECK(o.config->settleTimeoutMs == 0u);
 }
+
+// ---- Task 4: --fixed-time, absolute scene-clock pinning -------------------
+
+TEST_CASE("host config: --fixed-time is optional and validated like --fixed-dt", "[host]")
+{
+    // Absent by default -- the scene clock keeps accumulating as it always has.
+    {
+        const char* argv[] = { "ArcaneRuntime", "--project", "P", "--headless", "--frames", "1" };
+        auto [cfg, code] = Arcane::HostConfig::Parse(6, const_cast<char**>(argv));
+        REQUIRE(cfg.has_value());
+        CHECK_FALSE(cfg->fixedTimeSeconds.has_value());
+    }
+    // Supplied and finite: accepted, including zero (a legitimate pin).
+    {
+        const char* argv[] = { "ArcaneRuntime", "--project", "P", "--headless",
+                               "--frames", "1", "--fixed-time", "0" };
+        auto [cfg, code] = Arcane::HostConfig::Parse(8, const_cast<char**>(argv));
+        REQUIRE(cfg.has_value());
+        REQUIRE(cfg->fixedTimeSeconds.has_value());
+        CHECK(*cfg->fixedTimeSeconds == Catch::Approx(0.0));
+    }
+    // NaN is refused at the parse boundary, exactly as --fixed-dt already is
+    // (HostConfig.cpp:191-195): `>= 0.0` alone would not reject it, because
+    // every comparison against NaN is false.
+    {
+        const char* argv[] = { "ArcaneRuntime", "--project", "P", "--headless",
+                               "--frames", "1", "--fixed-time", "nan" };
+        auto [cfg, code] = Arcane::HostConfig::Parse(8, const_cast<char**>(argv));
+        CHECK_FALSE(cfg.has_value());
+        CHECK(code == 2);
+    }
+    // Negative is refused: a scene clock before zero is a typo, not a time.
+    {
+        const char* argv[] = { "ArcaneRuntime", "--project", "P", "--headless",
+                               "--frames", "1", "--fixed-time", "-1" };
+        auto [cfg, code] = Arcane::HostConfig::Parse(8, const_cast<char**>(argv));
+        CHECK_FALSE(cfg.has_value());
+        CHECK(code == 2);
+    }
+}

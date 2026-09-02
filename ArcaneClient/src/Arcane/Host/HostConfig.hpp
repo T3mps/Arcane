@@ -82,6 +82,17 @@ namespace Arcane
         // every ordinary run that never mentioned the flag at all.
         bool            fixedDtSupplied = false;
 
+        // --fixed-time: pin the ABSOLUTE clock the scene sees, so `Time` stops
+        // being a function of the frame count. --fixed-dt pins the STEP; this
+        // pins the CLOCK. Without it, changing --frames 60 to --frames 90
+        // re-shades anything animated on Time (ReferenceProject's PulseSprite
+        // computes sin(Time * PulseSpeed)) and silently invalidates a blessed
+        // reference.
+        //
+        // Optional-absent, NOT zero-defaulted: 0.0 is a legitimate pin and must
+        // be distinguishable from "not asked for".
+        std::optional<double> fixedTimeSeconds;
+
         // Raw, unparsed `--probe` arguments in command-line order. Parsed by
         // VerifyReport, not here: the kinds are that component's vocabulary.
         std::vector<std::string> probes;

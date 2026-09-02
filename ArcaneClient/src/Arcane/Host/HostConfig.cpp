@@ -22,6 +22,9 @@ namespace Arcane
                                          "pairs with --frames/--probe/--report");
         cli.Option("fixed-dt", "0.0166666666666666666", "seconds per simulated frame "
                                          "(--headless only)").Type(CliType::Double);
+        cli.Option("fixed-time", "", "pin the absolute scene clock to this many seconds, so "
+                                     "Time is independent of the frame count (--headless only; "
+                                     "omit to let the clock accumulate)").Type(CliType::Double);
         cli.Option("probe", "",          "repeatable: brightness@x,y | luma@x,y | rgba@x,y | pick@x,y | census").Many();
         cli.Option("report", "",         "write the observation report to this JSON path");
         cli.Option("dump-layout", "", "write the live ImGui layout to this .ini at shutdown "
@@ -103,6 +106,8 @@ namespace Arcane
         cfg.headless       = r.Flag("headless");
         cfg.fixedDtSeconds = r.GetAs<double>("fixed-dt");
         cfg.fixedDtSupplied = r.Supplied("fixed-dt");
+        if (r.Supplied("fixed-time"))
+            cfg.fixedTimeSeconds = r.GetAs<double>("fixed-time");
         cfg.probes         = r.GetMany("probe");
         cfg.reportPath     = r.Get("report");
         cfg.dumpLayoutPath = r.Get("dump-layout");
@@ -170,12 +175,13 @@ namespace Arcane
         // all if we compare strings. r.Supplied("fixed-dt") answers the actual
         // question: did the command line contain this option.
         const bool wantsOffscreenOnly = !cfg.probes.empty() || !cfg.reportPath.empty()
-                                      || r.Supplied("fixed-dt") || r.Supplied("settle")
+                                      || r.Supplied("fixed-dt") || r.Supplied("fixed-time")
+                                      || r.Supplied("settle")
                                       || r.Supplied("settle-timeout") || r.Supplied("compare");
         if (wantsOffscreenOnly && !cfg.headless)
         {
-            std::fprintf(stderr, "error: --fixed-dt/--probe/--report/--settle/--settle-timeout/"
-                                 "--compare require --headless\n");
+            std::fprintf(stderr, "error: --fixed-dt/--fixed-time/--probe/--report/--settle/"
+                                 "--settle-timeout/--compare require --headless\n");
             return { std::nullopt, 2 };
         }
         if (!cfg.probes.empty() && cfg.maxFrames == 0)
@@ -191,6 +197,16 @@ namespace Arcane
         if (cfg.headless && (!std::isfinite(cfg.fixedDtSeconds) || cfg.fixedDtSeconds <= 0.0))
         {
             std::fprintf(stderr, "error: --fixed-dt wants a positive, finite number of seconds\n");
+            return { std::nullopt, 2 };
+        }
+        // Same NaN reasoning as --fixed-dt directly above: `< 0.0` alone does
+        // not reject NaN, so test isfinite explicitly. Zero IS allowed here
+        // (unlike --fixed-dt, where zero means a stopped step) -- pinning the
+        // scene clock to t=0 is a legitimate request.
+        if (cfg.fixedTimeSeconds.has_value() &&
+            (!std::isfinite(*cfg.fixedTimeSeconds) || *cfg.fixedTimeSeconds < 0.0))
+        {
+            std::fprintf(stderr, "error: --fixed-time wants a non-negative, finite number of seconds\n");
             return { std::nullopt, 2 };
         }
         // "Was --settle supplied" mirrors --fixed-dt's own r.Supplied() reasoning

@@ -1293,7 +1293,11 @@ namespace Arcane::Editor
         if (m_resolver)
         {
             Arcane::SceneRenderResolver::FrameInfo frame;
-            frame.now            = m_editorClock;
+            // See RuntimeFrame.cpp's identical override: m_editorClock also drives
+            // the compile service's Poll/Submit and the material file-watch
+            // debounce (EditorAppProject.cpp), so only the scene's view of time is
+            // pinned here.
+            frame.now            = m_config.fixedTimeSeconds.value_or(m_editorClock);
             frame.dt             = m_gameUi.frameDt;
             frame.viewportWidth  = (float)ViewportWidth();
             frame.viewportHeight = (float)ViewportHeight();

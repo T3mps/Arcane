@@ -318,7 +318,12 @@ void PrepareFrame(FrameIo& io)
         FrameExtent(io, width, height);
 
         Arcane::SceneRenderResolver::FrameInfo frame;
-        frame.now            = io.hostClock;
+        // --fixed-time overrides ONLY what the scene sees. io.hostClock keeps
+        // accumulating untouched, because it is also the clock the shader
+        // compile service debounces against (see this file's dispatch gate) --
+        // a frozen accumulator would stall that, which is not what pinning
+        // scene time means.
+        frame.now            = io.config.fixedTimeSeconds.value_or(io.hostClock);
         frame.dt             = io.lastFrameDt;
         frame.viewportWidth  = (float)width;
         frame.viewportHeight = (float)height;
