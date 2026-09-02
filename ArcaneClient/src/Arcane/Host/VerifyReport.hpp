@@ -134,6 +134,23 @@ namespace Arcane
     class ARCANE_API VerifyReport
     {
     public:
+        // The report's own compatibility promise across the Servitor boundary.
+        // A RANGE rather than a bare number (adopted from UE's
+        // FImageComparisonResult, which pairs CurrentVersion with
+        // OldestSupportedVersion): a consumer declares the span it understands,
+        // and IsSupportedSchemaVersion answers whether a document is readable
+        // at all rather than leaving every consumer to hardcode one integer.
+        //
+        // 4 added compare.maxLocalDifference. 3 remains readable: every field a
+        // 3-era consumer knows is still emitted with the same meaning.
+        static constexpr int kSchemaVersion                = 4;
+        static constexpr int kOldestSupportedSchemaVersion  = 3;
+
+        [[nodiscard]] static constexpr bool IsSupportedSchemaVersion(int v) noexcept
+        {
+            return v >= kOldestSupportedSchemaVersion && v <= kSchemaVersion;
+        }
+
         // The run's own identity: which backend rendered it, how many frames
         // it completed, and why it stopped (mirrors the exit-reason
         // vocabulary the offscreen loop already logs -- "frames-complete", a
@@ -278,11 +295,17 @@ namespace Arcane
         //                     message on a mismatch, or this component's
         //                     own wording for a missing reference / an
         //                     unconverged run; empty on a pass or a bless.
+        //   maxLocalDifference -- the largest per-block mismatch fraction over
+        //                     ImageCompare's 10x10 grid, lifted from
+        //                     Arcane::ImageCompareResult alongside diffCount.
+        //                     Zero on a bless or a missing-reference run, where
+        //                     no comparison ever ran -- same as diffCount.
         void SetCompare(std::string reference, std::string resolvedLevel,
                         std::string referencePath, bool passed,
                         std::uint64_t diffCount, double diffRatio,
                         std::uint64_t maxDiffPixels, bool sizesMismatch,
-                        std::string diffPath, std::string errorMessage);
+                        std::string diffPath, std::string errorMessage,
+                        double maxLocalDifference);
 
         // The --settle verdict (Task 3). Emitted as `settleAttemptsUsed` +
         // `settleBailReason` ONLY when this was actually called -- a run
@@ -403,6 +426,7 @@ namespace Arcane
         bool          m_compareSizesMismatch  = false;
         std::string   m_compareDiffPath;
         std::string   m_compareErrorMessage;
+        double        m_compareMaxLocalDifference = 0.0;
 
         // The --settle verdict (Task 3) -- see SetSettle's own comment. As
         // everywhere else in this component, m_settleSet is what gates

@@ -1271,6 +1271,7 @@ void RuntimeApp::ShutdownGraphPath()
             bool          sizesMismatch     = false;
             std::string   diffPath;
             std::string   errorMessage;
+            double        maxLocalDifference = 0.0;
 
             if (m_compareMissingFatal)
             {
@@ -1297,12 +1298,13 @@ void RuntimeApp::ShutdownGraphPath()
             }
             else if (m_compareEvaluated)
             {
-                passed            = m_compareResult.passed;
-                diffCount         = m_compareResult.diffCount;
-                diffRatio         = m_compareResult.diffRatio;
-                maxDiffPixelsUsed = m_compareResult.maxDiffPixelsUsed;
-                sizesMismatch     = m_compareResult.sizesMismatch;
-                errorMessage      = m_compareResult.errorMessage;
+                passed             = m_compareResult.passed;
+                diffCount          = m_compareResult.diffCount;
+                diffRatio          = m_compareResult.diffRatio;
+                maxDiffPixelsUsed  = m_compareResult.maxDiffPixelsUsed;
+                sizesMismatch      = m_compareResult.sizesMismatch;
+                errorMessage       = m_compareResult.errorMessage;
+                maxLocalDifference = m_compareResult.maxLocalDifference;
 
                 // The write itself happens ABOVE, outside this --report block
                 // (final-review I-2) -- the diff PNG must land whether or not a
@@ -1324,7 +1326,7 @@ void RuntimeApp::ShutdownGraphPath()
 
             report.SetCompare(m_config.compareReference, resolvedLevel, referencePath, passed,
                                diffCount, diffRatio, maxDiffPixelsUsed, sizesMismatch, diffPath,
-                               errorMessage);
+                               errorMessage, maxLocalDifference);
         }
 
         // Parse-then-evaluate, never silently drop a malformed --probe: an

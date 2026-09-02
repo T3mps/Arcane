@@ -2351,6 +2351,7 @@ namespace Arcane::Editor
                 bool          sizesMismatch     = false;
                 std::string   diffPath;
                 std::string   errorMessage;
+                double        maxLocalDifference = 0.0;
 
                 if (m_compareMissingFatal)
                 {
@@ -2376,12 +2377,13 @@ namespace Arcane::Editor
                 }
                 else if (m_compareEvaluated)
                 {
-                    passed            = m_compareResult.passed;
-                    diffCount         = m_compareResult.diffCount;
-                    diffRatio         = m_compareResult.diffRatio;
-                    maxDiffPixelsUsed = m_compareResult.maxDiffPixelsUsed;
-                    sizesMismatch     = m_compareResult.sizesMismatch;
-                    errorMessage      = m_compareResult.errorMessage;
+                    passed             = m_compareResult.passed;
+                    diffCount          = m_compareResult.diffCount;
+                    diffRatio          = m_compareResult.diffRatio;
+                    maxDiffPixelsUsed  = m_compareResult.maxDiffPixelsUsed;
+                    sizesMismatch      = m_compareResult.sizesMismatch;
+                    errorMessage       = m_compareResult.errorMessage;
+                    maxLocalDifference = m_compareResult.maxLocalDifference;
 
                     // The write itself happens ABOVE, outside this --report
                     // block (final-review I-2) -- the diff PNG must land
@@ -2399,7 +2401,7 @@ namespace Arcane::Editor
 
                 report.SetCompare(m_config.compareReference, resolvedLevel, referencePath, passed,
                                    diffCount, diffRatio, maxDiffPixelsUsed, sizesMismatch, diffPath,
-                                   errorMessage);
+                                   errorMessage, maxLocalDifference);
             }
 
             // No probe specs, ever, on this host -- Evaluate() is

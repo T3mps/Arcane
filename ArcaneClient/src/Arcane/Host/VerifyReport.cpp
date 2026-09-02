@@ -215,7 +215,8 @@ namespace Arcane
                                    std::string referencePath, bool passed,
                                    std::uint64_t diffCount, double diffRatio,
                                    std::uint64_t maxDiffPixels, bool sizesMismatch,
-                                   std::string diffPath, std::string errorMessage)
+                                   std::string diffPath, std::string errorMessage,
+                                   double maxLocalDifference)
     {
         m_compareSet           = true;
         m_compareReference     = std::move(reference);
@@ -228,6 +229,7 @@ namespace Arcane
         m_compareSizesMismatch = sizesMismatch;
         m_compareDiffPath      = std::move(diffPath);
         m_compareErrorMessage  = std::move(errorMessage);
+        m_compareMaxLocalDifference = maxLocalDifference;
     }
 
     void VerifyReport::SetSettle(std::uint64_t attemptsUsed, bool converged, SettleBail bail,
@@ -533,7 +535,12 @@ namespace Arcane
         // an existing wire value may legitimately change; doing it at any
         // other time is a silent break for a consumer that parses this
         // without linking us.
-        j["schemaVersion"]   = 3;
+        //
+        // Bumped 3 -> 4 by Task 3 of the verdict-vocabulary arc: `compare`
+        // gained `maxLocalDifference` (see SetCompare's own comment). 3
+        // remains readable -- see kOldestSupportedSchemaVersion above -- every
+        // field a 3-era consumer knew is still emitted with the same meaning.
+        j["schemaVersion"]   = kSchemaVersion;
         j["backend"]         = m_backend;
         // Always "headless" -- Fix 3 (final fix wave) removed the "windowed"
         // value from this contract: HostConfig::Parse refuses --report
@@ -573,6 +580,7 @@ namespace Arcane
                               { "passed",        m_comparePassed },
                               { "diffCount",     m_compareDiffCount },
                               { "diffRatio",     m_compareDiffRatio },
+                              { "maxLocalDifference", m_compareMaxLocalDifference },
                               { "maxDiffPixels", m_compareMaxDiffPixels },
                               { "sizesMismatch", m_compareSizesMismatch },
                               { "diffPath",      m_compareDiffPath },

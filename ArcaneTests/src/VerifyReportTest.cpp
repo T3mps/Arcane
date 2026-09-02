@@ -68,7 +68,7 @@ TEST_CASE("verify: a brightness probe reads the capture and lands in the JSON", 
     // package, which parses this file without linking the engine -- so the
     // version is part of the contract, not decoration -- bumped to 2 by
     // Task 8's --compare/--bless block.
-    CHECK(doc["schemaVersion"] == 3);
+    CHECK(doc["schemaVersion"] == 4);
     CHECK(doc["backend"] == "D3D12");
     CHECK(doc["mode"] == "headless");
     CHECK(doc["framesRendered"] == 5);
@@ -656,7 +656,7 @@ TEST_CASE("verify: WriteTo round-trips through disk", "[verify]")
     in.close();
 
     const auto doc = nlohmann::json::parse(contents.str());
-    CHECK(doc["schemaVersion"] == 3);
+    CHECK(doc["schemaVersion"] == 4);
     CHECK(doc["framesRendered"] == 3);
 
     std::remove(path.c_str());
@@ -675,12 +675,12 @@ TEST_CASE("verify: WriteTo fails, does not throw, when the path cannot be opened
 
 // ---- Task 8: --compare/--bless inside the settle loop, report schema 2 ----
 
-TEST_CASE("verify: the report schema is version 3 once settle facts exist", "[verify]")
+TEST_CASE("verify: the report schema is version 4 once settle facts exist", "[verify]")
 {
     Arcane::VerifyReport r;
     r.SetRun("dx12", 60, "frames-complete");
     const auto doc = nlohmann::json::parse(r.ToJson());
-    CHECK(doc["schemaVersion"] == 3);
+    CHECK(doc["schemaVersion"] == 4);
 }
 
 TEST_CASE("verify: a run with no --compare emits NO compare block", "[verify]")
@@ -701,7 +701,7 @@ TEST_CASE("verify: a passing comparison reports its facts", "[verify]")
                  "ReferenceProject/Verify/References/runtime-scene.png",
                  /*passed*/ true, /*diffCount*/ 0, /*diffRatio*/ 0.0,
                  /*maxDiffPixels*/ 0, /*sizesMismatch*/ false,
-                 /*diffPath*/ "", /*errorMessage*/ "");
+                 /*diffPath*/ "", /*errorMessage*/ "", /*maxLocalDifference*/ 0.0);
 
     const auto doc = nlohmann::json::parse(r.ToJson());
     REQUIRE(doc.contains("compare"));
@@ -721,7 +721,8 @@ TEST_CASE("verify: a failing comparison carries the count, the budget and the di
                  "ReferenceProject/Verify/References/dx12/editor-ui.png",
                  false, 1234, 0.0134, 0, false,
                  "ReferenceProject/Saved/Verify/editor-ui-dx12-diff.png",
-                 "1234 pixels (ratio 0.013400 of all image pixels) are different.");
+                 "1234 pixels (ratio 0.013400 of all image pixels) are different.",
+                 /*maxLocalDifference*/ 0.0);
 
     const auto doc = nlohmann::json::parse(r.ToJson());
     CHECK(doc["compare"]["passed"] == false);
@@ -736,7 +737,8 @@ TEST_CASE("verify: a missing reference is its own resolvedLevel, not a zero-diff
     Arcane::VerifyReport r;
     r.SetRun("dx12", 60, "compare-missing-reference");
     r.SetCompare("brand-new", "none", "", false, 0, 0.0, 0, false, "",
-                 "no reference image on disk; re-run with --bless to create one");
+                 "no reference image on disk; re-run with --bless to create one",
+                 /*maxLocalDifference*/ 0.0);
 
     const auto doc = nlohmann::json::parse(r.ToJson());
     CHECK(doc["compare"]["resolvedLevel"] == "none");
@@ -755,7 +757,7 @@ TEST_CASE("verify: a --bless run's compare block reports a pass at the level it 
     r.SetRun("dx12", 60, "compare-blessed");
     r.SetCompare("runtime-scene", "shared",
                  "ReferenceProject/Verify/References/runtime-scene.png",
-                 /*passed*/ true, 0, 0.0, 0, false, "", "");
+                 /*passed*/ true, 0, 0.0, 0, false, "", "", /*maxLocalDifference*/ 0.0);
 
     const auto doc = nlohmann::json::parse(r.ToJson());
     CHECK(doc["exitReason"] == "compare-blessed");
@@ -765,7 +767,7 @@ TEST_CASE("verify: a --bless run's compare block reports a pass at the level it 
 
 // ---- Task 3: schemaVersion 3 -- the settle facts, and the headless mode ----
 
-TEST_CASE("verify report: schemaVersion 3 carries settle facts and the headless mode", "[verify]")
+TEST_CASE("verify report: schemaVersion 4 carries settle facts and the headless mode", "[verify]")
 {
     Arcane::VerifyReport r;
     r.SetRun("D3D12", 60, "frames-complete");
@@ -773,7 +775,7 @@ TEST_CASE("verify report: schemaVersion 3 carries settle facts and the headless 
                 /*captureFailed=*/false);
     const auto doc = nlohmann::json::parse(r.ToJson());
 
-    CHECK(doc["schemaVersion"] == 3);
+    CHECK(doc["schemaVersion"] == 4);
     // The MODE's machine-readable name, in the mode's own word. Changed on this
     // bump because a schemaVersion bump is exactly when a wire value may change.
     CHECK(doc["mode"] == "headless");
@@ -876,4 +878,46 @@ TEST_CASE("verify report: captureFailed alone is not a verdict", "[verify]")
     const auto doc = nlohmann::json::parse(r.ToJson());
     CHECK_FALSE(doc.contains("settleAttemptsUsed"));
     CHECK_FALSE(doc.contains("settleBailReason"));
+}
+
+TEST_CASE("verify report: schemaVersion is 4 and declares a supported range", "[host][verify]")
+{
+    // A RANGE plus a predicate, not a bare number: a consumer across the
+    // Servitor boundary can then say "I understand 3..4" rather than "I
+    // understand 4", and an unreadable result can be marked deliberately.
+    STATIC_REQUIRE(Arcane::VerifyReport::kSchemaVersion == 4);
+    STATIC_REQUIRE(Arcane::VerifyReport::kOldestSupportedSchemaVersion == 3);
+    CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(3));
+    CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(4));
+    CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(2));
+    CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(5));
+    CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(0));
+
+    Arcane::VerifyReport r;
+    r.SetRun("D3D12", 60, "frames-complete");
+    const auto j = nlohmann::json::parse(r.ToJson());
+    CHECK(j.at("schemaVersion").get<int>() == 4);
+}
+
+TEST_CASE("verify report: compare carries maxLocalDifference", "[host][verify]")
+{
+    Arcane::VerifyReport r;
+    r.SetRun("D3D12", 60, "frames-complete");
+    r.SetCompare("runtime-scene", "backend", "refs/runtime-scene.png", false,
+                 500, 0.01, 0, false, "diff.png", "500 pixels are different.",
+                 0.75);
+
+    const auto j = nlohmann::json::parse(r.ToJson());
+    REQUIRE(j.contains("compare"));
+    CHECK(j["compare"].at("maxLocalDifference").get<double>() == Catch::Approx(0.75));
+}
+
+TEST_CASE("verify report: a run without --compare emits no maxLocalDifference", "[host][verify]")
+{
+    // The absence-must-be-absence contract: "not asked" and "asked, scored
+    // zero" must not collapse into the same JSON.
+    Arcane::VerifyReport r;
+    r.SetRun("Vulkan", 60, "frames-complete");
+    const auto j = nlohmann::json::parse(r.ToJson());
+    CHECK_FALSE(j.contains("compare"));
 }
