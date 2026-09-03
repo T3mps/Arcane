@@ -2342,8 +2342,25 @@ namespace Arcane::Editor
                     }
                 };
 
+                // Schema 5: `compare.triedPaths` -- ported from RuntimeApp::
+                // ShutdownGraphPath verbatim (see that function's own
+                // comment). Seeded from m_compareResolution, re-seeded from
+                // `after` in the bless branch, exactly mirroring
+                // resolvedLevel/referencePath's own staleness handling below.
+                const auto stringifyTriedPaths =
+                    [](const std::vector<std::filesystem::path>& paths) -> std::vector<std::string>
+                {
+                    std::vector<std::string> out;
+                    out.reserve(paths.size());
+                    for (const std::filesystem::path& p : paths)
+                        out.push_back(p.generic_string());
+                    return out;
+                };
+
                 std::string   resolvedLevel = levelName(m_compareResolution.level);
                 std::string   referencePath = m_compareResolution.path.string();
+                std::vector<std::string> triedPaths =
+                    stringifyTriedPaths(m_compareResolution.triedPaths);
                 bool          passed            = false;
                 std::uint64_t diffCount         = 0;
                 double        diffRatio         = 0.0;
@@ -2368,6 +2385,7 @@ namespace Arcane::Editor
                                                   backendName);
                     resolvedLevel = levelName(after.level);
                     referencePath = after.path.string();
+                    triedPaths    = stringifyTriedPaths(after.triedPaths);
                     passed        = true;   // the reference now IS the capture, by construction
                 }
                 else if (compareWriteFailed)
@@ -2401,7 +2419,7 @@ namespace Arcane::Editor
 
                 report.SetCompare(m_config.compareReference, resolvedLevel, referencePath, passed,
                                    diffCount, diffRatio, maxDiffPixelsUsed, sizesMismatch, diffPath,
-                                   errorMessage, maxLocalDifference);
+                                   errorMessage, maxLocalDifference, triedPaths);
             }
 
             // No probe specs, ever, on this host -- Evaluate() is

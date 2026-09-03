@@ -1262,8 +1262,27 @@ void RuntimeApp::ShutdownGraphPath()
                 }
             };
 
+            // Schema 5: `compare.triedPaths` -- the ordered candidate list
+            // ResolveReference actually probed, stringified with
+            // generic_string() (forward slashes on every host OS). Mirrors
+            // resolvedLevel/referencePath's own pattern below: seeded from
+            // m_compareResolution (the fail-fast resolve above), and
+            // re-seeded from `after` in the bless branch for the same
+            // staleness reason -- the report must describe the resolution
+            // that actually applied, not the one captured before the write.
+            const auto stringifyTriedPaths =
+                [](const std::vector<std::filesystem::path>& paths) -> std::vector<std::string>
+            {
+                std::vector<std::string> out;
+                out.reserve(paths.size());
+                for (const std::filesystem::path& p : paths)
+                    out.push_back(p.generic_string());
+                return out;
+            };
+
             std::string   resolvedLevel = levelName(m_compareResolution.level);
             std::string   referencePath = m_compareResolution.path.string();
+            std::vector<std::string> triedPaths = stringifyTriedPaths(m_compareResolution.triedPaths);
             bool          passed            = false;
             std::uint64_t diffCount         = 0;
             double        diffRatio         = 0.0;
@@ -1289,6 +1308,7 @@ void RuntimeApp::ShutdownGraphPath()
                     Arcane::ResolveReference(projectRoot, m_config.compareReference, backendName);
                 resolvedLevel = levelName(after.level);
                 referencePath = after.path.string();
+                triedPaths    = stringifyTriedPaths(after.triedPaths);
                 passed        = true;   // the reference now IS the capture, by construction
             }
             else if (compareWriteFailed)
@@ -1326,7 +1346,7 @@ void RuntimeApp::ShutdownGraphPath()
 
             report.SetCompare(m_config.compareReference, resolvedLevel, referencePath, passed,
                                diffCount, diffRatio, maxDiffPixelsUsed, sizesMismatch, diffPath,
-                               errorMessage, maxLocalDifference);
+                               errorMessage, maxLocalDifference, triedPaths);
         }
 
         // Parse-then-evaluate, never silently drop a malformed --probe: an

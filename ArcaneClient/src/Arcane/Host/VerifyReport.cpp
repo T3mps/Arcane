@@ -216,7 +216,8 @@ namespace Arcane
                                    std::uint64_t diffCount, double diffRatio,
                                    std::uint64_t maxDiffPixels, bool sizesMismatch,
                                    std::string diffPath, std::string errorMessage,
-                                   double maxLocalDifference)
+                                   double maxLocalDifference,
+                                   std::vector<std::string> triedPaths)
     {
         m_compareSet           = true;
         m_compareReference     = std::move(reference);
@@ -230,6 +231,7 @@ namespace Arcane
         m_compareDiffPath      = std::move(diffPath);
         m_compareErrorMessage  = std::move(errorMessage);
         m_compareMaxLocalDifference = maxLocalDifference;
+        m_compareTriedPaths    = std::move(triedPaths);
     }
 
     void VerifyReport::SetSettle(std::uint64_t attemptsUsed, bool converged, SettleBail bail,
@@ -537,9 +539,14 @@ namespace Arcane
         // without linking us.
         //
         // Bumped 3 -> 4 by Task 3 of the verdict-vocabulary arc: `compare`
-        // gained `maxLocalDifference` (see SetCompare's own comment). 3
-        // remains readable -- see kOldestSupportedSchemaVersion above -- every
-        // field a 3-era consumer knew is still emitted with the same meaning.
+        // gained `maxLocalDifference` (see SetCompare's own comment).
+        //
+        // Bumped 4 -> 5 by Task 2 of the host-witness-harness arc: `compare`
+        // gained `triedPaths` -- the ordered candidate list this run's
+        // ResolveReference actually probed (see SetCompare's own comment).
+        // 3 and 4 remain readable -- see kOldestSupportedSchemaVersion above
+        // -- every field a 3-era or 4-era consumer knew is still emitted
+        // with the same meaning.
         j["schemaVersion"]   = kSchemaVersion;
         j["backend"]         = m_backend;
         // Always "headless" -- Fix 3 (final fix wave) removed the "windowed"
@@ -584,7 +591,8 @@ namespace Arcane
                               { "maxDiffPixels", m_compareMaxDiffPixels },
                               { "sizesMismatch", m_compareSizesMismatch },
                               { "diffPath",      m_compareDiffPath },
-                              { "errorMessage",  m_compareErrorMessage } };
+                              { "errorMessage",  m_compareErrorMessage },
+                              { "triedPaths",    m_compareTriedPaths } };
         }
 
         // The --settle verdict (Task 3). ABSENT unless SetSettle was called --

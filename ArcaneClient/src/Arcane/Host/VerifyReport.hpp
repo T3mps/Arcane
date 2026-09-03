@@ -141,9 +141,14 @@ namespace Arcane
         // and IsSupportedSchemaVersion answers whether a document is readable
         // at all rather than leaving every consumer to hardcode one integer.
         //
-        // 4 added compare.maxLocalDifference. 3 remains readable: every field a
-        // 3-era consumer knows is still emitted with the same meaning.
-        static constexpr int kSchemaVersion                = 4;
+        // 4 added compare.maxLocalDifference. 5 added compare.triedPaths --
+        // the ordered candidate list ResolveReference actually probed
+        // (Arcane::ReferenceResolution::triedPaths), so an agent debugging a
+        // "resolvedLevel none" verdict can see WHERE this run looked rather
+        // than guessing from the naming convention. 3 and 4 remain readable:
+        // every field a 3-era or 4-era consumer knows is still emitted with
+        // the same meaning.
+        static constexpr int kSchemaVersion                = 5;
         static constexpr int kOldestSupportedSchemaVersion  = 3;
 
         [[nodiscard]] static constexpr bool IsSupportedSchemaVersion(int v) noexcept
@@ -300,12 +305,33 @@ namespace Arcane
         //                     Arcane::ImageCompareResult alongside diffCount.
         //                     Zero on a bless or a missing-reference run, where
         //                     no comparison ever ran -- same as diffCount.
+        //   triedPaths     -- (schemaVersion 5) the candidate paths this run's
+        //                     ResolveReference actually probed, in try order
+        //                     (backend-keyed first, then shared; the resolved
+        //                     candidate is always last) -- lifted verbatim from
+        //                     Arcane::ReferenceResolution::triedPaths, each
+        //                     path stringified with generic_string() so the
+        //                     JSON carries forward slashes on every host OS.
+        //                     Empty on a REFUSED --compare name (refusal is
+        //                     not a search), same as ReferenceResolution's own
+        //                     contract -- never absent while `compare` itself
+        //                     is present, so an agent debugging a "resolvedLevel
+        //                     none" verdict can see exactly where this run
+        //                     looked instead of re-deriving the search order
+        //                     from the naming convention.
+        //
+        // NON-DEFAULTED deliberately: both call sites (RuntimeApp::
+        // ShutdownGraphPath, EditorApp's own report block) are ours, and a
+        // default here would let either silently keep reporting an empty
+        // list rather than being forced to thread the resolution's real one
+        // through.
         void SetCompare(std::string reference, std::string resolvedLevel,
                         std::string referencePath, bool passed,
                         std::uint64_t diffCount, double diffRatio,
                         std::uint64_t maxDiffPixels, bool sizesMismatch,
                         std::string diffPath, std::string errorMessage,
-                        double maxLocalDifference);
+                        double maxLocalDifference,
+                        std::vector<std::string> triedPaths);
 
         // The --settle verdict (Task 3). Emitted as `settleAttemptsUsed` +
         // `settleBailReason` ONLY when this was actually called -- a run
@@ -427,6 +453,7 @@ namespace Arcane
         std::string   m_compareDiffPath;
         std::string   m_compareErrorMessage;
         double        m_compareMaxLocalDifference = 0.0;
+        std::vector<std::string> m_compareTriedPaths;
 
         // The --settle verdict (Task 3) -- see SetSettle's own comment. As
         // everywhere else in this component, m_settleSet is what gates
