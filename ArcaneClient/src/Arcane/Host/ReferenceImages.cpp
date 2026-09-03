@@ -44,6 +44,7 @@ namespace Arcane
         const fs::path keyed  = root / backend / (name + ".png");
 
         std::error_code ec;
+        out.triedPaths.push_back(keyed);
         if (fs::exists(keyed, ec))
         {
             out.level = ReferenceLevel::Backend;
@@ -51,6 +52,7 @@ namespace Arcane
             out.blessTarget = keyed;
             return out;
         }
+        out.triedPaths.push_back(shared);
         if (fs::exists(shared, ec))
         {
             out.level = ReferenceLevel::Shared;

@@ -6,6 +6,7 @@
 #include <Arcane/Assets/ImageIo.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <system_error>
 #include <vector>
 
@@ -293,4 +294,44 @@ TEST_CASE("reference: BlessReference refuses a null pixel buffer", "[reference]"
 
     CHECK_FALSE(Arcane::BlessReference(res, 4, 4, nullptr));
     CHECK_FALSE(fs::exists(res.blessTarget));
+}
+
+TEST_CASE("reference resolution records the ordered search space it tried", "[host][reference]")
+{
+    // Layout: a temp project root with NO references at all.
+    const auto root = std::filesystem::temp_directory_path() / "arc-triedpaths-none";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "Verify" / "References");
+
+    const auto res = Arcane::ResolveReference(root, "runtime-scene", "vulkan");
+    REQUIRE(res.level == Arcane::ReferenceLevel::None);
+    // Both levels were tried, backend-specific first, in order.
+    REQUIRE(res.triedPaths.size() == 2);
+    REQUIRE(res.triedPaths[0].filename() == "runtime-scene.png");
+    REQUIRE(res.triedPaths[0].parent_path().filename() == "vulkan");
+    REQUIRE(res.triedPaths[1].parent_path().filename() == "References");
+    std::filesystem::remove_all(root);
+}
+
+TEST_CASE("a resolved reference still records what was tried before it", "[host][reference]")
+{
+    const auto root = std::filesystem::temp_directory_path() / "arc-triedpaths-shared";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "Verify" / "References");
+    // Only the SHARED level exists; the backend level will be tried and missed first.
+    std::ofstream(root / "Verify" / "References" / "runtime-scene.png") << "x";
+
+    const auto res = Arcane::ResolveReference(root, "runtime-scene", "vulkan");
+    REQUIRE(res.level == Arcane::ReferenceLevel::Shared);
+    REQUIRE(res.triedPaths.size() == 2);          // backend miss, then shared hit
+    REQUIRE(res.triedPaths.back() == res.path);   // last tried == resolved
+    std::filesystem::remove_all(root);
+}
+
+TEST_CASE("a refused reference name records an empty search space", "[host][reference]")
+{
+    const auto res = Arcane::ResolveReference(std::filesystem::temp_directory_path(),
+                                              "../evil", "vulkan");
+    REQUIRE(res.level == Arcane::ReferenceLevel::None);
+    REQUIRE(res.triedPaths.empty());   // refusal is not a search
 }

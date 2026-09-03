@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace Arcane
 {
@@ -54,6 +55,12 @@ namespace Arcane
         // shared level when nothing resolved. EMPTY means the name itself was
         // refused, and no write of any kind may happen.
         std::filesystem::path blessTarget;
+        // The candidate paths ResolveReference probed, in the exact order it
+        // probed them -- including the one that resolved, which is always
+        // last. Empty on a REFUSED name: refusal is not a search, and an
+        // empty list distinguishes "never looked" from "looked everywhere"
+        // (UE logs this list and then discards it; the report carries ours).
+        std::vector<std::filesystem::path> triedPaths;
     };
 
     // `name` is a bare name -- no extension, no directory. A name containing a
