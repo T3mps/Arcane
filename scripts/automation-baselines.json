@@ -3,11 +3,11 @@
   "note": "Committed suite counts, keyed by name + configuration + INVOCATION. A count is only comparable against a count taken THE SAME WAY, so every entry names the exact test-spec it was measured under and scripts/check-baselines.ps1 matches on all three -- a lane whose -Invocation has no entry here reports 'NO BASELINE -- not checked' instead of passing on slack it never earned. All six entries below are `ArcaneTests.exe \"~[gpu]\"`; `~[gpu]` is a BASELINE-COMPARABILITY convention, not a safety gate -- the [gpu] cases run clean on this hardware. The Jenkins lane runs the suite UNFILTERED, on an agent where [gpu] adds roughly 62000 further assertions, so it deliberately has no baseline here and reports not-checked until one is read off a real Jenkins run and committed. A drop means coverage was lost. Dist legitimately runs fewer cases than Debug/Release (6 cases / 68 assertions fewer) because of pre-existing `#if !defined(ARCANE_DIST)` guards in HostConfigTest.cpp and NriDiagnosticsTest.cpp -- that gap has been constant across this whole arc.",
   "measured": "2026-09-03, after Arc A's final-review fix wave",
   "baselines": [
-    { "name": "arcanetests.assertions", "configuration": "Debug",   "invocation": "~[gpu]", "value": 52422, "unit": "assertions" },
-    { "name": "arcanetests.cases",      "configuration": "Debug",   "invocation": "~[gpu]", "value": 1303,  "unit": "cases" },
-    { "name": "arcanetests.assertions", "configuration": "Release", "invocation": "~[gpu]", "value": 52422, "unit": "assertions" },
-    { "name": "arcanetests.cases",      "configuration": "Release", "invocation": "~[gpu]", "value": 1303,  "unit": "cases" },
-    { "name": "arcanetests.assertions", "configuration": "Dist",    "invocation": "~[gpu]", "value": 52354, "unit": "assertions" },
-    { "name": "arcanetests.cases",      "configuration": "Dist",    "invocation": "~[gpu]", "value": 1297,  "unit": "cases" }
+    { "name": "arcanetests.assertions", "configuration": "Debug",   "invocation": "~[gpu]", "value": 52431, "unit": "assertions" },
+    { "name": "arcanetests.cases",      "configuration": "Debug",   "invocation": "~[gpu]", "value": 1304,  "unit": "cases" },
+    { "name": "arcanetests.assertions", "configuration": "Release", "invocation": "~[gpu]", "value": 52431, "unit": "assertions" },
+    { "name": "arcanetests.cases",      "configuration": "Release", "invocation": "~[gpu]", "value": 1304,  "unit": "cases" },
+    { "name": "arcanetests.assertions", "configuration": "Dist",    "invocation": "~[gpu]", "value": 52363, "unit": "assertions" },
+    { "name": "arcanetests.cases",      "configuration": "Dist",    "invocation": "~[gpu]", "value": 1298,  "unit": "cases" }
   ]
 }
