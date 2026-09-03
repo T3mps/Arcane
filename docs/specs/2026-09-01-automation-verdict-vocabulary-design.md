@@ -1,6 +1,33 @@
 # Automation verdict vocabulary — Arc A design
 
-**Status:** design, 2026-09-01. Approved in brainstorming; implementation plan to follow.
+**Status:** **LANDED 2026-09-03.** All 13 tasks implemented, reviewed and closed on `main`
+(`313dfd79..b076eb5c`, plus Gacha `742533fb`). Plan:
+`docs/plans/2026-09-01-automation-verdict-vocabulary.md`.
+
+Measured at close, all derived rather than recalled -- `ArcaneTests.exe "~[gpu]"`, run from the
+exe directory, per configuration:
+
+| | Debug | Release | Dist |
+|---|---|---|---|
+| `~[gpu]` | 52431 / 1304 | 52431 / 1304 | 52363 / 1298 |
+
+`[gpu]` 62002 / 25. All three configurations build with 0 warnings. The gate reports four lanes,
+`gatePassed: true`; `-SelfTest` reports all four lanes `Failed` and `SELF-TEST PASSED`.
+
+**All seven verdicts were empirically observed**, each by constructing its condition rather than
+by reading the cascade. The one asymmetry that surfaced is real and left as a content decision:
+`ArcaneRuntime/dx12/runtime-scene` reports `PassedOnFallback` on every run, because only
+`vulkan/runtime-scene.png` is blessed. The vocabulary made a previously invisible gap visible on
+its first run.
+
+Plugin ABI moved **18 -> 19** (`HostConfig`, `VerifyReport` and `Arcane::Compare` all moved their
+mangled surfaces); `ReferenceProject` and Gacha's `Game/Aphelyon.arcproj` are restamped.
+
+**Two requirements of this spec shipped narrower than written, deliberately, and are Arc B's:**
+section 3.2's per-case exclusion honouring (`MatchExclusion` has no production consumer -- Catch2
+has no before-every-case hook that can skip, so it needs an opt-in macro and a decision about
+which cases carry it), and the software-adapter filter that would let the hosted CI lane drop
+`~[gpu]`. Both are recorded at their call sites with their revisit conditions.
 
 **Provenance.** Every item here traces to
 `docs/research/2026-08-31-ue-automation-framework-comparison.md` — its Tier 1 + Tier 2 lists and
@@ -166,7 +193,9 @@ Two independent pins on one list. Divergence is a test failure, not a latent inc
 
 `scripts/golden-gate.ps1` and `golden-gate-summary.json`:
 
-- `schemaVersion` **1 → 2**. `verdict` widens from `'PASS'|'FAIL'` to the seven values. This is
+- `schemaVersion` **1 → 3** as shipped (this design said 2; the fix wave added a `refusalReason`
+  shape to the same document, which took it to 3). `verdict` widens from `'PASS'|'FAIL'` to the
+  seven values. This is
   a breaking change to the field consumers are documented to assert on
   (`golden-gate.ps1:684-685`), and the version bump is the signal that makes it legitimate — the
   same reasoning that governed `VerifyReport`'s `"offscreen"` → `"headless"` rename at
