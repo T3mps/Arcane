@@ -9,10 +9,27 @@
 # defaults it to 0, which makes "no baseline" and "baseline of zero"
 # indistinguishable -- the same defaults-are-not-measurements trap this repo has
 # been bitten by before.
+#
+# -Invocation IS MANDATORY, AND IT IS PART OF THE KEY. A count is only
+# comparable against a count taken THE SAME WAY. The six committed baselines
+# were measured under `ArcaneTests.exe "~[gpu]"`; the Jenkins lane runs the
+# suite UNFILTERED on an agent where [gpu] contributes ~62000 further
+# assertions. Feeding one to the other left a permanent +62000 of slack, so a
+# regression that deleted a thousand non-GPU assertions would still have
+# reported a rise and exited 0 -- the guard was live and effectively inert on
+# the lane that matters most. Making the invocation part of the match means a
+# mismatched lane falls through to "NO BASELINE -- not checked", loudly, instead
+# of passing on slack it never earned. Not-checked-loudly beats
+# cannot-fail-silently.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$ReportPath,
     [Parameter(Mandatory)][ValidateSet('Debug','Release','Dist')][string]$Configuration,
+    # The test-spec the report was produced by, verbatim: "~[gpu]" for a
+    # filtered run, "unfiltered" for a bare `ArcaneTests.exe`. Free text rather
+    # than a ValidateSet, because it names whatever spec a lane actually passes
+    # and a new one must be able to report "not checked" rather than be rejected.
+    [Parameter(Mandatory)][string]$Invocation,
     [string]$BaselinePath
 )
 
@@ -94,17 +111,25 @@ foreach ($metric in @(
     @{ Name = 'arcanetests.assertions'; Actual = $assertions; Unit = 'assertions' },
     @{ Name = 'arcanetests.cases';      Actual = $cases;      Unit = 'cases' }
 )) {
-    $entry = $baseline.baselines | Where-Object { $_.name -eq $metric.Name -and $_.configuration -eq $Configuration }
+    # NAME *AND* CONFIGURATION *AND* INVOCATION. An entry with no `invocation`
+    # field never matches: [string]$null is '' and no lane passes an empty
+    # -Invocation, so an un-migrated baseline file reports "not checked" rather
+    # than silently comparing counts taken a different way.
+    $entry = $baseline.baselines | Where-Object {
+        $_.name -eq $metric.Name -and
+        $_.configuration -eq $Configuration -and
+        [string]$_.invocation -eq $Invocation
+    }
     if (-not $entry) {
-        Write-Host "telemetry: $($metric.Name) [$Configuration] = $($metric.Actual) $($metric.Unit) (NO BASELINE -- not checked)" -ForegroundColor Yellow
+        Write-Host "telemetry: $($metric.Name) [$Configuration/$Invocation] = $($metric.Actual) $($metric.Unit) (NO BASELINE -- not checked)" -ForegroundColor Yellow
         continue
     }
     $delta = $metric.Actual - [int]$entry.value
     if ($delta -lt 0) {
-        Write-Host "telemetry: $($metric.Name) [$Configuration] = $($metric.Actual) $($metric.Unit), baseline $($entry.value) -- REGRESSED by $([Math]::Abs($delta)). Coverage was lost, or the baseline needs a reviewed update." -ForegroundColor Red
+        Write-Host "telemetry: $($metric.Name) [$Configuration/$Invocation] = $($metric.Actual) $($metric.Unit), baseline $($entry.value) -- REGRESSED by $([Math]::Abs($delta)). Coverage was lost, or the baseline needs a reviewed update." -ForegroundColor Red
         $failed = $true
     } else {
-        Write-Host "telemetry: $($metric.Name) [$Configuration] = $($metric.Actual) $($metric.Unit), baseline $($entry.value) (+$delta)" -ForegroundColor Green
+        Write-Host "telemetry: $($metric.Name) [$Configuration/$Invocation] = $($metric.Actual) $($metric.Unit), baseline $($entry.value) (+$delta)" -ForegroundColor Green
     }
 }
 

@@ -1,10 +1,35 @@
 name: CI
 
 # Manifold2D-style hosted windows lane: generate, build Debug+Release+Dist, run
-# the full suite unfiltered. Hosted runners have no capable GPU, so [gpu]
-# cases report SKIPPED with a reason (ARC_REQUIRE_BACKEND) instead of being
-# filtered away unseen. The Jenkins multibranch pipeline on windows-1 is the
-# full gate (3 configs, an actual GPU, the --frames scripted verify).
+# the suite with `~[gpu]`. The Jenkins multibranch pipeline on windows-1 is the
+# full gate (3 configs, an actual GPU, the unfiltered suite, the --frames
+# scripted verify).
+#
+# WHY ~[gpu] HERE, when the [gpu] cases now SKIP-with-reason on a machine that
+# cannot run them. An earlier revision of this file dropped the filter on the
+# strength of "hosted runners have no capable GPU, so [gpu] reports SKIPPED".
+# THAT PREMISE IS UNVERIFIED, AND THIS BRANCH HAS NEVER BEEN PUSHED, SO THIS
+# LANE HAS NEVER RUN. Read at source, it is likely FALSE:
+# DeviceCreationD3D12.cpp:284-333 calls EnumAdapterByGpuPreference(0,
+# HIGH_PERFORMANCE) with NO software-adapter filter and then
+# D3D12CreateDevice(..., D3D_FEATURE_LEVEL_12_0). On a hosted Windows runner
+# the Microsoft Basic Render Driver (WARP) enumerates and supports 12_1, so
+# ARC_REQUIRE_BACKEND's probe would return TRUE and the D3D12 [gpu] cases would
+# RUN -- including GoldenImageTest.cpp:164, a ZERO-TOLERANCE pixel compare
+# against a reference blessed on a discrete GPU. A software rasterizer will not
+# match it, and a false red on a lane nobody has watched run is the worst
+# possible first impression of it.
+#
+# THE PRINCIPLED FIX, deliberately not taken here: filter software adapters in
+# the probe itself (DXGI_ADAPTER_FLAG_SOFTWARE, and VK_PHYSICAL_DEVICE_TYPE_CPU
+# on the Vulkan side), so [gpu] reports SKIPPED-with-reason instead of being
+# filtered away unseen. It needs real design work -- the probe delegates to
+# NativeDeviceOwner::Create and NriDevice.hpp exposes no adapter query, so it
+# wants either new surface on RenderDeviceDesc or DXGI enumeration inside a test
+# helper. REVISIT CONDITION: once this hosted lane has been OBSERVED GREEN once,
+# do that, then drop `~[gpu]` from the three invocations below.
+#
+# Jenkins keeps its unfiltered run -- it has a real GPU and is the full gate.
 
 on:
   push:
@@ -64,23 +89,29 @@ jobs:
       # Each suite runs FROM ITS OWN EXE DIRECTORY (working-directory): fixtures,
       # data/ and the staged automation-exclusions.json are all resolved relative
       # to it, and the exclusion-expiry case hard-fails if that file is missing.
+      #
+      # -Invocation MUST MATCH the test-spec above, verbatim. The baseline entry
+      # is keyed on it, so a mismatch reports "NO BASELINE -- not checked"
+      # instead of comparing against counts taken a different way. The six
+      # committed baselines are "~[gpu]", which is exactly what this lane runs,
+      # so this lane genuinely checks them.
       - name: Test Debug
         working-directory: bin/Debug-windows-x86_64-md/ArcaneTests
-        run: .\ArcaneTests.exe -r console -r json::out=${{ github.workspace }}\test-results\arcane-debug.json
+        run: .\ArcaneTests.exe "~[gpu]" -r console -r json::out=${{ github.workspace }}\test-results\arcane-debug.json
 
       - name: Check Debug baselines
-        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-debug.json" -Configuration Debug
+        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-debug.json" -Configuration Debug -Invocation "~[gpu]"
 
       - name: Test Release
         working-directory: bin/Release-windows-x86_64-md/ArcaneTests
-        run: .\ArcaneTests.exe -r console -r json::out=${{ github.workspace }}\test-results\arcane-release.json
+        run: .\ArcaneTests.exe "~[gpu]" -r console -r json::out=${{ github.workspace }}\test-results\arcane-release.json
 
       - name: Check Release baselines
-        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-release.json" -Configuration Release
+        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-release.json" -Configuration Release -Invocation "~[gpu]"
 
       - name: Test Dist
         working-directory: bin/Dist-windows-x86_64-md/ArcaneTests
-        run: .\ArcaneTests.exe -r console -r json::out=${{ github.workspace }}\test-results\arcane-dist.json
+        run: .\ArcaneTests.exe "~[gpu]" -r console -r json::out=${{ github.workspace }}\test-results\arcane-dist.json
 
       - name: Check Dist baselines
-        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-dist.json" -Configuration Dist
+        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-dist.json" -Configuration Dist -Invocation "~[gpu]"

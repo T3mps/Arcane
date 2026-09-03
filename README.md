@@ -90,6 +90,12 @@ per-lane `verdict` -- never on the exit code.** `-SelfTest` writes a SEPARATE
 `golden-gate-selftest-summary.json` in the same directory (also carrying `"selfTest": true`), so a
 self-test run never overwrites a green build's `gatePassed: true` artifact.
 
+The gate deletes that file at start-up and writes it again on the way out -- including on the paths
+where it *refuses to run at all* (a failed `ReferenceProject` rebuild, a malformed
+`automation-exclusions.json`, a dirty tree under `-SelfTest`). A refusal is `schemaVersion: 3`,
+`gatePassed: false`, a non-empty `refusalReason` and no lanes, so following the rule above never
+reads a previous run's green as this run's answer.
+
 ### Blessing a reference
 
 When a rendering change is intentional, re-bless. `--bless` accepts the converged capture as the

@@ -55,6 +55,16 @@
 #       true field so a consumer scanning golden-gate*summary.json can tell
 #       the two apart from the JSON itself, not only from the filename.
 #
+#       IT ALSO PINS THE WIRE CONTRACT, and that half is not optional: it runs
+#       `ArcaneTests.exe "[verdict]"`, which publishes what Arcane::ToString
+#       and VerifyReport's schema constants ACTUALLY produce into
+#       automation-vocabulary.txt beside the exe, then diffs that against
+#       $script:VerdictNames / $script:ReportSchemaMin / $script:ReportSchemaMax
+#       below. A missing ArcaneTests.exe FAILS the self-test rather than
+#       warning past it -- by that point this mode has already launched four
+#       hosts out of the same bin/<Config>/ tree, so its absence means the
+#       build is incomplete, not that the check does not apply.
+#
 #       PRECONDITIONS. (1) ReferenceProject/ must be clean: this mode
 #       refuses to start otherwise, because its restore ends in
 #       `git checkout --`, which would otherwise silently discard whatever
@@ -162,6 +172,95 @@ $configDirName = "$Configuration-windows-x86_64-md"
 
 Write-Host "=== golden-gate: $Configuration ===" -ForegroundColor Cyan
 
+# ---- THE SUMMARY FILE, RESOLVED AND CLEARED BEFORE ANYTHING CAN REFUSE. ----
+#
+# R20: under -SelfTest, write to a SEPARATE file. The Jenkins pipeline runs the
+# self-test stage immediately after the ordinary gate stage on the same agent,
+# so an in-place write would overwrite a green build's gatePassed=true summary
+# with an inverted one -- and every documented consumer of this gate is told to
+# assert on gatePassed in golden-gate-summary.json.
+$summaryFileName = if ($SelfTest) { 'golden-gate-selftest-summary.json' } else { 'golden-gate-summary.json' }
+$summaryPath = Join-Path $repoRoot "bin\$configDirName\$summaryFileName"
+
+# A GATE THAT REFUSES TO RUN MUST NOT LEAVE THE PREVIOUS RUN'S VERDICT ON DISK.
+# This script's own header tells consumers to assert on gatePassed and NEVER on
+# the exit code alone -- and there are a dozen-plus refusal paths BEFORE the
+# summary is written (a failed ReferenceProject rebuild, a dirty tree under
+# -SelfTest, a malformed exclusion file, a restaging failure). Every one of them
+# used to leave yesterday's `gatePassed: true` sitting there for a consumer
+# following that instruction to read as today's answer. Jenkins never saw it --
+# it consumes the `bat` exit code -- so this bit exactly the AGENT consumer the
+# file exists for.
+#
+# BOTH HALVES, deliberately. Exit-GateRefusal below replaces the bare `exit 1`
+# on every refusal path with a gatePassed=false summary that says WHY, keeping
+# the header's stated contract literally true. Deleting here as well covers what
+# that cannot: $ErrorActionPreference = 'Stop' turns any unhandled terminating
+# error into an exit that runs no code of ours at all, and a stale green would
+# survive it.
+if (Test-Path $summaryPath) {
+    Remove-Item $summaryPath -Force -ErrorAction SilentlyContinue
+}
+
+# Renders the machine-readable verdict. ONE writer for both the ordinary
+# end-of-run summary and a refusal, so the two can never drift into different
+# shapes -- a consumer parses the same document either way and reads
+# refusalReason to tell them apart.
+function Write-GateSummaryFile {
+    param(
+        [bool]$GatePassed,
+        [object[]]$Lanes,
+        [string]$RefusalReason
+    )
+    $summary = [pscustomobject]@{
+        # 2: `verdict` widened from PASS/FAIL to the seven-value vocabulary, and
+        # `skipReason` was added.
+        # 3: `refusalReason` added, and a summary is now written on the refusal
+        # paths that previously wrote none. Empty string on an ordinary run --
+        # EMPTY, NOT ABSENT, the same absence-must-be-absence contract
+        # VerifyReport upholds for its own optional blocks, so a consumer never
+        # has to distinguish "this build predates the field" from "this run was
+        # not a refusal". `gatePassed` keeps its name, type and meaning through
+        # both moves and remains the safe single thing to assert on.
+        schemaVersion = 3
+        configuration = $Configuration
+        gatePassed    = $GatePassed
+        selfTest      = [bool]$SelfTest
+        refusalReason = $RefusalReason
+        lanes         = @($Lanes)
+    }
+    try {
+        $summaryDir = Split-Path -Parent $summaryPath
+        if (-not (Test-Path $summaryDir)) { New-Item -ItemType Directory -Path $summaryDir -Force | Out-Null }
+        # NOT `Set-Content -Encoding UTF8`: under Windows PowerShell 5.1 that
+        # encoding emits a UTF-8 BOM, so the summary would start with EF BB BF
+        # and a stock JSON reader -- e.g. Python's json.load, the exact "AGENT"
+        # consumer this file exists for -- fails with "JSONDecodeError:
+        # Expecting value: line 1 column 1 (char 0)". PowerShell's own
+        # ConvertFrom-Json tolerates the BOM, which is exactly why this went
+        # unnoticed. WriteAllText with a BOM-less UTF8Encoding writes the same
+        # bytes without it. $summaryPath is already absolute (built off
+        # $repoRoot via Join-Path above), which WriteAllText requires.
+        [System.IO.File]::WriteAllText($summaryPath, ($summary | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "golden-gate: machine-readable verdict -> $summaryPath" -ForegroundColor Cyan
+    } catch {
+        # Never let summary-writing decide the gate's verdict; say so and continue.
+        Write-Host "golden-gate: WARNING -- could not write $summaryPath ($($_.Exception.Message))" -ForegroundColor Yellow
+    }
+}
+
+# Every pre-lane refusal goes through here. NOT Write-Error: under
+# $ErrorActionPreference = 'Stop' that is itself a script-terminating error, so
+# a `Write-Error ...; exit 1` pair never reaches its own exit -- and would never
+# reach a summary write placed after it either.
+function Exit-GateRefusal {
+    param([Parameter(Mandatory)][string]$Reason)
+    Write-Host ""
+    Write-Host "golden-gate: REFUSING TO RUN -- $Reason" -ForegroundColor Red
+    Write-GateSummaryFile -GatePassed $false -Lanes @() -RefusalReason $Reason
+    exit 1
+}
+
 #   VERDICT REACHABILITY. A value no synthetic condition can produce does not
 #   belong in the vocabulary. Each is reachable as follows -- the first is
 #   automated by -SelfTest; the rest are manual recipes, each OBSERVED once
@@ -207,12 +306,25 @@ $combos = @(
 
 # THE VERDICT VOCABULARY. This literal set is the PowerShell half of a contract
 # whose other half is Arcane::Verdict (ArcaneClient/src/Arcane/Host/Verdict.hpp),
-# pinned by VerdictTest.cpp. PowerShell cannot include that header, so the two
-# are pinned independently and -SelfTest asserts this one. Change either and the
-# other must change in the same commit.
+# pinned by VerdictTest.cpp. PowerShell cannot include that header -- so the
+# [verdict] cases PUBLISH what Arcane::ToString actually produces into
+# automation-vocabulary.txt beside ArcaneTests.exe, and -SelfTest reads that
+# file back and DIFFS IT AGAINST THIS LIST, order included. Change either side
+# and the other must change in the same commit; -SelfTest is what makes that a
+# failure rather than a hope.
 $script:VerdictNames = @(
     'Passed', 'PassedOnFallback', 'Failed', 'Errored', 'NotRun', 'Skipped', 'Indeterminate'
 )
+# THE VERIFY-REPORT SCHEMA RANGE this script claims to understand -- the
+# PowerShell copy of VerifyReport::kOldestSupportedSchemaVersion and
+# kSchemaVersion (ArcaneClient/src/Arcane/Host/VerifyReport.hpp). Read at the
+# report parse site below, so the range is a mechanism here and not only a
+# constant the header tests exercise. Pinned by -SelfTest against what the
+# engine actually publishes, exactly like $script:VerdictNames above -- these
+# are the second and third numbers in the same wire contract, and a
+# hand-maintained copy nothing compares is what this arc exists to abolish.
+$script:ReportSchemaMin = 3
+$script:ReportSchemaMax = 4
 # Green SATISFIES the gate. Skipped is deliberately absent: it does not fail a
 # gate, but it must not count toward "at least one lane passed" either, or an
 # all-skipped run reports success having verified nothing.
@@ -235,37 +347,32 @@ if (-not (Test-Path $referenceSln)) {
     # launched, on a precondition this script could satisfy itself.
     $premake5 = Join-Path $repoRoot 'ThirdParty\premake5\premake5.exe'
     if (-not (Test-Path $premake5)) {
-        Write-Error "ReferenceProject.slnx is missing AND $premake5 does not exist -- cannot generate it."
-        exit 1
+        Exit-GateRefusal "ReferenceProject.slnx is missing AND $premake5 does not exist -- cannot generate it."
     }
     Write-Host "-- ReferenceProject.slnx not found -- generating via premake5 vs2026 --"
     Push-Location $referenceProjectDir
     try {
         & $premake5 vs2026
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "premake5 vs2026 FAILED (exit $LASTEXITCODE) generating ReferenceProject.slnx."
-            exit 1
+            Exit-GateRefusal "premake5 vs2026 FAILED (exit $LASTEXITCODE) generating ReferenceProject.slnx."
         }
     } finally {
         Pop-Location
     }
     if (-not (Test-Path $referenceSln)) {
-        Write-Error "premake5 vs2026 reported success but $referenceSln still does not exist."
-        exit 1
+        Exit-GateRefusal "premake5 vs2026 reported success but $referenceSln still does not exist."
     }
 }
 
 $msbuildWrapper = Join-Path $repoRoot 'ci\msbuild.cmd'
 if (-not (Test-Path $msbuildWrapper)) {
-    Write-Error "ci\msbuild.cmd not found at $msbuildWrapper."
-    exit 1
+    Exit-GateRefusal "ci\msbuild.cmd not found at $msbuildWrapper."
 }
 
 Write-Host "-- rebuilding ReferenceProject for $Configuration (single-slot Binaries/ precondition) --"
 & $msbuildWrapper $referenceSln -t:Rebuild "-p:Configuration=$Configuration" -m -v:minimal -nologo
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "ReferenceProject rebuild FAILED (exit $LASTEXITCODE) -- refusing to run stale/mismatched hosts against it."
-    exit 1
+    Exit-GateRefusal "ReferenceProject rebuild FAILED (exit $LASTEXITCODE) -- refusing to run stale/mismatched hosts against it."
 }
 Write-Host "-- ReferenceProject rebuilt for $Configuration --" -ForegroundColor Green
 
@@ -369,16 +476,14 @@ if ($SelfTest) {
             & git -C $repoRoot checkout -- $sceneRelative
             $postHealDirty = & git -C $repoRoot status --porcelain -- ReferenceProject
             if ($postHealDirty) {
-                Write-Error ("-SelfTest: auto-heal of $sceneRelative did NOT clean the tree -- refusing " +
+                Exit-GateRefusal ("-SelfTest: auto-heal of $sceneRelative did NOT clean the tree -- refusing " +
                     "to continue. Remaining status:`n" + ($postHealDirty -join "`n"))
-                exit 1
             }
             Write-Host "-- -SelfTest: residue healed, ReferenceProject/ is clean -- continuing --" -ForegroundColor Green
         } else {
-            Write-Error ("-SelfTest: refusing to run -- ReferenceProject/ is NOT clean, and this mode's " +
+            Exit-GateRefusal ("-SelfTest: ReferenceProject/ is NOT clean, and this mode's " +
                 "mutate-then-'git checkout --' restore cycle would silently discard whatever is there " +
                 "now. Commit, stash, or discard these changes first, then re-run:`n" + ($preDirty -join "`n"))
-            exit 1
         }
     }
 }
@@ -418,15 +523,13 @@ if ($SelfTest) {
     # exists at all, not a match against the wrong entity.
     $sceneText = Get-Content $scenePath -Raw
     if ($sceneText -notmatch '(?s)"name":\s*"MeshCube".*?"Arcane::Transform":\s*\{\s*"position":\s*\[\s*0\.4') {
-        Write-Error "-SelfTest: could not find MeshCube's Arcane::Transform position at 0.4 in $sceneRelative -- the fixture moved; fix this script rather than reporting a pass."
-        exit 1
+        Exit-GateRefusal "-SelfTest: could not find MeshCube's Arcane::Transform position at 0.4 in $sceneRelative -- the fixture moved; fix this script rather than reporting a pass."
     }
     $broken = [Regex]::Replace($sceneText,
         '(?s)("name":\s*"MeshCube".*?"Arcane::Transform":\s*\{\s*"position":\s*\[\s*)0\.4',
         '${1}0.6', 1)
     if ($broken -eq $sceneText) {
-        Write-Error "-SelfTest: mutation did not apply to $sceneRelative -- refusing to run the lanes against an unbroken scene."
-        exit 1
+        Exit-GateRefusal "-SelfTest: mutation did not apply to $sceneRelative -- refusing to run the lanes against an unbroken scene."
     }
 }
 
@@ -459,8 +562,7 @@ try {
         Copy-Item -Path (Join-Path $referenceProjectDir 'Binaries\*') -Destination $stagedBinaries -Force -Recurse
         $stagedDll = Join-Path $stagedBinaries 'ReferenceGame.dll'
         if (-not (Test-Path $stagedDll)) {
-            Write-Error "restaging FAILED -- $stagedDll does not exist after the copy."
-            exit 1
+            Exit-GateRefusal "restaging FAILED -- $stagedDll does not exist after the copy."
         }
 
         # ---- Content/ HAS THE IDENTICAL HAZARD, and it stayed unfixed until a desk
@@ -506,15 +608,13 @@ try {
         $stagedScene = Join-Path $stagedContent 'scenes\main.arcscene'
         if ((Test-Path $sourceScene) -and (Test-Path $stagedScene)) {
             if ((Get-FileHash $sourceScene -Algorithm MD5).Hash -ne (Get-FileHash $stagedScene -Algorithm MD5).Hash) {
-                Write-Error "restaging FAILED -- staged scene still differs from source after the copy ($stagedScene)."
-                exit 1
+                Exit-GateRefusal "restaging FAILED -- staged scene still differs from source after the copy ($stagedScene)."
             }
         }
     }
     Write-Host "-- ReferenceGame.dll + Content/ restaged beside both hosts --" -ForegroundColor Green
 
     $results = @()
-    $anyFailure = $false
 
     # ---- EXCLUSIONS. Loaded once; a malformed file is a REFUSAL. ----
     # An ABSENT file legitimately means "no exclusions". A PRESENT but malformed
@@ -528,9 +628,8 @@ try {
         try {
             $parsed = Get-Content $exclusionsPath -Raw | ConvertFrom-Json
         } catch {
-            Write-Host "automation-exclusions.json is present but not valid JSON: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Host "Refusing to run -- a malformed exclusion file must not read as 'no exclusions'." -ForegroundColor Red
-            exit 1
+            Exit-GateRefusal ("automation-exclusions.json is present but not valid JSON: $($_.Exception.Message). " +
+                "A malformed exclusion file must not read as 'no exclusions'.")
         }
         if ($null -ne $parsed) {
             $exclusions = @($parsed)
@@ -541,13 +640,40 @@ try {
                     # parses as `($false) -contains $required` -- always false, so the
                     # missing-property half would never fire.
                     if ((-not ($e.PSObject.Properties.Name -contains $required)) -or (-not $e.$required)) {
-                        Write-Host "automation-exclusions.json: every entry needs a non-empty '$required'. Refusing to run." -ForegroundColor Red
-                        exit 1
+                        Exit-GateRefusal "automation-exclusions.json: every entry needs a non-empty '$required'."
                     }
                 }
-                if ($e.expires -notmatch '^\d{4}-\d{2}-\d{2}$') {
-                    Write-Host "automation-exclusions.json: 'expires' must be an ISO date YYYY-MM-DD, got '$($e.expires)'. Refusing to run." -ForegroundColor Red
-                    exit 1
+                # UNKNOWN KEYS ARE REFUSED, naming the key -- the same rule
+                # ExclusionList.cpp's ParseExclusions applies, in the same
+                # words, because this file has TWO readers and a rule only one
+                # of them enforces is not a rule. An omitted axis means ALL
+                # (see the matcher below), so a misspelled `"backend"` for
+                # `"backends"` is dropped in silence and the entry then excludes
+                # MORE THAN IT WAS AUTHORED TO -- the exact silent-widening
+                # failure the out-of-range-date check next to it already
+                # refuses.
+                #
+                # ADDING A KEY: extend this list IN THE SAME COMMIT that
+                # introduces the key, and extend ExclusionList.cpp's
+                # kKnownKeys there too. Both readers ship in this repo
+                # alongside the file, so there is no cross-version
+                # compatibility to protect and no reason for them to disagree.
+                $knownKeys = @('target', 'reason', 'expires', 'backends', 'hosts', 'configurations')
+                foreach ($prop in $e.PSObject.Properties.Name) {
+                    if ($knownKeys -cnotcontains $prop) {
+                        Exit-GateRefusal ("automation-exclusions.json: unknown key '$prop' on the entry targeting " +
+                            "'$($e.target)' -- known keys are $($knownKeys -join ', ').")
+                    }
+                }
+                # MONTH AND DAY RANGES ARE CHECKED, not just the shape.
+                # ExclusionList.cpp's IsIsoDate got exactly this and this half
+                # did not, so the two readers disagreed about the same file:
+                # "2026-13-01" sorts lexicographically AFTER every real 2026
+                # date, so the comparison below would have honoured it as live
+                # for nearly a year while ArcaneTests refused it outright. A
+                # shape-only regex cannot catch a transposed month.
+                if ($e.expires -notmatch '^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$') {
+                    Exit-GateRefusal "automation-exclusions.json: 'expires' must be an ISO date YYYY-MM-DD with a real month and day, got '$($e.expires)'."
                 }
                 # Lexicographic compare -- that is why the ISO format is mandatory.
                 if ($today -gt $e.expires) { $expiredExclusions += $e }
@@ -594,7 +720,15 @@ try {
 
         $excluded = $null
         foreach ($e in $exclusions) {
-            if ($e.target -ne $label) { continue }
+            # -cne, NOT -ne. PowerShell's -ne is CASE-INSENSITIVE, while
+            # ExclusionList.cpp:148 compares std::string with != and is
+            # case-SENSITIVE -- so `"arcaneeditor/vulkan/editor-ui"` matched
+            # here and not there, one file read two ways. The scoping AXES are
+            # deliberately case-insensitive on both sides (see AxisMatches);
+            # the target is deliberately exact on both. Case sensitivity is the
+            # stricter of the two behaviours, and the C++ side is the one with
+            # a test pinning it.
+            if ($e.target -cne $label) { continue }
             # An omitted axis means ALL, never NONE. d3d12 aliases dx12 so the
             # report's spelling is not a silent miss.
             $bMatch = $true; $hMatch = $true; $cMatch = $true
@@ -620,8 +754,9 @@ try {
                 Detail = "excluded until $($excluded.expires)"
                 SkipReason = "$($excluded.reason) (expires $($excluded.expires))"
             }
-            Write-Host ""
-            Write-Host "-- $label --" -ForegroundColor Cyan
+            # No second "-- $label --" header here: the loop already printed one
+            # a few lines above, before the exclusion was even looked up, so an
+            # excluded lane used to announce itself twice.
             Write-Host "Skipped -- $($excluded.reason) (expires $($excluded.expires))" -ForegroundColor DarkGray
             continue
         }
@@ -632,7 +767,6 @@ try {
         # carry and the vocabulary now makes unnecessary.
         if ($preflightFailures.ContainsKey($label)) {
             $results += [pscustomobject]@{ Combo = $label; Verdict = 'NotRun'; Detail = $preflightFailures[$label]; SkipReason = $null }
-            $anyFailure = $true
             continue
         }
 
@@ -784,6 +918,46 @@ try {
                 $report = $null
             }
 
+            # ---- THE SCHEMA RANGE, ACTUALLY CHECKED. ----
+            # VerifyReport::kSchemaVersion / kOldestSupportedSchemaVersion exist
+            # to answer "is this document readable at all", and until now the
+            # only thing that ever asked was VerifyReport's own tests. This
+            # script parses the document for real -- and reads
+            # compare.maxLocalDifference, WHICH ONLY EXISTS AT v4 -- so it is
+            # the mechanism's natural first consumer. A future v5 that repurposed
+            # a field would otherwise be read confidently and wrongly here, which
+            # is the whole failure a version range exists to prevent.
+            #
+            # INDETERMINATE, not Failed: an unreadable document says nothing
+            # about the render. The reason names the version so the next reader
+            # is told what to widen.
+            if ($report) {
+                $reportSchema = $null
+                if ($report.PSObject.Properties.Name -contains 'schemaVersion') {
+                    $reportSchema = $report.schemaVersion
+                }
+                $schemaInt = 0
+                if ($null -eq $reportSchema) {
+                    # NOT a [int] cast on the raw value: [int]$null is silently 0
+                    # in PowerShell, which would read a report with NO
+                    # schemaVersion at all as version 0 and then reject it with a
+                    # number the file never contained.
+                    $verdict = 'Indeterminate'
+                    $detail = "report at $reportPath carries NO schemaVersion field -- cannot establish it is readable, so nothing it says is trusted here"
+                    $report = $null
+                } elseif (-not [int]::TryParse([string]$reportSchema, [ref]$schemaInt)) {
+                    $verdict = 'Indeterminate'
+                    $detail = "report at $reportPath has a non-integer schemaVersion '$reportSchema' -- cannot establish it is readable"
+                    $report = $null
+                } elseif ($schemaInt -lt $script:ReportSchemaMin -or $schemaInt -gt $script:ReportSchemaMax) {
+                    $verdict = 'Indeterminate'
+                    $detail = "report at $reportPath is schemaVersion $schemaInt, outside this gate's supported range " +
+                              "$($script:ReportSchemaMin)..$($script:ReportSchemaMax) (VerifyReport::kOldestSupportedSchemaVersion..kSchemaVersion). " +
+                              "A document this script cannot claim to understand is not evidence about the render."
+                    $report = $null
+                }
+            }
+
             if ($report) {
                 $exitReason = $report.exitReason
                 $comparePassed = $false
@@ -853,7 +1027,15 @@ try {
                     $detail = "exitReason=$exitReason -- ran, but nothing established the render's correctness"
                 }
                 elseif ($exitReason -eq 'frames-complete' -and $comparePassed) {
-                    if ($resolvedLevel -and $resolvedLevel -ne $expectedLevel) {
+                    # ONE DIRECTION ONLY -- declared 'backend', resolved
+                    # 'shared'. That is what "fell back" means: the lane wanted
+                    # its own reference and had to inherit one. The old
+                    # `$resolvedLevel -ne $expectedLevel` also fired the OTHER
+                    # way: bless a dx12/editor-ui.png and that lane (declared
+                    # 'shared') would resolve 'backend' and be reported as
+                    # having fallen back for GAINING a reference of its own.
+                    # The spec's wording is one-directional; so is this now.
+                    if ($expectedLevel -eq 'backend' -and $resolvedLevel -eq 'shared') {
                         $verdict = 'PassedOnFallback'
                         $detail = "exitReason=$exitReason diffCount=$($report.compare.diffCount) maxLocalDifference=$maxLocal resolvedLevel=$resolvedLevel (expected $expectedLevel)"
                     } else {
@@ -903,7 +1085,6 @@ try {
         } elseif ($verdict -eq 'Skipped') {
             Write-Host "Skipped -- $label ($skipReason)" -ForegroundColor DarkGray
         } else {
-            $anyFailure = $true
             Write-Host "$verdict -- $label" -ForegroundColor Red
             Write-Host "  $detail" -ForegroundColor Red
             if (Test-Path $diffPathToReport) {
@@ -933,7 +1114,6 @@ try {
             Detail = "exclusion EXPIRED on $($e.expires) (today is $today) -- reason was: $($e.reason). Either the problem is fixed (delete the entry) or it is not (give it a new date and a fresh justification)."
             SkipReason = $null
         }
-        $anyFailure = $true
         Write-Host ""
         Write-Host "Failed -- automation-exclusions/$($e.target)" -ForegroundColor Red
         Write-Host "  EXPIRED on $($e.expires), today is $today. Reason was: $($e.reason)" -ForegroundColor Red
@@ -944,7 +1124,7 @@ try {
         # no-op (see the mutation block above).
         & git -C $repoRoot checkout -- $sceneRelative
         $dirty = & git -C $repoRoot status --porcelain -- $sceneRelative
-        if ($dirty) { Write-Error "-SelfTest: FAILED TO RESTORE $sceneRelative -- fix by hand before continuing."; exit 1 }
+        if ($dirty) { Exit-GateRefusal "-SelfTest: FAILED TO RESTORE $sceneRelative -- fix by hand before continuing." }
 
         # AND RESTAGE THE RESTORED SCENE TOO. Without this the source goes
         # clean while the staged copies -- what the hosts actually read --
@@ -998,63 +1178,29 @@ $greenCount = @($results | Where-Object { $_.Verdict -in $script:GreenVerdicts }
 $redCount   = @($results | Where-Object { $_.Verdict -in $script:RedVerdicts }).Count
 $gatePassed = ($greenCount -gt 0) -and ($redCount -eq 0)
 
-$summary = [pscustomobject]@{
-    # 2: `verdict` widened from PASS/FAIL to the seven-value vocabulary, and
-    # `skipReason` was added. `gatePassed` keeps its name, type and meaning and
-    # remains the safe single thing for a consumer to assert on.
-    schemaVersion = 2
-    configuration = $Configuration
-    gatePassed    = $gatePassed
-    selfTest      = [bool]$SelfTest
-    lanes         = @($results | ForEach-Object {
-        [pscustomobject]@{
-            combo      = $_.Combo
-            verdict    = $_.Verdict
-            detail     = $_.Detail
-            skipReason = $_.SkipReason
-        }
-    })
-}
-# R20: under -SelfTest, write to a SEPARATE file. Task 5 runs the self-test
-# stage immediately after the ordinary gate stage on the same agent, so an
-# in-place write here would overwrite a green build's gatePassed=true summary
-# with an inverted one -- and every documented consumer of this gate is told
-# to assert on gatePassed in golden-gate-summary.json. Do not suppress the
-# write instead: the per-lane detail is exactly what makes a self-test
-# failure diagnosable. The summary object also carries "selfTest" (Minor,
-# review pass 2026-08-31) alongside the distinct filename, not instead of
-# it -- a consumer that globs golden-gate*summary.json can then tell the two
-# apart from the JSON itself, not only from which filename it happened to
-# match.
-$summaryFileName = if ($SelfTest) { 'golden-gate-selftest-summary.json' } else { 'golden-gate-summary.json' }
-$summaryPath = Join-Path $repoRoot "bin\$configDirName\$summaryFileName"
-try {
-    $summaryDir = Split-Path -Parent $summaryPath
-    if (-not (Test-Path $summaryDir)) { New-Item -ItemType Directory -Path $summaryDir -Force | Out-Null }
-    # NOT `Set-Content -Encoding UTF8`: under Windows PowerShell 5.1 that
-    # encoding emits a UTF-8 BOM, so both summary files would start with
-    # EF BB BF and a stock JSON reader -- e.g. Python's json.load, the exact
-    # "AGENT" consumer this file exists for -- fails with
-    # "JSONDecodeError: Expecting value: line 1 column 1 (char 0)".
-    # PowerShell's own ConvertFrom-Json tolerates the BOM, which is exactly
-    # why this went unnoticed. WriteAllText with a BOM-less UTF8Encoding
-    # writes the same bytes without it. $summaryPath is already absolute
-    # (built off $repoRoot via Join-Path above), which WriteAllText requires.
-    [System.IO.File]::WriteAllText($summaryPath, ($summary | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
-    Write-Host "golden-gate: machine-readable verdict -> $summaryPath" -ForegroundColor Cyan
-} catch {
-    # Never let summary-writing decide the gate's verdict; say so and continue.
-    Write-Host "golden-gate: WARNING -- could not write $summaryPath ($($_.Exception.Message))" -ForegroundColor Yellow
-}
+# Written through the SAME writer every refusal path uses (defined at the top of
+# this script), so an ordinary verdict and a refusal are the same document shape
+# and a consumer never has to branch on which one it got. `refusalReason` is
+# empty here: this run reached its lanes. The per-lane detail is exactly what
+# makes a failure -- gate or self-test -- diagnosable, which is why the write is
+# never suppressed, only redirected to a separate filename under -SelfTest.
+Write-GateSummaryFile -GatePassed $gatePassed -RefusalReason '' -Lanes @($results | ForEach-Object {
+    [pscustomobject]@{
+        combo      = $_.Combo
+        verdict    = $_.Verdict
+        detail     = $_.Detail
+        skipReason = $_.SkipReason
+    }
+})
 
 # ---- -SelfTest: every lane must have NOTICED. ----
-# R11: this block sits HERE -- after the summary try/catch above closes,
-# before $anyFailure is checked below -- and nowhere else. In -SelfTest mode
-# all four lanes FAIL by design, so $anyFailure is $true; placing this block
-# after the ordinary exit paths would make it dead code that never asserts
-# anything. Placing it inside the summary try above is worse: that catch
-# exists specifically to stop summary I/O from deciding the verdict, and it
-# would swallow this block's own errors too.
+# R11: this block sits HERE -- after the summary is written above, before the
+# ordinary gatePassed check below -- and nowhere else. In -SelfTest mode all
+# four lanes FAIL by design, so an ordinary run would already have exited red;
+# placing this block after those exit paths would make it dead code that never
+# asserts anything. Placing it inside Write-GateSummaryFile's own try is worse:
+# that catch exists specifically to stop summary I/O from deciding the verdict,
+# and it would swallow this block's own errors too.
 #
 # The restore itself no longer lives here (review pass 2026-08-31, Important
 # #1) -- it now happens in the finally around the staging+host-launch block
@@ -1082,25 +1228,128 @@ if ($SelfTest) {
     # ends in an else that assigns $selfTestOk unconditionally, so writing the
     # probe result there would be silently clobbered whenever the hosts behave
     # normally -- which is EXACTLY the drift case this probe exists to catch.
+    #
+    # AND IT COMPARES THE TWO LISTS, which the exit-code probe never did. Running
+    # `ArcaneTests.exe "[verdict]"` and checking only its exit status proves the
+    # C++ side agrees WITH ITSELF -- VerdictTest.cpp's literals against
+    # Arcane::ToString. It says nothing about $script:VerdictNames above. Rename
+    # Indeterminate to Unknown in Verdict.hpp/.cpp and update VerdictTest.cpp in
+    # the same commit -- exactly what Verdict.hpp's own header instructs -- and
+    # the probe still exits 0 while this script keeps the stale word. The spec
+    # says the self-test "asserts its set matches the one the header produces"
+    # and its risk table claims the vocabulary is "pinned from both sides"; the
+    # exit code alone did not deliver that. So the [verdict] cases now PUBLISH
+    # what the engine actually produces (VerdictTest.cpp writes
+    # automation-vocabulary.txt beside the exe) and this reads it back and
+    # diffs it, order included.
     $vocabOk = $true
     $verdictProbe = Join-Path $repoRoot "bin\$configDirName\ArcaneTests\ArcaneTests.exe"
-    if (Test-Path $verdictProbe) {
-        # Run FROM the exe directory, like every other invocation of this suite:
-        # fixtures and data/ are staged relative to it.
-        Push-Location (Split-Path -Parent $verdictProbe)
-        try {
-            $probeOut = & $verdictProbe "[verdict]" 2>&1 | Out-String
-            $probeCode = $LASTEXITCODE
-        } finally {
-            Pop-Location
+    $probeDir     = Split-Path -Parent $verdictProbe
+    $vocabFile    = Join-Path $probeDir 'automation-vocabulary.txt'
+    if (-not (Test-Path $verdictProbe)) {
+        # A MISSING SUITE IS A FAILURE, NOT AN EXEMPTION. By this point
+        # -SelfTest has already launched four hosts out of this same
+        # bin/$configDirName/ tree, so ArcaneTests.exe missing from it means the
+        # BUILD IS INCOMPLETE -- not that the check does not apply here. This
+        # used to print a yellow warning and leave $vocabOk true, so
+        # "SELF-TEST PASSED" stayed reachable with the vocabulary never
+        # cross-checked at all: a check that silently stops checking, inside the
+        # mode whose entire purpose is proving a check can bite.
+        Write-Host ""
+        Write-Host "SELF-TEST FAILED -- ArcaneTests.exe is absent at $verdictProbe, so the verdict vocabulary was NEVER cross-checked." -ForegroundColor Red
+        Write-Host "This mode already launched its hosts out of bin\$configDirName, so a missing suite there means the build is incomplete." -ForegroundColor Red
+        Write-Host "Build first:  msbuild Arcane.slnx /p:Configuration=$Configuration /m" -ForegroundColor Yellow
+        $vocabOk = $false
+    } else {
+        # DELETE THE PUBLISHED FILE FIRST. Left in place, a copy from an older
+        # build would answer for a vocabulary this engine no longer has -- the
+        # stale-artifact failure this script already learned once with leftover
+        # diff PNGs.
+        if (Test-Path $vocabFile) { Remove-Item $vocabFile -Force }
+
+        # Start-Process with explicit redirection, NOT `& $exe ... 2>&1`. Under
+        # Windows PowerShell 5.1 that idiom wraps every stderr line from a
+        # NATIVE exe in an ErrorRecord, and with $ErrorActionPreference = 'Stop'
+        # set at the top of this script a single engine log line reaching stderr
+        # becomes a script-terminating NativeCommandError -- killing the whole
+        # self-test on output that was never an error. -WorkingDirectory does
+        # what the old Push-Location did: this suite runs FROM the exe
+        # directory, where its fixtures, data/ and automation-exclusions.json
+        # are staged.
+        $probeStdout = Join-Path $probeDir 'golden-gate-verdict-probe-stdout.txt'
+        $probeStderr = Join-Path $probeDir 'golden-gate-verdict-probe-stderr.txt'
+        $probeProc = Start-Process -FilePath $verdictProbe -ArgumentList @('[verdict]') `
+            -WorkingDirectory $probeDir -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $probeStdout -RedirectStandardError $probeStderr
+        $probeCode = $probeProc.ExitCode
+        $probeOut = ''
+        foreach ($streamFile in @($probeStdout, $probeStderr)) {
+            if (Test-Path $streamFile) {
+                $text = (Get-Content $streamFile -Raw)
+                if ($text) { $probeOut += $text }
+            }
         }
+
         if ($probeCode -ne 0) {
-            Write-Host "SELF-TEST FAILED -- the [verdict] cases do not pass, so this script's copy of the vocabulary cannot be trusted." -ForegroundColor Red
+            Write-Host ""
+            Write-Host "SELF-TEST FAILED -- the [verdict] cases do not pass (exit $probeCode), so this script's copy of the vocabulary cannot be trusted." -ForegroundColor Red
             Write-Host $probeOut
             $vocabOk = $false
+        } elseif (-not (Test-Path $vocabFile)) {
+            Write-Host ""
+            Write-Host "SELF-TEST FAILED -- the [verdict] cases passed but published no $vocabFile." -ForegroundColor Red
+            Write-Host "VerdictTest.cpp's publishing case is what this script diffs against; without it the vocabulary is unpinned." -ForegroundColor Red
+            Write-Host $probeOut
+            $vocabOk = $false
+        } else {
+            $published = @(Get-Content $vocabFile | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            $publishedVerdicts = @($published | Where-Object { $_ -cmatch '^verdict=' } |
+                                   ForEach-Object { $_ -creplace '^verdict=', '' })
+
+            # Joined and compared with -cne (case-SENSITIVE; plain -ne is not).
+            # Comparing the joins pins ORDER as well as membership, which is the
+            # contract VerdictTest.cpp's own first case states: "exactly these
+            # seven, in this order".
+            $mine   = ($script:VerdictNames -join '|')
+            $theirs = ($publishedVerdicts -join '|')
+            if ($mine -cne $theirs) {
+                Write-Host ""
+                Write-Host "SELF-TEST FAILED -- the verdict vocabulary has DRIFTED between Arcane::Verdict and this script." -ForegroundColor Red
+                Write-Host "  engine publishes: $theirs" -ForegroundColor Red
+                Write-Host "  this script has:  $mine" -ForegroundColor Red
+                # BACKTICK, not backslash. PowerShell's escape character is the
+                # backtick; `\$script:VerdictNames` in a double-quoted string
+                # would still interpolate the array and print seven words where
+                # a variable NAME was meant.
+                Write-Host "Change BOTH in the same commit: Verdict.hpp/.cpp + VerdictTest.cpp, and `$script:VerdictNames in this file." -ForegroundColor Red
+                $vocabOk = $false
+            }
+
+            # The report schema range rides the same file, for the same reason:
+            # this script reads compare.maxLocalDifference, which only exists at
+            # v4, and now range-checks every report it parses. Two integers
+            # copied by hand and compared by nothing is the same defect in
+            # miniature.
+            foreach ($pin in @(
+                @{ Key = 'reportSchemaMin'; Mine = $script:ReportSchemaMin; Variable = 'ReportSchemaMin'; Header = 'VerifyReport::kOldestSupportedSchemaVersion' },
+                @{ Key = 'reportSchemaMax'; Mine = $script:ReportSchemaMax; Variable = 'ReportSchemaMax'; Header = 'VerifyReport::kSchemaVersion' }
+            )) {
+                $line = @($published | Where-Object { $_ -cmatch ('^' + $pin.Key + '=') }) | Select-Object -First 1
+                if (-not $line) {
+                    Write-Host ""
+                    Write-Host "SELF-TEST FAILED -- $vocabFile publishes no '$($pin.Key)', so this script's copy of $($pin.Header) is unpinned." -ForegroundColor Red
+                    $vocabOk = $false
+                    continue
+                }
+                $theirValue = ($line -creplace ('^' + $pin.Key + '='), '')
+                if ("$($pin.Mine)" -cne $theirValue) {
+                    Write-Host ""
+                    Write-Host "SELF-TEST FAILED -- $($pin.Key) has DRIFTED: the engine publishes $theirValue, this script has $($pin.Mine)." -ForegroundColor Red
+                    Write-Host "Change BOTH in the same commit: $($pin.Header) and this script's `$script:$($pin.Variable)." -ForegroundColor Red
+                    $vocabOk = $false
+                }
+            }
         }
-    } else {
-        Write-Host "SELF-TEST: WARNING -- ArcaneTests.exe absent, cannot cross-check the verdict vocabulary." -ForegroundColor Yellow
     }
 
     # The ordinary -SelfTest mutation breaks the scene, so every lane that ran

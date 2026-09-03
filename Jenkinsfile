@@ -56,8 +56,24 @@ pipeline {
                         // vendored Catch2 3.15.0 by RUNNING it, not by reading docs.
                         bat 'cd bin\\Debug-windows-x86_64-md\\ArcaneTests   && ArcaneTests.exe -r junit::out=%WORKSPACE%\\test-results\\arcane-debug.xml -r json::out=%WORKSPACE%\\test-results\\arcane-debug.json'
                         bat 'cd bin\\Release-windows-x86_64-md\\ArcaneTests && ArcaneTests.exe -r junit::out=%WORKSPACE%\\test-results\\arcane-release.xml -r json::out=%WORKSPACE%\\test-results\\arcane-release.json'
-                        bat 'powershell -ExecutionPolicy Bypass -File scripts\\check-baselines.ps1 -ReportPath "%WORKSPACE%\\test-results\\arcane-debug.json" -Configuration Debug'
-                        bat 'powershell -ExecutionPolicy Bypass -File scripts\\check-baselines.ps1 -ReportPath "%WORKSPACE%\\test-results\\arcane-release.json" -Configuration Release'
+                        // -Invocation "unfiltered" NAMES WHAT THE TWO LINES
+                        // ABOVE ACTUALLY RUN. The committed baselines are all
+                        // "~[gpu]" figures; this lane has a real GPU and runs
+                        // the suite UNFILTERED, which on this agent adds ~62000
+                        // further assertions. Handing an unfiltered actual to a
+                        // ~[gpu] baseline left a permanent +62000 of slack --
+                        // a regression deleting a thousand non-GPU assertions
+                        // would still have reported a rise and exited 0. There
+                        // is no "unfiltered" entry in the baseline file, so
+                        // these two now report "NO BASELINE -- not checked",
+                        // loudly, which beats a guard that cannot fail.
+                        // FOLLOW-UP, one line of work: read the counts off the
+                        // first real Jenkins run of this stage and commit them
+                        // to scripts/automation-baselines.json as "unfiltered"
+                        // entries for Debug and Release. That desk cannot
+                        // measure this lane; this one can.
+                        bat 'powershell -ExecutionPolicy Bypass -File scripts\\check-baselines.ps1 -ReportPath "%WORKSPACE%\\test-results\\arcane-debug.json" -Configuration Debug -Invocation "unfiltered"'
+                        bat 'powershell -ExecutionPolicy Bypass -File scripts\\check-baselines.ps1 -ReportPath "%WORKSPACE%\\test-results\\arcane-release.json" -Configuration Release -Invocation "unfiltered"'
                     }
                 }
                 stage('Golden gate') {
