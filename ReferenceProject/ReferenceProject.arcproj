@@ -3,7 +3,7 @@
   "name": "ReferenceProject",
   "description": "The in-repo sample: an SDK-built game module (Source/ -> Binaries/ReferenceGame.dll) plus a simple data scene.",
   "engine": {
-    "abi": 18
+    "abi": 19
   },
   "gameModule": "ReferenceGame.dll",
   "plugins": [],

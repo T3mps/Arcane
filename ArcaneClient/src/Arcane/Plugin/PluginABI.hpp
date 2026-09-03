@@ -367,7 +367,54 @@ namespace Arcane
     //     THE SCENE FILE FORMAT DID NOT MOVE: Scene::kSceneJsonVersion stays
     //     at 3. ReferenceProject and Gacha's Game are restamped with this
     //     change, the same precedent v16 and v17 set.
-    inline constexpr uint32_t kGamePluginABIVersion = 18;
+    // v19 (2026-09-03, Arc A -- the automation verdict vocabulary): the two
+    //     ARCANE_API surfaces v18 moved MOVED AGAIN, and a third joined them.
+    //     Checked against the same "does this actually corrupt a mixed
+    //     pairing" bar the v18 entry applies -- all three clear it on layout
+    //     or on mangled name, so this one does not rest on desk legibility
+    //     either:
+    //       * `HostConfig` (Host/HostConfig.hpp:13, an ARCANE_API STRUCT)
+    //         gained `std::optional<double> fixedTimeSeconds` -- --fixed-time,
+    //         which pins the scene clock independently of the frame count.
+    //         LAYOUT: `optional<double>` is 16 bytes, so a v18 module holding
+    //         a HostConfig by value disagrees with the host about its SIZE.
+    //         Identical failure to the one the v18 entry recorded for
+    //         `settleTimeoutMs`.
+    //       * `VerifyReport` (Host/VerifyReport.hpp, an ARCANE_API CLASS)
+    //         gained `m_compareMaxLocalDifference`, and `SetCompare` gained a
+    //         NON-DEFAULTED eleventh parameter (`double maxLocalDifference`).
+    //         Both at once: the member is LAYOUT, and the new parameter moves
+    //         SetCompare's MANGLED NAME, so a v18 module that called it fails
+    //         import resolution at load. The report's JSON went schemaVersion
+    //         3 -> 4 with an added `compare.maxLocalDifference`. Unlike the
+    //         2 -> 3 move, NO existing field changed meaning -- which is why
+    //         `kOldestSupportedSchemaVersion` stays 3 and a 3-era consumer
+    //         still reads a v4 report correctly.
+    //       * `Arcane::Compare` (Assets/ImageCompare.hpp:186-191, ARCANE_API)
+    //         gained a DEFAULTED trailing parameter,
+    //         `std::array<std::uint64_t, 100>* localBlocks = nullptr`.
+    //         Defaulted is a source-compatibility convenience only -- the same
+    //         reasoning the v18 entry gives for `ProjectOpenOptions`: it moves
+    //         the mangled name either way, so a v18 module that referenced
+    //         this symbol fails import resolution at load. Loud and immediate,
+    //         not a silent misread, but still exactly what this gate exists to
+    //         catch before LoadLibrary rather than after.
+    //     Additive and harmless on their own, recorded so the list is complete:
+    //     `Host/Verdict.hpp` and `Host/ExclusionList.hpp` are new ARCANE_API
+    //     headers, and `ImageCompareOptions`/`ImageCompareResult` each gained
+    //     a member -- all of them consumed by the two HOSTS and ArcaneTests and
+    //     by no game module.
+    //     MEASURED, not assumed: `grep -rn` for HostConfig, VerifyReport,
+    //     ImageCompare, CompareImages, Verdict and ExclusionList over BOTH
+    //     game modules in the two trees -- ReferenceProject/Source/
+    //     (GameApi.hpp, ReferenceGame.cpp) and Gacha's Game/Source/
+    //     (GameApi.hpp, Aphelyon.cpp) -- returns nothing, so no module in
+    //     either tree breaks on this bump. The gate catches a stale stamp; the
+    //     compiler would not have.
+    //     THE SCENE FILE FORMAT DID NOT MOVE: Scene::kSceneJsonVersion stays
+    //     at 3. ReferenceProject and Gacha's Game are restamped with this
+    //     change, the same precedent v16, v17 and v18 set.
+    inline constexpr uint32_t kGamePluginABIVersion = 19;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
