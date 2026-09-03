@@ -414,7 +414,37 @@ namespace Arcane
     //     THE SCENE FILE FORMAT DID NOT MOVE: Scene::kSceneJsonVersion stays
     //     at 3. ReferenceProject and Gacha's Game are restamped with this
     //     change, the same precedent v16, v17 and v18 set.
-    inline constexpr uint32_t kGamePluginABIVersion = 19;
+    // v20 (2026-09-03, Arc B -- the host witness harness): the verify-report
+    //     surface v19 moved MOVED AGAIN, plus the resolver struct it reads
+    //     from. Both clear the v18 entry's "layout or mangled name" bar:
+    //       * `ReferenceResolution` (Host/ReferenceImages.hpp, returned BY
+    //         VALUE from the exported `ResolveReference`) gained `triedPaths`
+    //         (std::vector<std::filesystem::path>) -- the ordered candidate
+    //         search space the resolver probed. LAYOUT: a v19 module calling
+    //         `ResolveReference` disagrees with the host about the return
+    //         struct's SIZE.
+    //       * `VerifyReport` (Host/VerifyReport.hpp:134, an ARCANE_API CLASS)
+    //         gained `m_compareTriedPaths`, and `SetCompare` gained a
+    //         NON-DEFAULTED twelfth parameter
+    //         (`std::vector<std::string> triedPaths`). The same pairing the
+    //         v19 entry records: the member is LAYOUT, and the new parameter
+    //         moves SetCompare's MANGLED NAME, so a v19 module that called it
+    //         fails import resolution at load. The report's JSON went
+    //         schemaVersion 4 -> 5 with an added `compare.triedPaths`
+    //         (deliberately in the REPORT, not the log -- UE logs its tried
+    //         list and discards it). NO existing field changed meaning, so
+    //         `kOldestSupportedSchemaVersion` stays 3 and a 3-era consumer
+    //         still reads a v5 report correctly.
+    //     MEASURED, not assumed: `grep -rn` for SetCompare and
+    //     ReferenceResolution over BOTH game modules in the two trees --
+    //     ReferenceProject/Source/ (GameApi.hpp, ReferenceGame.cpp) and
+    //     Gacha's Game/Source/ (GameApi.hpp, Aphelyon.cpp) -- returns
+    //     nothing, so no module in either tree breaks on this bump. The gate
+    //     catches a stale stamp; the compiler would not have.
+    //     THE SCENE FILE FORMAT DID NOT MOVE: Scene::kSceneJsonVersion stays
+    //     at 3. ReferenceProject and Gacha's Game are restamped with this
+    //     change, the same precedent v16 through v19 set.
+    inline constexpr uint32_t kGamePluginABIVersion = 20;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

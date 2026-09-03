@@ -324,7 +324,7 @@ $script:VerdictNames = @(
 # are the second and third numbers in the same wire contract, and a
 # hand-maintained copy nothing compares is what this arc exists to abolish.
 $script:ReportSchemaMin = 3
-$script:ReportSchemaMax = 4
+$script:ReportSchemaMax = 5
 # Green SATISFIES the gate. Skipped is deliberately absent: it does not fail a
 # gate, but it must not count toward "at least one lane passed" either, or an
 # all-skipped run reports success having verified nothing.
