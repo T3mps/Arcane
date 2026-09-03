@@ -58,6 +58,26 @@ if (-not $totals) {
     exit 1
 }
 
+# Round-1 review finding: checking only that $totals exists is coarse. A
+# renamed/dropped LEAF field (e.g. assertions.failed -> assertions.FOO) is
+# $null under PowerShell's property access, and [int]$null is 0 -- silently
+# summed into $assertions/$cases below. If the surviving leaf alone happened
+# to equal the baseline, that read as a clean green pass with the vacuity
+# guard never engaging (reproduced: renaming assertions.failed while passed
+# stayed at the full baseline reported "+0" and exit 0). Validate each of the
+# four leaf fields individually, by name, before summing anything.
+$requiredLeaves = @(
+    @{ Path = 'assertions.passed';       Value = $totals.assertions.'passed' }
+    @{ Path = 'assertions.failed';       Value = $totals.assertions.'failed' }
+    @{ Path = "'test-cases'.passed";     Value = $totals.'test-cases'.'passed' }
+    @{ Path = "'test-cases'.failed";     Value = $totals.'test-cases'.'failed' }
+)
+$missingLeaves = $requiredLeaves | Where-Object { $null -eq $_.Value } | ForEach-Object { $_.Path }
+if ($missingLeaves) {
+    Write-Host "the report at $ReportPath is missing totals leaf field(s): $($missingLeaves -join ', '). Catch2 JSON shape has moved -- re-run ArcaneTests.exe with a non-matching tag plus --allow-running-no-tests -r json, and update this checker." -ForegroundColor Red
+    exit 1
+}
+
 $assertions = [int]$totals.assertions.passed + [int]$totals.assertions.failed
 $cases      = [int]$totals.'test-cases'.passed + [int]$totals.'test-cases'.failed
 

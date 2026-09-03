@@ -66,21 +66,21 @@ jobs:
       # to it, and the exclusion-expiry case hard-fails if that file is missing.
       - name: Test Debug
         working-directory: bin/Debug-windows-x86_64-md/ArcaneTests
-        run: .\ArcaneTests.exe -r json::out=${{ github.workspace }}\test-results\arcane-debug.json
+        run: .\ArcaneTests.exe -r console -r json::out=${{ github.workspace }}\test-results\arcane-debug.json
 
       - name: Check Debug baselines
         run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-debug.json" -Configuration Debug
 
       - name: Test Release
         working-directory: bin/Release-windows-x86_64-md/ArcaneTests
-        run: .\ArcaneTests.exe -r json::out=${{ github.workspace }}\test-results\arcane-release.json
+        run: .\ArcaneTests.exe -r console -r json::out=${{ github.workspace }}\test-results\arcane-release.json
 
       - name: Check Release baselines
         run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-release.json" -Configuration Release
 
       - name: Test Dist
         working-directory: bin/Dist-windows-x86_64-md/ArcaneTests
-        run: .\ArcaneTests.exe -r json::out=${{ github.workspace }}\test-results\arcane-dist.json
+        run: .\ArcaneTests.exe -r console -r json::out=${{ github.workspace }}\test-results\arcane-dist.json
 
       - name: Check Dist baselines
         run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-dist.json" -Configuration Dist
