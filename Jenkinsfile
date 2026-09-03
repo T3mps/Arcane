@@ -51,8 +51,13 @@ pipeline {
                         // staged relative to it). GPU tests assert
                         // Arcane::RenderErrorCount() == 0 -- validation noise
                         // is a test failure by design.
-                        bat 'cd bin\\Debug-windows-x86_64-md\\ArcaneTests   && ArcaneTests.exe -r junit::out=%WORKSPACE%\\test-results\\arcane-debug.xml'
-                        bat 'cd bin\\Release-windows-x86_64-md\\ArcaneTests && ArcaneTests.exe -r junit::out=%WORKSPACE%\\test-results\\arcane-release.xml'
+                        // Two -r flags in one invocation: JUnit for Jenkins own test view,
+                        // JSON for the baseline check below. Confirmed working on the
+                        // vendored Catch2 3.15.0 by RUNNING it, not by reading docs.
+                        bat 'cd bin\\Debug-windows-x86_64-md\\ArcaneTests   && ArcaneTests.exe -r junit::out=%WORKSPACE%\\test-results\\arcane-debug.xml -r json::out=%WORKSPACE%\\test-results\\arcane-debug.json'
+                        bat 'cd bin\\Release-windows-x86_64-md\\ArcaneTests && ArcaneTests.exe -r junit::out=%WORKSPACE%\\test-results\\arcane-release.xml -r json::out=%WORKSPACE%\\test-results\\arcane-release.json'
+                        bat 'powershell -ExecutionPolicy Bypass -File scripts\\check-baselines.ps1 -ReportPath "%WORKSPACE%\\test-results\\arcane-debug.json" -Configuration Debug'
+                        bat 'powershell -ExecutionPolicy Bypass -File scripts\\check-baselines.ps1 -ReportPath "%WORKSPACE%\\test-results\\arcane-release.json" -Configuration Release'
                     }
                 }
                 stage('Golden gate') {

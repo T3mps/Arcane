@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "note": "Counts for ArcaneTests.exe \"~[gpu]\", per configuration. `~[gpu]` is a BASELINE-COMPARABILITY convention, not a safety gate -- the [gpu] cases run clean on this hardware and CI runs the full unfiltered suite. A drop means coverage was lost; the check that reads this file is scripts/check-baselines.ps1. Dist legitimately runs fewer cases than Debug/Release (6 cases / 68 assertions fewer) because of pre-existing `#if !defined(ARCANE_DIST)` guards in HostConfigTest.cpp and NriDiagnosticsTest.cpp -- that gap has been constant across this whole arc.",
+  "measured": "2026-09-02, after Arc A tasks 1-12",
+  "baselines": [
+    { "name": "arcanetests.assertions", "configuration": "Debug",   "value": 52422, "unit": "assertions" },
+    { "name": "arcanetests.cases",      "configuration": "Debug",   "value": 1303,  "unit": "cases" },
+    { "name": "arcanetests.assertions", "configuration": "Release", "value": 52422, "unit": "assertions" },
+    { "name": "arcanetests.cases",      "configuration": "Release", "value": 1303,  "unit": "cases" },
+    { "name": "arcanetests.assertions", "configuration": "Dist",    "value": 52354, "unit": "assertions" },
+    { "name": "arcanetests.cases",      "configuration": "Dist",    "value": 1297,  "unit": "cases" }
+  ]
+}
