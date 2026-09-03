@@ -28,9 +28,10 @@ behaviours the vocabulary grades from. Three named facts have never been proven 
    observed either side of it.
 2. **The `compare-missing-reference` absence** — a lane whose reference cannot be resolved at
    any level. Arc A's vocabulary grades it `Indeterminate`; no test forces it.
-3. **`--settle-timeout` actually being spent** — that a genuinely unstable scene consumes the
-   bound and exits `settle-not-converged` with a nonzero code, rather than the flag being a
-   declared knob nobody has watched apply.
+3. **`--settle-timeout` actually being spent** — that a run which cannot converge consumes
+   BOTH bounds (attempts AND milliseconds, the conjunction this repo's own `--settle` fix
+   installed) before bailing with a nonzero code, rather than the flag being a declared knob
+   nobody has watched apply.
 
 The witness harness forces each condition against the **real staged host executable** and
 asserts, with `REQUIRE`, on the facts the host produces. The arc's standing lesson governs its
@@ -67,13 +68,20 @@ path both hosts use.
 
 | # | Adversarial setup | Facts the host must produce |
 |---|---|---|
-| **W1 — settle bound genuinely spent** | ReferenceProject scene animating on `Time` (PulseSprite computes `sin(Time * PulseSpeed)`), `--fixed-time` deliberately absent, small `--settle-timeout` | `exitReason: "settle-not-converged"`, nonzero exit code, `settle.attemptsUsed > 0`, capture-failed **false** — *captured fine, never agreed* |
-| **W2 — capture path broken** | A scene with **no camera** (candidate lever — pure content; camera is a scene component and no camera ⇒ nullopt, never identity) | Settle bails, `settle.result: "capture-failed"`, no screenshot written, nonzero exit — *readback never landed*. W1's exact counterpart; the pair proves the distinction `RuntimeFrame.cpp:893` records |
+| **W1 — settle bounds genuinely spent** | Scratch copy with the reference overwritten at **both** levels (`Verify/References/runtime-scene.png` and `vulkan/runtime-scene.png`) by a valid PNG with wrong pixels; run `--settle 4 --settle-timeout 2000 --compare runtime-scene`. The comparison is a **third conjunct in the convergence predicate** (`HostConfig.cpp`'s own comment), so a wrong reference holds the predicate false and the loop must spend BOTH bounds before bailing | Wall clock ≥ the timeout (measured by the helper), `settleAttemptsUsed >= 4`, `settleBailReason` ∈ {`attempts-bound`, `timeout-bound`} — not `converged`, not `capture-failed` — `exitReason: "compare-failed"`, nonzero exit. *Captured fine, never agreed* |
+| **W2 — capture path broken** | A scene with **no camera** (candidate lever — pure content; camera is a scene component and no camera ⇒ nullopt, never identity), via `--scene <guid>` | Settle bails, `settleBailReason: "capture-failed"`, no screenshot written, nonzero exit — *readback never landed*. W1's exact counterpart; the pair proves the distinction `RuntimeFrame.cpp:893` records |
 | **W3 — reference absent, search space reported** | Delete the reference at **every** level in the scenario's scratch copy — backend *and* shared; Arc A proved deleting one level silently falls back | Report carries `compare.resolvedLevel: "none"` **and the new `compare.triedPaths` array** listing the ordered candidates that failed, in the order tried |
 
 **W1/W2's mirror-image assertions are the point**: each case asserts its own flag true *and*
 the sibling flag false, so a regression that conflates the two states fails both cases, loudly,
 in opposite directions.
+
+**Two spec corrections made during plan grounding (2026-09-03), both from source:** the first
+draft's W1 lever (an animating scene) was impossible — `--settle` freezes the render clock, so
+animation cannot prevent convergence; and the report's settle keys are flat
+(`settleAttemptsUsed`, `settleBailReason`), not nested. The wrong-reference lever replaced it and
+is *stronger*: deterministic, content-only, and it proves the attempts-AND-timeout conjunction —
+the exact `--settle` fix this repo's history records — by measuring the time actually spent.
 
 **The W2 lever is verified RED-first in the plan.** If a no-camera scene does not force the
 capture failure, the fallback lever is derived then, in source — not guessed here. The spec
