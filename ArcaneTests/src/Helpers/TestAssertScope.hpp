@@ -28,8 +28,13 @@
 
 #include <Mosaic/Assert.hpp>
 
+// PUBLIC Catch2 headers only. catch_test_macros.hpp is what defines
+// REQUIRE/CHECK and pulls in whatever internals they expand to, so naming
+// catch2/internal/catch_decomposer.hpp here bought nothing and made this
+// header depend on a path Catch2 is free to move between versions -- an
+// upgrade hazard for no benefit. The vendored 3.15.0 builds identically
+// without it.
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/internal/catch_decomposer.hpp>
 
 #include <string>
 

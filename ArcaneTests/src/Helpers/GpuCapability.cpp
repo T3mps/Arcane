@@ -16,15 +16,14 @@ namespace Arcane::Test
         {
             // A real creation attempt, because that is the only question that
             // matters -- an adapter that enumerates but cannot create a device
-            // is not an available backend. Validation layers stay OFF here: the
-            // probe must be cheap and must not fail for a reason unrelated to
-            // availability.
-            RenderDeviceDesc desc;
-            desc.backend = backend;
-            // Validation OFF even in Debug, where RenderDeviceDesc defaults it
+            // is not an available backend.
+            //
+            // VALIDATION OFF, even in Debug where RenderDeviceDesc defaults it
             // ON: the probe asks ONE question -- can a device be created -- and
-            // must not fail for a reason unrelated to availability, nor pay for
-            // layers it will immediately throw away.
+            // must neither fail for a reason unrelated to availability nor pay
+            // for layers it will immediately throw away.
+            RenderDeviceDesc desc;
+            desc.backend               = backend;
             desc.enableValidation      = false;
             desc.enableD3D12DebugLayer = false;
             desc.enableSyncValidation  = false;

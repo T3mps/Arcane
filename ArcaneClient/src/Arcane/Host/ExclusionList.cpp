@@ -110,6 +110,40 @@ namespace Arcane
                 error = where + "must be an object";
                 return std::nullopt;
             }
+            // UNKNOWN KEYS ARE REFUSED, and the refusal names the key. Same
+            // defect class as the out-of-range month IsIsoDate refuses: a typo
+            // that SILENTLY WIDENS an exclusion instead of failing. target,
+            // reason and expires are already protected by the required-field
+            // loop below -- misspell one and the entry is refused for the
+            // missing field -- but the three optional axes are not, and they
+            // are exactly the keys that control BLAST RADIUS. An omitted axis
+            // means ALL (AxisMatches' first line), so `"backend": ["vulkan"]`
+            // -- singular, for "backends" -- would be dropped without a word
+            // and the entry would then exclude BOTH backends, which is not
+            // what its author wrote.
+            //
+            // ADDING A KEY: extend this list IN THE SAME COMMIT that
+            // introduces the key, and extend golden-gate.ps1's own allow-list
+            // there too. This file has two readers, both versioned alongside
+            // it in this repo, so there is no cross-version compatibility to
+            // protect and no reason for the two to ever disagree.
+            static constexpr const char* kKnownKeys[] = {
+                "target", "reason", "expires", "backends", "hosts", "configurations",
+            };
+            for (auto it = item.begin(); it != item.end(); ++it)
+            {
+                bool known = false;
+                for (const char* k : kKnownKeys)
+                {
+                    if (it.key() == k) { known = true; break; }
+                }
+                if (!known)
+                {
+                    error = where + "unknown key \"" + it.key() +
+                            "\" -- known keys are target, reason, expires, backends, hosts, configurations";
+                    return std::nullopt;
+                }
+            }
             ExclusionEntry e;
             for (const char* key : { "target", "reason", "expires" })
             {

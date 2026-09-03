@@ -232,6 +232,26 @@ namespace Arcane
         // Largest per-block mismatch fraction over the 10x10 grid, in [0,1].
         // 500 scattered pixels and 500 forming one broken widget have the same
         // diffCount; this is what tells them apart.
+        //
+        // TRAILING-EDGE BLOCKS ARE LESS SENSITIVE, and it is a real, reported
+        // property rather than a rounding footnote. Block size is
+        // ceil(extent/10) (CeilBlockExtent), so on any extent that is not a
+        // multiple of ten the last row and column of blocks cover FEWER pixels
+        // than that -- yet every block normalises against the NOMINAL area
+        // blockW*blockH. At 1920x1080 the grid is 192x108 and divides exactly;
+        // at 1000x600 the block is 100x60 and still does; but at 165x99 the
+        // block is 17x10 and the trailing column holds only 165-9*17 = 12
+        // columns, so a block whose every pixel differs scores 12*10/170 =
+        // 0.706, not 1.0.
+        //
+        // NEVER out of range and never a FALSE POSITIVE -- the number can only
+        // read LOW, so a maxLocalDiffRatio gate stays conservative. The cost is
+        // sensitivity: a fully-broken trailing block can sit under a threshold
+        // an interior block of the same damage would trip. Left as-is
+        // deliberately (dividing by each block's true area would make blocks
+        // incomparable in the other direction -- a single differing pixel in a
+        // 1-pixel-wide edge block would score 1.0), but stated here so nobody
+        // reads "fraction in [0,1]" as "1.0 is reachable in every block".
         double        maxLocalDifference = 0.0;
         std::uint64_t maxDiffPixelsUsed = 0;   // the budget actually applied
         bool          sizesMismatch = false;

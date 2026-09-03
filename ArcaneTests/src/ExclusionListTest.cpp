@@ -121,6 +121,24 @@ TEST_CASE("exclusions: malformed input is REFUSED, not treated as empty", "[host
     // An array entry that isn't an object.
     CHECK_FALSE(Arcane::ParseExclusions("[42]", err).has_value());
     CHECK_FALSE(err.empty());
+
+    err.clear();
+    // A MISSPELLED SCOPING KEY. "backend" (singular) is not "backends", and
+    // silently ignoring it is the worst available outcome: an omitted axis
+    // means ALL, so the entry would go on to exclude BOTH backends -- MORE
+    // broadly than its author wrote -- with nothing said. The refusal must
+    // NAME the offending key, or the author is left diffing their file against
+    // a schema that lives only in a header.
+    CHECK_FALSE(Arcane::ParseExclusions(
+        R"([{"target":"x","reason":"y","expires":"2026-12-31","backend":["vulkan"]}])", err).has_value());
+    CHECK(err.find("backend") != std::string::npos);
+    CHECK(err.find("unknown key") != std::string::npos);
+
+    err.clear();
+    // The same for a key that resembles nothing in the schema at all.
+    CHECK_FALSE(Arcane::ParseExclusions(
+        R"([{"target":"x","reason":"y","expires":"2026-12-31","ticket":"ARC-1"}])", err).has_value());
+    CHECK(err.find("ticket") != std::string::npos);
 }
 
 TEST_CASE("exclusions: matching scopes by backend, host and configuration", "[host][exclusions]")
