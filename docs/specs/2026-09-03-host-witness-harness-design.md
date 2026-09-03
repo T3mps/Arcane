@@ -1,9 +1,11 @@
 # Host witness harness — Arc B design
 
-**Status:** **LANDED 2026-09-03.** Six of seven scenarios/tasks implemented, reviewed and
-closed on `main` (`aa29454e..67b8c1ed`, plus Gacha `4219c644`); **W2 was removed by ruling —
-its behaviour has no content-or-CLI lever, derived in source (see `## Landed` below, the
-arc's headline finding).** Plan: `docs/plans/2026-09-03-host-witness-harness.md`.
+**Status:** **LANDED 2026-09-03.** All seven plan tasks landed; **two of the three scenarios
+shipped (W1, W3) — W2 was removed by ruling, its behaviour having no content-or-CLI lever, as
+derived in source (see `## Landed` below; it is the arc's headline finding).** Closed on `main`
+as the plan `aa29454e`, six implementation commits through `67b8c1ed`, and two closeout commits
+`4971581f` and `6a43d4a3`, plus Gacha `4219c644`. Plan:
+`docs/plans/2026-09-03-host-witness-harness.md`.
 
 **Provenance.** This is Arc B of the two automation arcs, inherited from
 `docs/specs/2026-09-01-automation-verdict-vocabulary-design.md` §9 (Tier 1 item 4 of
@@ -234,9 +236,10 @@ independently derived by neither of us until the comparison was run.
 
 ## Landed — 2026-09-03
 
-Implemented on `main` as `aa29454e..67b8c1ed` (the plan, then six implementation commits), with
-Gacha's ABI restamp at `4219c644`. Everything below is measured on the dev desk (RTX 3070,
-Vulkan + D3D12), not projected.
+Implemented on `main` as the plan commit `aa29454e`, then six implementation commits through
+`67b8c1ed`, then the two closeout commits that re-derived the baselines (`4971581f`) and wrote
+this record (`6a43d4a3`) — nine in all. Gacha's ABI restamp is `4219c644`. Everything below is
+measured on the dev desk (RTX 3070, Vulkan + D3D12), not projected.
 
 ### Against what this spec asked for
 
@@ -247,7 +250,13 @@ Vulkan + D3D12), not projected.
 | §3 W1 — settle bounds genuinely spent | Landed, with **two measured corrections to its invocation** (below) |
 | §3 W2 — capture path broken | **REMOVED.** The fact has no content-or-CLI lever on either host (below) |
 | §3 W3 — reference absent, search space reported | Landed, but the path is **fail-fast, not a settle bail** (below) |
-| §5 ABI 19 → 20, restamps, the three-place schema pin | Landed. The pin was **watched failing once** before it was watched passing |
+| §5 ABI 19 → 20, restamps, the three-place schema pin | Landed. Both projects restamped and verified at `"abi": 20` — `ReferenceProject/ReferenceProject.arcproj:6` and Gacha's `Game/Aphelyon.arcproj:6`. The pin was **watched failing once** before it was watched passing |
+
+**Against §1's three never-proven facts, the tally is two of three.** The
+`compare-missing-reference` absence (§1.2) and `--settle-timeout` genuinely being spent (§1.3)
+are now witnessed against the real host by W3 and W1. **`settleCaptureFailed` (§1.1) is not, and
+cannot be from outside the process** — it is unreachable by any scene or command line, for the
+reason derived below. It keeps only its unit-level coverage and W1's mirror assertion.
 
 ### Measured figures
 
@@ -272,6 +281,10 @@ zero — but the arc's *unit* cases are inside it, and they are the whole of the
 arithmetic reconciles exactly: 17 `TEST_CASE`s added, minus 3 schema-4 cases superseded by
 schema-5 equivalents, = 14 net, of which 2 are the `[witness][gpu]` scenarios — leaving **+12
 inside `~[gpu]`**.
+
+`scripts/check-baselines.ps1` was then run per configuration against those runs' own JSON
+reports with the mandatory `-Invocation "~[gpu]"`: **`+0` on all three, exit 0** — the committed
+values match the measurements exactly, rather than merely failing to regress.
 
 Golden gate, Release: `gatePassed: true` read from
 `bin/Release-windows-x86_64-md/golden-gate-summary.json`, four lanes, all `diffCount=0` and
@@ -301,7 +314,11 @@ Two of the spec's numbers were wrong, and both corrections are load-bearing:
 - **`--settle-timeout 4000`, not 2000.** `wallMs` is spawn→exit and so includes ~2 s of host
   boot. At 2000 the negative control measured 2130 ms ≥ 2000 and the assertion **passed on a
   converging run** — an assertion that could not fail on any input. At 4000 the two cases
-  separate by ~2 s in each direction (converging 2.1 s, bound-spending ~7.9 s). This is
+  separate cleanly: a converging run measures ~2.1 s, and a bound-spending run cannot finish
+  before ~6 s by construction (~2 s boot + the 4 s timeout). The bound-spending run measured
+  here came in at **7943 ms**; `WitnessScenariosTest.cpp`'s comment cites the ~6 s structural
+  floor rather than this desk's measurement, and both are correct — the floor is what makes the
+  assertion sound, the measurement is what this desk observed. This is
   `feedback_default_values_are_not_measurements` in another form: a bound not *separated* from
   the thing it exists to exclude is not a bound.
 
