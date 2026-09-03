@@ -37,7 +37,7 @@
 // previousCaptureValid is set by any settle attempt whose ReadCapture landed.
 // ReadCapture refuses at two branches -- the capture NODE never ran
 // (NriGraphContext.cpp:1915), or MapBuffer on the capture buffer returns
-// null (line 1934) -- and the predicate that arms the node,
+// null (NriGraphContext.cpp:1933-1936) -- and the predicate that arms the node,
 // RenderGraph's `willBeLastFrame` (RuntimeFrame.cpp:619-627), is the SAME
 // expression as CaptureTail's `pastBase` (line 701) that decides whether a
 // settle attempt happens at all: `frameCount + 1 >= maxFrames` evaluated
@@ -154,7 +154,24 @@ TEST_CASE("W1: settle spends BOTH bounds when the compare conjunct cannot pass",
     // conjunction itself regressed, and red would be the correct verdict.
     REQUIRE(run.report["settleAttemptsUsed"].get<std::uint64_t>() >= 4);
     const std::string bail = run.report["settleBailReason"].get<std::string>();
-    REQUIRE((bail == "attempts-bound" || bail == "timeout-bound"));
+    // TIGHTENED FROM A DISJUNCTION -- "timeout-bound" is the ONLY healthy
+    // label here, because which bound governs is a PURE FUNCTION of this
+    // scenario's own arguments, not of the machine it runs on.
+    // SettleBailDecision (SettleBound.hpp:101-134) computes
+    // attemptsNeeded = ceil(timeoutMs / intervalMs) and returns AttemptsBound
+    // iff attempts >= attemptsNeeded, else TimeoutBound. intervalMs is
+    // kSettleIntervalMs (SettleBound.hpp:32) = 50, a compile-time constant,
+    // not a measurement. With this run's attempts=4 and timeoutMs=4000:
+    // attemptsNeeded = ceil(4000 / 50) = 80, and 4 >= 80 is false, so the
+    // decision is TimeoutBound on every host, fast or slow -- the 4-attempt
+    // budget spends only ~200ms (4 * 50ms) against a 4000ms timeout, nowhere
+    // close to outlasting it. A disjunction admitting "attempts-bound" would
+    // pass a CONJUNCTION-regressed host that bails attempts-only-but-paced:
+    // such a host would report the wrong label here while still incidentally
+    // clearing `REQUIRE(run.wallMs >= timeoutMs)` above (~2s boot + ~2.8s of
+    // paced attempts >= 4000ms), so that assertion alone cannot catch the
+    // regression -- this one closes that hole.
+    REQUIRE(bail == "timeout-bound");
     // "compare-failed", NOT "settle-not-converged": the latter is the
     // compare-never-evaluated spelling (RuntimeApp.cpp:1158), and this run
     // evaluated the comparison on every stable, idle attempt.

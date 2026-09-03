@@ -69,6 +69,71 @@ namespace Arcane::Test
             return out;
         }
 
+        // Best-effort sweep of STALE sibling dirs under arcane-witness-stdio/,
+        // left behind by earlier report-less runs (nothing else ever deletes
+        // them). Run at ResolveStdioPaths -- i.e. RunWitness entry, before
+        // THIS run's dir is created -- never at exit: the caller reads
+        // stdoutPath/stderrPath AFTER RunWitness returns (pinned by the
+        // "stdout is captured to a file" unit test), so this run's own files
+        // must survive past the call. A sibling <pid>-<n> dir is stale when
+        // <pid> names a process that is no longer alive; a live pid --
+        // including this process's own earlier dirs -- is never touched.
+        // Swallows all errors: this is hygiene, never load-bearing.
+        void SweepStaleStdioDirs(const std::filesystem::path& stdioRoot)
+        {
+            std::error_code ec;
+            std::filesystem::directory_iterator it(stdioRoot, ec);
+            if (ec)
+                return;
+            const std::filesystem::directory_iterator end;
+            for (; it != end; it.increment(ec))
+            {
+                if (ec)
+                    return;
+                std::error_code dec;
+                if (!it->is_directory(dec) || dec)
+                    continue;
+
+                const std::wstring name = it->path().filename().wstring();
+                const std::size_t dash = name.find(L'-');
+                if (dash == std::wstring::npos)
+                    continue;
+
+                DWORD pid = 0;
+                for (wchar_t c : name.substr(0, dash))
+                {
+                    if (c < L'0' || c > L'9')
+                    {
+                        pid = 0;
+                        break;
+                    }
+                    pid = pid * 10 + static_cast<DWORD>(c - L'0');
+                }
+                if (pid == 0)
+                    continue;   // unparsed name -- never guess, never touch
+
+                bool alive = true;
+                HANDLE proc = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+                if (!proc)
+                {
+                    alive = false;
+                }
+                else
+                {
+                    DWORD code = 0;
+                    if (::GetExitCodeProcess(proc, &code) && code != STILL_ACTIVE)
+                        alive = false;
+                    ::CloseHandle(proc);
+                }
+
+                if (!alive)
+                {
+                    std::error_code rec;
+                    std::filesystem::remove_all(it->path(), rec);
+                }
+            }
+        }
+
         // stdout/stderr land beside reportPath (same directory, named off its
         // stem) when a report path was given, so a scenario's three artifacts
         // sit together; otherwise a fresh, uniquely-named temp directory --
@@ -86,9 +151,13 @@ namespace Arcane::Test
                 return { dir / (stem + L".stdout.txt"), dir / (stem + L".stderr.txt") };
             }
 
+            const std::filesystem::path stdioRoot =
+                std::filesystem::temp_directory_path() / "arcane-witness-stdio";
+            SweepStaleStdioDirs(stdioRoot);
+
             static std::atomic<int> s_counter{ 0 };
             const std::filesystem::path uniqueDir =
-                std::filesystem::temp_directory_path() / "arcane-witness-stdio" /
+                stdioRoot /
                 (std::to_wstring(::GetCurrentProcessId()) + L"-" +
                  std::to_wstring(s_counter.fetch_add(1, std::memory_order_relaxed)));
             std::filesystem::create_directories(uniqueDir, ec);
@@ -219,8 +288,11 @@ namespace Arcane::Test
 
                 if (wr == WAIT_OBJECT_0)
                 {
-                    ::GetExitCodeProcess(pi.hProcess, &exitCode);
-                    exited = true;
+                    // Checked: on the (theoretical) failure of
+                    // GetExitCodeProcess, leave exited false rather than
+                    // trust a spurious exitCode -- run.exitCode then falls
+                    // through to its documented "unknown" default (-1).
+                    exited = (::GetExitCodeProcess(pi.hProcess, &exitCode) != FALSE);
                     break;
                 }
 
@@ -241,11 +313,11 @@ namespace Arcane::Test
                     // Arc A's unkillable-process guard: bounded wait, never
                     // hang the suite even if termination doesn't land.
                     const DWORD killWr = ::WaitForSingleObject(pi.hProcess, 3000);
+                    // Checked, same reasoning as the WAIT_OBJECT_0 branch
+                    // above: on failure exited stays false and run.exitCode
+                    // falls through to -1 rather than reading a spurious 0.
                     if (killWr == WAIT_OBJECT_0)
-                    {
-                        ::GetExitCodeProcess(pi.hProcess, &exitCode);
-                        exited = true;
-                    }
+                        exited = (::GetExitCodeProcess(pi.hProcess, &exitCode) != FALSE);
                     break;
                 }
             }
