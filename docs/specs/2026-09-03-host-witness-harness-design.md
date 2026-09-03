@@ -99,6 +99,13 @@ struct WitnessRun {
 - **Precedence is the grading order, imitated from Gauntlet:** scenarios assert on `timedOut` /
   kill facts before exit code, exit code before report presence, presence before contents. A
   killed host's leftover report is never believed.
+- **One branch of UE's cascade is deliberately NOT imitated.** Gauntlet's no-report fallback
+  grades a clean exit with no report as **Passed** ("Tests passed (no report to parse)",
+  `LowLevelTestNode.cs:308-320`) — a pass with zero evidence, the vacuity trap its own
+  `ReportParser.HasPassed()` guards against everywhere else (`successes > 0`,
+  `LowLevelTests.ReportParser.cs:54`). For witness scenarios a missing or unparseable report is
+  a **failure regardless of exit code**: every scenario exists to assert on report contents, so
+  absent evidence is absence of the thing under test.
 - **Watchdog = duration cap + progress fact**, matching Gauntlet's `MaxDuration` + heartbeat
   conjunction (`Gauntlet.UnrealTestNode.cs:60,74,325`): the hard cap always kills, and
   `progressingAtKill` distinguishes *wedged* from *slow* in the failure message. One wedged
@@ -106,6 +113,11 @@ struct WitnessRun {
 - **Verdict mapping**: the helper maps facts → `Arcane::Verdict` via the exported C++
   vocabulary, and scenarios `REQUIRE` the verdict *and* the underlying facts — the vocabulary's
   first production consumer, closing the final review's I8 the sharp way.
+- **The helper captures host stdout/stderr to files in the scenario's scratch dir** — required
+  by the progress rule (stdout growth is half its conjunction) and by diagnostics: both prior
+  arts keep process output with the failure artifact (Gauntlet tails and saves logs;
+  Playwright captures stdio into the report — knowledge). The files ride the kept-on-failure
+  scratch dir (§6). Arc A Task 10's `Start-Process -RedirectStandardOutput` precedent, in C++.
 - The helper never launches concurrently-overlapping hosts; scenarios are ordinary sequential
   Catch2 cases.
 
@@ -188,6 +200,11 @@ independently derived by neither of us until the comparison was run.
 - **Any generic cascade engine** — the precedence lives in assert order, not machinery.
 - **A control channel into running hosts** — UE's TcpMessaging analog; recorded as prior art
   only.
+- **Retries.** Both targets carry a flake mechanism (Playwright per-test retries — knowledge;
+  Gauntlet `-ResumeRunTest`, `UE.Automation.cs:177`). The witness deliberately has none: a
+  retry masks exactly the fact a witness exists to observe, and this repo's flake mechanism is
+  already the exclusion list with a checked expiry. A flaky witness scenario is a finding, not
+  a nuisance.
 
 ## 10. Decisions log
 
