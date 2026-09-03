@@ -1,6 +1,9 @@
 # Host witness harness — Arc B design
 
-**Status:** design, 2026-09-03. Approved in brainstorming; implementation plan to follow.
+**Status:** **LANDED 2026-09-03.** Six of seven scenarios/tasks implemented, reviewed and
+closed on `main` (`aa29454e..67b8c1ed`, plus Gacha `4219c644`); **W2 was removed by ruling —
+its behaviour has no content-or-CLI lever, derived in source (see `## Landed` below, the
+arc's headline finding).** Plan: `docs/plans/2026-09-03-host-witness-harness.md`.
 
 **Provenance.** This is Arc B of the two automation arcs, inherited from
 `docs/specs/2026-09-01-automation-verdict-vocabulary-design.md` §9 (Tier 1 item 4 of
@@ -226,3 +229,160 @@ independently derived by neither of us until the comparison was run.
 | Absent host tree | Hard fail, actionable message | An incomplete build on a capable machine is not a skippable condition (Arc A Rulings 14, B2) |
 | Watchdog | Hard cap + progressing-at-kill fact | Gauntlet's duration+heartbeat conjunction; Arc A Task 10's progress rule reused |
 | W2 lever | No-camera scene, verified RED-first | Content-only forcing; a host code change whose purpose is to be broken is forbidden |
+
+---
+
+## Landed — 2026-09-03
+
+Implemented on `main` as `aa29454e..67b8c1ed` (the plan, then six implementation commits), with
+Gacha's ABI restamp at `4219c644`. Everything below is measured on the dev desk (RTX 3070,
+Vulkan + D3D12), not projected.
+
+### Against what this spec asked for
+
+| Spec item | Outcome |
+|---|---|
+| §5 `triedPaths` on `ResolveReference`, report schema **4 → 5** | Landed. The real try order is **backend-keyed first, shared second** — as §3 assumed — and is now pinned by test rather than by assumption |
+| §4 the spawn helper | Landed as `ArcaneTests/src/Helpers/HostWitness.{hpp,cpp}` with 7 `[witness-unit]` cases against `cmd /c exit N` |
+| §3 W1 — settle bounds genuinely spent | Landed, with **two measured corrections to its invocation** (below) |
+| §3 W2 — capture path broken | **REMOVED.** The fact has no content-or-CLI lever on either host (below) |
+| §3 W3 — reference absent, search space reported | Landed, but the path is **fail-fast, not a settle bail** (below) |
+| §5 ABI 19 → 20, restamps, the three-place schema pin | Landed. The pin was **watched failing once** before it was watched passing |
+
+### Measured figures
+
+`ArcaneTests.exe "~[gpu]"`, re-derived per configuration and committed to
+`scripts/automation-baselines.json`:
+
+| Configuration | Assertions | Cases | Previous baseline |
+|---|---|---|---|
+| Debug | **52462** | **1316** | 52431 / 1304 |
+| Release | **52462** | **1316** | 52431 / 1304 |
+| Dist | **52394** | **1310** | 52363 / 1298 |
+
++31 assertions / +12 cases in every configuration, and the Debug↔Dist gap holds at exactly the
+68 assertions / 6 cases the baseline file has always documented. `ArcaneTests.exe "[gpu]"` on
+this desk: **62042 assertions in 27 test cases**, all passing — the 25 cases that predate the
+arc, plus W1 and W3.
+
+**§7's "the six committed `~[gpu]` baselines do not move by construction" was true only of the
+scenarios, and is corrected here.** The `[witness][gpu]` cases are indeed outside the filter —
+`--list-tests "[witness]"` lists exactly W1 and W3, `--list-tests "~[gpu] [witness]"` lists
+zero — but the arc's *unit* cases are inside it, and they are the whole of the rise. The
+arithmetic reconciles exactly: 17 `TEST_CASE`s added, minus 3 schema-4 cases superseded by
+schema-5 equivalents, = 14 net, of which 2 are the `[witness][gpu]` scenarios — leaving **+12
+inside `~[gpu]`**.
+
+Golden gate, Release: `gatePassed: true` read from
+`bin/Release-windows-x86_64-md/golden-gate-summary.json`, four lanes, all `diffCount=0` and
+`maxLocalDifference=0.0`. `ArcaneRuntime/dx12/runtime-scene` is `PassedOnFallback`
+(`resolvedLevel=shared`, expected backend) — pre-existing and unrelated to this arc: only
+`vulkan/` carries a backend-level `runtime-scene.png`. `-SelfTest`: **`SELF-TEST PASSED -- all 4
+lane(s) launched and caught the broken scene`**, writing its inverted verdict to the *separate*
+`golden-gate-selftest-summary.json`, so a self-test can never overwrite a real gate verdict.
+
+### W1 — landed, at an invocation the desk corrected twice
+
+The lever held exactly as §3 designed it: the reference overwritten at **both** levels by a valid
+PNG with wrong pixels, and the comparison — the convergence predicate's third conjunct — holding
+the predicate false until both bounds are spent. Measured: `NOT CONVERGED after 7 attempt(s) /
+4889 ms`, `settleAttemptsUsed: 7`, `settleBailReason: "timeout-bound"`,
+`exitReason: "compare-failed"`, exit 3, wall 7943 ms, `diffCount: 903633` (ratio 0.99) at
+`resolvedLevel: "backend"`. *Captured fine, never agreed* — witnessed.
+
+Two of the spec's numbers were wrong, and both corrections are load-bearing:
+
+- **`--frames 60`, not the plan's 10.** `--settle` freezes the render clock, and `ShaderCompiler`
+  *dispatch* is gated on that same clock by a 200 ms debounce. At the headless fixed step of
+  1/60 s, **any frame budget below 13 freezes the clock before the debounce elapses in sim
+  time**, so queued compiles never dispatch, `IsIdle()` never becomes true, and the predicate's
+  second conjunct can never be satisfied — on *any* scene, with *any* reference. 60 is also what
+  `scripts/golden-gate.ps1` passes, so W1 and the gate now exercise the same shape of run.
+- **`--settle-timeout 4000`, not 2000.** `wallMs` is spawn→exit and so includes ~2 s of host
+  boot. At 2000 the negative control measured 2130 ms ≥ 2000 and the assertion **passed on a
+  converging run** — an assertion that could not fail on any input. At 4000 the two cases
+  separate by ~2 s in each direction (converging 2.1 s, bound-spending ~7.9 s). This is
+  `feedback_default_values_are_not_measurements` in another form: a bound not *separated* from
+  the thing it exists to exclude is not a bound.
+
+### W2 — removed, and why that is this arc's headline finding
+
+The spec's candidate lever (a no-camera scene, §3) **does not hold**, and no other content-or-CLI
+lever exists. The probe is unambiguous in both directions: at `--frames 10` the run bails
+`timeout-bound`; at `--frames 60` it reports `settleBailReason: "converged"` **with a capture
+block in the report**. The no-camera scene renders and captures perfectly well — it just renders
+nothing.
+
+The derivation, verified in source rather than inferred from the probe:
+
+1. `io.settleCaptureFailed = !io.previousCaptureValid` (`RuntimeFrame.cpp:893`) is the **only**
+   writer, and `previousCaptureValid` is set true by every attempt whose `ReadCapture` returned
+   true (`:872`). So `capture-failed` requires **every** attempt's readback to fail.
+2. **The identity that closes it.** `graphFrame.capture = willBeLastFrame && (screenshot||report)`
+   (`RuntimeFrame.cpp:619,627`) is evaluated in `RenderGraph` before the frame counter advances;
+   the settle branch runs only when `pastBase` (`:701`, gated at `:735`), evaluated in
+   `CaptureTail` after the counter advances. **They are the same frame predicate, by design** —
+   the comment at `:606-618` says so in prose. With `--report` present, every settle attempt is
+   therefore preceded by a frame that armed the readback node. The editor host states the same
+   identity in a single variable (`EditorAppFrame.cpp:2794-2798`, gate at `:2878`), so it is not
+   an escape hatch either.
+3. What remains is genuine GPU/driver failure only: `read == false` at `:740` requires
+   `ReadCapture` to refuse, and it refuses in exactly two places — the capture node never ran
+   (`NriGraphContext.cpp:1915`) or `MapBuffer` returned null (`:1933-1936`). **No scene and no
+   command line can express either.**
+
+`--crash-gpu N` was considered and rejected: it faults the device, `device-lost` breaks
+`MainLoop` ahead of the bail, `SettleVerdictReached` is therefore false and `SetSettle` is never
+called — the report would carry no settle keys at all, let alone `capture-failed`.
+
+Per this spec's own standing constraint — *the lever must be content or CLI, never a host code
+change whose only purpose is to be broken* (§3) — W2 was not written. Two consequences worth
+stating plainly:
+
+- **The `RuntimeFrame.cpp:893` distinction remains only half-witnessed.** W1's mirror assertion
+  (`settleBailReason != "capture-failed"`) is the observable half; the positive half stays
+  covered where it is actually reachable, at the unit level
+  (`ArcaneTests/src/VerifyReportTest.cpp`, which calls `SetSettle(..., captureFailed=true)`
+  directly).
+- **This is a finding about the host, not a gap in the harness.** §1 asserted the distinction was
+  built "because an agent needs to tell them apart". That remains true — but one side of it is
+  unreachable from outside the process, which is worth knowing before anyone designs a scenario
+  against it again.
+
+### W3 — landed; the absence is fail-fast, not a settle bail
+
+The missing-reference path does not bail out of the settle loop, because it never enters it.
+Measured: exit **4**, `exitReason: "compare-missing-reference"`, `framesRendered: 0`, and the
+settle keys **absent rather than zeroed** — `SetSettle` is guarded on `SettleVerdictReached`,
+whose own doc comment names exactly this case. `RuntimeApp::MainLoop` resolves `--compare` before
+boot completes and fail-fasts on `ReferenceLevel::None`; the report-writer's `exitReason` chain
+checks `m_compareMissingFatal` **before** `settleFailed`, specifically so this case cannot
+misreport as `settle-not-converged`. `compare.triedPaths` carries both candidates in order,
+backend-keyed first, shared second — §5's whole point, machine-readable, delivered.
+
+A naive expectation (`settle-not-converged` at some non-zero attempt count) would have been
+wrong. The test pins the *absence* of the settle keys precisely because that is what separates W3
+from "W1 with a different reference".
+
+### The watched failure
+
+§5 predicted the three-place schema constant would be its own anti-drift test. It was, and it
+fired verbatim with the header at 5 and `golden-gate.ps1` still at 4:
+
+```
+SELF-TEST FAILED -- reportSchemaMax has DRIFTED: the engine publishes 5, this script has 4.
+Change BOTH in the same commit: VerifyReport::kSchemaVersion and this script's $script:ReportSchemaMax.
+```
+
+— accompanied by all four lanes going `Indeterminate` ("schemaVersion 5, outside this gate's
+supported range 3..4") and by the vacuity guard ("A gate that cannot fail is not a gate"). Arc A's
+pin works, and has now been observed working.
+
+### Parked — a host defect this arc found and deliberately did not fix
+
+**`--frames <13` combined with `--settle` can never converge, on any scene** (the clock freezes
+before the 200 ms shader-compile debounce, above), yet the host's bail message reads *"timeout
+governed -- raise --settle-timeout"* — a knob that cannot help. This is exactly the
+send-the-caller-to-a-useless-knob failure the settle vocabulary was built to prevent, and it is a
+second instance the vocabulary does not currently name. It is out of scope here (Arc B is the
+grader layer only, §2), and is recorded for whoever unparks automation.
