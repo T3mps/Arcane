@@ -319,4 +319,41 @@ namespace Arcane::AssetPipeline
 
         return false;
     }
+
+    std::optional<fs::path> CookSession::ResolveCurrentArtifactPath(const fs::path& projectDir,
+                                                                      const Guid& guid) const
+    {
+        const fs::path contentDir = projectDir / "Content";
+        const fs::path intermediateDir = projectDir / "Intermediate";
+        const ArtifactStore store(intermediateDir);
+
+        // Deliberately NOT store.RebuildIndexFromScan()/Lookup() -- see the header
+        // comment: that index resolves a Guid shared by an orphaned artifact (an old
+        // cook key still on disk after a `.meta` settings edit) and the current one
+        // non-deterministically. Scanning sources and recomputing today's key directly
+        // sidesteps the ambiguity entirely, same discipline CookProject/CheckProject
+        // already use for staleness.
+        for (const fs::path& source : EnumerateTextureSources(contentDir))
+        {
+            fs::path metaPath = source;
+            metaPath += ".meta";
+
+            const std::optional<SourceMeta> meta = ReadSourceMeta(metaPath);
+            if (!meta || meta->guid != guid) continue;   // wrong/unreadable source -- keep scanning
+
+            const std::optional<std::vector<std::byte>> bytes = ReadWholeFileBytes(source);
+            if (!bytes) return std::nullopt;   // the one matching source is unreadable
+
+            const std::uint64_t cookKey = ComputeCookKey(*bytes, meta->settings, kTextureImporterVersion);
+            const fs::path artifactPath = store.PathFor(cookKey);
+
+            std::error_code ec;
+            if (!fs::exists(artifactPath, ec))
+                return std::nullopt;   // uncooked/stale -- NEVER fall back to another key
+
+            return artifactPath;
+        }
+
+        return std::nullopt;   // no source under Content/ carries this guid
+    }
 }

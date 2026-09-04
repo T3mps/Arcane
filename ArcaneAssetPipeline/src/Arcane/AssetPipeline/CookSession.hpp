@@ -94,6 +94,25 @@ namespace Arcane::AssetPipeline
         // the start of every CookProject call).
         [[nodiscard]] const std::unordered_map<Guid, std::string>& LastFailures() const;
 
+        // Resolves the CURRENT on-disk artifact path for `guid`: finds its source under
+        // projectDir/Content, recomputes TODAY's cook key from the source's CURRENT
+        // bytes + settings (the exact same key math CookProject/CheckProject use), and
+        // returns store.PathFor(that key) IFF a file already exists there. Deliberately
+        // NEVER goes through ArtifactStore::RebuildIndexFromScan/Lookup: that index maps
+        // one Guid -> ONE cook key by last-write-wins over recursive_directory_iterator
+        // order (undefined by contract), so when an orphaned artifact from an earlier
+        // `.meta` settings edit still sits on disk under its OLD key -- both it and the
+        // current artifact carry the SAME sourceGuid header -- the index can resolve to
+        // either one non-deterministically. This function sidesteps that ambiguity
+        // entirely by never consulting the index, exactly the same "existence-check on
+        // the CURRENT key only" discipline CookProject/CheckProject already use for
+        // staleness. Returns nullopt when no source matches `guid`, OR when the source's
+        // CURRENT artifact hasn't been cooked yet (uncooked/stale) -- NEVER falls back to
+        // any other artifact, orphaned or otherwise. Read-only: never imports, never
+        // writes. arccook's --dump-dds is this function's only production caller today.
+        [[nodiscard]] std::optional<std::filesystem::path> ResolveCurrentArtifactPath(
+            const std::filesystem::path& projectDir, const Guid& guid) const;
+
     private:
         ProgressFn m_progress;
         ImporterFn m_importer;

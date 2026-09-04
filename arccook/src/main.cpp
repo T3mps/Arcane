@@ -12,7 +12,6 @@
 #include "DdsDump.hpp"
 
 #include <Arcane/AssetPipeline/ArtifactFormat.hpp>
-#include <Arcane/AssetPipeline/ArtifactStore.hpp>
 #include <Arcane/AssetPipeline/CookSession.hpp>
 #include <Arcane/Cli/Cli.hpp>
 #include <Arcane/Guid.hpp>
@@ -72,20 +71,28 @@ int main(int argc, char** argv)
 
         // Cook first -- --dump-dds is a debug AID over a current artifact, not a bare
         // reader of whatever happens to already be on disk. The result itself is
-        // unused here: a failed cook for THIS guid surfaces below as "no cooked
-        // artifact for guid", which is the more specific, actionable message.
+        // unused here: a failed cook for THIS guid surfaces below as "no CURRENT
+        // cooked artifact for guid", which is the more specific, actionable message.
         [[maybe_unused]] const CookResult dumpCookResult = session.CookProject(projectDir);
 
-        ArtifactStore store(projectDir / "Intermediate");
-        store.RebuildIndexFromScan();
-        const std::optional<std::uint64_t> key = store.Lookup(*guid);
-        if (!key)
+        // ResolveCurrentArtifactPath, NEVER an ArtifactStore::RebuildIndexFromScan +
+        // Lookup round-trip: that index maps a Guid to ONE cook key by last-write-wins
+        // over an undefined directory-iteration order, so if an earlier `.meta`
+        // settings edit left an orphaned artifact on disk under its OLD key (same
+        // sourceGuid header as the current one), Lookup could non-deterministically
+        // return the STALE key instead of today's. ResolveCurrentArtifactPath
+        // recomputes today's key directly from the source's current bytes + settings
+        // and never falls back to any other artifact -- see CookSession.hpp.
+        const std::optional<std::filesystem::path> artifactPath =
+            session.ResolveCurrentArtifactPath(projectDir, *guid);
+        if (!artifactPath)
         {
-            std::fprintf(stderr, "arccook: no cooked artifact for guid %s\n", guid->ToString().c_str());
+            std::fprintf(stderr, "arccook: no CURRENT cooked artifact for guid %s "
+                                  "(uncooked or stale)\n", guid->ToString().c_str());
             return 1;
         }
 
-        const std::optional<LoadedArtifact> artifact = ReadTextureArtifact(store.PathFor(*key));
+        const std::optional<LoadedArtifact> artifact = ReadTextureArtifact(*artifactPath);
         if (!artifact)
         {
             std::fprintf(stderr, "arccook: artifact for guid %s failed to load\n", guid->ToString().c_str());

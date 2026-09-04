@@ -282,3 +282,60 @@ TEST_CASE("pipeline: a corrupt source memoizes its failure across two sessions, 
     CHECK_FALSE(sessionTwo.LastFailures().at(guid).empty());
     REQUIRE(secondFired.size() == 1u);   // the failure is observable again, from the memo alone.
 }
+
+// ---- Fix-loop finding: ResolveCurrentArtifactPath must never resolve an orphan --------
+
+TEST_CASE("pipeline: ResolveCurrentArtifactPath selects the CURRENT cook key, never an orphaned one", "[pipeline]")
+{
+    // A `.meta` settings edit leaves the ORIGINAL artifact on disk under its OLD cook
+    // key -- an orphan Task 5 explicitly permits (no sweep this task) -- while BOTH the
+    // orphan and the fresh artifact carry the SAME sourceGuid header (ArtifactFormat
+    // never changes a texture's identity, only its cook key, on a settings edit). The
+    // fix-loop finding: --dump-dds used to resolve via ArtifactStore::
+    // RebuildIndexFromScan + Lookup, whose Guid -> key index is last-write-wins over an
+    // undefined directory-iteration order across exactly this pair of files -- so it
+    // could non-deterministically hand back the STALE artifact. This pins the fix:
+    // ResolveCurrentArtifactPath must select the artifact at TODAY's recomputed cook
+    // key, and nothing else, every time.
+    const fs::path project = TempProjectDir("resolve_current_artifact");
+    const fs::path png = project / "Content" / "textures" / "a.png";
+    WritePngFile(png, 4, 4, SolidPixels(4, 4, 5, 6, 7, 255));
+    const Guid guid = Guid::Generate();
+    WriteMetaSidecar(png, guid);
+
+    CookSession session;
+    REQUIRE(session.CookProject(project).cooked == 1u);
+
+    const fs::path orphanPath = ExpectedArtifactPath(project, png, TextureMetaSettings{});
+    REQUIRE(fs::exists(orphanPath));
+
+    // Flip srgb -- a NEW cook key. The OLD artifact is never deleted (no sweep this
+    // task): it becomes the orphan, sourceGuid header unchanged.
+    nlohmann::json flipped;
+    flipped["srgb"] = false;
+    WriteMetaSidecar(png, guid, flipped);
+    REQUIRE(session.CookProject(project).cooked == 1u);
+
+    TextureMetaSettings newSettings{};
+    newSettings.srgb = false;
+    const fs::path currentPath = ExpectedArtifactPath(project, png, newSettings);
+    REQUIRE(fs::exists(currentPath));
+    REQUIRE(fs::exists(orphanPath));          // the orphan is still there, same guid header
+    REQUIRE(orphanPath != currentPath);       // two distinct files, both claiming this guid
+
+    const std::optional<fs::path> resolved = session.ResolveCurrentArtifactPath(project, guid);
+    REQUIRE(resolved.has_value());
+    CHECK(*resolved == currentPath);
+    CHECK(*resolved != orphanPath);           // THE pin: never the orphan, deterministically
+
+    // A guid with no matching source at all resolves to nothing.
+    CHECK_FALSE(session.ResolveCurrentArtifactPath(project, Guid::Generate()).has_value());
+
+    // A guid WITH a matching source that has never been cooked also resolves to
+    // nothing -- "current key has no artifact" must never fall back to any other file.
+    const fs::path uncookedPng = project / "Content" / "textures" / "uncooked.png";
+    WritePngFile(uncookedPng, 4, 4, SolidPixels(4, 4, 9, 9, 9, 255));
+    const Guid uncookedGuid = Guid::Generate();
+    WriteMetaSidecar(uncookedPng, uncookedGuid);
+    CHECK_FALSE(session.ResolveCurrentArtifactPath(project, uncookedGuid).has_value());
+}
