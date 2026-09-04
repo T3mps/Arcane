@@ -26,13 +26,20 @@
 // with `model` and `baseColor` this is EXACTLY 128 bytes -- Vulkan's
 // GUARANTEED MINIMUM maxPushConstantsSize, with ZERO headroom left. See
 // MeshNode.cpp's MeshRootConstants comment before adding another field here.
+//
+// Task 8/10 spent the one headroom this budget had without growing it:
+// normalMatrixCol0.w -- otherwise always zero, like col1/col2's own `.w` --
+// carries the per-instance MATERIAL SLOT into this bindless array below, as
+// RAW BITS (asuint/asfloat). See ps_main.
 struct MeshConstants
 {
     float4x4 model;             // model -> world
-    float4   baseColor;         // linear tint, multiplies the albedo sample
-    float4   normalMatrixCol0;  // NormalMatrixFor(model)'s columns 0..2, xyz
-    float4   normalMatrixCol1;  // used / w padding -- see the comment above
-    float4   normalMatrixCol2;
+    float4   baseColor;         // linear tint; the WHOLE albedo when the material
+                                 // slot below is kMeshInvalidMaterialSlot (the flat path)
+    float4   normalMatrixCol0;  // xyz: NormalMatrixFor(model) col0. w: the packed
+                                 // MATERIAL SLOT (Task 8/10) -- raw bits, never a float
+    float4   normalMatrixCol1;  // xyz used / w padding, always zero
+    float4   normalMatrixCol2;  // xyz used / w padding, always zero
 };
 
 #if SPIRV
@@ -56,10 +63,13 @@ cbuffer MeshConstantsCB : register(b0)
 
 // PER-FRAME, and an ordinary descriptor-set constant buffer rather than more
 // root constants: the view-projection alone is 64 bytes and root/push-constant
-// budget is the scarcest thing in a pipeline layout. b1 in the implicit space0,
-// which is where MeshNode's descriptor set is (THE REGISTER-SPACE RULE,
-// Batch2DNode.hpp).
-cbuffer MeshFrameCB : register(b1)
+// budget is the scarcest thing in a pipeline layout. b1 in space1 (Task 8/10
+// moved it there from the implicit space0 -- see MeshNode.cpp's
+// CreateBindings, THE REGISTER-SPACE RULE: adding a root SAMPLER for the
+// bindless array below meant root items and every ordinary descriptor set
+// had to become distinct spaces, where before only root CONSTANTS shared
+// space0 with the one set that existed).
+cbuffer MeshFrameCB : register(b1, space1)
 {
     float4x4 g_viewProjection;
     // xyz: a UNIT vector pointing TOWARD the light, ALREADY NORMALIZED by
@@ -115,8 +125,29 @@ VSOutput vs_main(VSInput input)
     return output;
 }
 
-Texture2D    g_Albedo  : register(t0);
+// THE BINDLESS MATERIAL TABLE (Task 8/10). A FIXED-size array -- not an
+// unbounded/runtime one -- because BindlessTable's capacity is decided once
+// at MeshNode creation and never resized (BindlessTable.hpp's SLOT POLICY).
+// kMeshBindlessCapacity MUST EQUAL MeshNode.cpp's own kBindlessCapacity
+// literal EXACTLY: CreateBindings() there sizes the matching descriptor
+// range to it. There is no compiler that checks the two agree, so this
+// comment (and its mirror in MeshNode.cpp) is the whole of that contract.
+// t0 in space2, matching MeshNode.cpp's bindlessSetDesc (THE REGISTER-SPACE
+// RULE, this file's MeshFrameCB comment above).
+#define kMeshBindlessCapacity 256
+Texture2D<float4> g_BindlessTextures[kMeshBindlessCapacity] : register(t0, space2);
+
+// THE ONE IMMUTABLE SAMPLER (Task 10's slice-one sampler strategy): a ROOT/
+// static sampler baked into the pipeline layout (MeshNode.cpp's
+// CreateBindings, RootSamplerDesc) rather than a descriptor-set entry -- s0
+// stays in the implicit space0, where this shader's OTHER root item (b0)
+// already is, which is exactly what THE REGISTER-SPACE RULE requires once a
+// layout carries a root sampler.
 SamplerState g_Sampler : register(s0);
+
+// BindlessTable::kInvalidSlot (BindlessTable.hpp), restated here because
+// HLSL cannot include a C++ header. Keep numerically identical.
+#define kMeshInvalidMaterialSlot 0xFFFFFFFFu
 
 float4 ps_main(VSOutput input) : SV_Target0
 {
@@ -125,7 +156,29 @@ float4 ps_main(VSOutput input) : SV_Target0
     // the "no directional light" case and dot() handles it; normalize() would
     // not.
     const float  ndotl  = saturate(dot(n, g_lightDirection.xyz));
-    const float4 albedo = g_Albedo.Sample(g_Sampler, input.uv) * g_baseColor;
+
+    // THE MATERIAL SLOT (Task 8/10), unpacked as RAW BITS from
+    // normalMatrixCol0.w -- see MeshConstants' own comment (and
+    // MeshNode.hpp's MeshInstance::materialSlot) for why this is asuint,
+    // never a float read: `kMeshInvalidMaterialSlot` is a NaN bit pattern
+    // and only ever safe reinterpreted, not converted.
+    const uint slot = asuint(g_normalMatrixCol0.w);
+
+    // kMeshInvalidMaterialSlot selects F2a's ORIGINAL flat path BIT-FOR-
+    // BIT: the old code sampled a 1x1 opaque-white texel and multiplied it
+    // by g_baseColor, and 1.0 * x is exact under IEEE-754, so using
+    // g_baseColor directly is that same result with the now-redundant
+    // sample removed, not an approximation of it. Any other slot must have
+    // come from THIS pipeline's own MeshNode::AddMaterial. The index is
+    // wrapped in NonUniformResourceIndex even though it is uniform across
+    // one draw's invocations (a root/push-constant value, not a per-pixel
+    // varying): it is still a SHADER-COMPUTED index into the array rather
+    // than a compile-time constant, which is the standard bindless-
+    // indexing idiom on both backends.
+    const float4 albedo = (slot == kMeshInvalidMaterialSlot)
+        ? g_baseColor
+        : g_BindlessTextures[NonUniformResourceIndex(slot)].Sample(g_Sampler, input.uv) * g_baseColor;
+
     const float3 lit    = albedo.rgb * (g_ambient.rgb + g_lightColor.rgb * ndotl);
     return float4(lit, albedo.a);
 }

@@ -17,12 +17,14 @@
 //     cube/sphere); cgltf/.arcmesh is a later arc, and no library is vendored
 //     for it here.
 //   * NOT the material system. A per-instance linear tint (MeshInstance::
-//     baseColor) is the whole of it, and t0 is this node's own white texel for
-//     every draw. A per-instance albedo Guid resolved into per-image descriptor
-//     sets was written and then REMOVED at Task 7's first fix round -- nothing
-//     exercised it and Task 8's BindlessTable replaces t0 outright. That
-//     table's per-instance MATERIAL INDEX is what belongs here next; see
-//     MeshInstance's own NO PER-INSTANCE ALBEDO block.
+//     baseColor) plus, since Task 10, an optional per-instance MATERIAL SLOT
+//     (MeshInstance::materialSlot) indexing this node's own BindlessTable is
+//     the whole of it. A per-instance albedo Guid resolved into per-image
+//     descriptor sets was written and then REMOVED at Task 7's first fix
+//     round -- nothing exercised it, and Task 8/10's BindlessTable replaced
+//     the fixed white-texel t0 binding it would have competed with outright.
+//     Feeding the table from a REAL cooked albedo (rather than a test's own
+//     generated textures) is Task 11's, not this node's.
 //
 // WHERE IT SITS IN THE FRAME: after `batch2d`, before the post chain and the
 // tonemap. The canvas is MINTED AND CLEARED by AddBatch2DNode, so the mesh
@@ -33,22 +35,50 @@
 // DeclareGraphFrame's THE CLEAR SEAM block), not this node's.
 //
 // WHAT THIS NODE OWNS (all persistent, all created once at Create()):
-//   * the 1x1 white texel + its SHADER_RESOURCE view -- what t0 binds for
-//     EVERY draw, mirroring Batch2DNode's untextured path;
-//   * one linear/repeat sampler (REPEAT, not clamp: a mesh's UVs tile);
+//   * the BINDLESS MATERIAL TABLE (Task 8/10) -- a BindlessTable of
+//     kBindlessCapacity SRV slots, gated on NriDeviceCaps::SupportsBindless()
+//     at Create() (tier 0 refuses the node outright rather than render wrong
+//     pixels) -- and the ONE
+//     descriptor set its array lives in. This REPLACED the node's own 1x1
+//     white texel + t0 binding outright: `kInvalidSlot` (MeshInstance::
+//     materialSlot's default) now selects a FLAT path in mesh.hlsl that
+//     skips sampling entirely, bit-for-bit F2a's old white-times-tint
+//     arithmetic;
 //   * the pipeline layout -- root constants b0 (the 128-byte MeshConstants
 //     from mesh.hlsl: model + tint + the per-instance normal matrix, Task 8/
-//     F2a) plus descriptor set space0 = { b1 frame CB, t0 albedo texture, s0
-//     sampler };
-//   * one descriptor pool, and ONE descriptor set PER FRAME SLOT out of it
-//     (CreateSets) -- written ONCE each, at Create, and never rewritten. That
-//     is the same discipline Batch2DNode keeps, and stronger: the sets exist
-//     before the first frame does, so there is no window in which the GPU
-//     could be reading one (and NRI cannot free a single set anyway);
+//     F2a) at the implicit rootRegisterSpace, ONE immutable ROOT SAMPLER at
+//     s0 (Task 10's slice-one trilinear sampler -- also rootRegisterSpace;
+//     THE REGISTER-SPACE RULE below is why that space can no longer be
+//     shared with either descriptor set), plus TWO ordinary descriptor sets:
+//     space1 = { b1 frame CB }, space2 = { t0 bindless material array };
+//   * one descriptor pool, and ONE descriptor set PER FRAME SLOT for the b1
+//     CB (CreateSets) -- written ONCE each, at Create, and never rewritten.
+//     That is the same discipline Batch2DNode keeps, and stronger: the sets
+//     exist before the first frame does, so there is no window in which the
+//     GPU could be reading one (and NRI cannot free a single set anyway).
+//     The bindless set is DIFFERENT: allocated ONCE (not per frame slot,
+//     since its contents do not vary by frame) and written INCREMENTALLY by
+//     AddMaterial as slots are Added -- see that method's own comment for
+//     the synchronization contract that discipline costs;
 //   * the per-frame-slot constant-buffer arena the b1 views name.
 // The PIPELINE is not owned here: it comes from the vehicle's shared
 // NriPipelineCache, keyed by (shader pair, layout, canvas format, DEPTH
 // format, blend), so a format change is a cache miss rather than a stale PSO.
+//
+// THE REGISTER-SPACE RULE (Batch2DNode.hpp states it in full, verified
+// against Source/Validation/DeviceVal.hpp's `rootDescriptorNum ||
+// rootSamplerNum` guard): NRI refuses a pipeline layout whose
+// rootRegisterSpace equals any descriptor set's registerSpace, but ONLY
+// once the layout carries a root DESCRIPTOR or root SAMPLER -- root
+// CONSTANTS alone are exempt (VK lowers them to push constants, outside the
+// set-space numbering entirely). Batch2DNode has neither and keeps
+// everything at space0; THIS layout is the first in the tree to add a root
+// SAMPLER (Task 10's immutable s0), so its root space and its two ordinary
+// sets must all be distinct register spaces -- see MeshNode.cpp's
+// CreateBindings() for the concrete numbers and mesh.hlsl for the matching
+// `register(..., spaceN)` annotations, including the SPIR-V register-shift
+// entries (compile-shaders.bat / ShaderConventions.hpp::kSpirvArgs) that
+// have to agree with them.
 //
 // WHY THE SETS ARE PER FRAME SLOT and Batch2DNode's built-in ones are not: a
 // set here carries the per-frame constant buffer b1, whose (buffer, offset) is
@@ -72,6 +102,7 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/MeshBuilder.hpp>      // MeshData / MeshVertex -- the CPU geometry
+#include <Arcane/Render/Nri/BindlessTable.hpp> // MeshInstance::materialSlot's kInvalidSlot default
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/FramePacing.hpp>      // kSwapchainFramesInFlight
@@ -177,22 +208,43 @@ namespace Arcane
         // that restriction.)
         glm::mat4 model{1.0f};
 
-        // LINEAR, and may exceed 1.0 (the canvas is RGBA16F). It multiplies
-        // the albedo sample, and since t0 is the node's white texel for every
-        // instance today (see NO PER-INSTANCE ALBEDO below), it IS the
-        // instance's colour.
+        // LINEAR, and may exceed 1.0 (the canvas is RGBA16F). When
+        // `materialSlot` is `kInvalidSlot` (the default) this IS the
+        // instance's colour outright -- mesh.hlsl's flat path, bit-for-bit
+        // F2a's original behaviour (see `materialSlot`'s own comment).
+        // Otherwise it multiplies the bindless texture's sample, same as
+        // F2a's white-texel arithmetic always meant it to.
         glm::vec4 baseColor{1.0f, 1.0f, 1.0f, 1.0f};
 
-        // ===== NO PER-INSTANCE ALBEDO FIELD, DELIBERATELY =====
-        // mesh.hlsl samples t0, and this node binds its 1x1 white texel there
-        // for every draw. A `Guid albedo` resolved through the shared
-        // NriTextureCache into per-(image, frame slot) descriptor sets was
-        // written and then REMOVED at Task 7's first fix round: Task 8's
-        // BindlessTable replaces t0, the descriptor ranges and the pipeline
-        // layout outright, so that binding could not survive one more commit,
-        // and nothing in the suite or either host exercised it in the
-        // meantime. Task 8's per-instance MATERIAL INDEX is the field that
-        // belongs here, and it arrives with the table that gives it meaning.
+        // ===== THE MATERIAL SLOT (Task 8/10) =====
+        // Indexes THIS NODE'S OWN BindlessTable -- a slot AddMaterial handed
+        // back for an SRV Added to a DIFFERENT MeshNode's table names a
+        // different node's texture entirely (or nothing), a silent
+        // wrong-picture bug the type system cannot catch, so callers must
+        // never mix them. `kInvalidSlot`, the default, is what a mesh
+        // carrying no bindless material uses -- it selects mesh.hlsl's FLAT
+        // path (baseColor alone, no sample), which is F2a's original
+        // behaviour: an all-white 1x1 t0 texel times baseColor, and 1.0 * x
+        // is exact under IEEE-754, so this is that same result with the now-
+        // redundant sample removed, not an approximation of it. A `Guid
+        // albedo` resolved through the shared NriTextureCache into a
+        // BindlessTable slot was written and then REMOVED at Task 7's first
+        // fix round; Task 8/10's BindlessTable + this field is what finally
+        // replaces it, and feeding a REAL cooked albedo in here (rather than
+        // a test's own generated texture) is Task 11's.
+        //
+        // PACKED INTO THE ROOT CONSTANTS' `normalMatrixCol0.w` by
+        // MeshNode::Record (the 128-byte MeshRootConstants budget has ZERO
+        // headroom -- see PackedNormalMatrix's comment in MeshNode.cpp --
+        // so this field does not grow that struct). `col0.w` is otherwise
+        // unused (the shader reads only `.xyz` off every normal-matrix
+        // column, mesh.hlsl:111-113, and C++ zeroes every column's `.w` at
+        // PackedNormalMatrix construction, MeshNode.cpp), so writing the
+        // slot there and reading it back via asuint/asfloat is safe --
+        // `kInvalidSlot` (0xFFFFFFFF) is a NaN bit pattern, which is only
+        // ever safe as RAW BITS. Never route `col0` through float
+        // arithmetic once the slot has been written into it.
+        std::uint32_t materialSlot = BindlessTable::kInvalidSlot;
     };
 
     struct MeshSceneDesc
@@ -242,11 +294,16 @@ namespace Arcane
     class ARCANE_API MeshNode
     {
     public:
-        // Loads mesh_vs/mesh_ps through the vehicle, creates the white texel +
-        // sampler + descriptor pool + constant arena, and registers the
-        // pipeline layout. Null (already logged + latched) on any failure --
-        // a vehicle that cannot build this node must not render a frame that
-        // silently draws nothing.
+        // Loads mesh_vs/mesh_ps through the vehicle, creates the bindless
+        // material table + descriptor pool + constant arena, and registers
+        // the pipeline layout. Null (already logged + latched) on any
+        // failure -- a vehicle that cannot build this node must not render a
+        // frame that silently draws nothing. Refuses FIRST, before any of
+        // that, on a device whose NriDeviceCaps::SupportsBindless() is false
+        // (bindless tier 0) -- the house refuse-loudly posture: this node's
+        // material table cannot mean anything on hardware that cannot index
+        // it, so it does not get built at all rather than rendering wrong
+        // pixels or silently falling back.
         static std::unique_ptr<MeshNode> Create(NriGraphContext& context);
 
         // SAFETY NET, NOT THE PATH -- same shape as ~Batch2DNode. The
@@ -258,8 +315,39 @@ namespace Arcane
 
         // Buries every NRI object this node owns at `fence` and empties it.
         // Idempotent. The caller picks the fence for the same reason
-        // NriPipelineCache::Clear does.
+        // NriPipelineCache::Clear does. Buries the bindless table's own
+        // descriptors too (BindlessTable::Release), so an SRV a caller Added
+        // via AddMaterial is discharged the same way everything else here
+        // is -- the caller still owns the TEXTURE that view names (see
+        // AddMaterial's own comment) and must release that separately.
         void Release(Graveyard& graveyard, std::uint64_t fence);
+
+        // Registers `srv` in this node's BindlessTable and writes it into
+        // the bindless descriptor set at the slot BindlessTable::Add
+        // returns -- `kInvalidSlot` on refusal (null `srv`, the table is at
+        // capacity, or Create() never built one). The returned slot is what
+        // a MeshInstance::materialSlot names to select `srv` at draw time.
+        //
+        // OWNERSHIP: exactly BindlessTable::Add's -- this node's table takes
+        // ownership of the VIEW (`srv`) and discharges it at Release()/
+        // destruction. The TEXTURE `srv` views is a SEPARATE object this
+        // node never touches; the caller (Task 11's feed, or a test's own
+        // generated texture) still owns it and must outlive both the view
+        // and this node's use of the returned slot.
+        //
+        // SYNCHRONIZATION: the write is a plain UpdateDescriptorRanges with
+        // no update-after-bind support (CreateBindings' bindless range
+        // carries PARTIALLY_BOUND only) -- safe before this set has ever
+        // been bound to a command buffer, the same "written once, before
+        // first use" discipline CreateSets keeps for the per-frame sets.
+        // Calling this again to add a material AFTER a frame that bound
+        // this set is already in flight is NOT safe without external
+        // synchronization (a fence wait) or without this range gaining
+        // ALLOW_UPDATE_AFTER_SET -- neither of which Task 10's synchronous,
+        // all-materials-before-the-first-frame proof needs. Task 11's
+        // live-streaming feed is what will have to revisit this if it needs
+        // to add a material once frames are already in flight.
+        [[nodiscard]] std::uint32_t AddMaterial(nri::Descriptor* srv);
 
         // Resolves the PIPELINE for the colour format the frame being declared
         // will attach. Called at DECLARATION time for the reason
@@ -269,10 +357,12 @@ namespace Arcane
         //
         // NO SCENE PARAMETER. It took one while instances carried a per-image
         // albedo Guid that had to be made resident and given descriptor sets
-        // here; with t0 fixed at the node's white texel there is nothing about
-        // the scene left to resolve ahead of recording, and an unread parameter
-        // is only something for a reader to reason about. Task 8's bindless
-        // table is what gives this a scene-dependent job again.
+        // here; the bindless table (Task 8/10) resolves per-instance material
+        // state through AddMaterial instead, called ahead of Record by
+        // whoever feeds this node (a test, or Task 11's scene resolver) --
+        // there is still nothing about the SCENE (as opposed to the node's
+        // own table) for Prepare to resolve, and an unread parameter is only
+        // something for a reader to reason about.
         //
         // Safe to skip entirely -- Record() then reports the missing pipeline
         // once and draws nothing.
@@ -310,6 +400,24 @@ namespace Arcane
         // alignment, so on that backend this is exactly one region.
         static constexpr std::uint32_t kFrameCbMaxBytes = 256;
 
+        // THE BINDLESS MATERIAL TABLE'S CAPACITY (Task 8/10). PUBLIC (unlike
+        // most of this node's internals) for the same reason kFrameCbMaxBytes
+        // is: a device-less [nri] case (RenderGraphTest.cpp) recomputes
+        // PoolSizes()'s expectations from first principles rather than
+        // copying the implementation, and needs a real symbol to do that
+        // with rather than a second hardcoded 256. A slice-one FIXED size --
+        // BindlessTable never resizes (BindlessTable.hpp's SLOT POLICY) --
+        // chosen well above what any scene in this arc names (the four-cube
+        // proof uses four slots) and above the spec's cited eventual high-
+        // water mark (T3's 144-entry box-projected cubemap array, spec
+        // section 6). MUST EQUAL mesh.hlsl's own kMeshBindlessCapacity
+        // literal EXACTLY: CreateBindings() sizes the t0/space2 descriptor
+        // range to this number, and the shader declares its Texture2D array
+        // with the matching literal -- HLSL cannot include this header, so
+        // that one comparison has no compiler behind it; this comment (and
+        // its mirror in mesh.hlsl) is the whole of that contract.
+        static constexpr std::uint32_t kBindlessCapacity = 256;
+
         // The arena's region stride on a device whose
         // deviceDesc.memoryAlignment.constantBufferOffset is
         // `constantBufferAlignment`. PURE and public for the same reason
@@ -336,28 +444,38 @@ namespace Arcane
             return (std::uint64_t)frameSlot * regionStride;
         }
 
-        // THE DESCRIPTOR POOL'S CAPACITY, as pure arithmetic over the ONE
-        // dimension this node's sets have (the frame slot). PUBLIC and
-        // separated from the creation call for the reason Batch2DNode::
-        // PoolSizes is: a pool's sizes are fixed at creation and NRI cannot
-        // free a single set, so a capacity that does not cover what the node
-        // allocates is not a compile error and not a wrong pixel -- it is an
-        // AllocateDescriptorSets failure part-way through Create at the desk.
-        // Each set carries exactly three descriptors (b1, t0, s0), so all
-        // three per-type maxima equal the set count.
+        // THE DESCRIPTOR POOL'S CAPACITY. PUBLIC and separated from the
+        // creation call for the reason Batch2DNode::PoolSizes is: a pool's
+        // sizes are fixed at creation and NRI cannot free a single set, so a
+        // capacity that does not cover what the node allocates is not a
+        // compile error and not a wrong pixel -- it is an
+        // AllocateDescriptorSets failure part-way through Create at the
+        // desk. TWO dimensions now (Task 8/10): kSwapchainFramesInFlight
+        // frame-CB sets (one CONSTANT_BUFFER descriptor each) plus ONE
+        // bindless set (kBindlessCapacity TEXTURE descriptors, MeshNode.cpp).
+        // The root sampler consumes NO pool budget at all -- RootSamplerDesc
+        // is "not allocated from a descriptor pool" (NRIDescs.h:1077).
         [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes() noexcept;
 
     private:
         MeshNode() = default;
 
         bool Init(NriGraphContext& context);
-        bool CreateWhiteTexel();
+        // Creates the BindlessTable (gated on Caps().SupportsBindless() by
+        // Init(), before this runs). Called before CreateBindings(), which
+        // sizes the bindless descriptor range off kBindlessCapacity alone
+        // (a compile-time constant) rather than this table, so ordering
+        // between the two is not otherwise load-bearing.
+        bool CreateBindless();
         bool CreateBindings();
         bool CreateConstantArena();
-        // Allocates the per-frame-slot descriptor sets and writes each one's
-        // three ranges: that slot's b1 view, the white texel at t0, the
-        // sampler at s0. Written ONCE, at Create, and never again -- which is
-        // what keeps ResetDescriptorPool and its fence discipline out of this
+        // Allocates the per-frame-slot descriptor sets (one b1 CONSTANT_
+        // BUFFER range each, written once) and the ONE bindless descriptor
+        // set (its range left UNWRITTEN here -- AddMaterial writes it
+        // incrementally, and CreateBindings' PARTIALLY_BOUND flag is what
+        // makes allocating it with an empty range legal). Written ONCE, at
+        // Create, and never again for the per-frame sets -- which is what
+        // keeps ResetDescriptorPool and its fence discipline out of this
         // node entirely.
         bool CreateSets();
 
@@ -420,10 +538,11 @@ namespace Arcane
         // and the frame slot -- arrive as Record/Prepare parameters.
         // Batch2DNode carries one that nothing reads; this does not copy it.
         //
-        // NO NriTextureCache POINTER EITHER, since the fix round that removed
-        // per-instance albedo: this node's only image is its OWN white texel,
-        // so it borrows nothing from the vehicle's shared residency cache.
-        // Task 8's bindless table is what makes it a consumer of that cache.
+        // NO NriTextureCache POINTER, still: this node's own images are its
+        // BindlessTable's SRVs, Added (and therefore owned/resolved) by
+        // whoever calls AddMaterial -- a test, or Task 11's scene resolver,
+        // which is the consumer of the shared residency cache, not this
+        // node. AddMaterial only needs the already-resolved nri::Descriptor*.
 
         // Bytecode is OWNED BY THE VEHICLE (NriGraphContext's bin cache) and
         // outlives this node -- which the pipeline cache's fill contract
@@ -431,9 +550,14 @@ namespace Arcane
         // callback returns.
         std::span<const std::uint8_t> m_vs, m_ps;
 
-        nri::Texture*    m_white     = nullptr;
-        nri::Descriptor* m_whiteView = nullptr;
-        nri::Descriptor* m_sampler   = nullptr;
+        // THE BINDLESS MATERIAL TABLE (Task 8/10) and the ONE descriptor set
+        // its array lives in -- allocated once, at Create, and written
+        // INCREMENTALLY by AddMaterial (contrast m_sets below, written once
+        // and never again). Null/kInvalidLayout-shaped until CreateBindless/
+        // CreateSets succeed; Create() refuses the whole node rather than
+        // leave either half-built (Init()'s `&&` chain).
+        std::unique_ptr<BindlessTable> m_bindless;
+        nri::DescriptorSet*            m_bindlessSet = nullptr;
 
         nri::DescriptorPool* m_pool = nullptr;
         std::uint32_t        m_layoutId = NriPipelineCache::kInvalidLayout;
@@ -445,10 +569,12 @@ namespace Arcane
         std::uint64_t    m_arenaStride = 0;
         nri::Descriptor* m_frameCbView[kSwapchainFramesInFlight]{};
 
-        // THE descriptor sets, one per frame slot. Each binds that slot's b1
-        // region, the white texel at t0 and the sampler at s0, and is written
-        // ONCE at Create and never again. One dimension only (the frame slot),
-        // because b1 is the only thing in a set that differs frame to frame.
+        // THE PER-FRAME descriptor sets, one per frame slot. Each binds only
+        // that slot's b1 region now (Task 8/10 moved the white texel/sampler
+        // out -- see m_bindless/m_bindlessSet above and the root sampler in
+        // CreateBindings), written ONCE at Create and never again. One
+        // dimension only (the frame slot), because b1 is the only thing in
+        // a set that differs frame to frame.
         nri::DescriptorSet* m_sets[kSwapchainFramesInFlight]{};
 
         // MEMBERS, not locals, and that is load-bearing:

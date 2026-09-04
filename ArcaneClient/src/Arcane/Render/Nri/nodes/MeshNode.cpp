@@ -20,6 +20,7 @@
 
 #undef ERROR
 
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -70,6 +71,16 @@ namespace Arcane
         // without either shrinking something already here or moving a field
         // out to a per-instance descriptor-bound buffer instead -- read this
         // comment before adding one.
+        //
+        // TASK 8/10 SPENT THE ONE HEADROOM THIS BUDGET HAD WITHOUT GROWING
+        // IT: `col0.w` is otherwise always zero (every column's constructor
+        // below sets `w` to exactly 0.0f, matching mesh.hlsl's own "used /
+        // w padding" comment on col1/col2), so MeshNode::Record writes
+        // MeshInstance::materialSlot into it AFTER construction, as RAW
+        // BITS (asuint/asfloat symmetry with mesh.hlsl) -- never through
+        // this struct's own float-valued constructor or any float
+        // arithmetic on `col0` afterward, because `BindlessTable::
+        // kInvalidSlot` (0xFFFFFFFF) is a NaN bit pattern.
         struct PackedNormalMatrix
         {
             glm::vec4 col0{1.0f, 0.0f, 0.0f, 0.0f};
@@ -159,6 +170,27 @@ namespace Arcane
         m_device    = &context.Device();
         m_pipelines = &context.Pipelines();
 
+        // THE GATE (Task 8/10 Step 1), FIRST -- before shader loads, before
+        // any NRI object exists. NriDeviceCaps::SupportsBindless()'s FIRST
+        // production call site: this node's whole material model is a
+        // descriptor-indexed table, which means nothing on hardware that
+        // cannot dynamically index a descriptor array (bindless tier 0).
+        // The house refuse-loudly posture: producing wrong pixels (or
+        // silently degrading to some other path) on tier-0 hardware is
+        // worse than refusing to build the node at all, so this returns
+        // false -- Create() turns that into a logged, latched null -- rather
+        // than limping on with an unbuilt or half-built table.
+        if (!m_device->Caps().SupportsBindless())
+        {
+            ARC_ERROR("[nri-graph] MeshNode: refused -- this device reports bindless tier 0 "
+                      "(NriDeviceCaps::SupportsBindless() is false). The opaque mesh pass's "
+                      "material table is a descriptor-indexed bindless array; there is no "
+                      "correct way to build it on hardware that cannot dynamically index a "
+                      "descriptor array, so the node is refused here rather than rendering "
+                      "wrong pixels or silently degrading.");
+            return false;
+        }
+
         m_vs = context.ShaderBytecode(kMeshVs);
         m_ps = context.ShaderBytecode(kMeshPs);
         if (m_vs.empty() || m_ps.empty())
@@ -201,71 +233,18 @@ namespace Arcane
         // why that qualified claim is the honest one.
         m_uploads.reserve(kInitialUploadSlots);
 
-        return CreateWhiteTexel() && CreateBindings() && CreateConstantArena() && CreateSets();
+        return CreateBindless() && CreateBindings() && CreateConstantArena() && CreateSets();
     }
 
-    bool MeshNode::CreateWhiteTexel()
+    bool MeshNode::CreateBindless()
     {
-        const nri::CoreInterface& core = m_device->Core();
-
-        nri::TextureDesc textureDesc = {};
-        textureDesc.type      = nri::TextureType::TEXTURE_2D;
-        textureDesc.usage     = nri::TextureUsageBits::SHADER_RESOURCE;
-        textureDesc.format    = nri::Format::RGBA8_UNORM;
-        textureDesc.width     = 1;
-        textureDesc.height    = 1;
-        textureDesc.depth     = 1;
-        textureDesc.mipNum    = 1;
-        textureDesc.layerNum  = 1;
-        textureDesc.sampleNum = 1;
-        if (!ARC_NRI_CHECK(core.CreateCommittedTexture(m_device->Device(), nri::MemoryLocation::DEVICE,
-                                                        0.0f, textureDesc, m_white))
-            || !m_white)
+        // Gated already, in Init(), before this ever runs -- a device that
+        // reached here has bindless tier > 0.
+        m_bindless = BindlessTable::Create(*m_device, kBindlessCapacity);
+        if (!m_bindless)
         {
-            ARC_ERROR("[nri-graph] MeshNode: the 1x1 white texel could not be created");
-            return false;
-        }
-        core.SetDebugName(m_white, "nri-graph mesh white");
-
-        // Through NRI's OWN helper rather than a hand-rolled staging buffer +
-        // transition pair, for the reason Batch2DNode gives at the identical
-        // call: the phase's rule is that graph code records no CmdBarrier of
-        // its own, and the helper means this file contains none at all.
-        nri::HelperInterface helper = {};
-        if (!ARC_NRI_CHECK(nriGetInterface(m_device->Device(), NRI_INTERFACE(nri::HelperInterface), &helper)))
-        {
-            ARC_ERROR("[nri-graph] MeshNode: HelperInterface unavailable -- cannot upload the white texel");
-            return false;
-        }
-
-        const std::uint32_t whitePixel = 0xFFFFFFFFu;
-        nri::TextureSubresourceUploadDesc subresource = {};
-        subresource.slices     = &whitePixel;
-        subresource.sliceNum   = 1;
-        subresource.rowPitch   = 4;
-        subresource.slicePitch = 4;
-
-        nri::TextureUploadDesc upload = {};
-        upload.subresources = &subresource;
-        upload.texture      = m_white;
-        upload.after        = { nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE,
-                                nri::StageBits::FRAGMENT_SHADER };
-        upload.planes       = nri::PlaneBits::ALL;
-        if (!ARC_NRI_CHECK(helper.UploadData(*m_device->GraphicsQueue(), &upload, 1, nullptr, 0)))
-        {
-            ARC_ERROR("[nri-graph] MeshNode: the white texel upload failed");
-            return false;
-        }
-
-        nri::TextureViewDesc viewDesc = {};
-        viewDesc.texture  = m_white;
-        viewDesc.type     = nri::TextureView::TEXTURE;
-        viewDesc.format   = textureDesc.format;
-        viewDesc.mipNum   = 1;
-        viewDesc.layerNum = 1;
-        if (!ARC_NRI_CHECK(core.CreateTextureView(viewDesc, m_whiteView)) || !m_whiteView)
-        {
-            ARC_ERROR("[nri-graph] MeshNode: the white texel's shader-resource view could not be created");
+            ARC_ERROR("[nri-graph] MeshNode: BindlessTable::Create failed -- the material table "
+                      "could not be built (already logged: capacity {})", kBindlessCapacity);
             return false;
         }
         return true;
@@ -273,19 +252,18 @@ namespace Arcane
 
     nri::DescriptorPoolDesc MeshNode::PoolSizes() noexcept
     {
-        // ONE set per frame slot, and that is the whole of it. A set carries
-        // b1 (which is per frame slot), t0 (this node's white texel, the same
-        // one every frame) and s0 (likewise), so the frame slot is the only
-        // dimension a set can vary along. Each set carries exactly three
-        // descriptors -- one of each type -- so the three per-type maxima are
-        // all the same number as the set count.
-        constexpr std::uint32_t kSets = kSwapchainFramesInFlight;
+        // TWO dimensions now (Task 8/10): kSwapchainFramesInFlight per-frame
+        // sets, each carrying exactly ONE CONSTANT_BUFFER descriptor (b1);
+        // and ONE bindless set carrying up to kBindlessCapacity TEXTURE
+        // descriptors. The root sampler (CreateBindings) consumes NO pool
+        // budget at all -- static/immutable samplers are not allocated from
+        // a descriptor pool on either backend (NRIDescs.h:1077's own words).
+        constexpr std::uint32_t kFrameSets = kSwapchainFramesInFlight;
 
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum  = kSets;
-        poolDesc.textureMaxNum        = kSets;
-        poolDesc.samplerMaxNum        = kSets;
-        poolDesc.constantBufferMaxNum = kSets;
+        poolDesc.descriptorSetMaxNum  = kFrameSets + 1;      // +1: the one bindless set
+        poolDesc.constantBufferMaxNum = kFrameSets;          // b1, one per frame slot
+        poolDesc.textureMaxNum        = kBindlessCapacity;   // the bindless array's own budget
         return poolDesc;
     }
 
@@ -293,67 +271,109 @@ namespace Arcane
     {
         const nri::CoreInterface& core = m_device->Core();
 
-        // Linear + REPEAT, unlike Batch2DNode's clamped sampler: a mesh's UVs
-        // are a surface parametrization that legitimately tiles, where a sprite
-        // atlas's must not bleed across cell edges.
-        nri::SamplerDesc samplerDesc = {};
-        samplerDesc.filters.min  = nri::Filter::LINEAR;
-        samplerDesc.filters.mag  = nri::Filter::LINEAR;
-        samplerDesc.filters.mip  = nri::Filter::LINEAR;
-        samplerDesc.addressModes = { nri::AddressMode::REPEAT, nri::AddressMode::REPEAT,
-                                     nri::AddressMode::REPEAT };
-        samplerDesc.mipMax       = 16.0f;
-        if (!ARC_NRI_CHECK(core.CreateSampler(m_device->Device(), samplerDesc, m_sampler)) || !m_sampler)
-        {
-            ARC_ERROR("[nri-graph] MeshNode: sampler creation failed");
-            return false;
-        }
-
-        // THE LAYOUT. mesh.hlsl's register map: b0 root constants (model,
-        // tint, and the packed per-instance normal matrix -- see
-        // MeshRootConstants above and its 128-byte budget), and ONE space-0
-        // descriptor set carrying the frame CB b1, the albedo t0 and the
-        // sampler s0.
+        // THE LAYOUT (Task 8/10 rewrote this in full). mesh.hlsl's register
+        // map: b0 root constants (model, tint, the packed per-instance
+        // normal matrix -- see MeshRootConstants above and its 128-byte
+        // budget) plus ONE immutable ROOT SAMPLER at s0, both at the
+        // implicit rootRegisterSpace; and TWO ordinary descriptor sets --
+        // space1 = { b1 frame CB }, space2 = { t0 bindless material array }.
         //
-        // THE REGISTER-SPACE RULE (Batch2DNode.hpp's header states it in full):
-        // NRI refuses rootRegisterSpace == a set's registerSpace only when the
-        // layout carries root DESCRIPTORS or root SAMPLERS. This layout carries
-        // neither -- root CONSTANTS are exempt, because VK lowers them to push
-        // constants which live outside the set-space entirely -- so both may be
-        // space 0, which mesh.hlsl's implicit space0 leaves no choice about.
-        //
-        // RANGE ORDER: CBV, then SRV, then sampler. NRI's D3D12 backend merges
-        // consecutive ranges of the same D3D12 range type into one root table,
-        // so this shape costs three root parameters rather than a scattered
-        // more.
+        // THE REGISTER-SPACE RULE (Batch2DNode.hpp's header states it in
+        // full, verified against Source/Validation/DeviceVal.hpp's
+        // `rootDescriptorNum || rootSamplerNum` guard): NRI refuses
+        // rootRegisterSpace == a set's registerSpace ONLY when the layout
+        // carries a root DESCRIPTOR or root SAMPLER -- root CONSTANTS alone
+        // are exempt, because VK lowers them to push constants, outside the
+        // set-space numbering entirely. Before this task the layout carried
+        // only root constants, so keeping the one descriptor set AND
+        // rootRegisterSpace both at space0 was legal and is what
+        // mesh.hlsl's then-implicit space0 registers required. Adding the
+        // root sampler below trips that guard, so root items stay at
+        // space0 (rootRegisterSpace unchanged -- b0 and s0 keep their
+        // existing implicit-space0 HLSL registers, UNCHANGED text) and the
+        // two ordinary sets move to space1/space2 instead (mesh.hlsl's b1/
+        // t0 gain explicit `spaceN` annotations to match). This also has to
+        // agree with the SPIR-V register-shift table dxc is invoked with
+        // (compile-shaders.bat's SPIRV_FLAGS / ShaderConventions.hpp::
+        // kSpirvArgs): NRI adds the SAME per-resource-type binding offset
+        // to a range regardless of which space it is in
+        // (Source/VK/PipelineLayoutVK.hpp's `bindingOffsets` array), so
+        // dxc must shift b-registers in space1 and t-registers in space2 by
+        // the same amounts it already shifts space0's -- both files gained
+        // a `-fvk-b-shift 256 1` / `-fvk-t-shift 0 2` pair for exactly that
+        // reason.
         nri::RootConstantDesc rootConstant = {};
-        rootConstant.registerIndex = 0;
+        rootConstant.registerIndex = 0;                       // b0
         rootConstant.size          = sizeof(MeshRootConstants);
         // BOTH stages: the vertex shader reads `model`, the pixel shader reads
-        // `baseColor`. Narrowing this to VERTEX would break the tint on D3D12,
-        // where root-parameter visibility is a hard root-signature property.
+        // `baseColor` (and, since Task 10, the packed material slot).
+        // Narrowing this to VERTEX would break the tint on D3D12, where
+        // root-parameter visibility is a hard root-signature property.
         rootConstant.shaderStages  = nri::StageBits::VERTEX_SHADER | nri::StageBits::FRAGMENT_SHADER;
 
-        // b1 is read by both stages too (viewProjection in the VS, the light in
-        // the PS); t0/s0 are fragment-only.
-        nri::DescriptorRangeDesc ranges[3] = {};
-        ranges[0].baseRegisterIndex = 1;                       // b1
-        ranges[0].descriptorNum     = 1;
-        ranges[0].descriptorType    = nri::DescriptorType::CONSTANT_BUFFER;
-        ranges[0].shaderStages      = nri::StageBits::VERTEX_SHADER | nri::StageBits::FRAGMENT_SHADER;
-        ranges[1].baseRegisterIndex = 0;                       // t0
-        ranges[1].descriptorNum     = 1;
-        ranges[1].descriptorType    = nri::DescriptorType::TEXTURE;
-        ranges[1].shaderStages      = nri::StageBits::FRAGMENT_SHADER;
-        ranges[2].baseRegisterIndex = 0;                       // s0
-        ranges[2].descriptorNum     = 1;
-        ranges[2].descriptorType    = nri::DescriptorType::SAMPLER;
-        ranges[2].shaderStages      = nri::StageBits::FRAGMENT_SHADER;
+        // THE ONE IMMUTABLE SAMPLER (Task 10's slice-one sampler strategy,
+        // spec section 6): trilinear -- LINEAR min/mag/mip, unchanged from
+        // the sampler this replaces -- and REPEAT (a mesh's UVs tile),
+        // anisotropy as the ONE tunable knob. A ROOT/static sampler
+        // (NRIDescs.h:1022's own words), baked into the pipeline layout
+        // itself rather than a descriptor-set entry: it consumes no pool
+        // budget and needs no per-frame write -- CmdSetPipelineLayout
+        // pushes it automatically on both backends (VK:
+        // CommandBufferVK::SetPipelineLayout's "Push immutable samplers"
+        // block; D3D12: a D3D12_STATIC_SAMPLER_DESC baked into the root
+        // signature at creation) -- and Record()'s existing
+        // CmdSetPipelineLayout call is already what does that; nothing new
+        // to call here.
+        nri::RootSamplerDesc rootSampler = {};
+        rootSampler.registerIndex     = 0;                    // s0
+        rootSampler.desc.filters.min  = nri::Filter::LINEAR;
+        rootSampler.desc.filters.mag  = nri::Filter::LINEAR;
+        rootSampler.desc.filters.mip  = nri::Filter::LINEAR;
+        rootSampler.desc.addressModes = { nri::AddressMode::REPEAT, nri::AddressMode::REPEAT,
+                                          nri::AddressMode::REPEAT };
+        rootSampler.desc.anisotropy   = 16;    // THE ONE KNOB -- see the comment above
+        rootSampler.desc.mipMax       = 16.0f;
+        rootSampler.shaderStages      = nri::StageBits::FRAGMENT_SHADER;   // only ps_main samples
 
-        nri::DescriptorSetDesc setDesc = {};
-        setDesc.registerSpace = 0;
-        setDesc.ranges        = ranges;
-        setDesc.rangeNum      = 3;
+        // set (array index 0, space1): b1, the per-frame-slot frame CB --
+        // read by both stages (viewProjection in the VS, the light in the
+        // PS).
+        nri::DescriptorRangeDesc frameRange = {};
+        frameRange.baseRegisterIndex = 1;                     // b1
+        frameRange.descriptorNum     = 1;
+        frameRange.descriptorType    = nri::DescriptorType::CONSTANT_BUFFER;
+        frameRange.shaderStages      = nri::StageBits::VERTEX_SHADER | nri::StageBits::FRAGMENT_SHADER;
+
+        nri::DescriptorSetDesc frameSetDesc = {};
+        frameSetDesc.registerSpace = 1;
+        frameSetDesc.ranges        = &frameRange;
+        frameSetDesc.rangeNum      = 1;
+
+        // set (array index 1, space2): the bindless material array at t0 --
+        // a FIXED size (kBindlessCapacity, matched by mesh.hlsl's own
+        // literal), not VARIABLE_SIZED_ARRAY: BindlessTable's capacity is
+        // decided once at MeshNode creation and never resized
+        // (BindlessTable.hpp's SLOT POLICY), so there is nothing for
+        // AllocateDescriptorSets' variableDescriptorNum argument to do
+        // here (CreateSets passes 0). PARTIALLY_BOUND: a table that has
+        // not yet Added every slot leaves the unused tail genuinely
+        // unwritten, which is legal by construction -- mesh.hlsl only ever
+        // indexes a slot AddMaterial actually wrote -- rather than a
+        // validation violation.
+        nri::DescriptorRangeDesc bindlessRange = {};
+        bindlessRange.baseRegisterIndex = 0;                  // t0
+        bindlessRange.descriptorNum     = kBindlessCapacity;
+        bindlessRange.descriptorType    = nri::DescriptorType::TEXTURE;
+        bindlessRange.shaderStages      = nri::StageBits::FRAGMENT_SHADER;
+        bindlessRange.flags             = nri::DescriptorRangeBits::ARRAY
+                                         | nri::DescriptorRangeBits::PARTIALLY_BOUND;
+
+        nri::DescriptorSetDesc bindlessSetDesc = {};
+        bindlessSetDesc.registerSpace = 2;
+        bindlessSetDesc.ranges        = &bindlessRange;
+        bindlessSetDesc.rangeNum      = 1;
+
+        nri::DescriptorSetDesc setDescs[2] = { frameSetDesc, bindlessSetDesc };
 
         // Value-initialized then assigned field by field: NriPipelineCache's
         // DEDUP CONTRACT (the desc is compared byte-wise, so its padding has to
@@ -362,8 +382,10 @@ namespace Arcane
         layoutDesc.rootRegisterSpace = 0;
         layoutDesc.rootConstants     = &rootConstant;
         layoutDesc.rootConstantNum   = 1;
-        layoutDesc.descriptorSets    = &setDesc;
-        layoutDesc.descriptorSetNum  = 1;
+        layoutDesc.rootSamplers      = &rootSampler;
+        layoutDesc.rootSamplerNum    = 1;
+        layoutDesc.descriptorSets    = setDescs;
+        layoutDesc.descriptorSetNum  = 2;
         layoutDesc.shaderStages      = nri::StageBits::VERTEX_SHADER | nri::StageBits::FRAGMENT_SHADER;
 
         m_layoutId = m_pipelines->RegisterLayout(layoutDesc);
@@ -374,11 +396,13 @@ namespace Arcane
         }
 
         // The pool. NOTHING IN IT IS EVER REWRITTEN WHILE THE GPU MIGHT READ
-        // IT -- every set is written once, at Create, and never again -- which
-        // is what keeps ResetDescriptorPool and its fence discipline out of
-        // this file, exactly as in Batch2DNode. Here it is stronger than there:
-        // the sets are allocated and written before the first frame exists, so
-        // there is no window at all.
+        // IT -- every per-frame set is written once, at Create, and never
+        // again -- which is what keeps ResetDescriptorPool and its fence
+        // discipline out of this file, exactly as in Batch2DNode. Here it is
+        // stronger than there: the per-frame sets are allocated and written
+        // before the first frame exists, so there is no window at all. The
+        // bindless set is the one exception -- see AddMaterial's own
+        // synchronization comment.
         const nri::DescriptorPoolDesc poolDesc = PoolSizes();
         if (!ARC_NRI_CHECK(core.CreateDescriptorPool(m_device->Device(), poolDesc, m_pool)) || !m_pool)
         {
@@ -453,12 +477,21 @@ namespace Arcane
     {
         const nri::CoreInterface& core = m_device->Core();
         nri::PipelineLayout* layout = m_pipelines->Layout(m_layoutId);
+        if (!layout)
+        {
+            ARC_ERROR("[nri-graph] MeshNode: no layout to allocate descriptor sets from");
+            return false;
+        }
 
         for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
         {
-            if (!layout
-                || !ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0,
-                                                               &m_sets[slot], 1, 0))
+            // setIndex 0: the ARRAY position of frameSetDesc in
+            // CreateBindings' setDescs[2] -- an ARRAY INDEX, not a register
+            // space (Source/VK/PipelineLayoutVK.hpp's `m_BindingInfo.sets`
+            // is a 1:1 copy of `descriptorSets[]` in array order, and
+            // `SetDescriptorSet` indexes it by that same position).
+            if (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0,
+                                                           &m_sets[slot], 1, 0))
                 || !m_sets[slot])
             {
                 ARC_ERROR("[nri-graph] MeshNode: descriptor-set allocation failed for frame slot "
@@ -467,62 +500,101 @@ namespace Arcane
                 return false;
             }
 
-            // EVERY `descriptors` SOURCE BELOW MUST OUTLIVE THE
-            // UpdateDescriptorRanges CALL: UpdateDescriptorRangeDesc::
-            // descriptors is a POINTER TO AN ARRAY dereferenced inside the
-            // call, so a single descriptor is passed as the address of a
-            // variable that has to still be alive when the call runs. Hence
-            // all three locals are declared in THIS scope.
-            const nri::Descriptor* cb      = m_frameCbView[slot];
-            const nri::Descriptor* texture = m_whiteView;
-            const nri::Descriptor* sampler = m_sampler;
+            // `cb`'s ADDRESS must outlive the UpdateDescriptorRanges call
+            // below: UpdateDescriptorRangeDesc::descriptors is a POINTER TO
+            // AN ARRAY dereferenced inside the call, so a single descriptor
+            // is passed as the address of a variable that has to still be
+            // alive when the call runs.
+            const nri::Descriptor* cb = m_frameCbView[slot];
 
-            nri::UpdateDescriptorRangeDesc updates[3] = {};
-            updates[0].descriptorSet = m_sets[slot];
-            updates[0].rangeIndex    = 0;   // b1
-            updates[0].descriptors   = &cb;
-            updates[0].descriptorNum = 1;
-            updates[1].descriptorSet = m_sets[slot];
-            updates[1].rangeIndex    = 1;   // t0
-            updates[1].descriptors   = &texture;
-            updates[1].descriptorNum = 1;
-            updates[2].descriptorSet = m_sets[slot];
-            updates[2].rangeIndex    = 2;   // s0
-            updates[2].descriptors   = &sampler;
-            updates[2].descriptorNum = 1;
-            core.UpdateDescriptorRanges(updates, 3);
+            nri::UpdateDescriptorRangeDesc update = {};
+            update.descriptorSet = m_sets[slot];
+            update.rangeIndex    = 0;   // b1 -- the only range in this set now
+            update.descriptors   = &cb;
+            update.descriptorNum = 1;
+            core.UpdateDescriptorRanges(&update, 1);
+        }
+
+        // THE BINDLESS SET -- setIndex 1 (bindlessSetDesc's array position),
+        // allocated ONCE for the node's whole lifetime, not per frame slot:
+        // unlike b1 there is nothing in it that differs frame to frame.
+        // Its range is left UNWRITTEN here -- AddMaterial writes each slot
+        // as it is Added, and CreateBindings' PARTIALLY_BOUND flag is what
+        // makes allocating it with a still-empty range legal.
+        if (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 1, &m_bindlessSet, 1, 0))
+            || !m_bindlessSet)
+        {
+            ARC_ERROR("[nri-graph] MeshNode: the bindless material descriptor set could not be "
+                      "allocated -- the pool holds {} sets (PoolSizes)",
+                      PoolSizes().descriptorSetMaxNum);
+            return false;
         }
         return true;
     }
 
+    std::uint32_t MeshNode::AddMaterial(nri::Descriptor* srv)
+    {
+        // See this method's own doc comment in MeshNode.hpp for the full
+        // ownership and synchronization contract.
+        if (!m_bindless || !m_bindlessSet)
+            return BindlessTable::kInvalidSlot;
+
+        const std::uint32_t slot = m_bindless->Add(srv);
+        if (slot == BindlessTable::kInvalidSlot)
+            return BindlessTable::kInvalidSlot;   // null srv, or the table is full -- BindlessTable
+                                                   // already warned (once) or refused silently, per
+                                                   // its own Add() contract
+
+        const nri::CoreInterface& core = m_device->Core();
+        // `view`'s ADDRESS must outlive UpdateDescriptorRanges -- same rule
+        // CreateSets' `cb` local follows, and for the same reason.
+        const nri::Descriptor* view = srv;
+
+        nri::UpdateDescriptorRangeDesc update = {};
+        update.descriptorSet  = m_bindlessSet;
+        update.rangeIndex     = 0;      // the bindless array is the set's only range
+        update.baseDescriptor = slot;   // WHERE in the array -- not an append
+        update.descriptors    = &view;
+        update.descriptorNum  = 1;
+        core.UpdateDescriptorRanges(&update, 1);
+        return slot;
+    }
+
     MeshNode::~MeshNode()
     {
-        if (!m_device || (!m_white && !m_whiteView && !m_sampler && !m_pool && !m_arena))
-            return;
-
-        ARC_WARN("[nri-graph] MeshNode destroyed with live NRI objects -- either Create() failed "
-                 "part way (an ERROR above says which step) or its owner never called Release(). "
-                 "Destroying directly behind a DeviceWaitIdle.");
-        const nri::CoreInterface& core = m_device->Core();
-        (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
-        if (m_pool) core.DestroyDescriptorPool(m_pool);
-        for (nri::Descriptor*& view : m_frameCbView)
-            if (view) { core.DestroyDescriptor(view); view = nullptr; }
-        if (m_arena)
+        // m_bindless resets UNCONDITIONALLY below, regardless of this guard
+        // (and regardless of whether m_device is even non-null): BindlessTable's
+        // own destructor is a no-op once Release() has emptied it (its guard is
+        // `!m_device || m_slots.empty()`), and a genuine leak -- Release() never
+        // called -- is exactly the case that destructor's own WARN + DeviceWaitIdle
+        // + destroy exists to catch, so this function does not need to duplicate
+        // that check, and a default-constructed MeshNode (m_bindless still null)
+        // resets a null unique_ptr harmlessly.
+        if (m_device && (m_pool || m_arena))
         {
-            if (m_arenaCpu) core.UnmapBuffer(*m_arena);
-            core.DestroyBuffer(m_arena);
+            ARC_WARN("[nri-graph] MeshNode destroyed with live NRI objects -- either Create() failed "
+                     "part way (an ERROR above says which step) or its owner never called Release(). "
+                     "Destroying directly behind a DeviceWaitIdle.");
+            const nri::CoreInterface& core = m_device->Core();
+            (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
+            if (m_pool) core.DestroyDescriptorPool(m_pool);
+            for (nri::Descriptor*& view : m_frameCbView)
+                if (view) { core.DestroyDescriptor(view); view = nullptr; }
+            if (m_arena)
+            {
+                if (m_arenaCpu) core.UnmapBuffer(*m_arena);
+                core.DestroyBuffer(m_arena);
+            }
+            // The sets (including the bindless one) are owned by the pool
+            // destroyed above -- NRI has no per-set destroy, so forgetting
+            // the pointers is the whole of it.
+            for (nri::DescriptorSet*& set : m_sets)
+                set = nullptr;
+            m_bindlessSet = nullptr;
+            m_pool = nullptr;
+            m_arena = nullptr; m_arenaCpu = nullptr;
         }
-        // The sets are owned by the pool destroyed above -- NRI has no
-        // per-set destroy, so forgetting the pointers is the whole of it.
-        for (nri::DescriptorSet*& set : m_sets)
-            set = nullptr;
-        if (m_sampler)   core.DestroyDescriptor(m_sampler);
-        if (m_whiteView) core.DestroyDescriptor(m_whiteView);
-        if (m_white)     core.DestroyTexture(m_white);
-        m_pool = nullptr;
-        m_arena = nullptr; m_arenaCpu = nullptr;
-        m_sampler = nullptr; m_whiteView = nullptr; m_white = nullptr;
+        m_bindless.reset();
     }
 
     void MeshNode::Release(Graveyard& graveyard, std::uint64_t fence)
@@ -530,6 +602,17 @@ namespace Arcane
         if (!m_device)
             return;
         const nri::CoreInterface* core = &m_device->Core();
+
+        // THE BINDLESS TABLE FIRST: BindlessTable::Release buries every
+        // occupied slot's descriptor at `fence` (its own comment) --
+        // discharging views this node's table owns per AddMaterial's
+        // OWNERSHIP contract, NOT the textures they view (a caller's own,
+        // per that same contract). The unique_ptr itself is NOT reset here
+        // -- see ~MeshNode's comment for why an idempotent Release() leaving
+        // an empty-but-alive BindlessTable behind is the right shape.
+        if (m_bindless)
+            m_bindless->Release(graveyard, fence);
+        m_bindlessSet = nullptr;   // owned by the pool buried below
 
         // Descriptors before the resources they view -- the graveyard runs
         // burials in order, so a view can never outlive its texture (or, for
@@ -566,21 +649,6 @@ namespace Arcane
             m_arena = nullptr;
         }
 
-        if (m_sampler)
-        {
-            graveyard.Bury(fence, [core, d = m_sampler] { core->DestroyDescriptor(d); });
-            m_sampler = nullptr;
-        }
-        if (m_whiteView)
-        {
-            graveyard.Bury(fence, [core, d = m_whiteView] { core->DestroyDescriptor(d); });
-            m_whiteView = nullptr;
-        }
-        if (m_white)
-        {
-            graveyard.Bury(fence, [core, t = m_white] { core->DestroyTexture(t); });
-            m_white = nullptr;
-        }
         m_pipeline = nullptr;   // owned by the shared cache; the vehicle clears it
     }
 
@@ -808,14 +876,19 @@ namespace Arcane
             return fresh;
         };
 
-        // THE ONE SET this pass binds, for this frame slot -- every instance
-        // reads the same b1, the same white texel at t0 and the same sampler,
-        // so there is nothing per-instance in it to rebind. (It was per-albedo
-        // until Task 7's first fix round removed that binding; Task 8's
-        // bindless table keeps it a single set by construction.) A null here
-        // means Create() failed part way and already said so.
+        // THE TWO SETS this pass binds. set0 (frame slot) carries only b1
+        // now (Task 8/10 moved the white texel/sampler out -- s0 is a root/
+        // immutable sampler CmdSetPipelineLayout pushes automatically,
+        // needing no CmdSetDescriptorSet of its own); every instance reads
+        // the same b1, so there is nothing per-instance in it to rebind.
+        // set1 is the bindless material array -- ONE set for the node's
+        // whole lifetime, not per frame slot, bound here once per pass
+        // exactly like set0 (its CONTENTS may still be growing via
+        // AddMaterial between passes; what does not change mid-pass is
+        // WHICH set is bound). A null here means Create() failed part way
+        // and already said so.
         nri::DescriptorSet* set = frameSlot < kSwapchainFramesInFlight ? m_sets[frameSlot] : nullptr;
-        if (!set)
+        if (!set || !m_bindlessSet)
         {
             GraphError("MeshNode: no descriptor set for this frame slot -- nothing recorded");
             return;
@@ -825,13 +898,22 @@ namespace Arcane
         // ONE layout for the whole pass, so this is bound once. CmdSetPipeline
         // Layout invalidates the bound sets and root constants on both
         // backends, which is exactly why it must not be re-issued per draw --
-        // and why the set below is bound AFTER it.
+        // and why the sets below are bound AFTER it. It is also what pushes
+        // the root/immutable s0 sampler automatically on both backends
+        // (CommandBufferVK::SetPipelineLayout's "Push immutable samplers"
+        // block; a D3D12 static sampler needs no runtime bind call at all)
+        // -- nothing else in this function touches s0.
         core.CmdSetPipelineLayout(context.cmd, nri::BindPoint::GRAPHICS, *layout);
 
-        nri::SetDescriptorSetDesc setDesc = {};
-        setDesc.setIndex      = 0;
-        setDesc.descriptorSet = set;
-        core.CmdSetDescriptorSet(context.cmd, setDesc);
+        nri::SetDescriptorSetDesc frameSetDesc = {};
+        frameSetDesc.setIndex      = 0;   // frameSetDesc's array position, CreateBindings
+        frameSetDesc.descriptorSet = set;
+        core.CmdSetDescriptorSet(context.cmd, frameSetDesc);
+
+        nri::SetDescriptorSetDesc bindlessSetDesc = {};
+        bindlessSetDesc.setIndex      = 1;   // bindlessSetDesc's array position, CreateBindings
+        bindlessSetDesc.descriptorSet = m_bindlessSet;
+        core.CmdSetDescriptorSet(context.cmd, bindlessSetDesc);
 
         core.CmdSetPipeline(context.cmd, *m_pipeline);
 
@@ -865,6 +947,16 @@ namespace Arcane
             // NormalMatrixFor's singular guard means a degenerate instance
             // gets identity here rather than NaN reaching the GPU.
             push.normalMatrix = PackedNormalMatrix(NormalMatrixFor(instance.model));
+            // THE MATERIAL SLOT (Task 8/10), packed into col0.w AFTER the
+            // line above and as RAW BITS ONLY -- PackedNormalMatrix's
+            // constructor just zeroed every column's `.w` (MeshInstance::
+            // materialSlot's own comment states the contract in full); this
+            // is the one write, and nothing may run `col0` through float
+            // arithmetic after it. `kInvalidSlot` (0xFFFFFFFF) is a NaN bit
+            // pattern, safe only as bytes -- std::bit_cast, never a numeric
+            // conversion (which would try to produce the FLOAT VALUE
+            // 4294967295.0f, not reinterpret the bits).
+            push.normalMatrix.col0.w = std::bit_cast<float>(instance.materialSlot);
             nri::SetRootConstantsDesc rootConstants = {};
             rootConstants.rootConstantIndex = 0;
             rootConstants.data              = &push;

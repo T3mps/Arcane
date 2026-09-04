@@ -7,6 +7,21 @@
 // t=0, s=128, b=256, u=384, and they MUST match what the render path binds
 // (Nri/NriDevice's VKBindingOffsets) -- if either side changes, change it
 // HERE first and fan out.
+//
+// THE SHIFT IS PER (TYPE, SPACE), NOT GLOBAL PER TYPE. dxc's -fvk-*-shift
+// applies only to the exact register space it names; NRI's own binding-
+// offset addition (Source/VK/PipelineLayoutVK.hpp's `bindingOffsets` array)
+// is NOT space-conditional -- it adds the same per-type offset to a range
+// regardless of which space the range's descriptor set declares. So every
+// HLSL source that puts a `b`/`t`/`s`/`u` register in a NON-space0 space
+// needs its own shift entry here (and in compile-shaders.bat's SPIRV_FLAGS)
+// for that (type, space) pair, or the SPIR-V binding dxc assigns and the
+// binding NRI writes descriptors to will disagree. mesh.hlsl (Task 8/10) is
+// the first source to do this: b1 moved to space1, and the bindless
+// material array sits at t0/space2 -- see the two extra shift pairs below.
+// A space that stays unlisted defaults to shift 0 (dxc's own default),
+// which happens to already be correct for `t` (whose space0 shift is also
+// 0), but is stated explicitly here rather than relied on by coincidence.
 
 #include <cstddef>
 
@@ -33,6 +48,11 @@ namespace Arcane
         "-fvk-s-shift", "128", "0",
         "-fvk-b-shift", "256", "0",
         "-fvk-u-shift", "384", "0",
+        // mesh.hlsl only (Task 8/10): b1 moved to space1, the bindless
+        // material array to t0/space2 -- see this file's header comment for
+        // why each (type, space) pair needs its own entry.
+        "-fvk-b-shift", "256", "1",
+        "-fvk-t-shift", "0",   "2",
     };
     inline constexpr std::size_t kSpirvArgCount = sizeof(kSpirvArgs) / sizeof(kSpirvArgs[0]);
 }

@@ -65,10 +65,20 @@
 #include <Arcane/Render/PickEmit.hpp>             // PickDrawable -- the id pass's input
 #include <Arcane/Render/RenderErrorLatch.hpp>     // the shared 0/0 latch every case guards
 #include <Arcane/Render/MeshBuilder.hpp>          // BuildCube -- the opaque pass's geometry
+#include <Arcane/Render/Nri/BindlessTable.hpp>    // kInvalidSlot -- the four-cube bindless proof
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>   // MeshInstance / MeshSceneDesc
 #include <Arcane/Scene/SceneCamera.hpp>           // PerspectiveProjection -- the camera under test
+
+// Extensions/NRIHelper.h: HelperInterface::UploadData, used by the four-cube
+// bindless proof's own MakeSolidTexture (mirrors MeshNode::CreateWhiteTexel's
+// CreateCommittedTexture + UploadData + CreateTextureView sequence). Placed
+// beside the other NRI-adjacent includes above, all of which already pull in
+// <NRI.h> first internally (NriDevice.hpp's own first include) -- so by the
+// time the preprocessor reaches this line the ERROR/windows.h ordering this
+// tree's NRI headers care about (NriCommon.hpp) is already settled.
+#include <Extensions/NRIHelper.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>           // lookAtRH, translate
@@ -1106,4 +1116,269 @@ TEST_CASE("mesh: a non-uniformly-scaled instance's lit-face brightness matches t
           "Lambert term (vulkan)", "[gpu][pixel][mesh][nri][vulkan]")
 {
     CheckNonUniformScaleNormalMatchesAnalyticLambert(Arcane::GraphicsBackend::Vulkan);
+}
+
+// ---------------------------------------------------------------------------
+// 10. THE BINDLESS MATERIAL TABLE (NRI Phase 4 Task 8 / F2b Task 10) -- FOUR
+//     cubes, FOUR generated solid-colour textures, FOUR distinct material
+//     slots, in ONE scene / ONE Record() call. This is the case that makes
+//     bindless PROVEN rather than merely present: a binding bug that ignores
+//     the per-instance index (a stale root constant, a wrong range write, an
+//     off-by-one slot) makes every cube read the SAME texture -- or falls
+//     back to the flat baseColor path -- and this fails; a correct
+//     implementation makes each cube's centre pixel dominated by ITS OWN
+//     texture's channel(s).
+//
+//     Reuses case 8's proven camera/geometry rather than inventing new
+//     numbers: four SMALL cubes on the z=0 plane, offset in X/Y so their
+//     on-screen footprints do not overlap, each instance's expected centre
+//     pixel located by PROJECTING its world-space centre through the SAME
+//     view/projection FillCamera built -- not a hand-derived pixel constant,
+//     which is exactly the kind of magic number a later camera or geometry
+//     change could silently desynchronise from reality. baseColor is left
+//     WHITE (1,1,1,1) on every instance so a channel-dominance assertion is
+//     entirely the BINDLESS TEXTURE's doing, never a tint faking it -- a
+//     shader that wrongly fell back to the flat path shows up as an
+//     undifferentiated white/grey cube, not an accidental channel match.
+// ---------------------------------------------------------------------------
+namespace
+{
+    // A 1x1 solid-colour RGBA8_UNORM texture + its SHADER_RESOURCE view,
+    // created and uploaded DIRECTLY through the device -- the pixel-suite
+    // way, mirroring MeshNode::CreateWhiteTexel's own CreateCommittedTexture
+    // + HelperInterface::UploadData + CreateTextureView sequence
+    // (MeshNode.cpp) rather than going through NriTextureCache, which this
+    // proof deliberately does not exercise (Task 11's route, not Task 10's).
+    //
+    // OWNERSHIP: the CALLER's, both halves. MeshNode::AddMaterial takes
+    // ownership of the VIEW only (BindlessTable::Add's own contract), never
+    // the texture it names -- so the texture must be destroyed by the
+    // caller, and only AFTER the vehicle holding the view has been torn
+    // down (a view must not outlive the texture it names -- see this
+    // case's own teardown below).
+    struct SolidTexture
+    {
+        nri::Texture*    texture = nullptr;
+        nri::Descriptor* view    = nullptr;
+    };
+
+    SolidTexture MakeSolidTexture(Arcane::NriDevice& device, std::uint8_t r, std::uint8_t g,
+                                  std::uint8_t b, std::uint8_t a)
+    {
+        const nri::CoreInterface& core = device.Core();
+        SolidTexture out;
+
+        nri::TextureDesc textureDesc = {};
+        textureDesc.type      = nri::TextureType::TEXTURE_2D;
+        textureDesc.usage     = nri::TextureUsageBits::SHADER_RESOURCE;
+        textureDesc.format    = nri::Format::RGBA8_UNORM;
+        textureDesc.width     = 1;
+        textureDesc.height    = 1;
+        textureDesc.depth     = 1;
+        textureDesc.mipNum    = 1;
+        textureDesc.layerNum  = 1;
+        textureDesc.sampleNum = 1;
+        REQUIRE(core.CreateCommittedTexture(device.Device(), nri::MemoryLocation::DEVICE, 0.0f,
+                                            textureDesc, out.texture) == nri::Result::SUCCESS);
+        REQUIRE(out.texture != nullptr);
+
+        nri::HelperInterface helper = {};
+        REQUIRE(nriGetInterface(device.Device(), NRI_INTERFACE(nri::HelperInterface), &helper)
+                == nri::Result::SUCCESS);
+
+        // RGBA8_UNORM: byte 0 is R (this machine is little-endian, so the low
+        // byte of this uint32 lands first in memory) -- the same packed-pixel
+        // idiom MeshNode::CreateWhiteTexel uses (there, all four bytes 0xFF).
+        const std::uint32_t pixel = (std::uint32_t)r | ((std::uint32_t)g << 8)
+                                   | ((std::uint32_t)b << 16) | ((std::uint32_t)a << 24);
+        nri::TextureSubresourceUploadDesc subresource = {};
+        subresource.slices     = &pixel;
+        subresource.sliceNum   = 1;
+        subresource.rowPitch   = 4;
+        subresource.slicePitch = 4;
+
+        nri::TextureUploadDesc upload = {};
+        upload.subresources = &subresource;
+        upload.texture      = out.texture;
+        upload.after        = { nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE,
+                                nri::StageBits::FRAGMENT_SHADER };
+        upload.planes       = nri::PlaneBits::ALL;
+        REQUIRE(helper.UploadData(*device.GraphicsQueue(), &upload, 1, nullptr, 0) == nri::Result::SUCCESS);
+
+        nri::TextureViewDesc viewDesc = {};
+        viewDesc.texture  = out.texture;
+        viewDesc.type     = nri::TextureView::TEXTURE;
+        viewDesc.format   = textureDesc.format;
+        viewDesc.mipNum   = 1;
+        viewDesc.layerNum = 1;
+        REQUIRE(core.CreateTextureView(viewDesc, out.view) == nri::Result::SUCCESS);
+        REQUIRE(out.view != nullptr);
+        return out;
+    }
+
+    // Projects `worldPos` through `view`/`projection` and returns its pixel
+    // coordinate in a `width`x`height` target -- COMPUTED, not a hand-derived
+    // constant, so a later camera or geometry change that shifts where a
+    // cube lands on screen cannot silently desynchronise this case from
+    // reality the way a magic pixel coordinate could.
+    //
+    // NDC +Y is the TOP of the target on both backends (MeshNode.cpp's
+    // PipelineFor WINDING comment), hence the flip in the Y term below; NDC
+    // X maps to pixel X with no flip.
+    glm::ivec2 ProjectToPixel(const glm::mat4& view, const glm::mat4& projection,
+                              const glm::vec3& worldPos, std::uint32_t width, std::uint32_t height)
+    {
+        const glm::vec4 clip = projection * view * glm::vec4(worldPos, 1.0f);
+        REQUIRE(clip.w > 0.0f);   // in front of the camera -- a REQUIRE, not a CHECK: everything
+                                  // below is meaningless against a point behind the eye
+        const glm::vec2 ndc = glm::vec2(clip.x, clip.y) / clip.w;
+        const float u = (ndc.x + 1.0f) * 0.5f;
+        const float v = (1.0f - ndc.y) * 0.5f;
+        return glm::ivec2(static_cast<int>(u * static_cast<float>(width)),
+                          static_cast<int>(v * static_cast<float>(height)));
+    }
+
+    void CheckBindlessTableIndexesFourDistinctMaterials(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        PixelVehicle v = MakeVehicle(backend);
+        Arcane::MeshNode* meshNode = v.ctx->Mesh();
+        REQUIRE(meshNode != nullptr);
+
+        // FOUR generated solid-colour textures, created directly through the
+        // device (not NriTextureCache -- Task 11's route, not this one's).
+        // Channels chosen so each is unambiguously dominant against the
+        // other three: pure red, pure green, pure blue, and cyan (green AND
+        // blue both high, red low) rather than a second primary some other
+        // texture's channel could plausibly be confused with.
+        const SolidTexture red   = MakeSolidTexture(*v.nri, 255, 0,   0,   255);
+        const SolidTexture green = MakeSolidTexture(*v.nri, 0,   255, 0,   255);
+        const SolidTexture blue  = MakeSolidTexture(*v.nri, 0,   0,   255, 255);
+        const SolidTexture cyan  = MakeSolidTexture(*v.nri, 0,   255, 255, 255);
+
+        const std::uint32_t redSlot   = meshNode->AddMaterial(red.view);
+        const std::uint32_t greenSlot = meshNode->AddMaterial(green.view);
+        const std::uint32_t blueSlot  = meshNode->AddMaterial(blue.view);
+        const std::uint32_t cyanSlot  = meshNode->AddMaterial(cyan.view);
+        // FOUR DISTINCT slots -- the property the shader's indexing has to
+        // preserve. Dense-from-0 is BindlessTable's own documented policy
+        // (BindlessTable.hpp), so this also happens to pin the order this
+        // node's table hands slots out in, but the assertions below do not
+        // otherwise depend on the exact numbers.
+        REQUIRE(redSlot   != Arcane::BindlessTable::kInvalidSlot);
+        REQUIRE(greenSlot != Arcane::BindlessTable::kInvalidSlot);
+        REQUIRE(blueSlot  != Arcane::BindlessTable::kInvalidSlot);
+        REQUIRE(cyanSlot  != Arcane::BindlessTable::kInvalidSlot);
+        CHECK(redSlot   != greenSlot);
+        CHECK(redSlot   != blueSlot);
+        CHECK(redSlot   != cyanSlot);
+        CHECK(greenSlot != blueSlot);
+        CHECK(greenSlot != cyanSlot);
+        CHECK(blueSlot  != cyanSlot);
+
+        // FOUR SMALL cubes, offset in X/Y from the origin so their on-screen
+        // footprints do not overlap (worked out against case 8's own
+        // derivation: at z=0 this camera's visible frame is ~7.67m wide by
+        // ~4.6m tall) -- comfortably inside the frame, with clearance to
+        // spare between neighbours along both axes.
+        constexpr float kCubeSize = 1.0f;
+        constexpr float kOffsetX  = 1.6f;
+        constexpr float kOffsetY  = 0.9f;
+
+        const Arcane::MeshData cube = Arcane::BuildCube(kCubeSize);
+
+        const auto instanceAt = [&cube](float x, float y, std::uint32_t slot)
+        {
+            Arcane::MeshInstance instance;
+            instance.mesh         = &cube;
+            instance.model        = glm::translate(glm::mat4(1.0f), glm::vec3(x, y, 0.0f));
+            instance.baseColor    = glm::vec4(1.0f);   // WHITE -- see this section's header comment
+            instance.materialSlot = slot;
+            return instance;
+        };
+
+        const Arcane::MeshInstance instances[] = {
+            instanceAt(-kOffsetX,  kOffsetY, redSlot),     // top-left     -> red
+            instanceAt( kOffsetX,  kOffsetY, greenSlot),   // top-right    -> green
+            instanceAt(-kOffsetX, -kOffsetY, blueSlot),    // bottom-left  -> blue
+            instanceAt( kOffsetX, -kOffsetY, cyanSlot),    // bottom-right -> cyan
+        };
+
+        Arcane::MeshSceneDesc scene;
+        scene.instances = instances;
+        FillCamera(scene);
+
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.capture = true;
+        frame.mesh    = &scene;
+        RenderOne(*v.ctx, frame);
+
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> pixels;
+        REQUIRE(v.ctx->ReadCapture(w, h, pixels));
+
+        const auto centreOf = [&](float x, float y)
+        {
+            return ProjectToPixel(scene.view, scene.projection, glm::vec3(x, y, 0.0f), w, h);
+        };
+        const glm::ivec2 redPx   = centreOf(-kOffsetX,  kOffsetY);
+        const glm::ivec2 greenPx = centreOf( kOffsetX,  kOffsetY);
+        const glm::ivec2 bluePx  = centreOf(-kOffsetX, -kOffsetY);
+        const glm::ivec2 cyanPx  = centreOf( kOffsetX, -kOffsetY);
+
+        const Rgba redPixel   = At(pixels, w, (std::uint32_t)redPx.x,   (std::uint32_t)redPx.y);
+        const Rgba greenPixel = At(pixels, w, (std::uint32_t)greenPx.x, (std::uint32_t)greenPx.y);
+        const Rgba bluePixel  = At(pixels, w, (std::uint32_t)bluePx.x,  (std::uint32_t)bluePx.y);
+        const Rgba cyanPixel  = At(pixels, w, (std::uint32_t)cyanPx.x,  (std::uint32_t)cyanPx.y);
+
+        // EACH CUBE'S CENTRE IS DOMINATED BY ITS OWN TEXTURE'S CHANNEL(S) --
+        // a binding bug that ignores the per-instance slot (reads the same
+        // slot for every draw, or falls back to the flat WHITE baseColor
+        // path for all four) makes these four indistinguishable and fails at
+        // least three of the four blocks below.
+        CHECK(redPixel.r > redPixel.g + 60);
+        CHECK(redPixel.r > redPixel.b + 60);
+
+        CHECK(greenPixel.g > greenPixel.r + 60);
+        CHECK(greenPixel.g > greenPixel.b + 60);
+
+        CHECK(bluePixel.b > bluePixel.r + 60);
+        CHECK(bluePixel.b > bluePixel.g + 60);
+
+        CHECK(cyanPixel.g > cyanPixel.r + 60);
+        CHECK(cyanPixel.b > cyanPixel.r + 60);
+
+        CHECK(Arcane::RenderErrorCount() == before);
+
+        // ---- TEARDOWN, in the order the OWNERSHIP contract requires ----
+        // The vehicle FIRST: ~NriGraphContext buries every node's objects
+        // (including MeshNode::Release's burial of every bindless VIEW,
+        // MeshNode.cpp) and then DRAINS the graveyard before returning (its
+        // own "RUNS every burial above HERE rather than leaving it pending"
+        // comment) -- so by the time this reset() call returns, the four
+        // views above are genuinely destroyed, not merely queued. Only THEN
+        // are the textures they named destroyed below: "a view must not
+        // outlive the image it views" is not a Vulkan validation nicety
+        // here, it is the actual hazard the wrong order would hit.
+        v.ctx.reset();
+        const nri::CoreInterface& core = v.nri->Core();
+        core.DestroyTexture(red.texture);
+        core.DestroyTexture(green.texture);
+        core.DestroyTexture(blue.texture);
+        core.DestroyTexture(cyan.texture);
+    }
+}
+
+TEST_CASE("mesh: the bindless material table indexes four distinct textures by per-instance slot "
+          "(d3d12)", "[gpu][pixel][mesh][bindless][nri][d3d12]")
+{
+    CheckBindlessTableIndexesFourDistinctMaterials(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("mesh: the bindless material table indexes four distinct textures by per-instance slot "
+          "(vulkan)", "[gpu][pixel][mesh][bindless][nri][vulkan]")
+{
+    CheckBindlessTableIndexesFourDistinctMaterials(Arcane::GraphicsBackend::Vulkan);
 }

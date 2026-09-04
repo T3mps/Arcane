@@ -6623,24 +6623,30 @@ TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it 
     // the whole vehicle (MeshNode is built eagerly). No device can show the
     // numbers agree; this can.
     //
-    // The expectations are recomputed here from kSwapchainFramesInFlight and
-    // mesh.hlsl's register map rather than copied from the implementation, so a
-    // set that gains a dimension without the pool gaining one fails here.
+    // The expectations are recomputed here from kSwapchainFramesInFlight,
+    // MeshNode::kBindlessCapacity and mesh.hlsl's register map rather than
+    // copied from the implementation, so a set that gains a dimension
+    // without the pool gaining one fails here.
     const nri::DescriptorPoolDesc pool = Arcane::MeshNode::PoolSizes();
 
-    // ONE set per frame slot: b1 is the only per-frame thing in a set, and t0
-    // (the node's own white texel) and s0 are the same for every draw.
-    constexpr std::uint32_t kSets = Arcane::kSwapchainFramesInFlight;
-    CHECK(pool.descriptorSetMaxNum == kSets);
+    // Task 8/10: ONE set per frame slot (b1 is the only per-frame thing left
+    // in a set -- t0/s0 moved out, see below) PLUS ONE bindless set, shared
+    // across every frame, that is not part of that per-frame dimension.
+    constexpr std::uint32_t kFrameSets = Arcane::kSwapchainFramesInFlight;
+    CHECK(pool.descriptorSetMaxNum == kFrameSets + 1);
 
-    // ...and each set carries exactly one of each type -- b1, t0, s0.
-    CHECK(pool.constantBufferMaxNum == kSets);
-    CHECK(pool.textureMaxNum        == kSets);
-    CHECK(pool.samplerMaxNum        == kSets);
+    // ...each per-frame set carries exactly b1; the bindless set carries up
+    // to kBindlessCapacity t0 TEXTURE descriptors. s0 is a ROOT/immutable
+    // sampler now (RootSamplerDesc, CreateBindings) -- "not allocated from a
+    // descriptor pool" (NRIDescs.h's own words on RootSamplerDesc) -- so
+    // samplerMaxNum claims nothing at all.
+    CHECK(pool.constantBufferMaxNum == kFrameSets);
+    CHECK(pool.textureMaxNum        == Arcane::MeshNode::kBindlessCapacity);
+    CHECK(pool.samplerMaxNum        == 0);
 
-    // Nothing else is claimed: this node binds no storage buffers, no samplers
-    // beyond s0, and no acceleration structures, so a nonzero here would mean
-    // the pool was sized for a shape mesh.hlsl does not declare.
+    // Nothing else is claimed: this node binds no storage buffers and no
+    // acceleration structures, so a nonzero here would mean the pool was
+    // sized for a shape mesh.hlsl does not declare.
     CHECK(pool.bufferMaxNum        == 0);
     CHECK(pool.structuredBufferMaxNum == 0);
     CHECK(pool.storageTextureMaxNum   == 0);
