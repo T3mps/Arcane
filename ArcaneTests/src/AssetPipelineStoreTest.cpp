@@ -1,0 +1,336 @@
+// F2b Task 2: the hash-flat artifact store (Arcane::AssetPipeline::ArtifactStore) and the
+// triple cook key (Arcane::AssetPipeline::ComputeCookKey). Pins: the cook key changes when any
+// one of its three constituents changes (source bytes, one setting field, importerVersion) and
+// is otherwise stable; Commit is atomic -- success renames the .tmp into place, a writer that
+// returns false or THROWS leaves no file at the final name and no stray .tmp; a directory of
+// artifacts written directly (Task 1's WriteTextureArtifact, at store.PathFor(key) paths) has
+// its Guid -> cook key index reproduced EXACTLY by RebuildIndexFromScan against a fresh store
+// instance (nothing carried over in-process); SweepOrphans removes only artifacts whose Guid is
+// absent from the live set, leaving live artifacts untouched (present AND still readable).
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <Arcane/AssetPipeline/ArtifactFormat.hpp>
+#include <Arcane/AssetPipeline/ArtifactStore.hpp>
+#include <Arcane/AssetPipeline/CookKey.hpp>
+#include <Arcane/AssetPipeline/TextureMetaSettings.hpp>
+#include <Arcane/Guid.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <stdexcept>
+#include <system_error>
+#include <unordered_set>
+#include <vector>
+
+namespace fs = std::filesystem;
+using namespace Arcane::AssetPipeline;
+using Arcane::Guid;
+
+namespace
+{
+    fs::path TempDir(const char* leaf)
+    {
+        fs::path d = fs::temp_directory_path() / "arcane_pipeline_store_test" / leaf;
+        std::error_code ec;
+        fs::remove_all(d, ec);
+        fs::create_directories(d);
+        return d;
+    }
+
+    std::vector<std::byte> PatternBytes(std::size_t n, std::uint8_t seed)
+    {
+        std::vector<std::byte> out(n);
+        for (std::size_t i = 0; i < n; ++i)
+            out[i] = static_cast<std::byte>(static_cast<std::uint8_t>(seed + i * 7));
+        return out;
+    }
+
+    // A minimal-but-valid TextureArtifactDesc for a given source Guid -- no mips, tiny sizes --
+    // just enough for WriteTextureArtifact/ReadTextureArtifact to round-trip, so the store tests
+    // exercise RebuildIndexFromScan against REAL artifact headers, not a hand-rolled stand-in.
+    TextureArtifactDesc MakeDesc(const Guid& guid, std::uint32_t importerVersion)
+    {
+        TextureArtifactDesc desc{};
+        desc.contentKind = ContentKind::Texture;
+        desc.sourceGuid = guid;
+        desc.sourceHash = 0xABCDEF0123456789ULL;
+        desc.importerVersion = importerVersion;
+        desc.format = ArtifactPixelFormat::RGBA8;
+        desc.dimension = ArtifactDimension::Tex2D;
+        desc.arrayOrDepth = 1;
+        desc.width = 4;
+        desc.height = 4;
+        desc.mipCount = 0;
+        desc.srgb = true;
+        desc.thumbWidth = 2;
+        desc.thumbHeight = 2;
+        return desc;
+    }
+}
+
+// ---- ComputeCookKey: the triple ----------------------------------------------------------
+
+TEST_CASE("pipeline: ComputeCookKey is stable for identical inputs", "[pipeline]")
+{
+    const std::vector<std::byte> bytes = PatternBytes(64, 0x11);
+    TextureMetaSettings settings{};
+    settings.srgb = true;
+    settings.maxSize = 2048;
+
+    const std::uint64_t a = ComputeCookKey(bytes, settings, kTextureImporterVersion);
+    const std::uint64_t b = ComputeCookKey(bytes, settings, kTextureImporterVersion);
+    CHECK(a == b);
+}
+
+TEST_CASE("pipeline: ComputeCookKey changes when a single source byte changes", "[pipeline]")
+{
+    std::vector<std::byte> bytes = PatternBytes(64, 0x22);
+    TextureMetaSettings settings{};
+
+    const std::uint64_t before = ComputeCookKey(bytes, settings, kTextureImporterVersion);
+    bytes[30] = static_cast<std::byte>(static_cast<std::uint8_t>(static_cast<std::uint8_t>(bytes[30]) ^ 0xFF));
+    const std::uint64_t after = ComputeCookKey(bytes, settings, kTextureImporterVersion);
+
+    CHECK(before != after);
+}
+
+TEST_CASE("pipeline: ComputeCookKey changes when a single setting field changes", "[pipeline]")
+{
+    const std::vector<std::byte> bytes = PatternBytes(32, 0x33);
+
+    TextureMetaSettings base{};
+    base.srgb = true;
+    base.maxSize = 1024;
+    const std::uint64_t baseline = ComputeCookKey(bytes, base, kTextureImporterVersion);
+
+    TextureMetaSettings srgbFlipped = base;
+    srgbFlipped.srgb = false;
+    CHECK(ComputeCookKey(bytes, srgbFlipped, kTextureImporterVersion) != baseline);
+
+    TextureMetaSettings maxSizeChanged = base;
+    maxSizeChanged.maxSize = 2048;
+    CHECK(ComputeCookKey(bytes, maxSizeChanged, kTextureImporterVersion) != baseline);
+}
+
+TEST_CASE("pipeline: ComputeCookKey changes when importerVersion changes", "[pipeline]")
+{
+    const std::vector<std::byte> bytes = PatternBytes(32, 0x44);
+    TextureMetaSettings settings{};
+
+    const std::uint64_t v1 = ComputeCookKey(bytes, settings, kTextureImporterVersion);
+    const std::uint64_t v2 = ComputeCookKey(bytes, settings, kTextureImporterVersion + 1);
+
+    CHECK(v1 != v2);
+}
+
+// ---- ArtifactStore::PathFor ---------------------------------------------------------------
+
+TEST_CASE("pipeline: ArtifactStore::PathFor shards on the key's first two hex digits", "[pipeline]")
+{
+    const fs::path root = TempDir("pathfor");
+    ArtifactStore store(root);
+
+    const fs::path p = store.PathFor(0x0a1b2c3d4e5f6789ULL);
+    CHECK(p.parent_path().filename() == "0a");
+    CHECK(p.filename() == "0a1b2c3d4e5f6789.arcart");
+    CHECK(p.parent_path().parent_path().filename() == "Artifacts");
+}
+
+// ---- ArtifactStore::Commit: atomicity ------------------------------------------------------
+
+TEST_CASE("pipeline: Commit renames a successful writer's tmp file into place", "[pipeline]")
+{
+    const fs::path root = TempDir("commit_success");
+    ArtifactStore store(root);
+
+    const std::uint64_t key = 0x1122334455667788ULL;
+    const fs::path finalPath = store.PathFor(key);
+    fs::path tmpPath = finalPath; tmpPath += ".tmp";
+
+    const std::vector<std::byte> content = PatternBytes(16, 0x55);
+
+    const bool committed = store.Commit(key, [&](const fs::path& tmp) -> bool
+    {
+        CHECK(tmp != finalPath);
+        std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
+        if (!ofs) return false;
+        ofs.write(reinterpret_cast<const char*>(content.data()), static_cast<std::streamsize>(content.size()));
+        return ofs.good();
+    });
+
+    REQUIRE(committed);
+    CHECK(fs::exists(finalPath));
+    CHECK_FALSE(fs::exists(tmpPath));
+
+    std::ifstream ifs(finalPath, std::ios::binary);
+    REQUIRE(ifs.good());
+    std::vector<std::byte> readBack(content.size());
+    ifs.read(reinterpret_cast<char*>(readBack.data()), static_cast<std::streamsize>(readBack.size()));
+    REQUIRE(ifs.good());
+    CHECK(readBack == content);
+}
+
+TEST_CASE("pipeline: Commit leaves nothing behind when the writer returns false", "[pipeline]")
+{
+    const fs::path root = TempDir("commit_returns_false");
+    ArtifactStore store(root);
+
+    const std::uint64_t key = 0x2233445566778899ULL;
+    const fs::path finalPath = store.PathFor(key);
+    fs::path tmpPath = finalPath; tmpPath += ".tmp";
+
+    const bool committed = store.Commit(key, [](const fs::path& tmp) -> bool
+    {
+        std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
+        ofs << "partial";
+        return false;   // writer decided the content is bad -- Commit must not publish it
+    });
+
+    CHECK_FALSE(committed);
+    CHECK_FALSE(fs::exists(finalPath));
+    CHECK_FALSE(fs::exists(tmpPath));
+}
+
+TEST_CASE("pipeline: Commit leaves no file and no stray .tmp when the writer throws", "[pipeline]")
+{
+    const fs::path root = TempDir("commit_throws");
+    ArtifactStore store(root);
+
+    const std::uint64_t key = 0x33445566778899AAULL;
+    const fs::path finalPath = store.PathFor(key);
+    fs::path tmpPath = finalPath; tmpPath += ".tmp";
+
+    const bool committed = store.Commit(key, [](const fs::path& tmp) -> bool
+    {
+        std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
+        ofs << "would-be-partial-content";
+        ofs.flush();
+        throw std::runtime_error("writer blew up mid-write");
+    });
+
+    CHECK_FALSE(committed);
+    CHECK_FALSE(fs::exists(finalPath));
+    CHECK_FALSE(fs::exists(tmpPath));
+}
+
+// ---- RebuildIndexFromScan -------------------------------------------------------------------
+
+TEST_CASE("pipeline: RebuildIndexFromScan reproduces the index from artifact headers alone", "[pipeline]")
+{
+    const fs::path root = TempDir("rebuild_scan");
+
+    struct Entry { Guid guid; std::uint64_t key; };
+    std::vector<Entry> entries;
+
+    for (std::uint8_t i = 0; i < 5; ++i)
+    {
+        const Guid guid = Guid::Generate();
+        const std::vector<std::byte> sourceBytes = PatternBytes(20, static_cast<std::uint8_t>(0x60 + i));
+        TextureMetaSettings settings{};
+        settings.maxSize = static_cast<std::uint32_t>(512 * (i + 1));
+        const std::uint64_t key = ComputeCookKey(sourceBytes, settings, kTextureImporterVersion);
+
+        ArtifactStore writerStore(root);   // PathFor is pure -- any instance over the same root agrees
+        const fs::path path = writerStore.PathFor(key);
+        std::error_code ec;
+        fs::create_directories(path.parent_path(), ec);
+
+        const TextureArtifactDesc desc = MakeDesc(guid, kTextureImporterVersion);
+        const std::vector<std::byte> payload = PatternBytes(8, 1);
+        const std::vector<std::byte> thumb = PatternBytes(4, 2);
+        REQUIRE(WriteTextureArtifact(path, desc, payload, thumb));
+
+        entries.push_back({ guid, key });
+    }
+
+    // A FRESH store instance, never PutIndex'd -- proves the index is reconstructed from disk,
+    // not carried over from any in-process state.
+    ArtifactStore store(root);
+    store.RebuildIndexFromScan();
+
+    for (const Entry& e : entries)
+    {
+        const std::optional<std::uint64_t> looked = store.Lookup(e.guid);
+        REQUIRE(looked.has_value());
+        CHECK(*looked == e.key);
+    }
+}
+
+// ---- SweepOrphans --------------------------------------------------------------------------
+
+TEST_CASE("pipeline: SweepOrphans removes non-live artifacts and touches nothing live", "[pipeline]")
+{
+    const fs::path root = TempDir("sweep_orphans");
+    ArtifactStore store(root);
+
+    const Guid guidLive1 = Guid::Generate();
+    const Guid guidLive2 = Guid::Generate();
+    const Guid guidOrphan = Guid::Generate();
+
+    auto writeOne = [&](const Guid& guid, std::uint8_t seed) -> std::uint64_t
+    {
+        const std::vector<std::byte> sourceBytes = PatternBytes(12, seed);
+        TextureMetaSettings settings{};
+        const std::uint64_t key = ComputeCookKey(sourceBytes, settings, kTextureImporterVersion);
+        const fs::path path = store.PathFor(key);
+        std::error_code ec;
+        fs::create_directories(path.parent_path(), ec);
+        const TextureArtifactDesc desc = MakeDesc(guid, kTextureImporterVersion);
+        REQUIRE(WriteTextureArtifact(path, desc, PatternBytes(4, 9), PatternBytes(4, 10)));
+        return key;
+    };
+
+    const std::uint64_t keyLive1 = writeOne(guidLive1, 0x70);
+    const std::uint64_t keyLive2 = writeOne(guidLive2, 0x71);
+    const std::uint64_t keyOrphan = writeOne(guidOrphan, 0x72);
+
+    store.RebuildIndexFromScan();
+    REQUIRE(store.Lookup(guidLive1).has_value());
+    REQUIRE(store.Lookup(guidLive2).has_value());
+    REQUIRE(store.Lookup(guidOrphan).has_value());
+
+    const std::unordered_set<Guid> liveGuids{ guidLive1, guidLive2 };
+    const std::size_t removed = store.SweepOrphans(liveGuids);
+
+    CHECK(removed == 1u);
+    CHECK_FALSE(fs::exists(store.PathFor(keyOrphan)));
+    CHECK(fs::exists(store.PathFor(keyLive1)));
+    CHECK(fs::exists(store.PathFor(keyLive2)));
+
+    // "Touches nothing live" means byte-for-byte untouched, not merely "not deleted" -- both
+    // survivors must still parse as valid artifacts.
+    CHECK(ReadTextureArtifact(store.PathFor(keyLive1)).has_value());
+    CHECK(ReadTextureArtifact(store.PathFor(keyLive2)).has_value());
+
+    CHECK_FALSE(store.Lookup(guidOrphan).has_value());
+    CHECK(store.Lookup(guidLive1).has_value());
+    CHECK(store.Lookup(guidLive2).has_value());
+}
+
+TEST_CASE("pipeline: SweepOrphans against an empty live set removes every indexed artifact", "[pipeline]")
+{
+    const fs::path root = TempDir("sweep_all");
+    ArtifactStore store(root);
+
+    const Guid guidA = Guid::Generate();
+    const std::vector<std::byte> sourceBytes = PatternBytes(10, 0x80);
+    TextureMetaSettings settings{};
+    const std::uint64_t key = ComputeCookKey(sourceBytes, settings, kTextureImporterVersion);
+    const fs::path path = store.PathFor(key);
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    REQUIRE(WriteTextureArtifact(path, MakeDesc(guidA, kTextureImporterVersion), PatternBytes(4, 3), PatternBytes(4, 4)));
+
+    store.RebuildIndexFromScan();
+    REQUIRE(store.Lookup(guidA).has_value());
+
+    const std::size_t removed = store.SweepOrphans(std::unordered_set<Guid>{});
+
+    CHECK(removed == 1u);
+    CHECK_FALSE(fs::exists(path));
+    CHECK_FALSE(store.Lookup(guidA).has_value());
+}
