@@ -63,16 +63,16 @@
 // this kind of claim as something to VERIFY against the code, not trust from a comment.
 // See Assets.cpp for how the result is memoized per-Guid at the facade layer (the SAME
 // decode-once-then-cache shape PixelsFor already uses), which is what keeps a repeat
-// lookup for the same guid from re-scanning -- though see Assets.cpp's own ArtifactFor
-// comment for the ONE case that is deliberately NOT memoized (PendingCook's re-poll).
+// lookup for the same guid from re-scanning (Missing included -- Task 8 memoized it
+// alongside the other refusals; Task 12's cook-completion invalidation is the un-latch).
 //
-// REFUSAL DISCIPLINE (spec s5, F2b Task 6 controller ruling -- "refuse, never limp"):
-//   Missing                 -- no artifact at all resolves for this guid. NOT a refusal
-//                               at the Assets facade layer yet: a guid with no artifact
-//                               falls back to the existing stb decode until Task 8 retires
-//                               that fallback and promotes this state to a real refusal
-//                               there. Modelled here (and unit-tested here) so Task 8 has
-//                               something to promote.
+// REFUSAL DISCIPLINE (spec s5, F2b Task 6 ruling; Task 8 completed it -- "refuse, never limp"):
+//   Missing                 -- no artifact at all resolves for this guid. A REAL refusal
+//                               at the Assets facade layer since Task 8 (the sprite
+//                               cutover): content is artifact-only, the stb fallback is
+//                               retired, and a missing artifact refuses by name
+//                               ("ArtifactMissing"), memoized and latched like the other
+//                               two states below.
 //   HashMismatch             -- an artifact EXISTS for this guid, but its header sourceHash
 //                               disagrees with the hash of the CURRENT staged source bytes:
 //                               the cook is stale (a source was edited without recooking)

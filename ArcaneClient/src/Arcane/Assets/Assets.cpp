@@ -311,10 +311,10 @@ namespace Arcane
             // bytes? Returns ArtifactRefusal::Missing (the default-constructed result)
             // whenever there is nothing to serve from an artifact -- no project is open
             // (m_contentRoot empty, so there is no Intermediate/ to derive), or the
-            // store has no artifact for this guid at all -- which is deliberately NOT a
-            // refusal at this layer (see ArtifactReader.hpp's own doc comment; Task 8
-            // promotes it). HashMismatch/VersionNewerThanEngine ARE refusals; callers
-            // must refuse loudly on those, never fall back.
+            // store has no artifact for this guid at all. Since Task 8 (the sprite
+            // cutover) Missing IS a refusal at this layer, exactly like HashMismatch/
+            // VersionNewerThanEngine: callers refuse loudly on all three, never fall
+            // back (see ArtifactReader.hpp's REFUSAL DISCIPLINE banner).
             //
             // INTERMEDIATE ROOT: derived as m_contentRoot's PARENT directory -- every
             // installer of this facade's content root sets it to exactly

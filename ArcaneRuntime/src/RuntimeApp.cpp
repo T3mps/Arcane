@@ -1479,9 +1479,9 @@ int RuntimeApp::Run()
     MainLoop();
     Shutdown();
     // F2b Task 6, spec s5 -- "refuse, never limp": a content texture whose cooked
-    // artifact is PRESENT but INVALID (HashMismatch or VersionNewerThanEngine --
-    // never a merely-missing artifact, which is not yet a refusal at the Assets
-    // facade layer; see Assets.hpp's ContentArtifactRefusalObserved doc comment)
+    // artifact is missing or invalid (ArtifactMissing since Task 8's sprite
+    // cutover, HashMismatch, or VersionNewerThanEngine -- see Assets.hpp's
+    // ContentArtifactRefusalObserved doc comment)
     // latches during resolve (SpriteCache::Request -> Assets::PixelsFor/
     // TextureInfoFor, driven every frame by SceneRenderResolver::Refresh -- see
     // RuntimeFrame.cpp). Checked HERE, after MainLoop, mirroring exactly where the
