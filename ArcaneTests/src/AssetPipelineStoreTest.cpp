@@ -1,12 +1,15 @@
 // F2b Task 2: the hash-flat artifact store (Arcane::AssetPipeline::ArtifactStore) and the
 // triple cook key (Arcane::AssetPipeline::ComputeCookKey). Pins: the cook key changes when any
 // one of its three constituents changes (source bytes, one setting field, importerVersion) and
-// is otherwise stable; Commit is atomic -- success renames the .tmp into place, a writer that
-// returns false or THROWS leaves no file at the final name and no stray .tmp; a directory of
-// artifacts written directly (Task 1's WriteTextureArtifact, at store.PathFor(key) paths) has
-// its Guid -> cook key index reproduced EXACTLY by RebuildIndexFromScan against a fresh store
-// instance (nothing carried over in-process); SweepOrphans removes only artifacts whose Guid is
-// absent from the live set, leaving live artifacts untouched (present AND still readable).
+// is otherwise stable; Commit is atomic -- success renames the tmp file into place, a writer
+// that returns false or THROWS leaves no file at the final name and no stray tmp file; two
+// Commits racing the SAME cook key (pinned single-process via re-entrancy, per the fix-loop
+// ruling on the task-2 review) never share a tmp path and the final content is exactly one
+// writer's complete output; a directory of artifacts written directly (Task 1's
+// WriteTextureArtifact, at store.PathFor(key) paths) has its Guid -> cook key index reproduced
+// EXACTLY by RebuildIndexFromScan against a fresh store instance (nothing carried over
+// in-process); SweepOrphans removes only artifacts whose Guid is absent from the live set,
+// leaving live artifacts untouched (present AND still readable).
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -69,6 +72,36 @@ namespace
         desc.thumbWidth = 2;
         desc.thumbHeight = 2;
         return desc;
+    }
+
+    std::vector<std::byte> ReadWholeFile(const fs::path& path)
+    {
+        std::ifstream ifs(path, std::ios::binary);
+        REQUIRE(ifs.good());
+        ifs.seekg(0, std::ios::end);
+        const auto len = static_cast<std::size_t>(ifs.tellg());
+        ifs.seekg(0, std::ios::beg);
+        std::vector<std::byte> out(len);
+        if (len > 0)
+            ifs.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(len));
+        REQUIRE(ifs.good());
+        return out;
+    }
+
+    // Counts files with a ".tmp" extension directly inside `dir` -- used to prove "no stray tmp
+    // file remains" without needing to guess Commit's internal per-invocation naming scheme.
+    std::size_t CountTmpFiles(const fs::path& dir)
+    {
+        std::error_code ec;
+        if (!fs::exists(dir, ec)) return 0;
+
+        std::size_t count = 0;
+        for (const auto& entry : fs::directory_iterator(dir, ec))
+        {
+            if (ec) break;
+            if (entry.path().extension() == ".tmp") ++count;
+        }
+        return count;
     }
 }
 
@@ -149,12 +182,16 @@ TEST_CASE("pipeline: Commit renames a successful writer's tmp file into place", 
 
     const std::uint64_t key = 0x1122334455667788ULL;
     const fs::path finalPath = store.PathFor(key);
-    fs::path tmpPath = finalPath; tmpPath += ".tmp";
 
     const std::vector<std::byte> content = PatternBytes(16, 0x55);
 
+    // Commit's tmp naming is an internal per-invocation detail (process id + a counter) --
+    // capture whatever path the writer is actually handed rather than assuming a fixed
+    // "<final>.tmp" scheme, then prove THAT exact path is gone after a successful commit.
+    fs::path capturedTmp;
     const bool committed = store.Commit(key, [&](const fs::path& tmp) -> bool
     {
+        capturedTmp = tmp;
         CHECK(tmp != finalPath);
         std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
         if (!ofs) return false;
@@ -164,14 +201,10 @@ TEST_CASE("pipeline: Commit renames a successful writer's tmp file into place", 
 
     REQUIRE(committed);
     CHECK(fs::exists(finalPath));
-    CHECK_FALSE(fs::exists(tmpPath));
+    CHECK_FALSE(fs::exists(capturedTmp));
+    CHECK(CountTmpFiles(finalPath.parent_path()) == 0u);
 
-    std::ifstream ifs(finalPath, std::ios::binary);
-    REQUIRE(ifs.good());
-    std::vector<std::byte> readBack(content.size());
-    ifs.read(reinterpret_cast<char*>(readBack.data()), static_cast<std::streamsize>(readBack.size()));
-    REQUIRE(ifs.good());
-    CHECK(readBack == content);
+    CHECK(ReadWholeFile(finalPath) == content);
 }
 
 TEST_CASE("pipeline: Commit leaves nothing behind when the writer returns false", "[pipeline]")
@@ -181,10 +214,11 @@ TEST_CASE("pipeline: Commit leaves nothing behind when the writer returns false"
 
     const std::uint64_t key = 0x2233445566778899ULL;
     const fs::path finalPath = store.PathFor(key);
-    fs::path tmpPath = finalPath; tmpPath += ".tmp";
 
-    const bool committed = store.Commit(key, [](const fs::path& tmp) -> bool
+    fs::path capturedTmp;
+    const bool committed = store.Commit(key, [&](const fs::path& tmp) -> bool
     {
+        capturedTmp = tmp;
         std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
         ofs << "partial";
         return false;   // writer decided the content is bad -- Commit must not publish it
@@ -192,20 +226,22 @@ TEST_CASE("pipeline: Commit leaves nothing behind when the writer returns false"
 
     CHECK_FALSE(committed);
     CHECK_FALSE(fs::exists(finalPath));
-    CHECK_FALSE(fs::exists(tmpPath));
+    CHECK_FALSE(fs::exists(capturedTmp));
+    CHECK(CountTmpFiles(finalPath.parent_path()) == 0u);
 }
 
-TEST_CASE("pipeline: Commit leaves no file and no stray .tmp when the writer throws", "[pipeline]")
+TEST_CASE("pipeline: Commit leaves no file and no stray tmp file when the writer throws", "[pipeline]")
 {
     const fs::path root = TempDir("commit_throws");
     ArtifactStore store(root);
 
     const std::uint64_t key = 0x33445566778899AAULL;
     const fs::path finalPath = store.PathFor(key);
-    fs::path tmpPath = finalPath; tmpPath += ".tmp";
 
-    const bool committed = store.Commit(key, [](const fs::path& tmp) -> bool
+    fs::path capturedTmp;
+    const bool committed = store.Commit(key, [&](const fs::path& tmp) -> bool
     {
+        capturedTmp = tmp;
         std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
         ofs << "would-be-partial-content";
         ofs.flush();
@@ -214,7 +250,66 @@ TEST_CASE("pipeline: Commit leaves no file and no stray .tmp when the writer thr
 
     CHECK_FALSE(committed);
     CHECK_FALSE(fs::exists(finalPath));
-    CHECK_FALSE(fs::exists(tmpPath));
+    CHECK_FALSE(fs::exists(capturedTmp));
+    CHECK(CountTmpFiles(finalPath.parent_path()) == 0u);
+}
+
+TEST_CASE("pipeline: Commit is safe when two Commits for the SAME key interleave (single-process)", "[pipeline]")
+{
+    // Pins the concurrency mechanism (per-invocation tmp paths) that Task 5's parallel arccook
+    // stagers rely on: two Commits racing the SAME cook key must never share a tmp path, so
+    // neither writer's bytes can ever land interleaved/corrupted at the other's location.
+    // Interleaving is reproduced deterministically, single-process, via re-entrancy: from
+    // INSIDE Commit A's writer callback, a complete, independent Commit B runs for the SAME
+    // key before A's own writer finishes.
+    const fs::path root = TempDir("commit_interleaved_same_key");
+    ArtifactStore store(root);
+
+    const std::uint64_t key = 0x4455667788990011ULL;
+    const fs::path finalPath = store.PathFor(key);
+
+    // Different-length, recognizable content per writer -- a mixed/truncated result could not
+    // match either pattern's length, let alone its bytes.
+    const std::vector<std::byte> contentA = PatternBytes(37, 0xA0);
+    const std::vector<std::byte> contentB = PatternBytes(19, 0xB0);
+
+    auto writeContent = [](const fs::path& tmp, const std::vector<std::byte>& content) -> bool
+    {
+        std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
+        if (!ofs) return false;
+        ofs.write(reinterpret_cast<const char*>(content.data()), static_cast<std::streamsize>(content.size()));
+        return ofs.good();
+    };
+
+    bool committedB = false;
+
+    const bool committedA = store.Commit(key, [&](const fs::path& tmpA) -> bool
+    {
+        committedB = store.Commit(key, [&](const fs::path& tmpB) -> bool
+        {
+            // THE mechanism this test pins: two invocations for the same cook key never agree
+            // on a tmp path. Pre-fix (a single "<final>.tmp" path shared by every invocation),
+            // this assertion is exactly what fails.
+            REQUIRE(tmpB != tmpA);
+            return writeContent(tmpB, contentB);
+        });
+
+        return writeContent(tmpA, contentA);
+    });
+
+    REQUIRE(committedA);
+    REQUIRE(committedB);
+
+    // The final content is EXACTLY one writer's complete output -- never a mix, never a
+    // truncation.
+    const std::vector<std::byte> finalContent = ReadWholeFile(finalPath);
+    const bool matchesA = (finalContent == contentA);
+    const bool matchesB = (finalContent == contentB);
+    CHECK((matchesA || matchesB));
+    CHECK_FALSE((matchesA && matchesB));   // different lengths -- both matching is impossible
+
+    // Both invocations cleaned up (renamed away) their own private tmp path -- nothing stray.
+    CHECK(CountTmpFiles(finalPath.parent_path()) == 0u);
 }
 
 // ---- RebuildIndexFromScan -------------------------------------------------------------------

@@ -2,10 +2,21 @@
 
 #include "Arcane/AssetPipeline/ArtifactFormat.hpp"
 
+#include <atomic>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
+
+// Only for CurrentProcessId() below -- part of the per-invocation tmp-path uniqueness that
+// makes concurrent same-key Commit() calls safe (see ArtifactStore.hpp's concurrency contract).
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace Arcane::AssetPipeline
 {
@@ -44,6 +55,26 @@ namespace Arcane::AssetPipeline
             }
             return v;
         }
+
+        [[nodiscard]] std::uint32_t CurrentProcessId() noexcept
+        {
+#if defined(_WIN32)
+            return static_cast<std::uint32_t>(::GetCurrentProcessId());
+#else
+            return static_cast<std::uint32_t>(::getpid());
+#endif
+        }
+
+        // Process-local, strictly increasing -- combined with the process id, gives every
+        // Commit() invocation (even two invocations for the SAME cook key, same process,
+        // interleaved via re-entrancy) its own private tmp path. No randomness needed:
+        // uniqueness only has to hold within "this process, right now", and a process id plus a
+        // monotonic counter does that exactly.
+        [[nodiscard]] std::uint64_t NextInvocationId() noexcept
+        {
+            static std::atomic<std::uint64_t> counter{0};
+            return counter.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 
     ArtifactStore::ArtifactStore(std::filesystem::path intermediateDir)
@@ -66,10 +97,16 @@ namespace Arcane::AssetPipeline
         std::error_code ec;
         std::filesystem::create_directories(finalPath.parent_path(), ec);
 
-        std::filesystem::path tmpPath = finalPath;
-        tmpPath += ".tmp";
+        // Per-invocation tmp path: process id + a process-local monotonic counter, NEVER just
+        // the cook key. This is what makes concurrent same-key Commit() calls safe -- each
+        // invocation's writer lands its bytes at a location no other invocation (same process
+        // or a different one) can ever touch, so a rename can never publish a half-interleaved
+        // file. See the concurrency contract in ArtifactStore.hpp.
+        const std::filesystem::path tmpPath = finalPath.parent_path()
+            / (finalPath.stem().string() + "." + std::to_string(CurrentProcessId()) + "-"
+               + std::to_string(NextInvocationId()) + ".tmp");
 
-        // A throwing writer must still leave no file at the final name and no stray .tmp;
+        // A throwing writer must still leave no file at the final name and no stray tmp file;
         // Commit's contract is a plain bool, so the exception is caught here rather than
         // propagated -- callers of Commit never need to guard against an arbitrary writer's
         // exception type.

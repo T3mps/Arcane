@@ -7,6 +7,17 @@
 // flat over path mirroring, for staleness -- an artifact's location depends only on its cook
 // key, never on where its source asset happens to live).
 //
+// Concurrency contract (load-bearing for Task 5's parallel arccook stagers, run under MSBuild
+// /m against the same ReferenceProject): concurrent Commit() calls for the SAME cook key --
+// same process or different processes -- are safe. Each invocation writes to its OWN tmp path
+// (process id + a process-local monotonic counter, never the cook key alone), so two racing
+// writers can never share a file and interleave/corrupt each other's bytes -- each writer's
+// bytes land intact at a private location before either side ever attempts a rename. Whichever
+// invocation's rename lands LAST simply wins the final path; because the cook key is itself a
+// content hash, two Commits racing for the same key are, by construction, writing byte-
+// identical content, so "last rename wins" only has to be SAFE, never has to be
+// deterministic about which racer wins.
+//
 // The in-memory index (Guid -> cook key) is a CACHE, never authoritative: every artifact header
 // already carries its own source Guid (ArtifactFormat's TextureArtifactDesc::sourceGuid), and
 // the cook key is recoverable from the artifact's own filename -- so RebuildIndexFromScan can
@@ -36,13 +47,14 @@ namespace Arcane::AssetPipeline
         // not require the file to exist.
         [[nodiscard]] std::filesystem::path PathFor(std::uint64_t cookKey) const;
 
-        // Atomic commit. `writer` is handed a `.tmp` sibling of the final path and must write a
-        // complete file there, returning true on success. Commit renames the tmp file into place
-        // ONLY when writer returns true; on writer returning false, on writer THROWING (the
-        // exception is caught here -- Commit never propagates it, matching its plain-bool
-        // contract), or on the rename itself failing, the tmp file is removed and Commit returns
-        // false. Either way, on any false return there is NO file at the final path and no stray
-        // `.tmp` left behind.
+        // Atomic commit. `writer` is handed a tmp path PRIVATE TO THIS INVOCATION -- never
+        // shared with any other Commit() call, even a concurrent one for the SAME cook key (see
+        // the concurrency contract above) -- and must write a complete file there, returning
+        // true on success. Commit renames the tmp file into place ONLY when writer returns true;
+        // on writer returning false, on writer THROWING (the exception is caught here -- Commit
+        // never propagates it, matching its plain-bool contract), or on the rename itself
+        // failing, the tmp file is removed and Commit returns false. Either way, on any false
+        // return there is NO file at the final path and no stray tmp file left behind.
         [[nodiscard]] bool Commit(std::uint64_t cookKey,
                                    const std::function<bool(const std::filesystem::path& tmpPath)>& writer);
 
