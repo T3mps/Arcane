@@ -10,6 +10,7 @@
 #include "BindlessTable.hpp"
 
 #include <Arcane/Render/Nri/Graveyard.hpp>
+#include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
 
 #include <Arcane/Base/Log.hpp>
@@ -33,8 +34,29 @@ namespace Arcane
         return table;
     }
 
+    BindlessTable::~BindlessTable()
+    {
+        if (!m_device || m_slots.empty())
+            return;
+
+        ARC_WARN("[nri] BindlessTable destroyed with {} live descriptor(s) -- its owner never "
+                 "called Release(). Destroying directly behind a DeviceWaitIdle.",
+                 m_slots.size());
+        const nri::CoreInterface& core = m_device->Core();
+        (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
+        for (nri::Descriptor* d : m_slots)
+            if (d) core.DestroyDescriptor(d);
+        m_slots.clear();
+    }
+
     std::uint32_t BindlessTable::Add(nri::Descriptor* srv)
     {
+        // A null descriptor is a caller-code bug, not the capacity
+        // condition below -- refused silently, no slot consumed. See the
+        // header's own Add() doc comment.
+        if (!srv)
+            return kInvalidSlot;
+
         if (m_slots.size() >= m_capacity)
         {
             if (!m_warnedFull)

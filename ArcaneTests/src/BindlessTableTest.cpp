@@ -170,3 +170,71 @@ TEST_CASE("BindlessTable: Release buries its descriptors via Graveyard::Bury, no
 
     CHECK(Arcane::RenderErrorCount() == before);
 }
+
+TEST_CASE("BindlessTable: destroyed without Release() warns once and does not crash (safety net, not the path)",
+          "[bindless]")
+{
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    auto table = Arcane::BindlessTable::Create(*device, 2);
+    REQUIRE(table != nullptr);
+
+    // Real descriptors, same reasoning as the Release() case above: the
+    // destructor's DeviceWaitIdle + DestroyDescriptor calls should run
+    // against genuine handles, not just avoid crashing on a fake one.
+    const nri::CoreInterface& core = device->Core();
+    nri::SamplerDesc samplerDesc{};
+    nri::Descriptor* d0 = nullptr;
+    nri::Descriptor* d1 = nullptr;
+    REQUIRE(core.CreateSampler(device->Device(), samplerDesc, d0) == nri::Result::SUCCESS);
+    REQUIRE(core.CreateSampler(device->Device(), samplerDesc, d1) == nri::Result::SUCCESS);
+    REQUIRE(d0 != nullptr);
+    REQUIRE(d1 != nullptr);
+
+    CHECK(table->Add(d0) == 0);
+    CHECK(table->Add(d1) == 1);
+
+    std::string captured;
+    int warnCount = 0;
+    auto cb = AttachLogCapture(captured, warnCount);
+
+    // ~BindlessTable() runs here, WITHOUT Release() ever having been
+    // called -- the safety-net path. NONE's DeviceWaitIdle/DestroyDescriptor
+    // are both no-ops (ImplNONE.cpp), so there is nothing further to observe
+    // on this backend beyond "it warned once and did not crash" -- which is
+    // exactly the contract this case pins.
+    table.reset();
+
+    DetachLogCapture(cb);
+
+    CHECK(warnCount == 1);
+    CHECK(captured.find("BindlessTable") != std::string::npos);
+    CHECK(captured.find("Release") != std::string::npos);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("BindlessTable: Add(nullptr) is refused -- no slot consumed, no warning", "[bindless]")
+{
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    auto table = Arcane::BindlessTable::Create(*device, 2);
+    REQUIRE(table != nullptr);
+
+    std::string captured;
+    int warnCount = 0;
+    auto cb = AttachLogCapture(captured, warnCount);
+
+    CHECK(table->Add(nullptr) == Arcane::BindlessTable::kInvalidSlot);
+
+    DetachLogCapture(cb);
+    CHECK(warnCount == 0);
+
+    // No slot consumed: the table's real capacity is still fully available.
+    CHECK(table->Add(FakeSrv(1)) == 0);
+    CHECK(table->Add(FakeSrv(2)) == 1);
+}

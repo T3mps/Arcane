@@ -21,14 +21,13 @@
 // OWNERSHIP: Add() takes ownership of the nri::Descriptor* it is handed --
 // Release() is what destroys it (buried, never direct). A caller that
 // destroys a descriptor itself after Adding it here will double-destroy it
-// once Release() reaps. NO SAFETY-NET DESTRUCTOR (unlike NriTextureCache's
-// ~NriTextureCache()): the Phase 4 interface owes exactly Create/Add/
-// Release, this task is allocator + lifecycle ONLY (Task 10 owns the real
-// node that will call Release() at teardown, same as Batch2DNode/
-// NriTextureCache today), and a table whose owner never calls Release()
-// simply leaks its descriptors rather than destroying them behind an
-// unrequested DeviceWaitIdle -- a caller-discipline bug worth fixing at the
-// call site, not papering over here.
+// once Release() reaps. If the owner never calls Release() at all --
+// an exception path, an early return, a teardown reorder -- the
+// destructor is the SAFETY NET, not a second path: see ~BindlessTable()'s
+// own comment. Same house practice as NriTextureCache and Batch2DNode,
+// neither of which publishes its destructor as part of its interface
+// either; a forgotten Release() is a real failure mode worth destroying
+// loudly for, not leaking silently forever.
 //
 // Include order: NRI headers first, ALWAYS -- see NriCommon.hpp
 // (Extensions/NRIDeviceCreation.h declares nri::Message::ERROR, and
@@ -60,13 +59,26 @@ namespace Arcane
         [[nodiscard]] static std::unique_ptr<BindlessTable> Create(NriDevice& device,
                                                                      std::uint32_t capacity);
 
+        // SAFETY NET, NOT THE PATH -- the same shape as ~NriTextureCache /
+        // ~Batch2DNode. The sanctioned release is Release() at a fence the
+        // owner knows; if this still holds descriptors it destroys them
+        // directly behind a DeviceWaitIdle and says so at WARN, because
+        // there is no fence value to bury against here and burying at 0
+        // would violate Graveyard's nondecreasing rule on a device the
+        // graph has been burying against all run.
+        ~BindlessTable();
+
         BindlessTable(const BindlessTable&)            = delete;
         BindlessTable& operator=(const BindlessTable&) = delete;
 
-        // Appends `srv` at the next dense slot and returns it. Returns
-        // kInvalidSlot, with a ONE-SHOT warning (further occurrences
-        // silent), once the table is at capacity -- Add() never grows the
-        // table or evicts an existing slot.
+        // Appends `srv` at the next dense slot and returns it. Refuses --
+        // returns kInvalidSlot, no slot consumed, no warning -- when `srv`
+        // is null: a null descriptor is a caller-code bug visible at the
+        // call site, not the resource-exhaustion condition this table
+        // diagnoses. Otherwise returns kInvalidSlot, with a ONE-SHOT
+        // warning (further occurrences silent), once the table is at
+        // capacity -- Add() never grows the table or evicts an existing
+        // slot.
         [[nodiscard]] std::uint32_t Add(nri::Descriptor* srv);
 
         // Buries every occupied slot's descriptor at `fence` via
