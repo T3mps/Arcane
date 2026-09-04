@@ -62,6 +62,7 @@ workspace "Arcane"
 
     IncludeDir = {}
     IncludeDir["ArcaneCore"]       = "%{wks.location}/ArcaneCore/src"
+    IncludeDir["ArcaneAssetPipeline"] = "%{wks.location}/ArcaneAssetPipeline/src"
     IncludeDir["nlohmann"]         = "%{wks.location}/ThirdParty/nlohmann"
     IncludeDir["picosha2"]         = "%{wks.location}/ThirdParty/picosha2"
     IncludeDir["spdlog"]           = "%{wks.location}/ThirdParty/spdlog/include"
@@ -136,6 +137,62 @@ project "ArcaneCore"
         -- WorkScheduler) ahead of the Task 2 move.
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
+    }
+
+    defines {
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
+
+    filter "configurations:Debug"
+        defines { "ARCANE_DEBUG" }
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        defines { "ARCANE_RELEASE", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        defines { "ARCANE_DIST", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+
+-- ============================================================================
+-- ArcaneAssetPipeline: offline asset-cook artifact library (F2b Task 1).
+-- Presentation-free, no Client/editor deps -- reads/writes the .arcart
+-- artifact formats (texture now, mesh in F2c). arccook (later tasks) links
+-- this alongside ArcaneCore to produce cooked content; this lib only
+-- INCLUDES ArcaneCore headers (Guid) and does not link ArcaneCore itself.
+-- Same static-lib shape as ArcaneCore above (server-style warnings/flags).
+-- ============================================================================
+project "ArcaneAssetPipeline"
+    location "ArcaneAssetPipeline"
+    kind "StaticLib"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+    floatingpoint "Strict"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/src/**.hpp",
+        "%{prj.location}/src/**.cpp",
+    }
+
+    includedirs {
+        "%{prj.location}/src",
+        "%{IncludeDir.ArcaneCore}",
     }
 
     defines {
@@ -415,8 +472,11 @@ project "ArcaneEditor"
         -- ArcaneClient.dll. Linking a second static copy of NRI into the exe
         -- would be the bug.
         "%{IncludeDir.NRI}",
+        -- Task 12's in-process cook (later F2b task) calls into the asset
+        -- pipeline directly from the editor.
+        "%{IncludeDir.ArcaneAssetPipeline}",
     }
-    links { "ArcaneCore", "ArcaneClient", "imgui-node-editor" }
+    links { "ArcaneCore", "ArcaneClient", "imgui-node-editor", "ArcaneAssetPipeline" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
@@ -658,6 +718,7 @@ project "ArcaneTests"
         "%{IncludeDir.imguinodeeditor}",   -- ShaderEditorDocument.cpp (graph canvas, Slice 9)
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
+        "%{IncludeDir.ArcaneAssetPipeline}",   -- Task 1: AssetPipelineFormatTest.cpp drives ArtifactFormat.hpp directly
     }
 
     -- msdfgen, freetype, and NRI are static libs compiled separately; the smoke
@@ -671,7 +732,8 @@ project "ArcaneTests"
     -- imgui-node-editor IS linked (a plain static lib compiled with
     -- IMGUI_API=dllimport, same as this exe): ShaderEditorDocument.cpp's graph
     -- canvas calls it, and that TU source-compiles into the tests.
-    links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "NRI", "Manifold2D", "imgui-node-editor" }
+    -- ArcaneAssetPipeline (Task 1): [pipeline] round-trips .arcart files directly.
+    links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "NRI", "Manifold2D", "imgui-node-editor", "ArcaneAssetPipeline" }
 
     -- MOSAIC_ENSURE/MOSAIC_ENSURE_ALWAYS (most of AssertRoutingTest.cpp) are
     -- defined UNCONDITIONALLY, outside the MOSAIC_ASSERTS_ACTIVE gate this
