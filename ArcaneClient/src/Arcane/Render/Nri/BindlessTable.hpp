@@ -21,7 +21,14 @@
 // OWNERSHIP: Add() takes ownership of the nri::Descriptor* it is handed --
 // Release() is what destroys it (buried, never direct). A caller that
 // destroys a descriptor itself after Adding it here will double-destroy it
-// once Release() reaps.
+// once Release() reaps. NO SAFETY-NET DESTRUCTOR (unlike NriTextureCache's
+// ~NriTextureCache()): the Phase 4 interface owes exactly Create/Add/
+// Release, this task is allocator + lifecycle ONLY (Task 10 owns the real
+// node that will call Release() at teardown, same as Batch2DNode/
+// NriTextureCache today), and a table whose owner never calls Release()
+// simply leaks its descriptors rather than destroying them behind an
+// unrequested DeviceWaitIdle -- a caller-discipline bug worth fixing at the
+// call site, not papering over here.
 //
 // Include order: NRI headers first, ALWAYS -- see NriCommon.hpp
 // (Extensions/NRIDeviceCreation.h declares nri::Message::ERROR, and
