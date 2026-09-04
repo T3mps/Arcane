@@ -55,20 +55,6 @@ namespace
         return px;
     }
 
-    // Writes the 8x4 checker fixture to a uniquely-named temp file and
-    // returns its path: a real, loadable PNG written by the test, no vendored
-    // fixture asset. AssetsTest.cpp carried the same idiom until ABI v15
-    // deleted GetTexture and left its writer with no caller.
-    std::filesystem::path WriteCheckerPng(const char* name)
-    {
-        const auto pixels = CheckerPixels();
-        const auto path = std::filesystem::temp_directory_path() / name;
-        REQUIRE(stbi_write_png(path.string().c_str(), static_cast<int>(kCheckerW),
-                               static_cast<int>(kCheckerH), 4, pixels.data(),
-                               static_cast<int>(kCheckerW) * 4) != 0);
-        return path;
-    }
-
     // Installs a resolver mapping exactly one Guid -> path (mirrors
     // AssetsTest.cpp's "resolver routes ids into the same cached loaders" test).
     Arcane::Assets::AssetResolver OneShotResolver(const Arcane::Guid& id,
@@ -80,42 +66,102 @@ namespace
             return std::nullopt;
         };
     }
+
+    // Task 8: content is artifact-only, so fixtures that expect PIXELS back cook
+    // their checker through the real import path (Rgba8; 8x4 <= 64 so the
+    // thumbnail IS the top mip, and 0/255 round-trip the sRGB linearize exactly
+    // -- every byte-exact assertion below survives the cutover unchanged).
+    struct CookedChecker
+    {
+        std::filesystem::path png;
+        Arcane::Guid guid;
+    };
+
+    CookedChecker AddCookedChecker(const std::filesystem::path& root, const char* name)
+    {
+        namespace fs = std::filesystem;
+        fs::create_directories(root / "Content" / "textures");
+        fs::create_directories(root / "Intermediate" / "Artifacts" / "aa");
+
+        CookedChecker cc;
+        cc.png = root / "Content" / "textures" / (std::string(name) + ".png");
+        const auto pixels = CheckerPixels();
+        REQUIRE(stbi_write_png(cc.png.string().c_str(), static_cast<int>(kCheckerW),
+                               static_cast<int>(kCheckerH), 4, pixels.data(),
+                               static_cast<int>(kCheckerW) * 4) != 0);
+
+        std::vector<std::byte> srcBytes;
+        {
+            std::ifstream f(cc.png, std::ios::binary);
+            REQUIRE(f.good());
+            f.seekg(0, std::ios::end);
+            srcBytes.resize(static_cast<std::size_t>(f.tellg()));
+            f.seekg(0, std::ios::beg);
+            f.read(reinterpret_cast<char*>(srcBytes.data()),
+                   static_cast<std::streamsize>(srcBytes.size()));
+            REQUIRE(f.good());
+        }
+
+        cc.guid = Arcane::Guid::Generate();
+        Arcane::AssetPipeline::TextureMetaSettings settings;
+        settings.format = Arcane::AssetPipeline::TextureMetaSettings::Format::Rgba8;
+        auto imported = Arcane::AssetPipeline::ImportTexture(srcBytes, cc.guid, settings);
+        REQUIRE(imported.has_value());
+        REQUIRE(Arcane::AssetPipeline::WriteTextureArtifact(
+            root / "Intermediate" / "Artifacts" / "aa" / (std::string(name) + ".arcart"),
+            imported->desc, imported->payload, imported->thumbRgba));
+        return cc;
+    }
+
+    std::filesystem::path MakeCookedRoot(const char* leaf)
+    {
+        namespace fs = std::filesystem;
+        const fs::path root = fs::temp_directory_path() / "arcane_assets_pixels_cooked" / leaf;
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        fs::create_directories(root, ec);
+        return root;
+    }
 }
 
-TEST_CASE("assets: PixelsFor decodes a fixture PNG to the exact byte pattern", "[assets][pixels]")
+TEST_CASE("assets: PixelsFor serves the artifact thumbnail's exact byte pattern", "[assets][pixels]")
 {
-    const auto png = WriteCheckerPng("arcane-assets-pixels-exact.png");
-    const Arcane::Guid id = Arcane::Guid::Generate();
+    const auto root = MakeCookedRoot("exact");
+    const auto fx = AddCookedChecker(root, "checker");
 
     auto assets = Arcane::Assets::Create();
     REQUIRE(assets != nullptr);
-    assets->SetAssetResolver(OneShotResolver(id, png));
+    assets->SetContentRoot(root / "Content");
+    assets->SetAssetResolver(OneShotResolver(fx.guid, fx.png));
 
-    const Arcane::PixelData* pixels = assets->PixelsFor(id);
+    const Arcane::PixelData* pixels = assets->PixelsFor(fx.guid);
     REQUIRE(pixels != nullptr);
     CHECK(pixels->Valid());
-    CHECK(pixels->width == kCheckerW);
+    CHECK(pixels->width == kCheckerW);   // 8x4 <= 64: the thumbnail IS the top mip
     CHECK(pixels->height == kCheckerH);
     CHECK(pixels->rgba == CheckerPixels());
 
-    std::remove(png.string().c_str());
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
 }
 
 TEST_CASE("assets: PixelsFor is a cache hit -- the second call returns the same pointer",
           "[assets][pixels]")
 {
-    const auto png = WriteCheckerPng("arcane-assets-pixels-cachehit.png");
-    const Arcane::Guid id = Arcane::Guid::Generate();
+    const auto root = MakeCookedRoot("cachehit");
+    const auto fx = AddCookedChecker(root, "checker");
 
     auto assets = Arcane::Assets::Create();
-    assets->SetAssetResolver(OneShotResolver(id, png));
+    assets->SetContentRoot(root / "Content");
+    assets->SetAssetResolver(OneShotResolver(fx.guid, fx.png));
 
-    const Arcane::PixelData* first = assets->PixelsFor(id);
-    const Arcane::PixelData* second = assets->PixelsFor(id);
+    const Arcane::PixelData* first = assets->PixelsFor(fx.guid);
+    const Arcane::PixelData* second = assets->PixelsFor(fx.guid);
     REQUIRE(first != nullptr);
-    CHECK(second == first);   // identical pointer: decode-once, retained
+    CHECK(second == first);   // identical pointer: resolve-once, retained
 
-    std::remove(png.string().c_str());
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
 }
 
 TEST_CASE("assets: PixelsFor on a missing or unresolvable Guid returns null, memoized",
@@ -130,10 +176,11 @@ TEST_CASE("assets: PixelsFor on a missing or unresolvable Guid returns null, mem
     CHECK(assets->PixelsFor(noResolver) == nullptr);   // memoized: no retry storm
 
     // Resolver installed but this id is unknown to it.
-    const Arcane::Guid known = Arcane::Guid::Generate();
+    const auto root = MakeCookedRoot("unknownid");
+    const auto fx = AddCookedChecker(root, "checker");
     const Arcane::Guid unknown = Arcane::Guid::Generate();
-    const auto png = WriteCheckerPng("arcane-assets-pixels-unknownid.png");
-    assets->SetAssetResolver(OneShotResolver(known, png));
+    assets->SetContentRoot(root / "Content");
+    assets->SetAssetResolver(OneShotResolver(fx.guid, fx.png));
 
     CHECK(assets->PixelsFor(unknown) == nullptr);
     CHECK(assets->PixelsFor(unknown) == nullptr);      // memoized
@@ -141,13 +188,14 @@ TEST_CASE("assets: PixelsFor on a missing or unresolvable Guid returns null, mem
     // Nil Guid -- explicitly invalid, never reaches the resolver.
     CHECK(assets->PixelsFor(Arcane::Guid::Nil()) == nullptr);
 
-    // The known id still resolves and decodes fine -- the failures above
-    // did not poison the whole facade.
-    const Arcane::PixelData* pixels = assets->PixelsFor(known);
+    // The known id still resolves through its artifact fine -- the failures
+    // above did not poison the whole facade.
+    const Arcane::PixelData* pixels = assets->PixelsFor(fx.guid);
     REQUIRE(pixels != nullptr);
     CHECK(pixels->width == kCheckerW);
 
-    std::remove(png.string().c_str());
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
 }
 
 TEST_CASE("assets: PixelsFor on a resolvable Guid whose file fails to decode returns null, memoized",
@@ -175,21 +223,24 @@ TEST_CASE("assets: PixelsFor budget evicts least-recently-used pixel entries",
 {
     namespace fs = std::filesystem;
 
-    // Three checker images (8*4*4 = 128 bytes each) against a budget that
-    // fits only two -- same touch-then-insert-evicts-LRU shape as
+    // Three cooked checkers (8x4 thumbnails, 128 bytes each) against a budget
+    // that fits only two -- same touch-then-insert-evicts-LRU shape as
     // AssetsTest.cpp's "assets: byte budget evicts least-recently-used
     // entries and stays within budget".
-    const auto pngA = WriteCheckerPng("arcane-assets-pixels-budget-a.png");
-    const auto pngB = WriteCheckerPng("arcane-assets-pixels-budget-b.png");
-    const auto pngC = WriteCheckerPng("arcane-assets-pixels-budget-c.png");
-    const Arcane::Guid a = Arcane::Guid::Generate();
-    const Arcane::Guid b = Arcane::Guid::Generate();
-    const Arcane::Guid c = Arcane::Guid::Generate();
+    const auto root = MakeCookedRoot("budget");
+    const auto fxA = AddCookedChecker(root, "a");
+    const auto fxB = AddCookedChecker(root, "b");
+    const auto fxC = AddCookedChecker(root, "c");
+    const fs::path pngA = fxA.png, pngB = fxB.png, pngC = fxC.png;
+    const Arcane::Guid a = fxA.guid;
+    const Arcane::Guid b = fxB.guid;
+    const Arcane::Guid c = fxC.guid;
 
     Arcane::AssetsDesc desc;
     desc.byteBudget = 280;   // two 128-byte entries fit (256); three do not (384)
     auto assets = Arcane::Assets::Create(desc);
     REQUIRE(assets != nullptr);
+    assets->SetContentRoot(root / "Content");
     assets->SetAssetResolver(
         [&](const Arcane::AssetId& id) -> std::optional<fs::path>
         {
@@ -233,9 +284,8 @@ TEST_CASE("assets: PixelsFor budget evicts least-recently-used pixel entries",
     CHECK(pb2->rgba == CheckerPixels());
     CHECK(assets->Stats().totalBytes <= 280);   // never settles over budget
 
-    std::remove(pngA.string().c_str());
-    std::remove(pngB.string().c_str());
-    std::remove(pngC.string().c_str());
+    std::error_code ec;
+    fs::remove_all(root, ec);
 }
 
 // ---- F2b Task 6: TextureInfoFor + PixelsFor's narrowed (artifact-backed) contract ----------
@@ -377,15 +427,20 @@ TEST_CASE("assets: TextureInfoFor serves HEADER (true) dims while PixelsFor serv
     CHECK(pixels->height != info->height);
 }
 
-TEST_CASE("assets: a guid with no cooked artifact yet keeps the legacy full-decode behaviour "
-          "unchanged (Task 8 retires this fallback)", "[assets][pixels][artifact]")
+TEST_CASE("assets: a guid with no cooked artifact is the ArtifactMissing refusal on ALL THREE "
+          "accessors -- loud, memoized, latched (Task 8: content is artifact-only, the stb "
+          "fallback is retired)", "[assets][pixels][artifact]")
 {
+    ScopedContentArtifactRefusalLatch latchGuard;
+    REQUIRE_FALSE(Arcane::ContentArtifactRefusalObserved());
+
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() / "arcane_assets_artifact_sandbox" / "no_artifact";
     std::error_code ec;
     fs::remove_all(root, ec);
     fs::create_directories(root / "Content" / "textures");
-    // Deliberately NO Intermediate/Artifacts anywhere under root.
+    // Deliberately NO Intermediate/Artifacts anywhere under root: a perfectly
+    // decodable source PNG with no cooked artifact must REFUSE, never limp to stb.
 
     const Arcane::Guid guid = Arcane::Guid::Generate();
     const fs::path png = root / "Content" / "textures" / "plain.png";
@@ -401,17 +456,17 @@ TEST_CASE("assets: a guid with no cooked artifact yet keeps the legacy full-deco
         return std::nullopt;
     });
 
-    const Arcane::TextureInfo* info = assets->TextureInfoFor(guid);
-    REQUIRE(info != nullptr);
-    CHECK(info->width == kCheckerW);
-    CHECK(info->height == kCheckerH);
-    CHECK(info->mipCount == 1);
+    CHECK(assets->TextureInfoFor(guid) == nullptr);
+    CHECK(assets->TextureInfoFor(guid) == nullptr);   // memoized: no retry storm
+    CHECK(assets->PixelsFor(guid) == nullptr);
+    CHECK(assets->ArtifactFor(guid) == nullptr);
 
-    const Arcane::PixelData* pixels = assets->PixelsFor(guid);
-    REQUIRE(pixels != nullptr);
-    CHECK(pixels->width == kCheckerW);
-    CHECK(pixels->height == kCheckerH);
-    CHECK(pixels->rgba == checker);   // legacy full decode, byte-exact, unchanged
+    // The watched firing: the process-wide latch names ArtifactMissing and the guid,
+    // exactly what ArcaneRuntime turns into its nonzero exit.
+    CHECK(Arcane::ContentArtifactRefusalObserved());
+    const std::string detail = Arcane::ContentArtifactRefusalDetail();
+    CHECK(detail.find("ArtifactMissing") != std::string::npos);
+    CHECK(detail.find(guid.ToString()) != std::string::npos);
 
     fs::remove_all(root, ec);
 }

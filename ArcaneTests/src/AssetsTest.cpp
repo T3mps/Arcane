@@ -28,6 +28,14 @@
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Project/Project.hpp>
 
+// F2b Task 8: content is artifact-only, so the anchoring test below cooks its
+// real marker through the production import path (the same idiom
+// AssetsPixelsTest.cpp uses -- these tests link ArcaneAssetPipeline to build
+// fixtures ONLY; ArcaneClient itself never links it).
+#include <Arcane/AssetPipeline/ArtifactFormat.hpp>
+#include <Arcane/AssetPipeline/TextureImporter.hpp>
+#include <Arcane/AssetPipeline/TextureMetaSettings.hpp>
+
 namespace
 {
     // Writes a temp JSON file; returns its path.
@@ -354,6 +362,34 @@ TEST_CASE("assets: registry-resolved ids are load-ready -- the content root must
     writePng("Proj/Content/textures/marker.png", 2, 2);
     writeText("Proj/Content/textures/marker.png.meta",
               std::string(R"({"guid":")") + kPngGuid + R"(","version":1})");
+
+    // Cook the REAL marker (Task 8: no artifact, no pixels). The decoy is
+    // deliberately NOT cooked: if double-anchoring regressed, the id route
+    // resolves the decoy's path, its bytes hash-mismatch this artifact's
+    // sourceHash, and PixelsFor refuses -- the REQUIRE below still catches
+    // the mechanism, now by refusal instead of by decoy dims.
+    {
+        const auto srcBytes = [&]() {
+            std::ifstream f("Proj/Content/textures/marker.png", std::ios::binary);
+            REQUIRE(f.good());
+            f.seekg(0, std::ios::end);
+            std::vector<std::byte> out(static_cast<std::size_t>(f.tellg()));
+            f.seekg(0, std::ios::beg);
+            f.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(out.size()));
+            REQUIRE(f.good());
+            return out;
+        }();
+        const auto markerGuid = Arcane::Guid::FromString(kPngGuid);
+        REQUIRE(markerGuid.has_value());
+        Arcane::AssetPipeline::TextureMetaSettings settings;
+        settings.format = Arcane::AssetPipeline::TextureMetaSettings::Format::Rgba8;
+        auto imported = Arcane::AssetPipeline::ImportTexture(srcBytes, *markerGuid, settings);
+        REQUIRE(imported.has_value());
+        fs::create_directories("Proj/Intermediate/Artifacts/aa");
+        REQUIRE(Arcane::AssetPipeline::WriteTextureArtifact(
+            fs::path("Proj/Intermediate/Artifacts/aa/marker.arcart"),
+            imported->desc, imported->payload, imported->thumbRgba));
+    }
     const std::string realJson = std::string(R"({"id":")") + kJsonGuid + R"(","payload":7})";
     writeText("Proj/Content/data/thing.json", realJson);
 
@@ -393,11 +429,13 @@ TEST_CASE("assets: registry-resolved ids are load-ready -- the content root must
     assets->SetAssetResolver(
         [p = &*proj](const Arcane::AssetId& id) { return p->ResolveAsset(id); });
 
-    // PixelsFor: the NRI graph path's ENTIRE texture supply -- RuntimeApp's
-    // SetPixelSupply lambda is a direct call to this.
+    // PixelsFor: preview pixels through the artifact route (Task 8). The 2x2
+    // marker's thumbnail is 2x2; a double-anchored resolve reads the uncooked
+    // decoy's bytes, hash-mismatches the artifact, and REFUSES -- either way
+    // the doubled path can no longer pass silently.
     const Arcane::PixelData* pixels = assets->PixelsFor(*pngId);
     REQUIRE(pixels != nullptr);
-    CHECK(pixels->width  == 2u);   // 4 == the decoy at the doubled path
+    CHECK(pixels->width  == 2u);
     CHECK(pixels->height == 2u);
 
     // GetJson(AssetId) / GetBytes(AssetId): the same ResolveId seam, device-free.
@@ -415,12 +453,12 @@ TEST_CASE("assets: registry-resolved ids are load-ready -- the content root must
     REQUIRE(byPath != nullptr);
     CHECK(byPath.get() == doc.get());
 
-    // THE ID ROUTE RETAINS WHAT IT DECODED, on a FRESH facade: the first call
-    // resolves through the project and decodes, and a second call for the same
-    // id is served from the retained pixel cache rather than from disk.
-    // Overwrite the file in between -- an answer that is still 2x2 can only be
-    // the retained decode, and it decoded the right file rather than the decoy
-    // at the doubled path.
+    // THE ID ROUTE RETAINS WHAT IT SERVED, on a FRESH facade: the first call
+    // resolves through the project and serves the artifact thumbnail, and a
+    // second call for the same id hits the retained pixel cache rather than
+    // disk. Overwrite the file in between -- a fresh miss would now
+    // hash-mismatch (8x8 bytes vs the 2x2 artifact) and refuse, so an answer
+    // that is still 2x2 can only be the retained entry.
     //
     // The first call was GetTexture(AssetId) until ABI v15, which proved the
     // same thing one layer up (it decoded through this same supply before it

@@ -92,9 +92,9 @@ namespace Arcane
 
         // Latches the FIRST refusal only (compare_exchange_strong guards the detail write
         // too -- a second, different refusal on a later guid must not overwrite the first
-        // one a host is about to report). `kind` is "HashMismatch" or
-        // "VersionNewerThanEngine" -- ArtifactRefusal::Missing never reaches here (see
-        // RefuseArtifact below; Missing is not a refusal at this layer yet).
+        // one a host is about to report). `kind` is "ArtifactMissing", "HashMismatch" or
+        // "VersionNewerThanEngine" -- as of Task 8 (the sprite cutover) a source with no
+        // cooked artifact refuses by name like the other two (see RefuseArtifact below).
         void NoteContentArtifactRefusal(const Guid& id, const char* kind)
         {
             bool expected = false;
@@ -351,16 +351,22 @@ namespace Arcane
             }
 
             // Refuse LOUDLY (ERROR, not WARN) and memoize -- "refuse, never limp"
-            // (Assets.hpp's PixelsFor/TextureInfoFor doc comments). Shared by both
-            // caches' artifact-refusal branch so the log line, the memo and the
+            // (Assets.hpp's PixelsFor/TextureInfoFor doc comments). Shared by every
+            // accessor's artifact-refusal branch so the log line, the memo and the
             // process-wide latch (Assets.hpp's ContentArtifactRefusalObserved) can
-            // never drift between the two call sites.
+            // never drift between the call sites. As of Task 8 (the sprite cutover)
+            // Missing IS a refusal here too: content is artifact-only, and a source
+            // with no cooked artifact refuses by name rather than limping to stb.
+            // Task 12's cook-completion invalidation is what clears a Missing memo
+            // once a cook lands -- the editor's drop-a-png flow depends on that.
             template <typename T>
             void RefuseArtifact(AssetCache<T>& cache, const std::string& key,
                                 const Guid& id, ArtifactRefusal refusal)
             {
                 const char* kind = (refusal == ArtifactRefusal::HashMismatch)
-                    ? "HashMismatch" : "VersionNewerThanEngine";
+                    ? "HashMismatch"
+                    : (refusal == ArtifactRefusal::VersionNewerThanEngine)
+                        ? "VersionNewerThanEngine" : "ArtifactMissing";
                 ARC_ERROR("Assets: content artifact REFUSED for {} -- {} (refuse, never "
                           "limp; see ArtifactReader.hpp's refusal discipline)",
                           id.ToString(), kind);
@@ -376,10 +382,12 @@ namespace Arcane
             // content (Assets.hpp's own doc comment): a guid whose source has a valid
             // cooked artifact is served that artifact's own THUMBNAIL (small,
             // uncompressed RGBA8) rather than a full decode of the source -- cheap, and
-            // exactly what a sprite-picker/inspector preview needs. A guid with no
-            // artifact yet keeps the ORIGINAL full-decode behaviour unchanged (Task 8
-            // retires this fallback). A guid whose artifact is PRESENT but INVALID
-            // refuses loudly instead of falling back to either -- see RefuseArtifact.
+            // exactly what a sprite-picker/inspector preview needs. As of Task 8 (the
+            // sprite cutover) content is ARTIFACT-ONLY: a guid with no cooked artifact
+            // is the ArtifactMissing refusal, loud and memoized, exactly like a guid
+            // whose artifact is PRESENT but INVALID -- see RefuseArtifact. The stb
+            // fallback this branch once had is retired; LoadPngRgba survives in this
+            // TU for the verify/compare ORACLE only.
             const PixelData* PixelsForResolved(const Guid& id, const std::filesystem::path& resolved,
                                                const std::string& key)
             {
@@ -391,32 +399,24 @@ namespace Arcane
                 }
 
                 const ArtifactReadResult art = ResolveArtifact(id, resolved);
-                if (art.refusal == ArtifactRefusal::HashMismatch ||
-                    art.refusal == ArtifactRefusal::VersionNewerThanEngine)
+                if (art.refusal != ArtifactRefusal::None || !art.artifact)
                 {
+                    // Missing lands here too (Task 8): no cooked artifact == refusal
+                    // by name, never a silent stb decode of the source.
                     RefuseArtifact(m_pixels, key, id, art.refusal);
                     return nullptr;
                 }
 
                 auto pixels = std::make_shared<PixelData>();
-                if (art.refusal == ArtifactRefusal::None && art.artifact)
+                // Artifact-backed: serve the THUMBNAIL. width/height here are the
+                // THUMBNAIL's dims (<=64px), never the source's -- TextureInfoFor
+                // is the true-dims source (the wrong-dims bug class this split
+                // exists to prevent -- see SpriteCache.cpp's own retarget).
+                pixels->width  = art.artifact->thumbWidth;
+                pixels->height = art.artifact->thumbHeight;
                 {
-                    // Artifact-backed: serve the THUMBNAIL. width/height here are the
-                    // THUMBNAIL's dims (<=64px), never the source's -- TextureInfoFor
-                    // is the true-dims source (the wrong-dims bug class this split
-                    // exists to prevent -- see SpriteCache.cpp's own retarget).
-                    pixels->width  = art.artifact->thumbWidth;
-                    pixels->height = art.artifact->thumbHeight;
                     const auto* p = reinterpret_cast<const unsigned char*>(art.artifact->thumbRgba.data());
                     pixels->rgba.assign(p, p + art.artifact->thumbRgba.size());
-                }
-                else if (!LoadPngRgba(resolved, pixels->width, pixels->height, pixels->rgba))
-                {
-                    // Missing (no artifact yet): legacy full decode. LoadPngRgba
-                    // already WARN-logged the specific reason (missing file, corrupt
-                    // data, non-positive dims).
-                    m_pixels.PutFailure(key);
-                    return nullptr;
                 }
 
                 const uint64_t bytes = (uint64_t)pixels->rgba.size();
@@ -439,11 +439,11 @@ namespace Arcane
 
             // Header dims/mipCount/srgb behind TextureInfoFor(Guid) -- ABI v21, new.
             // Artifact-backed content reads the artifact's own HEADER (no decode at
-            // all); content with no artifact yet falls back to a header-only stb probe
-            // (stbi_info -- dims only, no pixel decode) with mipCount=1 and srgb=true
-            // (the engine-wide default for colour textures this file's own banner
-            // states; Task 8's artifact-everywhere world removes the need to guess).
-            // A PRESENT-but-invalid artifact refuses loudly, same as PixelsForResolved.
+            // all). As of Task 8 content is ARTIFACT-ONLY: a guid with no cooked
+            // artifact is the ArtifactMissing refusal, loud and memoized -- the old
+            // stbi_info dimension probe is retired with the rest of the content stb
+            // route. A PRESENT-but-invalid artifact refuses the same way, same as
+            // PixelsForResolved.
             const TextureInfo* TextureInfoForResolved(const Guid& id, const std::filesystem::path& resolved,
                                                        const std::string& key)
             {
@@ -455,33 +455,15 @@ namespace Arcane
                 }
 
                 const ArtifactReadResult art = ResolveArtifact(id, resolved);
-                if (art.refusal == ArtifactRefusal::HashMismatch ||
-                    art.refusal == ArtifactRefusal::VersionNewerThanEngine)
+                if (art.refusal != ArtifactRefusal::None || !art.artifact)
                 {
+                    // Missing lands here too (Task 8): artifact-only, no stbi_info probe.
                     RefuseArtifact(m_textureInfo, key, id, art.refusal);
                     return nullptr;
                 }
 
                 auto info = std::make_shared<TextureInfo>();
-                if (art.refusal == ArtifactRefusal::None && art.artifact)
-                {
-                    *info = art.artifact->info;
-                }
-                else
-                {
-                    int w = 0, h = 0, comp = 0;
-                    if (!stbi_info(resolved.string().c_str(), &w, &h, &comp) || w <= 0 || h <= 0)
-                    {
-                        ARC_WARN("Assets: TextureInfoFor failed to probe dimensions: {}",
-                                 resolved.string());
-                        m_textureInfo.PutFailure(key);
-                        return nullptr;
-                    }
-                    info->width    = (uint32_t)w;
-                    info->height   = (uint32_t)h;
-                    info->mipCount = 1;
-                    info->srgb     = true;
-                }
+                *info = art.artifact->info;
 
                 const TextureInfo* raw = info.get();
                 // Tiny, fixed-size metadata -- weighted at sizeof(TextureInfo) in the
@@ -498,21 +480,18 @@ namespace Arcane
 
             // The compiled-texture supply behind ArtifactFor(Guid) -- Task 7, ABI v21.
             // Shares ResolveArtifact/RefuseArtifact with the two accessors above, so the
-            // hash/version refusal discipline can never drift between the three. See
-            // Assets.hpp's own doc comment for the one way this DIFFERS from them: "no
-            // artifact yet" (ArtifactRefusal::Missing, or ResolveArtifact's own
-            // no-project/no-store-hit early return) is NOT memoized here -- there is no
-            // fallback decode this accessor can serve instead, so every such call re-scans
-            // rather than latching a permanent miss. That re-scan is what lets
-            // NriTextureCache's PendingCook state (Task 7's own consumer) promote to
-            // Resident the moment a cook queue produces the artifact, rather than being
-            // stuck forever behind the FIRST caller that asked before the cook landed.
+            // refusal discipline can never drift between the three. As of Task 8 the
+            // three accessors agree on Missing too: no cooked artifact == the
+            // ArtifactMissing refusal, loud and MEMOIZED (the Task 7-era unmemoized
+            // re-scan is retired with the content stb route). The editor's drop-a-png
+            // flow still promotes PendingCook -> Resident: Task 12's cook-completion
+            // callback INVALIDATES this facade's entry for the cooked guid, which
+            // clears the Missing memo and lets the next re-poll resolve the fresh
+            // artifact -- promotion rides invalidation now, not perpetual re-scan.
             const LoadedClientArtifact* ArtifactForResolved(const Guid& id,
                                                              const std::filesystem::path& resolved,
                                                              const std::string& key)
             {
-                // A cache HIT is still a hit, Resident or Refused alike -- only the
-                // "nothing on disk yet" case below skips the cache entirely.
                 if (m_artifacts.Has(key))
                 {
                     if (m_artifacts.IsFailure(key))
@@ -521,16 +500,11 @@ namespace Arcane
                 }
 
                 const ArtifactReadResult art = ResolveArtifact(id, resolved);
-                if (art.refusal == ArtifactRefusal::HashMismatch ||
-                    art.refusal == ArtifactRefusal::VersionNewerThanEngine)
-                {
-                    RefuseArtifact(m_artifacts, key, id, art.refusal);
-                    return nullptr;
-                }
                 if (art.refusal != ArtifactRefusal::None || !art.artifact)
                 {
-                    // Missing: no cooked artifact for this guid's source YET. Deliberately
-                    // NOT m_artifacts.PutFailure(key) -- see this function's own banner.
+                    // Missing included (Task 8) -- memoized like the other two accessors;
+                    // Task 12's cook-completion invalidation is the un-latch.
+                    RefuseArtifact(m_artifacts, key, id, art.refusal);
                     return nullptr;
                 }
 

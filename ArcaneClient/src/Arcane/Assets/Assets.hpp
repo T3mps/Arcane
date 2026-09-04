@@ -91,12 +91,12 @@ namespace Arcane
         // even for a texture whose pixels have never been touched this session. Resolves
         // `id` through the installed AssetResolver to find the CONTENT source, then finds
         // that source's artifact under the project's Intermediate/Artifacts (see
-        // ArtifactReader.hpp's FindArtifactForGuid); a guid whose source has no cooked
-        // artifact yet falls back to a plain stb dimension probe of the source file itself
-        // (Task 8 retires this fallback once every content texture is guaranteed a cooked
-        // artifact). Null on an invalid/unresolvable id, a REFUSED artifact (present but
-        // invalid -- see PixelsFor's own refusal paragraph below, same memoization, same
-        // "refuse, never limp" posture), or an unresolvable source (logged once, memoized).
+        // ArtifactReader.hpp's FindArtifactForGuid). Content is ARTIFACT-ONLY as of
+        // Task 8 (the sprite cutover): a guid whose source has no cooked artifact is the
+        // ArtifactMissing refusal -- loud, memoized, latched -- exactly like a REFUSED
+        // artifact (present but invalid; see PixelsFor's refusal paragraph below). Null
+        // on an invalid/unresolvable id, any refusal, or an unresolvable source (logged
+        // once, memoized).
         //
         // THIS IS THE DIMENSION SOURCE going forward -- SpriteCache.cpp reads geometry dims
         // from here, not from PixelsFor, specifically because PixelsFor now serves a
@@ -109,10 +109,10 @@ namespace Arcane
         // for artifact-backed content (a guid whose source has a cooked .arcart) this
         // serves the artifact's own THUMBNAIL (small, uncompressed RGBA8, PixelData::width/
         // height are the THUMBNAIL's dims, NOT the source's -- use TextureInfoFor above for
-        // true dims). For content with no artifact yet, this keeps today's behaviour
-        // unchanged: a full stb decode of the source file, PixelData::width/height are the
-        // real dims (Task 8 retires this fallback, at which point every content texture
-        // routes through the artifact path). Resolves `id` through the installed
+        // true dims). Content is ARTIFACT-ONLY as of Task 8: a guid with no cooked
+        // artifact is the ArtifactMissing refusal (loud, memoized, latched) -- the old
+        // full-stb-decode fallback is retired; the stb symbols survive in this facade's
+        // TU for the verify/compare oracle and editor chrome only. Resolves `id` through the installed
         // AssetResolver, then decodes/loads once and retains the result: a second call for
         // the same id is a cache hit, returning the SAME pointer. Null on an invalid/
         // unresolvable id, an unreadable/undecodable source (logged once, memoized), or a
@@ -154,18 +154,14 @@ namespace Arcane
         // VersionNewerThanEngine -- refuses loudly and memoizes, same "refuse,
         // never limp" ERROR + latch as the other two accessors).
         //
-        // UNLIKE TextureInfoFor/PixelsFor, a guid whose source has NO cooked
-        // artifact YET is NOT memoized here: this accessor has no fallback to
-        // offer (there is no decode-to-mips path the way PixelsFor has a
-        // stb decode), so "no artifact yet" is re-checked on every call
-        // rather than latched as a permanent miss. That is deliberate and
-        // load-bearing for its one production consumer,
-        // NriTextureCache::ArtifactSupplyFn (Task 7): a texture in the
-        // engine's PendingCook state must be able to promote to Resident the
-        // moment a cook queue (Task 12) produces the artifact, which a sticky
-        // "missing" memo would permanently prevent. FindArtifactForGuid's own
-        // directory scan is cheap per its own doc comment (ArtifactReader.hpp)
-        // -- this is what makes the re-check affordable.
+        // Missing agrees with the other two accessors as of Task 8: a guid
+        // whose source has NO cooked artifact is the ArtifactMissing refusal,
+        // loud and MEMOIZED (the Task 7-era every-call re-scan is retired).
+        // PendingCook -> Resident promotion for the editor's drop-a-png flow
+        // rides INVALIDATION instead: Task 12's cook-completion callback
+        // invalidates this facade's entry for the cooked guid, clearing the
+        // memo, and NriTextureCache's next throttled re-poll resolves the
+        // fresh artifact.
         //
         // Null for an invalid/unresolvable id, a REFUSED artifact, or a guid
         // with no cooked artifact at all. The returned pointer is owned by
