@@ -15,8 +15,9 @@
 // surface check. None of the stitch/template/bindings machinery in that
 // header is reachable from here, and that is the part that matters: a
 // "mesh"-kind .arcmat carries no snippet at all (F2a design: two params,
-// `baseColor` and a declared-but-unbound `albedo`), so there is
-// no //@param declaration to parse and no MaterialTemplate to build --
+// `baseColor` and `albedo` -- the latter declared-but-unbound in F2a and
+// given a consumer in F2b Task 11, see Services::resolveAlbedoSlot below),
+// so there is no //@param declaration to parse and no MaterialTemplate to build --
 // MaterialSurface::Mesh does not even have a template file yet
 // (MaterialTemplateFile's ARC_ENSURE guard, Material/MaterialSource.cpp).
 // Reaching for that machinery here would not just be unneeded, it would
@@ -56,6 +57,7 @@
 #include <Arcane/Guid.hpp>
 #include <Arcane/Scene/SceneResources.hpp>   // Arcane::ResolvedMeshMaterial (full type: Table()'s value type)
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -71,9 +73,31 @@ namespace Arcane
         using ResolveAssetFn =
             std::function<std::optional<std::filesystem::path>(const Guid&)>;
 
+        // Guid (the resolved `albedo` texture) -> a bindless material-table
+        // slot, or 0xFFFFFFFF ("no slot" -- BindlessTable::kInvalidSlot's own
+        // value; restated as a literal for the SAME reason SceneResources.
+        // hpp's ResolvedMeshMaterial::materialSlot does, see that field's own
+        // comment) when there is none. F2b Task 11's device seam: this class
+        // stays CONSTANTS ONLY and never reaches NriTextureCache or
+        // BindlessTable itself (this header's own header comment, and
+        // MeshMaterialCache.cpp's OwnAlbedo helper never sees an NRI type) --
+        // the callback's IMPLEMENTATION is what does that, owned by whoever
+        // supplies it (a host's live NriGraphContext -- see
+        // NriGraphContext::ResolveMeshAlbedoSlot, which is what
+        // SceneRenderResolver wires in here through its OWN injected
+        // `resolveMeshAlbedoSlot` field, Host/SceneRenderResolver.hpp).
+        using ResolveAlbedoSlotFn = std::function<std::uint32_t(const Guid&)>;
+
         struct Services
         {
             ResolveAssetFn resolveAsset;   // Guid -> path (project registry)
+
+            // Null in every CPU test and on a host before its graph context
+            // exists -- Request() then leaves every resolved material's
+            // `materialSlot` at its default (kInvalidSlot's value), the flat
+            // baseColor path, exactly the same degrade a null `resolveAsset`
+            // already gets. See ResolveAlbedoSlotFn's own comment above.
+            ResolveAlbedoSlotFn resolveAlbedoSlot;
         };
 
         explicit MeshMaterialCache(Services services);

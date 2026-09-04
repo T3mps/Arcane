@@ -43,7 +43,9 @@
 //
 // WHAT IT DOES NOT OWN. The camera (a pure sweep -- Scene/SceneCamera.hpp),
 // the batcher, and the compile service: all injected. It never renders, and
-// it holds no graphics device at all.
+// it holds no graphics device at all. F2b Task 11 adds ONE more injected
+// seam under the same rule -- Services::resolveMeshAlbedoSlot, a callback
+// rather than an NRI/device type, so this promise stays literally true.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
@@ -51,6 +53,7 @@
 #include <Arcane/Render/GraphicsBackend.hpp>   // by value in Services
 
 
+#include <cstdint>
 #include <functional>
 
 namespace Arcane
@@ -99,6 +102,20 @@ namespace Arcane
             // while the editor still routes results to its open shader
             // documents. Hosts with no documents leave it unset.
             std::function<bool(const ShaderCompileResult&)> consumeFirst;
+
+            // F2b Task 11: resolves a mesh material's albedo Guid into a
+            // bindless material-table slot on the frame's live NRI device --
+            // forwarded verbatim into MeshMaterialCache::Services
+            // (Render/MeshMaterialCache.hpp's ResolveAlbedoSlotFn carries the
+            // full contract). Injected for the SAME reason `consumeFirst` is:
+            // this class holds no device of its own (WHAT IT DOES NOT OWN,
+            // above), so the one thing here that ever touches NRI is a
+            // callback a host with a live NriGraphContext supplies -- see
+            // NriGraphContext::ResolveMeshAlbedoSlot, the implementation
+            // both hosts wire in. Null (every test, and a host before its
+            // graph context exists) leaves every mesh's albedo unresolved,
+            // the flat baseColor path.
+            std::function<std::uint32_t(const Guid&)> resolveMeshAlbedoSlot;
         };
 
         // This frame's facts. `now` is the compile service's clock (monotonic

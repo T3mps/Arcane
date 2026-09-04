@@ -37,10 +37,24 @@
 
 #include <glm/glm.hpp>
 
+#include <cstdint>
 #include <vector>
 
 namespace Arcane
 {
+    // F2b Task 11: SceneResources.hpp's ResolvedMeshMaterial::materialSlot
+    // restates BindlessTable::kInvalidSlot as a plain 0xFFFFFFFF literal
+    // rather than including Render/Nri/BindlessTable.hpp (that header pulls
+    // <NRI.h>, and SceneResources.hpp is deliberately render-backend-
+    // agnostic -- see that field's own comment for the full reasoning). This
+    // is the ONE place both symbols are visible together (this header
+    // already pulls MeshNode.hpp -> BindlessTable.hpp for MeshInstance
+    // itself), so it is where the two literals' agreement is actually
+    // checked, not just asserted in a comment.
+    static_assert(std::uint32_t{0xFFFFFFFFu} == BindlessTable::kInvalidSlot,
+                  "SceneResources.hpp's ResolvedMeshMaterial::materialSlot default must mirror "
+                  "BindlessTable::kInvalidSlot exactly");
+
     // Sweeps every (WorldTransform, MeshRenderer) entity minus Hidden,
     // resolving each into a borrowed-mesh MeshInstance and appending it to
     // `out`. An entity missing WorldTransform is excluded by the view itself
@@ -122,8 +136,19 @@ namespace Arcane
             if (!mat)
                 mat = matTable ? matTable->Resolve(entry->material) : nullptr;
             const glm::vec4 baseColor = mat ? mat->baseColor : glm::vec4(1.0f);
+            // F2b Task 11: the resolved material's bindless slot, already
+            // resolved by the time this sweep runs -- SceneRenderResolver::
+            // Refresh's per-frame MeshMaterialCache::Request calls
+            // (Host/SceneRenderResolver.cpp) are what actually reach the
+            // device; this function calls neither cache (see the NO
+            // Request() CALL note above) and only copies the value across.
+            // No material resolved at all (nil override AND nil mesh
+            // default, or a broken override that fell through) means no
+            // slot either -- MeshInstance::materialSlot's own default,
+            // BindlessTable::kInvalidSlot, the flat baseColor path.
+            const std::uint32_t materialSlot = mat ? mat->materialSlot : BindlessTable::kInvalidSlot;
 
-            out.push_back(MeshInstance{ &entry->data, world.matrix, baseColor });
+            out.push_back(MeshInstance{ &entry->data, world.matrix, baseColor, materialSlot });
         });
     }
 }

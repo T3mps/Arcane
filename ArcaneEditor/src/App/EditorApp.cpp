@@ -764,6 +764,20 @@ namespace Arcane::Editor
                 });
                 return consumed;
             };
+            // F2b Task 11: the mesh-albedo bindless resolution seam. Routed
+            // through the VIEWPORT vehicle specifically, never ChromeGraph()
+            // -- m_viewportTargets.graph is the ONE graph context whose
+            // MeshNode ever draws the open scene (ChromeGraph() renders
+            // editor UI only and declares no mesh scene at all). Looked up
+            // live, at CALL time: this Services struct is built here, at
+            // stage time, long before m_viewportTargets.graph exists (it is
+            // (re)built per project, later) -- the same [this]-capture idiom
+            // rs.consumeFirst just above already relies on.
+            rs.resolveMeshAlbedoSlot = [this](const Arcane::Guid& g) -> std::uint32_t
+            {
+                Arcane::NriGraphContext* graph = m_viewportTargets.graph.get();
+                return graph ? graph->ResolveMeshAlbedoSlot(g) : 0xFFFFFFFFu;
+            };
             m_resolver =
                 std::make_unique<Arcane::SceneRenderResolver>(std::move(rs));
         }

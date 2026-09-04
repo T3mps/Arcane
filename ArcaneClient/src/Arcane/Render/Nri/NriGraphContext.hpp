@@ -1128,6 +1128,72 @@ namespace Arcane
         // only if Create() failed, which never returns a vehicle.
         [[nodiscard]] NriTextureCache* Textures() noexcept { return m_textures.get(); }
 
+        // F2b Task 11: resolves a mesh material's albedo Guid into a slot in
+        // THIS context's MeshNode bindless material table -- the device seam
+        // SceneRenderResolver's `resolveMeshAlbedoSlot` callback (Host/
+        // SceneRenderResolver.hpp) is built over, since SceneRenderResolver
+        // itself holds no device (its own "WHAT IT DOES NOT OWN" comment).
+        //
+        // Textures()->Resolve on first sight (uploading the artifact through
+        // the shared cache exactly like a sprite or a declared sprite-
+        // material param does), then mints a SEPARATE nri::Descriptor VIEW
+        // over the resolved texture -- deliberately NOT Textures()->View(id)
+        // -- before handing that fresh view to Mesh()->AddMaterial. Two
+        // independent views, one shared texture: AddMaterial's own
+        // OWNERSHIP contract (MeshNode.hpp) takes the view it is handed and
+        // destroys it at BindlessTable::Release, and NriTextureCache
+        // already owns and destroys ITS OWN view of the same asset for
+        // every other consumer (a sprite, a declared material param) -- one
+        // shared view with two destroyers is a double-destroy, not a
+        // sharing optimization. Memoized by TEXTURE Guid (not material
+        // Guid) in m_meshAlbedoSlots so N mesh materials sharing one albedo
+        // still cost one Add, one slot and one extra view -- "the resolver
+        // owns the texture->slot map" the plan calls for.
+        //
+        // kInvalidSlot's numeric value (0xFFFFFFFF -- BindlessTable::
+        // kInvalidSlot; restated as a literal so this HEADER need not pull
+        // BindlessTable.hpp's <NRI.h> in for one constant, matching how this
+        // file already keeps kInvalidSlot's OWN value out of SceneResources.
+        // hpp for the identical reason) for: a nil Guid, a context with no
+        // texture cache or no bindless-capable MeshNode (bindless tier 0 --
+        // MeshNode::Create refused), an image the shared cache cannot make
+        // resident, or a table already at its kBindlessCapacity ceiling --
+        // see NriTextureCache::Resolve's and BindlessTable::Add's own doc
+        // comments for why each degrades silently (one warn, memoized) rather
+        // than asserting.
+        //
+        // SLOT LIFETIME: a memoized slot is NEVER released individually --
+        // BindlessTable is Add-only (BindlessTable.hpp's SLOT POLICY: no
+        // per-slot free) and NriTextureCache itself never evicts a single
+        // texture either (only a whole-cache Release()), so "released when
+        // the texture leaves residency" reduces, on THIS shape, to "released
+        // when this whole context is": m_meshAlbedoSlots is a plain member
+        // with no burial of its own, and it goes stale exactly when
+        // m_textures/m_mesh do, at Release()/teardown. A run that streams
+        // through many more than kBindlessCapacity distinct albedos over its
+        // lifetime exhausts the table -- AddMaterial's own one-shot WARN says
+        // so, and the rest simply draw the flat baseColor path (kInvalidSlot)
+        // from then on, never a crash.
+        //
+        // KNOWN GAP, left for Task 12: a Guid resolved while its artifact was
+        // still PendingCook (NriTextureCache's checkerboard placeholder) gets
+        // memoized against the PLACEHOLDER's descriptor -- promotion to the
+        // real artifact on a later poll does not re-Add or update the cached
+        // slot, since a slot is only ever taken on the FIRST successful
+        // resolve of a given Guid. Not reachable by anything in THIS arc (the
+        // proof cooks its artifact before ever resolving it), and Task 12's
+        // live cook queue is exactly the feature that would need to close it.
+        //
+        // CALL AT DECLARATION TIME ONLY -- forwards straight into
+        // NriTextureCache::Resolve/View, which carries that rule itself
+        // (NriTextureCache.hpp's NO BARRIERS section). SceneRenderResolver::
+        // Refresh -- reached through the `resolveMeshAlbedoSlot` seam every
+        // production host wires in -- is the PRODUCTION caller and already
+        // runs well before that window, per ITS OWN "call before
+        // Batcher2D::Begin" contract; a test calling this directly (outside
+        // any RenderFrame) owes itself the same rule.
+        [[nodiscard]] std::uint32_t ResolveMeshAlbedoSlot(const Guid& id);
+
     private:
         NriGraphContext() = default;
 
@@ -1249,6 +1315,14 @@ namespace Arcane
         // value (NriPipelineCache's fill contract, rule 2).
         std::filesystem::path m_shaderDir;
         std::unordered_map<std::string, std::vector<std::uint8_t>> m_shaderBins;
+
+        // F2b Task 11's texture->slot memo -- see ResolveMeshAlbedoSlot's own
+        // doc comment for the full contract (what populates it, and why
+        // there is no per-entry release). Keyed by the ALBEDO TEXTURE Guid,
+        // never by a .arcmat Guid -- deliberately a DIFFERENT key space than
+        // MeshMaterialCache's own table (Render/MeshMaterialCache.hpp), which
+        // is keyed by material Guid and lives one layer up, device-free.
+        std::unordered_map<Guid, std::uint32_t> m_meshAlbedoSlots;
 
         // The capture staging buffer, owned here (the graph only IMPORTS it --
         // a transient graph buffer is DEVICE-local and could never be mapped).

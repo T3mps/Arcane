@@ -620,6 +620,77 @@ namespace Arcane
         return std::span<const std::uint8_t>(inserted.first->second);
     }
 
+    std::uint32_t NriGraphContext::ResolveMeshAlbedoSlot(const Guid& id)
+    {
+        // See this method's own doc comment (NriGraphContext.hpp) for the
+        // full contract -- what each refusal means and why, the memoization
+        // key, and the PendingCook gap left for Task 12.
+        if (!id.IsValid() || !m_mesh || !m_textures || !m_device)
+            return BindlessTable::kInvalidSlot;
+
+        const auto cached = m_meshAlbedoSlots.find(id);
+        if (cached != m_meshAlbedoSlots.end())
+            return cached->second;
+
+        // Srgb, the scene default (NriTextureCache::ColorSpace) -- a mesh
+        // albedo is scene content like a sprite's own texture, never chrome.
+        nri::Texture* texture = m_textures->Resolve(id);
+        if (!texture)
+            return BindlessTable::kInvalidSlot;   // not resident -- NriTextureCache already
+                                                   // warned, once (its own one-shot latch)
+
+        // A SEPARATE, INDEPENDENTLY-OWNED view over the SAME texture --
+        // deliberately NOT m_textures->View(id). AddMaterial's own
+        // OWNERSHIP contract (MeshNode.hpp) takes the descriptor it is
+        // handed and destroys it at BindlessTable::Release; NriTextureCache
+        // ALREADY owns and destroys ITS OWN view of this texture (any
+        // sprite/material param naming the same asset reads that one). Two
+        // owners destroying the SAME nri::Descriptor* is a double-destroy
+        // -- caught the hard way once already (a D3D12-only SIGSEGV at this
+        // vehicle's teardown, desk-verified before this comment was
+        // written) -- so this mints its own SRV instead: multiple views
+        // over one resource is ordinary and legal on both backends, and it
+        // is the only shape that keeps BOTH caches' "I own what I created"
+        // promise true at once.
+        const nri::CoreInterface& core = m_device->Core();
+        const nri::TextureDesc& textureDesc = core.GetTextureDesc(*texture);
+
+        nri::TextureViewDesc viewDesc = {};
+        viewDesc.texture  = texture;
+        viewDesc.type     = nri::TextureView::TEXTURE;
+        viewDesc.format   = textureDesc.format;
+        viewDesc.mipNum   = textureDesc.mipNum;
+        viewDesc.layerNum = textureDesc.layerNum;
+        nri::Descriptor* bindlessView = nullptr;
+        if (!ARC_NRI_CHECK(core.CreateTextureView(viewDesc, bindlessView)) || !bindlessView)
+            return BindlessTable::kInvalidSlot;   // already logged (ARC_NRI_CHECK)
+
+        const std::uint32_t slot = m_mesh->AddMaterial(bindlessView);
+        if (slot == BindlessTable::kInvalidSlot)
+        {
+            // AddMaterial/BindlessTable refused (a null srv cannot happen
+            // here -- CreateTextureView succeeded above -- so this is "the
+            // table is already full", already warned once by BindlessTable
+            // itself). The view just minted is now ownerless: nothing will
+            // ever bury it via a graph teardown, because it was never
+            // handed to anything that tracks it. Safe to destroy directly,
+            // with no fence/graveyard involved: Add() refused BEFORE ever
+            // writing it into the bindless descriptor set (BindlessTable::
+            // Add's own contract -- a refusal consumes no slot), so no
+            // command buffer can ever have read it.
+            core.DestroyDescriptor(bindlessView);
+            return BindlessTable::kInvalidSlot;
+        }
+
+        // ONLY a successful resolve is memoized -- a miss (not yet resident,
+        // refused, or a full table) is NOT cached here, so a later frame's
+        // ask for the same Guid tries again for free (NriTextureCache's own
+        // memoization already makes a repeat Resolve() on a known-failed or
+        // still-PendingCook key an O(1) map lookup, not a re-decode).
+        m_meshAlbedoSlots.emplace(id, slot);
+        return slot;
+    }
+
     NriGraphContext::~NriGraphContext()
     {
         // BEFORE the early-out below and before ANY member is destroyed: the

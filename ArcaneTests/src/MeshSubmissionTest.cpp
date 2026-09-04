@@ -117,10 +117,11 @@ namespace
         return data.id;
     }
 
-    // A BASE "mesh"-kind material carrying one saved "baseColor" Color param.
-    // No snippet, matching the F2a design (a mesh material carries two
-    // params -- baseColor consumed, albedo declared-not-bound -- and no
-    // snippet at all).
+    // A BASE "mesh"-kind material carrying one saved "baseColor" Color param
+    // and NO "albedo" -- matching the F2a design (a mesh material carries
+    // two params, baseColor and albedo, both self-typed) minus the second
+    // one. No snippet at all, either way. WriteMeshMaterialWithAlbedo below
+    // is F2b Task 11's variant that also declares "albedo".
     Arcane::Guid WriteMeshMaterial(const fs::path& file, const glm::vec4& baseColor)
     {
         Arcane::MaterialAssetData data;
@@ -130,6 +131,23 @@ namespace
         data.params.emplace_back(
             "baseColor",
             Arcane::MatParamValue::MakeColor(baseColor.r, baseColor.g, baseColor.b, baseColor.a));
+        REQUIRE(Arcane::SaveMaterialAsset(file, data));
+        return data.id;
+    }
+
+    // WriteMeshMaterial plus a Texture-typed "albedo" param (F2b Task 11) --
+    // the shape a mesh material referencing a real cooked texture authors.
+    Arcane::Guid WriteMeshMaterialWithAlbedo(const fs::path& file, const glm::vec4& baseColor,
+                                             const Arcane::Guid& albedo)
+    {
+        Arcane::MaterialAssetData data;
+        data.id   = Arcane::Guid::Generate();
+        data.name = "probe-material-albedo";
+        data.kind = "mesh";
+        data.params.emplace_back(
+            "baseColor",
+            Arcane::MatParamValue::MakeColor(baseColor.r, baseColor.g, baseColor.b, baseColor.a));
+        data.params.emplace_back("albedo", Arcane::MatParamValue::MakeTexture(albedo));
         REQUIRE(Arcane::SaveMaterialAsset(file, data));
         return data.id;
     }
@@ -581,6 +599,100 @@ TEST_CASE("MeshMaterialCache::Invalidate forces the next Request to re-read the 
     std::error_code ec; fs::remove_all(dir, ec);
 }
 
+// ---- F2b Task 11: albedo -> ResolvedMeshMaterial::albedo / materialSlot ----
+
+TEST_CASE("MeshMaterialCache resolves a declared albedo Guid into ResolvedMeshMaterial::albedo",
+          "[mesh][material]")
+{
+    const fs::path dir  = MakeTempDir("matl_albedo_roundtrip");
+    const fs::path file = dir / "probe.arcmat";
+    const Arcane::Guid albedoGuid = Arcane::Guid::Generate();
+    const Arcane::Guid id = WriteMeshMaterialWithAlbedo(file, glm::vec4(1.0f), albedoGuid);
+
+    Arcane::MeshMaterialCache::Services s;
+    s.resolveAsset = [&](const Arcane::Guid&) -> std::optional<fs::path> { return file; };
+    // Deliberately left unset (resolveAlbedoSlot): a device-less cache --
+    // every CPU test, and this class's own header-stated "CONSTANTS ONLY"
+    // promise -- must still round-trip the Guid itself with no device seam
+    // at all.
+    Arcane::MeshMaterialCache cache(std::move(s));
+
+    cache.Request(id);
+    REQUIRE(cache.Table().contains(id));
+    CHECK(cache.Table().at(id).albedo == albedoGuid);
+    // The flat baseColor path: kInvalidSlot's own numeric value
+    // (BindlessTable.hpp), restated as a literal here for the same reason
+    // SceneResources.hpp's own default does -- this file stays device-free
+    // by design (this group's own header banner), so it does not pull in
+    // <NRI.h> for one constant.
+    CHECK(cache.Table().at(id).materialSlot == 0xFFFFFFFFu);
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("MeshMaterialCache leaves albedo nil and materialSlot at kInvalidSlot when no "
+          "albedo param is declared",
+          "[mesh][material]")
+{
+    const fs::path dir  = MakeTempDir("matl_albedo_nil");
+    const fs::path file = dir / "probe.arcmat";
+    const Arcane::Guid id = WriteMeshMaterial(file, glm::vec4(1.0f));   // no "albedo" param at all
+
+    bool callbackInvoked = false;
+    Arcane::MeshMaterialCache::Services s;
+    s.resolveAsset = [&](const Arcane::Guid&) -> std::optional<fs::path> { return file; };
+    // Installed and would happily answer -- proves the skip is keyed on "no
+    // albedo declared", not "no callback installed".
+    s.resolveAlbedoSlot = [&](const Arcane::Guid&) -> std::uint32_t
+    {
+        callbackInvoked = true;
+        return 7u;
+    };
+    Arcane::MeshMaterialCache cache(std::move(s));
+
+    cache.Request(id);
+    REQUIRE(cache.Table().contains(id));
+    CHECK_FALSE(cache.Table().at(id).albedo.IsValid());
+    CHECK(cache.Table().at(id).materialSlot == 0xFFFFFFFFu);
+    CHECK_FALSE(callbackInvoked);
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("MeshMaterialCache resolves albedo into a bindless slot through the injected "
+          "device seam",
+          "[mesh][material]")
+{
+    const fs::path dir  = MakeTempDir("matl_albedo_slot");
+    const fs::path file = dir / "probe.arcmat";
+    const Arcane::Guid albedoGuid = Arcane::Guid::Generate();
+    const Arcane::Guid id = WriteMeshMaterialWithAlbedo(file, glm::vec4(1.0f), albedoGuid);
+
+    int slotCalls = 0;
+    Arcane::MeshMaterialCache::Services s;
+    s.resolveAsset = [&](const Arcane::Guid&) -> std::optional<fs::path> { return file; };
+    s.resolveAlbedoSlot = [&](const Arcane::Guid& g) -> std::uint32_t
+    {
+        ++slotCalls;
+        CHECK(g == albedoGuid);
+        return 3u;
+    };
+    Arcane::MeshMaterialCache cache(std::move(s));
+
+    cache.Request(id);
+    REQUIRE(cache.Table().contains(id));
+    CHECK(cache.Table().at(id).materialSlot == 3u);
+    CHECK(slotCalls == 1);
+
+    // Per-frame sweeps call Request every frame; the memoization guard at
+    // the top of Request (id already in `table`) means the seam is not
+    // re-consulted either, mirroring resolveCalls' own proof above.
+    cache.Request(id);
+    CHECK(slotCalls == 1);
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
 // ------------------------------------------------- [3] CollectMeshInstances
 
 namespace
@@ -741,6 +853,63 @@ TEST_CASE("CollectMeshInstances falls through an unresolvable materialOverride t
 
     REQUIRE(out.size() == 1);   // NOT skipped -- a broken override still draws
     CHECK(out[0].baseColor == glm::vec4(0.2f, 0.4f, 0.6f, 1.0f));   // the mesh default, never white
+}
+
+// ---- F2b Task 11: materialSlot rides the same fallback chain baseColor does ----
+
+TEST_CASE("CollectMeshInstances copies the resolved material's bindless slot onto "
+          "MeshInstance::materialSlot",
+          "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId     = Arcane::Guid::Generate();
+    const Arcane::Guid defaultMat = Arcane::Guid::Generate();
+
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, MakeMeshEntry(defaultMat));
+    std::unordered_map<Arcane::Guid, Arcane::ResolvedMeshMaterial> materials;
+    Arcane::ResolvedMeshMaterial resolved;
+    resolved.baseColor    = glm::vec4(1.0f);
+    resolved.albedo       = Arcane::Guid::Generate();
+    resolved.materialSlot = 5u;
+    materials.emplace(defaultMat, resolved);
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+    reg.SetResource<Arcane::MeshMaterialTable>(Arcane::MeshMaterialTable{ &materials });
+
+    SpawnMeshEntity(reg, glm::mat4(1.0f), meshId, Arcane::Guid{});   // materialOverride nil -> mesh default
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].materialSlot == 5u);
+}
+
+TEST_CASE("CollectMeshInstances defaults materialSlot to kInvalidSlot when no material resolves",
+          "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId = Arcane::Guid::Generate();
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, MakeMeshEntry(Arcane::Guid{}));   // nil default material
+    std::unordered_map<Arcane::Guid, Arcane::ResolvedMeshMaterial> materials;   // nothing to resolve to
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+    reg.SetResource<Arcane::MeshMaterialTable>(Arcane::MeshMaterialTable{ &materials });
+
+    SpawnMeshEntity(reg, glm::mat4(1.0f), meshId, Arcane::Guid{});   // materialOverride nil too
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].baseColor == glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));   // white, the same "nothing resolved" case
+    CHECK(out[0].materialSlot == Arcane::BindlessTable::kInvalidSlot);
 }
 
 TEST_CASE("CollectMeshInstances skips a Hidden entity", "[mesh][submission]")

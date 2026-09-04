@@ -264,6 +264,12 @@ namespace Arcane
         poolDesc.descriptorSetMaxNum  = kFrameSets + 1;      // +1: the one bindless set
         poolDesc.constantBufferMaxNum = kFrameSets;          // b1, one per frame slot
         poolDesc.textureMaxNum        = kBindlessCapacity;   // the bindless array's own budget
+        // ALLOW_UPDATE_AFTER_SET (Task 11): a POOL-level permission bit only --
+        // it lets a set ALLOCATED from this pool opt into update-after-bind
+        // (below, the bindless set only; the per-frame b1 sets do not ask for
+        // it and are unaffected). See AddMaterial's own synchronization
+        // comment for why this node needs it at all.
+        poolDesc.flags                = nri::DescriptorPoolBits::ALLOW_UPDATE_AFTER_SET;
         return poolDesc;
     }
 
@@ -360,18 +366,46 @@ namespace Arcane
         // unwritten, which is legal by construction -- mesh.hlsl only ever
         // indexes a slot AddMaterial actually wrote -- rather than a
         // validation violation.
+        // ALLOW_UPDATE_AFTER_SET (Task 11, on top of Task 10's ARRAY |
+        // PARTIALLY_BOUND): lets AddMaterial's UpdateDescriptorRanges write a
+        // NEW slot into this range AFTER the set has already been bound by an
+        // earlier, possibly still-in-flight frame's command buffer -- exactly
+        // what a live feed resolving textures mid-run needs (a mesh whose
+        // albedo finishes cooking, or is referenced for the first time, on
+        // frame N must not have to wait for every frame before N to retire
+        // first). Both backends implement it fully (VK:
+        // VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT, gated on the device's
+        // VK_EXT_descriptor_indexing feature bundle, which this device
+        // already has -- SupportsBindless() above is gated on the SAME
+        // Vulkan 1.2 `descriptorIndexing` feature, and NRI's device creation
+        // enables every sub-feature the physical device reports, granular
+        // update-after-bind bits included; D3D12: PipelineLayoutD3D12.hpp
+        // marks the range DATA_VOLATILE/DESCRIPTORS_VOLATILE, which is
+        // exactly this backend's "safe to rewrite a live table" idiom). See
+        // AddMaterial's own doc comment for what this makes safe and what it
+        // still does not (a slot, once written, is never rewritten or freed
+        // -- BindlessTable's own SLOT POLICY -- so nothing here has to reason
+        // about a draw that is CURRENTLY reading the slot being touched, only
+        // about writing slots nothing has read yet).
         nri::DescriptorRangeDesc bindlessRange = {};
         bindlessRange.baseRegisterIndex = 0;                  // t0
         bindlessRange.descriptorNum     = kBindlessCapacity;
         bindlessRange.descriptorType    = nri::DescriptorType::TEXTURE;
         bindlessRange.shaderStages      = nri::StageBits::FRAGMENT_SHADER;
         bindlessRange.flags             = nri::DescriptorRangeBits::ARRAY
-                                         | nri::DescriptorRangeBits::PARTIALLY_BOUND;
+                                         | nri::DescriptorRangeBits::PARTIALLY_BOUND
+                                         | nri::DescriptorRangeBits::ALLOW_UPDATE_AFTER_SET;
 
         nri::DescriptorSetDesc bindlessSetDesc = {};
         bindlessSetDesc.registerSpace = 2;
         bindlessSetDesc.ranges        = &bindlessRange;
         bindlessSetDesc.rangeNum      = 1;
+        // The SET-level counterpart the range's flag requires (NRIDescs.h:
+        // "ALLOW_UPDATE_AFTER_SET ... allows DescriptorRangeBits::
+        // ALLOW_UPDATE_AFTER_SET") -- the per-frame frameSetDesc above is
+        // left without it, unaffected: b1 is still written exactly once, at
+        // Create, and never again.
+        bindlessSetDesc.flags         = nri::DescriptorSetBits::ALLOW_UPDATE_AFTER_SET;
 
         nri::DescriptorSetDesc setDescs[2] = { frameSetDesc, bindlessSetDesc };
 

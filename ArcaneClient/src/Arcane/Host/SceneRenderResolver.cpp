@@ -124,6 +124,11 @@ namespace Arcane
 
         MeshMaterialCache::Services meshMaterialServices;
         meshMaterialServices.resolveAsset = resolveAsset;
+        // F2b Task 11: forwarded verbatim, not re-wrapped -- both are the
+        // exact same `Guid -> slot` shape (MeshMaterialCache.hpp's
+        // ResolveAlbedoSlotFn / this class's own Services field), so there is
+        // nothing for a wrapper lambda here to add.
+        meshMaterialServices.resolveAlbedoSlot = m_impl->services.resolveMeshAlbedoSlot;
         m_impl->meshMaterials = std::make_unique<MeshMaterialCache>(std::move(meshMaterialServices));
     }
 
@@ -371,6 +376,14 @@ namespace Arcane
             if (it == meshTable.end())
                 return;
 
+            // F2b Task 11: each Request() below now ALSO resolves that
+            // material's declared albedo (if any) into a bindless slot,
+            // through the `resolveMeshAlbedoSlot` seam this class's
+            // constructor wired into meshMaterialServices above -- the
+            // spine's Guid -> ResolvedMeshMaterial -> device step lives
+            // entirely INSIDE MeshMaterialCache::Request, not here; this
+            // sweep's own shape (request the override, then the mesh
+            // default) is unchanged.
             if (mr.materialOverride.IsValid())
                 im.meshMaterials->Request(mr.materialOverride);
             if (it->second.material.IsValid())

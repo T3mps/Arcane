@@ -68,6 +68,7 @@
 #include <Arcane/Render/Nri/BindlessTable.hpp>    // kInvalidSlot -- the four-cube bindless proof
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
+#include <Arcane/Render/Nri/NriTextureCache.hpp>  // ColorSpace -- Textures() is read directly, case 9
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>   // MeshInstance / MeshSceneDesc
 #include <Arcane/Scene/SceneCamera.hpp>           // PerspectiveProjection -- the camera under test
 
@@ -80,14 +81,29 @@
 // tree's NRI headers care about (NriCommon.hpp) is already settled.
 #include <Extensions/NRIHelper.h>
 
+// F2b Task 11's own case (9): cooks a real BC7 artifact through the pipeline
+// lib in-test and reads it back through THIS engine's ArtifactReader -- the
+// SAME cross-lib byte-contract path NriTextureCacheArtifactTest.cpp's own
+// "PART 2" exercises (its CookFlatBc7Artifact is this case's direct
+// ancestor; this file cannot include that one's anonymous-namespace helpers,
+// so they are mirrored here rather than shared).
+#include <Arcane/AssetPipeline/ArtifactFormat.hpp>
+#include <Arcane/AssetPipeline/TextureImporter.hpp>
+#include <Arcane/AssetPipeline/TextureMetaSettings.hpp>
+#include <Arcane/Assets/ArtifactReader.hpp>
+
+#include <stb_image_write.h>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>           // lookAtRH, translate
 
 #include <cstdint>
 #include <cstdlib>      // std::abs over the integer luma difference
+#include <filesystem>   // case 9's own temp artifact dir
 #include <memory>
 #include <optional>
 #include <span>         // FrameDesc::pickables / ::selectedIds are spans
+#include <system_error> // case 9's own temp-dir cleanup
 #include <vector>
 
 #include "Helpers/GpuCapability.hpp"
@@ -1381,4 +1397,188 @@ TEST_CASE("mesh: the bindless material table indexes four distinct textures by p
           "(vulkan)", "[gpu][pixel][mesh][bindless][nri][vulkan]")
 {
     CheckBindlessTableIndexesFourDistinctMaterials(Arcane::GraphicsBackend::Vulkan);
+}
+
+// ---------------------------------------------------------------------------
+// 9. THE ARC'S PROOF (F2b Task 11) -- cooked albedo, end to end. A small
+//    solid-colour PNG cooked through the REAL pipeline lib (bc7enc_rdo, the
+//    same library arccook links -- exactly NriTextureCacheArtifactTest.cpp's
+//    own "PART 2" proof), read back through THIS engine's ArtifactReader,
+//    uploaded through NriTextureCache and Added to MeshNode's BindlessTable
+//    via NriGraphContext::ResolveMeshAlbedoSlot -- the ACTUAL seam
+//    SceneRenderResolver installs every frame (Host/SceneRenderResolver.cpp's
+//    (1b) sweep -> MeshMaterialCache::Request -> Services::
+//    resolveAlbedoSlot), not a raw AddMaterial call -- and a cube carrying
+//    that slot renders the artifact's own colour. Case 8 above builds its
+//    four textures directly through the device (MakeSolidTexture); this is
+//    the one case that runs the WHOLE spine the arc exists to prove --
+//    `.arcmat` parse -> ResolvedMeshMaterial -> the resolver -> NriTextureCache
+//    -> BindlessTable -> MeshInstance.materialSlot -> the pixel -- in one
+//    assertion.
+// ---------------------------------------------------------------------------
+namespace
+{
+    namespace fs = std::filesystem;
+
+    fs::path AlbedoArtifactTempDir(const char* leaf)
+    {
+        fs::path d = fs::temp_directory_path() / "arcane_mesh_albedo_gpu_test" / leaf;
+        std::error_code ec;
+        fs::remove_all(d, ec);
+        fs::create_directories(d);
+        return d;
+    }
+
+    void CollectAlbedoPngBytes(void* ctx, void* data, int size)
+    {
+        auto* out = static_cast<std::vector<std::byte>*>(ctx);
+        const auto* p = static_cast<std::byte*>(data);
+        out->insert(out->end(), p, p + size);
+    }
+
+    // A FLAT single-colour PNG -- BC7 reproduces a solid-colour block
+    // exactly (no gradient to lose), so this proof does not have to pin an
+    // exact mip level, the same reasoning
+    // NriTextureCacheArtifactTest.cpp's own EncodeFlatPng states in full.
+    std::vector<std::byte> EncodeFlatAlbedoPng(int size, unsigned char r, unsigned char g,
+                                                unsigned char b)
+    {
+        std::vector<unsigned char> rgba(static_cast<std::size_t>(size) * size * 4);
+        for (std::size_t i = 0; i < rgba.size(); i += 4)
+        {
+            rgba[i + 0] = r;
+            rgba[i + 1] = g;
+            rgba[i + 2] = b;
+            rgba[i + 3] = 255;
+        }
+        std::vector<std::byte> out;
+        REQUIRE(stbi_write_png_to_func(&CollectAlbedoPngBytes, &out, size, size, 4, rgba.data(),
+                                        size * 4) != 0);
+        return out;
+    }
+
+    // Cooks a flat-colour BC7 artifact through the REAL pipeline lib
+    // (ImportTexture -> bc7enc_rdo -> WriteTextureArtifact, exactly what
+    // arccook drives) and reads it back through ArtifactReader -- the same
+    // cross-lib byte-contract path NriTextureCacheArtifactTest.cpp's own
+    // CookFlatBc7Artifact exercises, carried one layer further downstream
+    // here (through NriTextureCache AND the bindless table, not just the
+    // texture cache alone).
+    Arcane::LoadedClientArtifact CookFlatAlbedoArtifact(const fs::path& artifactPath,
+                                                         const Arcane::Guid& guid,
+                                                         unsigned char r, unsigned char g,
+                                                         unsigned char b)
+    {
+        const std::vector<std::byte> src = EncodeFlatAlbedoPng(5, r, g, b);
+
+        Arcane::AssetPipeline::TextureMetaSettings settings;
+        settings.format       = Arcane::AssetPipeline::TextureMetaSettings::Format::Bc7;
+        settings.srgb         = true;
+        settings.generateMips = true;
+
+        auto imported = Arcane::AssetPipeline::ImportTexture(src, guid, settings);
+        REQUIRE(imported.has_value());
+        REQUIRE(imported->desc.format == Arcane::AssetPipeline::ArtifactPixelFormat::BC7);
+
+        REQUIRE(Arcane::AssetPipeline::WriteTextureArtifact(
+            artifactPath, imported->desc, imported->payload, imported->thumbRgba));
+
+        auto result = Arcane::ReadClientArtifact(artifactPath, src, guid);
+        REQUIRE(result.refusal == Arcane::ArtifactRefusal::None);
+        REQUIRE(result.artifact.has_value());
+        return std::move(*result.artifact);
+    }
+
+    void CheckCookedAlbedoRendersThroughBindlessSlot(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        const fs::path dir = AlbedoArtifactTempDir("cooked_albedo");
+        const Arcane::Guid albedoGuid = Arcane::Guid::Generate();
+        // Magenta: red AND blue high, green low -- unambiguous against the
+        // near-black canvas clear and against every other channel
+        // combination this suite's mesh cases use.
+        Arcane::LoadedClientArtifact artifact =
+            CookFlatAlbedoArtifact(dir / "albedo.arcart", albedoGuid, 255, 0, 255);
+
+        PixelVehicle v = MakeVehicle(backend);
+        Arcane::MeshNode* meshNode = v.ctx->Mesh();
+        REQUIRE(meshNode != nullptr);
+        Arcane::NriTextureCache* textures = v.ctx->Textures();
+        REQUIRE(textures != nullptr);
+
+        // Task 7's own seam, installed exactly like
+        // NriTextureCacheArtifactTest.cpp's GPU case: the content supply is
+        // ARTIFACT-shaped, not raw pixels.
+        v.ctx->SetArtifactSupply(
+            [&](const Arcane::Guid& id) -> const Arcane::LoadedClientArtifact*
+            {
+                return id == albedoGuid ? &artifact : nullptr;
+            });
+
+        // THE SPINE: NriTextureCache resolve/view -> BindlessTable::Add,
+        // through the ACTUAL device seam SceneRenderResolver wires every
+        // frame (NriGraphContext::ResolveMeshAlbedoSlot) -- NOT a raw
+        // meshNode->AddMaterial(view) call, which is case 8's route and
+        // deliberately not this one's: this case's whole point is proving
+        // the SEAM end to end, not re-proving BindlessTable's own mechanics.
+        const std::uint32_t slot = v.ctx->ResolveMeshAlbedoSlot(albedoGuid);
+        REQUIRE(slot != Arcane::BindlessTable::kInvalidSlot);
+        // Memoized: a second ask for the same Guid returns the SAME slot
+        // without re-touching the device (ResolveMeshAlbedoSlot's own doc
+        // comment, NriGraphContext.hpp) -- the property that keeps N mesh
+        // materials sharing one albedo cheap.
+        CHECK(v.ctx->ResolveMeshAlbedoSlot(albedoGuid) == slot);
+
+        const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+        Arcane::MeshInstance instance;
+        instance.mesh         = &cube;
+        // WHITE -- the sampled albedo passes through unmultiplied
+        // (mesh.hlsl's ps_main: albedo * baseColor, and 1.0 * x is exact).
+        instance.baseColor    = glm::vec4(1.0f);
+        instance.materialSlot = slot;
+        const Arcane::MeshInstance instances[] = { instance };
+
+        Arcane::MeshSceneDesc scene;
+        scene.instances = instances;
+        FillCamera(scene);
+
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.capture = true;
+        frame.mesh    = &scene;
+        RenderOne(*v.ctx, frame);
+
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> pixels;
+        REQUIRE(v.ctx->ReadCapture(w, h, pixels));
+
+        const Rgba centre = At(pixels, w, w / 2u, h / 2u);
+        const Rgba corner = At(pixels, w, 10u, 10u);
+
+        // THE ARTIFACT'S OWN COLOUR: structural, not literal, per the file
+        // header (the tonemap sits between the sampled texel and this
+        // capture) -- magenta dominates the green channel on both counts.
+        CHECK(centre.r > centre.g + 60);
+        CHECK(centre.b > centre.g + 60);
+        // ...and it is genuinely THERE, not a coincidence of the clear
+        // colour: the cube is far brighter than the untouched corner.
+        CHECK(Luma(centre) > Luma(corner) + 120);
+
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+}
+
+TEST_CASE("mesh: a cooked artifact resolves through NriTextureCache into a bindless slot "
+          "and the cube renders its colour (d3d12)",
+          "[gpu][pixel][mesh][bindless][nri][d3d12]")
+{
+    CheckCookedAlbedoRendersThroughBindlessSlot(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("mesh: a cooked artifact resolves through NriTextureCache into a bindless slot "
+          "and the cube renders its colour (vulkan)",
+          "[gpu][pixel][mesh][bindless][nri][vulkan]")
+{
+    CheckCookedAlbedoRendersThroughBindlessSlot(Arcane::GraphicsBackend::Vulkan);
 }

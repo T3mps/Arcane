@@ -24,7 +24,9 @@
 //     round -- nothing exercised it, and Task 8/10's BindlessTable replaced
 //     the fixed white-texel t0 binding it would have competed with outright.
 //     Feeding the table from a REAL cooked albedo (rather than a test's own
-//     generated textures) is Task 11's, not this node's.
+//     generated textures) is Task 11's -- LANDED, in NriGraphContext::
+//     ResolveMeshAlbedoSlot, not in this node -- this node still only ever
+//     sees an already-resolved nri::Descriptor* through AddMaterial.
 //
 // WHERE IT SITS IN THE FRAME: after `batch2d`, before the post chain and the
 // tonemap. The canvas is MINTED AND CLEARED by AddBatch2DNode, so the mesh
@@ -231,7 +233,11 @@ namespace Arcane
         // BindlessTable slot was written and then REMOVED at Task 7's first
         // fix round; Task 8/10's BindlessTable + this field is what finally
         // replaces it, and feeding a REAL cooked albedo in here (rather than
-        // a test's own generated texture) is Task 11's.
+        // a test's own generated texture) is Task 11's -- landed: `Guid
+        // albedo` now lives on `Arcane::ResolvedMeshMaterial`
+        // (Scene/SceneResources.hpp), resolved into a slot by
+        // NriGraphContext::ResolveMeshAlbedoSlot and copied onto this field
+        // by CollectMeshInstances (Scene/MeshSubmissionSystem.hpp).
         //
         // PACKED INTO THE ROOT CONSTANTS' `normalMatrixCol0.w` by
         // MeshNode::Record (the 128-byte MeshRootConstants budget has ZERO
@@ -335,18 +341,23 @@ namespace Arcane
         // generated texture) still owns it and must outlive both the view
         // and this node's use of the returned slot.
         //
-        // SYNCHRONIZATION: the write is a plain UpdateDescriptorRanges with
-        // no update-after-bind support (CreateBindings' bindless range
-        // carries PARTIALLY_BOUND only) -- safe before this set has ever
-        // been bound to a command buffer, the same "written once, before
-        // first use" discipline CreateSets keeps for the per-frame sets.
-        // Calling this again to add a material AFTER a frame that bound
-        // this set is already in flight is NOT safe without external
-        // synchronization (a fence wait) or without this range gaining
-        // ALLOW_UPDATE_AFTER_SET -- neither of which Task 10's synchronous,
-        // all-materials-before-the-first-frame proof needs. Task 11's
-        // live-streaming feed is what will have to revisit this if it needs
-        // to add a material once frames are already in flight.
+        // SYNCHRONIZATION (Task 11 revisited this): CreateBindings' bindless
+        // range/set/pool now carry ALLOW_UPDATE_AFTER_SET (on top of Task
+        // 10's ARRAY | PARTIALLY_BOUND), so this write is safe to issue at
+        // ANY time relative to earlier frames' command buffers -- including
+        // ones still in flight on the GPU -- as long as the SLOT being
+        // written has never been read by any of them, which BindlessTable's
+        // own Add-only policy guarantees by construction (a fresh Add always
+        // claims the next UNUSED dense slot; nothing here ever rewrites a
+        // slot a prior instance's materialSlot could already be indexing).
+        // That is exactly the property a live feed needs: SceneRenderResolver
+        // ->MeshMaterialCache->NriGraphContext::ResolveMeshAlbedoSlot calls
+        // this once per newly-seen albedo Guid, on whatever frame first
+        // references it, with no fence wait and no requirement that earlier
+        // frames have retired first. Before Task 11 this call was only safe
+        // "before this set has ever been bound to a command buffer" -- see
+        // git history for that account if the update-after-bind wiring is
+        // ever questioned.
         [[nodiscard]] std::uint32_t AddMaterial(nri::Descriptor* srv);
 
         // Resolves the PIPELINE for the colour format the frame being declared

@@ -306,6 +306,17 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
     rs.sources  = &m_shaderSources;
     // No consumeFirst: a standalone host has no open documents to give first
     // refusal to, so every drained result goes straight to the caches.
+    //
+    // F2b Task 11: the mesh-albedo bindless resolution seam, the editor's
+    // own EditorApp.cpp wiring mirrored -- Graph() at CALL time, since
+    // Refresh() runs long after this Services struct is built and Graph()
+    // returns null until MainLoop constructs the vehicle (windowed or
+    // offscreen).
+    rs.resolveMeshAlbedoSlot = [this](const Arcane::Guid& g) -> std::uint32_t
+    {
+        Arcane::NriGraphContext* graph = Graph();
+        return graph ? graph->ResolveMeshAlbedoSlot(g) : 0xFFFFFFFFu;
+    };
     m_resolver.emplace(std::move(rs));
     return true;
 }

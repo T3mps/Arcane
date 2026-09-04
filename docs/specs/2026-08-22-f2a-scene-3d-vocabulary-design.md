@@ -246,6 +246,16 @@ naming Task 8 as where it gets bound. It is refused **loudly rather than ignored
 silently**, because a texture slot that quietly does nothing is the worse
 affordance.
 
+[F2b Task 11 landed the consumer: `albedo` is read by `MeshMaterialCache::Request`
+into `ResolvedMeshMaterial::albedo`, resolved into a bindless slot through
+`NriGraphContext::ResolveMeshAlbedoSlot`, and copied onto `MeshInstance::materialSlot`
+by `CollectMeshInstances` — the end-to-end path `mesh.hlsl` has sampled since Task
+10. The "declared-but-unbound" diagnostic this paragraph describes was never
+actually implemented in code (no test or diagnostic string for it exists in the
+tree as of Task 11); its retirement is therefore a design-item retirement, not a
+code removal — the surviving failure mode is Task 6's existing refusal for a
+non-nil albedo whose artifact is missing or stale.]
+
 **No `metallic`, no `roughness`.** `mesh.hlsl` is Lambert plus a flat ambient
 term. Declaring PBR params nothing reads is precisely the guess-ahead that
 Task 7's fix round already deleted ~135 lines for.

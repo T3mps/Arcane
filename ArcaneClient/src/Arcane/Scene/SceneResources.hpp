@@ -185,18 +185,53 @@ namespace Arcane
         }
     };
 
-    // One resolved mesh material (F2a, Task 4): CONSTANTS ONLY. Neither
-    // MeshCache nor MeshMaterialCache may touch MaterialSource or
-    // ShaderCompiler (that would open a second compile-drain site alongside
-    // SceneRenderResolver's one, Host/SceneRenderResolver.hpp:22-28), so
-    // there is no compiled pipeline riding along here -- just the value
-    // MeshInstance::baseColor (Render/Nri/nodes/MeshNode.hpp) copies into its
-    // per-instance root constant. Default (1,1,1,1) is exactly what a nil
-    // material at the end of the materialOverride -> mesh-default chain
-    // resolves to directly, with no lookup at all.
+    // One resolved mesh material (F2a, Task 4; `albedo`/`materialSlot` added
+    // F2b Task 11): CONSTANTS ONLY. Neither MeshCache nor MeshMaterialCache
+    // may touch MaterialSource or ShaderCompiler (that would open a second
+    // compile-drain site alongside SceneRenderResolver's one, Host/
+    // SceneRenderResolver.hpp:22-28), so there is no compiled pipeline
+    // riding along here -- just the values MeshInstance::baseColor/
+    // materialSlot (Render/Nri/nodes/MeshNode.hpp) copy into the per-instance
+    // root constant. Default (1,1,1,1) is exactly what a nil material at the
+    // end of the materialOverride -> mesh-default chain resolves to
+    // directly, with no lookup at all.
     struct ResolvedMeshMaterial
     {
         glm::vec4 baseColor{1.0f};
+
+        // The mesh material's declared "albedo" param, if any (F2b Task 11)
+        // -- a Texture-typed value read off the .arcmat chain by
+        // MeshMaterialCache::Request exactly like baseColor. Nil (the
+        // default) is legal and means "no texture, the flat baseColor path"
+        // -- CollectMeshInstances (Scene/MeshSubmissionSystem.hpp) needs
+        // this only to know WHICH texture `materialSlot` below names; nothing
+        // reads it directly at draw time.
+        Guid albedo{};
+
+        // `albedo` resolved into a slot in the render device's bindless
+        // material table (Render/Nri/BindlessTable.hpp) via
+        // NriGraphContext::ResolveMeshAlbedoSlot -> BindlessTable::Add, or
+        // the default below when there is nothing to resolve (nil albedo,
+        // no device attached, or the resolve failed). Populated by
+        // MeshMaterialCache::Request through its injected `resolveAlbedoSlot` seam
+        // (Render/MeshMaterialCache.hpp) -- this struct stays CONSTANTS
+        // ONLY, still: it holds a slot NUMBER a device produced elsewhere,
+        // never a device object of its own.
+        //
+        // 0xFFFFFFFF, restated as a LITERAL rather than referencing
+        // `BindlessTable::kInvalidSlot` by name: that header pulls <NRI.h>
+        // in (Render/Nri/BindlessTable.hpp's own include-order note), and
+        // this file is deliberately render-backend-agnostic -- it is shared
+        // by the 2D path above (SpriteEntry, SpriteTable) and by dozens of
+        // NRI-free consumers (Base/Runtime.hpp, Plugin/PluginABI.hpp, most
+        // of Scene/ and every Astra-registry CPU test that never touches a
+        // device). The two literals MUST stay numerically identical --
+        // MeshSubmissionSystem.hpp's static_assert, where both BindlessTable
+        // and this struct are visible together, is the compiled half of
+        // that contract; this comment is the other half, matching the
+        // discipline mesh.hlsl's own kMeshInvalidMaterialSlot restatement
+        // already uses for the identical reason.
+        std::uint32_t materialSlot = 0xFFFFFFFFu;
     };
 
     // .arcmat Guid -> the resolved record above. Same shape and lifetime

@@ -62,6 +62,28 @@ namespace Arcane
             }
             return found;
         }
+
+        // OwnBaseColor's mirror for the OTHER F2a-declared param (F2b Task
+        // 11 gives it a consumer): a "mesh"-kind asset carries no //@param
+        // snippet to check the author's spelling/type against either, so a
+        // saved "albedo" of any OTHER MatParamType is ignored the same way
+        // an OTHER-typed "baseColor" is above -- reading `.tex` off a Color/
+        // Float4 value would read those floats' bytes as a Guid. Same
+        // last-write-wins, whole-vector-scan reasoning as OwnBaseColor (see
+        // its own comment); nothing here duplicates that account.
+        std::optional<Guid> OwnAlbedo(const MaterialAssetData& data)
+        {
+            std::optional<Guid> found;
+            for (const auto& [name, value] : data.params)
+            {
+                if (name != "albedo")
+                    continue;
+                if (value.type != MatParamType::Texture)
+                    continue;
+                found = value.tex;
+            }
+            return found;
+        }
     }
 
     MeshMaterialCache::MeshMaterialCache(Services services)
@@ -141,12 +163,28 @@ namespace Arcane
         // onto. A level that declares no "baseColor" of its own leaves the
         // running value untouched, so an instance that overrides nothing
         // inherits its base's colour exactly as UMaterialInstance would.
-        ResolvedMeshMaterial resolved;   // baseColor defaults to (1,1,1,1)
+        ResolvedMeshMaterial resolved;   // baseColor (1,1,1,1), albedo nil, materialSlot kInvalidSlot
         for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+        {
             if (auto c = OwnBaseColor(*it))
                 resolved.baseColor = *c;
+            if (auto a = OwnAlbedo(*it))
+                resolved.albedo = *a;
+        }
         if (auto c = OwnBaseColor(*data))
             resolved.baseColor = *c;
+        if (auto a = OwnAlbedo(*data))
+            resolved.albedo = *a;
+
+        // F2b Task 11: resolve the declared albedo into a bindless slot
+        // through the injected device seam -- see Services::
+        // resolveAlbedoSlot's own comment for why this cache never reaches
+        // NriTextureCache/BindlessTable itself. A nil albedo, or no callback
+        // installed (every CPU test, and a host before its graph context
+        // exists), leaves the default materialSlot -- kInvalidSlot's value,
+        // mesh.hlsl's flat baseColor path.
+        if (resolved.albedo.IsValid() && im.services.resolveAlbedoSlot)
+            resolved.materialSlot = im.services.resolveAlbedoSlot(resolved.albedo);
 
         im.table.emplace(id, resolved);
     }
