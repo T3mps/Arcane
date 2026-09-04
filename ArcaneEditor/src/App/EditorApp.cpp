@@ -1734,12 +1734,20 @@ namespace Arcane::Editor
                 return project ? project->ResolveAsset(Arcane::AssetId::FromGuid(id))
                                : std::nullopt;
             });
-        // ...and the same seam extended to PIXELS: NriTextureCache uploads
-        // its own textures from the engine's RETAINED, device-free decode.
-        m_viewportTargets.graph->SetPixelSupply(
-            [rt = &*m_runtime](const Arcane::Guid& id) -> const Arcane::PixelData*
+        // ...and the same seam extended to COMPILED ARTIFACTS (Task 7):
+        // NriTextureCache uploads content's own BC7/RGBA8 mips from the
+        // engine's RETAINED, device-free artifact resolve (Assets::ArtifactFor)
+        // instead of a raw RGBA8 decode -- see NriTextureCache::ColorSpace's
+        // own routing-rule comment. PixelSupplyFn is deliberately NOT installed
+        // here any more: this vehicle's content is Srgb-space, which now
+        // always prefers the artifact supply once one is installed, and the
+        // viewport context has no Display-space chrome of its own to serve
+        // (that stays the CHROME graph's job -- see CreateGraphVehicles above,
+        // unchanged).
+        m_viewportTargets.graph->SetArtifactSupply(
+            [rt = &*m_runtime](const Arcane::Guid& id) -> const Arcane::LoadedClientArtifact*
             {
-                return rt ? rt->AssetsFacade().PixelsFor(id) : nullptr;
+                return rt ? rt->AssetsFacade().ArtifactFor(id) : nullptr;
             });
         return true;
     }

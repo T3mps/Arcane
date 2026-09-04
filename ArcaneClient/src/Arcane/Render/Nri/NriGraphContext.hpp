@@ -546,7 +546,19 @@ namespace Arcane
         // AssetResolveFn is: this class owns no Runtime and no Assets facade
         // and must not grow either. It feeds NriTextureCache, which is what
         // turns a drained span's texture Guid into something t0 can bind.
+        //
+        // TASK 7: this stays installed on every vehicle (including a content
+        // one) and is what a Display-space lookup still uses -- see
+        // ArtifactSupplyFn below and NriTextureCache::ColorSpace's own
+        // routing-rule comment for which supply answers which key.
         using PixelSupplyFn = NriTextureCache::PixelSupplyFn;
+
+        // THE SAME SEAM AGAIN, EXTENDED TO COMPILED ARTIFACTS (Task 7). Guid ->
+        // a compiled texture artifact (BC7/RGBA8 mips), i.e. `Assets::ArtifactFor`.
+        // A content vehicle installs THIS instead of PixelSupplyFn for its
+        // Srgb-space (scene) content; the chrome vehicle keeps PixelSupplyFn
+        // alone and never installs this at all.
+        using ArtifactSupplyFn = NriTextureCache::ArtifactSupplyFn;
 
         // Builds native device + NRI wrap + swapchain (over `window`) + ring +
         // cache + graph, in that order, honouring `config.backend` and
@@ -1095,6 +1107,18 @@ namespace Arcane
         {
             if (m_textures)
                 m_textures->SetPixelSupply(std::move(supply));
+        }
+
+        // Installed once by the frame driver, alongside (not instead of)
+        // SetPixelSupply -- a content vehicle wants both: this one for its
+        // Srgb-space scene content (Task 7), PixelSupplyFn still there for
+        // whatever Display-space chrome that same vehicle might ever need.
+        // Without it every Srgb-space Resolve falls back to PixelSupplyFn,
+        // exactly as before this task existed.
+        void SetArtifactSupply(ArtifactSupplyFn supply)
+        {
+            if (m_textures)
+                m_textures->SetArtifactSupply(std::move(supply));
         }
 
         // THE SHARED image residency cache -- one per vehicle, consumed by

@@ -46,10 +46,12 @@
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <unordered_map>
 
 namespace Arcane
@@ -57,6 +59,7 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
     struct PixelData;
+    struct LoadedClientArtifact;
 
     class ARCANE_API NriTextureCache
     {
@@ -66,6 +69,18 @@ namespace Arcane
         // pointer is READ INSIDE the call and never stored, so the supply owns
         // the buffer's lifetime and may evict it afterwards.
         using PixelSupplyFn = std::function<const PixelData*(const Guid&)>;
+
+        // Guid -> a compiled texture artifact (BC7 or RGBA8 mips + the format/
+        // srgb metadata to upload them), or null when no cooked artifact exists
+        // for this id YET (not a permanent miss -- see PendingCook below).
+        // `Assets::ArtifactFor` in production (Task 7); same "read inside the
+        // call, never stored" contract as PixelSupplyFn.
+        //
+        // THIS IS THE CONTENT SEAM going forward (Task 7): Resolve/View for
+        // ColorSpace::Srgb prefer this supply, when one is installed, over
+        // PixelSupplyFn -- see ColorSpace's own doc below for the full routing
+        // rule and why Display/chrome is deliberately untouched.
+        using ArtifactSupplyFn = std::function<const LoadedClientArtifact*(const Guid&)>;
 
         // ===== WHICH COLOUR SPACE THE VIEW SAMPLES IN ====================
         // TWO SPACES, because the two have DIFFERENT consumers and there is no
@@ -87,6 +102,17 @@ namespace Arcane
         // second space is a second upload. NRI has no typeless textures to
         // hang two views off, and an asset wanted in both spaces is rare (one
         // is scene content, the other is chrome).
+        //
+        // TASK 7 ROUTING RULE (which supply answers a given key): a Srgb-space
+        // resolve prefers ArtifactSupplyFn -- IF one is installed
+        // (SetArtifactSupply) -- over PixelSupplyFn; every other case (Display,
+        // or Srgb with no artifact supply installed) uses PixelSupplyFn exactly
+        // as before ABI 21. This is what "the chrome path kept" means concretely:
+        // the editor's toolbar mark (ColorSpace::Display, a PixelSupplyFn lambda,
+        // no artifact supply ever installed on that vehicle) is byte-for-byte
+        // unaffected, while a content vehicle that installs BOTH supplies still
+        // answers Display-space lookups (if it ever has any) through
+        // PixelSupplyFn -- only Srgb is artifact-shaped.
         enum class ColorSpace : std::uint8_t { Srgb, Display };
 
         // Resolves the HelperInterface once and takes a borrowed reference to
@@ -111,12 +137,47 @@ namespace Arcane
         // to its node's white texel. Copied, not borrowed.
         void SetPixelSupply(PixelSupplyFn supply) { m_supply = std::move(supply); }
 
+        // Installed once by the frame driver beside SetPixelSupply (Task 7).
+        // Without it every Srgb-space Resolve falls back to PixelSupplyFn
+        // exactly as before this task -- see ColorSpace's own routing-rule
+        // comment. Copied, not borrowed.
+        void SetArtifactSupply(ArtifactSupplyFn supply) { m_artifactSupply = std::move(supply); }
+
         // The texture for `id` on this device, uploading it on first sight.
-        // Null -- meaning "bind the white texel" -- for a nil Guid (the
-        // ordinary untextured case, silent), for an id the supply has no
-        // pixels for, for an image nri::Dim_t cannot express, and for an NRI
-        // refusal. Every null but the nil-Guid one is reported once per cache
-        // and then memoized.
+        //
+        // THREE OUTCOMES on the artifact-shaped path (Srgb, ArtifactSupplyFn
+        // installed) that the legacy pixel path does not have:
+        //   Resident    -- the artifact supply answered and the upload/view
+        //                  succeeded. Returns the real texture, exactly like
+        //                  the legacy "hit" case.
+        //   PendingCook -- the artifact supply answered null (no cooked
+        //                  artifact YET, not a permanent miss): returns the
+        //                  cache-owned 8x8 checkerboard placeholder for this
+        //                  colour space (lazily created, shared by every
+        //                  pending key in that space), and RE-POLLS the
+        //                  supply on every subsequent Resolve for this key --
+        //                  the placeholder is a stand-in for "still cooking",
+        //                  not a memoized failure, because Task 12's live
+        //                  cook queue is expected to promote it later.
+        //   Refused     -- the supply answered with a real artifact but this
+        //                  cache could not put it on the device (an
+        //                  unsupported/unmapped pixel format, dimensions
+        //                  nri::Dim_t cannot express, a malformed mip table,
+        //                  or an NRI failure): returns null -- the SAME "bind
+        //                  the white texel" null the legacy path already
+        //                  means -- and is memoized (sticky): never
+        //                  re-attempted. PendingCook and Refused therefore
+        //                  never render alike: a checkerboard is a real,
+        //                  visible texture, while a Refused key binds nothing
+        //                  and falls through to the caller's own white texel,
+        //                  the spec's placeholder rule.
+        //
+        // Everything else is the legacy contract, unchanged: null -- meaning
+        // "bind the white texel" -- for a nil Guid (the ordinary untextured
+        // case, silent), for an id the pixel supply has no pixels for, for an
+        // image nri::Dim_t cannot express, and for an NRI refusal. Every null
+        // but the nil-Guid one and PendingCook's placeholder is reported once
+        // per cache and then memoized.
         //
         // CALL AT DECLARATION TIME ONLY -- see NO BARRIERS above.
         //
@@ -128,6 +189,8 @@ namespace Arcane
         // Null under exactly the same conditions, and it does NOT trigger a
         // resolve: a caller that wants residency asks Resolve first (which is
         // what the nodes' Prepare passes do), so nothing uploads from a lookup.
+        // For a PendingCook key this is the shared checkerboard's own view --
+        // safe to read without re-polling because Resolve always runs first.
         [[nodiscard]] nri::Descriptor* View(const Guid& id,
                                             ColorSpace space = ColorSpace::Srgb) const;
 
@@ -136,24 +199,78 @@ namespace Arcane
         // reaping can never destroy a texture a live descriptor still names.
         // Idempotent. The caller picks the fence for the same reason
         // NriPipelineCache::Clear does: only it knows which timeline the
-        // cache's users submitted on.
+        // cache's users submitted on. Covers the lazily-created checkerboard
+        // placeholder(s) too, exactly once each -- never once per PendingCook
+        // key, which share the one object per colour space.
         void Release(Graveyard& graveyard, std::uint64_t fence);
 
-        // How many images are actually RESIDENT (uploaded and viewable).
-        // Memoized failures are not counted -- they hold no GPU object. Public
-        // because upload-once is otherwise unobservable from outside, and it
-        // is the property that makes this a cache rather than a loader.
+        // How many images are actually RESIDENT (uploaded and viewable) --
+        // i.e. in the Resident state. PendingCook keys (a real, viewable
+        // checkerboard, just not the real asset) and Refused/memoized
+        // failures (no GPU object) are both excluded -- neither is "the
+        // compiled asset made resident", which is this counter's whole
+        // meaning. Public because upload-once is otherwise unobservable from
+        // outside, and it is the property that makes this a cache rather than
+        // a loader.
         [[nodiscard]] std::size_t ResidentCount() const noexcept;
+
+        // How many checkerboard placeholders actually exist right now (0, 1,
+        // or 2 -- one slot per ColorSpace, lazily created on first
+        // PendingCook). TEST-ONLY introspection: on the NONE backend every
+        // NRI handle this cache ever creates is the SAME dummy pointer (see
+        // NriTextureCacheTest.cpp's own ColorSpace-case comment), so pointer
+        // identity cannot prove "one shared placeholder, not one per pending
+        // key" the way it would on a real device -- this count is what makes
+        // that property observable without one.
+        [[nodiscard]] std::size_t PlaceholderCount() const noexcept;
+
+        // BC-block row/slice pitch for a WxH mip. BC7 (and any future BCn
+        // sharing its 4x4/16-byte block shape) packs texels into 4x4 blocks
+        // regardless of the mip's own TRUE (possibly NPOT) dimensions -- see
+        // TextureImporter.hpp's own padding note -- so a row of blocks covers
+        // ceil(W/4) blocks and a mip covers ceil(H/4) rows of them. Exposed
+        // (not file-local) so the pitch arithmetic is unit-testable
+        // independent of any NRI device or artifact fixture: the exact
+        // numbers Task 7's brief pins for a 5->2->1 NPOT mip chain are
+        // Bc7RowPitch(5)==32, Bc7RowPitch(2)==Bc7RowPitch(1)==16.
+        [[nodiscard]] static std::uint32_t Bc7RowPitch(std::uint32_t width) noexcept
+        {
+            return ((width + 3u) / 4u) * 16u;
+        }
+        [[nodiscard]] static std::uint32_t Bc7SlicePitch(std::uint32_t width,
+                                                         std::uint32_t height) noexcept
+        {
+            return Bc7RowPitch(width) * ((height + 3u) / 4u);
+        }
 
     private:
         NriTextureCache() = default;
 
+        // Which of the three outcomes Resolve's doc comment describes a given
+        // key is currently in. Meaningful ONLY for a key resolved through the
+        // artifact-shaped path (ResolveArtifactKey below) -- a legacy
+        // pixel-path entry never reads this field and leaves it at its
+        // default, which is deliberately the same value a legacy "resident"
+        // entry would want (see Resident's own comment).
+        enum class ResidentState : std::uint8_t
+        {
+            Resident,      // texture/view are this key's OWN uploaded object.
+            PendingCook,   // texture/view are left null; the shared checkerboard
+                           // for this key's colour space is what Resolve/View
+                           // actually hand back (see m_placeholders).
+            Refused,       // texture/view are null (or texture non-null with a
+                           // null view after a partial create -- same shape the
+                           // legacy path's own failures already use), memoized.
+        };
+
         // One image made resident here. A FAILED load is kept with null
-        // members: attempted once, not once per frame.
+        // members: attempted once, not once per frame -- EXCEPT PendingCook,
+        // which is deliberately retried (see ResidentState).
         struct Resident
         {
             nri::Texture*    texture = nullptr;
             nri::Descriptor* view    = nullptr;
+            ResidentState    state   = ResidentState::Resident;
         };
 
         // (asset, colour space) -- see ColorSpace. The SPACE is part of the
@@ -179,12 +296,55 @@ namespace Arcane
             }
         };
 
+        // Resolves `key` through m_artifactSupply, driving it into PendingCook
+        // (supply answered null), Resident (answered, uploaded), or Refused
+        // (answered, but this cache could not upload it) -- see ResidentState
+        // and Resolve's own doc comment. Called both for a BRAND NEW key and,
+        // while `resident.state == PendingCook`, to RE-POLL an existing one --
+        // the one asymmetry against every other entry in m_textures, which is
+        // resolved exactly once.
+        nri::Texture* ResolveArtifactKey(const Key& key, Resident& resident);
+
+        // The upload half of ResolveArtifactKey's Resident/Refused branch:
+        // format+srgb -> nri::Format, textureDesc sized to the artifact's OWN
+        // mip table, one TextureSubresourceUploadDesc per mip (BC7's via
+        // Bc7RowPitch/Bc7SlicePitch, RGBA8's a straight width*4 passthrough),
+        // one CreateTextureView spanning every mip. Writes into `resident`
+        // exactly like the legacy path does on a partial failure (see
+        // Resident's own comment: texture may stay non-null with a null view,
+        // so Release()/the destructor still finds it and destroys it -- this
+        // function never leaks the object it created even when it fails
+        // partway through). Returns whether `resident.view` ended up non-null.
+        bool UploadArtifact(const LoadedClientArtifact& artifact, Resident& resident);
+
+        // The shared 8x8 checkerboard for `space` -- created on the FIRST
+        // PendingCook resolve in that space, reused (never recreated) by
+        // every other pending key in it, until Release()/the destructor buries
+        // it. Never returns a null texture/view once NRI itself is healthy;
+        // on an NRI failure it reports once (the shared miss latch) and hands
+        // back whatever partial state resulted (possibly all-null), which
+        // Resolve then returns verbatim -- the same "degrade to no texture,
+        // never crash" posture the rest of this cache already has.
+        Resident& EnsureCheckerboard(ColorSpace space);
+
+        // The shared one-shot diagnostic used by every failure path in this
+        // cache, artifact-shaped or legacy -- see m_warnedMiss's own comment.
+        void ReportIssue(const std::string& why);
+
         NriDevice*          m_device = nullptr;
         nri::HelperInterface m_helper{};
         PixelSupplyFn       m_supply;
+        ArtifactSupplyFn    m_artifactSupply;
         std::unordered_map<Key, Resident, KeyHash> m_textures;
+        // Index 0 == ColorSpace::Srgb, index 1 == ColorSpace::Display -- see
+        // EnsureCheckerboard. Both start empty (texture == nullptr); nothing
+        // creates one until a PendingCook resolve actually needs it.
+        std::array<Resident, 2> m_placeholders{};
         // THE ONE-SHOT MISS WARN (moved here from Batch2DNode): one line per
-        // run, not one per span per frame.
+        // run, not one per span per frame. Shared across EVERY failure reason
+        // this cache can report, legacy or artifact-shaped -- exactly the
+        // existing legacy contract already extended to more reasons, not a
+        // new latch per reason.
         bool m_warnedMiss = false;
     };
 }

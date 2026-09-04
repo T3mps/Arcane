@@ -77,6 +77,7 @@ namespace Arcane
         using JsonPtr        = std::shared_ptr<const nlohmann::json>;
         using PixelDataPtr   = std::shared_ptr<PixelData>;
         using TextureInfoPtr = std::shared_ptr<TextureInfo>;
+        using ArtifactPtr    = std::shared_ptr<LoadedClientArtifact>;
 
         // The process-wide content-artifact-refusal latch's storage (see Assets.hpp's own
         // "process-wide content-artifact-refusal latch" banner for the contract). One slot,
@@ -173,6 +174,14 @@ namespace Arcane
                 return p ? TextureInfoForResolved(id, *p, CacheKey(*p)) : nullptr;
             }
 
+            // Task 7: the compiled-texture supply -- see Assets.hpp's own doc comment
+            // (appended at the end of the interface; same-arc ABI v21 addition).
+            const LoadedClientArtifact* ArtifactFor(const Guid& id) override
+            {
+                const auto p = ResolveId(AssetId::FromGuid(id));
+                return p ? ArtifactForResolved(id, *p, CacheKey(*p)) : nullptr;
+            }
+
             BytesPtr GetBytes(const AssetId& id) override
             {
                 const auto p = ResolveId(id);
@@ -207,7 +216,8 @@ namespace Arcane
                 s.count = (uint32_t)(m_bytes.Count() +
                                      m_json.Count() +
                                      m_pixels.Count() +
-                                     m_textureInfo.Count());
+                                     m_textureInfo.Count() +
+                                     m_artifacts.Count());
                 return s;
             }
 
@@ -486,19 +496,74 @@ namespace Arcane
                 return raw;
             }
 
+            // The compiled-texture supply behind ArtifactFor(Guid) -- Task 7, ABI v21.
+            // Shares ResolveArtifact/RefuseArtifact with the two accessors above, so the
+            // hash/version refusal discipline can never drift between the three. See
+            // Assets.hpp's own doc comment for the one way this DIFFERS from them: "no
+            // artifact yet" (ArtifactRefusal::Missing, or ResolveArtifact's own
+            // no-project/no-store-hit early return) is NOT memoized here -- there is no
+            // fallback decode this accessor can serve instead, so every such call re-scans
+            // rather than latching a permanent miss. That re-scan is what lets
+            // NriTextureCache's PendingCook state (Task 7's own consumer) promote to
+            // Resident the moment a cook queue produces the artifact, rather than being
+            // stuck forever behind the FIRST caller that asked before the cook landed.
+            const LoadedClientArtifact* ArtifactForResolved(const Guid& id,
+                                                             const std::filesystem::path& resolved,
+                                                             const std::string& key)
+            {
+                // A cache HIT is still a hit, Resident or Refused alike -- only the
+                // "nothing on disk yet" case below skips the cache entirely.
+                if (m_artifacts.Has(key))
+                {
+                    if (m_artifacts.IsFailure(key))
+                        return nullptr;
+                    return m_artifacts.Get(key).get();
+                }
+
+                const ArtifactReadResult art = ResolveArtifact(id, resolved);
+                if (art.refusal == ArtifactRefusal::HashMismatch ||
+                    art.refusal == ArtifactRefusal::VersionNewerThanEngine)
+                {
+                    RefuseArtifact(m_artifacts, key, id, art.refusal);
+                    return nullptr;
+                }
+                if (art.refusal != ArtifactRefusal::None || !art.artifact)
+                {
+                    // Missing: no cooked artifact for this guid's source YET. Deliberately
+                    // NOT m_artifacts.PutFailure(key) -- see this function's own banner.
+                    return nullptr;
+                }
+
+                auto artifact = std::make_shared<LoadedClientArtifact>(std::move(*art.artifact));
+                const uint64_t bytes =
+                    (uint64_t)artifact->payload.size() + (uint64_t)artifact->thumbRgba.size();
+                const LoadedClientArtifact* raw = artifact.get();
+                m_artifacts.Put(key, artifact, bytes);
+                // Pin for the sweep below -- same reason PixelsForResolved pins its own
+                // fresh entry (EnforceBudget could otherwise evict THIS entry before the
+                // caller ever sees `raw`, since a texture artifact larger than the whole
+                // budget is swept right back out).
+                m_artifacts.Acquire(key);
+                EnforceBudget();
+                m_artifacts.Release(key);
+                return raw;
+            }
+
             uint64_t TotalBytes() const
             {
                 return m_bytes.TotalBytes() +
                        m_json.TotalBytes() +
                        m_pixels.TotalBytes() +
-                       m_textureInfo.TotalBytes();
+                       m_textureInfo.TotalBytes() +
+                       m_artifacts.TotalBytes();
             }
 
             // Budget sweep, run after every insert: evict the globally
-            // least-recently-used entry -- across ALL FOUR caches (it was three from
-            // ABI v15 (the texture cache went with GetTexture) until ABI v21 added
-            // m_textureInfo) -- comparable via the shared recency clock -- until the
-            // total is back under budget. Pinned (refcounted) entries are never
+            // least-recently-used entry -- across ALL FIVE caches (three from
+            // ABI v15 (the texture cache went with GetTexture); ABI v21 added
+            // m_textureInfo, then m_artifacts in the SAME arc, Task 7) --
+            // comparable via the shared recency clock -- until the total is
+            // back under budget. Pinned (refcounted) entries are never
             // offered by LeastRecentEvictable and Evict refuses them; memoized
             // failures are ~zero cost and skipped (evicting them frees nothing and
             // destroys their do-not-retry memo). The budget is strict, so an
@@ -534,6 +599,11 @@ namespace Arcane
                     {
                         key = candKey; used = candUsed; which = 3;
                     }
+                    if (m_artifacts.LeastRecentEvictable(candKey, candUsed) &&
+                        candUsed < used)
+                    {
+                        key = candKey; used = candUsed; which = 4;
+                    }
 
                     bool evicted = false;
                     switch (which)
@@ -542,6 +612,7 @@ namespace Arcane
                     case 1: evicted = m_json.Evict(key); break;
                     case 2: evicted = m_pixels.Evict(key); break;
                     case 3: evicted = m_textureInfo.Evict(key); break;
+                    case 4: evicted = m_artifacts.Evict(key); break;
                     default: break;
                     }
                     if (!evicted)
@@ -648,16 +719,19 @@ namespace Arcane
             // insertion order is the row order the user sees.
             std::vector<Guid> m_unresolvedDiagnosticIds;
 
-            // ONE recency clock across the four caches (declared first: the
+            // ONE recency clock across the five caches (declared first: the
             // caches capture its address) so the budget sweep can compare LRU
             // candidates cross-cache. See AssetCache's shared-clock ctor.
             // THERE IS NO GPU TEXTURE CACHE HERE: this facade holds no device --
-            // m_textureInfo (ABI v21) is header METADATA, never a device object.
+            // m_textureInfo and m_artifacts (both ABI v21) are CPU-side data
+            // (header metadata; mips + payload bytes), never device objects --
+            // NriTextureCache (Task 7) is what puts an m_artifacts entry on one.
             uint64_t m_lruClock = 0;
             AssetCache<BytesPtr>                 m_bytes{&m_lruClock};
             AssetCache<JsonPtr>                  m_json{&m_lruClock};
             AssetCache<PixelDataPtr>             m_pixels{&m_lruClock};
             AssetCache<TextureInfoPtr>           m_textureInfo{&m_lruClock};
+            AssetCache<ArtifactPtr>              m_artifacts{&m_lruClock};
         };
     }
 

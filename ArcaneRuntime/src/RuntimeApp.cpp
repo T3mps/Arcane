@@ -532,14 +532,20 @@ void RuntimeApp::MainLoop()
             return project ? project->ResolveAsset(Arcane::AssetId::FromGuid(id))
                            : std::nullopt;
         });
-    // ...and the SAME seam extended to PIXELS: NriTextureCache uploads its
-    // own textures from the engine's RETAINED, device-free decode
-    // (Assets::PixelsFor). That is what makes a textured sprite render
-    // without the asset layer ever holding a device handle.
-    graph.SetPixelSupply(
-        [rt = &*m_runtime](const Arcane::Guid& id) -> const Arcane::PixelData*
+    // ...and the SAME seam extended to COMPILED ARTIFACTS (Task 7):
+    // NriTextureCache uploads content's own BC7/RGBA8 mips from the engine's
+    // RETAINED, device-free artifact resolve (Assets::ArtifactFor) instead of
+    // a raw RGBA8 decode -- see NriTextureCache::ColorSpace's own
+    // routing-rule comment. That is still what makes a textured sprite
+    // render without the asset layer ever holding a device handle; only the
+    // shape of what crosses the seam changed. PixelSupplyFn is deliberately
+    // NOT installed on this vehicle any more: this host builds exactly ONE
+    // graph context (see the mode split above) and it is content, Srgb-space,
+    // with no Display-space chrome of its own to serve.
+    graph.SetArtifactSupply(
+        [rt = &*m_runtime](const Arcane::Guid& id) -> const Arcane::LoadedClientArtifact*
         {
-            return rt ? rt->AssetsFacade().PixelsFor(id) : nullptr;
+            return rt ? rt->AssetsFacade().ArtifactFor(id) : nullptr;
         });
 
     // --compare / --bless (Task 8, FINDING 3 of the dispatch audit):

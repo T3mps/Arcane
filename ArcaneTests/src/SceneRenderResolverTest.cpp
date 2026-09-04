@@ -220,6 +220,11 @@ namespace
         std::shared_ptr<const nlohmann::json> GetJson(const Arcane::AssetId&) override { return nullptr; }
         Arcane::AssetStats Stats() const override { return {}; }
 
+        // Task 7, ABI v21 (interface-completeness only): nothing in this suite
+        // exercises the compiled-artifact path -- SceneRenderResolver never
+        // calls ArtifactFor, only NriTextureCache's own artifact supply does.
+        const Arcane::LoadedClientArtifact* ArtifactFor(const Arcane::Guid&) override { return nullptr; }
+
         int pixelsForCalls       = 0;
         int textureInfoForCalls  = 0;
         int evictingCalls        = 0;

@@ -18,6 +18,7 @@
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/Graveyard.hpp>
 
+#include <Arcane/Assets/ArtifactReader.hpp>   // LoadedClientArtifact -- the compiled-texture supply (Task 7)
 #include <Arcane/Assets/ImageIo.hpp>   // PixelData -- the device-free decode (Task 1)
 #include <Arcane/Base/Log.hpp>
 
@@ -47,12 +48,16 @@ namespace Arcane
 
     NriTextureCache::~NriTextureCache()
     {
-        if (!m_device || m_textures.empty())
+        bool anyPlaceholders = false;
+        for (const Resident& ph : m_placeholders)
+            anyPlaceholders = anyPlaceholders || ph.texture || ph.view;
+
+        if (!m_device || (m_textures.empty() && !anyPlaceholders))
             return;
 
         ARC_WARN("[nri-graph] NriTextureCache destroyed with {} live NRI object set(s) -- its owner "
                  "never called Release(). Destroying directly behind a DeviceWaitIdle.",
-                 m_textures.size());
+                 m_textures.size() + (anyPlaceholders ? m_placeholders.size() : 0));
         const nri::CoreInterface& core = m_device->Core();
         (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
         for (auto& [key, resident] : m_textures)
@@ -61,6 +66,12 @@ namespace Arcane
             if (resident.texture) core.DestroyTexture(resident.texture);
         }
         m_textures.clear();
+        for (Resident& ph : m_placeholders)
+        {
+            if (ph.view)    core.DestroyDescriptor(ph.view);
+            if (ph.texture) core.DestroyTexture(ph.texture);
+            ph = Resident{};
+        }
     }
 
     void NriTextureCache::Release(Graveyard& graveyard, std::uint64_t fence)
@@ -79,6 +90,20 @@ namespace Arcane
                 graveyard.Bury(fence, [core, t = resident.texture] { core->DestroyTexture(t); });
         }
         m_textures.clear();
+
+        // The checkerboard placeholder(s) -- ONCE each, never once per
+        // PendingCook key (which never owned the object; see
+        // EnsureCheckerboard/ResolveArtifactKey). Reset to empty afterwards so
+        // a PendingCook resolve after this Release() recreates a fresh one
+        // rather than reusing a buried handle.
+        for (Resident& ph : m_placeholders)
+        {
+            if (ph.view)
+                graveyard.Bury(fence, [core, d = ph.view] { core->DestroyDescriptor(d); });
+            if (ph.texture)
+                graveyard.Bury(fence, [core, t = ph.texture] { core->DestroyTexture(t); });
+            ph = Resident{};
+        }
         // The warn latch stays SET across a release: a run that could not
         // resolve an image before a resize should not re-announce it after one.
     }
@@ -88,10 +113,23 @@ namespace Arcane
         // Counted on the VIEW, for the same reason Resolve's hit is gated on
         // it: counting TEXTURES over-reports by one for every entry whose
         // upload or view creation failed after the texture itself was created
-        // -- entries that are memoized FAILURES, not residents.
+        // -- entries that are memoized FAILURES, not residents. ALSO gated on
+        // state == Resident (Task 7): a PendingCook key has no view of its OWN
+        // anyway (it borrows the shared placeholder's, see View() below), but
+        // the state check is the honest reason -- a checkerboard is not "the
+        // compiled asset made resident" regardless of how it is wired.
         std::size_t count = 0;
         for (const auto& [key, resident] : m_textures)
-            if (resident.view)
+            if (resident.view && resident.state == ResidentState::Resident)
+                ++count;
+        return count;
+    }
+
+    std::size_t NriTextureCache::PlaceholderCount() const noexcept
+    {
+        std::size_t count = 0;
+        for (const Resident& ph : m_placeholders)
+            if (ph.texture)
                 ++count;
         return count;
     }
@@ -99,7 +137,18 @@ namespace Arcane
     nri::Descriptor* NriTextureCache::View(const Guid& id, ColorSpace space) const
     {
         const auto found = m_textures.find(Key{ id, space });
-        return found != m_textures.end() ? found->second.view : nullptr;
+        if (found == m_textures.end())
+            return nullptr;
+        // PendingCook keys never own a view -- Resolve leaves theirs null and
+        // hands back the SHARED checkerboard's instead (one per colour space,
+        // not one per pending key). Safe to read without creating anything:
+        // by the time a caller asks View(), Resolve() has already run for
+        // this key at least once (the documented calling convention), which
+        // is what put this key into PendingCook and built the placeholder in
+        // the first place.
+        if (found->second.state == ResidentState::PendingCook)
+            return m_placeholders[static_cast<std::size_t>(space)].view;
+        return found->second.view;
     }
 
     nri::Texture* NriTextureCache::Resolve(const Guid& id, ColorSpace space)
@@ -110,9 +159,30 @@ namespace Arcane
             return nullptr;
 
         const Key key{ id, space };
+        // TASK 7 ROUTING RULE -- see ColorSpace's own doc comment: a Srgb-space
+        // key with an artifact supply installed goes through the artifact-
+        // shaped path; every other key (Display, or Srgb with none installed)
+        // takes the legacy pixel-supply path below, byte for byte.
+        const bool artifactPath = (space == ColorSpace::Srgb) && static_cast<bool>(m_artifactSupply);
+
         const auto cached = m_textures.find(key);
         if (cached != m_textures.end())
         {
+            // PendingCook is the ONE state this cache re-attempts on every
+            // ask rather than serving a memo -- Task 12's live cook queue may
+            // have produced the artifact since the last Resolve. Cheap by
+            // ArtifactReader.hpp's own banner (FindArtifactForGuid's scan is
+            // "tens of bytes per candidate file").
+            if (cached->second.state == ResidentState::PendingCook)
+            {
+                if (m_artifactSupply)
+                    return ResolveArtifactKey(key, cached->second);
+                // The supply was pulled mid-run (a vehicle teardown in
+                // progress, say) -- keep serving the placeholder rather than
+                // silently going to nothing.
+                return m_placeholders[static_cast<std::size_t>(space)].texture;
+            }
+
             // THE VIEW, NOT THE TEXTURE, IS WHAT "RESIDENT" MEANS (whole-branch
             // review, M2). This used to return `texture` with the comment "null
             // for a load this cache already failed", which was false for two of
@@ -128,8 +198,16 @@ namespace Arcane
         }
 
         // Inserted BEFORE any early return, so a failure is attempted once
-        // rather than re-resolved every frame.
+        // rather than re-resolved every frame -- PendingCook is the deliberate
+        // exception to "once", handled above on every SUBSEQUENT ask.
         Resident& resident = m_textures[key];
+
+        if (artifactPath)
+            return ResolveArtifactKey(key, resident);
+
+        // ===== LEGACY PIXEL-SUPPLY PATH -- unchanged since before Task 7,
+        // and reached only for Display-space keys or a Srgb key with no
+        // artifact supply installed (see `artifactPath` above). =====
 
         // THE ONE-SHOT MISS WARN -- moved here from Batch2DNode, and it now
         // covers the SPRITE's own texture as well as a material's declared
@@ -239,5 +317,268 @@ namespace Arcane
                  id.ToString(), pixels->width, pixels->height,
                  space == ColorSpace::Display ? "display-referred" : "sRGB");
         return resident.texture;
+    }
+
+    // =====================================================================
+    // TASK 7 -- THE ARTIFACT-SHAPED PATH (Resident / PendingCook / Refused)
+    // =====================================================================
+
+    void NriTextureCache::ReportIssue(const std::string& why)
+    {
+        // THE SAME shared one-shot latch the legacy path's own `reportMiss`
+        // lambda guards (m_warnedMiss) -- one line per RUN across every
+        // failure reason this cache can report, not one per reason. See
+        // m_warnedMiss's own comment.
+        if (m_warnedMiss)
+            return;
+        m_warnedMiss = true;
+        ARC_WARN("[nri-graph] NriTextureCache: {} (further occurrences are silent)", why);
+    }
+
+    NriTextureCache::Resident& NriTextureCache::EnsureCheckerboard(ColorSpace space)
+    {
+        Resident& placeholder = m_placeholders[static_cast<std::size_t>(space)];
+        if (placeholder.texture)
+            return placeholder;   // already built -- ONE per space, shared by every pending key in it
+
+        // An 8x8 checkerboard in two saturated, mutually legible colours --
+        // deliberately NOT the white texel a Refused/nil-Guid lookup falls
+        // back to, and not a plausible real-asset colour either, so a
+        // PendingCook sprite reads as "placeholder" at a glance and can never
+        // be mistaken for a Refused one (the spec's placeholder rule: the two
+        // must never render alike).
+        constexpr std::uint32_t kSize = 8;
+        std::vector<unsigned char> pixels(static_cast<std::size_t>(kSize) * kSize * 4);
+        for (std::uint32_t y = 0; y < kSize; ++y)
+        {
+            for (std::uint32_t x = 0; x < kSize; ++x)
+            {
+                unsigned char* p = pixels.data() + (static_cast<std::size_t>(y) * kSize + x) * 4;
+                const bool dark = ((x ^ y) & 1u) != 0u;
+                p[0] = dark ? 16   : 255;
+                p[1] = dark ? 16   : 0;
+                p[2] = dark ? 16   : 255;
+                p[3] = 255;
+            }
+        }
+
+        const nri::CoreInterface& core = m_device->Core();
+
+        nri::TextureDesc textureDesc = {};
+        textureDesc.type      = nri::TextureType::TEXTURE_2D;
+        textureDesc.usage     = nri::TextureUsageBits::SHADER_RESOURCE;
+        // Same space -> format rule as every other texture this cache
+        // uploads (see ColorSpace's own doc) -- the placeholder is a real
+        // resident of whichever space asked for it.
+        textureDesc.format    = space == ColorSpace::Display ? nri::Format::RGBA8_UNORM
+                                                             : nri::Format::RGBA8_SRGB;
+        textureDesc.width     = kSize;
+        textureDesc.height    = kSize;
+        textureDesc.depth     = 1;
+        textureDesc.mipNum    = 1;
+        textureDesc.layerNum  = 1;
+        textureDesc.sampleNum = 1;
+        if (!ARC_NRI_CHECK(core.CreateCommittedTexture(m_device->Device(), nri::MemoryLocation::DEVICE,
+                                                        0.0f, textureDesc, placeholder.texture))
+            || !placeholder.texture)
+        {
+            ReportIssue("the pending-cook checkerboard placeholder could not be created");
+            placeholder.texture = nullptr;
+            return placeholder;
+        }
+        core.SetDebugName(placeholder.texture,
+                          space == ColorSpace::Display ? "pending-cook placeholder (display)"
+                                                        : "pending-cook placeholder");
+
+        nri::TextureSubresourceUploadDesc subresource = {};
+        subresource.slices     = pixels.data();
+        subresource.sliceNum   = 1;
+        subresource.rowPitch   = kSize * 4;
+        subresource.slicePitch = kSize * kSize * 4;
+
+        nri::TextureUploadDesc upload = {};
+        upload.subresources = &subresource;
+        upload.texture      = placeholder.texture;
+        upload.after        = { nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE,
+                                nri::StageBits::FRAGMENT_SHADER };
+        upload.planes       = nri::PlaneBits::ALL;
+        if (!ARC_NRI_CHECK(m_helper.UploadData(*m_device->GraphicsQueue(), &upload, 1, nullptr, 0)))
+        {
+            ReportIssue("the pending-cook checkerboard placeholder failed to upload");
+            return placeholder;   // texture stays (see UploadArtifact's own note on why);
+                                    // view stays null, so this placeholder is never handed out
+        }
+
+        nri::TextureViewDesc viewDesc = {};
+        viewDesc.texture  = placeholder.texture;
+        viewDesc.type     = nri::TextureView::TEXTURE;
+        viewDesc.format   = textureDesc.format;
+        viewDesc.mipNum   = 1;
+        viewDesc.layerNum = 1;
+        if (!ARC_NRI_CHECK(core.CreateTextureView(viewDesc, placeholder.view)) || !placeholder.view)
+        {
+            ReportIssue("the pending-cook checkerboard placeholder's view could not be created");
+            placeholder.view = nullptr;
+        }
+        return placeholder;
+    }
+
+    bool NriTextureCache::UploadArtifact(const LoadedClientArtifact& artifact, Resident& resident)
+    {
+        if (artifact.mips.empty())
+        {
+            ReportIssue("a content artifact has no mip levels");
+            return false;
+        }
+        // nri::Dim_t is 16-bit and a silent cast would WRAP -- the same
+        // refusal the legacy path makes for a decoded image (and
+        // RenderGraph::RealizePool for a transient's extent).
+        if (artifact.info.width > 0xFFFFu || artifact.info.height > 0xFFFFu)
+        {
+            ReportIssue("a content artifact is " + std::to_string(artifact.info.width) + "x"
+                        + std::to_string(artifact.info.height)
+                        + ", which nri::Dim_t (16-bit) cannot express");
+            return false;
+        }
+
+        // format + srgb -> the NRI format (Task 7 brief): BC7 uploads as
+        // whichever BC7 view variant matches the artifact's own srgb flag,
+        // RGBA8 the same choice in the uncompressed format -- srgb decides
+        // the VARIANT for either payload shape, never just BC7's. A format
+        // byte this reader does not recognise (BC5/BC6H's reserved values --
+        // ArtifactReader.hpp's own forward-compat placeholders) is refused,
+        // not guessed at.
+        nri::Format format;
+        switch (artifact.format)
+        {
+        case ArtifactPixelFormatValue::BC7:
+            format = artifact.info.srgb ? nri::Format::BC7_RGBA_SRGB : nri::Format::BC7_RGBA_UNORM;
+            break;
+        case ArtifactPixelFormatValue::RGBA8:
+            format = artifact.info.srgb ? nri::Format::RGBA8_SRGB : nri::Format::RGBA8_UNORM;
+            break;
+        default:
+            ReportIssue("a content artifact's pixel format is not one this render cache can "
+                        "upload yet");
+            return false;
+        }
+
+        const nri::CoreInterface& core = m_device->Core();
+
+        nri::TextureDesc textureDesc = {};
+        textureDesc.type      = nri::TextureType::TEXTURE_2D;
+        textureDesc.usage     = nri::TextureUsageBits::SHADER_RESOURCE;
+        textureDesc.format    = format;
+        textureDesc.width     = (nri::Dim_t)artifact.info.width;
+        textureDesc.height    = (nri::Dim_t)artifact.info.height;
+        textureDesc.depth     = 1;
+        textureDesc.mipNum    = (nri::Dim_t)artifact.mips.size();
+        textureDesc.layerNum  = 1;
+        textureDesc.sampleNum = 1;
+        if (!ARC_NRI_CHECK(core.CreateCommittedTexture(m_device->Device(), nri::MemoryLocation::DEVICE,
+                                                        0.0f, textureDesc, resident.texture))
+            || !resident.texture)
+        {
+            ReportIssue("CreateCommittedTexture failed for a content artifact");
+            resident.texture = nullptr;
+            return false;
+        }
+        core.SetDebugName(resident.texture, "content artifact");
+
+        // One TextureSubresourceUploadDesc per mip, in mip order -- layerNum
+        // is 1 here (texture importer v1 is 2D-only), so subresource index ==
+        // mip index with no layer-stride ambiguity. BC7's rows are BLOCKS
+        // (Bc7RowPitch/Bc7SlicePitch), RGBA8's a straight width*4 passthrough
+        // -- see this cache's own doc comment on Bc7RowPitch for the NPOT
+        // reasoning (5->2->1 never rounds a row count down to zero: ceil, not
+        // floor).
+        std::vector<nri::TextureSubresourceUploadDesc> subresources(artifact.mips.size());
+        for (std::size_t i = 0; i < artifact.mips.size(); ++i)
+        {
+            const MipView& mip = artifact.mips[i];
+            if (mip.offset > artifact.payload.size() || mip.size > artifact.payload.size() - mip.offset)
+            {
+                ReportIssue("a content artifact's mip table overruns its own payload");
+                return false;
+            }
+            nri::TextureSubresourceUploadDesc& sub = subresources[i];
+            sub.slices   = artifact.payload.data() + mip.offset;
+            sub.sliceNum = 1;
+            if (artifact.format == ArtifactPixelFormatValue::BC7)
+            {
+                sub.rowPitch   = Bc7RowPitch(mip.width);
+                sub.slicePitch = Bc7SlicePitch(mip.width, mip.height);
+            }
+            else
+            {
+                sub.rowPitch   = mip.width * 4u;
+                sub.slicePitch = mip.width * mip.height * 4u;
+            }
+        }
+
+        // Through NRI's OWN helper, exactly like the legacy path -- submits
+        // and waits internally, so this must run at DECLARATION time (see the
+        // header's NO BARRIERS note). A downstream failure here deliberately
+        // does NOT null `resident.texture`: the object was already created,
+        // and leaving it in place is what lets Release()/the destructor still
+        // find and destroy it -- the same reasoning the legacy path's own
+        // upload/view failures already rely on (see Resolve's HIT-check
+        // comment above).
+        nri::TextureUploadDesc upload = {};
+        upload.subresources = subresources.data();
+        upload.texture      = resident.texture;
+        upload.after        = { nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE,
+                                nri::StageBits::FRAGMENT_SHADER };
+        upload.planes       = nri::PlaneBits::ALL;
+        if (!ARC_NRI_CHECK(m_helper.UploadData(*m_device->GraphicsQueue(), &upload, 1, nullptr, 0)))
+        {
+            ReportIssue("a content artifact's texture upload failed");
+            return false;
+        }
+
+        nri::TextureViewDesc viewDesc = {};
+        viewDesc.texture  = resident.texture;
+        viewDesc.type     = nri::TextureView::TEXTURE;
+        viewDesc.format   = format;
+        viewDesc.mipNum   = (nri::Dim_t)artifact.mips.size();
+        viewDesc.layerNum = 1;
+        if (!ARC_NRI_CHECK(core.CreateTextureView(viewDesc, resident.view)) || !resident.view)
+        {
+            ReportIssue("a content artifact's shader-resource view could not be created");
+            resident.view = nullptr;
+            return false;
+        }
+
+        ARC_INFO("[nri-graph] NriTextureCache: content artifact ({}x{}, {} mip(s), {}) is resident "
+                 "on the graph device",
+                 artifact.info.width, artifact.info.height, artifact.mips.size(),
+                 artifact.format == ArtifactPixelFormatValue::BC7 ? "BC7" : "RGBA8");
+        return true;
+    }
+
+    nri::Texture* NriTextureCache::ResolveArtifactKey(const Key& key, Resident& resident)
+    {
+        const LoadedClientArtifact* artifact = m_artifactSupply(key.id);
+        if (!artifact)
+        {
+            // Not cooked yet -- retriable (see ResidentState::PendingCook).
+            // This key owns NO GPU object of its own: it borrows the shared
+            // placeholder's, so Release()/the destructor never double-destroys
+            // one checkerboard through N pending keys.
+            const Resident& placeholder = EnsureCheckerboard(key.space);
+            resident.texture = nullptr;
+            resident.view    = nullptr;
+            resident.state   = ResidentState::PendingCook;
+            return placeholder.texture;
+        }
+
+        // A real artifact answered -- build from it. `resident` starts this
+        // attempt from a clean slate every time (a re-poll from PendingCook
+        // must not inherit a previous, unrelated attempt's partial state).
+        resident.texture = nullptr;
+        resident.view    = nullptr;
+        const bool ok = UploadArtifact(*artifact, resident);
+        resident.state = ok ? ResidentState::Resident : ResidentState::Refused;
+        return resident.view ? resident.texture : nullptr;
     }
 }

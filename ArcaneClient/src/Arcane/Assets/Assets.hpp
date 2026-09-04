@@ -141,6 +141,38 @@ namespace Arcane
         virtual std::shared_ptr<const nlohmann::json> GetJson(const AssetId& id) = 0;
 
         virtual AssetStats Stats() const = 0;
+
+        // THE COMPILED-TEXTURE SUPPLY for the render path (ABI v21, Task 7 --
+        // same-arc addition, appended here rather than inserted above so a
+        // stale plugin module's existing vtable offsets never move; see
+        // Batcher2D.hpp's own "NEW VIRTUALS GO AT THE END" rule, which this
+        // mirrors). The FULL loaded artifact -- header, format, EVERY mip's
+        // view into its own payload -- for a texture asset whose source has a
+        // cooked .arcart, resolved and memoized exactly like TextureInfoFor/
+        // PixelsFor above (same ResolveArtifact, same refusal discipline: a
+        // PRESENT-but-invalid artifact -- HashMismatch or
+        // VersionNewerThanEngine -- refuses loudly and memoizes, same "refuse,
+        // never limp" ERROR + latch as the other two accessors).
+        //
+        // UNLIKE TextureInfoFor/PixelsFor, a guid whose source has NO cooked
+        // artifact YET is NOT memoized here: this accessor has no fallback to
+        // offer (there is no decode-to-mips path the way PixelsFor has a
+        // stb decode), so "no artifact yet" is re-checked on every call
+        // rather than latched as a permanent miss. That is deliberate and
+        // load-bearing for its one production consumer,
+        // NriTextureCache::ArtifactSupplyFn (Task 7): a texture in the
+        // engine's PendingCook state must be able to promote to Resident the
+        // moment a cook queue (Task 12) produces the artifact, which a sticky
+        // "missing" memo would permanently prevent. FindArtifactForGuid's own
+        // directory scan is cheap per its own doc comment (ArtifactReader.hpp)
+        // -- this is what makes the re-check affordable.
+        //
+        // Null for an invalid/unresolvable id, a REFUSED artifact, or a guid
+        // with no cooked artifact at all. The returned pointer is owned by
+        // this facade's LRU-budgeted cache and is valid only until evicted --
+        // callers that need it to outlive the current call must copy it, not
+        // hold the pointer (same contract as PixelsFor).
+        virtual const LoadedClientArtifact* ArtifactFor(const Guid& id) = 0;
     };
 
     // -----------------------------------------------------------------
