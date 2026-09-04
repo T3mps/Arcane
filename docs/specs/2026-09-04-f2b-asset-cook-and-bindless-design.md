@@ -21,6 +21,12 @@ states match or deliberate divergence. Reference-code policy is unchanged: NO le
 source, ever; ValveResourceFormat (MIT) is the legal reference — its `.vtex_c` parser is the
 legitimate record of the target's compiled-texture vocabulary.
 
+**UE, read first-hand (2026-09-04).** The target is Source 2, but UE source is the one we can
+actually read (`.example/UnrealEngine-release/`), and this spec was reviewed against it: every
+`UE:` citation below was verified in that dump, selection-not-declaration discipline applied
+(the BC7 finding below is exactly the trap — the module that registers BC7 is not the one that
+runs).
+
 **After F2b:** F2c (mesh import — cgltf + meshoptimizer) per the F2a sequencing ruling.
 
 ---
@@ -84,18 +90,43 @@ Binary, little-endian, versioned:
 
 - Self-describing (contract §4): the header alone rebuilds the index by directory scan.
 - Deterministic (contract §6): pinned encoder settings, no timestamps, fixed field order.
-  Cook-twice-byte-compare is a unit test, not an aspiration.
+  Cook-twice-byte-compare is a unit test, not an aspiration. UE treats texture builds as
+  expected-but-not-guaranteed deterministic and merely instruments the gap
+  (`TextureBuildUtilities.h:53-58` pre-encode mip digests); we pin it outright — achievable
+  because we are single-platform, single-encoder (UE's own named nondeterminism is
+  cross-architecture, `TextureDerivedData.cpp:508-515`). One UE trap adopted verbatim: hash
+  explicit fields, never struct memory — "struct padding RNG" makes whole-struct hashes
+  nondeterministic (`TextureCompressorModule.cpp:3828-3880`).
 - Atomic writes (contract §5): `<hash>.tmp` + rename. Non-negotiable.
 - Store: `Intermediate/Artifacts/<hh>/<hash>.arcart`; `Intermediate/artifacts.index` is a
   rebuildable cache keyed Guid → hash. Cache key is the triple
-  `hash(source bytes + import settings + importer version)`.
+  `hash(source bytes + import settings + importer version)`. The importer-version term
+  EXPLICITLY covers the encoder and resize-library versions, not just our own importer code —
+  UE keys the exact same way: a global recook GUID (`TextureDerivedData.cpp:68`), a per-format
+  encoder version mixed in separately (`:434`, `:469`), and even stb-resize's own version
+  string (`TEXTURE_DDC_STB_IMAGE_RESIZE_VERSION "2.06"`, `:79`). Bump any one constituent and
+  affected artifacts recook; slice one carries a single composite constant with the
+  constituents named in its comment.
+- **Mip policy, modeled on UE first-hand:** mips are generated in LINEAR space — decode,
+  linearize sRGB, downsample in float, re-encode on write (UE hard-asserts RGBA32F + linear
+  at the mip loop, `TextureCompressorModule.cpp:1817`, linearize trigger `:4518-4522`). The
+  default filter is a plain 2×2 box average — UE's actual default (`TextureLODSettings.cpp:
+  333-353`, kernel-2 short-circuit `TextureCompressorModule.cpp:196-204`); kaiser-by-default
+  is folklore. Sharpen/blur kernels are out of scope. Mip dims respect BC's 4×4 blocks
+  (standard padding of the encoded mip, never of the source).
 - Format policy, this slice: **BC7 default** (sRGB-aware; albedo and sprites), **RGBA8** as a
   `.meta` opt-out for content BC visibly harms (pixel art, UI atlases). BC5 arrives with T1
   (normal maps + MikkTSpace), BC6H with T3 (HDR cubemaps) — enum values reserved now so the
   format field never renumbers.
 - `.meta` (today `{guid, version}`, parsed at `AssetRegistry.cpp:99-119`) gains a typed
   `texture` block: `format` (auto|bc7|rgba8), `srgb`, `generateMips`, `maxSize`. Absent block
-  = defaults; an untouched `.meta` cooks sensibly.
+  = defaults; an untouched `.meta` cooks sensibly. Growth shape, decided now so the knobs
+  never churn: when T1 needs normal maps, `format` grows toward UE's SEMANTIC-INTENT enum
+  (`TC_Default/Normalmap/Masks/HDR/...`, `TextureDefines.h:375-394`) rather than raw format
+  names — the intent picks the format. UE's essential build-settings core is eight-ish knobs
+  (compression setting, sRGB, mip-gen, max size, LOD group/bias, POT mode, alpha forcing)
+  atop an ~80-field `FTextureBuildSettings` (`TextureCompressorModule.h:95-300`); our four
+  are the honest subset of that core, and the ceiling to grow into is the core, never the 80.
 - **Target comparison:** `.vtex_c` is the analog; VRF's parser is the legal reference for what
   the target records per compiled texture (format enum, mip dims, sRGB, array layout — read
   before pinning the header in the plan). Divergence, already ruled in the contract: hash-flat
@@ -163,6 +194,19 @@ bindless is the idiomatic D3D12/VK spelling of the capability the target's scale
   halves prove each other.
 - Sprites stay on per-sprite descriptor sets (`Batch2DNode.cpp:737-804`). Batcher2D bindless
   is not in scope.
+- **UE, first-hand — validations and two noted deltas.** UE gates bindless on real device
+  queries (SM 6.6 AND `RESOURCE_BINDING_TIER_3`, `D3D12Adapter.cpp:1077-1080`) and refuses
+  LOUDLY with a logged reason when unsupported (`:1160-1167`) — our tier-0 refusal is the
+  same doctrine. Its handles are flat with NO generation field (`RHIDefinitions.h:1347-1355`);
+  safety comes from fence-deferred release (delete-queue drained behind a GPU sync point,
+  `D3D12RHI.cpp:396-424`) — exactly our Graveyard model, validating `Release(Graveyard&,
+  fence)`. Its bindless and descriptor-table PSOs coexist per-frame, branched on a
+  root-signature bit (`D3D12StateCache.cpp:452-459`) — the shape of our sprites-on-sets
+  choice. Deltas noted, not adopted at this scale: UE's allocator is a coalescing free-range
+  list and its resource heap GROWS by doubling, fatal only at the hardware ceiling
+  (`D3D12BindlessDescriptors.cpp:182-222`, default capacity 1,000,000); our fixed capacity +
+  `kInvalidSlot` + one warn is right for a slice-one table, and UE's growth shape is the
+  documented path if capacity ever bites.
 
 ## 7. Editor layer
 
@@ -179,6 +223,20 @@ tools; the user never runs the compiler by hand. No divergence.
   recooks and live-reloads; failures land red in the Problems pane, clickable; **no "Reimport
   All" button, ever** — if one becomes necessary the hash key is wrong; orphan sweep at
   project open (inert by hash-addressing).
+- **While a cook is in flight, the scene shows a PLACEHOLDER — modeled on UE first-hand.**
+  UE serves a built-in stand-in while a texture compiles (checkerboard/typed defaults chosen
+  per usage, `Texture2D.cpp:237-268`; the live resource is constructed OVER the default's
+  resource at `Texture2D.cpp:1053-1068`) and swaps the real one in on completion via the
+  ordinary update path (`TextureCompiler.cpp:210-240`). Ours: `NriTextureCache` serves a
+  built-in checkerboard for a Guid whose cook is pending, distinct from the refusal state
+  (failed/missing = red diagnostic, pending = placeholder), and completion swaps in through
+  the existing invalidate path. In-progress and broken must never look alike.
+- **Capture and bless WAIT for pending cooks.** UE blocks its save path on outstanding
+  compiles so no artifact-bearing output embeds a placeholder (`Texture.cpp:1463-1467`,
+  `ObjectTools.cpp:5576-5581` blocks before caching a thumbnail). Same rule here: the
+  editor's verify/capture/bless paths refuse-or-wait while any content cook is in flight —
+  a golden blessed from a checkerboard is the failure mode this buys out. (Gate runs never
+  hit this: staged trees are cooked post-build, §8.)
 - **The thumbnail's consumer this arc: the inspector texture preview** — the exact spot
   `InspectorView.cpp:287-293` reserved ("PixelsFor is the supply"). The asset-browser
   thumbnail GRID is out (a UI arc of its own; the browser keeps glyph icons).
@@ -245,6 +303,16 @@ row with pinned version + upstream URL. The hand-rolled DDS writer is our code (
 only). **Rider, one line, while `NOTICE.md` is open:** AgilitySDK — the tree's only non-OSS
 dependency, flagged twice in prior records — finally gets its missing row.
 
+**The encoder question, settled against UE first-hand:** a stock UE Windows build compresses
+BC7 with **Oodle Texture** — proprietary, selected not by module priority but by ini-driven
+format-NAME rewriting (`[AlternateTextureCompression]` → prefix `TFO_` →
+`BuildSettings.TextureFormatName = "TFO_BC7"`, `Texture.cpp:3892-3970`,
+`BaseEngine.ini:3676-3677`); Intel ISPC TexComp registers `BC7` and is never selected — the
+declaration-is-not-selection trap in the wild. bc7enc does not ship in UE at all. Oodle is
+not licensable-vendorable for us; ISPC TexComp is UE's open fallback but carries a real build
+system. `bc7enc_rdo` stands on its own merits: MIT, drop-in compile shape (the house
+vendoring rule), RDO-capable. Not a copy of anyone — a fit.
+
 ## 12. Decisions log
 
 | Decision | Choice | Why |
@@ -259,3 +327,7 @@ dependency, flagged twice in prior records — finally gets its missing row.
 | ABI 21 | Bump + restamps + module rebuilds | `Assets` vtable moves; bumps are cheap during engine dev (standing directive) |
 | Format default | BC7, RGBA8 opt-out | Universal on D3D12+VK; pixel-art escape hatch; BC5/BC6H reserved for their consumers |
 | Re-bless | Once, mid-arc, restaged to both hosts | BC changes pixels by design; a delta from compression is expected, not a defect — but blessed deliberately, never casually |
+| Mip policy | Linear-space 2×2 box, per UE first-hand | Kaiser-default is folklore; linearize-before-downsample is the correctness rule UE hard-asserts |
+| Cook-pending state | Checkerboard placeholder, distinct from refusal | UE model; in-progress and broken must never look alike; capture/bless waits on pending cooks |
+| Encoder | bc7enc_rdo despite UE shipping Oodle | Oodle proprietary; ISPC = nested build; bc7enc_rdo = MIT drop-in with RDO — the house vendoring shape |
+| Determinism | Pinned byte-identity, stronger than UE | Single platform + single encoder makes it achievable; UE only instruments the gap |
