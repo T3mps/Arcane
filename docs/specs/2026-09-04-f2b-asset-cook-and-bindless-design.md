@@ -82,11 +82,23 @@ Binary, little-endian, versioned:
 ```
 [Header]   magic 'ARCA', artifactVersion, contentKind (Texture), sourceGuid,
            sourceHash, importerVersion, pixelFormat (BC7|RGBA8; BC5/BC6H reserved),
-           width, height, mipCount, sRGB flag, section offsets/sizes
-[MipTable] per-mip: offset, size, width, height
-[Payload]  BC blocks (or raw RGBA8), mip-major, tightly packed
+           dimension (Tex2D; Tex2DArray|TexCube|TexCubeArray|Tex3D reserved),
+           arrayOrDepth (fixed 1 this slice), width, height, mipCount, sRGB flag,
+           sectionCount + tagged section table { tag, offset, size }
+[MipTable] per-mip: offset, size, width, height. Slice-major, mip-minor when
+           arrayOrDepth > 1 (matches D3D12 subresource ordering) — the rule is
+           fixed NOW, unused this slice
+[Payload]  BC blocks (or raw RGBA8), laid out per the mip table
 [Thumb]    uncompressed RGBA mip, <=64 px long edge — the editor-preview route
 ```
+
+**Why `dimension`/`arrayOrDepth` are reserved today at 2D/1:** the target's tiers demand them
+— T2's paged lightmap arrays and probe-volume 3D textures, T3's 144-entry cubemap ARRAY (the
+very artifact §1 cites as this pipeline's reason to exist), T4's fog cubemap, T5's 3D grading
+LUTs. Reserving costs two fields and one ordering sentence; bumping later reshapes the mip
+table, which is a layout redo, not an append. The tagged section table is the same move for
+data we can already name coming (T3's per-envmap SH coefficients ride a future section tag
+with no format break).
 
 - Self-describing (contract §4): the header alone rebuilds the index by directory scan.
 - Deterministic (contract §6): pinned encoder settings, no timestamps, fixed field order.
@@ -157,7 +169,10 @@ Seams, verified in source 2026-09-03:
 - **Refusal semantics** (contract §8): missing artifact, source-hash mismatch, or importer
   version newer than the engine → loud memoized failure — red in the editor's Problems pane,
   fatal at runtime load. Plugin-ABI-gate philosophy verbatim. Failure memoization follows the
-  existing decode-failure precedent (`Assets.cpp:259-272`).
+  existing decode-failure precedent (`Assets.cpp:259-272`). (The contract words the version
+  refusal as artifact-OLDER-than-engine; under the triple cache key an older artifact is
+  simply a key miss — "missing" — so newer-than-engine is the only version state left to
+  refuse by name. Both directions are covered; the behavior is net-identical.)
 - **stb stays for exactly two things, stated so nobody "finishes the job" later:**
   1. The verify/compare oracle — reference load `RuntimeApp.cpp:592` and
      `EditorAppFrame.cpp:252`, diff write `RuntimeApp.cpp:1084`, bless write
@@ -194,19 +209,33 @@ bindless is the idiomatic D3D12/VK spelling of the capability the target's scale
   halves prove each other.
 - Sprites stay on per-sprite descriptor sets (`Batch2DNode.cpp:737-804`). Batcher2D bindless
   is not in scope.
-- **UE, first-hand — validations and two noted deltas.** UE gates bindless on real device
-  queries (SM 6.6 AND `RESOURCE_BINDING_TIER_3`, `D3D12Adapter.cpp:1077-1080`) and refuses
-  LOUDLY with a logged reason when unsupported (`:1160-1167`) — our tier-0 refusal is the
-  same doctrine. Its handles are flat with NO generation field (`RHIDefinitions.h:1347-1355`);
-  safety comes from fence-deferred release (delete-queue drained behind a GPU sync point,
-  `D3D12RHI.cpp:396-424`) — exactly our Graveyard model, validating `Release(Graveyard&,
-  fence)`. Its bindless and descriptor-table PSOs coexist per-frame, branched on a
-  root-signature bit (`D3D12StateCache.cpp:452-459`) — the shape of our sprites-on-sets
-  choice. Deltas noted, not adopted at this scale: UE's allocator is a coalescing free-range
-  list and its resource heap GROWS by doubling, fatal only at the hardware ceiling
-  (`D3D12BindlessDescriptors.cpp:182-222`, default capacity 1,000,000); our fixed capacity +
-  `kInvalidSlot` + one warn is right for a slice-one table, and UE's growth shape is the
-  documented path if capacity ever bites.
+- **Slice-one sampler strategy — decided here, not improvised in the plan.** Task 8 adds the
+  FIRST sampler the mesh pipeline has ever had (F2a's path is flat-color; `mesh.hlsl` gains
+  texture sampling this arc), and BC7-with-mips makes its filter a correctness decision:
+  **one immutable trilinear sampler owned by the mesh pipeline layout** (anisotropy as the
+  single knob), serving the whole bindless table. Bindless SAMPLERS are explicitly out of
+  scope: UE runs the two domains independently (`UsesDynamicResources()` vs
+  `UsesDynamicSamplers()` branched separately, `D3D12StateCache.cpp:452-453`), and its
+  sampler heap is a hardware-capped 2048-entry domain of its own
+  (`D3D12BindlessDescriptors.cpp:24`, `:154-160`) — proof that resources-bindless does not
+  drag samplers-bindless with it, and that a sampler TABLE is a different, smaller problem
+  for whenever material variety demands it.
+- **UE, first-hand — validations and noted deltas.** UE gates bindless on real device
+  queries (SM 6.6 AND `RESOURCE_BINDING_TIER_3`, `D3D12Adapter.cpp:1077-1080`) and logs its
+  reasons; the loud refusal at `:1160-1167` is RAY TRACING's (raster falls back to
+  descriptor tables) — the refuse-loudly posture for our tier-0 raster case is OURS, from
+  the house ABI-gate philosophy, not UE precedent. Its handles are flat with NO generation
+  field (`RHIDefinitions.h:1347-1355`); safety comes from fence-deferred release (delete
+  queue drained behind a GPU sync point, `D3D12RHI.cpp:396-424`, the drain with its
+  BindlessDescriptor case at `:441-501`/`:473`) — exactly our Graveyard model, validating
+  `Release(Graveyard&, fence)`. Its bindless and descriptor-table PSOs coexist per-frame,
+  branched on a root-signature bit (`D3D12StateCache.cpp:452-459`) — the shape of our
+  sprites-on-sets choice. Deltas noted, not adopted at this scale: UE's allocator is a
+  coalescing free-range list (`RHICore/Private/RHIDescriptorAllocator.cpp:42-58,139-150`,
+  used by `D3D12BindlessDescriptors.cpp`) and its resource heap GROWS by doubling, fatal
+  only at the hardware ceiling (`D3D12BindlessDescriptors.cpp:182-222`, default capacity
+  1,000,000); our fixed capacity + `kInvalidSlot` + one warn is right for a slice-one
+  table, and UE's growth shape is the documented path if capacity ever bites.
 
 ## 7. Editor layer
 
@@ -218,11 +247,14 @@ tools; the user never runs the compiler by hand. No divergence.
   fire-and-forget `Submit` API (enkiTS supports unwaited task sets; thin exposure, engine-side
   per the directional rule). The pipeline's cook queue rides it: watcher event (the existing
   `last_write_time` watcher triggers; the hash decides) → cook job → thumbnail/table refresh.
-- **Ergonomics held to the contract's list verbatim:** drop a `.png` → appears immediately,
-  cooks in background, thumbnail resolves when ready; import-settings change → that one asset
-  recooks and live-reloads; failures land red in the Problems pane, clickable; **no "Reimport
-  All" button, ever** — if one becomes necessary the hash key is wrong; orphan sweep at
-  project open (inert by hash-addressing).
+- **Ergonomics held to the contract's list, with one named narrowing:** drop a `.png` →
+  appears immediately, cooks in background, thumbnail resolves when ready; import-settings
+  change → that one asset recooks and live-reloads; failures land red in the Problems pane,
+  clickable; **no "Reimport All" button, ever** — if one becomes necessary the hash key is
+  wrong; orphan sweep at project open (inert by hash-addressing). The narrowing: the
+  contract's ergonomic #1 places the resolving thumbnail in the BROWSER; browser thumbnails
+  are deferred to the grid arc, and the inspector preview satisfies "thumbnail resolves when
+  ready" this arc.
 - **While a cook is in flight, the scene shows a PLACEHOLDER — modeled on UE first-hand.**
   UE serves a built-in stand-in while a texture compiles (checkerboard/typed defaults chosen
   per usage, `Texture2D.cpp:237-268`; the live resource is constructed OVER the default's
@@ -232,7 +264,8 @@ tools; the user never runs the compiler by hand. No divergence.
   (failed/missing = red diagnostic, pending = placeholder), and completion swaps in through
   the existing invalidate path. In-progress and broken must never look alike.
 - **Capture and bless WAIT for pending cooks.** UE blocks its save path on outstanding
-  compiles so no artifact-bearing output embeds a placeholder (`Texture.cpp:1463-1467`,
+  compiles so no artifact-bearing output embeds a placeholder (`Texture.cpp:1463-1472` — via
+  `Modify(false)`, which subsumes the commented-out `BlockOnAnyAsyncBuild` call;
   `ObjectTools.cpp:5576-5581` blocks before caching a thumbnail). Same rule here: the
   editor's verify/capture/bless paths refuse-or-wait while any content cook is in flight —
   a golden blessed from a checkerboard is the failure mode this buys out. (Gate runs never
@@ -277,7 +310,10 @@ tools; the user never runs the compiler by hand. No divergence.
   atomicity; index rebuild from a directory scan; cook-twice byte-determinism; refusal paths
   (missing / hash-mismatch / version-newer) each WATCHED FIRING ONCE (the Arc B standard);
   orphan sweep; `.meta` settings round-trip; BC7 payload sanity (decode a block, compare
-  against source within encoder tolerance).
+  against source within encoder tolerance). Determinism constraint, decided now: bc7enc_rdo's
+  multithreaded RDO path is either VERIFIED output-deterministic or run single-threaded per
+  asset with parallelism across assets — the cook queue's shape anyway — and the byte-identity
+  test is what holds the choice honest.
 - **GPU:** BC7 multi-mip upload case in the texture cache; Task 8's four-cube case; the
   cooked-BC7-albedo integration case.
 - **Product:** the golden gate's four lanes running entirely on cooked content are the
@@ -292,6 +328,11 @@ tools; the user never runs the compiler by hand. No divergence.
 - **Batcher2D bindless** — sprites keep descriptor sets; revisit only with a profiled need.
 - **Asset-browser thumbnail grid** — a UI arc; the inspector preview is this arc's consumer.
 - **BC5/BC6H encoding** — enum reserved; T1/T3 own the encoders' first use.
+- **Streaming** — whole-artifact residency this slice. The per-mip offset/size table is the
+  seam a future streamer consumes; UE bakes its inline-vs-streamed mip split into artifact
+  IDENTITY (`NUM_INLINE_DERIVED_MIPS` is a DDC key component, `TextureDerivedData.cpp:
+  463-468`) — evidence that retrofitting streaming reshapes artifacts, and the mip table is
+  why ours won't.
 - **Basisu/KTX2 transcoding** — rejected in the contract; revisit only if WASM/web firms up.
 - **F2c (mesh import: cgltf + meshoptimizer)** — the next arc, per the F2a ruling.
 
@@ -302,6 +343,14 @@ obligations: `LICENSE` in its subdir, a `NOTICE.md` row, a `ThirdParty/README.md
 row with pinned version + upstream URL. The hand-rolled DDS writer is our code (dump path
 only). **Rider, one line, while `NOTICE.md` is open:** AgilitySDK — the tree's only non-OSS
 dependency, flagged twice in prior records — finally gets its missing row.
+
+**Contract correction, verified upstream (2026-09-04):** the cook contract's vendoring table
+overstates bc7enc_rdo — it encodes BC1-5 + BC7 and has NO BC6H/HDR path. Nothing in this arc
+breaks (BC6H is a reserved enum value with no consumer until T3), but "BC6H is what makes
+T3's cubemap array viable" cannot be delivered by this library: **T3 brings its own HDR
+encoder** (Compressonator cmp_core, Intel ISPC TexComp, or Betsy are the candidates).
+Recorded here, per house convention, rather than rewriting the dated contract — so T3's
+author does not reach for an encoder that isn't there.
 
 **The encoder question, settled against UE first-hand:** a stock UE Windows build compresses
 BC7 with **Oodle Texture** — proprietary, selected not by module priority but by ini-driven
@@ -331,3 +380,6 @@ vendoring rule), RDO-capable. Not a copy of anyone — a fit.
 | Cook-pending state | Checkerboard placeholder, distinct from refusal | UE model; in-progress and broken must never look alike; capture/bless waits on pending cooks |
 | Encoder | bc7enc_rdo despite UE shipping Oodle | Oodle proprietary; ISPC = nested build; bc7enc_rdo = MIT drop-in with RDO — the house vendoring shape |
 | Determinism | Pinned byte-identity, stronger than UE | Single platform + single encoder makes it achievable; UE only instruments the gap |
+| Header dimensionality | `dimension` + `arrayOrDepth` reserved NOW at 2D/1, slice-major rule fixed | T2-T5 need array/cube/3D — including T3's cubemap array, this pipeline's founding artifact; reserving costs two fields, bumping later reshapes the mip table |
+| Slice-one sampler | One immutable trilinear sampler in the mesh pipeline layout | Task 8 adds the mesh pipeline's FIRST sampler; bindless samplers are a separate, smaller, HW-capped domain (UE splits them) — out of scope |
+| T3's HDR encoder | Not bc7enc_rdo (it has no BC6H — contract corrected) | T3 selects its own (cmp_core / ISPC / Betsy); the reserved enum is unaffected |
