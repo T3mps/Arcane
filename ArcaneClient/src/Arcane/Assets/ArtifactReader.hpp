@@ -51,12 +51,20 @@
 // disk to read -- ArtifactStore's Guid -> cook-key index (ArtifactStore.hpp) is IN-MEMORY
 // ONLY, rebuilt by scanning Artifacts/**/*.arcart; nothing in ArcaneAssetPipeline or
 // arccook ever persists it. FindArtifactForGuid below therefore does its OWN directory
-// scan of <intermediateDir>/Artifacts/**/*.arcart, reading only each candidate's FIXED
-// HEADER (never its section table or bodies) until a sourceGuid match is found -- cheap
-// (tens of bytes per candidate file) even across a project's whole artifact set, and it
-// needs no persistent state of its own. See Assets.cpp for how the result is memoized
-// per-Guid at the facade layer (the SAME decode-once-then-cache shape PixelsFor already
-// uses), which is what keeps a repeat lookup for the same guid from re-scanning.
+// scan of <intermediateDir>/Artifacts/**/*.arcart, reading only a BOUNDED PREFIX of each
+// candidate (ArtifactReader.cpp's ReadFilePrefix/kHeaderProbeBytes -- 256 bytes, generous
+// headroom over the fixed header's own exact 64) until a sourceGuid match is found -- a
+// few hundred bytes per candidate file, never the whole artifact (payload/thumbnail
+// included), even across a project's whole artifact set, and it needs no persistent state
+// of its own. CORRECTNESS NOTE: this paragraph used to claim exactly this cost while the
+// code underneath (ReadHeaderOnly -> ReadWholeFile) actually read every candidate's ENTIRE
+// file every scan -- caught by review, fixed the same task the claim was made in
+// (ArtifactReader.cpp's ReadHeaderOnly/ReadFilePrefix carry the fix's own comment); take
+// this kind of claim as something to VERIFY against the code, not trust from a comment.
+// See Assets.cpp for how the result is memoized per-Guid at the facade layer (the SAME
+// decode-once-then-cache shape PixelsFor already uses), which is what keeps a repeat
+// lookup for the same guid from re-scanning -- though see Assets.cpp's own ArtifactFor
+// comment for the ONE case that is deliberately NOT memoized (PendingCook's re-poll).
 //
 // REFUSAL DISCIPLINE (spec s5, F2b Task 6 controller ruling -- "refuse, never limp"):
 //   Missing                 -- no artifact at all resolves for this guid. NOT a refusal

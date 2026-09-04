@@ -155,10 +155,49 @@ namespace Arcane
             return raw;
         }
 
-        // Header-only parse of a whole-file buffer -- FindArtifactForGuid's workhorse.
+        // REVIEW FIX (post-Task-7): the fixed header ParseHeader actually reads is exactly
+        // 64 bytes (magic 4 + version 4 + contentKind 1 + sourceGuid 16 + sourceHash 8 +
+        // importerVersion 4 + format 1 + dimension 1 + arrayOrDepth 4 + width 4 + height 4
+        // + mipCount 4 + srgb 1 + thumbWidth 4 + thumbHeight 4). 256 is generous headroom
+        // over that exact count so a future field ADDED to ParseHeader does not silently
+        // start under-reading -- still minuscule next to a real artifact's payload (a
+        // single BC7 mip alone is already this size or larger), which is the whole point:
+        // ReadHeaderOnly below must never pay for anything past the header.
+        constexpr std::size_t kHeaderProbeBytes = 256;
+
+        // Reads at most `maxBytes` from the START of `path` -- NEVER the whole file. A
+        // file shorter than `maxBytes` on disk reads however many bytes actually exist;
+        // ParseHeader's own bounds-checked accessors then correctly refuse anything
+        // truncated inside the header, exactly as they would reading the same short buffer
+        // out of a full-file read. `ifs.bad()` (a genuine I/O error) is distinguished from
+        // merely hitting EOF before `maxBytes` (which sets failbit/eofbit, not badbit, and
+        // is the ordinary "short file" case, not a failure).
+        [[nodiscard]] std::optional<std::vector<std::byte>> ReadFilePrefix(
+            const std::filesystem::path& path, std::size_t maxBytes)
+        {
+            std::ifstream ifs(path, std::ios::binary);
+            if (!ifs) return std::nullopt;
+
+            std::vector<std::byte> raw(maxBytes);
+            ifs.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(maxBytes));
+            if (ifs.bad()) return std::nullopt;
+
+            const std::streamsize got = ifs.gcount();
+            if (got < 0) return std::nullopt;
+            raw.resize(static_cast<std::size_t>(got));
+            return raw;
+        }
+
+        // Header-only parse -- FindArtifactForGuid's workhorse, one call per directory-scan
+        // candidate. REVIEW FIX (post-Task-7): this used to call ReadWholeFile -- the
+        // ENTIRE artifact, payload and thumbnail included -- and parse only ~64 bytes out
+        // of it, exactly the "read everything to use tens of bytes of it" cost
+        // ArtifactReader.hpp's own header banner claimed this function did NOT pay. It now
+        // reads only ReadFilePrefix's bounded kHeaderProbeBytes, which is what makes the
+        // banner's claim true.
         [[nodiscard]] std::optional<ParsedHeader> ReadHeaderOnly(const std::filesystem::path& path)
         {
-            const std::optional<std::vector<std::byte>> raw = ReadWholeFile(path);
+            const std::optional<std::vector<std::byte>> raw = ReadFilePrefix(path, kHeaderProbeBytes);
             if (!raw) return std::nullopt;
 
             ByteReader r(raw->data(), raw->size());

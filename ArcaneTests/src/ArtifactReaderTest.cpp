@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <span>
 #include <system_error>
@@ -316,4 +317,94 @@ TEST_CASE("artifact: FindArtifactForGuid returns nullopt when the store has no A
     const fs::path dir = TempDir("find_guid_no_store");
     const auto found = Arcane::FindArtifactForGuid(dir / "Intermediate", Guid::Generate());
     CHECK_FALSE(found.has_value());
+}
+
+// ---- REVIEW FIX (post-Task-7): ReadHeaderOnly must never pay for anything past the header ----
+//
+// FindArtifactForGuid's directory scan calls ReadHeaderOnly once per candidate .arcart file.
+// Before this fix, ReadHeaderOnly called ReadWholeFile -- reading and copying the candidate's
+// ENTIRE contents (payload, thumbnail, everything) -- and then parsed only the fixed 64-byte
+// header out of it. ArtifactReader.hpp's own header banner claimed the opposite ("reading only
+// each candidate's FIXED HEADER... cheap"), which was false against the code underneath it. The
+// two cases below prove the FIXED behaviour is correct regardless of what -- if anything -- sits
+// after the header: an enormous trailing region the fix must not touch, and a truncated file with
+// no trailing region at all.
+
+TEST_CASE("artifact: FindArtifactForGuid resolves a candidate whose header is followed by an "
+          "enormous payload region",
+          "[artifact]")
+{
+    const fs::path dir = TempDir("header_only_enormous");
+    const fs::path intermediateDir = dir / "Intermediate";
+    const fs::path artifactsDir = intermediateDir / "Artifacts";
+    fs::create_directories(artifactsDir);
+
+    const Guid guid = Guid::Generate();
+    const fs::path artifactPath = artifactsDir / "a.arcart";
+    const Fixture fx = CookFixture(artifactPath, guid, 4, 4);
+
+    // Pad the artifact file with 20 MiB of real trailing bytes, appended AFTER its own
+    // legitimate section table/payload/thumbnail -- never addressed by any section table
+    // entry, so a CORRECT parse (full or header-only) ignores it either way. The point of
+    // padding this large is what a pre-fix, whole-file ReadHeaderOnly would have paid for
+    // on EVERY directory-scan candidate; ReadFilePrefix reads a fixed ~256-byte prefix
+    // regardless of what follows it, which is the property this case exercises.
+    {
+        std::ofstream ofs(artifactPath, std::ios::binary | std::ios::app);
+        REQUIRE(ofs);
+        constexpr std::size_t kPadding = 20ull * 1024 * 1024;
+        const std::vector<char> zeros(kPadding, '\0');
+        ofs.write(zeros.data(), static_cast<std::streamsize>(zeros.size()));
+        REQUIRE(ofs);
+    }
+    REQUIRE(fs::file_size(artifactPath) > 20ull * 1024 * 1024);
+
+    const auto found = Arcane::FindArtifactForGuid(intermediateDir, guid);
+    REQUIRE(found.has_value());
+    CHECK(*found == artifactPath);
+
+    // The full read (ReadClientArtifact, UNCHANGED by this fix) still succeeds too -- the
+    // padding sits past every section the table names, so a correct parse ignores it
+    // exactly as it always did.
+    const auto result = Arcane::ReadClientArtifact(*found, fx.sourceBytes, guid);
+    CHECK(result.refusal == Arcane::ArtifactRefusal::None);
+}
+
+TEST_CASE("artifact: FindArtifactForGuid resolves a candidate truncated to just its fixed "
+          "64-byte header -- no section table, no payload, no thumbnail",
+          "[artifact]")
+{
+    const fs::path dir = TempDir("header_only_truncated");
+    const fs::path intermediateDir = dir / "Intermediate";
+    const fs::path artifactsDir = intermediateDir / "Artifacts";
+    fs::create_directories(artifactsDir);
+
+    const Guid guid = Guid::Generate();
+    const fs::path artifactPath = artifactsDir / "a.arcart";
+    const Fixture fx = CookFixture(artifactPath, guid, 4, 4);
+
+    // Truncate to EXACTLY the fixed header's own width (64 bytes: magic 4 + version 4 +
+    // contentKind 1 + sourceGuid 16 + sourceHash 8 + importerVersion 4 + format 1 +
+    // dimension 1 + arrayOrDepth 4 + width 4 + height 4 + mipCount 4 + srgb 1 +
+    // thumbWidth 4 + thumbHeight 4) -- nothing of the section table, payload or thumbnail
+    // survives. The header-only probe must still succeed: it never reads past the header
+    // regardless of what (if anything) follows it on disk.
+    {
+        std::error_code ec;
+        fs::resize_file(artifactPath, 64, ec);
+        REQUIRE_FALSE(ec);
+    }
+    REQUIRE(fs::file_size(artifactPath) == 64);
+
+    const auto found = Arcane::FindArtifactForGuid(intermediateDir, guid);
+    REQUIRE(found.has_value());
+    CHECK(*found == artifactPath);
+
+    // The FULL read, by contrast, legitimately refuses this file -- it has no section table
+    // at all (sectionCount cannot even be read), which is exactly the "unparseable" shape
+    // ReadClientArtifact's own Missing refusal already covers. Stated here to draw the
+    // line: the header-only probe's tolerance for a missing tail is scoped to itself, not a
+    // general loosening of the format's rules.
+    const auto result = Arcane::ReadClientArtifact(artifactPath, fx.sourceBytes, guid);
+    CHECK(result.refusal == Arcane::ArtifactRefusal::Missing);
 }

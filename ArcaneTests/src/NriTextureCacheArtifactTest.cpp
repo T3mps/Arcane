@@ -152,15 +152,26 @@ TEST_CASE("nri texture cache: Bc7RowPitch/Bc7SlicePitch match the 5->2->1 NPOT c
     CHECK(NriTextureCache::Bc7SlicePitch(1, 1) == 16u);
 }
 
-// ---- state machine: PendingCook -> Resident ---------------------------------
+// ---- state machine: PendingCook -> Resident, THROTTLED (review fix) --------
+//
+// Resolve() runs at DECLARATION TIME -- every frame, per on-screen span -- so
+// polling the artifact supply on every ask (the pre-fix behaviour) drove a
+// fresh Assets::ArtifactFor call, and downstream a full Intermediate/
+// Artifacts/** rescan, every single frame for every still-uncooked texture.
+// The cases below pin the THROTTLED cadence: kPendingCookRepollInterval
+// asks are absorbed (placeholder only, no supply call) between two actual
+// polls, and promotion still lands within one throttle window of the
+// artifact actually appearing.
 
 TEST_CASE("nri texture cache: an artifact key with nothing cooked yet is PendingCook, "
           "and re-polls until it is Resident",
           "[nri][artifact][texcache-artifact]")
 {
+    using Arcane::NriTextureCache;
+
     auto device = Arcane::NriDevice::CreateNoneForTests();
     REQUIRE(device != nullptr);
-    auto cache = Arcane::NriTextureCache::Create(*device);
+    auto cache = NriTextureCache::Create(*device);
     REQUIRE(cache != nullptr);
 
     CountingArtifactSupply supply;
@@ -169,6 +180,8 @@ TEST_CASE("nri texture cache: an artifact key with nothing cooked yet is Pending
 
     // PendingCook: a real, non-null texture (the checkerboard), but NOT
     // counted as "resident" -- it is a placeholder, not the compiled asset.
+    // Creation itself is an unconditional poll (a brand new key deserves an
+    // immediate answer), so this alone costs exactly one supply call.
     nri::Texture* pending = cache->Resolve(kIdA);
     CHECK(pending != nullptr);
     CHECK(cache->View(kIdA) != nullptr);
@@ -176,27 +189,77 @@ TEST_CASE("nri texture cache: an artifact key with nothing cooked yet is Pending
     CHECK(cache->PlaceholderCount() == 1);
     CHECK(supply.calls == 1);
 
-    // RE-POLLED, not memoized: a second ask while still pending calls the
-    // supply again (unlike every OTHER miss reason in this cache).
-    CHECK(cache->Resolve(kIdA) == pending);
-    CHECK(supply.calls == 2);
+    // THROTTLED, not memoized and not polled every ask: kPendingCookRepollInterval-1
+    // more Resolve() calls are all absorbed by the placeholder alone -- the
+    // supply is not consulted again yet.
+    for (std::uint32_t i = 1; i < NriTextureCache::kPendingCookRepollInterval; ++i)
+    {
+        CHECK(cache->Resolve(kIdA) == pending);
+        CHECK(supply.calls == 1);
+    }
     CHECK(cache->ResidentCount() == 0);
 
-    // Task 12's (future) cook queue lands the artifact -- the NEXT ask
-    // promotes this key to Resident.
+    // Task 12's (future) cook queue lands the artifact -- but a still-pending
+    // ask inside the CURRENT throttle window must not see it early: this is
+    // exactly the kPendingCookRepollInterval-th Resolve since the key was
+    // created, which IS the throttle boundary, so it polls and promotes.
     Arcane::LoadedClientArtifact artifact = MakeRgba8Artifact(4, 4);
     supply.answer = &artifact;
 
     nri::Texture* resident = cache->Resolve(kIdA);
     REQUIRE(resident != nullptr);
-    CHECK(supply.calls == 3);
+    CHECK(supply.calls == 2);
     CHECK(cache->ResidentCount() == 1);
     CHECK(cache->View(kIdA) != nullptr);
 
-    // Resident is sticky now, exactly like the legacy path: no further polls.
+    // Resident is sticky now, exactly like the legacy path: no further polls,
+    // throttled or otherwise.
     CHECK(cache->Resolve(kIdA) == resident);
-    CHECK(supply.calls == 3);
+    CHECK(supply.calls == 2);
     CHECK(cache->ResidentCount() == 1);
+
+    cache->Release(device->Graves(), 1);
+    device->Graves().Reap(1);
+}
+
+TEST_CASE("nri texture cache: the PendingCook re-poll cadence matches "
+          "kPendingCookRepollInterval exactly, across several windows",
+          "[nri][artifact][texcache-artifact]")
+{
+    using Arcane::NriTextureCache;
+    const std::uint32_t N = NriTextureCache::kPendingCookRepollInterval;
+    REQUIRE(N >= 2);   // the test below needs at least one absorbed ask per window
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+    auto cache = NriTextureCache::Create(*device);
+    REQUIRE(cache != nullptr);
+
+    CountingArtifactSupply supply;
+    supply.answer = nullptr;   // stays pending for the whole test
+    cache->SetArtifactSupply(supply.Fn());
+
+    // Drive THREE full throttle windows and assert the supply call count
+    // after each one -- not just "it eventually polls again", but the EXACT
+    // cadence: one poll per N asks, every window, not just the first.
+    int expectedPolls = 1;   // creation itself polls once
+    CHECK(cache->Resolve(kIdA) != nullptr);
+    CHECK(supply.calls == expectedPolls);
+
+    for (int window = 0; window < 3; ++window)
+    {
+        // N-1 absorbed asks: no new supply call.
+        for (std::uint32_t i = 1; i < N; ++i)
+        {
+            (void)cache->Resolve(kIdA);
+            CHECK(supply.calls == expectedPolls);
+        }
+        // The Nth ask in this window IS the poll.
+        (void)cache->Resolve(kIdA);
+        ++expectedPolls;
+        CHECK(supply.calls == expectedPolls);
+        CHECK(cache->ResidentCount() == 0);   // still pending -- supply.answer never changed
+    }
 
     cache->Release(device->Graves(), 1);
     device->Graves().Reap(1);

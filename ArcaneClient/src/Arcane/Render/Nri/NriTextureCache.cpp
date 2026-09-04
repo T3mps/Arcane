@@ -168,18 +168,28 @@ namespace Arcane
         const auto cached = m_textures.find(key);
         if (cached != m_textures.end())
         {
-            // PendingCook is the ONE state this cache re-attempts on every
-            // ask rather than serving a memo -- Task 12's live cook queue may
-            // have produced the artifact since the last Resolve. Cheap by
-            // ArtifactReader.hpp's own banner (FindArtifactForGuid's scan is
-            // "tens of bytes per candidate file").
+            // PendingCook is the ONE state this cache re-attempts rather than
+            // serving a memo forever -- Task 12's live cook queue may have
+            // produced the artifact since the last poll. THROTTLED (review
+            // fix): Resolve runs at declaration time, every frame, per
+            // on-screen span, so polling on EVERY ask drove a fresh
+            // Assets::ArtifactFor call -- and, downstream, a full
+            // Intermediate/Artifacts/** rescan -- every single frame for
+            // every still-uncooked texture. Absorb kPendingCookRepollInterval
+            // asks between polls; see that constant's own comment for the
+            // cost/promptness tradeoff.
             if (cached->second.state == ResidentState::PendingCook)
             {
-                if (m_artifactSupply)
+                if (m_artifactSupply &&
+                    ++cached->second.pendingAsksSincePoll >= kPendingCookRepollInterval)
+                {
+                    cached->second.pendingAsksSincePoll = 0;
                     return ResolveArtifactKey(key, cached->second);
-                // The supply was pulled mid-run (a vehicle teardown in
-                // progress, say) -- keep serving the placeholder rather than
-                // silently going to nothing.
+                }
+                // Either the throttle window has not elapsed yet, or the
+                // supply was pulled mid-run (a vehicle teardown in progress,
+                // say) -- either way, keep serving the placeholder rather
+                // than silently going to nothing or polling early.
                 return m_placeholders[static_cast<std::size_t>(space)].texture;
             }
 
