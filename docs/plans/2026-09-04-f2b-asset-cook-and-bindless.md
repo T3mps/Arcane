@@ -74,7 +74,7 @@ cross-task contracts are what this plan must pin.
 
 | Path | Change |
 |---|---|
-| `premake5.lua` | `ArcaneAssetPipeline` static lib (pattern :110-112), `arccook` console exe (pattern :292-294), ArcaneTests links += `ArcaneAssetPipeline` (:674), postbuild cook + `{COPYDIR}` Intermediate/Artifacts (Runtime :347+, Editor :421+, Tests :692+). |
+| `premake5.lua` | `ArcaneAssetPipeline` static lib (pattern :110-112), `arccook` console exe (pattern :292-294, links the lib + ArcaneCore), ArcaneTests links += lib (:674), **ArcaneEditor links += lib (:407)**, postbuild cook + `{COPYDIR}` Intermediate/Artifacts (Runtime :347+, Editor :421+, Tests :692+), `dependson` edges per Task 5. |
 | `ArcaneClient/src/Arcane/Assets/Assets.{hpp,cpp}` | `TextureInfoFor` (new), `PixelsFor` → thumbnail semantics, artifact-refusal memoization beside `:259-272`'s pattern. Content `LoadPngRgba` route retired (oracle/chrome kept). |
 | `ArcaneClient/src/Arcane/Render/SpriteCache.cpp:102` | Dims from `TextureInfoFor`, not `PixelsFor`. |
 | `ArcaneClient/src/Arcane/Render/Nri/NriTextureCache.{hpp,cpp}` | BC7_SRGB/UNORM + RGBA8 artifact upload with mips (:190-231 region), artifact supply seam, raw-RGBA supply kept for `ColorSpace::Display` (:90), checkerboard pending-placeholder. |
@@ -83,7 +83,7 @@ cross-task contracts are what this plan must pin.
 | `ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.{hpp,cpp}` | `MeshInstance` gains `materialSlot` (the reserved block `MeshNode.hpp:186-195`), bindless wiring, `SupportsBindless()` gate (`NriDeviceCaps.hpp:26` — first production call site), immutable trilinear sampler. |
 | `ArcaneClient/src/Arcane/Material/*`, `Scene/SceneResources.hpp:197-200`, `Render/MeshMaterialCache.cpp:144-151`, `Scene/MeshSubmissionSystem.hpp:102-128`, `Host/SceneRenderResolver.cpp:357-378` | `albedo` Guid end-to-end: parse → `ResolvedMeshMaterial` → resolve → slot → instance. |
 | `ArcaneClient/src/Arcane/Jobs/JobSystem.hpp:24-48` (+cpp) | `Submit(std::function<void()>)` beside `WorkerCount()` (:43); enkiTS impl stays in pimpl. |
-| `ArcaneEditor/src/App/EditorAppProject.cpp` | Watcher extends past `AssetKind::Material` filter (:215-216) to texture sources → cook queue; `CreateMaterialAt` kind param (:391-434, "fullscreen" at :402); cook diagnostics via `Arcane::Diagnostics::Publish` (pattern :1180-1192); orphan sweep at project open. |
+| `ArcaneEditor/src/App/EditorAppProject.cpp` | Watcher extends past `AssetKind::Material` filter (:215-216) to texture sources + `.meta` sidecars → cook queue; `CreateMaterialAt` kind param (:391-434, "fullscreen" at :402); cook + refusal diagnostics via `Arcane::Diagnostics::Publish` (pattern :1180-1192); orphan sweep at project open. |
 | `ArcaneEditor/src/App/EditorAppFrame.cpp:207-273` | Verify/capture/bless waits on pending cooks (gate before `m_compareRequested` at :273). |
 | `ArcaneEditor/src/Documents/ShaderEditorDocument.cpp` | `meshSurface` picker enabled (:2180-2182), mesh decl path incl. albedo via `DrawTextureParam` (:5676). |
 | `ArcaneEditor/src/Panels/InspectorView.cpp:287-293` | Texture preview from `PixelsFor` thumbnail — the reserved spot. |
@@ -109,10 +109,12 @@ namespace Arcane::AssetPipeline
     enum class ArtifactDimension  : std::uint8_t { Tex2D, Tex2DArray_Reserved, TexCube_Reserved,
                                                    TexCubeArray_Reserved, Tex3D_Reserved };
     enum class SectionTag : std::uint32_t { MipTable = 1, Payload = 2, Thumbnail = 3 };
+    enum class ContentKind : std::uint8_t { Texture = 1 };   // F2c's mesh artifacts discriminate on this
 
     struct MipDesc { std::uint64_t offset; std::uint64_t size; std::uint32_t width, height; };
 
     struct TextureArtifactDesc {                    // header, serialized little-endian
+        ContentKind contentKind = ContentKind::Texture;      // spec s4 pins it; do not drop
         Guid sourceGuid;  std::uint64_t sourceHash;  std::uint32_t importerVersion;
         ArtifactPixelFormat format;  ArtifactDimension dimension;   // Tex2D this slice
         std::uint32_t arrayOrDepth;                                  // 1 this slice
@@ -132,11 +134,16 @@ namespace Arcane::AssetPipeline
 ```
 
 - [ ] **Step 1: Premake.** Add the static-lib project (copy the ArcaneCore shape at
-  `premake5.lua:110-112`; server-style warnings/flags), add `ArcaneAssetPipeline` to
-  ArcaneTests `links` (:674) and includedirs. Regenerate, build Debug — empty lib compiles.
+  `premake5.lua:110-112`; server-style warnings/flags); add `ArcaneAssetPipeline` to
+  ArcaneTests `links` (:674) AND to ArcaneEditor's `links` (:407 — currently
+  `{ "ArcaneCore", "ArcaneClient", "imgui-node-editor" }`; Task 12's in-process cook dies at
+  link without it), with includedirs for both. No STB symbol collision results: ArcaneClient
+  is a SharedLib (:178) so its StbImpl.cpp stays DLL-internal; the editor exe carries exactly
+  one static copy — the workspace's documented pattern (:663-667). Regenerate, build Debug —
+  empty lib compiles, editor still links.
 - [ ] **Step 2: Write the failing tests.** Assertions to pin (write real bodies against the
   interface above): round-trip every `TextureArtifactDesc` field byte-exactly, including
-  `dimension == Tex2D` and `arrayOrDepth == 1`; mip table order preserved; payload and thumb
+  `contentKind == Texture`, `dimension == Tex2D` and `arrayOrDepth == 1`; mip table order preserved; payload and thumb
   bytes identical after round-trip; `ReadTextureArtifact` returns nullopt on (a) wrong magic,
   (b) `artifactVersion + 1`, (c) file truncated mid-payload — each refusal watched firing;
   tagged-section reader skips an UNKNOWN section tag without failing (forward-compat pin).
@@ -191,6 +198,9 @@ the real name is correct and Task 3 grows it in place.)
   the index exactly; `SweepOrphans` removes artifacts whose guid is not live and touches
   nothing live.
 - [ ] **Step 2: RED, Step 3: implement, Step 4: green** (`"[pipeline]"`), same discipline.
+  `ComputeCookKey` hashes EXPLICIT FIELDS of `TextureMetaSettings`, never struct memory —
+  the same UE padding-RNG trap Task 1's writer rule cites, restated here because the spec's
+  citation is specifically about hashing build settings.
 - [ ] **Step 5: Commit** — `feat(pipeline): hash-flat artifact store, rebuildable index, triple cook key`
 
 ---
@@ -222,8 +232,9 @@ struct ImportedTexture { TextureArtifactDesc desc; std::vector<std::byte> payloa
                                                            const TextureMetaSettings&);
 ```
 
-- [ ] **Step 1: Failing tests.** Pin: mip chain dims halve to 1×1 (incl. non-square, NPOT
-  stays NPOT); **linear-space downsample correctness** — a 2×2 sRGB image of pure black and
+- [ ] **Step 1: Failing tests.** Pin: mip chain dims halve to 1×1 with FLOOR halving —
+  `max(1, dim >> 1)`, the UE/D3D12 rule: 5→2→1, never 3 (a ceil-derived mip table breaks
+  Task 7's uploads on the first NPOT texture) — incl. non-square, NPOT stays NPOT; **linear-space downsample correctness** — a 2×2 sRGB image of pure black and
   pure white quads averages to the value whose LINEAR average re-encodes to sRGB ≈188, not
   128 (the assertion that catches gamma-space averaging); `maxSize` drops top mips; settings
   JSON round-trip incl. absent-block defaults; thumbnail ≤64 long edge with aspect kept;
@@ -282,8 +293,13 @@ shared verbatim by CLI and editor (Task 12).
 - [ ] **Step 2: RED → implement → green.** CLI exit codes: cook path 0 on success, 1 on any
   failure; `--check` 0 clean / 2 stale (distinct from failure). `--dump-dds` writes a
   standard DDS (BC7 fourCC 'DX10' header or RGBA8) for eyeballing only.
-- [ ] **Step 3: Premake postbuild + gate staging.** ReferenceProject cooks ONCE at its
-  post-build; `{COPYDIR}` stages `Intermediate/Artifacts` into both hosts' + tests' trees.
+- [ ] **Step 3: Premake postbuild + gate staging.** EVERY stager (Runtime :347+, Editor
+  :421+, Tests :692+) runs `arccook --project ReferenceProject` FIRST, then `{COPYDIR}`s
+  `Intermediate/Artifacts` — cook-then-copy per stager, because under `/m` no postbuild
+  orders against another project's postbuild. Safe by construction: the cook is idempotent
+  by hash (second is free) and concurrent same-key writes are atomic-rename + deterministic
+  (identical bytes, last rename wins). All three stagers `dependson { "arccook" }` (and
+  arccook `dependson { "ArcaneAssetPipeline" }`) so the exe exists before any postbuild.
   Mirror-not-merge in golden-gate.ps1, copying the Content block's own shape (:568-611
   comments state the rationale — follow it).
 - [ ] **Step 4: Build Debug; verify staged trees contain `Intermediate/Artifacts`; run
@@ -331,12 +347,17 @@ struct LoadedClientArtifact {
   class, pinned).
 - [ ] **Step 2: RED → implement → green** (`"[pipeline]"` + Assets/sprite suites + full
   `"~[gpu]"`).
-- [ ] **Step 3: ABI.** Bump to 21 with a comment-block entry in the established voice (the
+- [ ] **Step 3: Refusal posture, both hosts (spec s5 as amended).** ArcaneRuntime: the first
+  REFUSED content texture during resolve exits nonzero with the refusal named (refuse, never
+  limp — watch it fire once against a scratch project with a deleted artifact). Editor side
+  lands in Task 12 (refusals PUBLISH to the Problems pane alongside cook failures) — note the
+  handoff in the report so neither task assumes the other did it.
+- [ ] **Step 4: ABI.** Bump to 21 with a comment-block entry in the established voice (the
   cause: `Assets` — an ARCANE_API pure-virtual facade — gained `TextureInfoFor`, vtable
   layout moved; MEASURED: grep both game modules for `Assets`-facade calls, state the
   result). Restamp both arcprojs; rebuild `ReferenceProject.slnx` so `ReferenceGame.dll`
   is not stranded (F2a lesson); Gacha restamp committed unpushed.
-- [ ] **Step 4: Commit** — `feat(host)!: runtime artifact route -- TextureInfoFor, thumbnail PixelsFor, plugin ABI 21`
+- [ ] **Step 5: Commit** — `feat(host)!: runtime artifact route -- TextureInfoFor, thumbnail PixelsFor, plugin ABI 21`
 
 ---
 
@@ -429,7 +450,11 @@ arrival). **The 128-byte root-constant block DOES NOT GROW** (`MeshNode.cpp:92` 
 stays): the slot is packed into `normalMatrixCol0.w` — unused today, all three normal-matrix
 columns carry only xyz — via `asuint`/`asfloat`. `kInvalidSlot` in the shader selects the
 flat `baseColor` path (F2a behaviour, bit-for-bit); any other slot samples the bindless
-array. The s0 sampler becomes the spec's immutable trilinear sampler (aniso as the one knob).
+array. Packing order rule: write the slot into the column's `.w` AFTER `PackedNormalMatrix`
+construction and never run the columns through float math afterward — `0xFFFFFFFF` is a NaN
+bit pattern, safe only as raw bytes (the shader reads `.xyz` only, `mesh.hlsl:111-113`; C++
+zeroes `.w` at construction, `MeshNode.cpp:81`). The s0 sampler becomes the spec's immutable
+trilinear sampler (aniso as the one knob).
 
 - [ ] **Step 1: Gate first.** `MeshNode` creation checks `Caps().SupportsBindless()`
   (`NriDeviceCaps.hpp:26` — its FIRST production call site) and refuses loudly at node
@@ -476,10 +501,13 @@ array. The s0 sampler becomes the spec's immutable trilinear sampler (aniso as t
 **Files:**
 - Modify: `JobSystem.hpp:24-48` + `JobSystem.cpp` (`Submit` beside `WorkerCount()` at :43,
   enkiTS pinned-task/TaskSet inside the pimpl), `EditorAppProject.cpp` (watcher :202-258
-  extends past the `AssetKind::Material` filter at :215-216 to texture sources — exact
-  AssetKind spelling adjusted to source; on change: hash-check via `CookSession`, cook on
+  extends past the `AssetKind::Material` filter at :215-216 to texture sources AND their
+  `.meta` sidecars — a hand-edited or inspector-written `.meta` is a cook trigger exactly
+  like a source edit (spec §7 as amended, plan-review F4); exact AssetKind spelling adjusted
+  to source; on change: hash-check via `CookSession`, cook on
   `Submit`, on completion invalidate the texture cache entry + refresh; self-save
-  re-baseline pattern :96-111 respected), cook diagnostics via
+  re-baseline pattern :96-111 respected), cook diagnostics AND Task 6's three artifact
+  refusals (spec §5 as amended — the Problems pane shows refusals, not cook failures only) via
   `Arcane::Diagnostics::Publish("diagnostics:cook", …)` (call-site shape :1180-1192,
   clickable locator to the source file), orphan sweep at project open,
   `EditorAppFrame.cpp:207-273` (verify/capture/bless refuses-or-waits while
@@ -507,8 +535,12 @@ array. The s0 sampler becomes the spec's immutable trilinear sampler (aniso as t
   `ParamDecl` through the existing `DrawTextureParam` :5676 machinery),
   `MaterialSource.cpp:324,:347` + `MaterialGraph.cpp:389` (the snippet/graph-on-mesh guards
   become ONE memoized diagnostic instead of bare refusals — the F2a "ignores snippet/graph
-  with one diagnostic" completion), `InspectorView.cpp:287-293` (texture preview from
-  `PixelsFor` thumbnail — the reserved spot, comment honoured)
+  with one diagnostic" completion), `InspectorView.cpp` (texture preview from `PixelsFor`
+  thumbnail — the preview's home is the INSPECTOR, the spec's stated intent; the
+  supply-precedent comment lives at `SpriteDocument.cpp:287-292`, the spec's first draft
+  transposed the filename — PLUS the minimal `.meta` texture-settings block: spec §4's four
+  knobs, written to the sidecar, which Task 12's watcher then treats as a cook trigger. The
+  round trip inspector-edit → sidecar → recook → live reload IS the contract's ergonomic #2)
 - Test: material-asset CPU tests (mesh kind + albedo authoring round-trip; the diagnostic
   fires once, watched); UI behaviour lands on the desk checklist
 
@@ -547,7 +579,11 @@ array. The s0 sampler becomes the spec's immutable trilinear sampler (aniso as t
 
 ## Self-review (spec → plan coverage)
 
-Run before Task 1 (the F2a lesson — the executor's pre-flight repeats it): every spec section
-maps — §3→T1/T5, §4→T1/T3/T4, §5→T6/T7/T8, §6→T9/T10/T11, §7→T12/T13, §8→T5/T6/T8/T14,
+Run before Task 1 (the F2a lesson — the executor's pre-flight repeats it). Two spec-ordered
+verifications are part of the pre-flight: the chrome upload route (spec §5 — how the toolbar
+logo/window icon become GPU textures, so Task 7's retained raw-RGBA supply provably covers
+them) and the VRF `.vtex_c` read (spec §4 — DISCHARGED by the 2026-09-04 plan review:
+covered/reserved verdict, `contentKind` confirmed load-bearing; do not repeat, cite it).
+Every spec section maps — §3→T1/T5, §4→T1/T3/T4, §5→T6/T7/T8, §6→T9/T10/T11, §7→T12/T13, §8→T5/T6/T8/T14,
 §9→distributed+T14, §10 out-of-scope guarded (no browser grid, no Batcher2D bindless, no
 BC5/BC6H encode, no streaming, no F2c), §11→T4, §12 rulings embedded in their tasks.

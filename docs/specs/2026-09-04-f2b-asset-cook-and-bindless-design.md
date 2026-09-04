@@ -140,9 +140,15 @@ with no format break).
   atop an ~80-field `FTextureBuildSettings` (`TextureCompressorModule.h:95-300`); our four
   are the honest subset of that core, and the ceiling to grow into is the core, never the 80.
 - **Target comparison:** `.vtex_c` is the analog; VRF's parser is the legal reference for what
-  the target records per compiled texture (format enum, mip dims, sRGB, array layout — read
-  before pinning the header in the plan). Divergence, already ruled in the contract: hash-flat
-  storage over Source 2's path mirroring, for staleness.
+  the target records per compiled texture. **The ordered read is DISCHARGED (plan review,
+  2026-09-04, via VRF's `Texture.cs` + `VTexFlags.cs`):** dims/mips/format/array-depth/cube
+  map onto the header + `ArtifactDimension`; VRF's extra-data-blocks-by-enum-tag is
+  structurally the tagged section table; Source 2's `CUBEMAP_RADIANCE_SH` block is literally
+  §4's anticipated SH section. Not carried, deliberately: reflectivity (derived average
+  colour — a future section), per-mip disk-compression sizes, clamp-suggest sampler hints
+  (contradicted by the immutable-sampler ruling), spritesheet (lives in our authored
+  `.arcsprite` layer). Divergence, already ruled in the contract: hash-flat storage over
+  Source 2's path mirroring, for staleness.
 
 ## 5. Runtime route and the sprite cutover
 
@@ -168,7 +174,10 @@ Seams, verified in source 2026-09-03:
   never cook, and the plan's grounding pass verifies the chrome upload route before Task 1.
 - **Refusal semantics** (contract §8): missing artifact, source-hash mismatch, or importer
   version newer than the engine → loud memoized failure — red in the editor's Problems pane,
-  fatal at runtime load. Plugin-ABI-gate philosophy verbatim. Failure memoization follows the
+  fatal at runtime load — pinned (plan review F3, 2026-09-04): ArcaneRuntime exits nonzero
+  at the first refused content texture (refuse, never limp), and the editor PUBLISHES each
+  refusal to the Problems pane, not only the cook failures. Plugin-ABI-gate philosophy
+  verbatim. Failure memoization follows the
   existing decode-failure precedent (`Assets.cpp:259-272`). (The contract words the version
   refusal as artifact-OLDER-than-engine; under the triple cache key an older artifact is
   simply a key miss — "missing" — so newer-than-engine is the only version state left to
@@ -270,9 +279,18 @@ tools; the user never runs the compiler by hand. No divergence.
   editor's verify/capture/bless paths refuse-or-wait while any content cook is in flight —
   a golden blessed from a checkerboard is the failure mode this buys out. (Gate runs never
   hit this: staged trees are cooked post-build, §8.)
-- **The thumbnail's consumer this arc: the inspector texture preview** — the exact spot
-  `InspectorView.cpp:287-293` reserved ("PixelsFor is the supply"). The asset-browser
-  thumbnail GRID is out (a UI arc of its own; the browser keeps glyph icons).
+- **The thumbnail's consumer this arc: a texture preview in the INSPECTOR** (the intent),
+  supplied by `PixelsFor` per the reserved comment — which lives at
+  `SpriteDocument.cpp:287-292`, NOT InspectorView (a filename transposition in this spec's
+  first draft, caught by the plan review 2026-09-04; the line numbers were always
+  SpriteDocument's). The asset-browser thumbnail GRID is out (a UI arc of its own; the
+  browser keeps glyph icons).
+- **Import-settings editing gets a minimal inspector block** (ruled 2026-09-04, closing the
+  plan review's F4): the contract's ergonomic #2 — settings change in the inspector → that
+  one asset recooks — needs an editing surface to be true. The inspector gains the four
+  `.meta` texture knobs (format / srgb / generateMips / maxSize), writes the sidecar, and
+  the watcher treats `.meta` edits as cook triggers exactly like source edits. Nothing more
+  — the knob set is §4's, never UE's eighty.
 - **F2a's inherited trio:** the surface picker and `CreateMaterialAt` learn `"mesh"`; the
   params panel gets a decl path for mesh materials (albedo texture slot + scalar params); the
   snippet/graph-ignored diagnostic completes (F2a shipped only the `passes`/`baseInputs`
