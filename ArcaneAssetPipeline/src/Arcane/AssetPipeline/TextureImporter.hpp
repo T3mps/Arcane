@@ -21,9 +21,12 @@
 // not the original decode size. `generateMips == false` stops after that single (possibly
 // clamped) level, so mipCount == 1.
 //
-// Every Format value (Auto/Bc7/Rgba8) produces an RGBA8 artifact this slice -- bc7enc_rdo is not
-// vendored yet. Task 4 replaces the branch that decides this with a real BC7 encode for
-// Bc7/Auto; Rgba8 keeps behaving exactly as it does today.
+// Format::Auto and Format::Bc7 both encode BC7 (bc7enc_rdo, F2b Task 4) -- pinned encoder
+// params, deterministic by construction (no thread/RNG surface in the vendored slice). The
+// ENCODED mip is padded to 4x4 blocks by clamping to the source's last row/column; the MipDesc
+// table keeps the TRUE (unpadded) width/height, only the payload bytes are block-padded, and
+// payload size is ceil(w/4)*ceil(h/4)*16. Format::Rgba8 stays a verbatim RGBA8 payload. The
+// thumbnail is always uncompressed RGBA8 regardless of `desc.format`.
 
 #include <cstddef>
 #include <optional>

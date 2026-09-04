@@ -6,7 +6,9 @@ file is authoritative. Summary:
 
 | Component | Path | License |
 |---|---|---|
+| Agility SDK (D3D12 redistributable) | `ThirdParty/AgilitySDK` | Microsoft Software License Terms, **not** MIT/permissive (`LICENSE.txt`) |
 | Astra (ECS) | `ThirdParty/Astra` | see `ThirdParty/Astra/LICENSE` |
+| bc7enc_rdo | `ThirdParty/bc7enc_rdo` | MIT or public domain, dual-licensed (`LICENSE`) |
 | Catch2 | `ThirdParty/Catch2` | Boost Software License 1.0 (`LICENSE.txt`) |
 | D3D12MemoryAllocator (D3D12MA) | `ThirdParty/D3D12MA` | MIT (`LICENSE`) |
 | DirectX-Headers | `ThirdParty/DirectX-Headers` | MIT (`LICENSE`) |

@@ -87,6 +87,7 @@ workspace "Arcane"
     IncludeDir["imguinodeeditor"]  = "%{wks.location}/ThirdParty/imgui-node-editor"
     IncludeDir["Manifold2D"]       = "%{wks.location}/ThirdParty/Manifold2D/include"
     IncludeDir["Mosaic"]           = "%{wks.location}/ThirdParty/Mosaic/include"
+    IncludeDir["bc7enc_rdo"]       = "%{wks.location}/ThirdParty/bc7enc_rdo"
 
 group "Dependencies"
     include "ThirdParty/Catch2"
@@ -99,6 +100,7 @@ group "Dependencies"
     include "ThirdParty/imgui"
     include "ThirdParty/imgui-node-editor"
     include "ThirdParty/Manifold2D"
+    include "ThirdParty/bc7enc_rdo"
 group ""
 
 
@@ -195,6 +197,7 @@ project "ArcaneAssetPipeline"
         "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.nlohmann}",   -- Task 3: TextureMetaSettings::FromMetaJson/ToMetaJson
         "%{IncludeDir.stb}",        -- Task 3: TextureImporter decode (stb_image) + StbImpl.cpp
+        "%{IncludeDir.bc7enc_rdo}", -- Task 4: TextureImporter BC7 encode (bc7enc.h)
     }
 
     defines {
@@ -478,7 +481,11 @@ project "ArcaneEditor"
         -- pipeline directly from the editor.
         "%{IncludeDir.ArcaneAssetPipeline}",
     }
-    links { "ArcaneCore", "ArcaneClient", "imgui-node-editor", "ArcaneAssetPipeline" }
+    -- bc7enc_rdo (Task 4): ArcaneAssetPipeline's TextureImporter now calls into it for the
+    -- BC7 encode path -- a static lib doesn't transitively pull its own links, so any consumer
+    -- linking ArcaneAssetPipeline links bc7enc_rdo alongside it, same reasoning as every other
+    -- ThirdParty static lib in this list.
+    links { "ArcaneCore", "ArcaneClient", "imgui-node-editor", "ArcaneAssetPipeline", "bc7enc_rdo" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
@@ -721,6 +728,7 @@ project "ArcaneTests"
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
         "%{IncludeDir.ArcaneAssetPipeline}",   -- Task 1: AssetPipelineFormatTest.cpp drives ArtifactFormat.hpp directly
+        "%{IncludeDir.bc7enc_rdo}",   -- Task 4: AssetPipelineImporterTest.cpp drives bc7decomp.h directly for the decode-block sanity test
     }
 
     -- msdfgen, freetype, and NRI are static libs compiled separately; the smoke
@@ -735,7 +743,10 @@ project "ArcaneTests"
     -- IMGUI_API=dllimport, same as this exe): ShaderEditorDocument.cpp's graph
     -- canvas calls it, and that TU source-compiles into the tests.
     -- ArcaneAssetPipeline (Task 1): [pipeline] round-trips .arcart files directly.
-    links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "NRI", "Manifold2D", "imgui-node-editor", "ArcaneAssetPipeline" }
+    -- bc7enc_rdo (Task 4): ArcaneAssetPipeline links it transitively (see ArcaneEditor's
+    -- comment above), and AssetPipelineImporterTest.cpp also calls bc7decomp::unpack_bc7
+    -- directly for the decode-block sanity test.
+    links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "NRI", "Manifold2D", "imgui-node-editor", "ArcaneAssetPipeline", "bc7enc_rdo" }
 
     -- MOSAIC_ENSURE/MOSAIC_ENSURE_ALWAYS (most of AssertRoutingTest.cpp) are
     -- defined UNCONDITIONALLY, outside the MOSAIC_ASSERTS_ACTIVE gate this

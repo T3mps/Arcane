@@ -19,7 +19,7 @@ namespace Arcane::AssetPipeline
 {
     // COMPOSITE version: bump when importer logic, bc7enc_rdo, or stb change. Constituents
     // named here so no one forgets the third term of the triple.
-    inline constexpr std::uint32_t kTextureImporterVersion = 1;   // {importer v1, bc7enc_rdo <pin>, stb <pin>}
+    inline constexpr std::uint32_t kTextureImporterVersion = 1;   // {importer v1, bc7enc_rdo b943862, stb 31c1ad3}
 
     [[nodiscard]] std::uint64_t ComputeCookKey(std::span<const std::byte> sourceBytes,
                                                 const TextureMetaSettings& settings,

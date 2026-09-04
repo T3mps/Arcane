@@ -7,6 +7,16 @@
 // clamped size; the TextureMetaSettings JSON round-trip, including an absent block falling back
 // to defaults; the thumbnail is <=64px long edge with aspect kept; `generateMips=false` yields
 // mipCount 1; and the RGBA8 artifact this importer produces is cook-twice byte-identical.
+//
+// F2b Task 4: the BC7 encode path (Format::Bc7/Auto). Pins: payload size per mip is
+// ceil(w/4)*ceil(h/4)*16 -- the ENCODED mip is padded to 4x4 blocks, the source is never
+// resized, and the mip table's own width/height stay the TRUE (unpadded) dims; a flat-colour
+// source decodes (via the vendored bc7decomp decoder) back to within a small per-channel
+// tolerance of the source, proving the encode path actually runs bc7enc and not some pass-
+// through; and BC7 artifacts are cook-twice byte-identical, same contract as RGBA8 -- the
+// encoder gets pinned settings only, no time/thread-count-dependent parameters (see
+// bc7enc_rdo's premake5.lua and ThirdParty/README.md's inventory row for why the vendored
+// slice has no thread/RNG surface to begin with).
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -18,8 +28,11 @@
 #include <Json.hpp>
 #include <stb_image_write.h>
 
+#include <bc7decomp.h>
+
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -188,6 +201,10 @@ TEST_CASE("pipeline: ImportTexture builds mips in LINEAR space, not gamma space"
     const std::vector<std::byte> png = EncodePng(2, 2, pixels);
 
     TextureMetaSettings settings{};
+    settings.format = TextureMetaSettings::Format::Rgba8;   // raw pixel-byte assertions below
+                                                              // need an uncompressed payload --
+                                                              // this test is about the box-average
+                                                              // math, not the encode format
     settings.srgb = true;
     settings.generateMips = true;
 
@@ -342,6 +359,10 @@ TEST_CASE("pipeline: ImportTexture RGBA8 artifacts are cook-twice byte-identical
     const std::vector<std::byte> png = EncodePng(17, 9, pixels);
 
     TextureMetaSettings settings{};
+    settings.format = TextureMetaSettings::Format::Rgba8;   // explicit -- Auto now means BC7
+                                                              // (Task 4); this case exercises the
+                                                              // RGBA8 path specifically, BC7 gets
+                                                              // its own case below
     settings.srgb = true;
     settings.generateMips = true;
     settings.maxSize = 0;
@@ -355,6 +376,118 @@ TEST_CASE("pipeline: ImportTexture RGBA8 artifacts are cook-twice byte-identical
 
     const fs::path pathA = TempFile("cook_twice_a.arcart");
     const fs::path pathB = TempFile("cook_twice_b.arcart");
+
+    REQUIRE(WriteTextureArtifact(pathA, first->desc, first->payload, first->thumbRgba));
+    REQUIRE(WriteTextureArtifact(pathB, second->desc, second->payload, second->thumbRgba));
+
+    const std::vector<std::byte> bytesA = ReadWholeFile(pathA);
+    const std::vector<std::byte> bytesB = ReadWholeFile(pathB);
+    CHECK(bytesA == bytesB);
+    CHECK(bytesA.size() > 0u);
+}
+
+// ---- BC7 payload sizing ----------------------------------------------------------------------
+
+TEST_CASE("pipeline: ImportTexture BC7 payload size is ceil(w/4)*ceil(h/4)*16 per mip", "[pipeline]")
+{
+    // NPOT, not a multiple of 4 on either axis -- exercises the block-padding math on every
+    // mip level (17x9 -> 9x5 -> 5x3 -> 3x2 -> 2x1 -> 1x1, FLOOR-halved as always).
+    const std::vector<unsigned char> pixels = GradientPixels(17, 9);
+    const std::vector<std::byte> png = EncodePng(17, 9, pixels);
+
+    TextureMetaSettings settings{};
+    settings.format = TextureMetaSettings::Format::Bc7;
+    settings.srgb = false;
+    settings.generateMips = true;
+    settings.maxSize = 0;
+
+    const std::optional<ImportedTexture> imported = ImportTexture(png, Guid::Generate(), settings);
+    REQUIRE(imported.has_value());
+    CHECK(imported->desc.format == ArtifactPixelFormat::BC7);
+    REQUIRE(imported->desc.mips.size() > 1u);
+
+    for (const MipDesc& mip : imported->desc.mips)
+    {
+        // Mip table dims are the TRUE (unpadded) dims -- padding is an encode-time-only
+        // artifact of the payload's own byte layout, never reflected here.
+        const std::uint64_t blocksW = (mip.width + 3u) / 4u;
+        const std::uint64_t blocksH = (mip.height + 3u) / 4u;
+        const std::uint64_t expected = blocksW * blocksH * 16u;
+        INFO("mip " << mip.width << "x" << mip.height << " size=" << mip.size << " expected=" << expected);
+        CHECK(mip.size == expected);
+    }
+
+    // Total payload is exactly the sum of the per-mip BC7 sizes -- no padding/alignment
+    // between mips, same contract as the RGBA8 path.
+    std::uint64_t totalExpected = 0;
+    for (const MipDesc& mip : imported->desc.mips)
+        totalExpected += mip.size;
+    CHECK(imported->payload.size() == totalExpected);
+}
+
+// ---- BC7 decode-block sanity -----------------------------------------------------------------
+
+TEST_CASE("pipeline: ImportTexture BC7 flat-colour block decodes within encoder tolerance", "[pipeline]")
+{
+    // A single 4x4 block, one flat colour -- exact byte-for-byte reproduction isn't guaranteed
+    // (BC7 endpoints are quantized), but a solid-colour block is the easiest case for any BC7
+    // encoder and should reconstruct within a few LSBs per channel.
+    const std::vector<unsigned char> pixels = SolidPixels(4, 4, 200, 100, 50, 255);
+    const std::vector<std::byte> png = EncodePng(4, 4, pixels);
+
+    TextureMetaSettings settings{};
+    settings.format = TextureMetaSettings::Format::Bc7;
+    settings.srgb = false;
+    settings.generateMips = false;   // single mip -- one block, nothing else to decode
+
+    const std::optional<ImportedTexture> imported = ImportTexture(png, Guid::Generate(), settings);
+    REQUIRE(imported.has_value());
+    CHECK(imported->desc.format == ArtifactPixelFormat::BC7);
+    REQUIRE(imported->desc.mips.size() == 1u);
+    REQUIRE(imported->desc.mips[0].size == 16u);   // exactly one BC7 block, no padding needed
+
+    bc7decomp::color_rgba decoded[16]{};
+    REQUIRE(bc7decomp::unpack_bc7(MipBytes(*imported, 0), decoded));
+
+    // Measured on this desk: mode 6 (opaque+alpha, 7-bit color / 8-bit alpha endpoints, both with
+    // a shared p-bit) reconstructs this flat block at r=+0 g=+0 b=+0 a=+1 -- a solid colour is
+    // the easiest case for any BC7 encoder. Tolerance is deliberately looser than that single
+    // measurement (endpoint quantization rounding is toolchain/rounding-mode sensitive in
+    // principle) while still being a real check, not a vacuous one.
+    constexpr int kTolerance = 4;
+    for (const bc7decomp::color_rgba& px : decoded)
+    {
+        INFO("decoded rgba = " << int(px.r) << "," << int(px.g) << "," << int(px.b) << "," << int(px.a));
+        CHECK(std::abs(int(px.r) - 200) <= kTolerance);
+        CHECK(std::abs(int(px.g) - 100) <= kTolerance);
+        CHECK(std::abs(int(px.b) - 50) <= kTolerance);
+        CHECK(std::abs(int(px.a) - 255) <= kTolerance);
+    }
+}
+
+// ---- BC7 cook-twice byte-identity ----------------------------------------------------------
+
+TEST_CASE("pipeline: ImportTexture BC7 artifacts are cook-twice byte-identical", "[pipeline]")
+{
+    const std::vector<unsigned char> pixels = GradientPixels(17, 9);   // NPOT + non-square
+    const std::vector<std::byte> png = EncodePng(17, 9, pixels);
+
+    TextureMetaSettings settings{};
+    settings.format = TextureMetaSettings::Format::Bc7;
+    settings.srgb = true;
+    settings.generateMips = true;
+    settings.maxSize = 0;
+
+    const Guid guid = Guid::Generate();
+
+    const std::optional<ImportedTexture> first = ImportTexture(png, guid, settings);
+    const std::optional<ImportedTexture> second = ImportTexture(png, guid, settings);
+    REQUIRE(first.has_value());
+    REQUIRE(second.has_value());
+    REQUIRE(first->desc.format == ArtifactPixelFormat::BC7);
+
+    const fs::path pathA = TempFile("cook_twice_bc7_a.arcart");
+    const fs::path pathB = TempFile("cook_twice_bc7_b.arcart");
 
     REQUIRE(WriteTextureArtifact(pathA, first->desc, first->payload, first->thumbRgba));
     REQUIRE(WriteTextureArtifact(pathB, second->desc, second->payload, second->thumbRgba));

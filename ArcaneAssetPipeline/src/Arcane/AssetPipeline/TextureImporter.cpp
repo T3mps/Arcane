@@ -4,6 +4,8 @@
 
 #include <stb_image.h>
 
+#include <bc7enc.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -155,6 +157,87 @@ namespace Arcane::AssetPipeline
             }
             return h;
         }
+
+        // ---- BC7 encode (bc7enc_rdo, plain non-RDO encoder) ----------------------------------
+        // Deterministic by construction (spec's determinism ruling, F2b Task 4): bc7enc.cpp has
+        // no thread/RNG surface at all (verified on the vendoring desk -- no rand()/thread/omp/
+        // clock() hits), and every field of bc7enc_compress_block_params below is a compile-time
+        // constant, so the SAME input block always produces the SAME 128-bit output. This is why
+        // the RDO post-process (ert.*, rdo_bc_encoder.*) was never vendored -- it exists to trade
+        // ratio for size at the cost of a multithreaded path that would need its own determinism
+        // proof; plain bc7enc with pinned params sidesteps that proof entirely.
+
+        // bc7enc_compress_block_init() populates process-wide lookup tables and must run exactly
+        // once before the first bc7enc_compress_block() call. A function-local static's
+        // initializer is guaranteed by the standard to run exactly once even under concurrent
+        // first calls (no <mutex> needed) -- ImportTexture has no other synchronization of its
+        // own, so this is the only thing standing between it and a data race on g_initialized.
+        void EnsureBc7EncInitialized()
+        {
+            static const bool initialized = (bc7enc_compress_block_init(), true);
+            (void)initialized;
+        }
+
+        // Pinned encoder params -- highest quality (m_uber_level raised to the max, full
+        // partition search), otherwise bc7enc_compress_block_params_init()'s own defaults
+        // (perceptual YCbCr weights). Every field is a compile-time constant: no time-based, no
+        // thread-count-dependent, no RNG-seeded parameter anywhere in this struct.
+        const bc7enc_compress_block_params& Bc7EncParams()
+        {
+            static const bc7enc_compress_block_params params = []
+            {
+                bc7enc_compress_block_params p{};
+                bc7enc_compress_block_params_init(&p);
+                p.m_uber_level = BC7ENC_MAX_UBER_LEVEL;
+                return p;
+            }();
+            return params;
+        }
+
+        // BC7-encodes one already-RGBA8 mip level (`rgba8` is (w*h*4) bytes, R first in memory --
+        // the same bytes the RGBA8 path would have written). Pads the ENCODED mip to 4x4 blocks
+        // by CLAMPING to the source's last row/column (never resizing the source -- same clamp
+        // convention BoxDownsampleOnce above already uses for its own edge samples); the caller's
+        // MipDesc keeps the true (unpadded) width/height, only the payload bytes are padded.
+        // Output is exactly ceil(w/4)*ceil(h/4)*16 bytes, one 128-bit block per 4x4 tile, blocks
+        // in row-major tile order.
+        std::vector<std::byte> EncodeBc7(std::span<const std::byte> rgba8, std::uint32_t w, std::uint32_t h)
+        {
+            EnsureBc7EncInitialized();
+            const bc7enc_compress_block_params& params = Bc7EncParams();
+
+            const std::uint32_t blocksW = (w + 3u) / 4u;
+            const std::uint32_t blocksH = (h + 3u) / 4u;
+            std::vector<std::byte> out(static_cast<std::size_t>(blocksW) * blocksH * 16u);
+
+            const auto* src = reinterpret_cast<const std::uint8_t*>(rgba8.data());
+            std::uint8_t blockPixels[16 * 4];
+
+            for (std::uint32_t by = 0; by < blocksH; ++by)
+            {
+                for (std::uint32_t bx = 0; bx < blocksW; ++bx)
+                {
+                    for (std::uint32_t py = 0; py < 4; ++py)
+                    {
+                        const std::uint32_t sy = std::min(by * 4 + py, h - 1);
+                        for (std::uint32_t px = 0; px < 4; ++px)
+                        {
+                            const std::uint32_t sx = std::min(bx * 4 + px, w - 1);
+                            const std::uint8_t* srcPx = src + (static_cast<std::size_t>(sy) * w + sx) * 4;
+                            std::uint8_t* dstPx = blockPixels + (py * 4 + px) * 4;
+                            dstPx[0] = srcPx[0];
+                            dstPx[1] = srcPx[1];
+                            dstPx[2] = srcPx[2];
+                            dstPx[3] = srcPx[3];
+                        }
+                    }
+
+                    void* dstBlock = out.data() + (static_cast<std::size_t>(by) * blocksW + bx) * 16u;
+                    bc7enc_compress_block(dstBlock, blockPixels, &params);
+                }
+            }
+            return out;
+        }
     }
 
     std::optional<ImportedTexture> ImportTexture(std::span<const std::byte> pngBytes, const Guid& sourceGuid,
@@ -239,6 +322,20 @@ namespace Arcane::AssetPipeline
         }
         std::vector<std::byte> thumbBytes = FromLinear(thumbFloat, settings.srgb);
 
+        // BC7 encode: Auto and Bc7 both resolve to BC7 this slice (Rgba8 stays RGBA8 verbatim).
+        // The thumbnail above is untouched -- it is always uncompressed RGBA8 regardless of
+        // `desc.format`, ArtifactFormat.hpp's own contract. sRGB does NOT gate this branch: the
+        // BC7 payload is colorspace-agnostic (it compresses whatever 8-bit values are already in
+        // each level's bytes, exactly the bytes the RGBA8 path would have written) -- `srgb`
+        // rides the artifact header only, for the runtime to pick a _SRGB vs plain view format.
+        const bool encodeBc7 = (settings.format == TextureMetaSettings::Format::Auto ||
+                                 settings.format == TextureMetaSettings::Format::Bc7);
+        if (encodeBc7)
+        {
+            for (MipLevel& lvl : levels)
+                lvl.bytes = EncodeBc7(lvl.bytes, lvl.width, lvl.height);
+        }
+
         // Assemble the payload: every mip's bytes back to back, in order, each MipDesc addressed
         // by its own offset into `payload` (never resorted -- ArtifactFormat.hpp's contract).
         std::vector<std::byte> payload;
@@ -260,10 +357,7 @@ namespace Arcane::AssetPipeline
         desc.sourceGuid = sourceGuid;
         desc.sourceHash = HashSourceBytes(pngBytes);
         desc.importerVersion = kTextureImporterVersion;
-        // BC7 encode arrives Task 4 (bc7enc_rdo isn't vendored yet) -- every Format value
-        // produces the RGBA8 payload until then. Task 4 replaces this with a real branch on
-        // settings.format for Bc7/Auto.
-        desc.format = ArtifactPixelFormat::RGBA8;
+        desc.format = encodeBc7 ? ArtifactPixelFormat::BC7 : ArtifactPixelFormat::RGBA8;
         desc.dimension = ArtifactDimension::Tex2D;
         desc.arrayOrDepth = 1;
         desc.width = levels.front().width;

@@ -26,8 +26,8 @@ namespace Arcane::AssetPipeline
     {
         enum class Format : std::uint8_t { Auto, Bc7, Rgba8 };
 
-        Format format = Format::Auto;   // Auto == Bc7 this slice (BC7 encode arrives Task 4;
-                                         // ImportTexture treats every Format as RGBA8 until then)
+        Format format = Format::Auto;   // Auto == Bc7 this slice (F2b Task 4: bc7enc_rdo, pinned
+                                         // params, deterministic -- see TextureImporter.hpp)
         bool srgb = true;
         bool generateMips = true;
         std::uint32_t maxSize = 0;   // 0 == unlimited
