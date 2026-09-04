@@ -144,23 +144,28 @@ namespace
         return data.id;
     }
 
-    // An Assets facade whose PIXEL ENTRY IS EVICTED BY A SECOND CALL -- the
+    // An Assets facade whose METADATA ENTRY IS EVICTED BY A SECOND CALL -- the
     // production behaviour, modelled deterministically.
     //
-    // In the real facade PixelsFor hands back a bare pointer INTO its
-    // LRU-budgeted pixel cache and releases its own pin before returning
-    // (Assets.cpp: `m_pixels.Acquire(key); EnforceBudget(); m_pixels.Release(key);`),
-    // and any other inserting call ends `Put(...); EnforceBudget();` -- a sweep
-    // that evicts the globally least-recently-used entry across ALL the
-    // facade's caches, the pixel cache included. So a caller holding the
-    // pointer across a second Assets call can be reading freed memory.
+    // ABI v21 (F2b Task 6) moved SpriteCache's dimension read from PixelsFor to
+    // TextureInfoFor -- PixelsFor now serves a THUMBNAIL for artifact-backed
+    // content, and geometry needs the artifact's TRUE dims, which is exactly
+    // TextureInfoFor's contract (Assets.hpp). This fake, and the hazard it
+    // pins, moved with it: in the real facade TextureInfoFor hands back a bare
+    // pointer INTO its own LRU-budgeted cache and releases its own pin before
+    // returning (Assets.cpp: `m_textureInfo.Acquire(key); EnforceBudget();
+    // m_textureInfo.Release(key);`), and any other inserting call ends
+    // `Put(...); EnforceBudget();` -- a sweep that evicts the globally least-
+    // recently-used entry across ALL the facade's caches, the metadata cache
+    // included. So a caller holding the pointer across a second Assets call
+    // can be reading freed memory.
     //
     // GetBytes is the second call here: an inserting, sweeping call on the
     // same shared LRU clock, which is the only property this fake needs from
     // it. What the fake pins is the ORDER: it hands out a stable pointer, then
     // on the second call RESETS the object it pointed at to a default-
-    // constructed PixelData (0x0, no bytes) -- the deterministic stand-in for
-    // "that buffer was freed and its memory reused". Read before the call, the
+    // constructed TextureInfo (0x0) -- the deterministic stand-in for "that
+    // entry was freed and its memory reused". Read before the call, the
     // dimensions are the image's; read after, they are zeros and
     // ComputeSpriteGeom silently returns its 1x1 m fallback.
     //
@@ -173,26 +178,40 @@ namespace
     public:
         EvictingAssets(std::uint32_t w, std::uint32_t h)
         {
-            m_pixels.width  = w;
-            m_pixels.height = h;
-            m_pixels.rgba.assign(static_cast<std::size_t>(w) * h * 4, 0xFF);
+            m_info.width    = w;
+            m_info.height   = h;
+            m_info.mipCount = 1;
+            m_info.srgb     = true;
         }
 
         void SetContentRoot(const std::filesystem::path&) override {}
         void SetAssetResolver(AssetResolver) override {}
 
+        // THE ACCESSOR SpriteCache ACTUALLY CALLS since ABI v21 -- see the
+        // class comment. Everything else (including PixelsFor below) answers
+        // without touching m_info.
+        const Arcane::TextureInfo* TextureInfoFor(const Arcane::Guid&) override
+        {
+            ++textureInfoForCalls;
+            return &m_info;
+        }
+
+        // Kept for interface completeness -- SpriteCache no longer calls this
+        // for dims (see the class comment), so it is never exercised by
+        // SpriteCache::Request; only driven by hand where a test needs it.
         const Arcane::PixelData* PixelsFor(const Arcane::Guid&) override
         {
             ++pixelsForCalls;
             return &m_pixels;
         }
 
-        // THE EVICTING CALL -- see the class comment. Everything else answers
-        // null without touching m_pixels.
+        // THE EVICTING CALL -- see the class comment. Resets m_info, not
+        // m_pixels: TextureInfoFor's cache is the one whose eviction ordering
+        // this fake is modelling since the ABI v21 retarget.
         std::shared_ptr<const std::vector<std::uint8_t>> GetBytes(const Arcane::AssetId&) override
         {
             ++evictingCalls;
-            m_pixels = Arcane::PixelData{};   // "the LRU sweep took the pixel entry"
+            m_info = Arcane::TextureInfo{};   // "the LRU sweep took the metadata entry"
             return nullptr;
         }
 
@@ -201,11 +220,13 @@ namespace
         std::shared_ptr<const nlohmann::json> GetJson(const Arcane::AssetId&) override { return nullptr; }
         Arcane::AssetStats Stats() const override { return {}; }
 
-        int pixelsForCalls = 0;
-        int evictingCalls  = 0;
+        int pixelsForCalls       = 0;
+        int textureInfoForCalls  = 0;
+        int evictingCalls        = 0;
 
     private:
-        Arcane::PixelData m_pixels;
+        Arcane::TextureInfo m_info;
+        Arcane::PixelData   m_pixels;
     };
 }
 
@@ -324,16 +345,24 @@ TEST_CASE("SpriteCache::Invalidate forces the next Request to re-read the file",
     std::error_code ec; fs::remove_all(dir, ec);
 }
 
-TEST_CASE("SpriteCache makes exactly ONE Assets call, so nothing can evict PixelsFor's pointer",
+TEST_CASE("SpriteCache makes exactly ONE Assets call, so nothing can evict TextureInfoFor's pointer",
           "[sprite][pixels]")
 {
     // THE HAZARD IS ABSENT RATHER THAN AVOIDED, and THAT is what this case
-    // pins. Assets.hpp is explicit that a PixelsFor pointer may not be held
-    // across another Assets call: it is owned by an LRU-budgeted cache, and
-    // "callers that need it to outlive the current call must copy it".
+    // pins. Assets.hpp is explicit that a TextureInfoFor pointer may not be
+    // held across another Assets call: it is owned by an LRU-budgeted cache,
+    // and "callers that need it to outlive the current call must copy it".
     // SpriteCache::Request makes EXACTLY ONE Assets call, so no interleaved
     // eviction is reachable at all. Re-add a second Assets call of any name and
     // this fails, pointing at the paragraph above.
+    //
+    // ABI v21 (F2b Task 6): this used to be PixelsFor's pointer -- SpriteCache
+    // read geometry dims from it directly. That accessor now serves a
+    // THUMBNAIL for artifact-backed content, so geometry reads TextureInfoFor
+    // instead (Assets.hpp's own doc comment on the split); this case, and the
+    // fake it drives, moved with it. `pixelsForCalls == 0` below is the other
+    // half of that same move: SpriteCache does not touch PixelsFor AT ALL
+    // during Request any more.
     //
     // Residency is NriTextureCache's job and a sprite is named by Guid alone,
     // which is why one call is enough.
@@ -353,7 +382,8 @@ TEST_CASE("SpriteCache makes exactly ONE Assets call, so nothing can evict Pixel
     Arcane::SpriteCache cache(std::move(s));
 
     cache.Request(id);
-    REQUIRE(assets.pixelsForCalls == 1);
+    REQUIRE(assets.textureInfoForCalls == 1);
+    REQUIRE(assets.pixelsForCalls == 0);   // ABI v21: SpriteCache no longer touches PixelsFor for dims
     REQUIRE(assets.evictingCalls == 0);   // THE INVARIANT: no second call to evict across
     REQUIRE(cache.Table().contains(id));
 
@@ -374,7 +404,7 @@ TEST_CASE("SpriteCache makes exactly ONE Assets call, so nothing can evict Pixel
     // pinning a real hazard rather than a fake that quietly stopped evicting.
     // Driven by hand, since SpriteCache no longer drives it.
     assets.GetBytes(Arcane::AssetId::FromGuid(texture));
-    const Arcane::PixelData* after = assets.PixelsFor(texture);
+    const Arcane::TextureInfo* after = assets.TextureInfoFor(texture);
     REQUIRE(after != nullptr);
     CHECK(after->width == 0);
     CHECK(after->height == 0);

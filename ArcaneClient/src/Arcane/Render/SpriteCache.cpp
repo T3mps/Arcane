@@ -80,37 +80,43 @@ namespace Arcane
         std::uint32_t texWidth = 0, texHeight = 0;
         if (data->texture.IsValid() && m_impl->services.assets)
         {
-            // Geometry's dimensions come from PixelsFor -- device-free, so
-            // this resolves with no render device bound, which is the only
-            // configuration there is.
+            // Geometry's dimensions come from TextureInfoFor (ABI v21) -- device-free,
+            // so this resolves with no render device bound, which is the only
+            // configuration there is. NOT PixelsFor: since ABI v21, PixelsFor serves a
+            // THUMBNAIL for artifact-backed content (small, preview-sized pixels),
+            // while TextureInfoFor serves the TRUE source dims from the artifact's own
+            // header -- geometry needs the latter, and reading dims off PixelsFor here
+            // would be exactly the wrong-dims bug class this split exists to prevent
+            // (F2b Task 6).
             //
             // THE DIMENSIONS ARE COPIED OUT IMMEDIATELY, and that ordering is
             // the contract, not a style choice (Assets.hpp: "valid only until
             // evicted -- callers that need it to outlive the current call must
-            // copy it, not hold the pointer"). PixelsFor returns a BARE pointer
-            // into the facade's LRU-budgeted pixel cache and drops its own pin
+            // copy it, not hold the pointer"). TextureInfoFor returns a BARE pointer
+            // into the facade's LRU-budgeted metadata cache and drops its own pin
             // before returning, so ANY later Assets call may free it and read
-            // it back as garbage. This was a REAL use-after-free once: a
+            // it back as garbage. This was a REAL use-after-free once (against the
+            // old PixelsFor route): a
             // second Assets call in this function, whose trailing
             // EnforceBudget() could evict the globally least-recently-used
-            // entry across every cache in the facade -- the pixel cache
-            // included -- and then `pixels->width` was read after it. There is
+            // entry across every cache in the facade -- included the one this
+            // pointer came from -- and then its width was read after it. There is
             // no second call today, so the hazard is structurally absent
             // rather than merely avoided; the copy stays anyway, because it
             // costs nothing and it is what keeps the NEXT Assets call added
             // here from being a bug.
-            const PixelData* pixels = m_impl->services.assets->PixelsFor(data->texture);
-            if (pixels)
+            const TextureInfo* info = m_impl->services.assets->TextureInfoFor(data->texture);
+            if (info)
             {
-                texWidth  = pixels->width;
-                texHeight = pixels->height;
+                texWidth  = info->width;
+                texHeight = info->height;
             }
         }
 
         // THERE IS NO entry.texture TO RESOLVE: a SpriteEntry carries no GPU
         // texture at all. `entry.textureId` above is what the render path
-        // resolves through NriTextureCache, and PixelsFor is the one dimension
-        // source.
+        // resolves through NriTextureCache, and TextureInfoFor is the one
+        // dimension source.
         const ResolvedSpriteGeom g = ComputeSpriteGeom(*data, texWidth, texHeight);
         entry.uvMin = g.uvMin;
         entry.uvMax = g.uvMax;

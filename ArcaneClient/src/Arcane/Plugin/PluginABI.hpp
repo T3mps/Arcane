@@ -444,7 +444,41 @@ namespace Arcane
     //     THE SCENE FILE FORMAT DID NOT MOVE: Scene::kSceneJsonVersion stays
     //     at 3. ReferenceProject and Gacha's Game are restamped with this
     //     change, the same precedent v16 through v19 set.
-    inline constexpr uint32_t kGamePluginABIVersion = 20;
+    // v21 (2026-09-04, F2b Task 6 -- the runtime artifact route): `Assets`
+    //     (Assets/Assets.hpp, an ARCANE_API PURE-VIRTUAL facade) gained
+    //     `TextureInfoFor(const Guid&)`, inserted between `SetAssetResolver`
+    //     and `PixelsFor` in declaration order -- every virtual AFTER it in
+    //     the class MOVES down one vtable slot. This is a LAYOUT change in
+    //     the sharpest sense a pure-virtual interface can have: a v20 module
+    //     that calls `PixelsFor` (or any of `GetBytes`/`GetJson`/`Stats`, all
+    //     declared after the insertion point) through a v21 `Assets*` reads
+    //     the WRONG slot and calls the wrong function -- not a link error,
+    //     not a crash, a silent wrong-function call through a valid-looking
+    //     vtable. The two `PluginABI`-checked entry points (module Init/
+    //     Shutdown) never touch `Assets` directly, so a stale module still
+    //     LOADS; it is any in-module call through the facade that would
+    //     misbehave, which is exactly the class of defect this gate exists to
+    //     preempt before it can happen rather than after.
+    //     `PixelsFor` ALSO NARROWS ITS CONTRACT on this same bump (documented
+    //     fully at its own declaration): for artifact-backed content it now
+    //     serves a THUMBNAIL instead of the source's full decode. Not itself
+    //     a layout change, but a behavior change riding the same bump -- a
+    //     module reading `PixelData::width/height` off `PixelsFor` for
+    //     geometry (rather than the new `TextureInfoFor`) would silently get
+    //     preview-sized dims instead of the source's true dims. No module in
+    //     the tree does this (see the MEASURED line below), but a future one
+    //     must reach for `TextureInfoFor`, not `PixelsFor`, for true dims.
+    //     MEASURED, not assumed: `grep -rn` for `Assets::`, `->PixelsFor`,
+    //     `->TextureInfoFor`, `assets->` and `Assets.hpp` over BOTH game
+    //     modules in the two trees -- ReferenceProject/Source/ (GameApi.hpp,
+    //     ReferenceGame.cpp) and Gacha's Game/Source/ (GameApi.hpp,
+    //     Aphelyon.cpp) -- returns nothing: neither module calls the Assets
+    //     facade at all today, so no module in either tree breaks on this
+    //     bump. The gate catches a stale stamp; the compiler would not have.
+    //     THE SCENE FILE FORMAT DID NOT MOVE: Scene::kSceneJsonVersion stays
+    //     at 3. ReferenceProject and Gacha's Game are restamped with this
+    //     change, the same precedent v16 through v20 set.
+    inline constexpr uint32_t kGamePluginABIVersion = 21;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

@@ -1,5 +1,6 @@
 #include <Arcane/Assets/Assets.hpp>
 
+#include <Arcane/Assets/ArtifactReader.hpp>
 #include <Arcane/Assets/AssetCache.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
@@ -8,9 +9,12 @@
 #include <stb_image.h>
 #include <stb_image_write.h>
 
+#include <atomic>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
+#include <span>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -69,9 +73,37 @@ namespace Arcane
             return canon.string();
         }
 
-        using BytesPtr     = std::shared_ptr<const std::vector<uint8_t>>;
-        using JsonPtr      = std::shared_ptr<const nlohmann::json>;
-        using PixelDataPtr = std::shared_ptr<PixelData>;
+        using BytesPtr       = std::shared_ptr<const std::vector<uint8_t>>;
+        using JsonPtr        = std::shared_ptr<const nlohmann::json>;
+        using PixelDataPtr   = std::shared_ptr<PixelData>;
+        using TextureInfoPtr = std::shared_ptr<TextureInfo>;
+
+        // The process-wide content-artifact-refusal latch's storage (see Assets.hpp's own
+        // "process-wide content-artifact-refusal latch" banner for the contract). One slot,
+        // first-refusal-wins -- same idiom as GpuInstrumentation.cpp's device-lost latch:
+        // g_contentRefusalObserved is the atomic flag callers poll cheaply and often,
+        // g_contentRefusalDetailMutex guards the (rarely read, written at most once) detail
+        // string separately so a poller never pays a lock for the common "nothing to see"
+        // case.
+        std::atomic<bool> g_contentRefusalObserved{ false };
+        std::mutex        g_contentRefusalDetailMutex;
+        std::string       g_contentRefusalDetail;
+
+        // Latches the FIRST refusal only (compare_exchange_strong guards the detail write
+        // too -- a second, different refusal on a later guid must not overwrite the first
+        // one a host is about to report). `kind` is "HashMismatch" or
+        // "VersionNewerThanEngine" -- ArtifactRefusal::Missing never reaches here (see
+        // RefuseArtifact below; Missing is not a refusal at this layer yet).
+        void NoteContentArtifactRefusal(const Guid& id, const char* kind)
+        {
+            bool expected = false;
+            if (g_contentRefusalObserved.compare_exchange_strong(expected, true,
+                                                                  std::memory_order_acq_rel))
+            {
+                std::lock_guard<std::mutex> lock(g_contentRefusalDetailMutex);
+                g_contentRefusalDetail = std::string(kind) + ": " + id.ToString();
+            }
+        }
 
         class AssetsImpl final : public Assets
         {
@@ -129,7 +161,16 @@ namespace Arcane
             const PixelData* PixelsFor(const Guid& id) override
             {
                 const auto p = ResolveId(AssetId::FromGuid(id));
-                return p ? PixelsForResolved(*p, CacheKey(*p)) : nullptr;
+                return p ? PixelsForResolved(id, *p, CacheKey(*p)) : nullptr;
+            }
+
+            // ABI v21: header dims/mipCount/srgb, artifact-backed -- see Assets.hpp's own
+            // doc comment for the full contract (this is the dimension source; PixelsFor
+            // above now serves a THUMBNAIL for artifact-backed content).
+            const TextureInfo* TextureInfoFor(const Guid& id) override
+            {
+                const auto p = ResolveId(AssetId::FromGuid(id));
+                return p ? TextureInfoForResolved(id, *p, CacheKey(*p)) : nullptr;
             }
 
             BytesPtr GetBytes(const AssetId& id) override
@@ -165,7 +206,8 @@ namespace Arcane
                 s.totalBytes = TotalBytes();
                 s.count = (uint32_t)(m_bytes.Count() +
                                      m_json.Count() +
-                                     m_pixels.Count());
+                                     m_pixels.Count() +
+                                     m_textureInfo.Count());
                 return s;
             }
 
@@ -253,7 +295,82 @@ namespace Arcane
             // keyed off the same pair; GetTexture and the texture cache were
             // deleted at ABI v15 (see the tombstone above), leaving this the
             // single consumer.
-            const PixelData* PixelsForResolved(const std::filesystem::path& resolved,
+            // Artifact-preferred resolve, shared by PixelsForResolved and
+            // TextureInfoForResolved below: does THIS guid's source have a cooked
+            // .arcart, and if so, is it still valid against the CURRENT staged source
+            // bytes? Returns ArtifactRefusal::Missing (the default-constructed result)
+            // whenever there is nothing to serve from an artifact -- no project is open
+            // (m_contentRoot empty, so there is no Intermediate/ to derive), or the
+            // store has no artifact for this guid at all -- which is deliberately NOT a
+            // refusal at this layer (see ArtifactReader.hpp's own doc comment; Task 8
+            // promotes it). HashMismatch/VersionNewerThanEngine ARE refusals; callers
+            // must refuse loudly on those, never fall back.
+            //
+            // INTERMEDIATE ROOT: derived as m_contentRoot's PARENT directory -- every
+            // installer of this facade's content root sets it to exactly
+            // `<project>/Content` (Runtime::OpenProject, and every test/host that
+            // mirrors that wiring), and ArtifactStore.hpp's own contract roots the
+            // store at `<project>/Intermediate`, i.e. the SAME parent, one directory
+            // over. This needs no new setter on the facade: a content root that is
+            // NOT literally `<project>/Content` (a synthetic single-directory test
+            // fixture, for instance) simply derives a directory that does not exist,
+            // which FindArtifactForGuid already treats as "no artifacts here" --
+            // degrading safely to the legacy fallback rather than misbehaving.
+            ArtifactReadResult ResolveArtifact(const Guid& id, const std::filesystem::path& resolved)
+            {
+                if (m_contentRoot.empty())
+                    return ArtifactReadResult{};
+
+                const std::filesystem::path intermediateRoot =
+                    m_contentRoot.parent_path() / "Intermediate";
+                const std::optional<std::filesystem::path> artifactPath =
+                    FindArtifactForGuid(intermediateRoot, id);
+                if (!artifactPath)
+                    return ArtifactReadResult{};
+
+                // Raw (undecoded) bytes of the CURRENT staged source -- the same file
+                // the legacy fallback would decode -- so ReadClientArtifact can hash-
+                // compare against the artifact's own sourceHash. An unreadable source
+                // reads as empty here, which will not match any real artifact's hash,
+                // so it correctly surfaces as HashMismatch rather than silently passing.
+                const std::vector<uint8_t> raw = ReadFileBytes(resolved);
+                return ReadClientArtifact(
+                    *artifactPath,
+                    std::span<const std::byte>(reinterpret_cast<const std::byte*>(raw.data()), raw.size()),
+                    id);
+            }
+
+            // Refuse LOUDLY (ERROR, not WARN) and memoize -- "refuse, never limp"
+            // (Assets.hpp's PixelsFor/TextureInfoFor doc comments). Shared by both
+            // caches' artifact-refusal branch so the log line, the memo and the
+            // process-wide latch (Assets.hpp's ContentArtifactRefusalObserved) can
+            // never drift between the two call sites.
+            template <typename T>
+            void RefuseArtifact(AssetCache<T>& cache, const std::string& key,
+                                const Guid& id, ArtifactRefusal refusal)
+            {
+                const char* kind = (refusal == ArtifactRefusal::HashMismatch)
+                    ? "HashMismatch" : "VersionNewerThanEngine";
+                ARC_ERROR("Assets: content artifact REFUSED for {} -- {} (refuse, never "
+                          "limp; see ArtifactReader.hpp's refusal discipline)",
+                          id.ToString(), kind);
+                cache.PutFailure(key);
+                NoteContentArtifactRefusal(id, kind);
+            }
+
+            // Decode-once pixel supply behind PixelsFor(Guid). `resolved`/`key` are the
+            // already-resolved path + CacheKey every route through this facade
+            // canonicalises to.
+            //
+            // ABI v21 NARROWS this to a PREVIEW-pixel contract for artifact-backed
+            // content (Assets.hpp's own doc comment): a guid whose source has a valid
+            // cooked artifact is served that artifact's own THUMBNAIL (small,
+            // uncompressed RGBA8) rather than a full decode of the source -- cheap, and
+            // exactly what a sprite-picker/inspector preview needs. A guid with no
+            // artifact yet keeps the ORIGINAL full-decode behaviour unchanged (Task 8
+            // retires this fallback). A guid whose artifact is PRESENT but INVALID
+            // refuses loudly instead of falling back to either -- see RefuseArtifact.
+            const PixelData* PixelsForResolved(const Guid& id, const std::filesystem::path& resolved,
                                                const std::string& key)
             {
                 if (m_pixels.Has(key))
@@ -263,16 +380,36 @@ namespace Arcane
                     return m_pixels.Get(key).get();
                 }
 
-                auto pixels = std::make_shared<PixelData>();
-                if (!LoadPngRgba(resolved, pixels->width, pixels->height, pixels->rgba))
+                const ArtifactReadResult art = ResolveArtifact(id, resolved);
+                if (art.refusal == ArtifactRefusal::HashMismatch ||
+                    art.refusal == ArtifactRefusal::VersionNewerThanEngine)
                 {
-                    // LoadPngRgba already WARN-logged the specific reason
-                    // (missing file, corrupt data, non-positive dims).
+                    RefuseArtifact(m_pixels, key, id, art.refusal);
+                    return nullptr;
+                }
+
+                auto pixels = std::make_shared<PixelData>();
+                if (art.refusal == ArtifactRefusal::None && art.artifact)
+                {
+                    // Artifact-backed: serve the THUMBNAIL. width/height here are the
+                    // THUMBNAIL's dims (<=64px), never the source's -- TextureInfoFor
+                    // is the true-dims source (the wrong-dims bug class this split
+                    // exists to prevent -- see SpriteCache.cpp's own retarget).
+                    pixels->width  = art.artifact->thumbWidth;
+                    pixels->height = art.artifact->thumbHeight;
+                    const auto* p = reinterpret_cast<const unsigned char*>(art.artifact->thumbRgba.data());
+                    pixels->rgba.assign(p, p + art.artifact->thumbRgba.size());
+                }
+                else if (!LoadPngRgba(resolved, pixels->width, pixels->height, pixels->rgba))
+                {
+                    // Missing (no artifact yet): legacy full decode. LoadPngRgba
+                    // already WARN-logged the specific reason (missing file, corrupt
+                    // data, non-positive dims).
                     m_pixels.PutFailure(key);
                     return nullptr;
                 }
 
-                const uint64_t bytes = (uint64_t)pixels->width * pixels->height * 4;
+                const uint64_t bytes = (uint64_t)pixels->rgba.size();
                 const PixelData* raw = pixels.get();
                 m_pixels.Put(key, pixels, bytes);
                 // Pin the fresh entry for the duration of the sweep below:
@@ -290,20 +427,80 @@ namespace Arcane
                 return raw;
             }
 
+            // Header dims/mipCount/srgb behind TextureInfoFor(Guid) -- ABI v21, new.
+            // Artifact-backed content reads the artifact's own HEADER (no decode at
+            // all); content with no artifact yet falls back to a header-only stb probe
+            // (stbi_info -- dims only, no pixel decode) with mipCount=1 and srgb=true
+            // (the engine-wide default for colour textures this file's own banner
+            // states; Task 8's artifact-everywhere world removes the need to guess).
+            // A PRESENT-but-invalid artifact refuses loudly, same as PixelsForResolved.
+            const TextureInfo* TextureInfoForResolved(const Guid& id, const std::filesystem::path& resolved,
+                                                       const std::string& key)
+            {
+                if (m_textureInfo.Has(key))
+                {
+                    if (m_textureInfo.IsFailure(key))
+                        return nullptr;
+                    return m_textureInfo.Get(key).get();
+                }
+
+                const ArtifactReadResult art = ResolveArtifact(id, resolved);
+                if (art.refusal == ArtifactRefusal::HashMismatch ||
+                    art.refusal == ArtifactRefusal::VersionNewerThanEngine)
+                {
+                    RefuseArtifact(m_textureInfo, key, id, art.refusal);
+                    return nullptr;
+                }
+
+                auto info = std::make_shared<TextureInfo>();
+                if (art.refusal == ArtifactRefusal::None && art.artifact)
+                {
+                    *info = art.artifact->info;
+                }
+                else
+                {
+                    int w = 0, h = 0, comp = 0;
+                    if (!stbi_info(resolved.string().c_str(), &w, &h, &comp) || w <= 0 || h <= 0)
+                    {
+                        ARC_WARN("Assets: TextureInfoFor failed to probe dimensions: {}",
+                                 resolved.string());
+                        m_textureInfo.PutFailure(key);
+                        return nullptr;
+                    }
+                    info->width    = (uint32_t)w;
+                    info->height   = (uint32_t)h;
+                    info->mipCount = 1;
+                    info->srgb     = true;
+                }
+
+                const TextureInfo* raw = info.get();
+                // Tiny, fixed-size metadata -- weighted at sizeof(TextureInfo) in the
+                // shared budget rather than 0, so it participates honestly in the
+                // facade-wide accounting this file's banner describes, but never comes
+                // close to dominating it (this cache's total is at most a few hundred
+                // bytes even with thousands of distinct textures resident).
+                m_textureInfo.Put(key, info, sizeof(TextureInfo));
+                m_textureInfo.Acquire(key);
+                EnforceBudget();
+                m_textureInfo.Release(key);
+                return raw;
+            }
+
             uint64_t TotalBytes() const
             {
                 return m_bytes.TotalBytes() +
                        m_json.TotalBytes() +
-                       m_pixels.TotalBytes();
+                       m_pixels.TotalBytes() +
+                       m_textureInfo.TotalBytes();
             }
 
             // Budget sweep, run after every insert: evict the globally
-            // least-recently-used entry -- across ALL THREE caches (it was
-            // four until ABI v15 deleted the texture cache with GetTexture),
-            // comparable via the shared recency clock -- until the total is back
-            // under budget. Pinned (refcounted) entries are never offered by
-            // LeastRecentEvictable and Evict refuses them; memoized failures
-            // are ~zero cost and skipped (evicting them frees nothing and
+            // least-recently-used entry -- across ALL FOUR caches (it was three from
+            // ABI v15 (the texture cache went with GetTexture) until ABI v21 added
+            // m_textureInfo) -- comparable via the shared recency clock -- until the
+            // total is back under budget. Pinned (refcounted) entries are never
+            // offered by LeastRecentEvictable and Evict refuses them; memoized
+            // failures are ~zero cost and skipped (evicting them frees nothing and
             // destroys their do-not-retry memo). The budget is strict, so an
             // entry larger than the whole budget is swept right back out --
             // the caller keeps its handle (shared ownership), the cache just
@@ -332,6 +529,11 @@ namespace Arcane
                     {
                         key = candKey; used = candUsed; which = 2;
                     }
+                    if (m_textureInfo.LeastRecentEvictable(candKey, candUsed) &&
+                        candUsed < used)
+                    {
+                        key = candKey; used = candUsed; which = 3;
+                    }
 
                     bool evicted = false;
                     switch (which)
@@ -339,6 +541,7 @@ namespace Arcane
                     case 0: evicted = m_bytes.Evict(key); break;
                     case 1: evicted = m_json.Evict(key); break;
                     case 2: evicted = m_pixels.Evict(key); break;
+                    case 3: evicted = m_textureInfo.Evict(key); break;
                     default: break;
                     }
                     if (!evicted)
@@ -445,20 +648,40 @@ namespace Arcane
             // insertion order is the row order the user sees.
             std::vector<Guid> m_unresolvedDiagnosticIds;
 
-            // ONE recency clock across the three caches (declared first: the
+            // ONE recency clock across the four caches (declared first: the
             // caches capture its address) so the budget sweep can compare LRU
             // candidates cross-cache. See AssetCache's shared-clock ctor.
-            // THERE IS NO TEXTURE CACHE HERE: this facade holds no device.
+            // THERE IS NO GPU TEXTURE CACHE HERE: this facade holds no device --
+            // m_textureInfo (ABI v21) is header METADATA, never a device object.
             uint64_t m_lruClock = 0;
             AssetCache<BytesPtr>                 m_bytes{&m_lruClock};
             AssetCache<JsonPtr>                  m_json{&m_lruClock};
             AssetCache<PixelDataPtr>             m_pixels{&m_lruClock};
+            AssetCache<TextureInfoPtr>           m_textureInfo{&m_lruClock};
         };
     }
 
     std::unique_ptr<Assets> Assets::Create(const AssetsDesc& desc)
     {
         return std::make_unique<AssetsImpl>(desc);
+    }
+
+    bool ContentArtifactRefusalObserved() noexcept
+    {
+        return g_contentRefusalObserved.load(std::memory_order_acquire);
+    }
+
+    std::string ContentArtifactRefusalDetail()
+    {
+        std::lock_guard<std::mutex> lock(g_contentRefusalDetailMutex);
+        return g_contentRefusalDetail;
+    }
+
+    void ResetContentArtifactRefusal() noexcept
+    {
+        g_contentRefusalObserved.store(false, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(g_contentRefusalDetailMutex);
+        g_contentRefusalDetail.clear();
     }
 
     namespace

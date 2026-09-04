@@ -11,6 +11,14 @@
 // raw struct memcpy. Struct padding is compiler/ABI dependent; a memcpy'd struct would make the
 // artifact non-deterministic across toolchains/configs, which breaks content-hash-based caching
 // in later tasks (spec s4).
+//
+// BYTE-CONTRACT PEER (F2b Task 6): ArcaneClient/src/Arcane/Assets/ArtifactReader.hpp/.cpp is
+// the runtime-side reader of this exact format -- a DELIBERATE, INDEPENDENT reimplementation,
+// not a shared consumer of this header (ArcaneClient must never link/include
+// ArcaneAssetPipeline). The two sides stay byte-compatible ONLY by both following this written
+// contract by hand; a layout change here must be mirrored there, or ArtifactReaderTest.cpp's
+// cross-lib round-trip case (fixtures written through THIS file's WriteTextureArtifact, read
+// back through that file's ReadClientArtifact) fails loudly.
 
 #include <cstddef>
 #include <cstdint>

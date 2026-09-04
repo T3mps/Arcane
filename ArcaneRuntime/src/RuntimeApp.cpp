@@ -1472,6 +1472,30 @@ int RuntimeApp::Run()
 
     MainLoop();
     Shutdown();
+    // F2b Task 6, spec s5 -- "refuse, never limp": a content texture whose cooked
+    // artifact is PRESENT but INVALID (HashMismatch or VersionNewerThanEngine --
+    // never a merely-missing artifact, which is not yet a refusal at the Assets
+    // facade layer; see Assets.hpp's ContentArtifactRefusalObserved doc comment)
+    // latches during resolve (SpriteCache::Request -> Assets::PixelsFor/
+    // TextureInfoFor, driven every frame by SceneRenderResolver::Refresh -- see
+    // RuntimeFrame.cpp). Checked HERE, after MainLoop, mirroring exactly where the
+    // device-lost check below polls its own latch: a game host's one job is
+    // running the game correctly, and a cook that is broken or stale is a stop-
+    // the-run condition here even though it degrades to a Problems-pane entry in
+    // the editor (Task 12) rather than an exit. 5 is a fresh code: 1/2/3/4 are
+    // already the graph path's own vocabulary (m_graphExit, documented below) and
+    // GpuDeviceLostObserved's own return 1 two lines down -- a content refusal is
+    // neither, and naming it distinctly is the whole point of Step 3's "exits
+    // nonzero with the refusal named" contract (the refusal ITSELF is named in the
+    // ARC_ERROR Assets.cpp already logged when it fired; this print restates it at
+    // the point the process is about to exit over it, for a caller that only kept
+    // the tail of a long log).
+    if (Arcane::ContentArtifactRefusalObserved())
+    {
+        ARC_ERROR("ArcaneRuntime: exiting -- content artifact refusal: {}",
+                  Arcane::ContentArtifactRefusalDetail());
+        return 5;
+    }
     // A device-loss exit is an abnormal end even though it was orderly: the
     // report exists, but the session did not do what it was asked to.
     if (Arcane::GpuDeviceLostObserved()) return 1;

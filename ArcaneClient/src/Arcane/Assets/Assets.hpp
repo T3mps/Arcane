@@ -7,6 +7,7 @@
 // later milestones (north star).
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Assets/ArtifactReader.hpp>   // TextureInfo -- TextureInfoFor's payload
 #include <Arcane/Assets/ImageIo.hpp>
 #include <Arcane/Project/AssetId.hpp>
 
@@ -17,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace Arcane
@@ -83,15 +85,49 @@ namespace Arcane
             std::function<std::optional<std::filesystem::path>(const AssetId&)>;
         virtual void SetAssetResolver(AssetResolver resolver) = 0;
 
-        // Decoded pixels for a texture asset, device-free -- THE facade's
-        // image supply since ABI v15 removed GetTexture. Resolves `id` through
-        // the installed AssetResolver, then decodes once and retains the
-        // result: a second call for the same id is a cache hit, returning the
-        // SAME pointer. Null on an invalid/unresolvable id or a decode failure
-        // (logged once, memoized). The returned pointer is owned by the
-        // facade's LRU-budgeted pixel cache (bytes-weighted) and is valid only
-        // until evicted -- callers that need it to outlive the current call
-        // must copy it, not hold the pointer.
+        // Header dims/mipCount/srgb for a texture asset -- ABI v21, DEVICE-FREE, artifact-
+        // BACKED: for content that has a cooked .arcart (F2b Task 5's arccook; see
+        // ArtifactReader.hpp), this reads the artifact's HEADER, never a decode -- cheap
+        // even for a texture whose pixels have never been touched this session. Resolves
+        // `id` through the installed AssetResolver to find the CONTENT source, then finds
+        // that source's artifact under the project's Intermediate/Artifacts (see
+        // ArtifactReader.hpp's FindArtifactForGuid); a guid whose source has no cooked
+        // artifact yet falls back to a plain stb dimension probe of the source file itself
+        // (Task 8 retires this fallback once every content texture is guaranteed a cooked
+        // artifact). Null on an invalid/unresolvable id, a REFUSED artifact (present but
+        // invalid -- see PixelsFor's own refusal paragraph below, same memoization, same
+        // "refuse, never limp" posture), or an unresolvable source (logged once, memoized).
+        //
+        // THIS IS THE DIMENSION SOURCE going forward -- SpriteCache.cpp reads geometry dims
+        // from here, not from PixelsFor, specifically because PixelsFor now serves a
+        // THUMBNAIL for artifact-backed content: the two calls answer DIFFERENT questions
+        // (true source dims vs. preview-pixel dims) for the SAME guid, and conflating them
+        // was the wrong-dims bug class this split exists to prevent.
+        virtual const TextureInfo* TextureInfoFor(const Guid& id) = 0;
+
+        // Preview pixels for a texture asset, device-free -- ABI v21 NARROWS this contract:
+        // for artifact-backed content (a guid whose source has a cooked .arcart) this
+        // serves the artifact's own THUMBNAIL (small, uncompressed RGBA8, PixelData::width/
+        // height are the THUMBNAIL's dims, NOT the source's -- use TextureInfoFor above for
+        // true dims). For content with no artifact yet, this keeps today's behaviour
+        // unchanged: a full stb decode of the source file, PixelData::width/height are the
+        // real dims (Task 8 retires this fallback, at which point every content texture
+        // routes through the artifact path). Resolves `id` through the installed
+        // AssetResolver, then decodes/loads once and retains the result: a second call for
+        // the same id is a cache hit, returning the SAME pointer. Null on an invalid/
+        // unresolvable id, an unreadable/undecodable source (logged once, memoized), or a
+        // REFUSED artifact -- HashMismatch (the artifact's sourceHash disagrees with the
+        // CURRENT staged source bytes: a stale/broken cook) or VersionNewerThanEngine (the
+        // artifact's importer is newer than this build knows how to read). A refusal is
+        // memoized the SAME way a decode failure is (never a retry storm) but is logged as
+        // an ERROR, not a WARN -- "refuse, never limp": this facade will not silently serve
+        // stb-decoded pixels over an artifact IT KNOWS is invalid, because that would mask
+        // a broken cook rather than surface it. See
+        // Arcane::ContentArtifactRefusalObserved/ContentArtifactRefusalDetail below for how
+        // a host turns the first such refusal into a hard exit. The returned pointer is
+        // owned by the facade's LRU-budgeted pixel cache (bytes-weighted) and is valid only
+        // until evicted -- callers that need it to outlive the current call must copy it,
+        // not hold the pointer.
         virtual const PixelData* PixelsFor(const Guid& id) = 0;
 
         // Raw file bytes (fonts, blobs). Null on failure (memoized).
@@ -106,6 +142,44 @@ namespace Arcane
 
         virtual AssetStats Stats() const = 0;
     };
+
+    // -----------------------------------------------------------------
+    // The process-wide content-artifact-refusal latch
+    // -----------------------------------------------------------------
+    //
+    // "Refuse, never limp" (F2b Task 6, spec s5): TextureInfoFor/PixelsFor's artifact-
+    // backed path sets this latch the FIRST time it hits a PRESENT-but-INVALID artifact
+    // (HashMismatch or VersionNewerThanEngine -- never Missing, which is not yet a
+    // refusal at this facade layer; see PixelsFor's own doc comment) instead of ever
+    // falling back to a source-file decode for that guid. One slot, first-refusal-wins --
+    // same idiom as Render/GpuInstrumentation.hpp's device-lost latch, and for the same
+    // reason: one bad artifact is already a stop-the-boot event, so there is nothing to
+    // gain from accumulating a list.
+    //
+    // ArcaneRuntime polls this once, after MainLoop (RuntimeApp::Run, mirroring
+    // GpuDeviceLostObserved's own poll site), and exits nonzero naming the refusal --
+    // refuse-out-loud is a HOST policy, this is only the fact the host polls. The editor
+    // does NOT poll it: Task 12 publishes the SAME refusals to the Problems pane instead
+    // of exiting, so an artifact refusal never takes down an editing session the way it
+    // takes down a game host.
+    [[nodiscard]] ARCANE_API bool ContentArtifactRefusalObserved() noexcept;
+
+    // The first refusal's own description -- "<refusal kind>: <guid>", e.g.
+    // "HashMismatch: 11111111-2222-4333-8444-555555555555" -- naming the refusal is Step
+    // 3's contract ("exits nonzero with the refusal named"). Empty when
+    // ContentArtifactRefusalObserved() is false.
+    [[nodiscard]] ARCANE_API std::string ContentArtifactRefusalDetail();
+
+    // TEST-ONLY reset -- clears the latch (and its detail string) back to the never-fired
+    // state. Unlike GpuInstrumentation.hpp's ResetGpuDeviceLost (which pairs with a real
+    // production re-arm site: a rebuilt device after a project switch legitimately clears
+    // a stale device-lost verdict), NOTHING in production calls this: a content-artifact
+    // refusal has no "comes back healthy" event to re-arm for -- the host that observes
+    // it exits the process, and a fresh process starts with a fresh (unset) latch by
+    // construction. Exists purely so ArcaneTests' [assets]/[artifact] cases can prove their
+    // OWN refusal fired without inheriting an earlier, unrelated case's latch from the same
+    // process (Catch2 runs every TEST_CASE in one process, random order).
+    ARCANE_API void ResetContentArtifactRefusal() noexcept;
 
     // NOTHING BELOW TAKES A DEVICE OR A TEXTURE OBJECT. Reading a rendered
     // image back is NriGraphContext::ReadCapture's job; everything here is

@@ -24,6 +24,14 @@
 #include <Arcane/Assets/ImageIo.hpp>
 #include <Arcane/Project/AssetId.hpp>
 
+// F2b Task 6: TextureInfoFor/PixelsFor's artifact-backed contract, and the header-dims-vs-
+// thumb-dims pin, exercised against a REAL cooked artifact (TextureImporter + WriteTextureArtifact,
+// the same production path arccook drives) -- these tests link ArcaneAssetPipeline to build
+// their fixtures ONLY; ArcaneClient's own Assets.cpp never links it (see ArtifactReader.hpp).
+#include <Arcane/AssetPipeline/ArtifactFormat.hpp>
+#include <Arcane/AssetPipeline/TextureImporter.hpp>
+#include <Arcane/AssetPipeline/TextureMetaSettings.hpp>
+
 namespace
 {
     // 8x4 RGBA8 checkerboard, 1x1 squares, black/white -- deterministic by
@@ -228,4 +236,232 @@ TEST_CASE("assets: PixelsFor budget evicts least-recently-used pixel entries",
     std::remove(pngA.string().c_str());
     std::remove(pngB.string().c_str());
     std::remove(pngC.string().c_str());
+}
+
+// ---- F2b Task 6: TextureInfoFor + PixelsFor's narrowed (artifact-backed) contract ----------
+
+namespace
+{
+    std::vector<unsigned char> GradientRgba(int w, int h)
+    {
+        std::vector<unsigned char> px(static_cast<std::size_t>(w) * h * 4);
+        for (int y = 0; y < h; ++y)
+        {
+            for (int x = 0; x < w; ++x)
+            {
+                unsigned char* p = px.data() + (static_cast<std::size_t>(y) * w + x) * 4;
+                p[0] = static_cast<unsigned char>((x * 255) / (w > 1 ? w - 1 : 1));
+                p[1] = static_cast<unsigned char>((y * 255) / (h > 1 ? h - 1 : 1));
+                p[2] = 128;
+                p[3] = 255;
+            }
+        }
+        return px;
+    }
+
+    std::vector<std::byte> ReadWholeFileAsBytes(const std::filesystem::path& path)
+    {
+        std::ifstream ifs(path, std::ios::binary);
+        REQUIRE(ifs.good());
+        ifs.seekg(0, std::ios::end);
+        const auto len = static_cast<std::size_t>(ifs.tellg());
+        ifs.seekg(0, std::ios::beg);
+        std::vector<std::byte> out(len);
+        if (len > 0)
+            ifs.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(len));
+        REQUIRE(ifs.good());
+        return out;
+    }
+
+    // A Content/ source PNG plus an Intermediate/Artifacts/*.arcart cooked from it via the
+    // REAL production import path (Arcane::AssetPipeline::ImportTexture + WriteTextureArtifact
+    // -- the same path arccook drives), wired into an Assets instance exactly the way
+    // Runtime::OpenProject wires a real project's content root + resolver. The artifact's own
+    // on-disk PATH does not need to match a real cook-key's 256-way shard -- FindArtifactForGuid
+    // scans Intermediate/Artifacts/**/*.arcart by CONTENT (each file's own header sourceGuid),
+    // never by filename, so any path under that tree is a valid fixture location.
+    struct ArtifactSandbox
+    {
+        std::filesystem::path root;
+        std::filesystem::path sourcePng;
+        std::filesystem::path artifactPath;
+        Arcane::Guid guid;
+        Arcane::AssetPipeline::ImportedTexture imported;
+    };
+
+    ArtifactSandbox MakeArtifactSandbox(const char* leaf, int w, int h,
+                                        std::optional<std::uint32_t> importerVersionOverride = std::nullopt)
+    {
+        namespace fs = std::filesystem;
+
+        ArtifactSandbox sb;
+        sb.root = fs::temp_directory_path() / "arcane_assets_artifact_sandbox" / leaf;
+        std::error_code ec;
+        fs::remove_all(sb.root, ec);
+        fs::create_directories(sb.root / "Content" / "textures");
+        fs::create_directories(sb.root / "Intermediate" / "Artifacts" / "aa");
+
+        sb.sourcePng = sb.root / "Content" / "textures" / "big.png";
+        const std::vector<unsigned char> rgba = GradientRgba(w, h);
+        REQUIRE(stbi_write_png(sb.sourcePng.string().c_str(), w, h, 4, rgba.data(), w * 4) != 0);
+
+        sb.guid = Arcane::Guid::Generate();
+        const std::vector<std::byte> sourceBytes = ReadWholeFileAsBytes(sb.sourcePng);
+
+        Arcane::AssetPipeline::TextureMetaSettings settings;
+        settings.format = Arcane::AssetPipeline::TextureMetaSettings::Format::Rgba8;
+        auto imported = Arcane::AssetPipeline::ImportTexture(sourceBytes, sb.guid, settings);
+        REQUIRE(imported.has_value());
+        sb.imported = *imported;
+
+        Arcane::AssetPipeline::TextureArtifactDesc desc = sb.imported.desc;
+        if (importerVersionOverride)
+            desc.importerVersion = *importerVersionOverride;
+
+        sb.artifactPath = sb.root / "Intermediate" / "Artifacts" / "aa" / "fixture.arcart";
+        REQUIRE(Arcane::AssetPipeline::WriteTextureArtifact(sb.artifactPath, desc, sb.imported.payload,
+                                                            sb.imported.thumbRgba));
+        return sb;
+    }
+
+    Arcane::Assets::AssetResolver SandboxResolver(const ArtifactSandbox& sb)
+    {
+        return [&sb](const Arcane::AssetId& id) -> std::optional<std::filesystem::path>
+        {
+            if (id.Value() == sb.guid) return sb.sourcePng;
+            return std::nullopt;
+        };
+    }
+
+    // ContentArtifactRefusalObserved is a PROCESS-WIDE latch (Assets.hpp), so a test that
+    // fires it must not leak that fact into an unrelated case in the same Catch2 process
+    // (random order) -- same RAII idiom NriDiagnosticsTest.cpp's ScopedGpuDeviceLostLatch
+    // already uses for GpuInstrumentation's own device-lost latch.
+    struct ScopedContentArtifactRefusalLatch
+    {
+        ScopedContentArtifactRefusalLatch() { Arcane::ResetContentArtifactRefusal(); }
+        ~ScopedContentArtifactRefusalLatch() { Arcane::ResetContentArtifactRefusal(); }
+    };
+}
+
+TEST_CASE("assets: TextureInfoFor serves HEADER (true) dims while PixelsFor serves THUMBNAIL "
+          "dims for the SAME artifact-backed guid -- the wrong-dims bug class this split "
+          "prevents (F2b Task 6)", "[assets][pixels][artifact]")
+{
+    const ArtifactSandbox sb = MakeArtifactSandbox("dims_pin", 128, 64);
+    // Sanity: the thumbnail must actually be SMALLER than the source for this pin to mean
+    // anything -- TextureImporter halves the top level until max(dim)<=64, so 128x64 must
+    // produce a strictly smaller thumbnail (64x32).
+    REQUIRE(sb.imported.desc.thumbWidth < sb.imported.desc.width);
+    REQUIRE(sb.imported.desc.thumbHeight < sb.imported.desc.height);
+
+    auto assets = Arcane::Assets::Create();
+    REQUIRE(assets != nullptr);
+    assets->SetContentRoot(sb.root / "Content");
+    assets->SetAssetResolver(SandboxResolver(sb));
+
+    const Arcane::TextureInfo* info = assets->TextureInfoFor(sb.guid);
+    REQUIRE(info != nullptr);
+    CHECK(info->width == sb.imported.desc.width);
+    CHECK(info->height == sb.imported.desc.height);
+    CHECK(info->mipCount == sb.imported.desc.mipCount);
+    CHECK(info->srgb == sb.imported.desc.srgb);
+
+    const Arcane::PixelData* pixels = assets->PixelsFor(sb.guid);
+    REQUIRE(pixels != nullptr);
+    CHECK(pixels->width == sb.imported.desc.thumbWidth);
+    CHECK(pixels->height == sb.imported.desc.thumbHeight);
+
+    // THE PIN: for the SAME guid, the two accessors answer DIFFERENT questions.
+    CHECK(pixels->width != info->width);
+    CHECK(pixels->height != info->height);
+}
+
+TEST_CASE("assets: a guid with no cooked artifact yet keeps the legacy full-decode behaviour "
+          "unchanged (Task 8 retires this fallback)", "[assets][pixels][artifact]")
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane_assets_artifact_sandbox" / "no_artifact";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "Content" / "textures");
+    // Deliberately NO Intermediate/Artifacts anywhere under root.
+
+    const Arcane::Guid guid = Arcane::Guid::Generate();
+    const fs::path png = root / "Content" / "textures" / "plain.png";
+    const auto checker = CheckerPixels();
+    REQUIRE(stbi_write_png(png.string().c_str(), static_cast<int>(kCheckerW), static_cast<int>(kCheckerH),
+                           4, checker.data(), static_cast<int>(kCheckerW) * 4) != 0);
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(root / "Content");
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == guid) return png;
+        return std::nullopt;
+    });
+
+    const Arcane::TextureInfo* info = assets->TextureInfoFor(guid);
+    REQUIRE(info != nullptr);
+    CHECK(info->width == kCheckerW);
+    CHECK(info->height == kCheckerH);
+    CHECK(info->mipCount == 1);
+
+    const Arcane::PixelData* pixels = assets->PixelsFor(guid);
+    REQUIRE(pixels != nullptr);
+    CHECK(pixels->width == kCheckerW);
+    CHECK(pixels->height == kCheckerH);
+    CHECK(pixels->rgba == checker);   // legacy full decode, byte-exact, unchanged
+
+    fs::remove_all(root, ec);
+}
+
+TEST_CASE("assets: a HashMismatch artifact REFUSES loudly (never limps to the source decode) "
+          "on BOTH accessors, memoized, and latches the process-wide refusal -- the Assets-"
+          "facade-layer half of Step 3's watched scratch scenario", "[assets][pixels][artifact]")
+{
+    ScopedContentArtifactRefusalLatch latchGuard;
+    REQUIRE_FALSE(Arcane::ContentArtifactRefusalObserved());
+
+    const ArtifactSandbox sb = MakeArtifactSandbox("hash_mismatch", 16, 16);
+
+    // Edit the STAGED source AFTER cooking, without recooking -- exactly the scratch scenario
+    // Step 3's watched ArcaneRuntime refusal exercises, reproduced here at the facade layer.
+    {
+        std::vector<unsigned char> edited = GradientRgba(16, 16);
+        edited[0] = static_cast<unsigned char>(edited[0] ^ 0xFF);
+        REQUIRE(stbi_write_png(sb.sourcePng.string().c_str(), 16, 16, 4, edited.data(), 16 * 4) != 0);
+    }
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(sb.root / "Content");
+    assets->SetAssetResolver(SandboxResolver(sb));
+
+    CHECK(assets->TextureInfoFor(sb.guid) == nullptr);
+    CHECK(assets->TextureInfoFor(sb.guid) == nullptr);   // memoized: no retry storm
+    CHECK(assets->PixelsFor(sb.guid) == nullptr);
+
+    CHECK(Arcane::ContentArtifactRefusalObserved());
+    const std::string detail = Arcane::ContentArtifactRefusalDetail();
+    CHECK(detail.find("HashMismatch") != std::string::npos);
+    CHECK(detail.find(sb.guid.ToString()) != std::string::npos);
+}
+
+TEST_CASE("assets: a VersionNewerThanEngine artifact refuses loudly too", "[assets][pixels][artifact]")
+{
+    ScopedContentArtifactRefusalLatch latchGuard;
+    REQUIRE_FALSE(Arcane::ContentArtifactRefusalObserved());
+
+    const ArtifactSandbox sb = MakeArtifactSandbox(
+        "version_newer", 8, 8, Arcane::kClientTextureImporterVersionMirror + 1);
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(sb.root / "Content");
+    assets->SetAssetResolver(SandboxResolver(sb));
+
+    CHECK(assets->PixelsFor(sb.guid) == nullptr);
+    CHECK(assets->TextureInfoFor(sb.guid) == nullptr);
+
+    CHECK(Arcane::ContentArtifactRefusalObserved());
+    CHECK(Arcane::ContentArtifactRefusalDetail().find("VersionNewerThanEngine") != std::string::npos);
 }
