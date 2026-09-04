@@ -193,6 +193,8 @@ project "ArcaneAssetPipeline"
     includedirs {
         "%{prj.location}/src",
         "%{IncludeDir.ArcaneCore}",
+        "%{IncludeDir.nlohmann}",   -- Task 3: TextureMetaSettings::FromMetaJson/ToMetaJson
+        "%{IncludeDir.stb}",        -- Task 3: TextureImporter decode (stb_image) + StbImpl.cpp
     }
 
     defines {

@@ -133,10 +133,16 @@ TEST_CASE("pipeline: ComputeCookKey changes when a single source byte changes", 
 
 TEST_CASE("pipeline: ComputeCookKey changes when a single setting field changes", "[pipeline]")
 {
+    // Covers every TextureMetaSettings field, not just the Task 2 stub's two -- Task 3 grew the
+    // struct (format, generateMips) and CookKey.cpp's explicit-field hash MUST cover every one
+    // of them, or a settings change silently fails to invalidate the cook key (a stale artifact
+    // survives a settings edit). This is the cross-task obligation Task 2's report flagged.
     const std::vector<std::byte> bytes = PatternBytes(32, 0x33);
 
     TextureMetaSettings base{};
+    base.format = TextureMetaSettings::Format::Auto;
     base.srgb = true;
+    base.generateMips = true;
     base.maxSize = 1024;
     const std::uint64_t baseline = ComputeCookKey(bytes, base, kTextureImporterVersion);
 
@@ -147,6 +153,14 @@ TEST_CASE("pipeline: ComputeCookKey changes when a single setting field changes"
     TextureMetaSettings maxSizeChanged = base;
     maxSizeChanged.maxSize = 2048;
     CHECK(ComputeCookKey(bytes, maxSizeChanged, kTextureImporterVersion) != baseline);
+
+    TextureMetaSettings formatChanged = base;
+    formatChanged.format = TextureMetaSettings::Format::Bc7;
+    CHECK(ComputeCookKey(bytes, formatChanged, kTextureImporterVersion) != baseline);
+
+    TextureMetaSettings generateMipsChanged = base;
+    generateMipsChanged.generateMips = false;
+    CHECK(ComputeCookKey(bytes, generateMipsChanged, kTextureImporterVersion) != baseline);
 }
 
 TEST_CASE("pipeline: ComputeCookKey changes when importerVersion changes", "[pipeline]")

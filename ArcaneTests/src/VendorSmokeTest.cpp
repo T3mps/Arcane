@@ -18,8 +18,12 @@ TEST_CASE("glm: vector and matrix math", "[vendor][glm]")
 }
 
 // ---------------------------------------------------------------- stb
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
+// F2b Task 3: stb's IMPLEMENTATION TU moved to ArcaneAssetPipeline/src/Arcane/AssetPipeline/
+// StbImpl.cpp (TextureImporter.cpp needs stbi_load_from_memory), and that static lib is linked
+// into this exe (see premake5.lua's ArcaneTests `links`). Defining the IMPLEMENTATION macros
+// here too would merge a SECOND copy of every stb symbol into this exe and fail to link
+// (LNK2005) -- declarations only; this test still exercises the real write->read round trip,
+// just against the symbols ArcaneAssetPipeline's TU provides.
 #include <stb_image.h>
 #include <stb_image_write.h>
 

@@ -50,9 +50,13 @@ namespace Arcane::AssetPipeline
         hasher.Update(sourceBytes);
 
         // Explicit fields only, in declaration order -- never a struct memcpy/reinterpret_cast.
-        // When Task 3 grows TextureMetaSettings, every new field must be added HERE explicitly
-        // too; the struct's memory layout is never a shortcut.
+        // Task 3 grew TextureMetaSettings (format, generateMips added alongside the original
+        // srgb/maxSize) -- every field is hashed here explicitly; the struct's memory layout is
+        // never a shortcut. Any FUTURE field must be added here too, or a settings change
+        // silently fails to invalidate the cook key.
+        hasher.U8(static_cast<std::uint8_t>(settings.format));
         hasher.U8(settings.srgb ? 1 : 0);
+        hasher.U8(settings.generateMips ? 1 : 0);
         hasher.U32(settings.maxSize);
 
         hasher.U32(importerVersion);
