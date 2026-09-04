@@ -611,8 +611,34 @@ try {
                 Exit-GateRefusal "restaging FAILED -- staged scene still differs from source after the copy ($stagedScene)."
             }
         }
+
+        # ---- Intermediate/Artifacts (F2b Task 5) HAS THE IDENTICAL HAZARD as Content/
+        #      above, one level down: it is arccook's OWN cooked-artifact output,
+        #      refreshed only when a host's postbuild runs `arccook --project
+        #      ReferenceProject` -- so it must be read fresh alongside Content on every
+        #      gate run, not accumulated across runs. MIRROR, NOT MERGE, same reasoning
+        #      and same shape as Content/'s block above (clear the staged copy first,
+        #      then copy the source's CURRENT contents over it) -- an orphaned artifact
+        #      left behind by an earlier cook key (e.g. a `.meta` settings edit since the
+        #      last gate run) must not silently survive in the staged tree once this
+        #      block has run. Unlike Content/, the source
+        #      (ReferenceProject/Intermediate/Artifacts) is a BUILD PRODUCT, not
+        #      checked into git -- absent on a checkout nothing has ever built yet -- so
+        #      this block tolerates a missing source by leaving the staged copy equally
+        #      empty (cleared, not populated) rather than refusing the whole gate: hosts
+        #      do not consume artifacts yet (F2b Task 5), so there is nothing here for a
+        #      missing source to silently break.
+        $stagedArtifacts = Join-Path $repoRoot "bin\$configDirName\$stageHost\ReferenceProject\Intermediate\Artifacts"
+        if (Test-Path $stagedArtifacts) {
+            Remove-Item -Path $stagedArtifacts -Recurse -Force
+        }
+        $sourceArtifacts = Join-Path $referenceProjectDir 'Intermediate\Artifacts'
+        if (Test-Path $sourceArtifacts) {
+            New-Item -ItemType Directory -Path $stagedArtifacts -Force | Out-Null
+            Copy-Item -Path (Join-Path $sourceArtifacts '*') -Destination $stagedArtifacts -Force -Recurse
+        }
     }
-    Write-Host "-- ReferenceGame.dll + Content/ restaged beside both hosts --" -ForegroundColor Green
+    Write-Host "-- ReferenceGame.dll + Content/ + Intermediate/Artifacts restaged beside both hosts --" -ForegroundColor Green
 
     $results = @()
 
@@ -1147,6 +1173,23 @@ try {
                     Copy-Item -Path (Join-Path $referenceProjectDir 'Content\*') -Destination $stagedRestoreDest -Force -Recurse
                 } catch {
                     Write-Host "-- -SelfTest: WARNING -- could not restage the restored scene to $stagedRestoreDest ($($_.Exception.Message)) --" -ForegroundColor Yellow
+                }
+            }
+
+            # Intermediate/Artifacts (F2b Task 5): the mutation above never touches it (it
+            # only breaks a Content/ scene), so this restage is DEFENSIVE, not load-bearing
+            # -- same "not load-bearing but must not disagree" status the Content comment
+            # above already claims for itself. Kept symmetric with the main staging loop's
+            # Artifacts block so the two never drift into opposite definitions of
+            # "restored." Same tolerant shape as that block: an absent source just leaves
+            # nothing to copy, never a refusal.
+            $stagedArtifactsRestoreDest = Join-Path $repoRoot "bin\$configDirName\$h\ReferenceProject\Intermediate\Artifacts"
+            $sourceArtifactsRestore = Join-Path $referenceProjectDir 'Intermediate\Artifacts'
+            if ((Test-Path $stagedArtifactsRestoreDest) -and (Test-Path $sourceArtifactsRestore)) {
+                try {
+                    Copy-Item -Path (Join-Path $sourceArtifactsRestore '*') -Destination $stagedArtifactsRestoreDest -Force -Recurse
+                } catch {
+                    Write-Host "-- -SelfTest: WARNING -- could not restage Intermediate/Artifacts to $stagedArtifactsRestoreDest ($($_.Exception.Message)) --" -ForegroundColor Yellow
                 }
             }
         }

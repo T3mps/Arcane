@@ -228,6 +228,77 @@ project "ArcaneAssetPipeline"
         symbols "off"
 
 -- ============================================================================
+-- arccook: the offline asset cook CLI (F2b Task 5). Cooks a project's Content/
+-- texture sources into Intermediate/Artifacts via
+-- Arcane::AssetPipeline::CookSession -- the SAME session type the editor's
+-- future in-process cook (Task 12) drives, so the CLI and the editor never
+-- diverge on cook semantics. Depends on ArcaneAssetPipeline + ArcaneCore only
+-- (no ArcaneClient/imgui/NRI surface) -- ArcaneServer's minimal ConsoleApp
+-- shape above is the structural template, widened with the includedirs/links
+-- an actual cook tool needs. Every stager (ArcaneRuntime/ArcaneEditor/
+-- ArcaneTests) `dependson` this project and runs it in its own postbuild
+-- BEFORE staging Content -- see those projects' postbuildcommands below.
+-- ============================================================================
+project "arccook"
+    location "arccook"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/src/**.hpp",
+        "%{prj.location}/src/**.cpp",
+    }
+
+    includedirs {
+        "%{prj.location}/src",
+        "%{IncludeDir.ArcaneCore}",
+        "%{IncludeDir.ArcaneAssetPipeline}",
+        -- CookSession.hpp pulls in TextureMetaSettings.hpp (a public
+        -- ArcaneAssetPipeline header), which needs <Json.hpp>.
+        "%{IncludeDir.nlohmann}",
+    }
+
+    -- bc7enc_rdo: ArcaneAssetPipeline's TextureImporter calls into it for the BC7 encode
+    -- path -- a static lib doesn't transitively pull its own links, so any consumer
+    -- linking ArcaneAssetPipeline links bc7enc_rdo alongside it, same reasoning as
+    -- ArcaneEditor's/ArcaneTests' own links line.
+    links { "ArcaneCore", "ArcaneAssetPipeline", "bc7enc_rdo" }
+    dependson { "ArcaneAssetPipeline" }
+
+    defines {
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
+
+    filter "configurations:Debug"
+        defines { "ARCANE_DEBUG" }
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        defines { "ARCANE_RELEASE", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        defines { "ARCANE_DIST", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+    filter {}
+
+-- ============================================================================
 -- Arcane: the engine DLL. One DLL, modular inside by folder/namespace
 -- (Base, Platform, Render for M1; Audio/Text/Assets/UI/Jobs/Plugin later).
 -- SDL3 links INTO this DLL; consumers link only the import lib.
@@ -405,8 +476,18 @@ project "ArcaneRuntime"
     -- ONE module per PROCESS holds because ArcaneRuntime.exe and ArcaneClient.dll are
     -- distinct modules.
     links { "ArcaneCore", "ArcaneClient" }
+    -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
+    dependson { "arccook" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
+        -- F2b Task 5: cook FIRST, then stage the cooked artifacts -- cook-then-copy per
+        -- stager, because under /m no postbuild orders against another project's
+        -- postbuild (ArcaneEditor/ArcaneTests run this exact same pair independently).
+        -- Safe by construction: the cook is idempotent by hash (a second run is free)
+        -- and concurrent same-key writes are atomic-rename + deterministic (identical
+        -- bytes, last rename wins -- see ArtifactStore.hpp's concurrency contract).
+        '"%{wks.location}/bin/' .. outputdir .. '/arccook/arccook.exe" --project "%{wks.location}/ReferenceProject"',
+        '{COPYDIR} "%{wks.location}/ReferenceProject/Intermediate/Artifacts" "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
         '{COPYDIR} "%{wks.location}/data/shaders/generated" "%{cfg.buildtarget.directory}/data/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
@@ -486,8 +567,15 @@ project "ArcaneEditor"
     -- linking ArcaneAssetPipeline links bc7enc_rdo alongside it, same reasoning as every other
     -- ThirdParty static lib in this list.
     links { "ArcaneCore", "ArcaneClient", "imgui-node-editor", "ArcaneAssetPipeline", "bc7enc_rdo" }
+    -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
+    dependson { "arccook" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
+        -- F2b Task 5: cook FIRST, then stage the cooked artifacts -- same cook-then-copy
+        -- shape as ArcaneRuntime's matching comment above (safe under /m: idempotent by
+        -- hash, concurrent same-key writes atomic-rename + deterministic).
+        '"%{wks.location}/bin/' .. outputdir .. '/arccook/arccook.exe" --project "%{wks.location}/ReferenceProject"',
+        '{COPYDIR} "%{wks.location}/ReferenceProject/Intermediate/Artifacts" "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
         '{COPYDIR} "%{wks.location}/data/shaders/generated" "%{cfg.buildtarget.directory}/data/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
@@ -761,10 +849,19 @@ project "ArcaneTests"
     -- their normal per-config behaviour.
     defines { "MOSAIC_ENABLE_ASSERTS" }
 
-    dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad" }
+    -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
+    dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad", "arccook" }
 
     -- The test exe loads ArcaneClient.dll from its own directory.
     postbuildcommands {
+        -- F2b Task 5: cook FIRST, then stage the cooked artifacts -- same cook-then-copy
+        -- shape as ArcaneRuntime's/ArcaneEditor's matching comments above (safe under /m:
+        -- idempotent by hash, concurrent same-key writes atomic-rename + deterministic).
+        -- Unlike those two hosts, this project does NOT blanket-copy the whole
+        -- ReferenceProject tree (see the targeted Verify/-only COPYDIR below), so this
+        -- line is this exe's ONLY source of a staged Intermediate/Artifacts.
+        '"%{wks.location}/bin/' .. outputdir .. '/arccook/arccook.exe" --project "%{wks.location}/ReferenceProject"',
+        '{COPYDIR} "%{wks.location}/ReferenceProject/Intermediate/Artifacts" "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
         '{COPYDIR} "%{wks.location}/data/shaders/generated" "%{cfg.buildtarget.directory}/data/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
