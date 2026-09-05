@@ -290,11 +290,28 @@ namespace Arcane::Editor
                     continue;   // e.g. no .meta sidecar yet -- not an error
                 const auto [it, inserted] =
                     m_materialMtimes.try_emplace(watched.generic_string(), mtime);
-                if (inserted || it->second == mtime)
+                if (inserted)
                 {
+                    // C2 FIX (final-review wave, 2026-09-04): for a TEXTURE entry,
+                    // first sighting COUNTS as a change -- it does NOT for a material
+                    // (the branch above), because a material's first sighting really
+                    // is a baseline (nothing is ever "cooked" for a material). A
+                    // texture's first sighting can be a source this project has NEVER
+                    // cooked (a fresh clone with no Intermediate/Artifacts yet, or a
+                    // .png just dropped into Content/ mid-session) -- treating that as
+                    // "nothing happened" left "the editor heals it in-process on open"
+                    // a dead path: nothing ever called CookQueue::NoteChanged() for it,
+                    // so an uncooked project showed checkerboards forever. This makes
+                    // the very first watcher tick after open coalesce into ONE
+                    // hash-gated CookProject pass (CookQueue's own coalescing, see
+                    // CookQueue.hpp) -- free (upToDate, zero actual cooks) on an
+                    // already-fully-cooked project, the heal on one that isn't.
                     it->second = mtime;
-                    continue;   // first sighting is the baseline, not an event
+                    changed = true;
+                    continue;
                 }
+                if (it->second == mtime)
+                    continue;   // unchanged since the last tick -- not an event
                 it->second = mtime;
                 changed = true;
             }
@@ -340,6 +357,17 @@ namespace Arcane::Editor
                     m_viewportTargets.graph->InvalidateContentTexture(guid);
                     m_viewportTargets.graph->InvalidateMeshAlbedoSlot(guid);
                 }
+                // I2 fix (final-review wave, 2026-09-04): the Inspector's texture preview
+                // (EditorApp.cpp's `resolveTexturePreview` service) reads through
+                // ChromeGraph()'s OWN texture cache in Display colour space -- a SEPARATE
+                // NriGraphContext from m_viewportTargets.graph above -- so invalidating
+                // only the viewport left a (guid, Display) memo in the chrome cache stuck
+                // until app exit even after a fresh cook landed: the preview never
+                // updated. NriTextureCache::Invalidate already sweeps BOTH colour spaces
+                // for a guid, so one more call here closes exactly the entry the preview
+                // reads.
+                if (Arcane::NriGraphContext* chrome = ChromeGraph())
+                    chrome->InvalidateContentTexture(guid);
                 // A guid that just cooked successfully is fixed now, even if
                 // it previously had a refusal/failure row (a `.meta` edit
                 // that corrects a bad setting, or a source re-saved after a

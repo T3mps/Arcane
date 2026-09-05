@@ -1954,11 +1954,20 @@ namespace Arcane::Editor
                 changed = true;
             int maxSize = static_cast<int>(settings.maxSize);
             ImGui::SetNextItemWidth(120.0f);
-            if (ImGui::DragInt("Max Size (0 = unlimited)##texmeta", &maxSize, 1.0f, 0, 16384))
-            {
-                settings.maxSize = maxSize > 0 ? static_cast<std::uint32_t>(maxSize) : 0;
+            ImGui::DragInt("Max Size (0 = unlimited)##texmeta", &maxSize, 1.0f, 0, 16384);
+            // Minor fix (final-review wave, 2026-09-04): DragInt returns true on EVERY
+            // frame the value changes WHILE the drag is active -- against this function's
+            // OWN "true on any edit THIS frame" contract, a single drag gesture used to
+            // report `changed` (and so trigger the caller's sidecar write, and so the
+            // watcher's cook trigger) on every intermediate tick, not once per gesture.
+            // Keep the LIVE value flowing into `settings` every frame regardless (ImGui's
+            // own internal drag accumulator is what keeps the widget tracking the mouse
+            // smoothly -- it does not depend on the caller persisting intermediate values),
+            // but only report the edit -- the caller's actual write signal -- once the item
+            // DEACTIVATES after an edit (mouse release / Enter): one write per gesture.
+            settings.maxSize = maxSize > 0 ? static_cast<std::uint32_t>(maxSize) : 0;
+            if (ImGui::IsItemDeactivatedAfterEdit())
                 changed = true;
-            }
             return changed;
         }
 

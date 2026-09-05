@@ -274,3 +274,91 @@ TEST_CASE("CookQueue: SetImporterForTesting forwards to the owned CookSession", 
     CHECK(delivered[0].cooked == 1u);
     CHECK(importCalls->load() == 1);
 }
+
+// ---- C2 fix (final-review wave, 2026-09-04): open-heal via NoteChanged --------------------
+//
+// The defect this pins: EditorAppProject.cpp's watcher (PollAssetWatch) used to treat EVERY
+// first sighting of a watched path -- material OR texture -- as a baseline, never an event
+// (try_emplace inserted -> continue, unconditionally). For a texture source that had never
+// been cooked (a fresh clone, or a .png just dropped into Content/), NOTHING ever called
+// CookQueue::NoteChanged() for it: "the editor heals it in-process on open" (spec s8) was a
+// dead path, and a project with uncooked textures showed checkerboards forever. The fix
+// (EditorAppProject.cpp) makes a TEXTURE entry's first sighting count as a change --
+// materials are untouched, since their own first sighting genuinely is a baseline (nothing
+// is ever cooked for a material).
+//
+// This suite cannot drive EditorAppProject.cpp's watcher directly -- PollAssetWatch needs a
+// live EditorApp/Runtime/Project, well outside CookQueue's own "[editor]-unit-testable
+// headlessly" scope (see this file's own top-of-file comment) -- so it pins the two
+// properties the fix's single, unconditional NoteChanged() call at open depends on for
+// correctness instead: a fresh (never-cooked) project's first pass actually heals (cooks
+// the uncooked source), and an ALREADY fully-cooked project's first pass costs nothing
+// beyond one hash-gated CookProject call that reports upToDate. Together these are exactly
+// what makes "call NoteChanged() unconditionally on the first tick after open" safe and
+// correct regardless of whether the project needed healing.
+
+TEST_CASE("CookQueue: a first-seen (never-cooked) texture source heals via one NoteChanged "
+          "pass -- the open-heal contract the watcher's first-sighting fix depends on (C2)",
+          "[editor][cook]")
+{
+    const fs::path project = TempProjectDir("open_heal_fresh");
+    const fs::path png = project / "Content" / "textures" / "never_cooked.png";
+    WritePngFile(png, 4, 4, SolidPixels(4, 4, 11, 22, 33, 255));
+    const Guid guid = Guid::Generate();
+    WriteMetaSidecar(png, guid);
+    // Deliberately NO prior cook -- Intermediate/Artifacts does not exist yet, exactly the
+    // shape of a fresh clone or a project that just had a source dropped into it.
+
+    ManualSubmit submit;
+    CookQueue queue(project, [&submit](std::function<void()> job) { submit(std::move(job)); });
+    std::vector<CookResult> delivered;
+    queue.SetOnCookComplete([&](const CookResult& r) { delivered.push_back(r); });
+
+    // One NoteChanged() -- what the fixed watcher's first-sighting-counts-as-a-change
+    // branch fires, exactly once, on the tick after project open.
+    queue.NoteChanged();
+    submit.RunNext();
+    queue.Pump();
+
+    REQUIRE(delivered.size() == 1u);
+    CHECK(delivered[0].cooked == 1u);       // THE heal: the never-cooked source actually cooked
+    CHECK(delivered[0].failed == 0u);
+    REQUIRE(delivered[0].cookedGuids.size() == 1u);
+    CHECK(delivered[0].cookedGuids[0] == guid);
+}
+
+TEST_CASE("CookQueue: a fully-cooked project's open pass cooks 0 -- the hash gate makes the "
+          "watcher's unconditional open NoteChanged() free (C2)", "[editor][cook]")
+{
+    const fs::path project = TempProjectDir("open_heal_already_cooked");
+    const fs::path png = project / "Content" / "textures" / "already_cooked.png";
+    WritePngFile(png, 4, 4, SolidPixels(4, 4, 44, 55, 66, 255));
+    const Guid guid = Guid::Generate();
+    WriteMetaSidecar(png, guid);
+
+    // Pre-cook via an INDEPENDENT session -- simulates a project already cooked in a
+    // previous editor run, or by arccook/postbuild, before this CookQueue/watcher instance
+    // even exists.
+    {
+        CookSession preCook;
+        REQUIRE(preCook.CookProject(project).cooked == 1u);
+    }
+
+    ManualSubmit submit;
+    CookQueue queue(project, [&submit](std::function<void()> job) { submit(std::move(job)); });
+    std::vector<CookResult> delivered;
+    queue.SetOnCookComplete([&](const CookResult& r) { delivered.push_back(r); });
+
+    // The SAME unconditional open-tick NoteChanged() the fix fires, now against a project
+    // that never needed healing -- idempotence via CookSession's own hash gate, not any
+    // special-casing in CookQueue or the watcher.
+    queue.NoteChanged();
+    submit.RunNext();
+    queue.Pump();
+
+    REQUIRE(delivered.size() == 1u);
+    CHECK(delivered[0].cooked == 0u);       // THE pin: nothing re-cooked
+    CHECK(delivered[0].upToDate == 1u);
+    CHECK(delivered[0].failed == 0u);
+    CHECK(delivered[0].cookedGuids.empty());
+}
