@@ -84,6 +84,72 @@ TEST_CASE("ShaderEditorDocument::Save before the first bind keeps saved params",
     CHECK(reloaded->id == data.id);
 }
 
+// F2b Task 13: a "mesh"-kind document binds baseColor/albedo with NO
+// ShaderCompiler and NO ShaderSourceProvider at all -- Rebuild()'s mesh
+// branch runs BEFORE the compiler/sources null check (its own comment), so
+// the params panel works even in this bare-services shape (every other
+// surface needs real services to bind ANYTHING, per the "before the first
+// bind" test above). ApplyParamEdit + Save is the SAME public round trip the
+// inspector's own texture picker will drive (DrawTextureParam ->
+// SetParamWithUndo -> ApplyParamEdit), proving the mesh decl path
+// (MeshParamTemplate) feeds the ordinary param-edit/save machinery with no
+// special-casing anywhere downstream of Rebuild().
+TEST_CASE("A mesh document binds baseColor/albedo with no compiler and round-trips an albedo edit",
+         "[editor][material][mesh]")
+{
+    const fs::path dir = TempDir("mesh_doc");
+    const fs::path file = dir / "hero.arcmat";
+
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate();
+    data.name = "Hero";
+    data.kind = "mesh";
+    data.params.emplace_back("baseColor", Arcane::MatParamValue::MakeColor(1.0f, 1.0f, 1.0f, 1.0f));
+    data.params.emplace_back("albedo", Arcane::MatParamValue::MakeTexture(Arcane::Guid{}));
+    REQUIRE(Arcane::SaveMaterialAsset(file, data));
+
+    const auto loaded = Arcane::LoadMaterialAsset(file);
+    REQUIRE(loaded.has_value());
+
+    // Bare services: no compiler, no source provider. A fullscreen/sprite
+    // document left at this shape never binds (m_instance stays null, per
+    // the "before the first bind" test above) -- a mesh document does,
+    // because nothing about baseColor/albedo needs either service.
+    ShaderEditorDocument doc(DocServices{}, file, *loaded);
+    CHECK(doc.ParseErrors().empty());
+
+    const Arcane::Guid newAlbedo = Arcane::Guid::Generate();
+    doc.ApplyParamEdit(Arcane::HashParamName("albedo"), /*hasValue=*/true,
+                       Arcane::MatParamValue::MakeTexture(newAlbedo));
+    REQUIRE(doc.Save());
+
+    const auto reloaded = Arcane::LoadMaterialAsset(file);
+    REQUIRE(reloaded.has_value());
+    CHECK(reloaded->kind == "mesh");
+    CHECK(reloaded->snippet.empty());          // still no snippet -- mesh stitches none
+    CHECK_FALSE(reloaded->graph.has_value());  // still no graph
+    REQUIRE(reloaded->params.size() == 2);     // baseColor AND albedo both round-trip
+
+    bool foundBaseColor = false, foundAlbedo = false;
+    for (const auto& [name, value] : reloaded->params)
+    {
+        if (name == "baseColor")
+        {
+            foundBaseColor = true;
+            CHECK(value.type == Arcane::MatParamType::Color);
+            CHECK(value.f[0] == 1.0f);   // untouched by the albedo edit
+        }
+        else if (name == "albedo")
+        {
+            foundAlbedo = true;
+            CHECK(value.type == Arcane::MatParamType::Texture);
+            CHECK(value.tex == newAlbedo);   // the edit survived Save + reload
+        }
+    }
+    CHECK(foundBaseColor);
+    CHECK(foundAlbedo);
+}
+
 TEST_CASE("ShaderEditorDocument resolves, and refuses, instance parent chains", "[editor][material]")
 {
     const fs::path dir = TempDir("chains");

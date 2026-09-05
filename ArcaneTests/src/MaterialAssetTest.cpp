@@ -478,3 +478,134 @@ TEST_CASE("A malformed material param is dropped WITH a diagnostic", "[diagnosti
 
     store.UninstallEngineSink();
 }
+
+// F2b Task 13: EditorAppProject.cpp's CreateMaterialAt(path, MaterialSurface::
+// Mesh) mints exactly this shape -- kind "mesh", NO snippet, NO graph,
+// `baseColor`/`albedo` as saved params (the F2a-declared pair). CreateMaterialAt
+// itself needs a live EditorApp/project (a GPU-backed host, out of reach for a
+// CPU-only [material] test), so this round-trips the identical asset shape at
+// the layer that IS reachable headlessly, then reads the params back exactly
+// the way MeshMaterialCache's OwnBaseColor/OwnAlbedo do (whole-vector scan by
+// name AND declared type -- see MeshMaterialCache.cpp's own comments).
+TEST_CASE("A mesh material created with no snippet/graph round-trips baseColor and albedo",
+         "[material]")
+{
+    const auto dir = TempDir("mesh_create");
+    const auto file = dir / "hero.arcmat";
+
+    MaterialAssetData data;
+    data.id = Guid::Generate();
+    data.name = "Hero";
+    data.kind = "mesh";
+    const Guid albedoTex = Guid::Generate();
+    data.params.emplace_back("baseColor", MatParamValue::MakeColor(1.0f, 1.0f, 1.0f, 1.0f));
+    data.params.emplace_back("albedo", MatParamValue::MakeTexture(albedoTex));
+
+    REQUIRE(SaveMaterialAsset(file, data));
+
+    const auto loaded = LoadMaterialAsset(file);
+    REQUIRE(loaded.has_value());
+    CHECK(loaded->kind == "mesh");
+    CHECK(loaded->snippet.empty());
+    CHECK_FALSE(loaded->graph.has_value());
+    REQUIRE(loaded->params.size() == 2);
+
+    bool foundBaseColor = false, foundAlbedo = false;
+    for (const auto& [name, value] : loaded->params)
+    {
+        if (name == "baseColor")
+        {
+            foundBaseColor = true;
+            CHECK(value.type == MatParamType::Color);
+            CHECK(value.f[0] == 1.0f);
+            CHECK(value.f[3] == 1.0f);
+        }
+        else if (name == "albedo")
+        {
+            foundAlbedo = true;
+            CHECK(value.type == MatParamType::Texture);
+            CHECK(value.tex == albedoTex);
+        }
+    }
+    CHECK(foundBaseColor);
+    CHECK(foundAlbedo);
+}
+
+// F2a's closing ruling, completed here (F2b Task 13): "a 'mesh'-kind material
+// ... ignores snippet/graph with one diagnostic". A hand-authored mesh file
+// carrying either field is dead content -- MeshMaterialCache never reads
+// snippet/graph -- and MaterialAsset.cpp's KindIgnoresSnippetGraph gate is
+// what turns that into ONE Problems-pane row instead of letting
+// LoadMaterialAsset's graph self-heal reach MaterialGraph.cpp's/
+// MaterialSource.cpp's own ARC_ENSURE guards, which fire at most once per
+// PROCESS (not once per offending ASSET) and never publish anywhere a user
+// looks.
+TEST_CASE("A mesh material's snippet/graph is ignored WITH ONE diagnostic, memoized per load",
+         "[material][diagnostics]")
+{
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+
+    const auto dir = TempDir("mesh_ignored");
+    const auto file = dir / "bad_mesh.arcmat";
+
+    // Hand-authored: kind "mesh" with BOTH a snippet and a graph -- the shape
+    // a re-kind (fullscreen/sprite -> mesh) via a hand edit could produce.
+    // The graph is a REAL one (Color -> Output) built the same way the
+    // "graph-only material self-heals" case above does, then serialized
+    // through the actual GraphToJson encoder rather than hand-typed JSON.
+    {
+        MaterialGraph pg;
+        GraphNode out{};
+        out.id = 1;
+        out.type = GraphNodeType::Output;
+        GraphNode color{};
+        color.id = 2;
+        color.type = GraphNodeType::ConstColor;
+        color.value[0] = 1.0f; color.value[1] = 0.5f;
+        color.value[2] = 0.25f; color.value[3] = 1.0f;
+        pg.nodes = { out, color };
+        GraphLink l;
+        l.fromNode = 2;
+        l.toNode = 1;
+        pg.links.push_back(l);
+        pg.nextId = 3;
+
+        nlohmann::json doc;
+        doc["id"] = Guid::Generate().ToString();
+        doc["type"] = "material";
+        doc["name"] = "bad";
+        doc["kind"] = "mesh";
+        doc["snippet"] = "float4 shade(Varyings v) { return 1; }\n";
+        doc["graph"] = GraphToJson(pg);
+        std::ofstream out2(file, std::ios::binary);
+        REQUIRE(out2.good());
+        out2 << doc.dump(2);
+    }
+
+    const auto loaded = LoadMaterialAsset(file);
+    REQUIRE(loaded.has_value());
+    CHECK(loaded->kind == "mesh");
+    CHECK(loaded->snippet.empty());          // ignored, not self-healed
+    CHECK_FALSE(loaded->graph.has_value());  // ignored, never parsed in
+
+    std::vector<Arcane::Diagnostic> rows = store.Snapshot();
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].code == "material.mesh.snippet_graph_ignored");
+    CHECK(rows[0].scope == Arcane::DiagScope::Material);
+    CHECK(rows[0].locator.kind == Arcane::DiagLocator::Kind::Asset);
+
+    // Reloading the SAME offending file must not duplicate the row --
+    // Diagnostics::Publish replaces the "material-load:<path>" key's whole
+    // set every call (the house memoization idiom shared with
+    // "material.param.dropped" above), so a hand-edited asset that never
+    // gets fixed produces exactly one row forever, never a growing pile
+    // across repeated reloads/watcher ticks.
+    const auto loadedAgain = LoadMaterialAsset(file);
+    REQUIRE(loadedAgain.has_value());
+    rows = store.Snapshot();
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].code == "material.mesh.snippet_graph_ignored");
+
+    store.UninstallEngineSink();
+}

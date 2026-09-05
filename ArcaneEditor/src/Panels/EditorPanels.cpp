@@ -1,4 +1,5 @@
 #include "Panels/EditorPanels.hpp"
+#include "Panels/AssetBrowser.hpp"   // AssetKindOf (F2b Task 13: the texture-asset panel's kind gate)
 #include "Scene/ComponentCatalog.hpp"
 #include "Panels/ConsoleBuffer.hpp"
 #include "Panels/DiagnosticStore.hpp"   // MatchesDiagnosticFilter, reused for the console's own text search
@@ -10,12 +11,15 @@
 #include "Panels/InspectorFields.hpp"
 #include "Panels/InspectorMeta.hpp"
 #include "Panels/InspectorView.hpp"
+#include "Panels/TextureMetaPanel.hpp"   // the .meta "texture" block's PURE read/merge-write (F2b Task 13)
 #include "App/PlayMode.hpp"
 #include "Scene/SelectionContext.hpp"
 
+#include <Arcane/AssetPipeline/TextureMetaSettings.hpp>   // the .meta "texture" block's four knobs (F2b Task 13)
 #include <Arcane/Base/Log.hpp>   // ARC_INFO -- Paste's foreign-clipboard notice
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
+#include <Arcane/Project/AssetId.hpp>   // AssetId::FromGuid (ResolveAsset's key)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Scene/Components.hpp>   // Arcane::Identity (the rename target)
 #include <Arcane/Sim/RunLoop.hpp>
@@ -226,6 +230,11 @@ namespace Arcane::Editor
                     // the dialog flow behind it is unchanged. Further asset
                     // types land here as they exist.
                     if (ImGui::MenuItem("Material...")) requests.newMaterial = true;
+                    // F2b Task 13: the surface picker's other creatable kind.
+                    // Sprite is still not offered here (see CreateMaterialAt's
+                    // own header comment) -- it is reached by re-kinding a
+                    // fullscreen document, never minted fresh.
+                    if (ImGui::MenuItem("Mesh Material...")) requests.newMeshMaterial = true;
                     ImGui::EndMenu();
                 }
                 // Act on the Assets panel's last-clicked row; greyed until one
@@ -1901,12 +1910,115 @@ namespace Arcane::Editor
         // untouched by a change scoped to vertical rhythm.
         constexpr float kInspectorFramePaddingY = 3.0f;
         constexpr float kInspectorItemSpacingY  = 4.0f;
+
+        // ---- F2b Task 13: the Inspector's texture-asset panel --------------
+        // Shown when the Asset Browser has a texture selected and NOTHING is
+        // entity-selected (DrawInspectorPanel's own tie-break). Spec sec 7:
+        // "a texture preview in the INSPECTOR" (PixelsFor's thumbnail) PLUS
+        // "the minimal inspector block" for the four .meta knobs -- spec
+        // sec 4's set exactly, never UE's eighty. This is the FIRST asset
+        // (as opposed to entity/component) content this panel has ever shown;
+        // it does not touch the entity-inspection code below at all beyond
+        // one early branch.
+
+        // Case-insensitive extension compare -- same rule AssetRegistry.cpp's
+        // own LowerExt uses, duplicated rather than shared (that one is file-
+        // local too; ArcaneEditor has at least two independent copies of this
+        // exact idiom already, an acknowledged stylistic duplication).
+        bool HasExtensionCI(const std::filesystem::path& p, std::string_view want)
+        {
+            std::string ext = p.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return ext == want;
+        }
+
+        // The four spec sec 4 knobs -- pinned, nothing more (the ceiling to
+        // grow into is UE's eight-ish core, never the eighty). Returns true
+        // on any edit THIS frame -- the caller merge-writes on that edge
+        // only, not every frame the block happens to be drawn.
+        bool DrawTextureMetaSettingsBlock(Arcane::AssetPipeline::TextureMetaSettings& settings)
+        {
+            bool changed = false;
+            int format = static_cast<int>(settings.format);
+            ImGui::SetNextItemWidth(120.0f);
+            if (ImGui::Combo("Format##texmeta", &format, "Auto\0Bc7\0Rgba8\0"))
+            {
+                settings.format =
+                    static_cast<Arcane::AssetPipeline::TextureMetaSettings::Format>(format);
+                changed = true;
+            }
+            if (ImGui::Checkbox("sRGB##texmeta", &settings.srgb))
+                changed = true;
+            if (ImGui::Checkbox("Generate Mips##texmeta", &settings.generateMips))
+                changed = true;
+            int maxSize = static_cast<int>(settings.maxSize);
+            ImGui::SetNextItemWidth(120.0f);
+            if (ImGui::DragInt("Max Size (0 = unlimited)##texmeta", &maxSize, 1.0f, 0, 16384))
+            {
+                settings.maxSize = maxSize > 0 ? static_cast<std::uint32_t>(maxSize) : 0;
+                changed = true;
+            }
+            return changed;
+        }
+
+        void DrawTextureAssetPanel(const Arcane::Project& project, const Arcane::Guid& guid,
+                                   const InspectorServices* services)
+        {
+            const auto path = project.ResolveAsset(Arcane::AssetId::FromGuid(guid));
+            if (!path)
+            {
+                ImGui::TextDisabled("(asset not found)");
+                return;
+            }
+            ImGui::TextUnformatted(path->stem().string().c_str());
+            ImGui::Separator();
+
+            // The preview: PixelsFor's thumbnail, through the chrome
+            // context's texture cache -- see InspectorServices::
+            // resolveTexturePreview's own comment for the ColorSpace::
+            // Display routing and why chrome rather than the viewport.
+            if (services && services->resolveTexturePreview)
+            {
+                const std::uint64_t texId = services->resolveTexturePreview(guid);
+                if (texId != 0)
+                    ImGui::Image(static_cast<ImTextureID>(texId), ImVec2(128.0f, 128.0f));
+                else
+                    ImGui::TextDisabled("(preview unavailable -- still cooking, or refused)");
+            }
+            else
+            {
+                ImGui::TextDisabled("(no preview vehicle)");
+            }
+
+            ImGui::Separator();
+
+            // The four .meta knobs apply to a COOKABLE source only: ".png" is
+            // the one extension CookSession.cpp's EnumerateTextureSources
+            // actually cooks this slice, even though AssetKindOf classifies
+            // several other extensions Texture too (.jpg/.tga/.bmp/.hdr).
+            // Anything else shows no editing surface rather than a block
+            // that silently writes settings nothing will ever read.
+            if (!HasExtensionCI(*path, ".png"))
+            {
+                ImGui::TextDisabled("import settings apply to .png sources only");
+                return;
+            }
+
+            std::filesystem::path metaPath = *path;
+            metaPath += ".meta";
+            Arcane::AssetPipeline::TextureMetaSettings settings =
+                ReadTextureMetaSettingsDisplay(metaPath);
+            if (DrawTextureMetaSettingsBlock(settings))
+                WriteTextureMetaSettingsMerged(metaPath, settings);
+        }
     }
 
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding,
                             const Arcane::Project* project, InspectorState& state,
-                            const InspectorServices* services, bool* open)
+                            const InspectorServices* services, bool* open,
+                            const Arcane::Guid& selectedAsset)
     {
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard.
         const EditGesture::ScopeGuard gestureGuard{ &undo, state.gesture };
@@ -1914,6 +2026,20 @@ namespace Arcane::Editor
         ImGui::Begin("Inspector", open);
         if (!sel.HasSelection())
         {
+            // F2b Task 13: no entity selected -- fall back to the Asset
+            // Browser's last click, but ONLY for a texture (the browser
+            // thumbnail GRID and per-kind property panels for everything
+            // else are out of scope this arc, spec sec 7).
+            if (project && selectedAsset.IsValid())
+            {
+                if (const auto mount = project->Registry().Resolve(selectedAsset);
+                    mount && Arcane::Editor::AssetKindOf(*mount) == Arcane::Editor::AssetKind::Texture)
+                {
+                    DrawTextureAssetPanel(*project, selectedAsset, services);
+                    ImGui::End();
+                    return;
+                }
+            }
             ImGui::TextDisabled("No selection");
             ImGui::End();
             return;

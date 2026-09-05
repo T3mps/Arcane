@@ -48,6 +48,20 @@ namespace Arcane
         {
             return kind == "sprite" || kind == "mesh";
         }
+
+        // "mesh" is the one kind that stitches NO shader source at all
+        // (MaterialSurface's own comment, Material/MaterialSource.hpp):
+        // MeshMaterialCache reads `baseColor`/`albedo` straight out of
+        // `params` and never touches MaterialSource/ShaderCompiler (its
+        // header's FAILURE DISCIPLINE block). Sprite still owns a real
+        // template, so it is NOT in this gate the way it IS in
+        // KindRefusesPassChains above -- these are two different questions
+        // ("does this kind have a pass-chain concept" vs "does this kind
+        // compile a snippet at all").
+        bool KindIgnoresSnippetGraph(std::string_view kind)
+        {
+            return kind == "mesh";
+        }
     }
 
     // Self-typed entry: {"type": "...", "value": ...}. Instances must load
@@ -259,11 +273,33 @@ namespace Arcane
         if (doc.contains("vertexSnippet") && doc["vertexSnippet"].is_string())
             data.vertexSnippet = doc["vertexSnippet"].get<std::string>();
 
+        // F2a's closing ruling, completed here (F2b Task 13): "a 'mesh'-kind
+        // material ... ignores snippet/graph with one diagnostic". Computed
+        // BEFORE the hasGraph branch below so that branch can skip the
+        // self-heal codegen call entirely for a mesh-kind file -- without
+        // this, a hand-authored graph-only "mesh" .arcmat would reach
+        // GenerateGraphSnippet(*data.graph, MaterialSurface::Mesh) and hit
+        // that function's own ARC_ENSURE guard (MaterialGraph.cpp), which
+        // fires once per PROCESS with no Problems-pane row rather than once
+        // per OFFENDING ASSET with one. Same reasoning covers
+        // MaterialTemplateFile/GenerateMaterialBindings's guards
+        // (MaterialSource.cpp): those are reached from
+        // ShaderEditorDocument::Rebuild(), which this loader cannot see, so
+        // that document guards mesh surface itself (see its own comment).
+        const bool meshIgnoresContent = !hasParent && data.kind == "mesh" &&
+                                        (hasGraph || !data.snippet.empty());
+
         if (hasGraph)
         {
             if (hasParent)
                 ARC_WARN("LoadMaterialAsset: '{}' is an instance with a graph -- graphs live "
                          "on base materials only; ignored", path.generic_string());
+            else if (meshIgnoresContent)
+            {
+                // Fall through to the shared diagnostic below -- data.graph
+                // stays nullopt (never assigned), never parsed via
+                // GraphFromJson, never handed to GenerateGraphSnippet.
+            }
             else if (auto g = GraphFromJson(doc["graph"]))
             {
                 data.graph = std::move(*g);
@@ -302,6 +338,30 @@ namespace Arcane
                 d.locator  = DiagLocator::Asset(data.id);
                 diagnostics.push_back(std::move(d));
             }
+        }
+
+        // ONE diagnostic covers BOTH fields (F2a's ruling names them
+        // together) -- never two rows for what is really one fact about the
+        // asset ("this kind carries no shader source"). Content is dropped
+        // unconditionally here so every downstream reader (MeshMaterialCache,
+        // the editor's ShaderEditorDocument, a future importer) sees the same
+        // clean "mesh materials have no snippet/graph" invariant rather than
+        // each having to re-derive "ignore it" on its own.
+        if (meshIgnoresContent)
+        {
+            ARC_WARN("LoadMaterialAsset: '{}' is a 'mesh' material -- its snippet/graph "
+                     "content is ignored (mesh materials read baseColor/albedo from saved "
+                     "params instead)", path.generic_string());
+            Diagnostic d;
+            d.severity = DiagSeverity::Warning;
+            d.scope    = DiagScope::Material;
+            d.code     = "material.mesh.snippet_graph_ignored";
+            d.message  = "'" + path.generic_string() + "' is a mesh material; its snippet/graph is ignored.";
+            d.detail   = "Mesh materials carry no shader source -- author baseColor/albedo as saved params.";
+            d.locator  = DiagLocator::Asset(data.id);
+            diagnostics.push_back(std::move(d));
+            data.snippet.clear();
+            data.graph.reset();
         }
 
         // Pass chain: fullscreen base materials only. Sprite and mesh kinds

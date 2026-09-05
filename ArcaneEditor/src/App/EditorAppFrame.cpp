@@ -591,6 +591,13 @@ namespace Arcane::Editor
         {
             CreateMaterialAt(*materialNew);
         }
+        // F2b Task 13: the mesh-surface twin, its own slot (DialogInbox's own
+        // comment) so this consumer can pass the right surface without a new
+        // request/thunk shape.
+        if (const auto meshMaterialNew = m_dialogs.meshMaterialNew.Take())
+        {
+            CreateMaterialAt(*meshMaterialNew, Arcane::MaterialSurface::Mesh);
+        }
         if (const auto materialOpen = m_dialogs.materialOpen.Take())
         {
             m_documents.OpenPath(*materialOpen);
@@ -2200,7 +2207,7 @@ namespace Arcane::Editor
                             menuReq.showInExplorer, menuReq.copyAssetPath);
         }
 
-        if (menuReq.newMaterial || menuReq.openMaterial)
+        if (menuReq.newMaterial || menuReq.newMeshMaterial || menuReq.openMaterial)
         {
             // Material dialogs start in the project's Content/ (the only place
             // a saved asset can register + resolve by GUID); no project = OS default.
@@ -2212,6 +2219,13 @@ namespace Arcane::Editor
                 m_gpu->Win().ShowSaveFileDialog(&EditorApp::PathPickedThunk,
                     new PathDialogRequest{ &m_dialogs.materialNew, m_dialogs.materialNew.Arm() },
                     "Arcane Material", "arcmat", defaultPath);
+            // F2b Task 13: its OWN slot (see DialogInbox's own comment) so
+            // ConsumeMaterialDialogResults can tell which surface to mint
+            // without a new request/thunk shape.
+            if (menuReq.newMeshMaterial)
+                m_gpu->Win().ShowSaveFileDialog(&EditorApp::PathPickedThunk,
+                    new PathDialogRequest{ &m_dialogs.meshMaterialNew, m_dialogs.meshMaterialNew.Arm() },
+                    "Arcane Mesh Material", "arcmat", defaultPath);
             if (menuReq.openMaterial)
                 m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
                     new PathDialogRequest{ &m_dialogs.materialOpen, m_dialogs.materialOpen.Arm() },
@@ -2686,10 +2700,14 @@ namespace Arcane::Editor
                                               m_scene.SavedStateId(),
                                               m_panelVis.OpenFlag(Arcane::Editor::PanelId::Outliner));
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Inspector))
+            // F2b Task 13: m_assetBrowser.selected is the trailing fallback --
+            // consulted only when nothing is entity-selected (DrawInspectorPanel's
+            // own tie-break).
             Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo,
                                                m_editBinding, m_runtime->CurrentProject(),
                                                m_inspector, &m_inspectorServices,
-                                               m_panelVis.OpenFlag(Arcane::Editor::PanelId::Inspector));
+                                               m_panelVis.OpenFlag(Arcane::Editor::PanelId::Inspector),
+                                               m_assetBrowser.selected);
 
         // (The hosted plugin's DrawUI now renders into its OWN ImGui context,
         // composited into the viewport texture above -- not the editor context.)

@@ -378,14 +378,22 @@ namespace Arcane
         // function emits a fullscreen snippet for a surface that has no
         // template to stitch it into.
         //
-        // REACHABLE, not theoretical: LoadMaterialAsset's graph self-heal
-        // calls GenerateGraphSnippet(*data.graph, MaterialSurfaceForKind(
-        // data.kind)) (MaterialAsset.cpp), so a hand-authored graph-only
-        // "mesh"-kind .arcmat reaches here today. One guard at the top rather
-        // than one per site: ARC_ENSURE dedups per CALL SITE, so two would
-        // mean two log lines for one call, and the whole function's output is
-        // surface-dependent -- there is no partial answer that is right.
-        // Closes when F2b/Task 8 gives Mesh a real template and a register map.
+        // [F2b Task 13: the one call site that made this REACHABLE is closed.
+        // LoadMaterialAsset's graph self-heal (MaterialAsset.cpp) now gates on
+        // KindIgnoresSnippetGraph BEFORE calling GenerateGraphSnippet -- a
+        // hand-authored graph-only "mesh"-kind .arcmat gets ONE Problems-pane
+        // diagnostic ("material.mesh.snippet_graph_ignored") there instead of
+        // reaching here at all. This guard now defends a call site nobody
+        // exercises (belt-and-suspenders against a FUTURE caller passing
+        // MaterialSurface::Mesh without knowing why that is wrong), the same
+        // shape MaterialTemplateFile/GenerateMaterialBindings's guards already
+        // had before this task (ShaderEditorDocument::Rebuild() gates mesh
+        // surface itself rather than ever calling them with it -- see its own
+        // comment).] One guard at the top rather than one per site: ARC_ENSURE
+        // dedups per CALL SITE, so two would mean two log lines for one call,
+        // and the whole function's output is surface-dependent -- there is no
+        // partial answer that is right. Closes when F2b/Task 8 gives Mesh a
+        // real template and a register map.
         ARC_ENSURE(surface != MaterialSurface::Mesh,
                    "GenerateGraphSnippet: MaterialSurface::Mesh has no graph codegen yet "
                    "(F2b/Task 8) -- generating against the fullscreen surface");

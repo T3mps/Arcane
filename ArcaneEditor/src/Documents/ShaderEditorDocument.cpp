@@ -102,6 +102,33 @@ namespace Arcane::Editor
             return "fullscreen";
         }
 
+        // The mesh kind's FIXED param decl list -- F2a's two declared params,
+        // `baseColor`/`albedo` (F2a spec sec 2's table; MeshMaterialCache.hpp's
+        // own header comment is the consumer-side citation). A mesh material
+        // carries no snippet, so there is no //@param text to
+        // parse a MaterialTemplate out of the usual way; this is the mesh
+        // decl path the params panel needs instead, built once per Rebuild()
+        // and fed through the SAME MaterialTemplate/MaterialInstance/
+        // DrawParamsPanel machinery every other surface uses -- baseColor
+        // draws through the ColorEdit arm, albedo through DrawTextureParam,
+        // both by ordinary MatParamType dispatch (WidgetFor). No sourceHash
+        // identity matters here (nothing compiles against it), so it is 0.
+        Arcane::MaterialTemplate MeshParamTemplate(const std::string& name)
+        {
+            std::vector<Arcane::ParamDecl> decls;
+            Arcane::ParamDecl baseColor;
+            baseColor.name = "baseColor";
+            baseColor.type = Arcane::MatParamType::Color;
+            baseColor.def  = Arcane::MatParamValue::MakeColor(1.0f, 1.0f, 1.0f, 1.0f);
+            decls.push_back(baseColor);
+            Arcane::ParamDecl albedo;
+            albedo.name = "albedo";
+            albedo.type = Arcane::MatParamType::Texture;
+            albedo.def  = Arcane::MatParamValue::MakeTexture(Arcane::Guid{});
+            decls.push_back(albedo);
+            return Arcane::MaterialTemplate::Build(name, /*sourceHash=*/0, std::move(decls));
+        }
+
         // One param edit as an undo step. The live edit already happened (the
         // ICommand contract); Undo restores the BEFORE override state (value or
         // no-override), Redo re-applies the AFTER. Doc-identity (review M3): the
@@ -1143,6 +1170,43 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::Rebuild()
     {
+        // Mesh materials are not authored OR compiled in this document
+        // (MaterialSurface's own comment, Material/MaterialSource.hpp): they
+        // stitch no shader source, and MeshMaterialCache reads baseColor/
+        // albedo straight out of saved params, never through MaterialSource/
+        // ShaderCompiler. This check runs BEFORE the compiler/sources guard
+        // below on purpose -- baseColor/albedo need neither a ShaderCompiler
+        // nor a ShaderSourceProvider to exist, so a mesh document opened with
+        // a bare DocServices{} (every basic headless test's shape, and a
+        // legitimate host state before those services exist) still gets its
+        // params bound. Without this guard ahead of that one, a mesh-kind
+        // document (openable since F2b Task 13's CreateMaterialAt surface
+        // argument) would either silently skip binding entirely (services
+        // absent) or -- once services exist -- call MaterialTemplateFile/
+        // BuildMaterialShaderSource with MaterialSurface::Mesh below, both of
+        // which silently fall back to the FULLSCREEN template/bindings (their
+        // own ARC_ENSURE guards) and submit a real compile job for HLSL
+        // nothing downstream ever reads. Invalidate whatever a PRIOR Rebuild
+        // left in flight (the surface picker locks on mesh, but a document
+        // can still open straight onto one), then bind the FIXED mesh decl
+        // list synchronously (MeshParamTemplate) so DrawParamsPanel has a
+        // template/instance to draw baseColor/albedo against -- there is no
+        // async compile step to wait for here, so PromotePendingInstance runs
+        // immediately rather than from a compile-job callback (BindIfComplete's
+        // own path).
+        if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
+        {
+            m_vsJob = m_psJob = 0;
+            m_vsBytes.clear();
+            m_psBytes.clear();
+            m_passJobs.clear();
+            m_parseErrors.clear();
+            m_pendingTemplate = std::make_shared<Arcane::MaterialTemplate>(MeshParamTemplate(m_title));
+            m_metas.assign(m_pendingTemplate->Params().size(), Arcane::ParamMeta{});
+            PromotePendingInstance();
+            return;
+        }
+
         if (!m_services.compiler || !m_services.sources)
             return;
 
@@ -2003,6 +2067,18 @@ namespace Arcane::Editor
 
             if (chainAvailable && m_inChainView)
                 DrawPassCanvas();
+            // A mesh base material has no snippet, no graph and no pass
+            // canvas to show here (Rebuild()'s own guard) -- falling through
+            // to DrawSnippetEditor would hand the user a live text box that
+            // edits `m_snippet`, which LoadMaterialAsset would then flag AND
+            // STRIP on the very next reload (MaterialAsset.cpp's
+            // KindIgnoresSnippetGraph diagnostic). Say so instead and point
+            // at where authoring actually happens.
+            else if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
+            {
+                ImGui::TextDisabled("mesh materials carry no shader source -- "
+                                    "author baseColor / albedo in the Material panel");
+            }
             // The canvas serves whichever pass is active and graph-owned;
             // text-owned passes -- and the vertex stage -- get the text editor.
             // Both fill the rest of the tab themselves (each measures the
@@ -2206,7 +2282,12 @@ namespace Arcane::Editor
             RegenerateFromGraph();
         }
         ImGui::SameLine();
-        if (HasErrors())
+        // Mesh materials never compile here (Rebuild()'s own guard) -- without
+        // this branch the fallback below would read "compiling..." forever,
+        // implying a stuck job that was never submitted in the first place.
+        if (meshSurface)
+            ImGui::TextDisabled("not compiled here");
+        else if (HasErrors())
             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "errors");
         else if (PreviewReady())
             ImGui::TextDisabled("ok");

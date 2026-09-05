@@ -313,9 +313,15 @@ namespace Arcane
     const char* MaterialTemplateFile(MaterialSurface surface)
     {
         // Mesh has no template file yet (see MaterialSurface's own comment in
-        // MaterialSource.hpp) -- nothing in F2a reaches this arm, since F2a
-        // never stitches a mesh shader source. Without a guard, a FUTURE
-        // caller that starts doing so would silently get the Fullscreen
+        // MaterialSource.hpp). F2b Task 13 gave mesh materials an authoring
+        // path (CreateMaterialAt's surface argument) and an open path
+        // (ShaderEditorDocument now loads them), which made this arm
+        // REACHABLE for the first time via Rebuild() -- closed there instead
+        // of here: Rebuild() checks `SurfaceOf(m_surface) == Mesh` before
+        // ever calling this function, and publishes the mesh-authoring story
+        // through the toolbar ("not compiled here") rather than through this
+        // guard. Without a guard HERE too, a FUTURE caller that starts
+        // calling this directly for Mesh would silently get the Fullscreen
         // template back: a wrong answer that compiles clean and renders
         // wrong, which is precisely the defect class this spec refuses
         // elsewhere. ARC_ENSURE reports it loudly (once per call site) while
@@ -340,8 +346,9 @@ namespace Arcane
                                          MaterialSurface surface,
                                          std::uint32_t chainInputs)
     {
-        // Same guard as MaterialTemplateFile above, and for the same reason:
-        // Mesh has no register map (cbuffer slot / texture base) yet, and the
+        // Same guard as MaterialTemplateFile above, and for the same reason
+        // (including the F2b Task 13 reachability note there): Mesh has no
+        // register map (cbuffer slot / texture base) yet, and the
         // `sprite`-only branch below would otherwise silently emit Fullscreen
         // bindings for it. Closes alongside MaterialTemplateFile's guard.
         ARC_ENSURE(surface != MaterialSurface::Mesh,

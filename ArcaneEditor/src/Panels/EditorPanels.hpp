@@ -49,6 +49,13 @@ namespace Arcane::Editor
         // nobody has open.
         bool fileMenuOpen = false;
         bool newMaterial = false;    // Assets -> Create -> Material... (save dialog; graph-owned)
+        // Assets -> Create -> Mesh Material... (save dialog; F2b Task 13).
+        // A separate flag rather than a second bool on newMaterial's request:
+        // the two mint DIFFERENT .arcmat shapes (graph-owned fullscreen vs.
+        // snippet/graph-less mesh) through the SAME dialog mechanics, and a
+        // distinct request keeps that a one-branch `if` at the consumer
+        // rather than a second parameter threading through MenuRequests.
+        bool newMeshMaterial = false;
         // NO MENU RAISES THIS TODAY (the restructure dropped File -> Open
         // Material...; the Assets panel double-click is the open path). The
         // request + its dialog handler stay wired for the wiring pass.
@@ -327,6 +334,15 @@ namespace Arcane::Editor
     struct InspectorServices
     {
         std::function<Arcane::Guid(const Arcane::Guid&)> mintSpriteForTexture;
+
+        // F2b Task 13: Guid -> an ImGui texture id (the raw nri::Texture*
+        // through uintptr_t, ImGuiNri's convention -- 0 = unavailable) for the
+        // Inspector's texture-asset preview. Resolves through the CHROME
+        // context's texture cache via Assets::PixelsFor -- see
+        // EditorApp::StageSpriteTables' own comment for why chrome, not the
+        // viewport. Null callback (every headless test) degrades to "no
+        // preview", same shape as a null mintSpriteForTexture.
+        std::function<std::uint64_t(const Arcane::Guid&)> resolveTexturePreview;
     };
 
     // Show the selected entity's components (via Registry::InspectEntity) and edit
@@ -405,9 +421,18 @@ namespace Arcane::Editor
         float labelColWidth = 0.0f;
     };
     // `open` is forwarded to ImGui::Begin (the tab's X button; null = no X).
+    // `selectedAsset` (F2b Task 13): the Asset Browser's last-clicked row
+    // (AssetBrowserState::selected). Consulted ONLY when there is no entity
+    // selection -- an entity selection always wins, matching every other
+    // "two things could occupy this panel" tie-break in the editor (e.g. the
+    // Material panel's own free function below routes the ACTIVE DOCUMENT,
+    // never a browser selection). A nil guid (the default) behaves exactly
+    // like the pre-Task-13 signature: "No selection" when nothing is
+    // entity-selected either.
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding,
                             const Arcane::Project* project, InspectorState& state,
                             const InspectorServices* services = nullptr,
-                            bool* open = nullptr);
+                            bool* open = nullptr,
+                            const Arcane::Guid& selectedAsset = Arcane::Guid{});
 }

@@ -707,6 +707,15 @@ project "ArcaneTests"
         -- reads in the Inspector, and EditorPanels.cpp is not compiled here --
         -- so anything left in the draw loop would have no coverage at all.
         "%{wks.location}/ArcaneEditor/src/Panels/InspectorMeta.cpp",
+        -- F2b Task 13: TextureMetaPanel (the Inspector's texture-asset
+        -- settings block's PURE half -- reading/merge-writing the ".meta"
+        -- sidecar's "texture" block) source-compiles into the test exe so
+        -- the [editor] units drive the merge-preserving write directly --
+        -- no ImGui in it at all, same InspectorMeta/ConsoleModel split
+        -- applied to this problem. EditorPanels.cpp (the ImGui half that
+        -- calls it) is not compiled here, same reason InspectorMeta's own
+        -- comment states.
+        "%{wks.location}/ArcaneEditor/src/Panels/TextureMetaPanel.cpp",
         -- Scene authoring: EditorCamera (the editor's own viewport pan/zoom/
         -- framing math + the framing-bounds sweep) source-compiles into the
         -- test exe so the [editor] units drive the PURE math headlessly -- no

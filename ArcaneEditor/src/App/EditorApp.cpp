@@ -788,6 +788,30 @@ namespace Arcane::Editor
         // through MintOrReuseSpriteForTexture), only the argument changes.
         m_inspectorServices.mintSpriteForTexture =
             [this](const Arcane::Guid& textureGuid) { return MintOrReuseSpriteForTexture(textureGuid); };
+
+        // F2b Task 13: the Inspector's texture-asset preview. ChromeGraph()
+        // does not exist yet at this stage (CreateGraphVehicles runs later,
+        // from Main()) -- looked up LIVE at call time instead, the same
+        // [this]-capture idiom resolveMeshAlbedoSlot above already relies on.
+        // Resolves through the CHROME context's texture cache (its
+        // SetPixelSupply lambda answers arbitrary content guids via
+        // Assets::PixelsFor as of this task -- see CreateGraphVehicles' own
+        // comment), NOT the viewport's: the viewport prefers the cooked
+        // artifact route for scene content (Task 7), and the preview wants
+        // PixelsFor's small thumbnail specifically. 0 (no ImGui texture) when
+        // there is no chrome context yet, no texture cache, or the guid does
+        // not resolve to any pixels (not yet cooked, refused, or not a
+        // texture at all) -- the caller degrades to "(preview unavailable)".
+        m_inspectorServices.resolveTexturePreview =
+            [this](const Arcane::Guid& guid) -> std::uint64_t
+        {
+            Arcane::NriGraphContext* chrome = ChromeGraph();
+            Arcane::NriTextureCache* cache = chrome ? chrome->Textures() : nullptr;
+            if (!cache)
+                return 0;
+            nri::Texture* tex = cache->Resolve(guid, Arcane::NriTextureCache::ColorSpace::Display);
+            return tex ? (std::uint64_t)(std::intptr_t)tex : 0;
+        };
         return true;
     }
 
@@ -1642,30 +1666,44 @@ namespace Arcane::Editor
         // A SYNTHETIC PER-RUN GUID, because this image is not a project asset
         // -- it is a file beside the exe -- and the cache's whole vocabulary is
         // Guids. Generated rather than hardcoded so it cannot collide with a
-        // real asset id in any project; the supply below is the only thing that
-        // answers it, and it answers nothing else (a real asset Guid arriving
-        // here returns null, which is the cache's own "not resident" path and
-        // is correct: the chrome context renders no scene content).
+        // real asset id in any project.
         //
         // ColorSpace::Display is load-bearing -- see NriTextureCache::ColorSpace.
         // maxSize 64 is StageEditorShell's own number, and the same reasoning:
         // ~2x the ~32px on-screen mark, so ImGui's single-tap bilinear only
         // minifies cleanly instead of aliasing a 550px source.
         if (Arcane::LoadDisplayPixels("data/images/arcane_logo.png", 64, m_graphLogoPixels))
-        {
             m_graphLogoId = Arcane::Guid::Generate();
-            ChromeGraph()->SetPixelSupply(
-                [this](const Arcane::Guid& id) -> const Arcane::PixelData*
-                {
-                    return id == m_graphLogoId ? &m_graphLogoPixels : nullptr;
-                });
+
+        // F2b Task 13: the supply now answers TWO things, not one -- the logo
+        // (checked first, an exact-guid match) and, for any OTHER guid, the
+        // Inspector's texture-asset preview via Assets::PixelsFor. Installed
+        // UNCONDITIONALLY (moved out of the `if` above) so the preview still
+        // resolves even on the rare boot where the logo PNG itself fails to
+        // load -- the two concerns are unrelated and one's failure must not
+        // silently take out the other. `id == m_graphLogoId` on a nil
+        // m_graphLogoId (the logo-failed case) never matches a real asset
+        // guid, so this degrades exactly like the old logo-only lambda did.
+        // Deliberately Display, not Srgb/the artifact route the viewport uses
+        // for scene content (NriTextureCache.hpp's own routing-rule comment):
+        // the preview wants PixelsFor's small THUMBNAIL as raw RGBA8, never a
+        // full cooked BC7/mip chain -- a real asset guid arriving here when
+        // m_runtime is null (never happens post-boot, but this lambda outlives
+        // any one project) returns null, the cache's own "not resident" path.
+        ChromeGraph()->SetPixelSupply(
+            [this](const Arcane::Guid& id) -> const Arcane::PixelData*
+            {
+                if (id == m_graphLogoId)
+                    return &m_graphLogoPixels;
+                return m_runtime ? m_runtime->AssetsFacade().PixelsFor(id) : nullptr;
+            });
+        if (m_graphLogoId.IsValid())
             if (Arcane::NriTextureCache* cache = ChromeGraph()->Textures())
                 if (nri::Texture* logo = cache->Resolve(
                         m_graphLogoId, Arcane::NriTextureCache::ColorSpace::Display))
                 {
                     m_graphLogoTexture = (std::uint64_t)(std::intptr_t)logo;
                 }
-        }
 
         // THE VIEWPORT, at the boot extent -- 0/0 asks for the default that
         // function names (1280x720; see BuildGraphViewportContext's own

@@ -1268,12 +1268,21 @@ namespace Arcane::Editor
             DialogSlot<std::string>       sceneSave;
             DialogSlot<std::string>       projectOpen;
             DialogSlot<std::string>       materialNew;
+            // Assets -> Create -> Mesh Material... (F2b Task 13). A SEPARATE
+            // slot rather than a surface flag riding PathDialogRequest: every
+            // other dialog kind here already gets its own slot, and SDL's
+            // save dialog fires the SAME PathPickedThunk trampoline for both
+            // -- the slot pointer baked into the PathDialogRequest at launch
+            // is what tells ConsumeMaterialDialogResults which surface to
+            // mint, with no new request/thunk shape to keep in lockstep.
+            DialogSlot<std::string>       meshMaterialNew;
             DialogSlot<std::string>       materialOpen;
             DialogSlot<InstanceNewResult> instanceNew;
             void ClearAll()
             {
                 sceneOpen.Clear(); sceneSave.Clear(); projectOpen.Clear();
-                materialNew.Clear(); materialOpen.Clear(); instanceNew.Clear();
+                materialNew.Clear(); meshMaterialNew.Clear();
+                materialOpen.Clear(); instanceNew.Clear();
             }
         };
         DialogInbox m_dialogs;
@@ -1300,7 +1309,17 @@ namespace Arcane::Editor
 
         // Mint a GRAPH-owned .arcmat (UE-model: nodes are the authoring tier)
         // + open its doc. Legacy text-owned files still open via OpenPath.
-        void CreateMaterialAt(std::filesystem::path path);
+        // `surface` selects the .arcmat kind: Fullscreen (default) mints the
+        // graph-owned starter (Color -> Output) this comment already
+        // described; Mesh (F2b Task 13) mints kind="mesh" with NO snippet
+        // and NO graph -- mesh materials stitch no shader source at all
+        // (MaterialSurface's own comment, Material/MaterialSource.hpp) -- and
+        // instead saves the F2a-declared `baseColor`/`albedo` params
+        // MeshMaterialCache reads directly. Sprite is not offered here: it is
+        // reached by re-kinding a fullscreen document via the shader
+        // editor's surface picker, never minted fresh.
+        void CreateMaterialAt(std::filesystem::path path,
+                              Arcane::MaterialSurface surface = Arcane::MaterialSurface::Fullscreen);
         void CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent);
         // Reuse-or-mint policy (sprite-asset spec, Section 3): exactly one
         // registered .arcsprite referencing `textureGuid` -> reuse its id;

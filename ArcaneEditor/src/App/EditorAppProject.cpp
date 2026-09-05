@@ -595,40 +595,68 @@ namespace Arcane::Editor
         return data.id;
     }
 
-    void EditorApp::CreateMaterialAt(std::filesystem::path path)
+    void EditorApp::CreateMaterialAt(std::filesystem::path path, Arcane::MaterialSurface surface)
     {
         if (path.extension() != ".arcmat")
             path += ".arcmat";
 
-        // UE-model: every new material is GRAPH-owned (freeform HLSL lives in
-        // Custom nodes; legacy text-owned .arcmat files still open fine).
-        // Starter = a Color wired to the Output -- never an empty canvas.
         Arcane::MaterialAssetData data;
         data.id = Arcane::Guid::Generate();
         data.name = path.stem().string();
-        data.kind = "fullscreen";
-        Arcane::MaterialGraph g;
-        Arcane::GraphNode out;
-        out.id = 1;
-        out.type = Arcane::GraphNodeType::Output;
-        out.posX = 420.0f;
-        out.posY = 200.0f;
-        Arcane::GraphNode color;
-        color.id = 2;
-        color.type = Arcane::GraphNodeType::ConstColor;
-        color.posX = 160.0f;
-        color.posY = 200.0f;
-        color.value[0] = 0.2f; color.value[1] = 0.8f;
-        color.value[2] = 1.0f; color.value[3] = 1.0f;
-        g.nodes = { out, color };
-        Arcane::GraphLink l;
-        l.fromNode = 2;
-        l.toNode = 1;
-        g.links.push_back(l);
-        g.nextId = 3;
-        auto gen = Arcane::GenerateGraphSnippet(g, Arcane::MaterialSurface::Fullscreen);
-        data.snippet = std::move(gen.snippet);
-        data.graph = std::move(g);
+
+        if (surface == Arcane::MaterialSurface::Mesh)
+        {
+            // Mesh materials stitch NO shader source (MaterialSurface's own
+            // comment, Material/MaterialSource.hpp) -- no snippet, no graph.
+            // The F2a-declared params ride as saved VALUES instead:
+            // MeshMaterialCache reads `baseColor`/`albedo` straight out of
+            // `params` by name (OwnBaseColor/OwnAlbedo), never through
+            // MaterialSource/ShaderCompiler. A LoadMaterialAsset that later
+            // finds a snippet or graph on a "mesh"-kind file treats it as
+            // dead content and ignores it with one diagnostic
+            // (MaterialAsset.cpp's KindIgnoresSnippetGraph) -- so this path
+            // never writes either field, keeping a freshly-created mesh
+            // material clean of that diagnostic.
+            data.kind = "mesh";
+            data.params.emplace_back("baseColor",
+                                     Arcane::MatParamValue::MakeColor(1.0f, 1.0f, 1.0f, 1.0f));
+            data.params.emplace_back("albedo",
+                                     Arcane::MatParamValue::MakeTexture(Arcane::Guid{}));
+        }
+        else
+        {
+            // UE-model: every new (fullscreen) material is GRAPH-owned
+            // (freeform HLSL lives in Custom nodes; legacy text-owned
+            // .arcmat files still open fine). Starter = a Color wired to the
+            // Output -- never an empty canvas. Sprite is not offered here
+            // (see this function's own header comment); a caller passing it
+            // would still route to this starter, since it is the only other
+            // surface CreateMaterialAt knows how to author from scratch.
+            data.kind = "fullscreen";
+            Arcane::MaterialGraph g;
+            Arcane::GraphNode out;
+            out.id = 1;
+            out.type = Arcane::GraphNodeType::Output;
+            out.posX = 420.0f;
+            out.posY = 200.0f;
+            Arcane::GraphNode color;
+            color.id = 2;
+            color.type = Arcane::GraphNodeType::ConstColor;
+            color.posX = 160.0f;
+            color.posY = 200.0f;
+            color.value[0] = 0.2f; color.value[1] = 0.8f;
+            color.value[2] = 1.0f; color.value[3] = 1.0f;
+            g.nodes = { out, color };
+            Arcane::GraphLink l;
+            l.fromNode = 2;
+            l.toNode = 1;
+            g.links.push_back(l);
+            g.nextId = 3;
+            auto gen = Arcane::GenerateGraphSnippet(g, Arcane::MaterialSurface::Fullscreen);
+            data.snippet = std::move(gen.snippet);
+            data.graph = std::move(g);
+        }
+
         if (!Arcane::SaveMaterialAsset(path, data))
         {
             ARC_WARN("Arcane Editor: could not create material at '{}'", path.generic_string());
