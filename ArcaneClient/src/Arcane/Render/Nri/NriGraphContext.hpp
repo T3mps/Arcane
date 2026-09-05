@@ -1238,6 +1238,17 @@ namespace Arcane
         // per guid that was ever resolved before its first successful
         // cook, bounded by kBindlessCapacity same as every other slot use).
         // A no-op for a guid that was never memoized here.
+        // FINAL-REVIEW NOTE (2026-09-04): the abandoned slot's descriptor is the
+        // SHARED checkerboard placeholder's own view, which NriTextureCache::Invalidate
+        // deliberately never touches, so the slot stays a valid view over a live texture
+        // for as long as this context does; if this whole context later tears down
+        // (Release()), the placeholder itself gets buried and the abandoned slot ends up
+        // pointing at a descriptor scheduled for destruction while BindlessTable was
+        // never told to release that specific slot -- a real gap against the reap
+        // ordering this class otherwise holds to (every live slot released before its
+        // descriptor dies), but only FORMALLY: the table and every MeshInstance that
+        // could ever reference that slot index die in the SAME teardown, so nothing ever
+        // samples it between the two events.
         void InvalidateMeshAlbedoSlot(const Guid& id) { m_meshAlbedoSlots.erase(id); }
 
     private:

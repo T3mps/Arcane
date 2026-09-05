@@ -478,6 +478,38 @@ namespace Arcane
     //     THE SCENE FILE FORMAT DID NOT MOVE: Scene::kSceneJsonVersion stays
     //     at 3. ReferenceProject and Gacha's Game are restamped with this
     //     change, the same precedent v16 through v20 set.
+    //
+    //     v21 LEDGER EXTENSION (final-review wave, 2026-09-04): F2b landed three
+    //     MORE `Assets` changes after Task 6 above, all under this SAME v21
+    //     number (no further bump) -- recorded here retroactively so this entry
+    //     is the COMPLETE v21 delta, not just what triggered it:
+    //       * Task 7: `ArtifactFor(const Guid&)` APPENDED after `Stats()` --
+    //         the tail of the class, per the established "new virtuals go at
+    //         the end" rule (Batcher2D.hpp's own precedent, cited at
+    //         `ArtifactFor`'s own declaration). An append does not reshuffle
+    //         any EXISTING slot the way Task 6's mid-class insert did, so it
+    //         does not independently demand a bump -- it rides this one.
+    //       * Task 12: `InvalidateArtifact(const Guid&)` APPENDED immediately
+    //         after `ArtifactFor`, same tail-append shape. Additive and
+    //         harmless on its own for the same reason.
+    //       * Task 12: `SetArtifactRefusalObserver`/`ContentArtifactRefusalObserved`/
+    //         `ContentArtifactRefusalDetail`/`ResetContentArtifactRefusal`
+    //         (Assets.hpp) are FREE `ARCANE_API` functions, not virtuals on
+    //         `Assets` at all -- new exported symbols, never a vtable-layout
+    //         concern for any module (stale or otherwise).
+    //       * Also Task 12: `JobSystem::Submit(std::function<void()>)`
+    //         (JobSystem.hpp) and `Runtime::Jobs()` (Base/Runtime.hpp) are
+    //         NON-VIRTUAL additions to PIMPL'd concrete classes -- no vtable
+    //         at all on that path, and no change to either class's own
+    //         `sizeof` as seen across the DLL boundary. Not part of this
+    //         bump's REASON; recorded here only so "what shipped under v21"
+    //         is the complete, honest answer.
+    //     MEASURED, not assumed: `grep -rn` for `ArtifactFor`,
+    //     `InvalidateArtifact`, `SetArtifactRefusalObserver`, `->Jobs()` and
+    //     `JobSystem` over BOTH game modules in the two trees --
+    //     ReferenceProject/Source/ and Gacha's Game/Source/ -- returns
+    //     nothing, so none of these three additions break either module
+    //     either.
     inline constexpr uint32_t kGamePluginABIVersion = 21;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the

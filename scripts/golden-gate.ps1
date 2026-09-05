@@ -625,9 +625,18 @@ try {
         #      (ReferenceProject/Intermediate/Artifacts) is a BUILD PRODUCT, not
         #      checked into git -- absent on a checkout nothing has ever built yet -- so
         #      this block tolerates a missing source by leaving the staged copy equally
-        #      empty (cleared, not populated) rather than refusing the whole gate: hosts
-        #      do not consume artifacts yet (F2b Task 5), so there is nothing here for a
-        #      missing source to silently break.
+        #      empty (cleared, not populated) rather than refusing THIS SCRIPT here.
+        #      STALE CLAIM CORRECTED (final-review wave, post-Task-8): this comment used
+        #      to say "hosts do not consume artifacts yet, so there is nothing here for a
+        #      missing source to silently break" -- false since Task 8's sprite cutover
+        #      made content ARTIFACT-ONLY. An empty staged Artifacts tree now means every
+        #      content texture on all four lanes hits ArtifactMissing: ArcaneRuntime exits
+        #      nonzero at the first refused texture (Task 6/8's refuse-never-limp
+        #      contract) and the editor lane's captures fail loudly too -- a HARD LANE
+        #      FAILURE, by design, not a silent nothing. This block's own tolerance is
+        #      narrowly for "the repo was just cloned and nothing has cooked ONCE yet", a
+        #      state the postbuild cook step corrects on the very next build -- it is not
+        #      a claim that an empty/missing Artifacts tree is harmless downstream.
         $stagedArtifacts = Join-Path $repoRoot "bin\$configDirName\$stageHost\ReferenceProject\Intermediate\Artifacts"
         if (Test-Path $stagedArtifacts) {
             Remove-Item -Path $stagedArtifacts -Recurse -Force
