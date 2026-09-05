@@ -215,6 +215,29 @@ namespace Arcane::Editor
         if (!project)
             return;
 
+        // Desk-fix 2: still-settling -- ask for a pass on every tick until the
+        // FIRST one completes (OnCookCompleted flips m_cookQueueSettling to
+        // false; see its own comment). Unconditional, not gated on any
+        // texture entry actually changing: this is what closes the settling
+        // window for a project with ZERO texture sources, where the loop
+        // below never finds one to trigger the C2 first-sighting branch, so
+        // nothing else here would ever produce a CookResult at all.
+        // CookQueue::NoteChanged() coalesces repeat calls while a pass is
+        // already running (or resubmits a cheap upToDate-only pass if none
+        // is), so ticking this every ~1 Hz costs nothing extra once settled.
+        //
+        // DELIBERATELY NOT forced any earlier than this (e.g. at
+        // OnProjectOpened, during boot stages): a first cut did exactly that
+        // and a desk check caught a reproducible DEVICE_LOST when the forced
+        // background cook's real work (import + BC7 compression + a file
+        // write) raced Main() -> CreateGraphVehicles()'s device creation.
+        // PollAssetWatch only ever runs from inside the main loop's
+        // PumpEditorDocuments, i.e. always after the device exists and always
+        // after THIS frame's own scene render -- see OnProjectOpened's own
+        // comment for the fuller account.
+        if (m_cookQueueSettling && m_cookQueue)
+            m_cookQueue->NoteChanged();
+
         // F2b desk-checkpoint fix: mid-session Content/ drop discovery. The
         // loop below can only watch what the registry ALREADY knows -- a
         // .png dropped into Content/ after project open has no registry
@@ -377,6 +400,20 @@ namespace Arcane::Editor
 
     void EditorApp::OnCookCompleted(const Arcane::AssetPipeline::CookResult& result)
     {
+        // Desk-fix 2: the FIRST CookProject pass for this project has now
+        // finished (this callback fires once per finished pass, from inside
+        // Pump() -- see this class's own threading contract at
+        // m_cookDiagnostics' declaration). Unconditional and idempotent: once
+        // this flips false it stays false until the next OnProjectOpened
+        // re-arms it, so every LATER pass's completion is a harmless no-op
+        // write here. This is what closes the settling window even for a
+        // project with ZERO texture sources -- PollAssetWatch's own forced
+        // NoteChanged() call (gated on m_cookQueueSettling, unconditional on
+        // any texture entry actually changing -- see its own comment)
+        // guarantees SOME pass, possibly a trivial nothing-to-cook one,
+        // always reaches this function.
+        m_cookQueueSettling = false;
+
         bool diagnosticsChanged = false;
 
         // Freshly cooked guids: the un-latch. Assets' own memo FIRST
@@ -815,6 +852,14 @@ namespace Arcane::Editor
         m_contentDiscoveryNext = 0.0;
         m_cookQueue.reset();
         m_cookDiagnostics.clear();
+        // Desk-fix 2: the settling window is meaningless without a live
+        // m_cookQueue -- reset alongside it so a stray call to the Assets
+        // facade's probe between this reset and the next OnProjectOpened (a
+        // project-less gap, or mid-switch) reads a defined, non-stale value.
+        // The probe closure itself also guards on `!m_cookQueue` (see
+        // OnProjectOpened's own comment), so this is belt-and-suspenders, not
+        // load-bearing on its own.
+        m_cookQueueSettling = false;
         // A parked LaunchStandalone cannot survive into a switch: OpenProject's
         // own Request is ignored while any intent is parked, so the modal
         // resolves first.

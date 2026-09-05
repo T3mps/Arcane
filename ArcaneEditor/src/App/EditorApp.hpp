@@ -1203,6 +1203,32 @@ namespace Arcane::Editor
         // in OnProjectOpened, destroyed in ResetPerProjectState, same
         // lifetime shape as m_resolver's per-project caches.
         std::optional<Arcane::Editor::CookQueue> m_cookQueue;
+        // Desk-fix 2 (the cook-pending quiet seam): true from the moment
+        // m_cookQueue is (re)constructed in OnProjectOpened until the FIRST
+        // CookProject pass for THIS project finishes (OnCookCompleted's first
+        // invocation after that construction) -- the "still settling" window
+        // that covers the boot race: frame 1's scene resolution runs strictly
+        // before the watcher's own first tick (PollAssetWatch, ~1 Hz), so
+        // EVERY texture guid the boot scene references is genuinely Missing at
+        // that instant, not broken. PollAssetWatch's own first tick forces
+        // that first pass to happen (an explicit NoteChanged() call, gated on
+        // THIS flag, not on any texture entry actually changing) specifically
+        // so this window closes even for a project with ZERO texture sources
+        // -- CookSession::CookProject's own source enumeration is empty in
+        // that case, so the forced pass completes trivially (no cooks, no
+        // failures) and still flips this flag, rather than leaving it stuck
+        // true for a session that never happens to trigger a cook.
+        // DELIBERATELY NOT forced any earlier (e.g. here in OnProjectOpened,
+        // during boot stages) -- see PollAssetWatch's own comment for the
+        // DEVICE_LOST a first cut of this hit by starting real background
+        // cook work before Main() -> CreateGraphVehicles() had a device up.
+        // Read (never written) by the SetCookPendingProbe closure installed on
+        // the Assets facade in the SAME OnProjectOpened block -- MAIN-THREAD
+        // ONLY, no mutex, same invariant m_cookDiagnostics documents below (the
+        // probe fires from the same main-thread-only scene-resolution /
+        // NriTextureCache::Resolve path). Reset to false in
+        // ResetPerProjectState alongside m_cookQueue itself.
+        bool m_cookQueueSettling = false;
         // Drains m_cookQueue's finished passes once per frame -- see
         // PumpEditorDocuments (EditorAppFrame.cpp), the same safe window
         // (strictly after this frame's render, strictly before the next
@@ -1213,7 +1239,9 @@ namespace Arcane::Editor
         // (installed once, in OnProjectOpened) forwards into -- see
         // EditorAppProject.cpp for what it actually does (Assets::
         // InvalidateArtifact, NriGraphContext::InvalidateContentTexture/
-        // InvalidateMeshAlbedoSlot, m_cookDiagnostics bookkeeping).
+        // InvalidateMeshAlbedoSlot, m_cookDiagnostics bookkeeping, and --
+        // desk-fix 2 -- closing m_cookQueueSettling's window on its first
+        // call after a project open).
         void OnCookCompleted(const Arcane::AssetPipeline::CookResult& result);
 
         // One row per guid this session has seen refused (via the per-
@@ -1264,6 +1292,11 @@ namespace Arcane::Editor
         // this session's own bookkeeping knows. See m_cookDiagnostics'
         // `permanent` field: true (pending) unless a PERMANENT row already
         // exists for `id`.
+        //
+        // REUSED VERBATIM (desk-fix 2), not duplicated, as the per-guid half
+        // of the Assets facade's own SetCookPendingProbe closure -- see
+        // m_cookQueueSettling's own comment for the other half (the
+        // project-wide "still settling" window that closes first).
         [[nodiscard]] bool IsCookPending(const Arcane::Guid& id) const;
         // Removes Artifacts/** files this project's registry no longer names
         // any live guid for (ArtifactStore::SweepOrphans) -- called once, at

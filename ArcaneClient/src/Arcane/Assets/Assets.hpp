@@ -196,6 +196,70 @@ namespace Arcane
         // just FAILED too, so a stale success memo from before the edit
         // cannot linger.
         virtual void InvalidateArtifact(const Guid& id) = 0;
+
+        // F2b desk-fix 2 (the cook-pending quiet seam): Guid -> "is a cook
+        // plausibly still pending for this asset, so a MISSING resolution right
+        // now should stay quiet rather than refuse loudly". Installs (or clears,
+        // with an empty std::function) the facade's own cook-pending probe --
+        // distinct from NriTextureCache::SetCookPendingOracle (a render-layer
+        // seam with the same shape, consulted after this one has already
+        // decided whether to log/latch at all).
+        //
+        // THE PROBLEM THIS CLOSES: opening an uncooked project resolves the
+        // scene on frame 1, strictly before the editor's ~1 Hz watcher has even
+        // taken its first tick (EditorAppProject.cpp's PollAssetWatch). Every
+        // texture guid the scene references is genuinely Missing at that
+        // instant -- not broken, just not cooked YET -- but until this seam
+        // existed, TextureInfoFor/PixelsFor/ArtifactFor refused it exactly like
+        // a permanently-broken artifact: an ERROR log, a memoized failure, and
+        // the process-wide ContentArtifactRefusalObserved latch, ALL for a
+        // condition that resolves itself within the same second once the first
+        // CookProject pass lands. The editor's own cook-completion invalidation
+        // (InvalidateArtifact above) was built to CLEAR that latch after the
+        // fact; this seam exists so the latch, the memo and the log never fire
+        // for this transient condition IN THE FIRST PLACE.
+        //
+        // CONSULTED ONLY on ArtifactRefusal::Missing (no cooked artifact at
+        // all) -- NEVER on HashMismatch or VersionNewerThanEngine. A
+        // present-but-invalid artifact is broken regardless of whether a cook
+        // is queued (RefuseArtifact's own "refuse, never limp" contract is
+        // unchanged for those two kinds).
+        //
+        // WHEN INSTALLED AND IT ANSWERS true for a Missing resolution, the
+        // accessor returns null QUIETLY: no ARC_ERROR, no AssetCache::
+        // PutFailure memo, no NoteContentArtifactRefusal latch. Deliberately NO
+        // memo -- there is nothing to un-latch when the cook lands, because
+        // nothing was latched; the very next ask re-runs ResolveArtifact from
+        // scratch and picks up the fresh artifact on its own. (On the render
+        // path this is cheap in practice because NriTextureCache::
+        // ResolveArtifactKey's own PendingCook branch throttles how often IT
+        // re-asks this facade -- see kPendingCookRepollInterval's comment; a
+        // caller that asks every frame with no throttle of its own pays for a
+        // fresh ResolveArtifact scan every time it is still pending, the same
+        // cost class InvalidateArtifact's promotion path already accepts.)
+        //
+        // WHEN ABSENT (the default -- every non-editor host, and the editor
+        // itself before a project is open) or when it answers false, behavior
+        // is EXACTLY today's: loud, memoized, latched, unaffected. RuntimeApp
+        // and every existing [assets]/[artifact] test that never installs one
+        // are untouched by this addition.
+        //
+        // THREADING: called from whatever thread first resolves the guid --
+        // today always the main thread, the SAME contract
+        // SetArtifactRefusalObserver's own doc comment states (every Assets
+        // accessor is reached from scene resolution / NriTextureCache::Resolve,
+        // both main-thread-only by their own contracts). A probe closure that
+        // reads shared state (the editor's own settling flag + its
+        // m_cookDiagnostics-backed IsCookPending) relies on that same
+        // invariant, exactly as m_cookDiagnostics' own "no cross-thread access
+        // is ever reachable" comment already documents for its reader.
+        //
+        // Appended at the END of the interface (ABI v21, same-arc addition --
+        // see ArtifactFor/InvalidateArtifact's own "NEW VIRTUALS GO AT THE END"
+        // precedent, which this mirrors): moves no existing vtable slot, but
+        // the class's shape changed again this arc, so ReferenceProject.slnx
+        // needs the same rebuild those two additions required.
+        virtual void SetCookPendingProbe(std::function<bool(const Guid&)> probe) = 0;
     };
 
     // -----------------------------------------------------------------

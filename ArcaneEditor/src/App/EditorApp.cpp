@@ -960,14 +960,59 @@ namespace Arcane::Editor
         // back down (m_cookQueue.reset()).
         if (const Arcane::Project* proj = m_runtime->CurrentProject())
         {
+            // Desk-fix 2: arm the settling window BEFORE the queue exists, so
+            // there is no gap between "m_cookQueue is live" and "the window
+            // says still settling" that a resolve landing on this exact frame
+            // could slip through.
+            m_cookQueueSettling = true;
+
             m_cookQueue.emplace(proj->Root(),
                 [this](std::function<void()> job) { m_runtime->Jobs().Submit(std::move(job)); });
             m_cookQueue->SetOnCookComplete(
                 [this](const Arcane::AssetPipeline::CookResult& r) { OnCookCompleted(r); });
 
+            // Desk-fix 2: the Assets-facade half of the cook-pending quiet seam
+            // (Assets.hpp's own doc comment on SetCookPendingProbe has the full
+            // contract). Reinstalled on every project open/switch -- harmless,
+            // since it is the SAME closure logic reading live `this` state each
+            // time, not a fresh capture of per-project data. `!m_cookQueue`
+            // guards the gap after ResetPerProjectState has torn the queue down
+            // but before a NEW project's OnProjectOpened reaches this point
+            // (a project-less interval, or mid-switch) -- answering false there
+            // preserves the "no probe installed" default (loud, as always)
+            // rather than stalling a genuine refusal on stale state.
+            m_runtime->AssetsFacade().SetCookPendingProbe(
+                [this](const Arcane::Guid& id)
+                {
+                    if (!m_cookQueue)
+                        return false;
+                    if (m_cookQueueSettling)
+                        return true;
+                    return IsCookPending(id);
+                });
+
             // Task 5 deferral, closed here (SweepArtifactOrphans' own
             // comment): once, at project open -- not on every cook pass.
             SweepArtifactOrphans();
+
+            // Desk-fix 2 does NOT force a CookQueue pass here, even though the
+            // settling window above needs SOME pass to eventually close it
+            // for a project with ZERO texture sources. A first cut did submit
+            // one right here (JobSystem::Submit, fire-and-forget) and a desk
+            // check caught why that is unsafe: this whole block runs during
+            // BOOT STAGES, strictly before Main() -> CreateGraphVehicles()
+            // has created the D3D12/Vulkan device -- starting REAL background
+            // work (texture import + BC7 compression + a file write) that
+            // early raced device creation on this machine and reproducibly
+            // took the device down (DEVICE_LOST inside the first
+            // --headless run, confirmed reproducible, confirmed absent the
+            // moment the forced call was removed and confirmed absent again
+            // on an already-cooked project that also runs a -- trivial --
+            // pass via the watcher). PollAssetWatch (EditorAppProject.cpp) is
+            // where the equivalent forced call now lives instead: it runs
+            // from inside the main loop's PumpEditorDocuments, unconditionally
+            // AFTER the device exists and AFTER this project's own frame 1
+            // has already rendered, so it cannot repeat this race.
         }
 
         EnsureScene();

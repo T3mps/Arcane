@@ -409,6 +409,21 @@ namespace Arcane
             // with no cooked artifact refuses by name rather than limping to stb.
             // Task 12's cook-completion invalidation is what clears a Missing memo
             // once a cook lands -- the editor's drop-a-png flow depends on that.
+            // Desk-fix 2: does a MISSING resolution for `id` deserve the quiet
+            // treatment instead of RefuseArtifact's loud one? Shared by all three
+            // accessors' refusal branches so the check never drifts between them --
+            // same "one function, every call site" idiom RefuseArtifact itself
+            // follows. Deliberately gated on ArtifactRefusal::Missing ONLY:
+            // HashMismatch/VersionNewerThanEngine never reach this branch true,
+            // because a present-but-invalid artifact is broken regardless of
+            // whether a cook is queued (see SetCookPendingProbe's own doc comment,
+            // "the never-quieted pin").
+            bool QuietlyPending(const Guid& id, ArtifactRefusal refusal) const
+            {
+                return refusal == ArtifactRefusal::Missing &&
+                       m_cookPendingProbe && m_cookPendingProbe(id);
+            }
+
             template <typename T>
             void RefuseArtifact(AssetCache<T>& cache, const std::string& key,
                                 const Guid& id, ArtifactRefusal refusal)
@@ -451,6 +466,10 @@ namespace Arcane
                 const ArtifactReadResult art = ResolveArtifact(id, resolved);
                 if (art.refusal != ArtifactRefusal::None || !art.artifact)
                 {
+                    // Desk-fix 2: a probe-quieted Missing returns null with NO log,
+                    // NO memo and NO latch -- see QuietlyPending's own comment.
+                    if (QuietlyPending(id, art.refusal))
+                        return nullptr;
                     // Missing lands here too (Task 8): no cooked artifact == refusal
                     // by name, never a silent stb decode of the source.
                     RefuseArtifact(m_pixels, key, id, art.refusal);
@@ -507,6 +526,10 @@ namespace Arcane
                 const ArtifactReadResult art = ResolveArtifact(id, resolved);
                 if (art.refusal != ArtifactRefusal::None || !art.artifact)
                 {
+                    // Desk-fix 2: a probe-quieted Missing returns null with NO log,
+                    // NO memo and NO latch -- see QuietlyPending's own comment.
+                    if (QuietlyPending(id, art.refusal))
+                        return nullptr;
                     // Missing lands here too (Task 8): artifact-only, no stbi_info probe.
                     RefuseArtifact(m_textureInfo, key, id, art.refusal);
                     return nullptr;
@@ -552,6 +575,10 @@ namespace Arcane
                 const ArtifactReadResult art = ResolveArtifact(id, resolved);
                 if (art.refusal != ArtifactRefusal::None || !art.artifact)
                 {
+                    // Desk-fix 2: a probe-quieted Missing returns null with NO log,
+                    // NO memo and NO latch -- see QuietlyPending's own comment.
+                    if (QuietlyPending(id, art.refusal))
+                        return nullptr;
                     // Missing included (Task 8) -- memoized like the other two accessors;
                     // Task 12's cook-completion invalidation is the un-latch.
                     RefuseArtifact(m_artifacts, key, id, art.refusal);
@@ -592,6 +619,15 @@ namespace Arcane
                 m_pixels.Evict(key);
                 m_textureInfo.Evict(key);
                 m_artifacts.Evict(key);
+            }
+
+            // Desk-fix 2: see Assets.hpp's own doc comment on SetCookPendingProbe for
+            // the full contract. A plain assignment -- like m_resolver, "last writer
+            // wins" -- and an empty std::function (the default: nothing has ever
+            // installed one) restores today's loud-always behavior exactly.
+            void SetCookPendingProbe(std::function<bool(const Guid&)> probe) override
+            {
+                m_cookPendingProbe = std::move(probe);
             }
 
             uint64_t TotalBytes() const
@@ -754,6 +790,10 @@ namespace Arcane
             uint64_t m_byteBudget;
             std::filesystem::path m_contentRoot;   // empty => exe-relative (legacy)
             AssetResolver m_resolver;              // empty => AssetId loads fail
+            // Desk-fix 2: empty => every Missing resolution refuses loudly and
+            // memoizes, exactly as before this seam existed (see
+            // SetCookPendingProbe's own doc comment in Assets.hpp).
+            std::function<bool(const Guid&)> m_cookPendingProbe;
             std::unordered_set<Guid> m_idFailures; // warn-once memo per unresolved id
             // Diagnostic mirror of the SLICE of m_idFailures that came from an
             // actually-installed resolver failing to resolve (ResolveId's third

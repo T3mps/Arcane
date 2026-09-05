@@ -230,6 +230,11 @@ namespace
         // invalidation.
         void InvalidateArtifact(const Arcane::Guid&) override {}
 
+        // Desk-fix 2, ABI v21 (interface-completeness only, same reasoning as
+        // ArtifactFor/InvalidateArtifact above): nothing in this suite drives
+        // the cook-pending quiet seam.
+        void SetCookPendingProbe(std::function<bool(const Arcane::Guid&)>) override {}
+
         int pixelsForCalls       = 0;
         int textureInfoForCalls  = 0;
         int evictingCalls        = 0;

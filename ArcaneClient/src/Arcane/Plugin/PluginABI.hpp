@@ -504,12 +504,23 @@ namespace Arcane
     //         `sizeof` as seen across the DLL boundary. Not part of this
     //         bump's REASON; recorded here only so "what shipped under v21"
     //         is the complete, honest answer.
+    //       * Desk-fix 2 (2026-09-05, the cook-pending quiet seam):
+    //         `SetCookPendingProbe(std::function<bool(const Guid&)>)`
+    //         APPENDED immediately after `InvalidateArtifact` -- the same
+    //         tail-append shape as Task 7/Task 12's three appends above, so it
+    //         does not independently demand a bump either. Consulted ONLY on
+    //         an `ArtifactRefusal::Missing` outcome (never HashMismatch/
+    //         VersionNewerThanEngine); absent -- the default for every
+    //         non-editor host, and the editor itself before this same arc's
+    //         wiring installs one -- preserves the existing loud/memoized/
+    //         latched refusal verbatim. See Assets.hpp's own doc comment on
+    //         this virtual for the full contract.
     //     MEASURED, not assumed: `grep -rn` for `ArtifactFor`,
-    //     `InvalidateArtifact`, `SetArtifactRefusalObserver`, `->Jobs()` and
-    //     `JobSystem` over BOTH game modules in the two trees --
-    //     ReferenceProject/Source/ and Gacha's Game/Source/ -- returns
-    //     nothing, so none of these three additions break either module
-    //     either.
+    //     `InvalidateArtifact`, `SetArtifactRefusalObserver`,
+    //     `SetCookPendingProbe`, `->Jobs()` and `JobSystem` over BOTH game
+    //     modules in the two trees -- ReferenceProject/Source/ and Gacha's
+    //     Game/Source/ -- returns nothing, so none of these additions break
+    //     either module either.
     inline constexpr uint32_t kGamePluginABIVersion = 21;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the

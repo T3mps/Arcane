@@ -737,3 +737,141 @@ TEST_CASE("assets: TextureInfoFor/ArtifactFor resolve the FRESH artifact through
 
     fs::remove_all(root, ec);
 }
+
+// ---- Desk-fix 2: SetCookPendingProbe -- the boot-race quiet seam --------------
+
+TEST_CASE("assets: cook-pending probe installed and true quiets a Missing resolution on ALL "
+          "THREE accessors -- no latch, no memo, heals WITHOUT InvalidateArtifact (desk-fix 2)",
+          "[assets][pixels][artifact][cook]")
+{
+    ScopedContentArtifactRefusalLatch latchGuard;
+    REQUIRE_FALSE(Arcane::ContentArtifactRefusalObserved());
+
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane_assets_artifact_sandbox" / "cook_pending_quiet";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "Content" / "textures");
+    fs::create_directories(root / "Intermediate" / "Artifacts" / "aa");
+    // Deliberately no .arcart yet -- ArtifactMissing, exactly the boot-race shape:
+    // a project just opened, the scene already resolved this guid, and the first
+    // CookProject pass has not landed yet.
+
+    const fs::path png = root / "Content" / "textures" / "big.png";
+    constexpr int w = 16, h = 16;
+    const std::vector<unsigned char> rgba = GradientRgba(w, h);
+    REQUIRE(stbi_write_png(png.string().c_str(), w, h, 4, rgba.data(), w * 4) != 0);
+    const Arcane::Guid guid = Arcane::Guid::Generate();
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(root / "Content");
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == guid) return png;
+        return std::nullopt;
+    });
+    assets->SetCookPendingProbe([](const Arcane::Guid&) { return true; });
+
+    CHECK(assets->TextureInfoFor(guid) == nullptr);
+    CHECK(assets->PixelsFor(guid) == nullptr);
+    CHECK(assets->ArtifactFor(guid) == nullptr);
+
+    // THE FIRST PIN: quiet -- unlike every other Missing case in this file, the
+    // process-wide refusal latch never fires.
+    CHECK_FALSE(Arcane::ContentArtifactRefusalObserved());
+
+    // THE SECOND PIN: no memo either. A cook lands afterward -- write the real
+    // artifact straight to disk -- with NO call to InvalidateArtifact, and
+    // resolution simply works on the very next ask (nothing was ever latched,
+    // so there is nothing to un-latch).
+    Arcane::AssetPipeline::TextureMetaSettings settings;
+    settings.format = Arcane::AssetPipeline::TextureMetaSettings::Format::Rgba8;
+    const std::vector<std::byte> sourceBytes = ReadWholeFileAsBytes(png);
+    const auto imported = Arcane::AssetPipeline::ImportTexture(sourceBytes, guid, settings);
+    REQUIRE(imported.has_value());
+    REQUIRE(Arcane::AssetPipeline::WriteTextureArtifact(
+        root / "Intermediate" / "Artifacts" / "aa" / "fixture.arcart",
+        imported->desc, imported->payload, imported->thumbRgba));
+
+    const Arcane::LoadedClientArtifact* artifact = assets->ArtifactFor(guid);
+    REQUIRE(artifact != nullptr);   // healed with NO InvalidateArtifact call
+    CHECK(artifact->info.width == static_cast<std::uint32_t>(w));
+
+    const Arcane::TextureInfo* info = assets->TextureInfoFor(guid);
+    REQUIRE(info != nullptr);
+    CHECK(info->width == static_cast<std::uint32_t>(w));
+
+    const Arcane::PixelData* pixels = assets->PixelsFor(guid);
+    REQUIRE(pixels != nullptr);
+
+    CHECK_FALSE(Arcane::ContentArtifactRefusalObserved());   // still never latched
+
+    fs::remove_all(root, ec);
+}
+
+TEST_CASE("assets: cook-pending probe returning false refuses loudly and memoizes, identical to "
+          "no probe installed at all (desk-fix 2)", "[assets][pixels][artifact][cook]")
+{
+    ScopedContentArtifactRefusalLatch latchGuard;
+    REQUIRE_FALSE(Arcane::ContentArtifactRefusalObserved());
+
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane_assets_artifact_sandbox" / "cook_pending_false";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "Content" / "textures");
+
+    const Arcane::Guid guid = Arcane::Guid::Generate();
+    const fs::path png = root / "Content" / "textures" / "plain.png";
+    const auto checker = CheckerPixels();
+    REQUIRE(stbi_write_png(png.string().c_str(), static_cast<int>(kCheckerW), static_cast<int>(kCheckerH),
+                           4, checker.data(), static_cast<int>(kCheckerW) * 4) != 0);
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(root / "Content");
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == guid) return png;
+        return std::nullopt;
+    });
+    assets->SetCookPendingProbe([](const Arcane::Guid&) { return false; });
+
+    CHECK(assets->ArtifactFor(guid) == nullptr);
+    CHECK(assets->ArtifactFor(guid) == nullptr);   // memoized: no retry storm
+
+    CHECK(Arcane::ContentArtifactRefusalObserved());
+    CHECK(Arcane::ContentArtifactRefusalDetail().find("ArtifactMissing") != std::string::npos);
+
+    fs::remove_all(root, ec);
+}
+
+TEST_CASE("assets: HashMismatch refuses loudly even with a cook-pending probe answering true -- "
+          "NEVER quieted, a present-but-invalid artifact is broken regardless of a pending cook "
+          "(desk-fix 2, watched)", "[assets][pixels][artifact][cook]")
+{
+    ScopedContentArtifactRefusalLatch latchGuard;
+    REQUIRE_FALSE(Arcane::ContentArtifactRefusalObserved());
+
+    const ArtifactSandbox sb = MakeArtifactSandbox("cook_pending_hashmismatch", 16, 16);
+
+    // Edit the STAGED source AFTER cooking, without recooking -- same shape as the
+    // HashMismatch case above, reproduced here with a probe that would quiet a
+    // Missing but must NOT quiet this.
+    {
+        std::vector<unsigned char> edited = GradientRgba(16, 16);
+        edited[0] = static_cast<unsigned char>(edited[0] ^ 0xFF);
+        REQUIRE(stbi_write_png(sb.sourcePng.string().c_str(), 16, 16, 4, edited.data(), 16 * 4) != 0);
+    }
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(sb.root / "Content");
+    assets->SetAssetResolver(SandboxResolver(sb));
+    assets->SetCookPendingProbe([](const Arcane::Guid&) { return true; });
+
+    CHECK(assets->TextureInfoFor(sb.guid) == nullptr);
+    CHECK(assets->PixelsFor(sb.guid) == nullptr);
+    CHECK(assets->ArtifactFor(sb.guid) == nullptr);
+
+    CHECK(Arcane::ContentArtifactRefusalObserved());
+    CHECK(Arcane::ContentArtifactRefusalDetail().find("HashMismatch") != std::string::npos);
+}
