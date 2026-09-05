@@ -44,6 +44,14 @@ namespace Arcane::Editor
             return;
         }
         doc["texture"] = settings.ToMetaJson();
+        // Plain truncate-overwrite, no temp+rename -- a DECISION, not an
+        // omission (task-review finding): AssetRegistry.cpp's own
+        // ResolveSidecarId writes its sidecar the same way, both readers here
+        // and there tolerate a torn read (a parse failure degrades to
+        // defaults/nullopt, never a crash), and atomic-write hardening for
+        // sidecars in general belongs to a dedicated pass across every writer
+        // if one ever proves necessary -- not a one-off fix bolted onto this
+        // single call site.
         std::ofstream out(metaPath, std::ios::binary);
         if (!out)
         {

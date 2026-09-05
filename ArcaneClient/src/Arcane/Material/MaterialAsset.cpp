@@ -286,7 +286,20 @@ namespace Arcane
         // (MaterialSource.cpp): those are reached from
         // ShaderEditorDocument::Rebuild(), which this loader cannot see, so
         // that document guards mesh surface itself (see its own comment).
-        const bool meshIgnoresContent = !hasParent && data.kind == "mesh" &&
+        //
+        // Routed through KindIgnoresSnippetGraph rather than a second inline
+        // `== "mesh"` (task-review finding): that predicate exists SPECIFICALLY
+        // as the one place this question is answered, the same role
+        // KindRefusesPassChains already plays for its own question -- a
+        // hardcoded literal here is exactly the drift the predicate's own
+        // comment says it exists to prevent.
+        //
+        // Checks `snippet`/`graph` only, per the F2a ruling's exact wording
+        // ("ignores snippet/graph with one diagnostic") -- `vertexSnippet` is
+        // deliberately OUTSIDE this diagnostic's scope today: F2a never gave
+        // mesh a vertex stage of its own, and widening the check would be
+        // answering a question nobody has asked yet.
+        const bool meshIgnoresContent = !hasParent && KindIgnoresSnippetGraph(data.kind) &&
                                         (hasGraph || !data.snippet.empty());
 
         if (hasGraph)
