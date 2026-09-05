@@ -28,6 +28,12 @@ namespace Arcane::AssetPipeline
 
         Format format = Format::Auto;   // Auto == Bc7 this slice (F2b Task 4: bc7enc_rdo, pinned
                                          // params, deterministic -- see TextureImporter.hpp)
+                                         // FromMetaJson parses the JSON string CASE-
+                                         // INSENSITIVELY (spec s4: auto|bc7|rgba8) and WARNS
+                                         // once per parse on an unrecognised value, falling
+                                         // back to Auto rather than throwing (I1 fix, final-
+                                         // review wave). ToMetaJson's own output spelling is
+                                         // unchanged ("Auto"/"Bc7"/"Rgba8").
         bool srgb = true;
         bool generateMips = true;
         std::uint32_t maxSize = 0;   // 0 == unlimited

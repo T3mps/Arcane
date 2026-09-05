@@ -198,6 +198,7 @@ project "ArcaneAssetPipeline"
         "%{IncludeDir.nlohmann}",   -- Task 3: TextureMetaSettings::FromMetaJson/ToMetaJson
         "%{IncludeDir.stb}",        -- Task 3: TextureImporter decode (stb_image) + StbImpl.cpp
         "%{IncludeDir.bc7enc_rdo}", -- Task 4: TextureImporter BC7 encode (bc7enc.h)
+        "%{IncludeDir.spdlog}",     -- I1 fix (final-review wave): TextureMetaSettings' WARN
     }
 
     defines {

@@ -1,5 +1,9 @@
 #include "Arcane/AssetPipeline/TextureMetaSettings.hpp"
 
+#include <Arcane/Util/Logger.hpp>
+
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <string>
 
@@ -7,11 +11,32 @@ namespace Arcane::AssetPipeline
 {
     namespace
     {
+        std::string ToLowerAscii(std::string s)
+        {
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return s;
+        }
+
+        // I1 fix (final-review wave, 2026-09-04): case-insensitive, matching spec s4's own
+        // spelling ("format (auto|bc7|rgba8)", lowercase) -- the parser used to require an
+        // EXACT "Auto"/"Bc7"/"Rgba8" match, silently falling back to Auto even for the
+        // spec's own documented lowercase spellings. An unrecognised string still falls
+        // back to `fallback` (never throws -- this stays as tolerant as every other field
+        // in this struct's FromMetaJson), but now WARNS once per parse so a hand-edited
+        // typo is visible instead of silently doing nothing. ToMetaJson's own output
+        // spelling is UNCHANGED by this fix (still "Auto"/"Bc7"/"Rgba8") -- round-trip
+        // through this engine's own writer is unaffected either way.
         TextureMetaSettings::Format FormatFromString(const std::string& s, TextureMetaSettings::Format fallback)
         {
-            if (s == "Auto")  return TextureMetaSettings::Format::Auto;
-            if (s == "Bc7")   return TextureMetaSettings::Format::Bc7;
-            if (s == "Rgba8") return TextureMetaSettings::Format::Rgba8;
+            const std::string lower = ToLowerAscii(s);
+            if (lower == "auto")  return TextureMetaSettings::Format::Auto;
+            if (lower == "bc7")   return TextureMetaSettings::Format::Bc7;
+            if (lower == "rgba8") return TextureMetaSettings::Format::Rgba8;
+
+            ::Arcane::Logger::Get("AssetPipeline")->warn(
+                "TextureMetaSettings: unrecognised \"format\" value '{}' in a .meta texture "
+                "block (expected auto|bc7|rgba8, case-insensitive) -- falling back to Auto", s);
             return fallback;   // unrecognised string -- keep the default rather than throw
         }
 

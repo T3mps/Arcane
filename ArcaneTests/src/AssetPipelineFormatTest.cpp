@@ -336,3 +336,73 @@ TEST_CASE("pipeline: an unrecognised section tag is skipped, not a refusal", "[p
     CHECK(loaded->payload == payloadBody);
     CHECK(loaded->thumbRgba == thumbBody);
 }
+
+// ---- I3 fix (final-review wave, 2026-09-04): unbounded mipCount reserve ------------------
+
+TEST_CASE("pipeline: ReadTextureArtifact refuses a crafted huge mipCount instead of throwing "
+          "bad_alloc (I3)", "[pipeline]")
+{
+    const fs::path dir = TempDir("huge_mipcount");
+    const fs::path path = dir / "huge_mipcount.arcart";
+
+    // MipTable body: just the count -- I3's crafted huge value, no actual mip entries
+    // follow, so mipCount claims far more entries than this section (or the whole file)
+    // could possibly hold.
+    std::vector<std::byte> mipTableBody;
+    PutU32(mipTableBody, 0xFFFFFFFFu);
+
+    const std::vector<std::byte> payloadBody = PatternBytes(8, 0x70);
+    const std::vector<std::byte> thumbBody = PatternBytes(4, 0x80);
+
+    std::vector<std::byte> file = EncodeHeader(/*artifactVersion*/ 1);
+
+    constexpr std::uint32_t kSectionCount = 3;
+    const std::uint64_t headerSize = file.size();
+    const std::uint64_t tableSize = 4 + kSectionCount * 20ULL;
+    std::uint64_t offset = headerSize + tableSize;
+
+    const std::uint64_t mipTableOffset = offset; offset += mipTableBody.size();
+    const std::uint64_t payloadOffset  = offset; offset += payloadBody.size();
+    const std::uint64_t thumbOffset    = offset; offset += thumbBody.size();
+
+    PutU32(file, kSectionCount);
+    PutU32(file, static_cast<std::uint32_t>(SectionTag::MipTable));  PutU64(file, mipTableOffset); PutU64(file, mipTableBody.size());
+    PutU32(file, static_cast<std::uint32_t>(SectionTag::Payload));   PutU64(file, payloadOffset);  PutU64(file, payloadBody.size());
+    PutU32(file, static_cast<std::uint32_t>(SectionTag::Thumbnail)); PutU64(file, thumbOffset);    PutU64(file, thumbBody.size());
+
+    PutBytes(file, mipTableBody);
+    PutBytes(file, payloadBody);
+    PutBytes(file, thumbBody);
+
+    WriteFile(path, file);
+
+    // THE pin: must refuse cleanly (nullopt), never throw std::bad_alloc trying to
+    // std::vector::reserve(0xFFFFFFFF) mip entries that could not possibly fit in a
+    // section body this small.
+    std::optional<LoadedArtifact> loaded;
+    REQUIRE_NOTHROW(loaded = ReadTextureArtifact(path));
+    CHECK_FALSE(loaded.has_value());
+}
+
+// ---- Minor fix (final-review wave): contentKind fails closed -----------------------------
+
+TEST_CASE("pipeline: ReadTextureArtifact refuses a non-Texture contentKind", "[pipeline]")
+{
+    const fs::path dir = TempDir("wrong_content_kind");
+    const fs::path path = dir / "wrong_content_kind.arcart";
+
+    const TextureArtifactDesc desc = MakeDesc();
+    const std::vector<std::byte> payload = PatternBytes(156, 0x10);
+    const std::vector<std::byte> thumb   = PatternBytes(8 * 4 * 4, 0x40);
+    REQUIRE(WriteTextureArtifact(path, desc, payload, thumb));
+    REQUIRE(ReadTextureArtifact(path).has_value());   // baseline
+
+    // contentKind is the single byte immediately after magic(4) + artifactVersion(4).
+    std::vector<std::byte> bytes = ReadFile(path);
+    REQUIRE(bytes.size() >= 9);
+    REQUIRE(bytes[8] == static_cast<std::byte>(static_cast<std::uint8_t>(ContentKind::Texture)));
+    bytes[8] = static_cast<std::byte>(0xEFu);   // a hypothetical future/unknown ContentKind
+    WriteFile(path, bytes);
+
+    REQUIRE_FALSE(ReadTextureArtifact(path).has_value());
+}

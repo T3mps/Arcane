@@ -14,6 +14,8 @@ namespace Arcane::AssetPipeline
         };
         // On-disk width of one section table entry: tag(u32) + offset(u64) + size(u64).
         constexpr std::uint64_t kSectionEntrySize = 4 + 8 + 8;
+        // On-disk width of one MipTable entry: offset(u64) + size(u64) + width(u32) + height(u32).
+        constexpr std::uint64_t kMipEntrySize = 8 + 8 + 4 + 4;
 
         [[nodiscard]] constexpr std::byte ByteOf(std::uint64_t v, int shift) noexcept
         {
@@ -213,6 +215,12 @@ namespace Arcane::AssetPipeline
 
         std::uint8_t contentKind = 0;
         if (!r.U8(contentKind)) return std::nullopt;
+        // Minor fix (final-review wave): fail closed on an unexpected contentKind rather
+        // than silently accepting it as this reader's own Texture-shaped body -- spares
+        // F2c's mesh-artifact author a texture reader that happily "parses" (misreads) a
+        // future artifact kind's bytes just because the fixed header widths still fit.
+        if (contentKind != static_cast<std::uint8_t>(ContentKind::Texture))
+            return std::nullopt;
         desc.contentKind = static_cast<ContentKind>(contentKind);
 
         if (!r.U64(desc.sourceGuid.hi)) return std::nullopt;
@@ -270,6 +278,17 @@ namespace Arcane::AssetPipeline
                 ByteReader mr(body.data(), body.size());
                 std::uint32_t mipCount = 0;
                 if (!mr.U32(mipCount)) return std::nullopt;
+
+                // I3 fix (final-review wave): same cheap sanity bound as the section
+                // table's own check above, same rationale -- each mip entry costs at
+                // least kMipEntrySize bytes on disk, so a mip count that could not
+                // possibly fit in THIS section's own body is corrupt. Without this, a
+                // crafted mipCount (e.g. 0xFFFFFFFF) would ask std::vector::reserve for
+                // ~64 GB and THROW std::bad_alloc out of this read instead of refusing
+                // it cleanly (nullopt).
+                if (static_cast<std::uint64_t>(mipCount) * kMipEntrySize > body.size())
+                    return std::nullopt;
+
                 desc.mips.clear();
                 desc.mips.reserve(mipCount);
                 for (std::uint32_t i = 0; i < mipCount; ++i)

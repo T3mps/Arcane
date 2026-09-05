@@ -24,11 +24,14 @@
 #include <Arcane/AssetPipeline/TextureImporter.hpp>
 #include <Arcane/AssetPipeline/TextureMetaSettings.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Util/Logger.hpp>
 
 #include <Json.hpp>
 #include <stb_image_write.h>
 
 #include <bc7decomp.h>
+
+#include <spdlog/sinks/base_sink.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -36,6 +39,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
+#include <string>
 #include <system_error>
 #include <vector>
 
@@ -296,6 +301,63 @@ TEST_CASE("pipeline: TextureMetaSettings JSON round-trip, including absent-block
     const TextureMetaSettings tolerant = TextureMetaSettings::FromMetaJson(partiallyWrong);
     CHECK(tolerant.srgb == true);        // default, wrong type ignored
     CHECK(tolerant.maxSize == 512u);     // well-typed field still read
+}
+
+namespace
+{
+    // Minimal capturing spdlog sink -- proves the I1 WARN actually fires without touching
+    // the process-wide Logger::Init/file-sink path (LoggerTest.cpp already owns that seam,
+    // and it is order-sensitive across a shared random-order Catch2 run: a second Init with
+    // a NEW path is silently ignored once any earlier test already installed a file sink).
+    // Pushed onto -- and popped back off -- the SPECIFIC "AssetPipeline" named logger's own
+    // sink list, so this probe cannot affect any other logger or any other test.
+    class CapturingSink : public spdlog::sinks::base_sink<std::mutex>
+    {
+    public:
+        std::vector<std::string> lines;
+
+    protected:
+        void sink_it_(const spdlog::details::log_msg& msg) override
+        {
+            lines.emplace_back(msg.payload.data(), msg.payload.size());
+        }
+        void flush_() override {}
+    };
+}
+
+// ---- I1 fix (final-review wave, 2026-09-04): case-insensitive format parse + WARN once -----
+
+TEST_CASE("pipeline: TextureMetaSettings format parse is case-insensitive; a garbage string "
+          "falls back to Auto and WARNS once (I1)", "[pipeline]")
+{
+    // Case-insensitive spellings (spec s4: auto|bc7|rgba8) all parse to the SAME values the
+    // exact-case spellings already did.
+    nlohmann::json lowerBc7; lowerBc7["format"] = "bc7";
+    CHECK(TextureMetaSettings::FromMetaJson(lowerBc7).format == TextureMetaSettings::Format::Bc7);
+
+    nlohmann::json upperBc7; upperBc7["format"] = "BC7";
+    CHECK(TextureMetaSettings::FromMetaJson(upperBc7).format == TextureMetaSettings::Format::Bc7);
+
+    nlohmann::json mixedRgba8; mixedRgba8["format"] = "RgBa8";
+    CHECK(TextureMetaSettings::FromMetaJson(mixedRgba8).format == TextureMetaSettings::Format::Rgba8);
+
+    nlohmann::json lowerAuto; lowerAuto["format"] = "auto";
+    CHECK(TextureMetaSettings::FromMetaJson(lowerAuto).format == TextureMetaSettings::Format::Auto);
+
+    // Garbage falls back to Auto AND warns -- watched via a temporary sink pushed onto the
+    // "AssetPipeline" named logger, removed again immediately after.
+    auto sink = std::make_shared<CapturingSink>();
+    spdlog::logger* logger = Arcane::Logger::Get("AssetPipeline");
+    logger->sinks().push_back(sink);
+
+    nlohmann::json garbage; garbage["format"] = "not-a-real-format";
+    const TextureMetaSettings result = TextureMetaSettings::FromMetaJson(garbage);
+
+    logger->sinks().pop_back();   // never leak this probe into any other test's logger
+
+    CHECK(result.format == TextureMetaSettings::Format::Auto);
+    REQUIRE(sink->lines.size() == 1u);
+    CHECK(sink->lines[0].find("not-a-real-format") != std::string::npos);
 }
 
 // ---- Thumbnail -----------------------------------------------------------------------------
