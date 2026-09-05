@@ -249,10 +249,12 @@ namespace Arcane
         // SetArtifactRefusalObserver's own doc comment states (every Assets
         // accessor is reached from scene resolution / NriTextureCache::Resolve,
         // both main-thread-only by their own contracts). A probe closure that
-        // reads shared state (the editor's own settling flag + its
-        // m_cookDiagnostics-backed IsCookPending) relies on that same
-        // invariant, exactly as m_cookDiagnostics' own "no cross-thread access
-        // is ever reachable" comment already documents for its reader.
+        // reads shared state (the editor's own settling flag, plus -- post-
+        // settling -- CookQueue::CookPending() and a filesystem exists() check
+        // against the guid's registered source; see EditorApp.cpp's
+        // OnProjectOpened for exactly what it consults and why row-absence in
+        // m_cookDiagnostics must NEVER be that signal) relies on that same
+        // main-thread-only invariant.
         //
         // Appended at the END of the interface (ABI v21, same-arc addition --
         // see ArtifactFor/InvalidateArtifact's own "NEW VIRTUALS GO AT THE END"

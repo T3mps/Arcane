@@ -875,3 +875,179 @@ TEST_CASE("assets: HashMismatch refuses loudly even with a cook-pending probe an
     CHECK(Arcane::ContentArtifactRefusalObserved());
     CHECK(Arcane::ContentArtifactRefusalDetail().find("HashMismatch") != std::string::npos);
 }
+
+// ---- Review fix: the probe's part (b) must be a POSITIVE signal --------------
+//
+// A critical review finding on the FIRST cut of desk-fix 2: the editor's probe
+// fell through to IsCookPending(id) post-settling, whose OWN default is
+// "pending" whenever m_cookDiagnostics has NO ROW for the guid yet. That
+// default is safe for NriTextureCache's render-layer oracle (a wrong guess
+// there only costs a checkerboard-vs-refused VISUAL choice, and RefuseArtifact
+// fires independently regardless of what that oracle answers) -- but reusing
+// it as the FACADE's OWN cook-pending probe made it load-bearing for whether
+// RefuseArtifact fires AT ALL, and RefuseArtifact is the ONLY thing that ever
+// creates a row in m_cookDiagnostics in the first place. For a guid CookSession
+// will NEVER attempt (its source renamed/deleted after registration, or a
+// format EnumerateTextureSources skips), no row ever forms: "presumed pending"
+// forever, quiet forever, unmemoized, unlatched, unreported -- a closed loop,
+// and a regression against "refusals stay loud" for exactly the broken-
+// reference case that matters most.
+//
+// The fix (editor-side, EditorApp.cpp's SetCookPendingProbe installation):
+// post-settling, quiet now requires a POSITIVE signal -- the cook queue has
+// ACTIVE work (CookQueue::CookPending()) AND the guid's registered source
+// still exists on disk (a real filesystem exists() check). Since
+// EditorApp.cpp/.hpp are not part of ArcaneTests' compiled sources (only a
+// few hand-picked pure-logic files are -- see the workspace premake5.lua's
+// ArcaneTests file list), these three tests pin the SAME decision shape at
+// the Assets-facade level the editor's probe actually plugs into: a
+// test-installed probe modeling "queue active AND source exists" with a REAL
+// std::filesystem::exists() check against a REAL file this test creates and
+// deletes, proving the facade's behavior responds correctly to that signal in
+// all three of the review's required scenarios.
+TEST_CASE("assets: cook-pending probe's positive-signal shape -- queue IDLE means never quiet "
+          "regardless of row-absence, closing the review's row-absence-implies-pending "
+          "regression (desk-fix 2, review fix)", "[assets][pixels][artifact][cook]")
+{
+    ScopedContentArtifactRefusalLatch latchGuard;
+    REQUIRE_FALSE(Arcane::ContentArtifactRefusalObserved());
+
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane_assets_artifact_sandbox" / "review_fix_queue_idle";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "Content" / "textures");
+
+    const Arcane::Guid guid = Arcane::Guid::Generate();
+    const fs::path png = root / "Content" / "textures" / "orphan.png";
+    const auto checker = CheckerPixels();
+    REQUIRE(stbi_write_png(png.string().c_str(), static_cast<int>(kCheckerW), static_cast<int>(kCheckerH),
+                           4, checker.data(), static_cast<int>(kCheckerW) * 4) != 0);
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(root / "Content");
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == guid) return png;
+        return std::nullopt;
+    });
+
+    // Models the editor's post-settling probe with the queue-active half of the
+    // AND FALSE -- no cook is running or queued for this project at all. Source
+    // existence is irrelevant when the queue has no activity (the top-level
+    // operator is AND), so this alone must answer false, exactly like "no probe
+    // installed at all."
+    const bool queueActive = false;
+    assets->SetCookPendingProbe([&](const Arcane::Guid&)
+    {
+        if (!queueActive) return false;
+        std::error_code existsEc;
+        return fs::exists(png, existsEc);
+    });
+
+    // THE REGRESSION PIN: pre-fix, IsCookPending's row-absence default would
+    // have answered "pending" here (nothing has ever refused this guid yet, so
+    // no row exists) and quieted this forever. Post-fix, "queue idle" answers
+    // false unconditionally -- loud, exactly pre-seam.
+    CHECK(assets->TextureInfoFor(guid) == nullptr);
+    CHECK(assets->PixelsFor(guid) == nullptr);
+    CHECK(assets->ArtifactFor(guid) == nullptr);
+
+    CHECK(Arcane::ContentArtifactRefusalObserved());
+    CHECK(Arcane::ContentArtifactRefusalDetail().find("ArtifactMissing") != std::string::npos);
+
+    fs::remove_all(root, ec);
+}
+
+TEST_CASE("assets: cook-pending probe's positive-signal shape -- queue active AND the guid's "
+          "source still exists on disk quiets the legitimate pending case (desk-fix 2, "
+          "review fix)", "[assets][pixels][artifact][cook]")
+{
+    ScopedContentArtifactRefusalLatch latchGuard;
+    REQUIRE_FALSE(Arcane::ContentArtifactRefusalObserved());
+
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane_assets_artifact_sandbox" / "review_fix_active_exists";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "Content" / "textures");
+
+    const Arcane::Guid guid = Arcane::Guid::Generate();
+    const fs::path png = root / "Content" / "textures" / "pending.png";
+    const auto checker = CheckerPixels();
+    REQUIRE(stbi_write_png(png.string().c_str(), static_cast<int>(kCheckerW), static_cast<int>(kCheckerH),
+                           4, checker.data(), static_cast<int>(kCheckerW) * 4) != 0);
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(root / "Content");
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == guid) return png;
+        return std::nullopt;
+    });
+
+    const bool queueActive = true;
+    assets->SetCookPendingProbe([&](const Arcane::Guid&)
+    {
+        if (!queueActive) return false;
+        std::error_code existsEc;
+        return fs::exists(png, existsEc);
+    });
+
+    CHECK(assets->ArtifactFor(guid) == nullptr);
+    CHECK_FALSE(Arcane::ContentArtifactRefusalObserved());   // quiet: the legitimate pending case
+
+    fs::remove_all(root, ec);
+}
+
+TEST_CASE("assets: cook-pending probe's positive-signal shape -- queue active but the guid's "
+          "source has been DELETED still refuses loudly, the file-exists conjunct firing "
+          "(desk-fix 2, review fix, watched)", "[assets][pixels][artifact][cook]")
+{
+    ScopedContentArtifactRefusalLatch latchGuard;
+    REQUIRE_FALSE(Arcane::ContentArtifactRefusalObserved());
+
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane_assets_artifact_sandbox" / "review_fix_active_deleted";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "Content" / "textures");
+
+    const Arcane::Guid guid = Arcane::Guid::Generate();
+    const fs::path png = root / "Content" / "textures" / "deleted.png";
+    const auto checker = CheckerPixels();
+    REQUIRE(stbi_write_png(png.string().c_str(), static_cast<int>(kCheckerW), static_cast<int>(kCheckerH),
+                           4, checker.data(), static_cast<int>(kCheckerW) * 4) != 0);
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(root / "Content");
+    // The registry keeps resolving this guid to `png` even after the file is
+    // deleted below -- exactly "a registry entry outliving its file" (the
+    // review finding's own phrasing).
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == guid) return png;
+        return std::nullopt;
+    });
+
+    const bool queueActive = true;
+    assets->SetCookPendingProbe([&](const Arcane::Guid&)
+    {
+        if (!queueActive) return false;
+        std::error_code existsEc;
+        return fs::exists(png, existsEc);
+    });
+
+    // Delete the source AFTER registration -- a rename/delete race, the exact
+    // scenario that regressed pre-fix.
+    fs::remove(png, ec);
+    REQUIRE_FALSE(fs::exists(png));
+
+    // THE PIN: queue activity ALONE is not enough -- the file-exists conjunct is
+    // what fires here, refusing loudly even mid-pass.
+    CHECK(assets->ArtifactFor(guid) == nullptr);
+    CHECK(Arcane::ContentArtifactRefusalObserved());
+    CHECK(Arcane::ContentArtifactRefusalDetail().find("ArtifactMissing") != std::string::npos);
+
+    fs::remove_all(root, ec);
+}

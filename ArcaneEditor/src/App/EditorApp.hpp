@@ -1293,10 +1293,20 @@ namespace Arcane::Editor
         // `permanent` field: true (pending) unless a PERMANENT row already
         // exists for `id`.
         //
-        // REUSED VERBATIM (desk-fix 2), not duplicated, as the per-guid half
-        // of the Assets facade's own SetCookPendingProbe closure -- see
-        // m_cookQueueSettling's own comment for the other half (the
-        // project-wide "still settling" window that closes first).
+        // NOT reused by the Assets facade's own SetCookPendingProbe closure
+        // (desk-fix 2, revised after a review finding) -- this function's
+        // OWN default, "pending" whenever m_cookDiagnostics has no row for
+        // `id` yet, is safe ONLY here, where a wrong guess costs nothing more
+        // than a checkerboard-vs-refused VISUAL choice and RefuseArtifact
+        // still fires independently regardless of what this returns. Reusing
+        // it as SetCookPendingProbe's own per-guid signal would have made
+        // THAT default load-bearing for whether RefuseArtifact fires AT ALL
+        // -- a closed loop for any guid CookSession will never attempt (see
+        // OnProjectOpened's own comment on the probe for the full account).
+        // The probe instead asks a POSITIVE question of its own: is the cook
+        // queue doing active work, and does this guid's registered source
+        // still exist on disk. This function's own callers (NriTextureCache's
+        // oracle) are unaffected and unchanged.
         [[nodiscard]] bool IsCookPending(const Arcane::Guid& id) const;
         // Removes Artifacts/** files this project's registry no longer names
         // any live guid for (ArtifactStore::SweepOrphans) -- called once, at

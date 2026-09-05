@@ -971,24 +971,77 @@ namespace Arcane::Editor
             m_cookQueue->SetOnCookComplete(
                 [this](const Arcane::AssetPipeline::CookResult& r) { OnCookCompleted(r); });
 
-            // Desk-fix 2: the Assets-facade half of the cook-pending quiet seam
-            // (Assets.hpp's own doc comment on SetCookPendingProbe has the full
-            // contract). Reinstalled on every project open/switch -- harmless,
-            // since it is the SAME closure logic reading live `this` state each
-            // time, not a fresh capture of per-project data. `!m_cookQueue`
-            // guards the gap after ResetPerProjectState has torn the queue down
-            // but before a NEW project's OnProjectOpened reaches this point
-            // (a project-less interval, or mid-switch) -- answering false there
-            // preserves the "no probe installed" default (loud, as always)
-            // rather than stalling a genuine refusal on stale state.
+            // Desk-fix 2 (revised, review fix): the Assets-facade half of the
+            // cook-pending quiet seam (Assets.hpp's own doc comment on
+            // SetCookPendingProbe has the full contract). Reinstalled on every
+            // project open/switch -- harmless, since it is the SAME closure
+            // logic reading live `this` state each time, not a fresh capture
+            // of per-project data. `!m_cookQueue` guards the gap after
+            // ResetPerProjectState has torn the queue down but before a NEW
+            // project's OnProjectOpened reaches this point (a project-less
+            // interval, or mid-switch) -- answering false there preserves the
+            // "no probe installed" default (loud, as always) rather than
+            // stalling a genuine refusal on stale state.
+            //
+            // POST-SETTLING, THIS IS A POSITIVE SIGNAL -- review finding
+            // (critical, fixed here): the first cut fell through to
+            // IsCookPending(id) here, whose OWN default is "pending" whenever
+            // m_cookDiagnostics has NO ROW for the guid. That default is safe
+            // for NriTextureCache's oracle (a wrong guess there only costs a
+            // checkerboard-vs-refused VISUAL choice, and RefuseArtifact fires
+            // independently regardless), but it is NOT safe reused HERE,
+            // because RefuseArtifact is what CREATES a row in the first
+            // place (via OnArtifactRefused) -- gating RefuseArtifact itself
+            // on a "no row means pending" default is a closed loop with no
+            // exit for any guid CookSession will NEVER attempt (its source
+            // renamed/deleted after registration, or a format
+            // EnumerateTextureSources skips): no row ever forms, so it stays
+            // "presumed pending" -- quiet, unmemoized, unlatched, un-reported
+            // -- forever. That is a regression against "refusals stay loud"
+            // for exactly the broken-reference case that matters most, so
+            // row-ABSENCE must never imply pending here. Quiet now requires
+            // an ACTUAL positive signal: the cook queue has active work
+            // (CookQueue::CookPending() -- a pass submitted, running, or
+            // marked dirty for a follow-up; see CookQueue.hpp) AND the guid's
+            // OWN registered source still exists on disk right now (a
+            // filesystem exists() call per ask -- cheap enough to pay
+            // unconditionally: the only callers that ask about a guid stuck
+            // in this branch at all are ones ResolveArtifact already found
+            // Missing, and the highest-frequency one, NriTextureCache's own
+            // PendingCook re-poll, already throttles ITS OWN calls into this
+            // facade via kPendingCookRepollInterval, so this exists() rides
+            // an already-throttled ask, not a hot per-frame one). A deleted/
+            // renamed source answers false here even while the queue is mid-
+            // pass, which is exactly the fix: that guid refuses LOUDLY again,
+            // matching pre-seam behavior. IsCookPending/SetCookPendingOracle
+            // (the RENDER-layer oracle) is UNCHANGED and untouched -- it
+            // keeps its own, independent, and now-safely-inconsequential
+            // "no row means pending" default, since RefuseArtifact no longer
+            // depends on it for anything.
             m_runtime->AssetsFacade().SetCookPendingProbe(
                 [this](const Arcane::Guid& id)
                 {
                     if (!m_cookQueue)
                         return false;
                     if (m_cookQueueSettling)
-                        return true;
-                    return IsCookPending(id);
+                        return true;   // (a) still-settling window
+
+                    // (b) POSITIVE signal only, post-settling: active queue
+                    // work AND the guid's own source still on disk. No queue
+                    // activity at all -> nothing legitimately pending -> a
+                    // Missing resolution refuses loudly, exactly pre-seam.
+                    if (!m_cookQueue->CookPending())
+                        return false;
+
+                    const Arcane::Project* liveProj = m_runtime->CurrentProject();
+                    if (!liveProj)
+                        return false;
+                    const auto sourcePath =
+                        liveProj->ResolveAsset(Arcane::AssetId::FromGuid(id));
+                    if (!sourcePath)
+                        return false;   // not even registered -- nothing pending
+                    std::error_code existsEc;
+                    return std::filesystem::exists(*sourcePath, existsEc);
                 });
 
             // Task 5 deferral, closed here (SweepArtifactOrphans' own
