@@ -1,6 +1,9 @@
 # F2b — the asset cook (texture slice) and the bindless material table
 
-**Status:** design, 2026-09-04. Approved in brainstorming; implementation plan to follow.
+**Status:** **LANDED 2026-09-04.** All 14 plan tasks landed on `main` in place (no
+worktree), from `2ea2f812` (Task 1) through `c360aa5c` (Task 13), plus Task 14's own CI
+stage (`83885083`), baseline re-derivation (`b2690b0e`) and this record. See `## Landed —
+2026-09-04` below for the measured close.
 
 **Provenance.** F2b of the 3D foundations pivot (decided 2026-08-21). Three inputs bind it:
 
@@ -401,3 +404,153 @@ vendoring rule), RDO-capable. Not a copy of anyone — a fit.
 | Header dimensionality | `dimension` + `arrayOrDepth` reserved NOW at 2D/1, slice-major rule fixed | T2-T5 need array/cube/3D — including T3's cubemap array, this pipeline's founding artifact; reserving costs two fields, bumping later reshapes the mip table |
 | Slice-one sampler | One immutable trilinear sampler in the mesh pipeline layout | Task 8 adds the mesh pipeline's FIRST sampler; bindless samplers are a separate, smaller, HW-capped domain (UE splits them) — out of scope |
 | T3's HDR encoder | Not bc7enc_rdo (it has no BC6H — contract corrected) | T3 selects its own (cmp_core / ISPC / Betsy); the reserved enum is unaffected |
+
+## Landed — 2026-09-04
+
+Implemented on `main` as fourteen task commits `2ea2f812`..`c360aa5c` (Tasks 1-13), then
+Task 14's own CI-stage commit (`83885083`), baseline-re-derivation commit (`b2690b0e`) and
+this record — sixteen in all. All work landed in place, no worktree, per the arc's setup
+ruling. Gacha's ABI 21 restamp is `5923da65` (unpushed, per the standing ABI-bump follow-up
+below). Everything measured below is on the dev desk (RTX 3070, D3D12 + Vulkan), not
+projected, from a full three-config `/t:Rebuild` — zero `warning C` in Debug, Release or
+Dist.
+
+### Which levers held
+
+Every lever named in §12's decisions log held as designed, with one correction to what it
+implied would happen at Task 8 (below):
+
+- **The whole pipeline (§3-§4).** `arccook.exe --project ReferenceProject --check` reports
+  `clean` (exit 0) from all three configs' own `bin/` directories against the tree this arc
+  produced — the postbuild cook hooks in `ArcaneRuntime`/`ArcaneEditor`/`ArcaneTests` and the
+  CLI's own `CookSession::CheckProject` agree on "nothing stale" every time they were asked.
+- **Full sprite migration, sprite cutover (§5, Task 8).** The `LoadPngRgba` content route is
+  gone from `PixelsForResolved`/`TextureInfoForResolved`; every content accessor is
+  artifact-only. Watched firing once, both directions: a scratch `ReferenceProject` copy with
+  `Intermediate/Artifacts` deleted makes `ArcaneRuntime --headless --frames 3` exit **5**
+  (`content artifact refusal: ArtifactMissing: d7f389fd-...`); the unmodified baseline copy
+  exits **0**.
+- **Bindless (§6, Task 8's execution).** `BindlessTable` ships with the safety-net destructor
+  ruling, `mesh.hlsl` samples by `materialSlot` packed NaN-safe into
+  `normalMatrixCol0.w`, and the four-cube proof plus the cooked-BC7-albedo integration case
+  both pass on both backends (`[gpu]`, below).
+- **Editor layer (§7, Tasks 9-13).** Watcher-triggered background cook (`.meta` edits
+  included), completion invalidation (Assets memo → texture cache → mesh-albedo slot),
+  refusal publishing to the Problems pane, orphan sweep at open, verify/capture/bless waiting
+  on pending cooks (`compare-cook-refused` triaged `Indeterminate`), mesh-material authoring
+  with the inspector preview and the 4-knob `.meta` block — all landed as designed; UI-only
+  correctness rests on code review plus the desk checkpoint (§Step 6 below), per this arc's
+  own testing carve-out.
+- **ABI 21 (§8).** `Assets`'s vtable move bumped plugin ABI 20 → 21. Both `.arcproj` files
+  restamped and verified: `ReferenceProject/ReferenceProject.arcproj:6` reads `"abi": 21`;
+  Gacha's `Game/Aphelyon.arcproj` restamped at `5923da65`. **Gacha's Game DLL was already
+  stale against ABI 20 before this arc's restamp** — the restamp does not fix that; it is the
+  user's rebuild, named again in the follow-ups below.
+
+### The re-bless: a MEASURED NO-OP, correcting §12's "once, restaged to both hosts"
+
+§12's decisions log recorded the re-bless as something that would happen — "Once, mid-arc,
+restaged to both hosts." **It did not need to.** Task 8's own evidence (recorded before any
+bless was attempted): the Release golden gate ran all four lanes green with `diffCount=0,
+maxLocalDifference=0.0` **against the existing, un-reblessed references**, both before and
+(re-measured at this close) after the arc's remaining tasks landed. BC7 renders
+byte-identical to the blessed PNGs for `ReferenceProject`'s actual content — `uv_marker` is a
+flat, block-aligned-quadrant texture, exactly the structure BC7 encodes losslessly. The
+references were never touched.
+
+The evidence chain, so route-liveness is not confused with "nothing was tested":
+
+1. **Deletion A/B (Task 8).** Artifacts deleted → `ArcaneRuntime --headless --frames 3` exits
+   5 with `ArtifactMissing`; artifacts present → exits 0. The cooked-artifact route is
+   genuinely load-bearing, not a dead branch the gate happens to not exercise.
+2. **The staged artifact's header format byte.** `format=BC7, 64x64, mips=7, srgb=1` — the
+   pixels reaching the gate really did go through the BC7 encoder, not a silent RGBA8
+   fallback that would trivially compare byte-identical for the wrong reason.
+3. **The gate itself, twice.** Task 8: Debug, 4 lanes, `diffCount=0`. This close: Release, 4
+   lanes, `gatePassed: true`, `diffCount=0` / `maxLocalDifference=0.0` on all four
+   (`ArcaneRuntime/dx12` `PassedOnFallback` at `resolvedLevel=shared`, the same
+   pre-existing/unrelated single-backend-reference gap Arc B recorded — `vulkan/` is the only
+   backend carrying its own `runtime-scene.png`).
+
+No reference PNG in this repo was ever overwritten by this arc.
+
+### Measured figures
+
+`ArcaneTests.exe "~[gpu]"`, re-derived per configuration and committed to
+`scripts/automation-baselines.json`:
+
+| Configuration | Assertions | Cases | Previous baseline (arc start) |
+|---|---|---|---|
+| Debug | **53739** | **1402** | 52462 / 1316 |
+| Release | **53739** | **1402** | 52462 / 1316 |
+| Dist | **53671** | **1396** | 52394 / 1310 |
+
++1277 assertions / +86 cases in every configuration; the Debug↔Dist gap holds at exactly the
+68 assertions / 6 cases the baseline file has always documented. Reconciled against source:
+raw `TEST_CASE(` count in `ArcaneTests/src` rose 1343 → 1435 (+92) across the arc (base
+`02af8711` vs `c360aa5c`), of which 6 are newly `[gpu]`-tagged (27 → 33, matching that
+sweep's own rise) and 86 fall inside `~[gpu]` — exactly the measured rise.
+
+`ArcaneTests.exe "[gpu]"` (Debug): **62274 assertions in 33 test cases, all passing** — the
+arc's new GPU cases (the bindless four-cube proof, the cooked-BC7-albedo integration case,
+the BC7 multi-mip upload case, and the new pixel-probe cases) plus the cases that predate it.
+
+`ArcaneTests.exe "[witness]"` (Debug): **40 assertions in 2 test cases, both passing** — W1
+and W3 (Arc B), unaffected by this arc.
+
+Golden gate, Release: `gatePassed: true` read from
+`bin/Release-windows-x86_64-md/golden-gate-summary.json`, four lanes, `diffCount=0` and
+`maxLocalDifference=0.0` on every lane (`ArcaneRuntime/dx12/runtime-scene` is
+`PassedOnFallback` at `resolvedLevel=shared`, pre-existing and unrelated). `-SelfTest`
+(Debug, the script's default): **`SELF-TEST PASSED -- all 4 lane(s) launched and caught the
+broken scene`**, written to the separate `golden-gate-selftest-summary.json` so a self-test
+can never overwrite a real gate verdict.
+
+### The witness-flake check — dispositive: pre-existing, not this arc's
+
+Task 13 flagged an intermittent Release-only `"[gpu]"` failure: 2 of 33 cases, both in
+`WitnessScenariosTest.cpp` (W1, W3), on wall-clock timing margins that test's own header
+documents as ~2s of headroom. This close re-ran Release `"[gpu]"` at HEAD (`c360aa5c`) and
+the flake recurred on the first run: **`test cases: 33 | 31 passed | 2 failed`, `assertions:
+62245 | 62243 passed | 2 failed`**, W1 (`WitnessScenariosTest.cpp:134`) and W3 (`:203`) both
+failing.
+
+Per the ruled extra, `55b8a42e` (Task 12 close, well before Task 13's own change) was checked
+out into a **detached worktree**, generated and built Release from scratch (zero `warning
+C`), and re-run: **identical result** — `test cases: 33 | 31 passed | 2 failed`, `assertions:
+62245 | 62243 passed | 2 failed`, the *same two cases* (W1 `:134`, W3 `:203`) failing. This is
+dispositive: **the flake predates this entire arc** (it reproduces at a commit before Task 13
+even started), confirming Task 13's own conclusion that its source changes are not the
+cause, and narrowing the defect to Arc B's witness harness itself (wall-clock timing margins
+around a real subprocess spawn). Debug's `"[gpu]"` was clean on every run this session. The
+worktree was removed and the main checkout was never moved off `c360aa5c`. Not chased
+further here — recorded for whoever next touches `WitnessScenariosTest.cpp`.
+
+One further, unrelated, single-run anomaly worth naming rather than burying: one `~[gpu]`
+Debug run captured mid-session (used only for a `check-baselines.ps1` round-trip, not the
+run cited for the committed baseline) recorded exactly one failed assertion inside
+`HostBootTest.cpp`'s boot-scene test, with an oddly-attributed source line landing outside
+that test's own lexical body. An immediate rerun on the identical binary was clean
+(53739/1402, all passing), and every other run this session — including the run actually
+cited for the committed baseline — was clean. Recorded, not chased, in the same spirit as
+this arc's own precedent for single-run flakes that clear on rerun; if it recurs, the odd
+line attribution is the first thing to run down (possibly a Catch2 JSON-reporter artifact
+rather than a real cross-test assertion).
+
+### Ruled follow-ups, recorded for whoever picks them up
+
+- **Document-preview `NriGraphContext` instances are not invalidated on cook completion.**
+  Viewport-only; heals on close/reopen. Not fixed this arc (ruled).
+- **The editor keeps LAST KNOWN GOOD on a failed recook.** Deliberate, documented behaviour,
+  not a bug.
+- **Gacha needs a cook before Aphelyon boots**, now that the sprite route is artifact-only.
+  Two distinct follow-ups, neither this arc's: (a) a one-line `scripts/setup.ps1` addition in
+  the Gacha repo to run `arccook` as part of setup (the editor heals in-process on open;
+  headless runs do not); (b) the user's Game-DLL rebuild against ABI 21 — it was already
+  stale against ABI 20 before this arc's restamp, so the restamp alone does not clear it.
+
+### Against §10's out-of-scope list
+
+Nothing in it was touched: no browser thumbnail grid, no Batcher2D bindless, no BC5/BC6H
+encode, no streaming, no F2c (mesh import) work. After F2b, per the F2a sequencing ruling,
+F2c is next.
