@@ -44,6 +44,26 @@ pipeline {
                         bat 'ci\\msbuild.cmd Arcane.slnx /p:Configuration=Dist    /m /v:minimal /nologo'
                     }
                 }
+                stage('Asset cook check') {
+                    // F2b Task 14 (design doc :318): arccook --check is the nothing-stale
+                    // gate. ArcaneRuntime/ArcaneEditor/ArcaneTests each carry a postbuild
+                    // hook that just cooked ReferenceProject's Content/ into
+                    // Intermediate/Artifacts as a side effect of the Build stage above --
+                    // this re-asks CookSession::CheckProject the same question
+                    // CookProject just answered, so a broken or incomplete postbuild cook
+                    // fails HERE, not three stages downstream as a wrong-looking golden
+                    // gate render. Exit 0 clean, 2 stale, 1 broken (bad --project etc.) --
+                    // `bat` already fails the build on any nonzero exit, so no explicit
+                    // errorlevel handling is needed.
+                    //
+                    // Debug + Release only, mirroring the Tests stage below: Dist builds
+                    // in this pipeline but is never gated further once it does (same gap
+                    // the ~[gpu] baseline note already documents).
+                    steps {
+                        bat 'bin\\Debug-windows-x86_64-md\\arccook\\arccook.exe   --project ReferenceProject --check'
+                        bat 'bin\\Release-windows-x86_64-md\\arccook\\arccook.exe --project ReferenceProject --check'
+                    }
+                }
                 stage('Tests (incl [gpu])') {
                     steps {
                         bat 'if not exist test-results mkdir test-results'
