@@ -668,3 +668,72 @@ TEST_CASE("assets: InvalidateArtifact clears a memoized ArtifactMissing refusal 
 
     fs::remove_all(root, ec);
 }
+
+TEST_CASE("assets: TextureInfoFor/ArtifactFor resolve the FRESH artifact through the REAL "
+          "facade even with a stale same-guid artifact still physically on disk (C1b, "
+          "final-review wave)", "[assets][pixels][artifact]")
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane_assets_artifact_sandbox" / "c1b_stale_and_fresh";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "Content" / "textures");
+    // "aa" sorts before "zz" -- the adversarial shard ordering (stale visited before
+    // fresh) the pre-fix single-candidate FindArtifactForGuid always lost to.
+    fs::create_directories(root / "Intermediate" / "Artifacts" / "aa");
+    fs::create_directories(root / "Intermediate" / "Artifacts" / "zz");
+
+    const fs::path png = root / "Content" / "textures" / "big.png";
+    constexpr int w = 16, h = 16;
+    const std::vector<unsigned char> currentPixels = GradientRgba(w, h);
+    REQUIRE(stbi_write_png(png.string().c_str(), w, h, 4, currentPixels.data(), w * 4) != 0);
+    const Arcane::Guid guid = Arcane::Guid::Generate();
+
+    Arcane::AssetPipeline::TextureMetaSettings settings;
+    settings.format = Arcane::AssetPipeline::TextureMetaSettings::Format::Rgba8;
+
+    // The FRESH artifact -- cooked from the CURRENT staged source -- must be what resolves.
+    const std::vector<std::byte> currentSourceBytes = ReadWholeFileAsBytes(png);
+    const auto freshImported = Arcane::AssetPipeline::ImportTexture(currentSourceBytes, guid, settings);
+    REQUIRE(freshImported.has_value());
+    REQUIRE(Arcane::AssetPipeline::WriteTextureArtifact(
+        root / "Intermediate" / "Artifacts" / "zz" / "fresh.arcart",
+        freshImported->desc, freshImported->payload, freshImported->thumbRgba));
+
+    // The STALE artifact -- SAME guid, cooked from OLDER (different-sized, so definitely
+    // different-hashing) source bytes -- exactly the shape a source edit + recook leaves
+    // behind if CookSession's own C1(a) self-heal somehow didn't run (a locked file, an
+    // external tool). Written to the shard that sorts FIRST.
+    const fs::path oldPngTemp = root / "old_temp_source.png";
+    const std::vector<unsigned char> oldPixels = GradientRgba(4, 4);
+    REQUIRE(stbi_write_png(oldPngTemp.string().c_str(), 4, 4, 4, oldPixels.data(), 4 * 4) != 0);
+    const std::vector<std::byte> oldSourceBytes = ReadWholeFileAsBytes(oldPngTemp);
+    const auto staleImported = Arcane::AssetPipeline::ImportTexture(oldSourceBytes, guid, settings);
+    REQUIRE(staleImported.has_value());
+    REQUIRE(freshImported->desc.sourceHash != staleImported->desc.sourceHash);
+    REQUIRE(Arcane::AssetPipeline::WriteTextureArtifact(
+        root / "Intermediate" / "Artifacts" / "aa" / "stale.arcart",
+        staleImported->desc, staleImported->payload, staleImported->thumbRgba));
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(root / "Content");
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == guid) return png;
+        return std::nullopt;
+    });
+
+    // THE pin: resolves cleanly through the REAL public facade despite the stale duplicate
+    // sitting in the shard the scan would visit first.
+    const Arcane::TextureInfo* info = assets->TextureInfoFor(guid);
+    REQUIRE(info != nullptr);
+    CHECK(info->width == static_cast<std::uint32_t>(w));
+    CHECK(info->height == static_cast<std::uint32_t>(h));
+
+    const Arcane::LoadedClientArtifact* artifact = assets->ArtifactFor(guid);
+    REQUIRE(artifact != nullptr);
+    CHECK(artifact->info.width == static_cast<std::uint32_t>(w));
+    CHECK(artifact->info.height == static_cast<std::uint32_t>(h));
+
+    fs::remove_all(root, ec);
+}

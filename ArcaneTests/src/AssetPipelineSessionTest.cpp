@@ -287,16 +287,21 @@ TEST_CASE("pipeline: a corrupt source memoizes its failure across two sessions, 
 
 TEST_CASE("pipeline: ResolveCurrentArtifactPath selects the CURRENT cook key, never an orphaned one", "[pipeline]")
 {
-    // A `.meta` settings edit leaves the ORIGINAL artifact on disk under its OLD cook
-    // key -- an orphan Task 5 explicitly permits (no sweep this task) -- while BOTH the
-    // orphan and the fresh artifact carry the SAME sourceGuid header (ArtifactFormat
-    // never changes a texture's identity, only its cook key, on a settings edit). The
-    // fix-loop finding: --dump-dds used to resolve via ArtifactStore::
-    // RebuildIndexFromScan + Lookup, whose Guid -> key index is last-write-wins over an
-    // undefined directory-iteration order across exactly this pair of files -- so it
-    // could non-deterministically hand back the STALE artifact. This pins the fix:
-    // ResolveCurrentArtifactPath must select the artifact at TODAY's recomputed cook
-    // key, and nothing else, every time.
+    // A `.meta` settings edit used to leave the ORIGINAL artifact on disk under its OLD
+    // cook key -- an orphan Task 5 explicitly permitted (no sweep that task) -- while
+    // BOTH the orphan and the fresh artifact carried the SAME sourceGuid header
+    // (ArtifactFormat never changes a texture's identity, only its cook key, on a
+    // settings edit). The fix-loop finding: --dump-dds used to resolve via
+    // ArtifactStore::RebuildIndexFromScan + Lookup, whose Guid -> key index is
+    // last-write-wins over an undefined directory-iteration order across exactly this
+    // pair of files -- so it could non-deterministically hand back the STALE artifact.
+    // This pins the fix: ResolveCurrentArtifactPath must select the artifact at TODAY's
+    // recomputed cook key, and nothing else, every time -- now doubly true since the
+    // FINAL-REVIEW WAVE's C1(a) fix makes CookProject itself remove the superseded old
+    // key's artifact on the very same recook that supersedes it (see the settings-edit
+    // recook test below for that removal pinned directly); this test's own value is
+    // unchanged either way, since it never depended on the orphan's continued existence
+    // to make its point -- it just no longer has one to work around.
     const fs::path project = TempProjectDir("resolve_current_artifact");
     const fs::path png = project / "Content" / "textures" / "a.png";
     WritePngFile(png, 4, 4, SolidPixels(4, 4, 5, 6, 7, 255));
@@ -309,8 +314,7 @@ TEST_CASE("pipeline: ResolveCurrentArtifactPath selects the CURRENT cook key, ne
     const fs::path orphanPath = ExpectedArtifactPath(project, png, TextureMetaSettings{});
     REQUIRE(fs::exists(orphanPath));
 
-    // Flip srgb -- a NEW cook key. The OLD artifact is never deleted (no sweep this
-    // task): it becomes the orphan, sourceGuid header unchanged.
+    // Flip srgb -- a NEW cook key.
     nlohmann::json flipped;
     flipped["srgb"] = false;
     WriteMetaSidecar(png, guid, flipped);
@@ -320,8 +324,12 @@ TEST_CASE("pipeline: ResolveCurrentArtifactPath selects the CURRENT cook key, ne
     newSettings.srgb = false;
     const fs::path currentPath = ExpectedArtifactPath(project, png, newSettings);
     REQUIRE(fs::exists(currentPath));
-    REQUIRE(fs::exists(orphanPath));          // the orphan is still there, same guid header
-    REQUIRE(orphanPath != currentPath);       // two distinct files, both claiming this guid
+    // C1(a) fix (final-review wave): the OLD key's artifact is now REMOVED by the same
+    // CookProject call that superseded it -- self-healing, not merely tolerated as an
+    // orphan (see the dedicated settings-edit-recook test below for this pinned in
+    // isolation).
+    CHECK_FALSE(fs::exists(orphanPath));
+    REQUIRE(orphanPath != currentPath);       // the two paths were always distinct values
 
     const std::optional<fs::path> resolved = session.ResolveCurrentArtifactPath(project, guid);
     REQUIRE(resolved.has_value());
@@ -338,4 +346,86 @@ TEST_CASE("pipeline: ResolveCurrentArtifactPath selects the CURRENT cook key, ne
     const Guid uncookedGuid = Guid::Generate();
     WriteMetaSidecar(uncookedPng, uncookedGuid);
     CHECK_FALSE(session.ResolveCurrentArtifactPath(project, uncookedGuid).has_value());
+}
+
+// ---- C1(a) fix (final-review wave, 2026-09-04): a recook removes the superseded --------
+// ---- same-guid artifact, both halves of the finding: settings-only edits (sourceHash ---
+// ---- UNCHANGED) and source-content edits (sourceHash CHANGED). --------------------------
+//
+// The defect: a recook under a NEW cook key never removed the OLD key's artifact for the
+// SAME guid. SweepOrphans is guid-keyed and never caught it (the guid stays live -- only
+// the key moved). Two distinct consequences, both closed by the same fix in CookProject's
+// success path (both the "up to date" and "freshly committed" branches): a SOURCE edit
+// leaves a stale artifact whose header sourceHash no longer matches the current source
+// (the client's FindArtifactForGuid/ResolveArtifact fix, C1b, covers a client still
+// finding this one in a directory scan); a SETTINGS-ONLY edit leaves a stale artifact
+// whose header sourceHash STILL matches the current source (only the settings changed,
+// not the bytes) -- meaning that stale artifact would hash-VALIDATE as if it were current,
+// which no amount of client-side validation logic can tell apart from the real one. Only
+// removing it at the STORE level (this fix) closes that half.
+
+TEST_CASE("pipeline: a settings-only-edit recook removes the superseded old-key artifact "
+          "(C1a) -- the half a client CANNOT detect by hash validation alone", "[pipeline]")
+{
+    const fs::path project = TempProjectDir("c1a_settings_edit_removes_superseded");
+    const fs::path png = project / "Content" / "textures" / "a.png";
+    WritePngFile(png, 4, 4, SolidPixels(4, 4, 12, 34, 56, 255));
+    const Guid guid = Guid::Generate();
+    WriteMetaSidecar(png, guid);
+
+    CookSession session;
+    REQUIRE(session.CookProject(project).cooked == 1u);
+    const fs::path oldPath = ExpectedArtifactPath(project, png, TextureMetaSettings{});
+    REQUIRE(fs::exists(oldPath));
+
+    // Settings-only edit -- the PNG bytes on disk are completely untouched, only the
+    // sidecar's "texture" block changes, so the stale artifact's sourceHash will still
+    // match the current source bytes exactly.
+    nlohmann::json flipped;
+    flipped["srgb"] = false;
+    WriteMetaSidecar(png, guid, flipped);
+
+    const CookResult result = session.CookProject(project);
+    CHECK(result.cooked == 1u);
+
+    TextureMetaSettings newSettings{};
+    newSettings.srgb = false;
+    const fs::path newPath = ExpectedArtifactPath(project, png, newSettings);
+    REQUIRE(fs::exists(newPath));
+    REQUIRE(newPath != oldPath);
+
+    // THE pin: the old key's artifact is gone -- not merely superseded in the index, but
+    // physically removed, which is the only thing that closes the settings-only-edit half
+    // of C1 (a stale artifact here would otherwise hash-validate as current forever).
+    CHECK_FALSE(fs::exists(oldPath));
+}
+
+TEST_CASE("pipeline: a source-content-edit recook removes the superseded old-key artifact "
+          "(C1a), the OTHER half alongside the client's own multi-candidate resolution (C1b)",
+          "[pipeline]")
+{
+    const fs::path project = TempProjectDir("c1a_source_edit_removes_superseded");
+    const fs::path png = project / "Content" / "textures" / "a.png";
+    WritePngFile(png, 4, 4, SolidPixels(4, 4, 1, 1, 1, 255));
+    const Guid guid = Guid::Generate();
+    WriteMetaSidecar(png, guid);
+
+    CookSession session;
+    REQUIRE(session.CookProject(project).cooked == 1u);
+    const fs::path oldPath = ExpectedArtifactPath(project, png, TextureMetaSettings{});
+    REQUIRE(fs::exists(oldPath));
+
+    // A genuine SOURCE edit this time -- different pixel bytes, same settings -- so the
+    // new cook key differs because sourceHash changed, not because settings did.
+    WritePngFile(png, 4, 4, SolidPixels(4, 4, 250, 250, 250, 255));
+    const fs::path newPath = ExpectedArtifactPath(project, png, TextureMetaSettings{});
+    REQUIRE(newPath != oldPath);
+
+    const CookResult result = session.CookProject(project);
+    CHECK(result.cooked == 1u);
+    REQUIRE(fs::exists(newPath));
+
+    // THE pin: the pre-edit artifact is gone, same as the settings-only case above --
+    // C1(a) does not distinguish WHY the key changed, only THAT it did.
+    CHECK_FALSE(fs::exists(oldPath));
 }

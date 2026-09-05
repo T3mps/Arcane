@@ -17,6 +17,14 @@ namespace Arcane
         // Mirrors ArtifactFormat.cpp's own kSectionEntrySize -- duplicated, not shared,
         // per this file's no-pipeline-code banner (ArtifactReader.hpp).
         constexpr std::uint64_t kSectionEntrySize = 4 + 8 + 8;
+        // On-disk width of one MipTable entry: offset(u64) + size(u64) + width(u32) +
+        // height(u32). Mirrors ArtifactFormat.cpp's own kMipEntrySize -- same duplication
+        // discipline as kSectionEntrySize above.
+        constexpr std::uint64_t kMipEntrySize = 8 + 8 + 4 + 4;
+        // Mirrors AssetPipeline::ContentKind::Texture's numeric value (ArtifactFormat.hpp)
+        // -- kept in lockstep BY HAND, same discipline as ArtifactPixelFormatValue's own
+        // mirrored values (ArtifactReader.hpp).
+        constexpr std::uint8_t kContentKindTexture = 1;
 
         // Bounds-checked little-endian reader over an in-memory buffer, independently
         // reimplemented from ArtifactFormat.cpp's own ByteReader (that class is private to
@@ -118,6 +126,11 @@ namespace Arcane
             if (version != kArtifactVersion) return false;
 
             if (!r.U8(out.contentKind)) return false;
+            // Minor fix (final-review wave): mirrors ArtifactFormat.cpp's own fail-closed
+            // contentKind check -- refuse a non-Texture artifact here too, rather than
+            // silently parsing (misreading) a future artifact kind's bytes as if they were
+            // this reader's own Texture shape.
+            if (out.contentKind != kContentKindTexture) return false;
             if (!r.U64(out.sourceGuid.hi)) return false;
             if (!r.U64(out.sourceGuid.lo)) return false;
             if (!r.U64(out.sourceHash)) return false;
@@ -260,6 +273,17 @@ namespace Arcane
                     ByteReader mr(body.data(), body.size());
                     std::uint32_t mipCount = 0;
                     if (!mr.U32(mipCount)) return std::nullopt;
+
+                    // I3 fix (final-review wave): mirrors ArtifactFormat.cpp's own
+                    // MipTable bound and rationale -- each mip entry costs at least
+                    // kMipEntrySize bytes on disk, so a mip count that could not possibly
+                    // fit in THIS section's own body is corrupt. Without this, a crafted
+                    // mipCount (e.g. 0xFFFFFFFF) would ask std::vector::reserve for ~64 GB
+                    // and THROW std::bad_alloc out of this read instead of refusing it
+                    // cleanly (nullopt, which callers turn into a single Missing refusal).
+                    if (static_cast<std::uint64_t>(mipCount) * kMipEntrySize > body.size())
+                        return std::nullopt;
+
                     out.mips.clear();
                     out.mips.reserve(mipCount);
                     for (std::uint32_t i = 0; i < mipCount; ++i)
@@ -365,17 +389,19 @@ namespace Arcane
         return result;
     }
 
-    std::optional<std::filesystem::path> FindArtifactForGuid(const std::filesystem::path& intermediateDir,
-                                                               const Guid& guid)
+    std::vector<std::filesystem::path> FindArtifactForGuid(const std::filesystem::path& intermediateDir,
+                                                             const Guid& guid)
     {
+        std::vector<std::filesystem::path> matches;
+
         const std::filesystem::path artifactsDir = intermediateDir / "Artifacts";
 
         std::error_code ec;
         if (!std::filesystem::exists(artifactsDir, ec) || ec)
-            return std::nullopt;
+            return matches;
 
         std::filesystem::recursive_directory_iterator it(artifactsDir, ec);
-        if (ec) return std::nullopt;
+        if (ec) return matches;
 
         const std::filesystem::recursive_directory_iterator end;
         for (; it != end; it.increment(ec))
@@ -390,10 +416,13 @@ namespace Arcane
             const std::optional<ParsedHeader> header = ReadHeaderOnly(entry.path());
             if (!header) continue;   // unreadable/corrupt candidate -- skip, never abort the scan
 
+            // C1(b) fix: collect EVERY guid match rather than returning the first --
+            // the caller validates each candidate and picks the first clean one (see
+            // ArtifactReader.hpp's own C1(b) paragraph).
             if (header->sourceGuid == guid)
-                return entry.path();
+                matches.push_back(entry.path());
         }
 
-        return std::nullopt;
+        return matches;
     }
 }

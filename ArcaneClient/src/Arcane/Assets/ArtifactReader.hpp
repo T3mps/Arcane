@@ -53,18 +53,30 @@
 // arccook ever persists it. FindArtifactForGuid below therefore does its OWN directory
 // scan of <intermediateDir>/Artifacts/**/*.arcart, reading only a BOUNDED PREFIX of each
 // candidate (ArtifactReader.cpp's ReadFilePrefix/kHeaderProbeBytes -- 256 bytes, generous
-// headroom over the fixed header's own exact 64) until a sourceGuid match is found -- a
-// few hundred bytes per candidate file, never the whole artifact (payload/thumbnail
+// headroom over the fixed header's own exact 64) to test the sourceGuid match -- a few
+// hundred bytes per candidate file, never the whole artifact (payload/thumbnail
 // included), even across a project's whole artifact set, and it needs no persistent state
 // of its own. CORRECTNESS NOTE: this paragraph used to claim exactly this cost while the
 // code underneath (ReadHeaderOnly -> ReadWholeFile) actually read every candidate's ENTIRE
 // file every scan -- caught by review, fixed the same task the claim was made in
 // (ArtifactReader.cpp's ReadHeaderOnly/ReadFilePrefix carry the fix's own comment); take
 // this kind of claim as something to VERIFY against the code, not trust from a comment.
-// See Assets.cpp for how the result is memoized per-Guid at the facade layer (the SAME
-// decode-once-then-cache shape PixelsFor already uses), which is what keeps a repeat
-// lookup for the same guid from re-scanning (Missing included -- Task 8 memoized it
-// alongside the other refusals; Task 12's cook-completion invalidation is the un-latch).
+//
+// C1(b) FIX (final-review wave, 2026-09-04): FindArtifactForGuid returns EVERY
+// guid-matching candidate, not just the first the scan happens to visit. The single-match
+// version was a real bug: a recook under a NEW cook key can leave the SUPERSEDED old-key
+// artifact still on disk for one pass (CookSession's own self-heal, C1a, removes it
+// best-effort, but a locked file or an external tool can still leave one behind), and
+// BOTH the stale and the fresh artifact carry the SAME sourceGuid header -- so a
+// first-match resolve could pick the stale one in unspecified directory-iteration order
+// and refuse HashMismatch forever even though a valid artifact sits right next to it. The
+// caller (Assets.cpp's ResolveArtifact) is the one that actually VALIDATES each candidate
+// via ReadClientArtifact -- this function stays a cheap, header-only, format-agnostic
+// scan; it does not itself decide which candidate wins. See Assets.cpp for how the result
+// is memoized per-Guid at the facade layer (the SAME decode-once-then-cache shape
+// PixelsFor already uses), which is what keeps a repeat lookup for the same guid from
+// re-scanning (Missing included -- Task 8 memoized it alongside the other refusals;
+// Task 12's cook-completion invalidation is the un-latch).
 //
 // REFUSAL DISCIPLINE (spec s5, F2b Task 6 ruling; Task 8 completed it -- "refuse, never limp"):
 //   Missing                 -- no artifact at all resolves for this guid. A REAL refusal
@@ -193,11 +205,16 @@ namespace Arcane
         std::span<const std::byte> currentSourceBytes,
         const Guid& expectedSourceGuid);
 
-    // Guid -> artifact path via a DIRECTORY SCAN of intermediateDir/Artifacts/**/*.arcart
-    // (this task's resolution choice -- see this file's header banner for why no index
-    // file exists to read instead). nullopt when no artifact under the store carries this
-    // guid -- NOT itself a refusal; see ArtifactRefusal::Missing's own doc above for what
-    // IS a refusal.
-    [[nodiscard]] ARCANE_API std::optional<std::filesystem::path> FindArtifactForGuid(
+    // Guid -> EVERY matching artifact path via a DIRECTORY SCAN of
+    // intermediateDir/Artifacts/**/*.arcart (this task's resolution choice -- see this
+    // file's header banner for why no index file exists to read instead, and its C1(b)
+    // paragraph for why this returns ALL matches rather than the first). Empty when no
+    // artifact under the store carries this guid -- NOT itself a refusal; see
+    // ArtifactRefusal::Missing's own doc above for what IS a refusal. Ordinarily a single
+    // element (the common case: exactly one artifact per guid); more than one means a
+    // stale, superseded artifact is still on disk alongside the current one (C1a/C1b) --
+    // the caller (Assets.cpp's ResolveArtifact) is responsible for validating candidates
+    // and picking the first clean one, never this function.
+    [[nodiscard]] ARCANE_API std::vector<std::filesystem::path> FindArtifactForGuid(
         const std::filesystem::path& intermediateDir, const Guid& guid);
 }

@@ -133,6 +133,14 @@ namespace Arcane::AssetPipeline
         // CURRENT artifact hasn't been cooked yet (uncooked/stale) -- NEVER falls back to
         // any other artifact, orphaned or otherwise. Read-only: never imports, never
         // writes. arccook's --dump-dds is this function's only production caller today.
+        //
+        // FINAL-REVIEW FIX (C1a, 2026-09-04): CookProject's own success path now removes
+        // an old-key artifact it supersedes for the SAME guid (best-effort -- see
+        // CookProject's own comment), so the "orphan" case above is now the SHORT-LIVED
+        // exception rather than the steady state. This function's defense stays anyway:
+        // the removal is best-effort (a locked file, a concurrent reader, or an external
+        // tool can leave one behind) and this function's whole point is to never need the
+        // index to be clean to answer correctly.
         [[nodiscard]] std::optional<std::filesystem::path> ResolveCurrentArtifactPath(
             const std::filesystem::path& projectDir, const Guid& guid) const;
 

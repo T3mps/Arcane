@@ -235,10 +235,41 @@ namespace Arcane::AssetPipeline
             const std::uint64_t cookKey = ComputeCookKey(*bytes, meta->settings, kTextureImporterVersion);
             const fs::path finalPath = store.PathFor(cookKey);
 
+            // C1 fix (final-review wave, 2026-09-04): captured BEFORE this pass touches
+            // the index, from whatever RebuildIndexFromScan warmed it with above -- i.e.
+            // this guid's key as of the LAST successful cook. A source edit changes
+            // sourceHash (a new key); a SETTINGS-ONLY edit changes the key too even though
+            // sourceHash stays the SAME -- either way, once this pass lands a DIFFERENT
+            // key for the same guid below, the OLD key's artifact is superseded and must
+            // not survive: SweepOrphans is guid-keyed and would never catch it (the guid
+            // is still live, only the KEY moved), and a client-side directory scan by guid
+            // (ArcaneClient's FindArtifactForGuid) can otherwise still find the stale file
+            // -- for a settings-only edit, the stale artifact's sourceHash still matches
+            // the CURRENT source bytes (only the settings changed), so it would even
+            // hash-validate as if it were current, silently masking the settings change.
+            const std::optional<std::uint64_t> previousKeyForGuid = store.Lookup(meta->guid);
+
+            // Best-effort removal of a superseded old-key artifact for `guid`, now that
+            // `newKey` is the artifact this pass is about to make current for it. A no-op
+            // when there was nothing indexed yet, or the key didn't actually change.
+            // Failure (e.g. a locked file) is silently tolerated -- ResolveCurrentArtifactPath
+            // never trusts the index anyway (see this file's own header comment), and a
+            // future SweepOrphans/self-heal pass gets another chance at it once the guid's
+            // OWN source is ever removed.
+            auto removeSupersededArtifact = [&](std::uint64_t newKey)
+            {
+                if (previousKeyForGuid && *previousKeyForGuid != newKey)
+                {
+                    std::error_code removeEc;
+                    fs::remove(store.PathFor(*previousKeyForGuid), removeEc);
+                }
+            };
+
             std::error_code existsEc;
             if (fs::exists(finalPath, existsEc))
             {
                 store.PutIndex(meta->guid, cookKey);
+                removeSupersededArtifact(cookKey);
                 ++result.upToDate;
                 if (m_progress) m_progress(source, true, "up to date");
                 continue;
@@ -289,6 +320,7 @@ namespace Arcane::AssetPipeline
             }
 
             store.PutIndex(meta->guid, cookKey);
+            removeSupersededArtifact(cookKey);
             result.cookedGuids.push_back(meta->guid);
             ++result.cooked;
             if (m_progress) m_progress(source, true, "cooked");

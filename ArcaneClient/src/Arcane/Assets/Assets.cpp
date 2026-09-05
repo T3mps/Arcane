@@ -349,6 +349,22 @@ namespace Arcane
             // fixture, for instance) simply derives a directory that does not exist,
             // which FindArtifactForGuid already treats as "no artifacts here" --
             // degrading safely to the legacy fallback rather than misbehaving.
+            // C1(b) FIX (final-review wave, 2026-09-04): a same-guid recook under a NEW
+            // cook key can leave the SUPERSEDED old-key artifact still on disk for one
+            // pass (CookSession's own self-heal, C1a, removes it best-effort, but a
+            // locked file or an external tool can still leave one behind), and BOTH the
+            // stale and the fresh artifact carry the SAME sourceGuid header --
+            // FindArtifactForGuid now returns EVERY guid-matching candidate rather than
+            // the first the scan happens to visit, and THIS function is the one that
+            // actually validates them: iterate every candidate and accept the FIRST that
+            // reads back clean (ArtifactRefusal::None); only refuse once NONE of them do,
+            // reporting the MOST INFORMATIVE refusal seen (HashMismatch/
+            // VersionNewerThanEngine over a bare Missing -- "we found something
+            // specifically wrong" beats "we found nothing usable"). The header-only probe
+            // inside FindArtifactForGuid stays cheap regardless of how many candidates
+            // exist; only guid-MATCHED candidates ever pay for a full ReadClientArtifact
+            // parse, exactly as before this fix (there was previously ever only one to
+            // pay for).
             ArtifactReadResult ResolveArtifact(const Guid& id, const std::filesystem::path& resolved)
             {
                 if (m_contentRoot.empty())
@@ -356,21 +372,32 @@ namespace Arcane
 
                 const std::filesystem::path intermediateRoot =
                     m_contentRoot.parent_path() / "Intermediate";
-                const std::optional<std::filesystem::path> artifactPath =
+                const std::vector<std::filesystem::path> candidates =
                     FindArtifactForGuid(intermediateRoot, id);
-                if (!artifactPath)
+                if (candidates.empty())
                     return ArtifactReadResult{};
 
                 // Raw (undecoded) bytes of the CURRENT staged source -- the same file
                 // the legacy fallback would decode -- so ReadClientArtifact can hash-
-                // compare against the artifact's own sourceHash. An unreadable source
+                // compare against each candidate's own sourceHash. An unreadable source
                 // reads as empty here, which will not match any real artifact's hash,
                 // so it correctly surfaces as HashMismatch rather than silently passing.
                 const std::vector<uint8_t> raw = ReadFileBytes(resolved);
-                return ReadClientArtifact(
-                    *artifactPath,
-                    std::span<const std::byte>(reinterpret_cast<const std::byte*>(raw.data()), raw.size()),
-                    id);
+                const std::span<const std::byte> rawBytes(
+                    reinterpret_cast<const std::byte*>(raw.data()), raw.size());
+
+                ArtifactReadResult best;
+                best.refusal = ArtifactRefusal::Missing;
+                for (const std::filesystem::path& candidate : candidates)
+                {
+                    ArtifactReadResult result = ReadClientArtifact(candidate, rawBytes, id);
+                    if (result.refusal == ArtifactRefusal::None)
+                        return result;   // THE fix: first candidate that validates wins
+
+                    if (best.refusal == ArtifactRefusal::Missing && result.refusal != ArtifactRefusal::Missing)
+                        best.refusal = result.refusal;   // remember the most informative refusal seen
+                }
+                return best;
             }
 
             // Refuse LOUDLY (ERROR, not WARN) and memoize -- "refuse, never limp"
