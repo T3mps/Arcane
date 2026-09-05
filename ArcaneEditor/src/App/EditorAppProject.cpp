@@ -14,6 +14,7 @@
 
 #include "App/EditorApp.hpp"
 #include "Panels/AssetBrowser.hpp"
+#include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
 
 #include <Arcane/AssetPipeline/ArtifactStore.hpp>   // SweepArtifactOrphans (F2b Task 12)
 #include <Arcane/Base/Log.hpp>
@@ -213,6 +214,42 @@ namespace Arcane::Editor
             m_runtime ? m_runtime->CurrentProject() : nullptr;
         if (!project)
             return;
+
+        // F2b desk-checkpoint fix: mid-session Content/ drop discovery. The
+        // loop below can only watch what the registry ALREADY knows -- a
+        // .png dropped into Content/ after project open has no registry
+        // entry (AssetRegistry::ScanContent runs exactly once, at open) and
+        // is invisible to it. Own, slower gate than m_materialWatchNext
+        // (~2s vs. ~1s -- see m_contentDiscoveryNext's declaration for why):
+        // this step pays for a full recursive walk of Content/, a different
+        // cost shape than the loop below's per-KNOWN-file stat() calls.
+        // Runs BEFORE BuildAssetEntries below (not after) so a discovery
+        // this tick registers the new guid in time for the SAME tick's
+        // texture first-sighting branch to fire -- drop -> registered ->
+        // cook-triggered lands inside ONE poll interval.
+        if (m_editorClock >= m_contentDiscoveryNext)
+        {
+            m_contentDiscoveryNext = m_editorClock + 2.0;
+
+            std::unordered_set<std::string> knownTexturePaths;
+            for (const Arcane::Editor::AssetEntry& known :
+                 Arcane::Editor::BuildAssetEntries(project->Registry()))
+            {
+                if (known.kind != Arcane::Editor::AssetKind::Texture)
+                    continue;
+                if (const auto p = project->ResolveAsset(Arcane::AssetId::FromGuid(known.guid)))
+                    knownTexturePaths.insert(p->generic_string());
+            }
+
+            for (const std::filesystem::path& dropped :
+                 Arcane::Editor::DiscoverUnknownTextureSources(project->Root() / "Content",
+                                                                knownTexturePaths))
+            {
+                ARC_INFO("Assets: discovered new content file '{}' -- registering",
+                         dropped.generic_string());
+                m_runtime->RegisterCreatedAsset(dropped);
+            }
+        }
 
         for (const Arcane::Editor::AssetEntry& e :
              Arcane::Editor::BuildAssetEntries(project->Registry()))
@@ -744,6 +781,10 @@ namespace Arcane::Editor
     // m_modalErrors: a dead project's modal must not pop post-switch.
     // m_materialMtimes / m_materialWatchNext: the outgoing project's
     // path-keyed watch cache -- grew unbounded across switches before this.
+    // m_contentDiscoveryNext (F2b desk-checkpoint fix): gates a walk of the
+    // OUTGOING project's Content/ tree -- reset alongside m_materialWatchNext
+    // so the incoming project's first tick discovers immediately rather than
+    // waiting out whatever cadence the outgoing project had reached.
     // (the two launch-modal flags this entry used to name are gone entirely --
     // a parked LaunchStandalone now lives in m_scene, covered by the m_scene
     // entry above; see the comment ahead of m_scene.Reset below.)
@@ -771,6 +812,7 @@ namespace Arcane::Editor
         m_modalErrors.Clear();
         m_materialMtimes.clear();
         m_materialWatchNext = 0.0;
+        m_contentDiscoveryNext = 0.0;
         m_cookQueue.reset();
         m_cookDiagnostics.clear();
         // A parked LaunchStandalone cannot survive into a switch: OpenProject's

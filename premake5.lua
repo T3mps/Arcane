@@ -810,6 +810,12 @@ project "ArcaneTests"
         -- the analogous split; here it is JobSystem::Submit, tested for real
         -- threading separately in JobSystemSubmitTest.cpp).
         "%{wks.location}/ArcaneEditor/src/Project/CookQueue.cpp",
+        -- F2b desk-checkpoint fix: ContentDiscovery (the mid-session
+        -- Content/-drop discovery probe -- recursive .png enumeration plus
+        -- the known-paths set difference) source-compiles into the test exe
+        -- so the [editor][cook] units drive its PURE halves directly with a
+        -- real temp-dir fixture, same pattern as CookQueue.cpp above.
+        "%{wks.location}/ArcaneEditor/src/Project/ContentDiscovery.cpp",
     }
 
     includedirs {

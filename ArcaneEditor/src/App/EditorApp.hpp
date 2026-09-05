@@ -1170,9 +1170,32 @@ namespace Arcane::Editor
         // editor never hand-writes a texture's PIXELS in place, only its
         // .meta sidecar (the inspector's four cook-setting knobs), so THAT
         // write re-baselines itself the same way immediately below.
+        //
+        // F2b desk-checkpoint fix: PollAssetWatch's sweep above can only
+        // watch what the registry ALREADY knows -- a .png dropped into
+        // Content/ mid-session has no registry entry and is invisible to it.
+        // A content-discovery step (Project/ContentDiscovery.hpp) runs on
+        // its own, slower cadence (m_contentDiscoveryNext below) ahead of
+        // the sweep: it enumerates Content/ for .png candidates the registry
+        // doesn't know yet and registers each one (Runtime::
+        // RegisterCreatedAsset), so the freshly-minted texture entry hits
+        // the SAME first-sighting-counts-as-a-change branch in the sweep
+        // below, in the SAME tick.
         void PollAssetWatch();
         std::unordered_map<std::string, std::filesystem::file_time_type> m_materialMtimes;
         double m_materialWatchNext = 0.0;
+        // Gates the content-discovery step above -- deliberately a SEPARATE,
+        // slower-cadence gate from m_materialWatchNext (~2s vs. ~1s): that
+        // step pays for a full recursive directory walk of Content/ (cost
+        // proportional to total file COUNT under Content/, never file
+        // size -- no reads, no hashing), a materially different cost shape
+        // than the sweep's own per-ALREADY-KNOWN-file stat() calls, so it
+        // does not need to run on every single watcher tick to still land
+        // well inside the spec's "cooks in background" ergonomic. Reset
+        // (with m_materialWatchNext) in ResetPerProjectState so a project
+        // switch's first tick discovers immediately, same as the sweep's own
+        // open-heal convention.
+        double m_contentDiscoveryNext = 0.0;
 
         // ---- Background texture cook (F2b Task 12) --------------------------
         // CookQueue itself is per-project (its CookSession's staleness memo
