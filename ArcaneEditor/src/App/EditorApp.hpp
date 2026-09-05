@@ -1211,6 +1211,18 @@ namespace Arcane::Editor
             Arcane::Diagnostic diagnostic;
             bool permanent = false;
         };
+        // MAIN-THREAD ONLY, no mutex -- unlike CookQueue's own m_results
+        // (worker -> main handoff), every touch of this map happens on the
+        // main thread by construction: OnCookCompleted writes it from
+        // inside Pump() (this class's own threading contract -- Pump() is
+        // where a worker's result crosses back to the main thread), and
+        // OnArtifactRefused writes it from wherever an Assets accessor
+        // refuses, which is always scene resolution / NriTextureCache::
+        // Resolve, both main-thread-only by THEIR OWN contracts (see
+        // NriTextureCache.hpp's "CALL AT DECLARATION TIME ONLY"). IsCookPending
+        // reads it from the SetCookPendingOracle callback, invoked from
+        // inside that same main-thread-only Resolve() path. No cross-thread
+        // access is ever reachable.
         std::unordered_map<Arcane::Guid, CookDiagRow> m_cookDiagnostics;
         // Republishes m_cookDiagnostics's CURRENT contents under
         // "diagnostics:cook" -- called after every mutation of the map

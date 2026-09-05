@@ -354,6 +354,24 @@ namespace Arcane::Editor
         // vocabulary (OnArtifactRefused below), but the SAME Problems pane
         // per the brief ("alongside cook failures"). PERMANENT: none of
         // these resolve on their own -- the source needs a real fix.
+        //
+        // DELIBERATE LAST-KNOWN-GOOD RULING (controller, post-review): a
+        // failing guid is NEVER passed to InvalidateArtifact/
+        // InvalidateContentTexture/InvalidateMeshAlbedoSlot above -- only
+        // result.cookedGuids (successes) is. So a texture that was already
+        // Resident and gets edited into a now-undecodable/failing state
+        // KEEPS RENDERING ITS OLD, STILL-GOOD ARTIFACT: the Problems-pane
+        // row below is the only signal, the viewport is not nuked to a
+        // checkerboard/white-texel mid-iteration. This is the editor's
+        // posture, NOT the runtime's -- ArcaneRuntime refuses hard on any
+        // artifact problem (Task 6/8's exit-nonzero contract) because a
+        // shipped build has no "keep iterating" use case. The editor's
+        // is the opposite: an artist mid-edit on a source that transiently
+        // fails to decode should not lose their last-good preview, matching
+        // the "serve stale until recooked" precedent other engines use for
+        // exactly this workflow. If this ever needs to change, it is a
+        // policy decision (probably a new invalidate-on-failure toggle),
+        // not a bug fix.
         for (const auto& [guid, reason] : result.failures)
         {
             Arcane::Diagnostic d;

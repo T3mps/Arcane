@@ -1034,11 +1034,17 @@ try {
                     $verdict = 'Errored'
                     $detail = "exitReason=$exitReason -- the host died before it could answer"
                 }
-                elseif ($exitReason -in @('compare-missing-reference', 'settle-not-converged', 'stopped-early', 'compare-blessed')) {
+                elseif ($exitReason -in @('compare-missing-reference', 'compare-cook-refused', 'settle-not-converged', 'stopped-early', 'compare-blessed')) {
                     # The render may be perfectly correct; nothing established
                     # otherwise. Red, but NOT "the render is wrong" -- and the
                     # distinction is the reason this vocabulary exists.
                     #   compare-missing-reference: no reference to compare against.
+                    #   compare-cook-refused:      F2b Task 12 -- the editor's pre-loop cook gate
+                    #                              refused (a content texture failed to cook) at
+                    #                              ZERO frames rendered, before compare ever ran;
+                    #                              same "setup couldn't complete" shape as
+                    #                              compare-missing-reference immediately above,
+                    #                              not a render verdict.
                     #   settle-not-converged:      the compare NEVER RAN. RuntimeApp.cpp:1158
                     #                              picks this over "compare-failed" precisely
                     #                              when m_compareEvaluated is false. The gate
