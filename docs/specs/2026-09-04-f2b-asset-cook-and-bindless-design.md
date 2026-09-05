@@ -481,15 +481,18 @@ No reference PNG in this repo was ever overwritten by this arc.
 
 | Configuration | Assertions | Cases | Previous baseline (arc start) |
 |---|---|---|---|
-| Debug | **53739** | **1402** | 52462 / 1316 |
-| Release | **53739** | **1402** | 52462 / 1316 |
-| Dist | **53671** | **1396** | 52394 / 1310 |
+| Debug | **53866** | **1413** | 52462 / 1316 |
+| Release | **53866** | **1413** | 52462 / 1316 |
+| Dist | **53798** | **1407** | 52394 / 1310 |
 
-+1277 assertions / +86 cases in every configuration; the Debug↔Dist gap holds at exactly the
-68 assertions / 6 cases the baseline file has always documented. Reconciled against source:
-raw `TEST_CASE(` count in `ArcaneTests/src` rose 1343 → 1435 (+92) across the arc (base
-`02af8711` vs `c360aa5c`), of which 6 are newly `[gpu]`-tagged (27 → 33, matching that
-sweep's own rise) and 86 fall inside `~[gpu]` — exactly the measured rise.
++1404 assertions / +97 cases in every configuration (the figures include the final-review
+fix wave's 11 further cases, commits `dd63dbb7..88711542`); the Debug↔Dist gap holds at
+exactly the 68 assertions / 6 cases the baseline file has always documented. At the
+pre-fix-wave close (`3a32f832`) the figures were 53739/1402 · 53671/1396, reconciled
+against source: raw `TEST_CASE(` count in `ArcaneTests/src` rose 1343 → 1435 (+92) to that
+point, of which 6 are newly `[gpu]`-tagged (27 → 33, matching that sweep's own rise) and 86
+fall inside `~[gpu]` — exactly that stage's measured rise; the fix wave added its 11
+`~[gpu]` cases on top.
 
 `ArcaneTests.exe "[gpu]"` (Debug): **62274 assertions in 33 test cases, all passing** — the
 arc's new GPU cases (the bindless four-cube proof, the cooked-BC7-albedo integration case,
@@ -531,7 +534,7 @@ Debug run captured mid-session (used only for a `check-baselines.ps1` round-trip
 run cited for the committed baseline) recorded exactly one failed assertion inside
 `HostBootTest.cpp`'s boot-scene test, with an oddly-attributed source line landing outside
 that test's own lexical body. An immediate rerun on the identical binary was clean
-(53739/1402, all passing), and every other run this session — including the run actually
+(all passing at that stage's counts), and every other run this session — including the run actually
 cited for the committed baseline — was clean. Recorded, not chased, in the same spirit as
 this arc's own precedent for single-run flakes that clear on rerun; if it recurs, the odd
 line attribution is the first thing to run down (possibly a Catch2 JSON-reporter artifact
