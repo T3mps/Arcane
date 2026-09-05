@@ -120,6 +120,26 @@ namespace Arcane
         if (const auto why = LoadMaterialParentChain(im.services.resolveAsset, id, data->parent, chain))
             return fail(*why);
 
+        // THE KIND GATE, read off the chain's BASE and not the leaf -- same
+        // shape as MeshMaterialCache::Request's and PostChainCache::Request's
+        // own (an instance carries no kind of its own, so the base is the
+        // only level whose `kind` means anything).
+        //
+        // Without this, a mesh- or fullscreen-kind .arcmat assigned to a
+        // SpriteRenderer.material field (the Inspector's picker/drag-drop
+        // target is kind-blind -- a separate, larger fix) reached all the way
+        // to a real async DXC submit, stitched into the SPRITE template
+        // regardless of its own surface, and only failed once the drain came
+        // back -- ConsumeResult's WARN below then reads as a shader bug
+        // ("failed to compile") when the real fact is "this guid was never a
+        // sprite material to begin with." Refusing here turns that into one
+        // quiet, attributable, synchronous refusal instead, through the same
+        // `fail()` bookkeeping every other rejection in this function uses.
+        const MaterialAssetData& base = chain.empty() ? *data : chain.back();
+        if (MaterialSurfaceForKind(base.kind) != MaterialSurface::Sprite)
+            return fail("not a sprite material -- SpriteRenderer resolves \"sprite\"-kind "
+                        "materials only (this one's base kind is '" + base.kind + "')");
+
         const std::string& snippet = chain.empty() ? data->snippet
                                                    : chain.back().snippet;
         const auto templateText =
