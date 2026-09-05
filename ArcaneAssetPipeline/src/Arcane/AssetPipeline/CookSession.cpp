@@ -247,6 +247,7 @@ namespace Arcane::AssetPipeline
             if (const std::optional<std::string> memo = ReadFailureMemo(intermediateDir, cookKey))
             {
                 m_lastFailures[meta->guid] = *memo;
+                result.failures.emplace_back(meta->guid, *memo);
                 ++result.failed;
                 if (m_progress) m_progress(source, false, *memo);
                 continue;   // memoized -- the importer NEVER runs again for this exact key
@@ -262,6 +263,7 @@ namespace Arcane::AssetPipeline
                     + "' did not decode as a supported image (corrupt or unrecognised source bytes)";
                 WriteFailureMemo(intermediateDir, cookKey, reason);
                 m_lastFailures[meta->guid] = reason;
+                result.failures.emplace_back(meta->guid, reason);
                 ++result.failed;
                 if (m_progress) m_progress(source, false, reason);
                 continue;
@@ -280,12 +282,14 @@ namespace Arcane::AssetPipeline
                 const std::string reason = "artifact commit failed for '" + source.filename().string()
                     + "' (disk write error)";
                 m_lastFailures[meta->guid] = reason;
+                result.failures.emplace_back(meta->guid, reason);
                 ++result.failed;
                 if (m_progress) m_progress(source, false, reason);
                 continue;
             }
 
             store.PutIndex(meta->guid, cookKey);
+            result.cookedGuids.push_back(meta->guid);
             ++result.cooked;
             if (m_progress) m_progress(source, true, "cooked");
         }

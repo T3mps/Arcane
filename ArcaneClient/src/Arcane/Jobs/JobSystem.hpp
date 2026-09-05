@@ -11,6 +11,7 @@
 #include <Astra/Core/WorkScheduler.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace Arcane
@@ -41,6 +42,30 @@ namespace Arcane
         ITaskExecutor* TaskExecutor() const noexcept;
 
         uint32_t WorkerCount() const noexcept;
+
+        // F2b Task 12: fire-and-forget CPU work off the calling thread -- the
+        // editor's background texture cook is the first production consumer
+        // (a watcher-triggered CookSession::CookProject pass must never block
+        // the frame). Submitted work runs on ONE of the enkiTS worker threads
+        // this JobSystem owns (never the calling thread, unlike WaitforTask's
+        // participate-while-waiting shape) and is NOT awaitable by design --
+        // a caller that needs a result posts it back through its own queue
+        // (see Arcane::Editor::CookQueue for the production shape: a mutex-
+        // guarded result list drained once per frame on the main thread).
+        //
+        // DESTRUCTION DRAINS: ~JobSystem calls enki::TaskScheduler::
+        // WaitforAllAndShutdown, which blocks until every submitted task set
+        // -- including every fn Submit() ever handed to enkiTS, whether it
+        // has started running yet or not -- has completed, before joining the
+        // worker threads. A caller does not need to drain explicitly before
+        // destroying the JobSystem.
+        //
+        // enkiTS-pinned-task/TaskSet inside the pimpl: implemented as a
+        // heap-allocated enki::TaskSet (setSize 1, so it runs as a single
+        // unit on one worker) kept alive in Impl::submitted until it
+        // completes; see JobSystem.cpp for the reap-on-next-Submit bookkeeping
+        // that keeps that list from growing unbounded across a long session.
+        void Submit(std::function<void()> fn);
 
     private:
         struct Impl;

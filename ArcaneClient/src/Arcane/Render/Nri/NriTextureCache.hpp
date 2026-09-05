@@ -143,6 +143,23 @@ namespace Arcane
         // comment. Copied, not borrowed.
         void SetArtifactSupply(ArtifactSupplyFn supply) { m_artifactSupply = std::move(supply); }
 
+        // Guid -> "is a cook currently queued or in flight for this asset".
+        // F2b Task 12: without this, ResolveArtifactKey cannot tell "not
+        // cooked YET" (genuinely PendingCook -- the cook queue will produce
+        // it) apart from "answered null and NEVER WILL without user action"
+        // (HashMismatch/VersionNewerThanEngine -- Assets::ArtifactFor
+        // refuses both identically to Missing as of Task 8, returning
+        // nullptr either way), because the artifact supply's return value
+        // alone cannot distinguish them. Installed ONLY on a vehicle that
+        // also owns a live cook queue (the editor's viewport graph); left
+        // unset (the default) preserves the EXACT pre-Task-12 behaviour --
+        // every null answer is PendingCook, as ResolveArtifactKey's own doc
+        // comment already describes -- so RuntimeApp and every existing
+        // [texcache-artifact] case are unaffected. See ResolveArtifactKey's
+        // own comment for exactly where this is consulted.
+        using CookPendingOracle = std::function<bool(const Guid&)>;
+        void SetCookPendingOracle(CookPendingOracle oracle) { m_cookPendingOracle = std::move(oracle); }
+
         // The texture for `id` on this device, uploading it on first sight.
         //
         // THREE OUTCOMES on the artifact-shaped path (Srgb, ArtifactSupplyFn
@@ -208,6 +225,24 @@ namespace Arcane
         // placeholder(s) too, exactly once each -- never once per PendingCook
         // key, which share the one object per colour space.
         void Release(Graveyard& graveyard, std::uint64_t fence);
+
+        // F2b Task 12: drops residency for `id`, in BOTH colour spaces (a
+        // content guid is always Srgb; Display is swept too, for symmetry
+        // and at negligible cost -- an unordered_map lookup that almost
+        // always misses), so the NEXT Resolve() treats it as a brand new
+        // key -- Resident, PendingCook, or Refused, whichever this key was
+        // left in, since a cook-completion callback does not know which.
+        // This is the ESCAPE HATCH the cook-pending oracle above needs: a
+        // key the oracle steered into Refused (because nothing was queued
+        // for it YET) would otherwise be stuck there forever once a cook
+        // finally lands, since Resolve()'s own re-poll is PendingCook-only
+        // (Refused is sticky by design). A genuine RESIDENT texture/view --
+        // never the shared checkerboard placeholder, which no key owns --
+        // is buried at `fence`, exactly like Release()'s own bulk sweep, so
+        // an already-recorded command buffer still reading the OLD texture
+        // is never invalidated out from under it. A no-op for a guid this
+        // cache has never resolved.
+        void Invalidate(const Guid& id, Graveyard& graveyard, std::uint64_t fence);
 
         // How many images are actually RESIDENT (uploaded and viewable) --
         // i.e. in the Resident state. PendingCook keys (a real, viewable
@@ -364,6 +399,7 @@ namespace Arcane
         nri::HelperInterface m_helper{};
         PixelSupplyFn       m_supply;
         ArtifactSupplyFn    m_artifactSupply;
+        CookPendingOracle   m_cookPendingOracle;   // F2b Task 12 -- see SetCookPendingOracle
         std::unordered_map<Key, Resident, KeyHash> m_textures;
         // Index 0 == ColorSpace::Srgb, index 1 == ColorSpace::Display -- see
         // EnsureCheckerboard. Both start empty (texture == nullptr); nothing

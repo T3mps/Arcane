@@ -4,9 +4,12 @@
 
 #include <TaskScheduler.h>
 
+#include <algorithm>
 #include <cassert>
 #include <functional>
 #include <limits>
+#include <mutex>
+#include <vector>
 
 namespace Arcane
 {
@@ -57,6 +60,21 @@ namespace Arcane
         enki::TaskScheduler                     ts;
         std::unique_ptr<EnkiTaskExecutor>       taskExec;  // the sole enki adapter (worker-index face)
         std::shared_ptr<Mosaic::IWorkScheduler> adapter;   // ArcaneWorkScheduler over taskExec; destroyed first
+
+        // F2b Task 12: Submit()'s fire-and-forget task objects. enki::TaskSet
+        // must outlive its own execution (AddTaskSetToPipe only stores a
+        // pointer), so each submitted task is heap-allocated here and kept
+        // alive until it completes. Reaped opportunistically on the NEXT
+        // Submit() call (GetIsComplete() is O(1), the sweep is O(n) over
+        // whatever is still outstanding) rather than immediately after
+        // AddTaskSetToPipe, since a task is essentially never complete by the
+        // time the call that submitted it returns -- an unconditional
+        // check-right-after would almost always find nothing to reap and just
+        // cost an extra pass every call. WaitforAllAndShutdown (~JobSystem)
+        // guarantees every entry still here at destruction has finished
+        // before this vector is torn down.
+        std::mutex                                    submittedMutex;
+        std::vector<std::unique_ptr<enki::TaskSet>>   submitted;
     };
 
     JobSystem::JobSystem(uint32_t threads) : m_impl(std::make_unique<Impl>())
@@ -94,5 +112,35 @@ namespace Arcane
     uint32_t JobSystem::WorkerCount() const noexcept
     {
         return m_impl->ts.GetNumTaskThreads();
+    }
+
+    void JobSystem::Submit(std::function<void()> fn)
+    {
+        // enki::TaskSet's own std::function-based constructor (TaskSetFunction
+        // is void(TaskSetPartition, uint32_t)) -- setSize/minRange both default
+        // to 1, so this runs ExecuteRange exactly once, on exactly one worker,
+        // for the whole fn: a single unit of fire-and-forget work, not a
+        // parallel-for.
+        auto task = std::make_unique<enki::TaskSet>(
+            [fn = std::move(fn)](enki::TaskSetPartition, uint32_t) { fn(); });
+
+        std::lock_guard<std::mutex> lock(m_impl->submittedMutex);
+
+        // Reap whatever earlier submissions have already finished before
+        // adding this one -- amortized cleanup, see Impl::submitted's own
+        // comment for why this is done here rather than right after
+        // AddTaskSetToPipe below.
+        m_impl->submitted.erase(
+            std::remove_if(m_impl->submitted.begin(), m_impl->submitted.end(),
+                            [](const std::unique_ptr<enki::TaskSet>& t) { return t->GetIsComplete(); }),
+            m_impl->submitted.end());
+
+        // The task object must already be reachable from m_impl->submitted
+        // BEFORE AddTaskSetToPipe, in case a worker picks it up and completes
+        // it before this function returns -- there is no window where a
+        // worker could be executing a task this vector does not yet own.
+        enki::TaskSet* raw = task.get();
+        m_impl->submitted.push_back(std::move(task));
+        m_impl->ts.AddTaskSetToPipe(raw);
     }
 }

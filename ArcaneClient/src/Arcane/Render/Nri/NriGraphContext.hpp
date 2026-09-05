@@ -1121,6 +1121,32 @@ namespace Arcane
                 m_textures->SetArtifactSupply(std::move(supply));
         }
 
+        // F2b Task 12: forwards to NriTextureCache::SetCookPendingOracle --
+        // see that method's own doc comment for the full contract. Installed
+        // only on a vehicle that also owns a live cook queue (the editor's
+        // viewport graph); a vehicle that never calls this keeps the
+        // pre-Task-12 behaviour exactly (every artifact-supply miss is
+        // PendingCook).
+        using CookPendingOracle = NriTextureCache::CookPendingOracle;
+        void SetCookPendingOracle(CookPendingOracle oracle)
+        {
+            if (m_textures)
+                m_textures->SetCookPendingOracle(std::move(oracle));
+        }
+
+        // F2b Task 12: the render-side half of a cook-completion callback's
+        // invalidation, for ONE guid -- forwards to NriTextureCache::
+        // Invalidate using THIS context's own graveyard/fence (the same pair
+        // Resize/teardown already use for InvalidateSource(s) above), so a
+        // stale Resident/PendingCook/Refused entry is dropped safely and the
+        // NEXT Resolve() re-attempts from scratch. No-op if this context has
+        // no texture cache (Create() failed).
+        void InvalidateContentTexture(const Guid& id)
+        {
+            if (m_textures)
+                m_textures->Invalidate(id, m_graves, m_graph ? m_graph->DebugSubmitCount() : 0);
+        }
+
         // THE SHARED image residency cache -- one per vehicle, consumed by
         // BOTH the batch node (a span's own t0 texture and a registered
         // material's declared params) and the post chain (its declared
@@ -1175,14 +1201,17 @@ namespace Arcane
         // so, and the rest simply draw the flat baseColor path (kInvalidSlot)
         // from then on, never a crash.
         //
-        // KNOWN GAP, left for Task 12: a Guid resolved while its artifact was
-        // still PendingCook (NriTextureCache's checkerboard placeholder) gets
-        // memoized against the PLACEHOLDER's descriptor -- promotion to the
-        // real artifact on a later poll does not re-Add or update the cached
-        // slot, since a slot is only ever taken on the FIRST successful
-        // resolve of a given Guid. Not reachable by anything in THIS arc (the
-        // proof cooks its artifact before ever resolving it), and Task 12's
-        // live cook queue is exactly the feature that would need to close it.
+        // CLOSED by Task 12 (was: "KNOWN GAP, left for Task 12"): a Guid
+        // resolved while its artifact was still PendingCook (NriTextureCache's
+        // checkerboard placeholder) gets memoized against the PLACEHOLDER's
+        // descriptor -- promotion to the real artifact on a later poll does
+        // NOT re-Add or update the cached slot on its own, since a slot is
+        // only ever taken on the FIRST successful resolve of a given Guid.
+        // InvalidateMeshAlbedoSlot (below) is the fix: the editor's cook-
+        // completion callback calls it for every guid a cook pass reports as
+        // freshly cooked, dropping the stale placeholder-bound memo so the
+        // NEXT ResolveMeshAlbedoSlot call re-resolves against the (by then
+        // Resident) real artifact and takes a fresh slot.
         //
         // CALL AT DECLARATION TIME ONLY -- forwards straight into
         // NriTextureCache::Resolve/View, which carries that rule itself
@@ -1193,6 +1222,23 @@ namespace Arcane
         // Batcher2D::Begin" contract; a test calling this directly (outside
         // any RenderFrame) owes itself the same rule.
         [[nodiscard]] std::uint32_t ResolveMeshAlbedoSlot(const Guid& id);
+
+        // F2b Task 12: closes the "KNOWN GAP, left for Task 12" paragraph
+        // above. Drops the memoized slot for `id` (a plain map erase -- the
+        // slot itself is never freed in BindlessTable, per the SLOT LIFETIME
+        // paragraph above; this just forgets that THIS guid already has
+        // one), so the NEXT ResolveMeshAlbedoSlot(id) re-resolves from
+        // scratch: if the texture is Resident by then (this method is meant
+        // to be called from the SAME cook-completion callback that already
+        // called InvalidateContentTexture(id) for the render cache), that
+        // re-resolve mints a fresh view over the REAL artifact and Adds a
+        // NEW slot -- the old slot, taken while the texture was still
+        // PendingCook and bound to the checkerboard's descriptor, is simply
+        // abandoned (an accepted, documented cost: one extra bindless slot
+        // per guid that was ever resolved before its first successful
+        // cook, bounded by kBindlessCapacity same as every other slot use).
+        // A no-op for a guid that was never memoized here.
+        void InvalidateMeshAlbedoSlot(const Guid& id) { m_meshAlbedoSlots.erase(id); }
 
     private:
         NriGraphContext() = default;

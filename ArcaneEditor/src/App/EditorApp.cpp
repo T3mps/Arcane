@@ -38,6 +38,7 @@
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputActions.hpp>
+#include <Arcane/Jobs/JobSystem.hpp>   // F2b Task 12: m_runtime->Jobs().Submit (CookQueue's SubmitFn)
 #include <Panels/ConsoleModel.hpp>   // ConsoleEntry / CategoryForMessage (ConsoleDiagnostics::Install)
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
@@ -925,6 +926,26 @@ namespace Arcane::Editor
                 }
             }
         }
+
+        // F2b Task 12: the background texture cook -- per-project (its
+        // CookSession's staleness memo and its projectDir are meaningless
+        // across a switch), so it is constructed fresh here rather than
+        // ever surviving into a different project. m_runtime always has a
+        // JobSystem (Runtime::Jobs()); the SubmitFn just forwards to it.
+        // ResetPerProjectState (the switch/close path) is what tears this
+        // back down (m_cookQueue.reset()).
+        if (const Arcane::Project* proj = m_runtime->CurrentProject())
+        {
+            m_cookQueue.emplace(proj->Root(),
+                [this](std::function<void()> job) { m_runtime->Jobs().Submit(std::move(job)); });
+            m_cookQueue->SetOnCookComplete(
+                [this](const Arcane::AssetPipeline::CookResult& r) { OnCookCompleted(r); });
+
+            // Task 5 deferral, closed here (SweepArtifactOrphans' own
+            // comment): once, at project open -- not on every cook pass.
+            SweepArtifactOrphans();
+        }
+
         EnsureScene();
         // Compute the real title now that project/scene state is final,
         // rather than the "Untitled" placeholder a mid-boot call would have
@@ -1367,6 +1388,15 @@ namespace Arcane::Editor
         // arm before m_runtime or anything else below exists.
         Arcane::Diagnostics::SetReportWrittenHook(&EditorApp::OnReportWritten, this);
 
+        // F2b Task 12: the per-refusal observer (Assets.hpp), same early
+        // dependency-free install point and the same reasoning as the
+        // report-written hook above -- OnArtifactRefused only ever touches
+        // m_cookDiagnostics + calls PublishCookDiagnostics(), so it is safe
+        // to arm before m_runtime or any project exists (a refusal literally
+        // cannot fire before the Assets facade has a content root, but
+        // arming early costs nothing and matches the hook's own precedent).
+        Arcane::SetArtifactRefusalObserver(&EditorApp::OnArtifactRefused, this);
+
         m_bootCtx.runtime     = nullptr;              // stages populate as they go
         m_bootCtx.splash      = m_splash;
         m_bootCtx.projectPath = m_config.projectPath.c_str();
@@ -1763,6 +1793,14 @@ namespace Arcane::Editor
             {
                 return rt ? rt->AssetsFacade().ArtifactFor(id) : nullptr;
             });
+        // F2b Task 12: which of a null artifact answer's two meanings applies
+        // (still cooking vs. permanently refused) -- see NriTextureCache::
+        // SetCookPendingOracle's own doc comment for the full contract this
+        // closes. Captures `this`, safe for the same reason every other
+        // lambda captured into this vehicle is: the vehicle is destroyed
+        // (ShutdownGraphPath / TeardownGraphForSwitch) well before ~EditorApp.
+        m_viewportTargets.graph->SetCookPendingOracle(
+            [this](const Arcane::Guid& id) { return IsCookPending(id); });
         return true;
     }
 
@@ -2272,6 +2310,8 @@ namespace Arcane::Editor
                 exitReason = "validation-errors";
             else if (m_compareMissingFatal)
                 exitReason = "compare-missing-reference";
+            else if (m_cookRefusedFatal)
+                exitReason = "compare-cook-refused";
             else if (settleFailed)
                 exitReason = m_compareEvaluated ? "compare-failed" : "settle-not-converged";
             else if (compareBlessed)
@@ -2396,6 +2436,17 @@ namespace Arcane::Editor
                 {
                     errorMessage = "no reference image on disk; re-run with --bless to create one";
                 }
+                else if (m_cookRefusedFatal)
+                {
+                    // F2b Task 12: fired BEFORE m_compareResolution was ever
+                    // computed (the cook gate runs ahead of reference
+                    // resolution) -- resolvedLevel/referencePath/triedPaths
+                    // above are therefore left at their honest "nothing
+                    // resolved yet" defaults, exactly as intended for a run
+                    // that exited at zero frames.
+                    errorMessage = "one or more content textures failed to cook; see the Console "
+                                    "'Texture cook failed' lines and the Problems pane";
+                }
                 else if (compareBlessed)
                 {
                     // m_compareResolution was captured BEFORE the write, so
@@ -2472,6 +2523,10 @@ namespace Arcane::Editor
         // before any member below starts tearing down, is what makes that
         // pointer safe to have handed out.
         Arcane::Diagnostics::ClearReportWrittenHook();
+
+        // Same reasoning, the per-refusal observer (F2b Task 12):
+        // OnArtifactRefused's `user` is also `this`.
+        Arcane::SetArtifactRefusalObserver(nullptr, nullptr);
 
         // Reclaim the module-rebuild worker before member teardown: it only
         // touches its own mutex-guarded queue, but a thread outliving the

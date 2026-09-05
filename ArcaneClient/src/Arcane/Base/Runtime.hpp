@@ -33,6 +33,7 @@ namespace Mosaic { struct IWorkScheduler; }   // the shared data-parallel seam (
 namespace Arcane
 {
     class Assets;
+    class JobSystem;
     struct ITaskExecutor;
     struct SpriteEntry;            // Scene/SceneResources.hpp -- only named here (pointer-to-map param)
     struct MeshEntry;               // Scene/SceneResources.hpp -- SpriteEntry's F2a (3D) sibling
@@ -78,6 +79,14 @@ namespace Arcane
         Astra::TypeContext*     TypeContext()   noexcept;
         Mosaic::IWorkScheduler* WorkScheduler() noexcept;
         ITaskExecutor*          TaskExecutor()  noexcept;   // enki pool, worker-index ParallelFor face
+        // The shared background job queue (F2b Task 12): JobSystem::Submit for
+        // fire-and-forget CPU work off the main thread -- the editor's
+        // background texture cook (Arcane::Editor::CookQueue) is the first
+        // production consumer. Same instance WorkScheduler()/TaskExecutor()
+        // already expose two other faces of; this is the third. Reference,
+        // not pointer: the JobSystem is a fixed part of this Runtime's
+        // substrate and outlives every caller that could hold the reference.
+        JobSystem&              Jobs() noexcept;
         std::shared_ptr<Astra::ComponentRegistry> Components() noexcept;
         Assets&                 AssetsFacade() noexcept;
         Config&                 Configuration() noexcept;   // layered engine+project config (Slice 3)

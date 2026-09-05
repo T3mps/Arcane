@@ -225,6 +225,11 @@ namespace
         // calls ArtifactFor, only NriTextureCache's own artifact supply does.
         const Arcane::LoadedClientArtifact* ArtifactFor(const Arcane::Guid&) override { return nullptr; }
 
+        // F2b Task 12 (interface-completeness only, same reasoning as
+        // ArtifactFor above): nothing in this suite drives a cook-completion
+        // invalidation.
+        void InvalidateArtifact(const Arcane::Guid&) override {}
+
         int pixelsForCalls       = 0;
         int textureInfoForCalls  = 0;
         int evictingCalls        = 0;

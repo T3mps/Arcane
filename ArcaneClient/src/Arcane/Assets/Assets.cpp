@@ -90,6 +90,16 @@ namespace Arcane
         std::mutex        g_contentRefusalDetailMutex;
         std::string       g_contentRefusalDetail;
 
+        // F2b Task 12: the per-refusal observer (Assets.hpp's own doc
+        // comment) -- fires on EVERY refusal, not just the process's first.
+        // Guarded by its own mutex (never g_contentRefusalDetailMutex): the
+        // observer callback itself may take arbitrarily long (a Diagnostics::
+        // Publish call, say), and it must never be held while some OTHER
+        // caller is blocked reading ContentArtifactRefusalDetail().
+        std::mutex                 g_refusalObserverMutex;
+        ArtifactRefusalObserver    g_refusalObserver = nullptr;
+        void*                      g_refusalObserverUser = nullptr;
+
         // Latches the FIRST refusal only (compare_exchange_strong guards the detail write
         // too -- a second, different refusal on a later guid must not overwrite the first
         // one a host is about to report). `kind` is "ArtifactMissing", "HashMismatch" or
@@ -104,6 +114,19 @@ namespace Arcane
                 std::lock_guard<std::mutex> lock(g_contentRefusalDetailMutex);
                 g_contentRefusalDetail = std::string(kind) + ": " + id.ToString();
             }
+
+            // Unconditional -- unlike the latch above, EVERY call reaches the
+            // observer (Task 12's Problems pane wants every refused guid it
+            // has ever seen this session, not just the first).
+            ArtifactRefusalObserver observer;
+            void* user;
+            {
+                std::lock_guard<std::mutex> lock(g_refusalObserverMutex);
+                observer = g_refusalObserver;
+                user = g_refusalObserverUser;
+            }
+            if (observer)
+                observer(id, kind, user);
         }
 
         class AssetsImpl final : public Assets
@@ -523,6 +546,27 @@ namespace Arcane
                 return raw;
             }
 
+            // F2b Task 12: the un-latch behind Assets.hpp's InvalidateArtifact
+            // doc comment. Resolves `id` through the SAME ResolveId path every
+            // accessor above does, then evicts that one resolved key from all
+            // three caches at once -- a success memo and a memoized refusal
+            // (RefuseArtifact's PutFailure) are evicted identically, since
+            // both can be stale after a fresh cook (a `.meta` settings edit
+            // recooking an already-successful guid needs the OLD success
+            // memo gone too, not just a Missing memo). A guid ResolveId
+            // cannot place (never resolved, or the resolver itself refused
+            // it) leaves nothing to evict -- a harmless no-op.
+            void InvalidateArtifact(const Guid& id) override
+            {
+                const auto p = ResolveId(AssetId::FromGuid(id));
+                if (!p)
+                    return;
+                const std::string key = CacheKey(*p);
+                m_pixels.Evict(key);
+                m_textureInfo.Evict(key);
+                m_artifacts.Evict(key);
+            }
+
             uint64_t TotalBytes() const
             {
                 return m_bytes.TotalBytes() +
@@ -730,6 +774,13 @@ namespace Arcane
         g_contentRefusalObserved.store(false, std::memory_order_release);
         std::lock_guard<std::mutex> lock(g_contentRefusalDetailMutex);
         g_contentRefusalDetail.clear();
+    }
+
+    void SetArtifactRefusalObserver(ArtifactRefusalObserver observer, void* user)
+    {
+        std::lock_guard<std::mutex> lock(g_refusalObserverMutex);
+        g_refusalObserver = observer;
+        g_refusalObserverUser = user;
     }
 
     namespace

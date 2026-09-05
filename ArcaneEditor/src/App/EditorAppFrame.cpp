@@ -16,6 +16,7 @@
 #include "Scene/SelectionOps.hpp"
 #include "Viewport/ViewportImGuiInput.hpp"
 
+#include <Arcane/AssetPipeline/CookSession.hpp>   // F2b Task 12: MainLoop's pre-loop cook gate
 #include <Arcane/Assets/Assets.hpp>      // Arcane::WritePngRgba (RenderSceneToViewport's capture block)
 #include <Arcane/Assets/ImageCompare.hpp>   // --compare (Task 9): PixelData/ImageCompareOptions/CompareImages; also pulls in ImageIo.hpp's LoadPngRgba
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
@@ -203,6 +204,52 @@ namespace Arcane::Editor
         // Boot is over; anything the watchdog reports from here on belongs to
         // the frame loop, not to a stale boot stage.
         Arcane::Diagnostics::SetPhase("editor frame loop");
+
+        // ===== F2b Task 12: the cook gate =====================================
+        // verify/capture/bless REFUSES-OR-WAITS while CookSession-reported
+        // cooks are pending -- gated BEFORE m_compareRequested is set below
+        // (Task 9's own reference-resolution block), and deliberately BEFORE
+        // that block too: a --bless run with no reference yet must not bless
+        // a checkerboard/refused placeholder as the new "golden" capture any
+        // more than an ordinary --compare run may compare against one.
+        //
+        // WAITS: this is a one-shot batch verify run, not the live editing
+        // session's fire-and-forget JobSystem::Submit queue (CookQueue) --
+        // blocking here, synchronously, on a plain CookSession::CookProject
+        // pass IS the wait. REFUSES: if that pass reports any source that
+        // FAILED to cook (corrupt source / disk write error -- CookSession's
+        // own vocabulary), this exits fast, at zero frames rendered, exactly
+        // like the missing-reference fail-fast path below -- neither a
+        // placeholder nor a refusal is something to compare against or
+        // bless. A run with no open project (projectRoot empty) has no
+        // Content/ tree to cook and is left to the reference-resolution
+        // block's own handling.
+        if (!m_config.compareReference.empty())
+        {
+            const std::filesystem::path cookProjectRoot =
+                (m_runtime && m_runtime->CurrentProject()) ? m_runtime->CurrentProject()->Root()
+                                                            : std::filesystem::path{};
+            if (!cookProjectRoot.empty())
+            {
+                Arcane::AssetPipeline::CookSession cookGate;
+                const Arcane::AssetPipeline::CookResult cookResult =
+                    cookGate.CookProject(cookProjectRoot);
+                if (cookResult.failed > 0)
+                {
+                    ARC_ERROR("--compare '{}': {} content source(s) failed to cook -- refusing "
+                              "rather than comparing/blessing against a placeholder or refused "
+                              "render",
+                              m_config.compareReference, cookResult.failed);
+                    m_cookRefusedFatal = true;
+                    m_graphExit = 5;
+                    ShutdownGraphPath();
+                    return;
+                }
+                if (cookResult.cooked > 0)
+                    ARC_INFO("--compare '{}': cooked {} content source(s) before comparing",
+                             m_config.compareReference, cookResult.cooked);
+            }
+        }
 
         // ===== --compare / --bless (Task 9) =================================
         // Resolve the reference BEFORE the settle loop starts, mirroring
@@ -1903,7 +1950,13 @@ namespace Arcane::Editor
         // been recorded AND submitted, which is the whole condition the
         // deferral exists to satisfy.
         DrainRetiredDocPreviews();
-        PollMaterialWatch();   // external .arcmat edits (~1 Hz mtime sweep)
+        PollAssetWatch();   // external .arcmat/texture/.meta edits (~1 Hz mtime sweep)
+        // F2b Task 12: drains the background cook queue's finished passes --
+        // same safe window (strictly after this frame's render, strictly
+        // before the next one's) InvalidateMesh's own doc comment already
+        // establishes, since a completed cook's invalidation touches the
+        // Assets facade and the viewport graph's GPU-adjacent caches.
+        PollCookQueue();
         m_documents.TickAll(m_gameUi.frameDt);
     }
 

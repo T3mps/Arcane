@@ -791,6 +791,15 @@ project "ArcaneTests"
         -- too but never invoked by any test -- process creation is desk-verify
         -- territory, the same rule as RuntimeLaunch's SpawnDetached above.
         "%{wks.location}/ArcaneEditor/src/Project/ModuleBuild.cpp",
+        -- F2b Task 12: CookQueue (the editor's background texture cook --
+        -- watcher-triggered, hash-decided, never blocks) source-compiles into
+        -- the test exe so the [editor][cook] units drive its queuing/
+        -- coalescing logic directly with a manually-pumped SubmitFn fake, no
+        -- JobSystem/threading involved -- same "pure logic, no ImGui" pattern
+        -- as ModuleBuild.cpp above (Runner's own std::thread half there has
+        -- the analogous split; here it is JobSystem::Submit, tested for real
+        -- threading separately in JobSystemSubmitTest.cpp).
+        "%{wks.location}/ArcaneEditor/src/Project/CookQueue.cpp",
     }
 
     includedirs {

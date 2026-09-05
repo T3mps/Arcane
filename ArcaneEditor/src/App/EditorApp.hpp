@@ -35,6 +35,7 @@
 #include "Documents/DocumentHost.hpp"
 #include "Viewport/EditorCamera.hpp"
 #include "Panels/EditorPanels.hpp"
+#include "Project/CookQueue.hpp"
 #include "Project/ModuleBuild.hpp"
 #include "App/PlayMode.hpp"
 #include "Panels/ProblemsPanel.hpp"
@@ -685,6 +686,18 @@ namespace Arcane::Editor
         // falling through the ordinary settle/frames-complete
         // classification.
         bool                                  m_compareMissingFatal  = false;
+        // F2b Task 12: set true ONLY by MainLoop's pre-loop cook gate, when
+        // a synchronous CookSession::CookProject pass (run BEFORE the
+        // reference/settle machinery below, so a fresh --bless never blesses
+        // a placeholder either) reports at least one content source that
+        // FAILED to cook -- the refuse half of "refuses-or-waits while
+        // CookSession-reported cooks are pending". ShutdownGraphPath reads
+        // this the same way it reads m_compareMissingFatal, folding
+        // exitReason "compare-cook-refused" into m_graphExit (5) ahead of
+        // the ordinary settle/frames-complete classification. Mutually
+        // exclusive with m_compareMissingFatal by construction: both are
+        // ahead-of-the-loop `return`s, so only one can ever fire per run.
+        bool                                  m_cookRefusedFatal     = false;
 
         // ---- Boot state (EditorApp::Create/Init) ----------------------------
         // Deliberately declared HERE, outside the m_gpu/m_runtime/m_plugin
@@ -1144,14 +1157,88 @@ namespace Arcane::Editor
         Arcane::Editor::AssetBrowserState       m_assetBrowser;
         double m_editorClock = 0.0;   // the compile service's Poll/Submit clock
 
-        // Material file watcher: a ~1 Hz mtime sweep over the registry's
-        // .arcmat files (ShaderLibrary's hot-reload pattern). An EXTERNAL
-        // change (git pull, sibling repo, hand edit) invalidates the sprite
-        // cache and reloads/refreshes open documents; our own saves
-        // re-baseline through onAssetSaved so they never bounce back.
-        void PollMaterialWatch();
+        // Asset file watcher: a ~1 Hz mtime sweep over the registry's .arcmat
+        // files (ShaderLibrary's hot-reload pattern) AND, since F2b Task 12,
+        // every AssetKind::Texture source PLUS its .meta sidecar -- a
+        // hand-edited or inspector-written .meta is a cook trigger exactly
+        // like a source edit (spec s7 as amended). An EXTERNAL .arcmat change
+        // (git pull, sibling repo, hand edit) invalidates the sprite cache
+        // and reloads/refreshes open documents; a texture/.meta change calls
+        // m_cookQueue->NoteChanged() (watcher-triggered, hash-decided, never
+        // blocks -- see CookQueue.hpp). Our own saves re-baseline through
+        // onAssetSaved (the material half) so they never bounce back; the
+        // editor never hand-writes a texture's PIXELS in place, only its
+        // .meta sidecar (the inspector's four cook-setting knobs), so THAT
+        // write re-baselines itself the same way immediately below.
+        void PollAssetWatch();
         std::unordered_map<std::string, std::filesystem::file_time_type> m_materialMtimes;
         double m_materialWatchNext = 0.0;
+
+        // ---- Background texture cook (F2b Task 12) --------------------------
+        // CookQueue itself is per-project (its CookSession's staleness memo
+        // and its projectDir are meaningless across a switch) -- constructed
+        // in OnProjectOpened, destroyed in ResetPerProjectState, same
+        // lifetime shape as m_resolver's per-project caches.
+        std::optional<Arcane::Editor::CookQueue> m_cookQueue;
+        // Drains m_cookQueue's finished passes once per frame -- see
+        // PumpEditorDocuments (EditorAppFrame.cpp), the same safe window
+        // (strictly after this frame's render, strictly before the next
+        // one's) SceneRenderResolver::InvalidateMesh's own doc comment
+        // already establishes for GPU-adjacent invalidation.
+        void PollCookQueue();
+        // The completion handler CookQueue's SetOnCookComplete callback
+        // (installed once, in OnProjectOpened) forwards into -- see
+        // EditorAppProject.cpp for what it actually does (Assets::
+        // InvalidateArtifact, NriGraphContext::InvalidateContentTexture/
+        // InvalidateMeshAlbedoSlot, m_cookDiagnostics bookkeeping).
+        void OnCookCompleted(const Arcane::AssetPipeline::CookResult& result);
+
+        // One row per guid this session has seen refused (via the per-
+        // refusal observer, Assets.hpp) or failed to cook (via CookQueue's
+        // completion callback) -- accumulated across the WHOLE session,
+        // republished in full under "diagnostics:cook" every time it
+        // changes (the Diagnostics publication-group contract: a producer
+        // owns a key and republishes its ENTIRE set). `permanent` is what
+        // IsCookPending below reads: true for HashMismatch/
+        // VersionNewerThanEngine/a CookSession import failure (none of
+        // these will ever resolve without a user fixing the source), false
+        // for ArtifactMissing (presumed still-cooking until proven
+        // otherwise). A row is ERASED (not merely left stale) the moment
+        // the SAME guid appears in a LATER CookResult::cookedGuids -- "refuse,
+        // never limp... until fixed" extended to the Problems pane.
+        struct CookDiagRow
+        {
+            Arcane::Diagnostic diagnostic;
+            bool permanent = false;
+        };
+        std::unordered_map<Arcane::Guid, CookDiagRow> m_cookDiagnostics;
+        // Republishes m_cookDiagnostics's CURRENT contents under
+        // "diagnostics:cook" -- called after every mutation of the map
+        // (never left for the next frame to notice, since a refusal can
+        // land off the per-frame cook-queue rhythm entirely, from ordinary
+        // scene resolution).
+        void PublishCookDiagnostics();
+        // The per-refusal observer (Assets.hpp's SetArtifactRefusalObserver)
+        // installed once, in Create() -- see Assets.hpp's own doc comment
+        // for why this fires EVERY refusal rather than just the process's
+        // first. `user` is always `this`.
+        static void OnArtifactRefused(const Arcane::Guid& id, const char* kind, void* user);
+        // The cook-pending oracle installed on the viewport graph's texture
+        // cache (NriTextureCache::SetCookPendingOracle, via NriGraphContext)
+        // -- "is a cook still plausibly in flight for this guid" as far as
+        // this session's own bookkeeping knows. See m_cookDiagnostics'
+        // `permanent` field: true (pending) unless a PERMANENT row already
+        // exists for `id`.
+        [[nodiscard]] bool IsCookPending(const Arcane::Guid& id) const;
+        // Removes Artifacts/** files this project's registry no longer names
+        // any live guid for (ArtifactStore::SweepOrphans) -- called once, at
+        // project open (OnProjectOpened), NOT on every cook pass: this is
+        // garbage collection for guids that were REMOVED from the project
+        // entirely, unrelated to CookQueue's own per-source staleness
+        // decisions. RebuildIndexFromScan is called first (SweepOrphans'
+        // own header comment: it sweeps the IN-MEMORY index, which starts
+        // empty every call).
+        void SweepArtifactOrphans();
 
         // ---- Async file-dialog inbox (architecture pass sec 2) --------------
         // One DialogSlot per dialog kind. The old six pending strings + three

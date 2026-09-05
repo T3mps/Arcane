@@ -238,6 +238,7 @@ namespace Arcane
     Astra::TypeContext*    Runtime::TypeContext()   noexcept { return m_impl->context; }
     Mosaic::IWorkScheduler* Runtime::WorkScheduler() noexcept { return m_impl->sched.get(); }
     ITaskExecutor*         Runtime::TaskExecutor()  noexcept { return m_impl->jobs.TaskExecutor(); }
+    JobSystem&             Runtime::Jobs()          noexcept { return m_impl->jobs; }
     std::shared_ptr<Astra::ComponentRegistry> Runtime::Components() noexcept { return m_impl->components; }
     Assets& Runtime::AssetsFacade() noexcept { return *m_impl->assets; }
     Audio::AudioDevice& Runtime::AudioSystem() noexcept { return m_impl->audio; }

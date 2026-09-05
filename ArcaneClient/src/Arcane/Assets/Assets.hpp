@@ -169,7 +169,58 @@ namespace Arcane
         // callers that need it to outlive the current call must copy it, not
         // hold the pointer (same contract as PixelsFor).
         virtual const LoadedClientArtifact* ArtifactFor(const Guid& id) = 0;
+
+        // F2b Task 12: drops every memoized entry (pixels/textureInfo/
+        // artifacts, success OR memoized refusal alike) this facade holds for
+        // `id` -- the un-latch a background cook's completion needs. Since
+        // Task 8, a guid with no cooked artifact yet is a MEMOIZED
+        // ArtifactMissing refusal at all three accessors (RefuseArtifact's
+        // own comment); without this call that memo is sticky FOREVER, and a
+        // texture dropped into Content/ mid-session would never promote past
+        // its first "not cooked yet" ask even after the cook queue finishes.
+        // The editor's cook-completion callback calls this for every guid a
+        // CookSession::CookProject pass reports as freshly cooked
+        // (CookResult::cookedGuids), THEN refreshes the render-side caches
+        // (NriTextureCache::Invalidate, NriGraphContext::
+        // InvalidateMeshAlbedoSlot) that separately memoize their OWN view of
+        // the same guid downstream of this facade.
+        //
+        // Appended at the END of the interface (ABI v21, same-arc addition --
+        // see ArtifactFor's own "NEW VIRTUALS GO AT THE END" precedent):
+        // moves no existing vtable slot, but the class's shape changed again
+        // this arc, so ReferenceProject.slnx needs the same rebuild Task 7
+        // required for ArtifactFor.
+        //
+        // A no-op for an id nothing has ever resolved/refused (nothing to
+        // drop). Safe to call speculatively -- e.g. for a guid whose cook
+        // just FAILED too, so a stale success memo from before the edit
+        // cannot linger.
+        virtual void InvalidateArtifact(const Guid& id) = 0;
     };
+
+    // -----------------------------------------------------------------
+    // The per-refusal observer (F2b Task 12)
+    // -----------------------------------------------------------------
+    //
+    // ContentArtifactRefusalObserved/Detail above latch the FIRST refusal
+    // only -- enough for a host that exits on the first hit, not enough for
+    // a long-lived editing session that wants to show EVERY refused guid in
+    // its Problems pane. This fires on EVERY RefuseArtifact call (all three
+    // kinds -- "ArtifactMissing", "HashMismatch", "VersionNewerThanEngine" --
+    // the same `kind` strings the latch's detail string embeds), for every
+    // distinct refusal, not just the process's first.
+    //
+    // Raw function pointer + user data, mirroring Diagnostics::SetSink --
+    // keeps the DLL boundary free of std::function's allocator coupling
+    // (Diagnostics.hpp's own comment on why). Install (or clear, with
+    // nullptr) the process-wide observer; last writer wins, same "at most
+    // one" contract as SetSink. Called from whatever thread first resolves
+    // the refused guid -- today always the main thread (every Assets
+    // accessor is called from scene resolution / NriTextureCache::Resolve,
+    // both main-thread-only by their own contracts), but the install/read is
+    // still mutex-guarded rather than relying on that.
+    using ArtifactRefusalObserver = void (*)(const Guid& id, const char* kind, void* user);
+    ARCANE_API void SetArtifactRefusalObserver(ArtifactRefusalObserver observer, void* user);
 
     // -----------------------------------------------------------------
     // The process-wide content-artifact-refusal latch

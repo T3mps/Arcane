@@ -45,6 +45,8 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "Arcane/AssetPipeline/TextureImporter.hpp"
 #include "Arcane/Guid.hpp"
@@ -56,6 +58,27 @@ namespace Arcane::AssetPipeline
         std::size_t cooked = 0;      // freshly imported + committed this call
         std::size_t upToDate = 0;    // already had a current artifact for that key
         std::size_t failed = 0;      // import failed (fresh or memoized) or commit failed
+
+        // F2b Task 12: WHICH guids landed in the `cooked` bucket this call --
+        // the editor's background cook queue needs this to invalidate exactly
+        // the textures that changed (the Assets facade's per-guid memos, the
+        // NriTextureCache GPU residency entry, the mesh-albedo bindless slot
+        // memo), rather than sweeping every known guid in the project on
+        // every cook pass. `arccook`'s CLI and CookSession's own [pipeline]
+        // tests never read this -- purely additive, existing callers that
+        // only look at the three counts above are unaffected.
+        std::vector<Guid> cookedGuids;
+
+        // Guid -> human reason, for every guid that landed in the `failed`
+        // bucket this call -- the SAME strings LastFailures() carries,
+        // duplicated into the result itself (not read back out of
+        // LastFailures() later) so a caller that consumes CookResult on a
+        // DIFFERENT thread than the one that called CookProject (the
+        // editor's cook queue runs CookProject on a JobSystem worker and
+        // drains the result on the main thread) never races a LATER
+        // CookProject call already reusing the same CookSession/
+        // m_lastFailures.
+        std::vector<std::pair<Guid, std::string>> failures;
     };
 
     class CookSession

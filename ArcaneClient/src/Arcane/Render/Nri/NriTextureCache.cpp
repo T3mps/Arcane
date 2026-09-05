@@ -108,6 +108,32 @@ namespace Arcane
         // resolve an image before a resize should not re-announce it after one.
     }
 
+    void NriTextureCache::Invalidate(const Guid& id, Graveyard& graveyard, std::uint64_t fence)
+    {
+        if (!m_device)
+            return;
+        const nri::CoreInterface* core = &m_device->Core();
+
+        // Both colour spaces -- content is always Srgb, but sweeping Display
+        // too costs one extra unordered_map lookup (almost always a miss)
+        // and keeps this method correct even if a future caller ever DID
+        // resolve the same guid in both spaces. Never touches the shared
+        // checkerboard placeholder(s): a PendingCook/Refused key's
+        // texture/view are always null (ResolveArtifactKey's own contract),
+        // so only a genuinely RESIDENT key's own object is ever buried here.
+        for (const ColorSpace space : { ColorSpace::Srgb, ColorSpace::Display })
+        {
+            const auto it = m_textures.find(Key{ id, space });
+            if (it == m_textures.end())
+                continue;
+            if (it->second.view)
+                graveyard.Bury(fence, [core, d = it->second.view] { core->DestroyDescriptor(d); });
+            if (it->second.texture)
+                graveyard.Bury(fence, [core, t = it->second.texture] { core->DestroyTexture(t); });
+            m_textures.erase(it);
+        }
+    }
+
     std::size_t NriTextureCache::ResidentCount() const noexcept
     {
         // Counted on the VIEW, for the same reason Resolve's hit is gated on
@@ -571,6 +597,32 @@ namespace Arcane
         const LoadedClientArtifact* artifact = m_artifactSupply(key.id);
         if (!artifact)
         {
+            // F2b Task 12: a null answer means EITHER "not cooked yet, a
+            // live cook queue will produce it" (genuinely PendingCook) OR
+            // "refused -- HashMismatch/VersionNewerThanEngine -- and will
+            // NEVER resolve without a user fixing the source" (Task 8 made
+            // Assets::ArtifactFor return null for both alike, so this
+            // return value alone cannot tell them apart). The cook-pending
+            // oracle, when installed, is queue KNOWLEDGE from outside this
+            // cache that can: no oracle installed, or the oracle answering
+            // true, preserves the pre-Task-12 behaviour (PendingCook,
+            // retriable); the oracle answering false means this guid is not
+            // queued for a cook, so the null answer is a genuine refusal,
+            // not a wait -- memoized Refused, exactly like an upload
+            // failure below, so the checkerboard never claims "still
+            // cooking" for something that is simply broken (the spec's
+            // placeholder rule). A cook that completes LATER for a guid
+            // stuck here reaches it through Invalidate(), not through this
+            // branch re-polling -- Refused is sticky by design (see
+            // ResidentState's own comment).
+            if (m_cookPendingOracle && !m_cookPendingOracle(key.id))
+            {
+                resident.texture = nullptr;
+                resident.view    = nullptr;
+                resident.state   = ResidentState::Refused;
+                return nullptr;
+            }
+
             // Not cooked yet -- retriable (see ResidentState::PendingCook).
             // This key owns NO GPU object of its own: it borrows the shared
             // placeholder's, so Release()/the destructor never double-destroys

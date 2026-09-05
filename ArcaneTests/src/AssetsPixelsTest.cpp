@@ -392,6 +392,26 @@ namespace
         ScopedContentArtifactRefusalLatch() { Arcane::ResetContentArtifactRefusal(); }
         ~ScopedContentArtifactRefusalLatch() { Arcane::ResetContentArtifactRefusal(); }
     };
+
+    // F2b Task 12: the per-refusal observer (Assets.hpp's SetArtifactRefusalObserver) is
+    // ALSO process-wide -- same leak-across-cases hazard as the latch above, same RAII fix.
+    struct ScopedArtifactRefusalObserver
+    {
+        ~ScopedArtifactRefusalObserver() { Arcane::SetArtifactRefusalObserver(nullptr, nullptr); }
+    };
+
+    struct RefusalRecord
+    {
+        Arcane::Guid id;
+        std::string  kind;
+    };
+
+    // Raw fn-ptr + user-data thunk, matching SetArtifactRefusalObserver's own DLL-safe
+    // signature (Diagnostics::SetSink's convention) -- `user` is the vector under test.
+    void RecordRefusal(const Arcane::Guid& id, const char* kind, void* user)
+    {
+        static_cast<std::vector<RefusalRecord>*>(user)->push_back(RefusalRecord{ id, kind });
+    }
 }
 
 TEST_CASE("assets: TextureInfoFor serves HEADER (true) dims while PixelsFor serves THUMBNAIL "
@@ -519,4 +539,132 @@ TEST_CASE("assets: a VersionNewerThanEngine artifact refuses loudly too", "[asse
 
     CHECK(Arcane::ContentArtifactRefusalObserved());
     CHECK(Arcane::ContentArtifactRefusalDetail().find("VersionNewerThanEngine") != std::string::npos);
+}
+
+TEST_CASE("assets: the per-refusal observer fires on EVERY refusal, not just the process's "
+          "first (F2b Task 12 -- the Problems pane wants all of them, unlike the latch)",
+          "[assets][pixels][artifact]")
+{
+    ScopedContentArtifactRefusalLatch latchGuard;
+    ScopedArtifactRefusalObserver observerGuard;
+    std::vector<RefusalRecord> seen;
+    Arcane::SetArtifactRefusalObserver(&RecordRefusal, &seen);
+
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane_assets_artifact_sandbox" / "observer_fires_always";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "Content" / "textures");
+
+    const Arcane::Guid guid = Arcane::Guid::Generate();
+    const fs::path png = root / "Content" / "textures" / "plain.png";
+    const auto checker = CheckerPixels();
+    REQUIRE(stbi_write_png(png.string().c_str(), static_cast<int>(kCheckerW), static_cast<int>(kCheckerH),
+                           4, checker.data(), static_cast<int>(kCheckerW) * 4) != 0);
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(root / "Content");
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == guid) return png;
+        return std::nullopt;
+    });
+
+    // THE PIN: TextureInfoFor/PixelsFor/ArtifactFor each maintain their OWN memo, so a guid
+    // with no cooked artifact refuses independently on each -- the process-wide LATCH
+    // (ContentArtifactRefusalObserved/Detail) only ever remembers the FIRST of these three,
+    // but the observer must see ALL of them.
+    CHECK(assets->TextureInfoFor(guid) == nullptr);
+    CHECK(assets->PixelsFor(guid) == nullptr);
+    CHECK(assets->ArtifactFor(guid) == nullptr);
+    // A repeat call on an ALREADY-memoized accessor must NOT fire again -- the memo's whole
+    // point is "attempted once", not "reported once".
+    CHECK(assets->TextureInfoFor(guid) == nullptr);
+
+    REQUIRE(seen.size() == 3u);
+    for (const RefusalRecord& r : seen)
+    {
+        CHECK(r.id == guid);
+        CHECK(r.kind == "ArtifactMissing");
+    }
+
+    // Clearing (nullptr, nullptr) stops delivery -- a later refusal (a second, distinct guid)
+    // must not reach the now-cleared observer.
+    Arcane::SetArtifactRefusalObserver(nullptr, nullptr);
+    const Arcane::Guid guid2 = Arcane::Guid::Generate();
+    const fs::path png2 = root / "Content" / "textures" / "plain2.png";
+    REQUIRE(stbi_write_png(png2.string().c_str(), static_cast<int>(kCheckerW), static_cast<int>(kCheckerH),
+                           4, checker.data(), static_cast<int>(kCheckerW) * 4) != 0);
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == guid2) return png2;
+        return std::nullopt;
+    });
+    CHECK(assets->TextureInfoFor(guid2) == nullptr);
+    CHECK(seen.size() == 3u);   // unchanged -- the cleared observer received nothing more
+
+    fs::remove_all(root, ec);
+}
+
+TEST_CASE("assets: InvalidateArtifact clears a memoized ArtifactMissing refusal so a cook that "
+          "lands afterward actually promotes -- the un-latch F2b Task 12's cook-completion "
+          "callback depends on", "[assets][pixels][artifact]")
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane_assets_artifact_sandbox" / "invalidate_promotes";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "Content" / "textures");
+    fs::create_directories(root / "Intermediate" / "Artifacts" / "aa");
+
+    const fs::path png = root / "Content" / "textures" / "big.png";
+    constexpr int w = 16, h = 16;
+    const std::vector<unsigned char> rgba = GradientRgba(w, h);
+    REQUIRE(stbi_write_png(png.string().c_str(), w, h, 4, rgba.data(), w * 4) != 0);
+    const Arcane::Guid guid = Arcane::Guid::Generate();
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(root / "Content");
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == guid) return png;
+        return std::nullopt;
+    });
+
+    // No artifact yet -- ArtifactMissing on all three, memoized (Task 8).
+    REQUIRE(assets->ArtifactFor(guid) == nullptr);
+    REQUIRE(assets->TextureInfoFor(guid) == nullptr);
+    REQUIRE(assets->PixelsFor(guid) == nullptr);
+
+    // NOW a background cook lands (mirrors what CookQueue's RunOnePass -> CookSession::
+    // CookProject actually does): import + write the artifact for real.
+    const std::vector<std::byte> sourceBytes = ReadWholeFileAsBytes(png);
+    Arcane::AssetPipeline::TextureMetaSettings settings;
+    settings.format = Arcane::AssetPipeline::TextureMetaSettings::Format::Rgba8;
+    const auto imported = Arcane::AssetPipeline::ImportTexture(sourceBytes, guid, settings);
+    REQUIRE(imported.has_value());
+    const fs::path artifactPath = root / "Intermediate" / "Artifacts" / "aa" / "fixture.arcart";
+    REQUIRE(Arcane::AssetPipeline::WriteTextureArtifact(artifactPath, imported->desc, imported->payload,
+                                                        imported->thumbRgba));
+
+    // Without invalidation the memo is STICKY -- this is the regression InvalidateArtifact
+    // exists to prevent; proving it stays stuck here is what makes the promotion below mean
+    // something (not just "it would have worked anyway").
+    CHECK(assets->ArtifactFor(guid) == nullptr);
+
+    assets->InvalidateArtifact(guid);
+
+    const Arcane::LoadedClientArtifact* artifact = assets->ArtifactFor(guid);
+    REQUIRE(artifact != nullptr);
+    CHECK(artifact->info.width == static_cast<std::uint32_t>(w));
+    CHECK(artifact->info.height == static_cast<std::uint32_t>(h));
+
+    const Arcane::TextureInfo* info = assets->TextureInfoFor(guid);
+    REQUIRE(info != nullptr);
+    CHECK(info->width == static_cast<std::uint32_t>(w));
+
+    const Arcane::PixelData* pixels = assets->PixelsFor(guid);
+    REQUIRE(pixels != nullptr);
+
+    fs::remove_all(root, ec);
 }

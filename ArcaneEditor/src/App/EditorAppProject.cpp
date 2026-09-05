@@ -1,7 +1,8 @@
 // EditorApp, project + asset plumbing: the Open-Project soft restart, the
 // material/instance creation flows, the DocServices the shader documents are
-// built from, and the ~1 Hz .arcmat file watcher. Split out of EditorApp.cpp as
-// a pure move.
+// built from, and the ~1 Hz asset watcher (.arcmat edits; since F2b Task 12
+// also texture sources + their .meta sidecars, feeding the background cook
+// queue). Split out of EditorApp.cpp as a pure move.
 //
 // SwitchProject and the CreateXAt effects are called ONLY from the frame loop's
 // top-of-frame phases or its deferred sceneAction (EditorAppFrame.cpp) -- never
@@ -14,6 +15,7 @@
 #include "App/EditorApp.hpp"
 #include "Panels/AssetBrowser.hpp"
 
+#include <Arcane/AssetPipeline/ArtifactStore.hpp>   // SweepArtifactOrphans (F2b Task 12)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MintMeshAsset)
@@ -34,6 +36,9 @@
 #include <span>
 #include <string>
 #include <string_view>   // take()'s id parameter
+#include <unordered_set>   // SweepArtifactOrphans' live-guid set (F2b Task 12)
+#include <utility>       // std::move (F2b Task 12's cook-diagnostics bookkeeping)
+#include <vector>
 
 namespace Arcane::Editor
 {
@@ -199,7 +204,7 @@ namespace Arcane::Editor
         }
     }
 
-    void EditorApp::PollMaterialWatch()
+    void EditorApp::PollAssetWatch()
     {
         if (m_editorClock < m_materialWatchNext)
             return;
@@ -212,49 +217,233 @@ namespace Arcane::Editor
         for (const Arcane::Editor::AssetEntry& e :
              Arcane::Editor::BuildAssetEntries(project->Registry()))
         {
-            if (e.kind != Arcane::Editor::AssetKind::Material)
+            if (e.kind == Arcane::Editor::AssetKind::Material)
+            {
+                const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(e.guid));
+                if (!path)
+                    continue;
+                std::error_code ec;
+                const auto mtime = std::filesystem::last_write_time(*path, ec);
+                if (ec)
+                    continue;   // deleted/unreadable -- documents keep last-good
+                const auto [it, inserted] =
+                    m_materialMtimes.try_emplace(path->generic_string(), mtime);
+                if (inserted || it->second == mtime)
+                {
+                    it->second = mtime;
+                    continue;   // first sighting is the baseline, not an event
+                }
+                it->second = mtime;
+
+                // An EXTERNAL edit landed: scene sprites re-resolve, an open
+                // document for the asset reloads (clean) or keeps its edits with
+                // a warn (dirty -- never stomped), and open documents whose
+                // PARENT chain contains it re-resolve + recompile.
+                ARC_INFO("material '{}' changed on disk", e.name);
+                if (m_resolver)
+                    m_resolver->InvalidateMaterial(e.guid);
+                m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
+                {
+                    auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d);
+                    if (!doc)
+                        return;
+                    if (doc->AssetGuid() == e.guid)
+                    {
+                        if (doc->Dirty())
+                            ARC_WARN("'{}' changed on disk but has unsaved edits here -- "
+                                     "keeping yours (Save overwrites the disk version)",
+                                     e.name);
+                        else
+                            doc->ReloadFromDisk();
+                    }
+                    else if (doc->DependsOn(e.guid))
+                        doc->RefreshParentChain();
+                });
                 continue;
+            }
+
+            if (e.kind != Arcane::Editor::AssetKind::Texture)
+                continue;
+
+            // F2b Task 12: a texture source AND its .meta sidecar are BOTH
+            // watched -- a hand-edited or inspector-written .meta (the four
+            // cook-setting knobs) is a cook trigger exactly like editing the
+            // pixels themselves (spec s7 as amended). Deliberately no
+            // self-save re-baseline for the .meta half the way the material
+            // branch above has one: the editor's own inspector write to a
+            // .meta IS a legitimate cook trigger, not a false-positive
+            // reload to suppress -- there is no "our own edit, ignore it"
+            // case for a texture setting the way there is for a material's
+            // in-memory document state.
             const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(e.guid));
             if (!path)
                 continue;
-            std::error_code ec;
-            const auto mtime = std::filesystem::last_write_time(*path, ec);
-            if (ec)
-                continue;   // deleted/unreadable -- documents keep last-good
-            const auto [it, inserted] =
-                m_materialMtimes.try_emplace(path->generic_string(), mtime);
-            if (inserted || it->second == mtime)
-            {
-                it->second = mtime;
-                continue;   // first sighting is the baseline, not an event
-            }
-            it->second = mtime;
+            std::filesystem::path metaPath = *path;
+            metaPath += ".meta";
 
-            // An EXTERNAL edit landed: scene sprites re-resolve, an open
-            // document for the asset reloads (clean) or keeps its edits with
-            // a warn (dirty -- never stomped), and open documents whose
-            // PARENT chain contains it re-resolve + recompile.
-            ARC_INFO("material '{}' changed on disk", e.name);
-            if (m_resolver)
-                m_resolver->InvalidateMaterial(e.guid);
-            m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
+            bool changed = false;
+            for (const std::filesystem::path& watched : { *path, metaPath })
             {
-                auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d);
-                if (!doc)
-                    return;
-                if (doc->AssetGuid() == e.guid)
+                std::error_code ec;
+                const auto mtime = std::filesystem::last_write_time(watched, ec);
+                if (ec)
+                    continue;   // e.g. no .meta sidecar yet -- not an error
+                const auto [it, inserted] =
+                    m_materialMtimes.try_emplace(watched.generic_string(), mtime);
+                if (inserted || it->second == mtime)
                 {
-                    if (doc->Dirty())
-                        ARC_WARN("'{}' changed on disk but has unsaved edits here -- "
-                                 "keeping yours (Save overwrites the disk version)",
-                                 e.name);
-                    else
-                        doc->ReloadFromDisk();
+                    it->second = mtime;
+                    continue;   // first sighting is the baseline, not an event
                 }
-                else if (doc->DependsOn(e.guid))
-                    doc->RefreshParentChain();
-            });
+                it->second = mtime;
+                changed = true;
+            }
+
+            if (changed && m_cookQueue)
+            {
+                ARC_INFO("texture '{}' (or its .meta) changed on disk", e.name);
+                // Watcher-triggered, hash-decided, NEVER BLOCKS: NoteChanged
+                // only submits a background CookSession::CookProject pass
+                // (JobSystem::Submit) and returns immediately -- the actual
+                // hash-gate decision (is anything really stale) and the
+                // import both happen on the worker. PollCookQueue (called
+                // every frame, PumpEditorDocuments) delivers the result.
+                m_cookQueue->NoteChanged();
+            }
         }
+    }
+
+    // ---- Background texture cook (F2b Task 12) -----------------------------
+
+    void EditorApp::PollCookQueue()
+    {
+        if (m_cookQueue)
+            m_cookQueue->Pump();   // -> OnCookCompleted, once per finished pass
+    }
+
+    void EditorApp::OnCookCompleted(const Arcane::AssetPipeline::CookResult& result)
+    {
+        bool diagnosticsChanged = false;
+
+        // Freshly cooked guids: the un-latch. Assets' own memo FIRST
+        // (InvalidateArtifact), then the render-side caches that separately
+        // memoize their own view of the same guid downstream of it -- so a
+        // Resolve()/ResolveMeshAlbedoSlot call the very next render phase
+        // sees the FRESH artifact rather than replaying a stale memo.
+        if (m_runtime)
+        {
+            for (const Arcane::Guid& guid : result.cookedGuids)
+            {
+                m_runtime->AssetsFacade().InvalidateArtifact(guid);
+                if (m_viewportTargets.graph)
+                {
+                    m_viewportTargets.graph->InvalidateContentTexture(guid);
+                    m_viewportTargets.graph->InvalidateMeshAlbedoSlot(guid);
+                }
+                // A guid that just cooked successfully is fixed now, even if
+                // it previously had a refusal/failure row (a `.meta` edit
+                // that corrects a bad setting, or a source re-saved after a
+                // corrupt drop) -- drop its Problems-pane row.
+                if (m_cookDiagnostics.erase(guid) > 0)
+                    diagnosticsChanged = true;
+            }
+        }
+
+        // Cook FAILURES -- CookSession's own vocabulary (corrupt source /
+        // disk write error), distinct from Assets' artifact-refusal
+        // vocabulary (OnArtifactRefused below), but the SAME Problems pane
+        // per the brief ("alongside cook failures"). PERMANENT: none of
+        // these resolve on their own -- the source needs a real fix.
+        for (const auto& [guid, reason] : result.failures)
+        {
+            Arcane::Diagnostic d;
+            d.severity = Arcane::DiagSeverity::Error;
+            d.scope    = Arcane::DiagScope::Assets;
+            d.code     = "assets.cook.failed";
+            d.message  = "Texture cook failed";
+            d.detail   = reason;
+            d.locator  = Arcane::DiagLocator::Asset(guid);
+            m_cookDiagnostics[guid] = CookDiagRow{ std::move(d), /*permanent=*/true };
+            diagnosticsChanged = true;
+        }
+
+        if (diagnosticsChanged)
+            PublishCookDiagnostics();
+    }
+
+    void EditorApp::OnArtifactRefused(const Arcane::Guid& id, const char* kind, void* user)
+    {
+        auto* self = static_cast<EditorApp*>(user);
+        if (!self)
+            return;
+
+        Arcane::Diagnostic d;
+        d.severity = Arcane::DiagSeverity::Error;
+        d.scope    = Arcane::DiagScope::Assets;
+        d.code     = "assets.artifact.refused";
+        d.message  = std::string("Content artifact refused (") + kind + ")";
+        d.detail   = id.ToString();
+        d.locator  = Arcane::DiagLocator::Asset(id);
+
+        // ArtifactMissing is presumed still-cooking (a fresh drop, or a cook
+        // that just hasn't run yet) -- IsCookPending's own default for a
+        // guid with NO row at all is ALSO "presume pending", so this
+        // permanent=false row changes nothing about that answer; it exists
+        // purely so the Problems pane shows something for it. HashMismatch/
+        // VersionNewerThanEngine are permanent: neither resolves without a
+        // user fixing the source, so the cook-pending oracle must say "no,
+        // this is refused" the moment either fires -- see IsCookPending.
+        const bool permanent = (std::string_view(kind) != "ArtifactMissing");
+        self->m_cookDiagnostics[id] = CookDiagRow{ std::move(d), permanent };
+        self->PublishCookDiagnostics();
+    }
+
+    bool EditorApp::IsCookPending(const Arcane::Guid& id) const
+    {
+        const auto it = m_cookDiagnostics.find(id);
+        return it == m_cookDiagnostics.end() || !it->second.permanent;
+    }
+
+    void EditorApp::PublishCookDiagnostics()
+    {
+        // KEY OWNERSHIP: "diagnostics:cook" -- this is the ONLY publisher,
+        // and it republishes m_cookDiagnostics' ENTIRE current contents
+        // every time (the Diagnostics publication-group contract), so an
+        // erased row (a guid that cooked successfully) actually disappears
+        // from the Problems pane rather than lingering until some unrelated
+        // later publish happens to overwrite it.
+        std::vector<Arcane::Diagnostic> rows;
+        rows.reserve(m_cookDiagnostics.size());
+        for (const auto& [guid, row] : m_cookDiagnostics)
+            rows.push_back(row.diagnostic);
+        Arcane::Diagnostics::Publish("diagnostics:cook", rows);
+    }
+
+    void EditorApp::SweepArtifactOrphans()
+    {
+        // Task 5 deferral, closed here: a `.meta` settings edit leaves the
+        // OLD artifact on disk under its OLD cook key forever until
+        // something sweeps it. That specific case is NOT what this function
+        // fixes (SweepOrphans only drops artifacts for a guid ABSENT from
+        // the live set entirely -- see its own header comment); this is
+        // garbage collection for a source REMOVED from the project, run
+        // once at project open, not on every cook pass.
+        const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!project)
+            return;
+
+        std::unordered_set<Arcane::Guid> liveGuids;
+        for (const auto& [guid, mountPath] : project->Registry().All())
+            liveGuids.insert(guid);
+
+        Arcane::AssetPipeline::ArtifactStore store(project->Root() / "Intermediate");
+        // The in-memory index starts EMPTY every call (a fresh ArtifactStore
+        // here) -- SweepOrphans' own header comment: "Call RebuildIndexFromScan
+        // first for a sweep grounded in the current disk state."
+        store.RebuildIndexFromScan();
+        const std::size_t removed = store.SweepOrphans(liveGuids);
+        if (removed > 0)
+            ARC_INFO("Assets: swept {} orphaned artifact(s) at project open", removed);
     }
 
     void EditorApp::CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent)
@@ -284,7 +473,7 @@ namespace Arcane::Editor
     // fresh sibling (never guess among duplicates).
     //
     // WHY the linear scan: this loads every registered .arcsprite off disk on
-    // EACH call to find matches by `texture`, same shape as PollMaterialWatch's
+    // EACH call to find matches by `texture`, same shape as PollAssetWatch's
     // sweep above -- registries are small today (dozens, not thousands, of
     // sprite assets per project), so a per-call scan is the simplest correct
     // thing. It would need a texture->sprites index (built once, invalidated on
@@ -484,6 +673,16 @@ namespace Arcane::Editor
     // (the two launch-modal flags this entry used to name are gone entirely --
     // a parked LaunchStandalone now lives in m_scene, covered by the m_scene
     // entry above; see the comment ahead of m_scene.Reset below.)
+    // m_cookQueue / m_cookDiagnostics (F2b Task 12): m_cookQueue's
+    // CookSession is rooted at the OUTGOING project's directory -- surviving
+    // a switch would cook the WRONG project's Content/ the next time
+    // something notices a change. m_cookDiagnostics carries
+    // DiagLocator::Asset(guid) rows for guids that exist only in the
+    // outgoing project's registry, the identical staleness class
+    // m_reportDiagnostics's own comment already documents (m_consoleDiag.
+    // store.ClearAll() above clears the PUBLISHED "diagnostics:cook" set,
+    // but the accumulator itself needs its own clear or the next post-switch
+    // publish would resurrect every stale row alongside it).
     void EditorApp::ResetPerProjectState()
     {
         m_documents.CloseAll();
@@ -498,6 +697,8 @@ namespace Arcane::Editor
         m_modalErrors.Clear();
         m_materialMtimes.clear();
         m_materialWatchNext = 0.0;
+        m_cookQueue.reset();
+        m_cookDiagnostics.clear();
         // A parked LaunchStandalone cannot survive into a switch: OpenProject's
         // own Request is ignored while any intent is parked, so the modal
         // resolves first.
