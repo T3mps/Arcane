@@ -705,20 +705,35 @@ namespace Arcane::Editor
         }
         else
         {
-            // Icon fallback: a Lucide glyph centered in the same 18px cell,
-            // under whichever font is active (every editor face carries the
-            // merged icon range, EditorFonts.cpp), so a missing thumbnail
-            // keeps the row's column alignment rather than shifting it.
+            // Icon fallback: a Lucide glyph centered WITHIN the same 18px
+            // cell, under whichever font is active (every editor face
+            // carries the merged icon range, EditorFonts.cpp). Centering
+            // makes this glyph's own registered item rect narrower than
+            // (and offset from) a real 18px thumbnail's whenever the glyph
+            // isn't exactly kRowThumbSize wide -- which is exactly why the
+            // name below is NOT anchored off this item's rect (a bare
+            // SameLine() would inherit that per-glyph offset); it is
+            // anchored off the fixed CELL width instead, so it lands at the
+            // same x regardless of which branch ran.
             const ImVec2 iconSize = ImGui::CalcTextSize(iconUtf8);
             ImGui::SetCursorScreenPos(ImVec2(rowMin.x + indent + (kRowThumbSize - iconSize.x) * 0.5f,
                                              rowMin.y + (rowHeight - iconSize.y) * 0.5f));
             ImGui::TextUnformatted(iconUtf8);
         }
 
-        ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+        // Fixed-anchor the name at indent + the thumb CELL's width, not a
+        // bare SameLine() off whichever item just ran: SameLine() reads
+        // CursorPosPrevLine.x, which is the THUMB/ICON's own item-rect right
+        // edge -- identical to indent+kRowThumbSize for the real 18x18
+        // Image, but short of it for the icon fallback's centered (and
+        // usually narrower) glyph rect. Anchoring both paths off the same
+        // fixed x is what actually keeps the name column aligned between
+        // thumbnail rows and icon-fallback rows, and gives the documented
+        // caller SameLine() convention (see the doc comment above) a stable
+        // x to inherit either way.
+        const float nameX = rowMin.x + indent + kRowThumbSize + ImGui::GetStyle().ItemInnerSpacing.x;
         const ImVec2 nameSize = ImGui::CalcTextSize(name);
-        ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x,
-                                         rowMin.y + (rowHeight - nameSize.y) * 0.5f));
+        ImGui::SetCursorScreenPos(ImVec2(nameX, rowMin.y + (rowHeight - nameSize.y) * 0.5f));
         ImGui::TextUnformatted(name);
 
         // Put the flow cursor back at the row's true bottom (see the doc
