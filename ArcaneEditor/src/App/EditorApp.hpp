@@ -28,6 +28,7 @@
 #include <Arcane/Assets/ImageCompare.hpp>     // --compare (Task 9): PixelData/ImageCompareResult
 #include "Panels/AssetBrowser.hpp"
 #include "Panels/AssetPanelModel.hpp"
+#include "Panels/AssetsPanel.hpp"
 #include "Panels/ConsoleBuffer.hpp"
 #include "Panels/DiagnosticStore.hpp"
 #include "App/DialogSlot.hpp"
@@ -285,7 +286,11 @@ namespace Arcane::Editor
         void DrawEditorUi(LoopState& ls, const FrameState& fs);
         void ConsumeMenuRequests(Arcane::Editor::MenuRequests& menuReq,
                                  const FrameState& fs, LoopState& ls);
-        void ConsumeBrowserActions(const Arcane::Editor::AssetBrowserActions& browserActions,
+        // Asset-manager redesign, Plan 1 Task 9: takes AssetsPanelActions now
+        // (the new panel's contract, a superset of the old AssetBrowserActions
+        // -- see that struct's own comment); the old AssetBrowserActions
+        // overload is gone with the call site that produced it.
+        void ConsumeBrowserActions(const Arcane::Editor::AssetsPanelActions& browserActions,
                                    LoopState& ls);
         Arcane::Editor::ShaderEditorDocument* ResolveActiveMaterialDoc();
         void DrawModals(LoopState& ls);
@@ -1163,6 +1168,12 @@ namespace Arcane::Editor
         std::unique_ptr<Arcane::SceneRenderResolver> m_resolver;
         Arcane::Editor::DocumentHost            m_documents;
         Arcane::Editor::AssetBrowserState       m_assetBrowser;
+        // Asset-manager redesign, Plan 1 Task 9: the new panel's session UI
+        // state (lens/search/rail selection). AssetBrowserState above stays
+        // declared (AssetBrowser.* is not deleted until Task 15) but is no
+        // longer fed by any draw call -- see DrawAssetsPanel's call site in
+        // DrawEditorUi.
+        Arcane::Editor::AssetsPanelState        m_assetsPanel;
         // Asset-manager redesign, Plan 1 Task 5: the pure, cached model behind
         // the (future) Browse lens -- kept current every frame ahead of ANY
         // panel draw (DrawEditorUi's RebuildIfDirty call, immediately before

@@ -2040,18 +2040,31 @@ namespace Arcane::Editor
 
         // Asset-manager redesign, Plan 1 Task 5: the invariant later tasks
         // rely on -- the model is current before ANY panel draw, whether or
-        // not the OLD panel below is even visible this frame (a future
-        // consumer must never observe a stale rebuild just because Assets
-        // happened to be docked shut). Cheap when clean (RebuildIfDirty's
-        // own doc comment): no registry walk, no provider calls, unless
-        // something actually marked it dirty since the last frame.
-        Arcane::Editor::AssetBrowserActions browserActions;
+        // not the panel below is even visible this frame (a future consumer
+        // must never observe a stale rebuild just because Assets happened to
+        // be docked shut). Cheap when clean (RebuildIfDirty's own doc
+        // comment): no registry walk, no provider calls, unless something
+        // actually marked it dirty since the last frame.
+        //
+        // Task 9: DrawAssetsPanel replaces DrawAssetBrowserPanel as what this
+        // draws (AssetBrowser.* stays on disk, unreferenced here, until
+        // Task 15 deletes it).
+        Arcane::Editor::AssetsPanelActions browserActions;
         const Arcane::Project* proj = m_runtime->CurrentProject();
         m_assetModel.RebuildIfDirty(proj ? &proj->Registry() : nullptr, m_assetPanelProviders);
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets))
-            browserActions = Arcane::Editor::DrawAssetBrowserPanel(
-                m_assetBrowser, proj, m_documents,
+        {
+            // Task 7's AssetServices seam, re-shaped into Task 9's
+            // AssetsPanelServices at this ONE call site -- two distinct
+            // struct types (different consumers, per AssetServices's own
+            // header comment) that happen to carry the same single callable,
+            // so a same-shape temporary is the whole adapter needed.
+            const Arcane::Editor::AssetsPanelServices assetsPanelServices{
+                m_assetServices.resolveAssetThumb };
+            browserActions = Arcane::Editor::DrawAssetsPanel(
+                m_assetsPanel, m_assetModel, proj, m_documents, assetsPanelServices,
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::Assets));
+        }
         ConsumeBrowserActions(browserActions, ls);
 
         if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
@@ -2294,7 +2307,7 @@ namespace Arcane::Editor
             ShowSceneSaveDialog();
     }
 
-    void EditorApp::ConsumeBrowserActions(const Arcane::Editor::AssetBrowserActions& browserActions,
+    void EditorApp::ConsumeBrowserActions(const Arcane::Editor::AssetsPanelActions& browserActions,
                                           LoopState& ls)
     {
         if (browserActions.createInstanceOf.IsValid())
@@ -2324,21 +2337,11 @@ namespace Arcane::Editor
                         m_documents.OpenPath(*p);
             }
         }
-        if (browserActions.createMesh)
-        {
-            // F2a, Task 9: the "+ Mesh" button. No dialog -- unlike a
-            // material/instance, a mesh names no user-meaningful path up
-            // front (MeshAssetData's own defaults already describe a
-            // complete asset), so this mints straight into the project's
-            // Content root and opens the result, same two-step shape as the
-            // createSpriteFrom branch just above.
-            if (const Arcane::Guid minted = MintMeshAsset(); minted.IsValid())
-            {
-                if (const Arcane::Project* proj = m_runtime->CurrentProject())
-                    if (const auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(minted)))
-                        m_documents.OpenPath(*p);
-            }
-        }
+        // Asset-manager redesign spec s7: "the silent + Mesh toolbar button
+        // dies; Mesh gets the [unified Create] dialog". AssetsPanelActions
+        // carries no createMesh field (AssetBrowserActions's old one-off) --
+        // Task 12's requestCreateKind==Mesh path is the replacement, and
+        // MintMeshAsset (EditorApp.hpp) stays available for it to call.
         if (!browserActions.openScene.empty())
         {
             // A scene double-clicked in the browser is not a document -- it
@@ -2371,6 +2374,11 @@ namespace Arcane::Editor
             AssetPathAction(m_runtime->CurrentProject(), browserActions.showInExplorer, true, false);
         if (browserActions.copyPath.IsValid())
             AssetPathAction(m_runtime->CurrentProject(), browserActions.copyPath, false, true);
+        // Spec s6's new context-menu entry: Copy Guid, straight to the
+        // clipboard (no file resolution needed -- unlike copyPath/
+        // showInExplorer, a guid needs no project lookup to be copyable).
+        if (browserActions.copyGuid.IsValid())
+            ImGui::SetClipboardText(browserActions.copyGuid.ToString().c_str());
     }
 
     Arcane::Editor::ShaderEditorDocument* EditorApp::ResolveActiveMaterialDoc()
