@@ -35,6 +35,11 @@ this plan implements its §3–§8, §11 fidelity rules, Plan-1 column of §2.
   table). All chrome colors are `EditorTheme` tokens. `MaterialSurface::Fullscreen`
   displays as the pill string `"post"`.
 - Every ImGui table: `ImGuiTableFlags_NoSavedSettings`.
+- **Visual keystone:** `.superpowers/design/asset-manager-mockups/README.md` — the
+  FINAL board renders in `renders/` are the redline. Any task that draws UI ends
+  with a structural comparison against the matching render (re-render command in
+  the README; capture the editor with its own screenshot tooling; compare values
+  against spec §11.2 — never a pixel diff).
 - Commit after every task (message prefixes as shown); do NOT push.
 
 ---
