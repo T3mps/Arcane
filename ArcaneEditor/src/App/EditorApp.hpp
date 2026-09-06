@@ -37,6 +37,7 @@
 #include "Viewport/EditorCamera.hpp"
 #include "Panels/EditorPanels.hpp"
 #include "Project/CookQueue.hpp"
+#include "Project/MaterialPreviewHarvester.hpp"   // owned by value-in-unique_ptr (m_materialThumbs)
 #include "Project/ModuleBuild.hpp"
 #include "App/PlayMode.hpp"
 #include "Panels/ProblemsPanel.hpp"
@@ -76,13 +77,6 @@ struct ImGuiTextBuffer;
 
 namespace Arcane::Editor
 {
-    // Task 8's material-thumbnail harvester -- forward-declared only, never
-    // defined here (that's Task 8's job). This task just needs a null-guarded
-    // pointer member for resolveAssetThumb's Material branch to check; an
-    // incomplete-type pointer is enough for that, so no header dependency on
-    // a class that does not exist yet.
-    class MaterialPreviewHarvester;
-
     class EditorApp
     {
     public:
@@ -1177,12 +1171,42 @@ namespace Arcane::Editor
         // above is still what's on screen (m_assetBrowser/DrawAssetBrowserPanel);
         // this is wiring only, no behavior change.
         Arcane::Editor::AssetPanelModel         m_assetModel;
-        // Task 8 stub: resolveAssetThumb's Material branch null-guards on
-        // this and returns 0 until Task 8 constructs the real harvester and
-        // points this at it. A non-owning raw pointer (never new'd here) is
-        // enough for a forward-declared incomplete type; Task 8 decides the
-        // real ownership shape when it lands.
-        Arcane::Editor::MaterialPreviewHarvester* m_materialThumbs = nullptr;
+        // Asset-manager redesign, Plan 1 Task 8: LIVE 64px material
+        // thumbnails, harvested from a lazily-created offscreen vehicle and
+        // persisted to <project>/Saved/Thumbnails (see the class's own header
+        // for the whole shape). OWNED here -- Task 7 left a non-owning raw
+        // pointer for its null-guard, and this is the ownership shape it
+        // deferred to this task.
+        //
+        // DECLARED AFTER m_graphChrome, which is the borrower-dies-first half
+        // of the rule EditorApp::ShutdownGraphPath states: the harvester's
+        // preview vehicle BORROWS the chrome context's device. Declaration
+        // order is the backstop; ShutdownGraphPath's explicit
+        // m_materialThumbs->Shutdown() is what actually closes it, for the
+        // same reason it closes the documents' previews there rather than
+        // trusting member order (both contexts are reset by that function,
+        // long before ~EditorApp runs).
+        //
+        // Null ONLY between construction of this object and Init -- every use
+        // is guarded, which also keeps every headless/failed-boot path safe.
+        std::unique_ptr<Arcane::Editor::MaterialPreviewHarvester> m_materialThumbs;
+        // Task 8's two fan-outs, both of which need the model/providers this
+        // class owns and therefore live here rather than inside the harvester
+        // (which knows nothing about an asset registry):
+        //   * a material changed (saved, edited on disk, or an ancestor of it
+        //     changed) -- invalidate it AND every registry material whose
+        //     parent chain passes through it, because an instance's picture is
+        //     its base's picture plus overrides;
+        //   * a batch of textures finished cooking -- invalidate every
+        //     material that References any of them, because their declared
+        //     params just changed pixels.
+        //
+        // The cook variant takes the WHOLE batch rather than one guid: each
+        // call costs one registry walk with a refsFor per material, and a
+        // first-cook pass over a big project reports hundreds of guids at
+        // once -- per-guid calls would be that walk hundreds of times over.
+        void InvalidateMaterialThumb(const Arcane::Guid& material);
+        void InvalidateMaterialThumbsForTextures(const std::vector<Arcane::Guid>& textures);
         // The model's facade seam, built once per project open
         // (MakeAssetPanelProviders, EditorAppProject.cpp) and cached here --
         // rebuilding it every frame would be pointless closure churn for

@@ -1964,6 +1964,17 @@ namespace Arcane::Editor
         // establishes, since a completed cook's invalidation touches the
         // Assets facade and the viewport graph's GPU-adjacent caches.
         PollCookQueue();
+        // Asset-manager Task 8: at most ONE 64px material thumbnail per frame.
+        // It sits HERE, in the same safe window PollAssetWatch and
+        // PollCookQueue already occupy -- strictly after this frame's render,
+        // strictly before the next one's -- because a harvest renders a whole
+        // offscreen frame and then ReadCapture idles the device, neither of
+        // which may land inside the render phases above. Pump() returns
+        // without touching a single device object when nothing is queued, so
+        // an idle editor with every thumbnail already harvested pays nothing
+        // for this line (see the early-out at the top of Pump).
+        if (m_materialThumbs)
+            m_materialThumbs->Pump(m_editorClock);
         m_documents.TickAll(m_gameUi.frameDt);
     }
 

@@ -763,6 +763,18 @@ namespace Arcane::Editor
                     if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d))
                         consumed = doc->ConsumeResult(r) || consumed;
                 });
+                // Asset-manager Task 8: the thumbnail harvester rides the SAME
+                // one drain site -- this process has exactly one, by design
+                // (SceneRenderResolver.hpp:22-28) -- as a PASSIVE OBSERVER.
+                // Its answer is deliberately NOT OR'd into `consumed`:
+                // reporting a consume here would swallow the result before the
+                // scene's own caches ever saw it. It cannot claim theirs
+                // either, for the same reason a document cannot -- its jobs
+                // ride their own disjoint coalesce keys (0x40/0x80, see
+                // MaterialPreviewHarvester.cpp's ThumbStageKey and the
+                // scheme-wide table in that class's header).
+                if (m_materialThumbs)
+                    m_materialThumbs->OfferCompileResult(r);
                 return consumed;
             };
             // F2b Task 11: the mesh-albedo bindless resolution seam. Routed
@@ -822,10 +834,48 @@ namespace Arcane::Editor
         // the chrome context, EditorAppProject.cpp:461-462, already keeps
         // BOTH fresh -- no new cache here). Textures resolve directly;
         // sprites resolve through their single texture ref (FirstTextureRefOf);
-        // materials route through Task 8's MaterialPreviewHarvester
-        // (m_materialThumbs is null until Task 8 lands, so this returns 0
-        // until then); everything else is 0 -- the caller falls back to the
-        // kind icon.
+        // materials route through Task 8's MaterialPreviewHarvester;
+        // everything else is 0 -- the caller falls back to the kind icon.
+        //
+        // ===== TASK 8: THE HARVESTER ITSELF ==============================
+        // Constructed HERE, at stage time, for the same reason the two
+        // lambdas above are built here: everything device-adjacent it needs
+        // (the chrome vehicle, its NriTextureCache, its ImGuiNriNode) is
+        // reached through a live `[this]`-capture, so it does not need a
+        // device to exist yet -- and it must exist before the FIRST project
+        // opens, because OnProjectOpened is what primes it from disk.
+        {
+            Arcane::Editor::MaterialPreviewHarvester::Services hs;
+            hs.chromeGraph = [this] { return ChromeGraph(); };
+            hs.hostConfig  = &m_config;
+            hs.compiler    = m_shaderCompiler.get();
+            hs.sources     = &m_shaderSources;
+            hs.backend     = m_config.backend;
+            // Both seams re-read CurrentProject() per call, so they survive a
+            // project switch -- the same shape ShaderEditorDocument's preview
+            // installs on its own vehicle.
+            hs.resolveAsset = [this](const Arcane::Guid& id)
+                -> std::optional<std::filesystem::path>
+            {
+                const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject() : nullptr;
+                return p ? p->ResolveAsset(Arcane::AssetId::FromGuid(id)) : std::nullopt;
+            };
+            hs.pixelSupply = [this](const Arcane::Guid& id) -> const Arcane::PixelData*
+            {
+                return m_runtime ? m_runtime->AssetsFacade().PixelsFor(id) : nullptr;
+            };
+            // Saved/ is the project's scratch directory -- the same one the
+            // Hub's cover screenshot (Saved/AutoScreenshot.png) already lives
+            // in. Empty (no project) means "no persistence right now", which
+            // the harvester reads as harvest-but-do-not-write.
+            hs.thumbnailDir = [this]() -> std::filesystem::path
+            {
+                const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject() : nullptr;
+                return p ? (p->Root() / "Saved" / "Thumbnails") : std::filesystem::path{};
+            };
+            m_materialThumbs =
+                std::make_unique<Arcane::Editor::MaterialPreviewHarvester>(std::move(hs));
+        }
         m_assetServices.resolveAssetThumb =
             [this](const Arcane::Guid& guid) -> std::uint64_t
         {
@@ -842,7 +892,13 @@ namespace Arcane::Editor
             else if (e->kind == Arcane::Editor::AssetKind::Sprite)
                 tex = FirstTextureRefOf(guid);
             else if (e->kind == Arcane::Editor::AssetKind::Material)
-                return 0;   // Task 8: m_materialThumbs->ThumbTextureId(guid)
+            {
+                // Task 8: a REAL rendered preview, not a texture lookup --
+                // 0 until this material has been harvested (the caller falls
+                // back to the kind icon for that window), and the Browse draw
+                // is what asks for one (Request(), Task 10).
+                return m_materialThumbs ? m_materialThumbs->ThumbTextureId(guid) : 0;
+            }
             if (!tex.IsValid())
                 return 0;
             nri::Texture* t = cache->Resolve(tex, Arcane::NriTextureCache::ColorSpace::Display);
@@ -1100,6 +1156,31 @@ namespace Arcane::Editor
             // Task 5 deferral, closed here (SweepArtifactOrphans' own
             // comment): once, at project open -- not on every cook pass.
             SweepArtifactOrphans();
+
+            // ===== ASSET-MANAGER TASK 8: THE PERSISTED THUMBNAILS ==========
+            // Load <project>/Saved/Thumbnails/<guid>.png straight into the
+            // harvester's pixel supply, and queue a harvest ONLY for a
+            // material with no PNG or one whose .arcmat is NEWER than it. For
+            // an unchanged project that is ZERO harvests -- the whole point:
+            // every harvest costs a ReadCapture device idle, and a naive
+            // harvest-everything-at-open would pay N of them at every boot
+            // (UE's package-header FObjectThumbnail + OnAssetSave frequency is
+            // the same lesson, learned the same way).
+            //
+            // SAFE THIS EARLY, unlike the cook pass the block below refuses to
+            // force here: PrimeFromDisk is pure CPU (a stat, a PNG decode) and
+            // touches no device and no background job at all. The harvester's
+            // own upload is lazy -- ThumbTextureId resolves the texture on
+            // first ask, which is necessarily after CreateGraphVehicles.
+            if (m_materialThumbs)
+            {
+                std::vector<Arcane::Guid> materials;
+                for (const Arcane::Editor::AssetEntry& e :
+                     Arcane::Editor::BuildAssetEntries(proj->Registry()))
+                    if (e.kind == Arcane::Editor::AssetKind::Material)
+                        materials.push_back(e.guid);
+                m_materialThumbs->PrimeFromDisk(materials);
+            }
 
             // Desk-fix 2 does NOT force a CookQueue pass here, even though the
             // settling window above needs SOME pass to eventually close it
@@ -1852,11 +1933,24 @@ namespace Arcane::Editor
         // full cooked BC7/mip chain -- a real asset guid arriving here when
         // m_runtime is null (never happens post-boot, but this lambda outlives
         // any one project) returns null, the cache's own "not resident" path.
+        //
+        // ASSET-MANAGER TASK 8 makes it THREE. The material-thumbnail
+        // harvester uploads its 64px captures through this very cache, under
+        // SYNTHETIC per-material guids (the toolbar mark's own idiom, and for
+        // its stated reason: a rendered thumbnail is not a project asset, and
+        // the cache's whole vocabulary is Guids). Checked BEFORE PixelsFor for
+        // the same reason the logo is -- a synthetic guid is ours by
+        // construction and must never take the asset path -- and it answers
+        // null for every guid that is not one of its own, so a texture asset
+        // still falls through to PixelsFor exactly as before.
         ChromeGraph()->SetPixelSupply(
             [this](const Arcane::Guid& id) -> const Arcane::PixelData*
             {
                 if (id == m_graphLogoId)
                     return &m_graphLogoPixels;
+                if (m_materialThumbs)
+                    if (const Arcane::PixelData* thumb = m_materialThumbs->PixelsForThumb(id))
+                        return thumb;
                 return m_runtime ? m_runtime->AssetsFacade().PixelsFor(id) : nullptr;
             });
         if (m_graphLogoId.IsValid())
@@ -2299,6 +2393,21 @@ namespace Arcane::Editor
         // still alive. No frame is recorded between the two, which is the one
         // condition the deferral exists to satisfy.
         DrainRetiredDocPreviews();
+
+        // ===== AND THE THUMBNAIL HARVESTER'S VEHICLE (Task 8) ================
+        // Exactly the same shape and exactly the same reason as the documents
+        // above: it owns an offscreen context BORROWING the device
+        // m_graphChrome owns, so the borrower has to die at the point the
+        // owner is about to -- not at a member-declaration order that runs in
+        // ~EditorApp, long after the resets below. It needs no
+        // InvalidateUserTextureNow of its own: its output texture is never
+        // handed to ImGui (it is only ever ReadCapture'd), and the THUMBNAIL
+        // textures live in the CHROME context's own cache, which is the same
+        // context whose ImGuiNri caches them -- the same-context case
+        // ~NriGraphContext's ordering already covers (m_graphLogoTexture's own
+        // declaration states this distinction in full).
+        if (m_materialThumbs)
+            m_materialThumbs->Shutdown();
 
         // ===== THE TEARDOWN HALF OF THE VIEW-BEFORE-TEXTURE RULE =============
         // A RESIZE is not the only moment

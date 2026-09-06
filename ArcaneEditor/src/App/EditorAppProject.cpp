@@ -103,6 +103,13 @@ namespace Arcane::Editor
         {
             if (m_resolver)
                 m_resolver->InvalidateMaterial(id);
+            // Asset-manager Task 8: the material's THUMBNAIL is now wrong too
+            // -- and so is every instance's that derives from it. THIS is the
+            // material-save invalidation site: every ShaderEditorDocument
+            // SaveMaterialAsset call routes through onAssetSaved (its own Save
+            // at :1858 and the assisted-rename rewrite at :4122), so one hook
+            // here covers both rather than two calls at the document.
+            InvalidateMaterialThumb(id);
             // Re-baseline the file watcher: our own save is not an external
             // edit and must not bounce back as a reload.
             if (const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject()
@@ -203,6 +210,132 @@ namespace Arcane::Editor
             case Arcane::DiagLocator::Kind::None:
                 break;
         }
+    }
+
+    // ---- Asset-manager Plan 1 Task 8: the two thumbnail fan-outs -----------
+    //
+    // BOTH LIVE HERE, not in MaterialPreviewHarvester, because both are
+    // questions about the ASSET GRAPH -- "who derives from this?", "who
+    // references this texture?" -- and this class is the one that owns the
+    // registry and the providers seam that answers them. The harvester knows
+    // only Guids and pixels, which is what keeps it testable and what keeps
+    // exactly one path from a guid to its outgoing refs in the editor
+    // (m_assetPanelProviders.refsFor, the same seam AssetPanelModel and
+    // FirstTextureRefOf already read through).
+
+    namespace
+    {
+        // ONE registry walk, both fan-outs. `seedFromRefs` decides whether a
+        // material is itself a seed (the texture variant asks "does it
+        // reference one of these cooked guids?"; the material variant seeds
+        // explicitly and passes nothing here), and the DerivesFrom edges are
+        // collected in the SAME pass so the parent -> children index costs no
+        // second walk. Nothing is cached between calls: a cached child index
+        // would need its own invalidation, which is the exact class of bug
+        // this function exists to fix one level up.
+        void FanOutMaterialThumbs(
+            Arcane::Editor::MaterialPreviewHarvester& thumbs,
+            const Arcane::AssetRegistry& registry,
+            const Arcane::Editor::AssetPanelProviders& providers,
+            std::vector<Arcane::Guid> seeds,
+            const std::function<bool(const std::vector<Arcane::AssetRef>&)>& seedFromRefs)
+        {
+            if (!providers.refsFor)
+                return;
+            std::unordered_map<Arcane::Guid, std::vector<Arcane::Guid>> children;
+            std::unordered_set<Arcane::Guid> materials;
+            for (const Arcane::Editor::AssetEntry& e : Arcane::Editor::BuildAssetEntries(registry))
+            {
+                if (e.kind != Arcane::Editor::AssetKind::Material)
+                    continue;
+                materials.insert(e.guid);
+                const auto refs = providers.refsFor(e.guid);
+                if (!refs)
+                    continue;
+                for (const Arcane::AssetRef& r : *refs)
+                    if (r.kind == Arcane::AssetRefKind::DerivesFrom && r.target.IsValid())
+                        children[r.target].push_back(e.guid);
+                if (seedFromRefs && seedFromRefs(*refs))
+                    seeds.push_back(e.guid);
+            }
+
+            // BFS down the derivation tree. `seen` doubles as the CYCLE GUARD
+            // -- a cyclic parent chain is a real, already-diagnosed failure
+            // shape (LoadMaterialParentChain owns the loud version of it) and
+            // this sweep must not hang on one.
+            std::unordered_set<Arcane::Guid> seen;
+            std::vector<Arcane::Guid> frontier;
+            for (const Arcane::Guid& s : seeds)
+                // `materials` gates the SEED, not just the walk: onAssetSaved
+                // is a general asset hook, so a caller can legitimately hand
+                // this a guid that is not a material at all -- and queueing
+                // one would cost a doomed LoadMaterialAsset and a WARN that
+                // says nothing true. Free here (the walk already collected the
+                // set), which is why it is a filter rather than a caller
+                // obligation.
+                if (s.IsValid() && materials.contains(s) && seen.insert(s).second)
+                {
+                    thumbs.Invalidate(s);
+                    frontier.push_back(s);
+                }
+            while (!frontier.empty())
+            {
+                const Arcane::Guid parent = frontier.back();
+                frontier.pop_back();
+                const auto it = children.find(parent);
+                if (it == children.end())
+                    continue;
+                for (const Arcane::Guid& child : it->second)
+                    if (seen.insert(child).second)
+                    {
+                        thumbs.Invalidate(child);
+                        frontier.push_back(child);
+                    }
+            }
+        }
+    }
+
+    // Invalidate `material`'s thumbnail AND every registry material whose
+    // parent chain passes through it.
+    //
+    // WHY THE FAN-OUT IS NOT OPTIONAL: a material INSTANCE is "a parent Guid
+    // + sparse overrides" (MaterialAsset.hpp), so its picture is its base's
+    // picture plus whatever it overrode -- editing the base changes the
+    // instance's thumbnail while touching the instance's file not at all.
+    // Nothing else would ever re-harvest it, and the persisted PNG's mtime
+    // comparison cannot catch it either (that file genuinely did not change).
+    // This is the identical hazard SceneRenderResolver::InvalidateMaterial
+    // documents for the mesh-material cache, answered the same way: from a
+    // base's Guid alone you cannot tell which instances inherit from it, so
+    // walk.
+    void EditorApp::InvalidateMaterialThumb(const Arcane::Guid& material)
+    {
+        const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!m_materialThumbs || !material.IsValid() || !project)
+            return;
+        FanOutMaterialThumbs(*m_materialThumbs, project->Registry(), m_assetPanelProviders,
+                             { material }, nullptr);
+    }
+
+    // Textures finished cooking: re-harvest every material that names one of
+    // them as a declared `texture` param (an AssetRefKind::References edge on
+    // an .arcmat -- Assets.cpp's ListAssetReferences), plus everything derived
+    // from those.
+    void EditorApp::InvalidateMaterialThumbsForTextures(
+        const std::vector<Arcane::Guid>& textures)
+    {
+        const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!m_materialThumbs || textures.empty() || !project)
+            return;
+        const std::unordered_set<Arcane::Guid> cooked(textures.begin(), textures.end());
+        FanOutMaterialThumbs(*m_materialThumbs, project->Registry(), m_assetPanelProviders, {},
+                             [&cooked](const std::vector<Arcane::AssetRef>& refs)
+                             {
+                                 for (const Arcane::AssetRef& r : refs)
+                                     if (cooked.contains(r.target))
+                                         return true;
+                                 return false;
+                             });
     }
 
     void EditorApp::PollAssetWatch()
@@ -310,6 +443,10 @@ namespace Arcane::Editor
                 m_assetModel.MarkDirty(e.guid);
                 if (m_resolver)
                     m_resolver->InvalidateMaterial(e.guid);
+                // Asset-manager Task 8: an external .arcmat edit changes what
+                // the material LOOKS like, so its thumbnail (and every
+                // instance's below it) is re-harvested.
+                InvalidateMaterialThumb(e.guid);
                 m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
                 {
                     auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d);
@@ -471,6 +608,13 @@ namespace Arcane::Editor
                 // erased above) -- ask again next rebuild.
                 m_assetModel.MarkDirty(guid);
             }
+            // Asset-manager Task 8: a MATERIAL that names one of these
+            // textures as a declared param has been rendering the pre-cook
+            // stand-in in its thumbnail until this moment -- re-harvest it,
+            // and everything derived from it. OUTSIDE the loop, once per
+            // BATCH: each call is a registry walk, and a first-cook pass over
+            // a fresh clone reports every texture in the project at once.
+            InvalidateMaterialThumbsForTextures(result.cookedGuids);
         }
 
         // Cook FAILURES -- CookSession's own vocabulary (corrupt source /
@@ -933,6 +1077,14 @@ namespace Arcane::Editor
         m_materialMtimes.clear();
         m_materialWatchNext = 0.0;
         m_contentDiscoveryNext = 0.0;
+        // Asset-manager Task 8: a Guid means something ELSE in a different
+        // project, and the harvester's preview batcher holds the OUTGOING
+        // project's registered materials -- so it drops everything, vehicle
+        // included. Safe here: TeardownGraphForSwitch keeps the chrome
+        // context (whose device the vehicle borrows) alive across a switch,
+        // and Clear() is idempotent besides.
+        if (m_materialThumbs)
+            m_materialThumbs->Clear();
         m_cookQueue.reset();
         m_cookDiagnostics.clear();
         // Desk-fix 2: the settling window is meaningless without a live
