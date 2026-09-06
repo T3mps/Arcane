@@ -240,6 +240,11 @@ namespace
         // above): nothing in this suite resolves a material subkind.
         std::optional<Arcane::MaterialSurface> MaterialSurfaceFor(const Arcane::Guid&) override { return std::nullopt; }
 
+        // Asset-manager arc, ABI v22, Task 2 (interface-completeness only,
+        // same reasoning as MaterialSurfaceFor above): nothing in this suite
+        // walks the reference graph.
+        std::optional<std::vector<Arcane::AssetRef>> ListAssetReferences(const Arcane::Guid&) override { return std::nullopt; }
+
         int pixelsForCalls       = 0;
         int textureInfoForCalls  = 0;
         int evictingCalls        = 0;

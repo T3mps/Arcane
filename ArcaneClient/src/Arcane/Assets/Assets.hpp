@@ -30,6 +30,32 @@ namespace Arcane
         uint32_t count = 0;
     };
 
+    // Asset-manager arc (ABI v22, Task 2): one edge in the reference graph a
+    // browsable asset participates in -- "this asset's JSON names that Guid,
+    // and the relationship is X". Two kinds only:
+    //   DerivesFrom -- this asset's identity is BUILT ON the target: a plain
+    //     (whole-texture) sprite's own texture, an instance material's
+    //     parent. The target is not merely an input; without it this asset
+    //     is not really itself.
+    //   References -- this asset merely POINTS AT the target as one of
+    //     possibly several inputs: a material's texture params, a sliced
+    //     sprite's source texture (now shared among however many other
+    //     slices reference it), a mesh's material.
+    // The distinction matters to the asset manager's dependency view: a
+    // DerivesFrom edge is the one a "what breaks if I delete this" walk
+    // should treat as load-bearing; a References edge is not.
+    enum class AssetRefKind : std::uint8_t { References, DerivesFrom };
+
+    // By value, tail-appended (same ABI v22 bump as MaterialSurfaceFor):
+    // ListAssetReferences below returns these, never a pointer/reference
+    // into facade-owned storage, so a caller owns the result outright the
+    // moment the call returns.
+    struct AssetRef
+    {
+        Guid target;
+        AssetRefKind kind = AssetRefKind::References;
+    };
+
     struct AssetsDesc
     {
         // Facade-wide byte budget across ALL caches (textures + bytes + JSON
@@ -280,6 +306,35 @@ namespace Arcane
         // paragraph documents for ArtifactFor/InvalidateArtifact/
         // SetCookPendingProbe.
         virtual std::optional<MaterialSurface> MaterialSurfaceFor(const Guid& id) = 0;
+
+        // Asset-manager arc (ABI v22, Task 2 -- fulfills the "STAYS OPEN"
+        // promise on MaterialSurfaceFor above and PluginABI.hpp's v22 ledger
+        // entry, which this extends under the same number): the OUTGOING
+        // reference graph for `id`, resolved through the installed
+        // AssetResolver exactly like MaterialSurfaceFor. Classifies by the
+        // resolved path's extension:
+        //   .arcsprite -- "texture": DerivesFrom for a plain (whole-texture)
+        //     sprite; References once a sub-rect is present, since the
+        //     sprite is then one CONSUMER of a shared source rather than the
+        //     texture's sole reason to exist.
+        //   .arcmat -- "parent" (an instance): DerivesFrom; every
+        //     texture-typed entry in "params": References.
+        //   .arcmesh -- "material": References; the nil guid (unassigned)
+        //     contributes nothing, so a mesh with no material yields an
+        //     empty list rather than a phantom nil-guid entry.
+        //   .arcscene -- delegates to Task 3's scene structural scan (empty
+        //     until that task lands).
+        //   leaf/opaque formats (images, audio, fonts, generic .json) --
+        //     empty, NEVER nullopt: a leaf asset genuinely has no outgoing
+        //     edges, a different fact than "could not even read this asset"
+        //     below.
+        //   anything else unrecognised -- also an empty, documented list
+        //     (Task 3's coverage test pins this table so a future format
+        //     can't silently fall through unnoticed).
+        // nullopt ONLY when `id` itself does not resolve to a readable file
+        // -- an unresolvable/unregistered guid -- mirroring
+        // MaterialSurfaceFor's own "not readable at all" contract.
+        virtual std::optional<std::vector<AssetRef>> ListAssetReferences(const Guid& id) = 0;
     };
 
     // -----------------------------------------------------------------

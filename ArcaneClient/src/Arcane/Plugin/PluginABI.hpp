@@ -556,6 +556,28 @@ namespace Arcane
     //     at 3. ReferenceProject is restamped with this change, the same
     //     precedent v16 through v21 set (Gacha's Game restamp is this arc's
     //     own follow-up in that repo, tracked there rather than here).
+    // Task 2 (same date, same arc): the promise directly above is now
+    //     fulfilled. `ListAssetReferences(const Guid&)` is APPENDED
+    //     immediately after `MaterialSurfaceFor` -- the new tail of the
+    //     class -- returning `std::optional<std::vector<AssetRef>>`.
+    //     `AssetRef` and `AssetRefKind` (Assets.hpp) are two NEW BY-VALUE
+    //     types this bump introduces: a `std::uint8_t`-backed two-value enum
+    //     and a Guid+kind struct. Neither crosses the plugin vtable except as
+    //     this one method's return value, so the SAME bar Task 1's paragraph
+    //     above applies still holds verbatim: an append reshuffles no
+    //     EXISTING vtable slot, and nothing in a game module ever
+    //     SUBCLASSES `Assets` (the one concrete class, `AssetsImpl`, stays
+    //     private to Assets.cpp behind `Assets::Create()`) -- so this second
+    //     append is not an independent hazard, just the same one, twice.
+    //     MEASURED, not assumed: `grep -rn` for `ListAssetReferences`,
+    //     `AssetRef` and `AssetRefKind` over BOTH game modules in the two
+    //     trees -- ReferenceProject/Source/ and Gacha's Game/Source/ --
+    //     returns nothing, so this second append breaks neither module.
+    //     THIS ENTRY IS NOW CLOSED for v22: Task 3 of the same arc only fills
+    //     in `ScanSceneReferences`'s BODY (a free function `ListAssetReferences`
+    //     already calls, never itself a virtual), and no remaining task in
+    //     this arc's plan (4 through 16) touches the `Assets` vtable, so
+    //     nothing further is scheduled to extend this entry.
     inline constexpr uint32_t kGamePluginABIVersion = 22;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the

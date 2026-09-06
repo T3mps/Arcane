@@ -9,13 +9,16 @@
 #include <stb_image.h>
 #include <stb_image_write.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -71,6 +74,47 @@ namespace Arcane
             if (ec)
                 return resolved.string();
             return canon.string();
+        }
+
+        // Asset-manager arc (ABI v22, Task 2): the resolved path's extension,
+        // lowercased -- the format-classification key ListAssetReferences
+        // switches on. Kept local: Assets.cpp has no existing extension-
+        // classification helper to reuse (AssetBrowser.hpp's AssetKindOf is
+        // an EDITOR-side classifier in a different translation unit; this
+        // facade must not reach for it).
+        std::string LowerExt(const std::filesystem::path& path)
+        {
+            std::string ext = path.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return ext;
+        }
+
+        // True when a sprite's JSON carries a non-default sub-rect --
+        // SaveSpriteAsset (SpriteAsset.cpp) writes "sourceSize" only when it
+        // differs from the (0,0) "whole texture" default, so its presence
+        // (with a non-zero pair) IS the sliced/whole-texture discriminator.
+        // A whole-texture sprite's texture reference is DerivesFrom (the
+        // sprite IS that texture, in effect); a sliced sprite merely
+        // References a source shared among however many other slices --
+        // see AssetRefKind's own doc comment in Assets.hpp.
+        bool IsSlicedSpriteJson(const nlohmann::json& sprite)
+        {
+            const auto it = sprite.find("sourceSize");
+            if (it == sprite.end() || !it->is_array() || it->size() != 2 ||
+                !(*it)[0].is_number() || !(*it)[1].is_number())
+                return false;
+            return (*it)[0].get<float>() != 0.0f || (*it)[1].get<float>() != 0.0f;
+        }
+
+        // Task 3 stub (asset-manager arc): the scene structural reference
+        // scan. Returns an empty list for every .arcscene until Task 3
+        // implements the recursive walk -- kept as its own named seam so
+        // ListAssetReferences's switch never special-cases "not implemented
+        // yet" inline.
+        std::optional<std::vector<AssetRef>> ScanSceneReferences(const nlohmann::json& /*scene*/)
+        {
+            return std::vector<AssetRef>{};
         }
 
         using BytesPtr       = std::shared_ptr<const std::vector<uint8_t>>;
@@ -665,6 +709,82 @@ namespace Arcane
                     return std::nullopt;
                 }
                 return std::nullopt;   // chain too deep / cyclic
+            }
+
+            // Asset-manager arc (ABI v22, Task 2): see Assets.hpp's own doc
+            // comment for the full contract. Reuses ResolveId (the SAME
+            // resolution step MaterialSurfaceFor above takes, just to learn
+            // the FORMAT) and GetJson(AssetId) (the SAME cached loader, SAME
+            // installed resolver, SAME warn-once memo every other JSON-
+            // backed accessor on this facade shares) rather than opening a
+            // second read route into this facade.
+            std::optional<std::vector<AssetRef>> ListAssetReferences(const Guid& id) override
+            {
+                const auto resolved = ResolveId(AssetId::FromGuid(id));
+                if (!resolved)
+                    return std::nullopt;
+                const std::string ext = LowerExt(*resolved);
+
+                // Leaf/opaque formats: readable, but structurally incapable
+                // of naming another asset -- an empty list is the honest
+                // answer, never nullopt (nullopt means "could not even read
+                // this asset", a different fact than "read it; it has no
+                // outgoing edges").
+                static constexpr std::string_view kLeaf[] = {
+                    ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr",
+                    ".wav", ".ogg", ".mp3", ".flac", ".ttf", ".otf" };
+                static constexpr std::string_view kOpaque[] = { ".json", ".arcdiag" };
+                for (std::string_view e : kLeaf)   if (ext == e) return std::vector<AssetRef>{};
+                for (std::string_view e : kOpaque) if (ext == e) return std::vector<AssetRef>{};
+
+                const auto json = GetJson(AssetId::FromGuid(id));
+                if (!json)
+                    return std::nullopt;
+
+                std::vector<AssetRef> out;
+                auto addGuid = [&out](const nlohmann::json& v, AssetRefKind kind)
+                {
+                    if (!v.is_string())
+                        return;
+                    const auto g = Guid::FromString(v.get<std::string>());
+                    if (g && g->IsValid())
+                        out.push_back({ *g, kind });
+                };
+
+                if (ext == ".arcsprite")
+                {
+                    if (auto it = json->find("texture"); it != json->end())
+                        addGuid(*it, IsSlicedSpriteJson(*json) ? AssetRefKind::References
+                                                                : AssetRefKind::DerivesFrom);
+                    return out;
+                }
+                if (ext == ".arcmat")
+                {
+                    if (auto it = json->find("parent"); it != json->end())
+                        addGuid(*it, AssetRefKind::DerivesFrom);
+                    if (auto params = json->find("params"); params != json->end() && params->is_object())
+                        for (const auto& [name, p] : params->items())
+                        {
+                            if (!p.is_object())
+                                continue;
+                            const auto typeIt = p.find("type");
+                            const auto valueIt = p.find("value");
+                            if (typeIt != p.end() && typeIt->is_string() && *typeIt == "texture" &&
+                                valueIt != p.end())
+                                addGuid(*valueIt, AssetRefKind::References);
+                        }
+                    return out;
+                }
+                if (ext == ".arcmesh")
+                {
+                    if (auto it = json->find("material"); it != json->end())
+                        addGuid(*it, AssetRefKind::References);
+                    return out;
+                }
+                if (ext == ".arcscene")
+                    return ScanSceneReferences(*json);   // Task 3; stub returns {} until then
+
+                return std::vector<AssetRef>{};   // unrecognised format: documented empty (Task 3 pins the table)
             }
 
             uint64_t TotalBytes() const
