@@ -76,6 +76,13 @@ struct ImGuiTextBuffer;
 
 namespace Arcane::Editor
 {
+    // Task 8's material-thumbnail harvester -- forward-declared only, never
+    // defined here (that's Task 8's job). This task just needs a null-guarded
+    // pointer member for resolveAssetThumb's Material branch to check; an
+    // incomplete-type pointer is enough for that, so no header dependency on
+    // a class that does not exist yet.
+    class MaterialPreviewHarvester;
+
     class EditorApp
     {
     public:
@@ -917,6 +924,12 @@ namespace Arcane::Editor
         // every frame, so the field visitor's texture-drop auto-mint branch
         // never needs to know about EditorApp itself.
         Arcane::Editor::InspectorServices m_inspectorServices;
+        // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail
+        // resolver (resolveAssetThumb), built once in StageSpriteTables next
+        // to resolveTexturePreview above -- same [this]-capture idiom, same
+        // chrome-texture-cache recipe. Nothing calls it yet (Task 9 hands it
+        // to the new Browse panel); wiring only, no behavior change.
+        Arcane::Editor::AssetServices    m_assetServices;
 
         // Editor undo/redo history. Deliberately NOT cleared on Play: Stop restores
         // the pre-Play registry, so the edits behind these entries are still on
@@ -1164,6 +1177,12 @@ namespace Arcane::Editor
         // above is still what's on screen (m_assetBrowser/DrawAssetBrowserPanel);
         // this is wiring only, no behavior change.
         Arcane::Editor::AssetPanelModel         m_assetModel;
+        // Task 8 stub: resolveAssetThumb's Material branch null-guards on
+        // this and returns 0 until Task 8 constructs the real harvester and
+        // points this at it. A non-owning raw pointer (never new'd here) is
+        // enough for a forward-declared incomplete type; Task 8 decides the
+        // real ownership shape when it lands.
+        Arcane::Editor::MaterialPreviewHarvester* m_materialThumbs = nullptr;
         // The model's facade seam, built once per project open
         // (MakeAssetPanelProviders, EditorAppProject.cpp) and cached here --
         // rebuilding it every frame would be pointless closure churn for
@@ -1184,6 +1203,15 @@ namespace Arcane::Editor
         // CookDiagRow::permanent's own declaration for the permanent/
         // transient split.
         [[nodiscard]] bool HasPermanentCookDiag(const Arcane::Guid& id) const;
+        // Asset-manager redesign, Plan 1 Task 7: resolveAssetThumb's helper
+        // for the Sprite branch. A sprite entry's refs (m_assetPanelProviders.
+        // refsFor) always carry EXACTLY ONE texture ref -- DerivesFrom for the
+        // 1:1 auto-mint fold, References for a sliced sub-rect sprite (see
+        // AssetPanelModel.cpp's own `sliced` derivation) -- so this returns
+        // the first ref's target, kind-agnostic, either way. A nil Guid means
+        // no answer (no provider, no refs, or an empty list); the caller's
+        // `!tex.IsValid()` guard handles that.
+        [[nodiscard]] Arcane::Guid FirstTextureRefOf(const Arcane::Guid& guid) const;
         double m_editorClock = 0.0;   // the compile service's Poll/Submit clock
 
         // Asset file watcher: a ~1 Hz mtime sweep over the registry's .arcmat

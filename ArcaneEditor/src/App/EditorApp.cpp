@@ -812,7 +812,60 @@ namespace Arcane::Editor
             nri::Texture* tex = cache->Resolve(guid, Arcane::NriTextureCache::ColorSpace::Display);
             return tex ? (std::uint64_t)(std::intptr_t)tex : 0;
         };
+
+        // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail
+        // resolver, built here for the same "ChromeGraph() doesn't exist yet
+        // at this stage" reason resolveTexturePreview just above is -- looked
+        // up LIVE at call time, same [this]-capture idiom. Resolves through
+        // the SAME chrome texture cache as resolveTexturePreview (one cache,
+        // two consumers; OnCookCompleted's InvalidateContentTexture call on
+        // the chrome context, EditorAppProject.cpp:461-462, already keeps
+        // BOTH fresh -- no new cache here). Textures resolve directly;
+        // sprites resolve through their single texture ref (FirstTextureRefOf);
+        // materials route through Task 8's MaterialPreviewHarvester
+        // (m_materialThumbs is null until Task 8 lands, so this returns 0
+        // until then); everything else is 0 -- the caller falls back to the
+        // kind icon.
+        m_assetServices.resolveAssetThumb =
+            [this](const Arcane::Guid& guid) -> std::uint64_t
+        {
+            Arcane::NriGraphContext* chrome = ChromeGraph();
+            Arcane::NriTextureCache* cache = chrome ? chrome->Textures() : nullptr;
+            if (!cache)
+                return 0;
+            const auto* e = m_assetModel.Find(guid);
+            if (!e)
+                return 0;
+            Arcane::Guid tex;
+            if (e->kind == Arcane::Editor::AssetKind::Texture)
+                tex = guid;
+            else if (e->kind == Arcane::Editor::AssetKind::Sprite)
+                tex = FirstTextureRefOf(guid);
+            else if (e->kind == Arcane::Editor::AssetKind::Material)
+                return 0;   // Task 8: m_materialThumbs->ThumbTextureId(guid)
+            if (!tex.IsValid())
+                return 0;
+            nri::Texture* t = cache->Resolve(tex, Arcane::NriTextureCache::ColorSpace::Display);
+            return t ? (std::uint64_t)(std::intptr_t)t : 0;
+        };
         return true;
+    }
+
+    // Asset-manager redesign, Plan 1 Task 7: see this method's own
+    // declaration (EditorApp.hpp) for the "exactly one ref" contract this
+    // relies on. m_assetPanelProviders is the SAME cached facade seam
+    // AssetPanelModel::RebuildIfDirty drives (MakeAssetPanelProviders,
+    // EditorAppProject.cpp) -- reused here rather than calling
+    // m_runtime->AssetsFacade() a second time, so there is exactly one path
+    // from a guid to its outgoing refs in the whole editor.
+    Arcane::Guid EditorApp::FirstTextureRefOf(const Arcane::Guid& guid) const
+    {
+        if (!m_assetPanelProviders.refsFor)
+            return Arcane::Guid{};
+        const std::optional<std::vector<Arcane::AssetRef>> refs = m_assetPanelProviders.refsFor(guid);
+        if (!refs || refs->empty())
+            return Arcane::Guid{};
+        return (*refs)[0].target;
     }
 
     bool EditorApp::StagePluginLoad(Arcane::HostBoot::BootContext&)

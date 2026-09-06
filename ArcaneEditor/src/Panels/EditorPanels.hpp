@@ -345,6 +345,21 @@ namespace Arcane::Editor
         std::function<std::uint64_t(const Arcane::Guid&)> resolveTexturePreview;
     };
 
+    // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail
+    // resolver seam. Same convention as InspectorServices::resolveTexturePreview
+    // above (Guid -> an ImGui texture id via the CHROME context's texture
+    // cache, 0 = unavailable -- the caller falls back to the kind icon), kept
+    // as its own struct rather than folded into InspectorServices because the
+    // consumer is a different panel (Tasks 9-11's Browse lens, not the
+    // Inspector). Textures resolve directly; sprites resolve through their
+    // referenced texture; materials route through Task 8's
+    // MaterialPreviewHarvester (0 until then); everything else is 0. Task 9's
+    // AssetsPanelServices consumes this exact callable.
+    struct AssetServices
+    {
+        std::function<std::uint64_t(const Arcane::Guid&)> resolveAssetThumb;
+    };
+
     // Show the selected entity's components (via Registry::InspectEntity) and edit
     // reflected fields in place; unsupported types render read-only. Each field
     // edit gesture is bracketed into `undo` (Begin+SnapshotComponent on first
