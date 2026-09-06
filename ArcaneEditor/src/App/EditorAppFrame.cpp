@@ -2000,7 +2000,7 @@ namespace Arcane::Editor
                                        m_moduleBuild.Running(), hasGameModule,
                                        m_panelVis,
                                        m_selection.HasSelection(),
-                                       m_assetBrowser.selected.IsValid(),
+                                       m_assetModel.selected.IsValid(),
                                        &m_recents.projects,
                                        &m_recents.scenes);
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
@@ -2232,11 +2232,13 @@ namespace Arcane::Editor
             ls.sceneAction = { Arcane::Editor::SceneIntent::Exit, {} };
         }
 
-        // Assets -> Show in Explorer / Copy Path, on the browser's tracked row.
+        // Assets -> Show in Explorer / Copy Path, on the panel's tracked
+        // selection (Task 10: repointed from the frozen m_assetBrowser.selected
+        // to m_assetModel.selected -- see Task 9's carry-over note).
         if ((menuReq.showInExplorer || menuReq.copyAssetPath) &&
-            m_assetBrowser.selected.IsValid())
+            m_assetModel.selected.IsValid())
         {
-            AssetPathAction(m_runtime->CurrentProject(), m_assetBrowser.selected,
+            AssetPathAction(m_runtime->CurrentProject(), m_assetModel.selected,
                             menuReq.showInExplorer, menuReq.copyAssetPath);
         }
 
@@ -2728,14 +2730,15 @@ namespace Arcane::Editor
                                               m_scene.SavedStateId(),
                                               m_panelVis.OpenFlag(Arcane::Editor::PanelId::Outliner));
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Inspector))
-            // F2b Task 13: m_assetBrowser.selected is the trailing fallback --
-            // consulted only when nothing is entity-selected (DrawInspectorPanel's
-            // own tie-break).
+            // F2b Task 13: the trailing fallback -- consulted only when
+            // nothing is entity-selected (DrawInspectorPanel's own tie-break).
+            // Task 10: repointed from the frozen m_assetBrowser.selected to
+            // m_assetModel.selected -- see Task 9's carry-over note.
             Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo,
                                                m_editBinding, m_runtime->CurrentProject(),
                                                m_inspector, &m_inspectorServices,
                                                m_panelVis.OpenFlag(Arcane::Editor::PanelId::Inspector),
-                                               m_assetBrowser.selected);
+                                               m_assetModel.selected);
 
         // (The hosted plugin's DrawUI now renders into its OWN ImGui context,
         // composited into the viewport texture above -- not the editor context.)

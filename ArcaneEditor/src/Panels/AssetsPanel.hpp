@@ -23,6 +23,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <string>
+#include <unordered_map>
 
 namespace Arcane { class Project; }
 
@@ -48,6 +50,20 @@ namespace Arcane::Editor
         char search[128] = {};
         int  railKind = -1;                 // -1 = All
         std::uint32_t seenSelectionStamp = 0; // scroll-to-selection once
+
+        // Task 10: session-only fold/group open state, MIRRORING
+        // AssetPanelModel's own private m_groupOpen/m_childrenOpen (same
+        // defaults: a folder absent from `groupOpen` is OPEN, a texture
+        // guid absent from `childrenOpen` is COLLAPSED). The model exposes
+        // no getter for either -- Rows() already bakes the effective result
+        // into which rows exist -- but the panel still needs to know which
+        // glyph to draw (chevron open/closed) and what to flip, so it keeps
+        // its own copy and pushes every toggle through
+        // AssetPanelModel::SetGroupOpen/SetChildrenOpen (the only two
+        // writers of the model's maps), which keeps the two in lockstep by
+        // construction rather than by convention.
+        std::unordered_map<std::string, bool>  groupOpen;
+        std::unordered_map<Arcane::Guid, bool> childrenOpen;
     };
 
     // Row/menu actions the APP resolves after the draw -- same "panel

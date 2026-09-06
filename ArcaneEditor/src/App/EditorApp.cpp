@@ -895,9 +895,21 @@ namespace Arcane::Editor
             {
                 // Task 8: a REAL rendered preview, not a texture lookup --
                 // 0 until this material has been harvested (the caller falls
-                // back to the kind icon for that window), and the Browse draw
-                // is what asks for one (Request(), Task 10).
-                return m_materialThumbs ? m_materialThumbs->ThumbTextureId(guid) : 0;
+                // back to the kind icon for that window). Task 10 (controller
+                // ruling, 2026-09-06): on a miss, ALSO push a harvest request
+                // right here -- "visible" is exactly what the Browse draw's
+                // clipper resolved this frame, this seam is the one place
+                // every material-thumb consumer (row, tooltip, later the
+                // preview pane) funnels through, and Request() is a cheap
+                // no-op once queued/harvested/given-up (dedupe + give-up
+                // latch, MaterialPreviewHarvester.hpp's own doc comment), so
+                // calling it from a tooltip/peek resolve too is harmless.
+                if (!m_materialThumbs)
+                    return 0;
+                const std::uint64_t id = m_materialThumbs->ThumbTextureId(guid);
+                if (id == 0)
+                    m_materialThumbs->Request(guid);
+                return id;
             }
             if (!tex.IsValid())
                 return 0;
