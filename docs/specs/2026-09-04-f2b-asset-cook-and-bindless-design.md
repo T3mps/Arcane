@@ -481,9 +481,9 @@ No reference PNG in this repo was ever overwritten by this arc.
 
 | Configuration | Assertions | Cases | Previous baseline (arc start) |
 |---|---|---|---|
-| Debug | **53866** | **1413** | 52462 / 1316 |
-| Release | **53866** | **1413** | 52462 / 1316 |
-| Dist | **53798** | **1407** | 52394 / 1310 |
+| Debug | **53982** | **1429** | 52462 / 1316 |
+| Release | **53982** | **1429** | 52462 / 1316 |
+| Dist | **53914** | **1423** | 52394 / 1310 |
 
 +1404 assertions / +97 cases in every configuration (the figures include the final-review
 fix wave's 11 further cases, commits `dd63dbb7..88711542`); the Debug↔Dist gap holds at
@@ -539,6 +539,25 @@ cited for the committed baseline — was clean. Recorded, not chased, in the sam
 this arc's own precedent for single-run flakes that clear on rerun; if it recurs, the odd
 line attribution is the first thing to run down (possibly a Catch2 JSON-reporter artifact
 rather than a real cross-test assertion).
+
+### Desk checkpoint and the desk-fix wave (2026-09-05/06) — CLOSED
+
+The USER desk checkpoint (Task 14 Step 6) ran across two live sessions and PASSED in full:
+open-heal, mid-session drop (a real 1242x1276 photo, discovered -> registered -> BC7/11-mips
+resident), settings round-trip, delete-source loud refusal, placeholder-vs-refusal,
+no-Reimport-All, mesh-material authoring, and the no-`tint` validation — with ~1 hour of
+sustained interactive use at zero latched errors. It surfaced three defects, each fixed and
+review-clean before this push (`0f249cb4..9de281f8`): mid-session texture drops had NO
+discovery mechanism (watcher iterated the registry; ScanContent ran only at open) — fixed by
+a discovery probe + incremental registration on the watcher tick; the open-heal boot race
+logged transient ArtifactMissing ERRORs — fixed by the `Assets::SetCookPendingProbe` seam
+(quiet pending misses via a POSITIVE signal — settling window, or active cook work with the
+source on disk; refusals stay loud, and row-absence never implies pending); and
+`SpriteMaterialCache` lacked the material-kind gate its siblings carry — wrong-surface picks
+now refuse honestly. Figures above are the true close at `9de281f8`. Also seeded during the
+desk pass, parked for its own arc (post-F2c / with F4): asset-creation UX unification and
+the `.arcsprite`-per-plain-texture browser duplication, joining the kind-blind-picker
+follow-up.
 
 ### Ruled follow-ups, recorded for whoever picks them up
 
