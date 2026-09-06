@@ -14,6 +14,9 @@
 
 #include <filesystem>
 #include <fstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -367,4 +370,162 @@ TEST_CASE("ListAssetReferences returns nullopt for an unresolvable guid", "[asse
 {
     auto assets = Arcane::Assets::Create();   // no resolver installed at all
     CHECK_FALSE(assets->ListAssetReferences(Arcane::Guid::Generate()).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// Task 3: scene structural reference scan + format coverage
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ListAssetReferences scans a scene: reports a real ref, skips identity/nil/"
+          "unresolvable, and dedups repeated mentions", "[assets]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arc_listrefs_scene_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // {"hi":u64,"lo":u64} is EXACTLY Components.hpp's ASTRA_REFLECT_TYPE(Guid)
+    // wire shape -- verified against the real ReferenceProject/Content/
+    // scenes/main.arcscene fixture ("material": {"hi": <u64>, "lo": <u64>}).
+    // Two entities:
+    //   entity 0: an identity "id" (must NOT be reported even though it IS
+    //     resolvable -- proves the exclusion is the KEY-NAME rule, not the
+    //     resolvability filter), a resolvable material named from TWO
+    //     different component fields (dedup), and a nil sprite ({0,0}).
+    //   entity 1: an identity "guid" (the OTHER spelling the rule accepts)
+    //     and a nonzero, resolver-unknown mesh guid (the resolvability
+    //     filter must drop it).
+    const auto scene = WriteFile(dir, "scene.arcscene", R"({
+        "version": 3,
+        "entities": [
+            {
+                "components": {
+                    "Arcane::Identity": {
+                        "id": { "hi": 111111111111111111, "lo": 222222222222222222 },
+                        "name": "A"
+                    },
+                    "Arcane::SpriteRenderer": {
+                        "material": { "hi": 333333333333333333, "lo": 444444444444444444 },
+                        "sprite": { "hi": 0, "lo": 0 }
+                    },
+                    "Arcane::PostProcess": {
+                        "material": { "hi": 333333333333333333, "lo": 444444444444444444 }
+                    }
+                },
+                "parent": -1
+            },
+            {
+                "components": {
+                    "Arcane::Identity": {
+                        "guid": { "hi": 111111111111111111, "lo": 222222222222222222 },
+                        "name": "B"
+                    },
+                    "Arcane::MeshRenderer": {
+                        "mesh": { "hi": 555555555555555555, "lo": 666666666666666666 }
+                    }
+                },
+                "parent": -1
+            }
+        ]
+    })");
+
+    const auto sceneId = Arcane::Guid::FromString("7e5c0001-0001-4001-8001-000000000001");
+    REQUIRE(sceneId.has_value());
+
+    // Reconstructed the SAME way GuidFromHiLo does (Guid{hi, lo} -- direct
+    // field construction, no packing) so the test and the production code
+    // agree on what these numbers mean.
+    const Arcane::Guid identityGuid{ 111111111111111111ull, 222222222222222222ull };
+    const Arcane::Guid materialGuid{ 333333333333333333ull, 444444444444444444ull };
+    const Arcane::Guid unresolvableGuid{ 555555555555555555ull, 666666666666666666ull };
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == *sceneId)      return scene;
+        if (id.Value() == identityGuid)  return fs::path("identity-marker");   // resolvable, but excluded BY NAME
+        if (id.Value() == materialGuid)  return fs::path("material-marker");
+        return std::nullopt;   // unresolvableGuid stays deliberately unresolved
+    });
+
+    const auto refs = assets->ListAssetReferences(*sceneId);
+    REQUIRE(refs.has_value());
+    REQUIRE(refs->size() == 1);   // materialGuid only -- deduped from its two mentions
+    CHECK((*refs)[0].target == materialGuid);
+    CHECK((*refs)[0].kind == Arcane::AssetRefKind::References);
+    CHECK_FALSE(ContainsRef(*refs, identityGuid, Arcane::AssetRefKind::References));
+    CHECK_FALSE(ContainsRef(*refs, unresolvableGuid, Arcane::AssetRefKind::References));
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("ListAssetReferences never returns nullopt for any AssetKindOf-recognized "
+          "extension (format coverage)", "[assets]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arc_listrefs_coverage_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // Every extension ArcaneEditor's AssetKindOf (Panels/AssetBrowser.hpp:59)
+    // explicitly classifies -- hardcoded here, WITH this comment pointing
+    // back at the real switch, per the brief's documented fallback (AssetKindOf
+    // switches on a runtime string_view; there is no case list to introspect
+    // and walk). This is the spec s3.2 guarantee pinned as data: a future
+    // extension AssetKindOf grows without a matching row here will still
+    // classify correctly upstream, but ListAssetReferences's own switch
+    // (Assets.cpp) has no entry for it either until someone adds one -- and
+    // the day they add a row HERE for it is the day this test actually
+    // exercises the gap.
+    //
+    // Content: formats ListAssetReferences routes through GetJson (must
+    // parse) get a minimal "{}"; formats it short-circuits on extension
+    // alone (Assets.cpp's kLeaf/kOpaque tables) get arbitrary non-empty
+    // bytes, matching the existing leaf-.png test's own fixture above.
+    struct Case { const char* ext; const char* content; };
+    static constexpr Case kCases[] = {
+        { ".arcmat",    "{}" },
+        { ".arcscene",  "{}" },
+        { ".arcsprite", "{}" },
+        { ".arcmesh",   "{}" },
+        { ".arcdiag",   "not a real diag, just bytes" },
+        { ".png",       "not a real png, just bytes" },
+        { ".jpg",       "not a real jpg, just bytes" },
+        { ".jpeg",      "not a real jpeg, just bytes" },
+        { ".tga",       "not a real tga, just bytes" },
+        { ".bmp",       "not a real bmp, just bytes" },
+        { ".hdr",       "not a real hdr, just bytes" },
+        { ".wav",       "not a real wav, just bytes" },
+        { ".ogg",       "not a real ogg, just bytes" },
+        { ".mp3",       "not a real mp3, just bytes" },
+        { ".flac",      "not a real flac, just bytes" },
+        { ".ttf",       "not a real ttf, just bytes" },
+        { ".otf",       "not a real otf, just bytes" },
+        { ".json",      "{}" },
+    };
+
+    std::vector<std::pair<Arcane::Guid, fs::path>> mapping;
+    int n = 0;
+    for (const Case& c : kCases)
+    {
+        const std::string name = "min" + std::to_string(++n) + c.ext;
+        mapping.emplace_back(Arcane::Guid::Generate(), WriteFile(dir, name.c_str(), c.content));
+    }
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        for (const auto& [guid, path] : mapping)
+            if (id.Value() == guid) return path;
+        return std::nullopt;
+    });
+
+    for (size_t i = 0; i < mapping.size(); ++i)
+    {
+        INFO("extension: " << kCases[i].ext);
+        const auto refs = assets->ListAssetReferences(mapping[i].first);
+        REQUIRE(refs.has_value());   // never nullopt for a readable file (spec s3.2)
+    }
+
+    fs::remove_all(dir, ec);
 }

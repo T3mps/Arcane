@@ -107,14 +107,107 @@ namespace Arcane
             return (*it)[0].get<float>() != 0.0f || (*it)[1].get<float>() != 0.0f;
         }
 
-        // Task 3 stub (asset-manager arc): the scene structural reference
-        // scan. Returns an empty list for every .arcscene until Task 3
-        // implements the recursive walk -- kept as its own named seam so
-        // ListAssetReferences's switch never special-cases "not implemented
-        // yet" inline.
-        std::optional<std::vector<AssetRef>> ScanSceneReferences(const nlohmann::json& /*scene*/)
+        // Task 3 (asset-manager arc): a Guid field whose NAME says it is an
+        // IDENTITY, not an asset reference -- exactly "id"/"guid", case-
+        // insensitive. THIS IS A MIRROR of ArcaneEditor's
+        // AssetBrowser.hpp::IsIdentityGuidFieldName (AssetBrowser.hpp:161):
+        // this engine-side facade cannot include an editor header (the
+        // directional rule in CLAUDE.md -- engine never depends on editor),
+        // so the rule is copied here rather than shared. Keep the two in
+        // sync by hand if either one ever changes.
+        bool IsIdentityGuidFieldName(std::string_view fieldName)
         {
-            return std::vector<AssetRef>{};
+            std::string lower(fieldName);
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return lower == "id" || lower == "guid";
+        }
+
+        // Task 3 (asset-manager arc): hi/lo -> Guid reconstruction for the
+        // scene structural scan below. This PROVABLY mirrors the reflection-
+        // >JSON bridge's own wire encoding rather than guessing a byte order:
+        // Components.hpp registers `ASTRA_REFLECT_TYPE(Guid)` with exactly
+        // two reflected scalar fields, `hi` and `lo` -- Guid.hpp's own public
+        // members, nothing else -- and ReflectionJson.hpp's WriteScalar/
+        // ReadScalar for a `uint64_t` field copy the raw scalar value
+        // verbatim (see its uint64_t branch): no byte-swap, no repacking.
+        // So a scene's {"hi":H,"lo":L} literally IS Guid{H,L}; there is
+        // nothing left to get wrong here.
+        Guid GuidFromHiLo(std::uint64_t hi, std::uint64_t lo)
+        {
+            return Guid{ hi, lo };
+        }
+
+        // Task 3 (asset-manager arc): recursive structural walk of a parsed
+        // .arcscene document, collecting every {"hi":u64,"lo":u64} guid-
+        // shaped field except an identity field (IsIdentityGuidFieldName
+        // above). That two-field shape is exactly what Components.hpp's
+        // ASTRA_REFLECT_TYPE(Guid) writes for every Guid-typed component
+        // field (SpriteRenderer::material/sprite, MeshRenderer::mesh/
+        // materialOverride, PostProcess::material, Identity::id, ...) --
+        // verified against the real ReferenceProject/Content/scenes/
+        // main.arcscene fixture. A nil guid ({"hi":0,"lo":0}) and a guid the
+        // installed resolver cannot place are both dropped here via
+        // `resolvable` -- see ScanSceneReferences below for what that
+        // predicate means.
+        //
+        // No visited-set / depth bound: a JSON document is a tree by
+        // construction (unlike MaterialSurfaceFor's parent-chain walk, which
+        // follows Guid links that COULD cycle), so this walk always
+        // terminates on its own.
+        static void ScanSceneJson(const nlohmann::json& node,
+                                  const std::function<bool(const Guid&)>& resolvable,
+                                  std::vector<AssetRef>& out)
+        {
+            if (node.is_object())
+            {
+                for (const auto& [key, value] : node.items())
+                {
+                    if (value.is_object() && value.size() == 2 &&
+                        value.contains("hi") && value.contains("lo") &&
+                        value["hi"].is_number_unsigned() && value["lo"].is_number_unsigned())
+                    {
+                        if (IsIdentityGuidFieldName(key))
+                            continue;   // identity, not a reference
+                        const Guid g = GuidFromHiLo(value["hi"].get<std::uint64_t>(),
+                                                    value["lo"].get<std::uint64_t>());
+                        if (g.IsValid() && resolvable(g))
+                            out.push_back({ g, AssetRefKind::References });
+                        continue;   // a guid-shaped leaf has nothing further to walk into
+                    }
+                    ScanSceneJson(value, resolvable, out);
+                }
+            }
+            else if (node.is_array())
+                for (const auto& v : node) ScanSceneJson(v, resolvable, out);
+        }
+
+        // Task 3 (asset-manager arc): the scene structural reference scan --
+        // fulfils ListAssetReferences's .arcscene branch, a stub until now.
+        // `resolvable` = "the installed AssetResolver answers for this guid"
+        // (ResolveId succeeds); the CALLER (ListAssetReferences below) is
+        // the one that actually has a resolver to ask, so it builds and
+        // hands in the predicate rather than this free function reaching
+        // for one of its own. Every surviving edge is
+        // AssetRefKind::References: a scene structurally NAMES another
+        // asset, it never DERIVES its own identity from one (AssetRefKind's
+        // own doc comment in Assets.hpp). Deduplicated by target guid -- a
+        // scene routinely names the SAME material/mesh from several
+        // component fields or several entities, and the caller wants one
+        // edge per distinct target, not one per mention.
+        std::optional<std::vector<AssetRef>> ScanSceneReferences(
+            const nlohmann::json& scene, const std::function<bool(const Guid&)>& resolvable)
+        {
+            std::vector<AssetRef> raw;
+            ScanSceneJson(scene, resolvable, raw);
+
+            std::unordered_set<Guid> seen;
+            std::vector<AssetRef> out;
+            out.reserve(raw.size());
+            for (const AssetRef& r : raw)
+                if (seen.insert(r.target).second)
+                    out.push_back(r);
+            return out;
         }
 
         using BytesPtr       = std::shared_ptr<const std::vector<uint8_t>>;
@@ -782,7 +875,14 @@ namespace Arcane
                     return out;
                 }
                 if (ext == ".arcscene")
-                    return ScanSceneReferences(*json);   // Task 3; stub returns {} until then
+                {
+                    // Task 3: "resolvable" IS "ResolveId succeeds" -- the
+                    // same resolution step every other accessor on this
+                    // facade takes, just probed here rather than opened.
+                    auto resolvable = [this](const Guid& g)
+                    { return ResolveId(AssetId::FromGuid(g)).has_value(); };
+                    return ScanSceneReferences(*json, resolvable);
+                }
 
                 return std::vector<AssetRef>{};   // unrecognised format: documented empty (Task 3 pins the table)
             }
