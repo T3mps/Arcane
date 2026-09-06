@@ -55,12 +55,17 @@ the next starts.
 Two stateless queries — parse-on-call, no engine-side cache (the editor's index and
 model are the caches):
 
-### 3.1 `Assets::MaterialKindFor(Guid) -> std::optional<MaterialKind>`
+### 3.1 `Assets::MaterialSurfaceFor(Guid) -> std::optional<MaterialSurface>`
 
-Reads the `kind` field the `.arcmat` JSON already carries (verified:
-`"kind": "sprite"` in `pulse_sprite.arcmat`), returning the existing engine
-`MaterialKind` enum (the one the SpriteMaterialCache kind gate consumes; exact
-spelling verified at plan time). `nullopt` = not a material or unreadable.
+(Plan-time verification corrected the type: there is no `MaterialKind` enum — the
+engine's subkind type is `MaterialSurface { Fullscreen, Sprite, Mesh }`
+(`MaterialSource.hpp:71`), mapped from the `.arcmat` `"kind"` string
+(`"fullscreen"/"sprite"/"mesh"`) by `MaterialSurfaceForKind`.) Returns the resolved
+surface. **Instance files carry no `kind` field** — only a `"parent"` guid — so the
+query walks the parent chain (bounded depth, cycle-safe) to the base material's
+kind. `nullopt` = not a material or unreadable. UI note: the display label for
+`Fullscreen` is "post" (the mocks' vocabulary); the wire/disk vocabulary is
+unchanged.
 
 ### 3.2 `Assets::ListAssetReferences(Guid) -> std::optional<std::vector<AssetRef>>`
 
@@ -77,7 +82,7 @@ Per-format extraction, one engine-side parser per format:
 | `.arcmat` | every param with `"type": "texture"` | `References` |
 | `.arcmat` (instance) | parent material (field name verified at plan time) | `DerivesFrom` |
 | `.arcscene` | the `assets` manifest (3.3); pre-v4 scenes: structural scan (3.4) | `References` |
-| `.arcmesh` | none — self-contained (verified at plan time) | — |
+| `.arcmesh` | its `material` guid (default material, `MeshAsset.hpp:89`) — plan-time verification corrected this row: `.arcmesh` is NOT self-contained | `References` |
 | textures, audio, fonts | documented leaf formats | — |
 | `.json` data, `.arcdiag` | documented opaque | — |
 
@@ -130,10 +135,12 @@ One unit owning everything the lenses read.
   children), rail counts, `HealthCounts` (digest + Status tiles/meter), filtered
   projections (search reuses `MatchesFilter` semantics — case-insensitive substring
   over name and mount path; rail kind filter).
-- **Invalidation, not per-frame rebuild:** per-guid dirty marks from events the
-  editor already receives (the F2b watcher/drop-discovery path, cook-completion
-  observers, save hooks); full rebuild only on registry-scale events (project open,
-  ScanContent). Engine queries are cached per guid and re-asked only for dirtied
+- **Invalidation, not per-frame rebuild:** per-guid dirty marks from the seams the
+  editor already has — there is no registry watcher; the editor polls
+  (`PollAssetWatch`'s ~1 Hz mtime sweep + drop discovery), and cook completion
+  arrives via `CookQueue::SetOnCookComplete` → `EditorApp::OnCookCompleted`. The
+  model exposes `MarkDirty(guid)`/`MarkAllDirty()` and those sites call it; full
+  rebuild only on registry-scale events (project open, ScanContent). Engine queries are cached per guid and re-asked only for dirtied
   guids. Rebuild is lazy, at next draw. Today's rebuild-every-frame dies here.
 - **The one shared selection** (single `Guid`) lives in the model; all lenses and
   the preview read it. Reset on project switch (today's rule kept). A
