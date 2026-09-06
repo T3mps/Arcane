@@ -294,9 +294,6 @@ namespace Arcane::Editor
         // oversight.
         constexpr float kPillLineHeight  = 16.0f;
         constexpr ImU32 kPillAmberBorder = IM_COL32(0x7a, 0x5a, 0x20, 255);
-
-        // RowWithThumb's thumb cell (spec §11.2: "row thumb ... 18px").
-        constexpr float kRowThumbSize = 18.0f;
     }
 
     // capacity() + 1 is BufSize's own C++ spelling (imgui.h:2772); the +1 is
@@ -661,25 +658,37 @@ namespace Arcane::Editor
     // window's ParentWorkRect = WorkRect in Begin(), so SpanAllColumns
     // degrades to "span this window" outside a table rather than asserting,
     // which is what lets this same helper draw both the table rows and the
-    // (table-free) rail rows per spec §11.1). The thumb and name are then an
-    // OVERDRAW on top of that same rect -- SetCursorScreenPos back into it,
-    // not the normal top-down flow -- because Selectable's OWN width fills
-    // the row (size.x == 0), so a plain SameLine() straight after it would
-    // land off to the right of the whole row, not at the thumb's position.
+    // (table-free) rail rows per spec §11.1).
     //
-    // The cursor is explicitly put back at the row's bottom-left before
-    // returning: Image/TextUnformatted's own ItemSize calls, run at the
-    // manually-centered (shorter-than-rowHeight) positions above, would
-    // otherwise leave window cursor short of the row's true bottom, and the
-    // NEXT sibling (another row, in the common no-trailing-content case)
-    // must not start there. That reset only touches CursorPos, not
-    // CursorPosPrevLine (imgui.cpp SetCursorScreenPos) -- so a caller who DOES
-    // want trailing content (pills, right-aligned extras) can still call bare
-    // ImGui::SameLine() immediately after this returns and land right after
-    // the name, at the name's own vertical center; a table caller stacking
-    // rows should still pin the row height explicitly via
-    // `TableNextRow(0, rowHeight)` rather than lean on this function's own
-    // line-height bookkeeping once trailing content is in play.
+    // TASK 10 FIX ROUND 1 (review Critical 1): the thumb and name are now
+    // PURE ImDrawList overdraw (AddImage/AddText, no ItemAdd of their own)
+    // rather than ImGui::Image/TextUnformatted items. The Selectable is
+    // therefore the ONLY real item this function submits -- it stays
+    // ImGui's "last submitted item" for as long as the caller wants it to,
+    // which is the whole point: the previous design's real Image/Text items
+    // silently became the "last item" instead, so a caller's
+    // BeginDragDropSource/BeginPopupContextItem/tooltip calls (which all key
+    // off "the last item") landed on the NAME TEXT's tiny rect rather than
+    // the row -- the bug that motivated a since-deleted InvisibleButton
+    // "hit anchor" overlay, which had its own, worse bug (see below).
+    //
+    // The Selectable is submitted with SetNextItemAllowOverlap() so a
+    // caller MAY still add a small foreground item after this call returns
+    // (an expander chevron, the rail's hover "+") without it being starved
+    // by the Selectable's own hover claim -- imgui.cpp:5089-5118 is precise
+    // about the direction this has to run: the flag belongs on the
+    // BACKGROUND item (this Selectable) and grants permission to whatever
+    // is submitted AFTER it, never the reverse. This is also exactly why
+    // the deleted InvisibleButton design was broken instead of merely
+    // suboptimal: it flagged the Selectable (background, correct side) but
+    // then overlaid a SAME-SIZE button over the ENTIRE row rather than a
+    // small sub-area -- so every single frame the mouse was anywhere on the
+    // row, that overlay re-claimed HoveredId, and the AllowOverlap
+    // precondition ("g.HoveredIdPreviousFrame == this Selectable's id",
+    // imgui.cpp:5117) could never be satisfied. A caller that adds no
+    // foreground item at all pays nothing for the flag: nothing else ever
+    // contests the row's hover, so it settles to hovered=true after, at
+    // most, one frame.
     AssetRowResult RowWithThumb(const char* id, ImTextureID thumb, const char* iconUtf8,
                                 const char* name, bool selected, float indent,
                                 float rowHeight)
@@ -691,55 +700,55 @@ namespace Arcane::Editor
         ImGui::PushID(id);
         const ImVec2 rowMin = ImGui::GetCursorScreenPos();
 
+        ImGui::SetNextItemAllowOverlap();
         result.clicked = ImGui::Selectable("##row", selected,
                                            ImGuiSelectableFlags_SpanAllColumns |
                                            ImGuiSelectableFlags_AllowDoubleClick,
                                            ImVec2(0.0f, rowHeight));
         result.hovered = ImGui::IsItemHovered();
 
-        const float thumbY = rowMin.y + (rowHeight - kRowThumbSize) * 0.5f;
-        ImGui::SetCursorScreenPos(ImVec2(rowMin.x + indent, thumbY));
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        const float thumbY = rowMin.y + (rowHeight - kAssetRowThumbSize) * 0.5f;
         if (thumb != 0)
         {
-            ImGui::Image(thumb, ImVec2(kRowThumbSize, kRowThumbSize));
+            dl->AddImage(thumb, ImVec2(rowMin.x + indent, thumbY),
+                        ImVec2(rowMin.x + indent + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
         }
         else
         {
             // Icon fallback: a Lucide glyph centered WITHIN the same 18px
             // cell, under whichever font is active (every editor face
-            // carries the merged icon range, EditorFonts.cpp). Centering
-            // makes this glyph's own registered item rect narrower than
-            // (and offset from) a real 18px thumbnail's whenever the glyph
-            // isn't exactly kRowThumbSize wide -- which is exactly why the
-            // name below is NOT anchored off this item's rect (a bare
-            // SameLine() would inherit that per-glyph offset); it is
-            // anchored off the fixed CELL width instead, so it lands at the
-            // same x regardless of which branch ran.
+            // carries the merged icon range, EditorFonts.cpp).
             const ImVec2 iconSize = ImGui::CalcTextSize(iconUtf8);
-            ImGui::SetCursorScreenPos(ImVec2(rowMin.x + indent + (kRowThumbSize - iconSize.x) * 0.5f,
-                                             rowMin.y + (rowHeight - iconSize.y) * 0.5f));
-            ImGui::TextUnformatted(iconUtf8);
+            dl->AddText(ImVec2(rowMin.x + indent + (kAssetRowThumbSize - iconSize.x) * 0.5f,
+                              rowMin.y + (rowHeight - iconSize.y) * 0.5f),
+                       ImGui::GetColorU32(ImGuiCol_Text), iconUtf8);
         }
 
-        // Fixed-anchor the name at indent + the thumb CELL's width, not a
-        // bare SameLine() off whichever item just ran: SameLine() reads
-        // CursorPosPrevLine.x, which is the THUMB/ICON's own item-rect right
-        // edge -- identical to indent+kRowThumbSize for the real 18x18
-        // Image, but short of it for the icon fallback's centered (and
-        // usually narrower) glyph rect. Anchoring both paths off the same
-        // fixed x is what actually keeps the name column aligned between
-        // thumbnail rows and icon-fallback rows, and gives the documented
-        // caller SameLine() convention (see the doc comment above) a stable
-        // x to inherit either way.
-        const float nameX = rowMin.x + indent + kRowThumbSize + ImGui::GetStyle().ItemInnerSpacing.x;
+        // The name anchors at indent + the thumb CELL's fixed width --
+        // there is no per-glyph icon-rect to diverge from any more (nothing
+        // above is a real item), so both the thumb and icon-fallback paths
+        // already agree on where the cell ends.
+        const float nameX = rowMin.x + indent + kAssetRowThumbSize + ImGui::GetStyle().ItemInnerSpacing.x;
         const ImVec2 nameSize = ImGui::CalcTextSize(name);
-        ImGui::SetCursorScreenPos(ImVec2(nameX, rowMin.y + (rowHeight - nameSize.y) * 0.5f));
-        ImGui::TextUnformatted(name);
+        dl->AddText(ImVec2(nameX, rowMin.y + (rowHeight - nameSize.y) * 0.5f),
+                   ImGui::GetColorU32(ImGuiCol_Text), name);
 
-        // Put the flow cursor back at the row's true bottom (see the doc
-        // comment above) -- CursorPosPrevLine is untouched by this, so a
-        // caller's own SameLine() immediately after still lands beside the
-        // name, not here.
+        // Where the caller's own trailing content (pills, right-aligned
+        // extras) should START -- see the header's own doc comment on
+        // `trailingPos` for why this replaces the old bare-SameLine()
+        // convention (there is no longer a real name ITEM for SameLine to
+        // read line metrics off of).
+        result.trailingPos = ImVec2(nameX + nameSize.x + ImGui::GetStyle().ItemInnerSpacing.x,
+                                    rowMin.y + (rowHeight - kPillLineHeight) * 0.5f);
+
+        // Put the flow cursor back at the row's true bottom: the NEXT
+        // sibling (another row, in the common no-trailing-content case)
+        // must not start mid-row. CursorPosPrevLine is untouched by this
+        // (imgui.cpp's SetCursorScreenPos), which no longer matters to a
+        // caller wanting trailing content -- it seeds its own cursor from
+        // `result.trailingPos` instead of a bare SameLine().
         ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMin.y + rowHeight));
 
         ImGui::PopID();

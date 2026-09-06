@@ -172,18 +172,62 @@ namespace Arcane::Editor
     [[nodiscard]] int SegmentedStrip(const char* id, const char* const* items,
                                      int count, int active, unsigned enabledMask);
 
+    // Row thumb cell size (spec §11.2: "row thumb ... 18px"). Exposed
+    // (rather than kept file-local to EditorWidgets.cpp) so a caller that
+    // needs to compute a position against RowWithThumb's own thumb rect --
+    // e.g. a status badge overlaid on a corner of it -- can do so without
+    // re-guessing the value; AssetsPanel.cpp's refused-marker badge (Task
+    // 10 fix round 1) is the first such consumer.
+    inline constexpr float kAssetRowThumbSize = 18.0f;
+
     // One selectable asset row (spec §11.1/§11.2): an 18px thumb (`thumb`
-    // == 0 falls back to the `iconUtf8` Lucide glyph), then `name`, then the
-    // cursor is left ready for the caller to draw trailing content (pills,
-    // right-aligned extras) with SameLine. `indent` shifts where the thumb
-    // and name start; the row's own Selectable still spans the full width,
-    // so the row stays clickable everywhere regardless of indent.
+    // == 0 falls back to the `iconUtf8` Lucide glyph), then `name`, then
+    // `result.trailingPos` names where the caller's own trailing content
+    // (pills, right-aligned extras) should START. `indent` shifts where the
+    // thumb and name start; the row's own Selectable still spans the full
+    // width, so the row stays clickable everywhere regardless of indent.
     // `rowHeight` defaults to the 24px table row (spec §11.2); rail rows --
     // drawn with this SAME helper per §11.1 -- pass 26. (The brief's doc
     // fixed this at 24px, which cannot serve both rows; controller ruling,
     // 2026-09-06, makes it a parameter instead, defaulted to 24 so table
     // call sites stay unchanged.)
-    struct [[nodiscard]] AssetRowResult { bool clicked = false; bool hovered = false; };
+    //
+    // TASK 10 FIX ROUND 1 (review Critical 1): the thumb and name are pure
+    // ImDrawList overdraw now, NOT ImGui::Image/TextUnformatted items --
+    // the row's Selectable is therefore the ONE real item this function
+    // submits, and stays ImGui's "last submitted item" the instant this
+    // call returns. That is what lets a caller hang
+    // BeginDragDropSource()/BeginPopupContextItem()/
+    // IsItemHovered(ImGuiHoveredFlags_ForTooltip) directly off the return
+    // of this call with no separate anchor widget -- the previous design's
+    // full-row InvisibleButton "hit anchor" is deleted along with the bug
+    // it had (an AllowOverlap item is hoverable only when
+    // g.HoveredIdPreviousFrame already names it, imgui.cpp:5112-5118 --  a
+    // same-size overlay submitted every frame starves it permanently).
+    //
+    // The Selectable IS still submitted with SetNextItemAllowOverlap() (see
+    // the .cpp), but for the mechanism's actual documented purpose this
+    // time: permitting a SMALL foreground item a caller submits AFTER this
+    // call to remain clickable despite sitting inside the row's rect (an
+    // expander chevron, the rail's hover "+") -- imgui.h's own doc comment
+    // for SetNextItemAllowOverlap names exactly this pattern ("Typically
+    // useful with InvisibleButton(), Selectable(), TreeNode() covering an
+    // area where subsequent items may need to be added"). A caller that
+    // never adds such a foreground item pays nothing: the row just settles
+    // to hovered=true after, at most, one frame of the mouse entering it.
+    // `trailingPos` bypasses the fragile alternative of a bare SameLine()
+    // trying to re-derive a text-item's line metrics off a Selectable that
+    // never carried them in the first place -- call
+    // ImGui::SetCursorScreenPos(result.trailingPos) for the FIRST trailing
+    // widget only; ordinary SameLine() chaining resumes correctly after
+    // that (a real item -- e.g. AssetPill's own Dummy -- reseeds normal
+    // line-tracking for anything chained after it).
+    struct [[nodiscard]] AssetRowResult
+    {
+        bool clicked = false;
+        bool hovered = false;
+        ImVec2 trailingPos{};
+    };
     AssetRowResult RowWithThumb(const char* id, ImTextureID thumb, const char* iconUtf8,
                                 const char* name, bool selected, float indent,
                                 float rowHeight = 24.0f);

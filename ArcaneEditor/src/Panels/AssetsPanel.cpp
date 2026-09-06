@@ -423,31 +423,24 @@ namespace Arcane::Editor
             ImGui::EndPopup();
         }
 
-        // ---- Task 10: shared per-row interaction anchor --------------------
-        // BeginDragDropSource/BeginPopupContextItem/IsItemHovered(ForTooltip)
-        // all key off "the last submitted item" -- and RowWithThumb's own
-        // last item is its NAME text (drawn after the row's real Selectable),
-        // not the full-row Selectable itself. So this draws ONE invisible
-        // button back over the FULL row rect (rowMin.."row width"x
-        // kTableRowHeight), submitted AFTER RowWithThumb, and hangs every
-        // interaction that needs "last item" semantics off THAT instead.
-        //
-        // For this to receive hover at all despite sitting on top of
-        // RowWithThumb's already-hovered Selectable, the CALLER must have
-        // called ImGui::SetNextItemAllowOverlap() immediately before invoking
-        // RowWithThumb (flagging ITS internal Selectable as overlappable) --
-        // see DrawAssetRow/DrawChildRow. Selectable's OWN click (-> Select())
-        // is unaffected: it already returned its `clicked` value at ITS OWN
-        // submission time, before this button even exists.
-        void DrawRowInteractions(AssetPanelModel& model, const Arcane::Project* project,
-                                 DocumentHost& docs, const AssetsPanelServices& services,
-                                 AssetsPanelActions& actions, const AssetPanelEntry& e,
-                                 ImVec2 rowMin, bool kindSpecificMenu)
+        // ---- Task 10 fix round 1: shared per-row interaction attachment ----
+        // Called IMMEDIATELY after RowWithThumb returns, with NOTHING else
+        // submitted in between: BeginDragDropSource/BeginPopupContextItem/
+        // IsItemHovered(ForTooltip) all key off ImGui's "last submitted
+        // item", which at this exact point is the row's own Selectable
+        // (RowWithThumb's own doc comment explains why it stays that way).
+        // No anchor widget of any kind -- the original design's full-row
+        // InvisibleButton overlay is DELETED, not replaced: it was the
+        // Critical 1 bug (an AllowOverlap item is hoverable only when
+        // g.HoveredIdPreviousFrame already names it, imgui.cpp:5112-5118 --
+        // a same-size overlay submitted every frame starved the row's real
+        // Selectable of that permanently, so `model.Select()` never fired
+        // from a left-click).
+        void AttachRowInteractions(AssetPanelModel& model, const Arcane::Project* project,
+                                   DocumentHost& docs, const AssetsPanelServices& services,
+                                   AssetsPanelActions& actions, const AssetPanelEntry& e,
+                                   bool kindSpecificMenu)
         {
-            ImGui::SetCursorScreenPos(rowMin);
-            const std::string hitId = "##hit_" + e.guid.ToString();
-            ImGui::InvisibleButton(hitId.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, kTableRowHeight));
-
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                 OpenAssetRow(e, project, docs, actions);
 
@@ -478,6 +471,8 @@ namespace Arcane::Editor
                     const char* icon = (re.kind < 0) ? ICON_LC_LAYOUT_GRID
                                                      : KindIcon(static_cast<AssetKind>(re.kind));
 
+                    const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+                    const float rowWidth = ImGui::GetContentRegionAvail().x;
                     const AssetRowResult res = RowWithThumb("##rail", 0, icon, re.label.c_str(),
                                                             selected, 0.0f, kRailRowHeight);
                     if (res.clicked)
@@ -488,28 +483,49 @@ namespace Arcane::Editor
 
                     // Trailing block, right-aligned: an optional hover "+"
                     // (creatable kinds only) then the dim count (spec s6).
+                    // Fix round 1 (Important 3): the "+" is a REAL item
+                    // submitted AFTER the row's Selectable, which
+                    // RowWithThumb flags AllowOverlap for exactly this
+                    // reason -- it genuinely receives its own clicks per
+                    // ImGui's front-to-back overlap arbitration
+                    // (imgui.cpp:5112-5118), rather than sitting inert under
+                    // a Selectable that never releases hover to it. Both
+                    // pieces are positioned by absolute screen coordinates,
+                    // not SameLine() (RowWithThumb no longer leaves a real
+                    // "name" item for SameLine to read line-metrics off of;
+                    // see its own doc comment on `trailingPos`).
                     char countBuf[16];
                     std::snprintf(countBuf, sizeof(countBuf), "%d", re.count);
                     const float countW = ImGui::CalcTextSize(countBuf).x;
                     const bool showPlus = res.hovered && RailKindCreatable(re.kind);
-                    const float plusW = showPlus
-                        ? (ImGui::CalcTextSize(ICON_LC_PLUS).x + ImGui::GetStyle().FramePadding.x * 2.0f
-                           + ImGui::GetStyle().ItemSpacing.x)
-                        : 0.0f;
-                    const float trailingW = countW + plusW;
+                    const float plusBtnW = ImGui::CalcTextSize(ICON_LC_PLUS).x
+                                          + ImGui::GetStyle().FramePadding.x * 2.0f;
+                    const float trailingW = countW + (showPlus ? (plusBtnW + ImGui::GetStyle().ItemSpacing.x) : 0.0f);
+                    const float padX = ImGui::GetStyle().FramePadding.x;
 
-                    ImGui::SameLine();
-                    const float avail = ImGui::GetContentRegionAvail().x;
-                    if (avail > trailingW)
-                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - trailingW);
+                    float cursorX = std::max(res.trailingPos.x, rowMin.x + rowWidth - padX - trailingW);
+                    const float rowCenterY = rowMin.y + kRailRowHeight * 0.5f;
 
                     if (showPlus)
                     {
+                        ImGui::SetCursorScreenPos(ImVec2(cursorX, rowCenterY - ImGui::GetFrameHeight() * 0.5f));
                         if (ImGui::SmallButton(ICON_LC_PLUS))
                             actions.requestCreateKind = re.kind;
-                        ImGui::SameLine();
+                        cursorX += plusBtnW + ImGui::GetStyle().ItemSpacing.x;
                     }
+                    ImGui::SetCursorScreenPos(ImVec2(cursorX, rowCenterY - ImGui::GetTextLineHeight() * 0.5f));
                     ImGui::TextDisabled("%s", countBuf);
+
+                    // Absolute-position the NEXT row explicitly rather than
+                    // trusting ImGui's own newline bookkeeping to recover
+                    // the right Y from wherever the trailing content above
+                    // was manually placed (RowWithThumb's own internal
+                    // "put the cursor back" reset gets overwritten by every
+                    // SetCursorScreenPos call this loop body makes after it
+                    // returns) -- this is what SameLine() used to do for
+                    // free when the trailing content was SameLine-chained;
+                    // absolute positioning has to restate it explicitly.
+                    ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMin.y + kRailRowHeight));
 
                     ImGui::PopID();
                 }
@@ -567,77 +583,98 @@ namespace Arcane::Editor
             const bool hasChildren = (e.kind == AssetKind::Texture) && !e.derivedChildren.empty();
             const bool childrenOpen = hasChildren && ChildrenAreOpen(state, e.guid);
             const bool refused = (e.cook == CookState::Refused);
-            // One leading gutter, used for EITHER the expander OR the
-            // refused marker (a row needing both -- rare: a texture that is
-            // both refused and has a folded child -- shows the expander;
-            // the functional affordance wins over the status marker).
-            const bool needsGutter = hasChildren || refused;
-            const float indent = needsGutter ? kChildIndent : 0.0f;
+            // The expander gutter is reserved only for textures with a
+            // folded child -- refused now wears its OWN corner badge on the
+            // thumb below (fix round 1, Important 5), so it never competes
+            // with the expander for the same slot.
+            const float indent = hasChildren ? kChildIndent : 0.0f;
 
             const std::uint64_t thumbId = services.resolveAssetThumb ? services.resolveAssetThumb(e.guid) : 0;
             const char* icon = KindIcon(e.kind);
             const bool selected = (model.selected == e.guid);
 
-            ImGui::SetNextItemAllowOverlap();
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
                                                     e.fileName.c_str(), selected, indent, kTableRowHeight);
             if (res.clicked)
                 model.Select(e.guid);
 
-            if (needsGutter)
-            {
-                const char* glyph = hasChildren ? (childrenOpen ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT)
-                                                : ICON_LC_TRIANGLE_ALERT;
-                const ImU32 color = hasChildren ? ImGui::GetColorU32(ImGuiCol_Text)
-                                                : ImGui::GetColorU32(Theme::kAmber);
-                const ImVec2 gs = ImGui::CalcTextSize(glyph);
-                ImGui::GetWindowDrawList()->AddText(
-                    ImVec2(rowMin.x + (kChildIndent - gs.x) * 0.5f, rowMin.y + (kTableRowHeight - gs.y) * 0.5f),
-                    color, glyph);
+            // Fix round 1 (Critical 1): attach drag/context-menu/tooltip/
+            // double-click HERE, immediately -- the row's Selectable is
+            // still ImGui's last submitted item at this exact point (see
+            // RowWithThumb's own doc comment). Everything drawn below this
+            // line (the expander, the refused badge, the pills) must come
+            // AFTER this call, not before -- each is either pure drawlist
+            // (doesn't touch "last item") or a real item that would
+            // otherwise steal that title away from the Selectable.
+            AttachRowInteractions(model, project, docs, services, actions, e, /*kindSpecificMenu=*/true);
 
-                if (hasChildren &&
-                    ImGui::IsMouseHoveringRect(ImVec2(rowMin.x, rowMin.y),
-                                              ImVec2(rowMin.x + kChildIndent, rowMin.y + kTableRowHeight)) &&
-                    ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            // Expander: a REAL item submitted AFTER the row's Selectable
+            // (which RowWithThumb flags AllowOverlap for exactly this), so
+            // it genuinely receives its own clicks through ImGui's
+            // front-to-back overlap arbitration (imgui.cpp:5112-5118)
+            // rather than a manual screen-rect hit-test that a same-
+            // coordinate popup from an unrelated row could fool (fix round
+            // 1, Important 7).
+            if (hasChildren)
+            {
+                ImGui::SetCursorScreenPos(rowMin);
+                const std::string expId = "##exp_" + e.guid.ToString();
+                if (ImGui::InvisibleButton(expId.c_str(), ImVec2(kChildIndent, kTableRowHeight)))
                 {
                     const bool newOpen = !childrenOpen;
                     state.childrenOpen[e.guid] = newOpen;
                     model.SetChildrenOpen(e.guid, newOpen);
                 }
+                const char* chevron = childrenOpen ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT;
+                const ImVec2 cs = ImGui::CalcTextSize(chevron);
+                ImGui::GetWindowDrawList()->AddText(
+                    ImVec2(rowMin.x + (kChildIndent - cs.x) * 0.5f, rowMin.y + (kTableRowHeight - cs.y) * 0.5f),
+                    ImGui::GetColorU32(ImGuiCol_Text), chevron);
+            }
+
+            // Refused marker: its OWN slot, a small badge overlaid on the
+            // thumb's bottom-right corner -- independent of the expander
+            // gutter above, so a refused texture with a folded child still
+            // reads as refused rather than losing the marker to the
+            // expander (fix round 1, Important 5; spec s6: refused rows
+            // wear the amber triangle, unconditionally).
+            if (refused)
+            {
+                const float thumbY = rowMin.y + (kTableRowHeight - kAssetRowThumbSize) * 0.5f;
+                const ImVec2 badgePos(rowMin.x + indent + kAssetRowThumbSize - 11.0f, thumbY + kAssetRowThumbSize - 11.0f);
+                ImGui::GetWindowDrawList()->AddText(badgePos, ImGui::GetColorU32(Theme::kAmber),
+                                                    ICON_LC_TRIANGLE_ALERT);
             }
 
             // Trailing pills, in spec order: subkind, inst, boot, sliced,
-            // derived-count.
+            // derived-count. Positioned from `res.trailingPos` (the FIRST
+            // pill only) rather than a bare SameLine() -- RowWithThumb's
+            // name is pure drawlist overdraw now, so there is no real name
+            // ITEM left for SameLine to inherit line-metrics from; ordinary
+            // SameLine() chaining resumes correctly for every pill AFTER
+            // the first (AssetPill's own Dummy is a real item).
+            bool firstPill = true;
+            const auto placePill = [&](const char* text, int variant = 0)
+            {
+                if (firstPill) { ImGui::SetCursorScreenPos(res.trailingPos); firstPill = false; }
+                else           ImGui::SameLine();
+                AssetPill(text, variant);
+            };
             if (const char* sub = SubkindPillText(e))
-            {
-                ImGui::SameLine();
-                AssetPill(sub);
-            }
+                placePill(sub);
             if (e.isInstance)
-            {
-                ImGui::SameLine();
-                AssetPill("inst");
-            }
+                placePill("inst");
             if (e.kind == AssetKind::Scene && bootGuid.IsValid() && e.guid == bootGuid)
-            {
-                ImGui::SameLine();
-                AssetPill("boot", 1);
-            }
+                placePill("boot", 1);
             if (e.kind == AssetKind::Sprite && e.sliced)
-            {
-                ImGui::SameLine();
-                AssetPill("sliced");
-            }
+                placePill("sliced");
             if (hasChildren && !childrenOpen)
             {
-                ImGui::SameLine();
                 char buf[16];
                 std::snprintf(buf, sizeof(buf), "%d", static_cast<int>(e.derivedChildren.size()));
-                AssetPill(buf);
+                placePill(buf);
             }
-
-            DrawRowInteractions(model, project, docs, services, actions, e, rowMin, /*kindSpecificMenu=*/true);
 
             ImGui::PopID();
         }
@@ -653,8 +690,6 @@ namespace Arcane::Editor
             const char* icon = KindIcon(e.kind);
             const bool selected = (model.selected == e.guid);
 
-            ImGui::SetNextItemAllowOverlap();
-            const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
                                                     e.fileName.c_str(), selected, kChildIndent, kTableRowHeight);
@@ -662,10 +697,12 @@ namespace Arcane::Editor
             if (res.clicked)
                 model.Select(e.guid);
 
-            ImGui::SameLine();
-            AssetPill("derived");
+            // Fix round 1 (Critical 1): attach interactions before drawing
+            // the pill -- see DrawAssetRow's own comment on ordering.
+            AttachRowInteractions(model, project, docs, services, actions, e, /*kindSpecificMenu=*/false);
 
-            DrawRowInteractions(model, project, docs, services, actions, e, rowMin, /*kindSpecificMenu=*/false);
+            ImGui::SetCursorScreenPos(res.trailingPos);
+            AssetPill("derived");
 
             ImGui::PopID();
         }
@@ -704,12 +741,55 @@ namespace Arcane::Editor
             if (wantsScroll && scrollTargetIndex < 0)
                 state.seenSelectionStamp = model.selectionStamp;
 
+            // Fix round 1 (Important 2): TableNextRow(_, 24) actually grows
+            // to 24 + CellPadding.y*2 (imgui_tables.cpp:1936-1937) -- the
+            // theme leaves CellPadding at ImGui's stock (x, 3-ish) default,
+            // so the real row PITCH was ~28-30px against the clipper's
+            // (and every row-index/scroll-position computation's) 24px
+            // assumption. Zeroing only the VERTICAL padding for the
+            // duration of this table restores the pinned 24px pitch
+            // (spec §11.2) exactly, without touching the horizontal
+            // padding anything else in this cell might still want.
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,
+                                ImVec2(ImGui::GetStyle().CellPadding.x, 0.0f));
+
             if (ImGui::BeginTable("##assets", 1,
                                   ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoSavedSettings))
             {
+                // Fix round 1 (Important 4): a row a MOUSE just selected
+                // (left-click, or the right-click that is about to open its
+                // context menu) is by definition already on-screen -- you
+                // cannot click what is not rendered. Re-centering it anyway
+                // was the bug: it slides the row out from under a popup that
+                // is anchored to screen coordinates at OPEN time and does
+                // not follow the list. Gating the actual SetScrollHereY call
+                // on "is the target genuinely outside the visible scroll
+                // window" (read directly off the table's own inner scroll
+                // region, which is the CURRENT window right after
+                // BeginTable) fixes every origin uniformly: a mouse click
+                // (always already-visible) never re-centers, while keyboard
+                // Up/Down walking past the visible edge -- or a future
+                // external selector (Task 11's preview-pane Derived list)
+                // picking something scrolled away -- still correctly
+                // recenters. This subsumes tagging each panel-side
+                // model.Select() call site individually: there is exactly
+                // one thing that actually needs to be true (was the row
+                // visible already), and checking it directly cannot drift
+                // out of sync the way remembering to tag every call site
+                // could.
+                bool targetAlreadyVisible = false;
+                if (scrollTargetIndex >= 0)
+                {
+                    const float scrollY = ImGui::GetScrollY();
+                    const float viewH = ImGui::GetWindowHeight();
+                    const int firstVisible = static_cast<int>(scrollY / kTableRowHeight);
+                    const int lastVisible = static_cast<int>((scrollY + viewH) / kTableRowHeight);
+                    targetAlreadyVisible = (scrollTargetIndex >= firstVisible && scrollTargetIndex <= lastVisible);
+                }
+
                 ImGuiListClipper clipper;
                 clipper.Begin(static_cast<int>(rows.size()), kTableRowHeight);
-                if (scrollTargetIndex >= 0)
+                if (scrollTargetIndex >= 0 && !targetAlreadyVisible)
                     clipper.IncludeItemByIndex(scrollTargetIndex);
 
                 while (clipper.Step())
@@ -737,13 +817,15 @@ namespace Arcane::Editor
 
                         if (i == scrollTargetIndex)
                         {
-                            ImGui::SetScrollHereY();
+                            if (!targetAlreadyVisible)
+                                ImGui::SetScrollHereY();
                             state.seenSelectionStamp = model.selectionStamp;
                         }
                     }
                 }
                 ImGui::EndTable();
             }
+            ImGui::PopStyleVar();
 
             // Step 3 tail: keyboard, minimal v1 (spec s8). Up/Down move
             // Select through the VISIBLE rows (group rows are not navigable
