@@ -546,3 +546,82 @@ TEST_CASE("AssetPanelModel Health tallies cook state from the provider", "[edito
 
     fs::remove_all(dir, ec);
 }
+
+// ---------------------------------------------------------------------------
+// Fix round 1: a fold TARGET removed from the registry via per-guid
+// MarkDirty (not MarkAllDirty) must not orphan the dependent that was
+// folded under it -- the dependent's stale (but still IsValid()) foldedUnder
+// used to hide it from Rows() entirely (neither a peer nor a child).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AssetPanelModel un-folds a sprite when its fold target is removed via per-guid MarkDirty", "[editor]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_fold_target_removed_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "sprites");
+
+    WriteFile(dir, "hero.png", "not a real png, just bytes");   // sidecar-minted guid
+    WriteFile(dir / "sprites", "hero_full.arcsprite",
+             R"({"id":"9f000001-0001-4001-8001-000000000001","type":"sprite","name":"HeroFull"})");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 2);
+    const auto all = registry.All();
+
+    const Arcane::Guid heroTexId  = GuidForPath(all, "game://hero.png");
+    const Arcane::Guid heroFullId = *Arcane::Guid::FromString("9f000001-0001-4001-8001-000000000001");
+    REQUIRE(heroTexId.IsValid());
+
+    FakeProviders fake;
+    fake.refsByGuid[heroFullId] = { { heroTexId, Arcane::AssetRefKind::DerivesFrom } };   // plain 1:1 -> folds
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    // Sanity: the fold is in place before the removal.
+    REQUIRE(model.Find(heroFullId));
+    REQUIRE(model.Find(heroFullId)->foldedUnder == heroTexId);
+    REQUIRE(model.Find(heroTexId));
+    REQUIRE(model.Find(heroTexId)->derivedChildren.size() == 1);
+    REQUIRE(fake.refsCalls[heroFullId] == 1);
+
+    // Remove the texture from disk and re-scan the SAME registry (a real
+    // AssetRegistry rebuild, not a fake) -- hero_full.arcsprite keeps its
+    // embedded id, so it survives the rescan; hero.png's sidecar-minted guid
+    // does not.
+    fs::remove(dir / "hero.png", ec);
+    fs::remove(dir / "hero.png.meta", ec);   // orphaned sidecar, if written back
+    REQUIRE(registry.ScanContent(dir, "game") == 1);
+
+    // Only the REMOVED guid is dirtied -- the sprite itself is untouched.
+    model.MarkDirty(heroTexId);
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    // The texture entry is gone...
+    CHECK(model.Find(heroTexId) == nullptr);
+
+    // ...and the sprite must be un-folded and visible again -- not orphaned.
+    const AssetPanelEntry* heroFull = model.Find(heroFullId);
+    REQUIRE(heroFull);
+    CHECK_FALSE(heroFull->foldedUnder.IsValid());
+
+    bool sawAsPeer = false, sawAsChild = false;
+    for (const auto& row : model.Rows())
+    {
+        if (row.guid != heroFullId)
+            continue;
+        if (row.type == AssetPanelRow::Type::Asset) sawAsPeer = true;
+        if (row.type == AssetPanelRow::Type::Child) sawAsChild = true;
+    }
+    CHECK(sawAsPeer);
+    CHECK_FALSE(sawAsChild);
+
+    // The dependent WAS re-asked (a directly-affected cascade, not a no-op);
+    // this is the "fine to re-ask a dependent" half of the fix's contract.
+    CHECK(fake.refsCalls[heroFullId] == 2);
+
+    fs::remove_all(dir, ec);
+}

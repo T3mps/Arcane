@@ -113,11 +113,33 @@ namespace Arcane::Editor
 
         bool entriesChanged = false;
 
+        // Anything folded under a guid the registry no longer carries must be
+        // re-evaluated THIS pass, even if only the removed guid itself was
+        // dirtied (fix round 1): a dependent's cached `foldedUnder` is
+        // otherwise left pointing at a now-gone guid -- still IsValid() (it
+        // only checks non-nil), so the dependent is silently excluded from
+        // byFolder (not a peer, foldedUnder still "valid") AND never re-added
+        // to any parent's derivedChildren (the parent entry is gone) -- it
+        // vanishes from Rows() entirely. Cascading into m_dirty re-asks the
+        // providers only for these directly-affected dependents (one level:
+        // a folded child can never itself be a fold parent), never for the
+        // rest of the registry -- the per-guid MarkDirty guarantee (test f)
+        // stays intact.
+        std::unordered_set<Arcane::Guid> cascadeDirty;
         for (auto it = m_entries.begin(); it != m_entries.end(); )
         {
-            if (!live.count(it->first)) { it = m_entries.erase(it); entriesChanged = true; }
+            if (!live.count(it->first))
+            {
+                for (const Arcane::Guid& child : it->second.derivedChildren)
+                    cascadeDirty.insert(child);
+                it = m_entries.erase(it);
+                entriesChanged = true;
+            }
             else ++it;
         }
+        if (!m_allDirty)
+            for (const Arcane::Guid& guid : cascadeDirty)
+                m_dirty.insert(guid);
 
         auto rebuildOne = [&](const Arcane::Guid& guid, const std::string& mountPath)
         {
