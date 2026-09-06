@@ -507,6 +507,12 @@ namespace Arcane::Editor
             d.locator  = Arcane::DiagLocator::Asset(guid);
             m_cookDiagnostics[guid] = CookDiagRow{ std::move(d), /*permanent=*/true };
             diagnosticsChanged = true;
+            // Controller ruling (ledgered plan defect, brief omitted this
+            // loop): a cook FAILURE is a permanent refusal exactly like
+            // OnArtifactRefused's HashMismatch/VersionNewerThanEngine rows --
+            // "cook refusals stay loud" means the panel model must not wait
+            // for an unrelated event to notice. Ask again next rebuild.
+            m_assetModel.MarkDirty(guid);
         }
 
         if (diagnosticsChanged)
@@ -538,6 +544,14 @@ namespace Arcane::Editor
         const bool permanent = (std::string_view(kind) != "ArtifactMissing");
         self->m_cookDiagnostics[id] = CookDiagRow{ std::move(d), permanent };
         self->PublishCookDiagnostics();
+        // Controller ruling (ledgered plan defect, brief omitted this site):
+        // this fires from scene resolution / NriTextureCache::Resolve --
+        // main-thread-only, same contract m_cookDiagnostics itself documents
+        // -- so it's safe to mark directly. Whether this particular row is
+        // permanent or not (ArtifactMissing vs. Hash/Version), the model's
+        // cook-state answer for `id` may have just changed; ask again next
+        // rebuild rather than waiting on an unrelated event to notice.
+        self->m_assetModel.MarkDirty(id);
     }
 
     bool EditorApp::IsCookPending(const Arcane::Guid& id) const
