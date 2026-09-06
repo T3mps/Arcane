@@ -153,6 +153,41 @@ namespace Arcane::Editor
                         std::string_view current, float width,
                         Arcane::FunctionRef<void(const char*)> commit);
 
+    // ---- asset panel vocabulary -------------------------------------------
+    // Model-free ImGui draw helpers the asset panel's Browse lens and rail
+    // draw rows out of (docs/specs/2026-09-06-asset-manager-redesign-design.md,
+    // §11.1/§11.2). `AssetPeekTooltip` is deliberately NOT here -- it composes
+    // the model plus a thumbnail resolver, so it lives with the panel (Task 9).
+
+    // 12px bordered label (spec §11.2). variant: 0 = neutral (#333333 border,
+    // TextDisabled-ish #9a9a9a text), 1 = amber (border #7a5a20, text
+    // Theme::kAmber). 16px line height; chain several with SameLine.
+    void AssetPill(const char* text, int variant = 0);
+
+    // Right-most segmented switch (spec §11.1/§11.2, e.g. the Browse/Graph/
+    // Status lens strip). `items` are labels; `enabledMask` bit i gates item
+    // i (a cleared bit -> BeginDisabled); returns the clicked index or -1.
+    // Drawn with collapsed shared 1px borders and square corners, active =
+    // Theme::kButtonActive.
+    [[nodiscard]] int SegmentedStrip(const char* id, const char* const* items,
+                                     int count, int active, unsigned enabledMask);
+
+    // One selectable asset row (spec §11.1/§11.2): an 18px thumb (`thumb`
+    // == 0 falls back to the `iconUtf8` Lucide glyph), then `name`, then the
+    // cursor is left ready for the caller to draw trailing content (pills,
+    // right-aligned extras) with SameLine. `indent` shifts where the thumb
+    // and name start; the row's own Selectable still spans the full width,
+    // so the row stays clickable everywhere regardless of indent.
+    // `rowHeight` defaults to the 24px table row (spec §11.2); rail rows --
+    // drawn with this SAME helper per §11.1 -- pass 26. (The brief's doc
+    // fixed this at 24px, which cannot serve both rows; controller ruling,
+    // 2026-09-06, makes it a parameter instead, defaulted to 24 so table
+    // call sites stay unchanged.)
+    struct [[nodiscard]] AssetRowResult { bool clicked = false; bool hovered = false; };
+    AssetRowResult RowWithThumb(const char* id, ImTextureID thumb, const char* iconUtf8,
+                                const char* name, bool selected, float indent,
+                                float rowHeight = 24.0f);
+
     // ---- colour ---------------------------------------------------------------
     // sRGB <-> linear, the IEC 61966-2-1 piecewise curve. This is the SAME
     // transfer nri::Format::RGBA8_SRGB applies in hardware when a texture is

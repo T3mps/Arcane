@@ -1,5 +1,8 @@
 #include "Widgets/EditorWidgets.hpp"
 
+#include "Widgets/EditorFonts.hpp"   // AssetPill's 12px PushFont
+#include "Widgets/EditorTheme.hpp"   // Theme:: tokens -- asset panel vocabulary is chrome
+
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiTable + ImGuiTableColumn + TableSetColumnWidth
                               // (the field grid's shared split reads
@@ -274,6 +277,26 @@ namespace Arcane::Editor
         {
             ImGui::PopStyleColor(3);
         }
+
+        // ---------------------------------------------------------------------
+        // Asset panel vocabulary (asset-manager-redesign-design.md §11.1/§11.2):
+        // AssetPill, SegmentedStrip, RowWithThumb. Model-free -- the tooltip
+        // that additionally needs a thumbnail resolver lives with the panel
+        // (Task 9), not here.
+        // ---------------------------------------------------------------------
+
+        // Pill geometry (spec §11.2: "12px text, 16px line, 1px #333333
+        // border"). The neutral border IS a theme token already -- kSeparator
+        // is EditorTheme.hpp's own #333333, used today for table borders --
+        // but the amber variant's #7a5a20 has no token of its own, so it is
+        // hardcoded here for the same reason kAxisBarColors/kHeaderBandColor
+        // above are: a spec-pinned hex with no chrome-ramp equivalent, not an
+        // oversight.
+        constexpr float kPillLineHeight  = 16.0f;
+        constexpr ImU32 kPillAmberBorder = IM_COL32(0x7a, 0x5a, 0x20, 255);
+
+        // RowWithThumb's thumb cell (spec §11.2: "row thumb ... 18px").
+        constexpr float kRowThumbSize = 18.0f;
     }
 
     // capacity() + 1 is BufSize's own C++ spelling (imgui.h:2772); the +1 is
@@ -544,6 +567,168 @@ namespace Arcane::Editor
             return true;
         }
         return false;
+    }
+
+    // A rect + 1px border from the window drawlist around PushFont-sized
+    // text, sized to the pill's OWN 16px line height rather than ImGui's
+    // frame padding -- a pill is a much smaller chip than a normal widget.
+    // variant 0 borrows Theme::kSeparator for its border (the same #333333
+    // spec §11.2 pins) and Theme::kGrab for its text (the spec's #9a9a9a --
+    // "TextDisabled-ish" in name only; kTextDim is a different gray, #737373,
+    // so kGrab is the token that actually matches). variant 1 is the amber
+    // attention pill: kPillAmberBorder (no token exists for #7a5a20) and
+    // Theme::kAmber, whose own value already IS the spec's #ffa61a.
+    void AssetPill(const char* text, int variant)
+    {
+        if (ImGui::GetCurrentWindowRead()->SkipItems)
+            return;
+
+        ImGui::PushFont(GetEditorFonts().interRegular, 12.0f);
+
+        const ImVec2 textSize = ImGui::CalcTextSize(text);
+        const float paddingX = ImGui::GetStyle().FramePadding.x;
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        const ImVec2 size(textSize.x + paddingX * 2.0f, kPillLineHeight);
+
+        const ImU32 borderColor = (variant == 1) ? kPillAmberBorder
+                                                  : ImGui::GetColorU32(Theme::kSeparator);
+        const ImU32 textColor   = (variant == 1) ? ImGui::GetColorU32(Theme::kAmber)
+                                                  : ImGui::GetColorU32(Theme::kGrab);
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), borderColor);
+        dl->AddText(ImVec2(pos.x + paddingX, pos.y + (kPillLineHeight - textSize.y) * 0.5f),
+                    textColor, text);
+
+        // A real item, not just drawlist paint: Dummy reserves the layout
+        // space so a caller chaining several pills (or a row's trailing-pill
+        // run) with SameLine gets correct advancement.
+        ImGui::Dummy(size);
+
+        ImGui::PopFont();
+    }
+
+    // N ImGui::Buttons with zero ItemSpacing, so each button's own
+    // FrameBorderSize edge (the theme's global style.FrameBorderSize = 1,
+    // EditorTheme.hpp) sits flush against its neighbour's rather than
+    // doubling up -- "collapsed shared borders" falls out of that geometry,
+    // not extra drawing. FrameRounding is pinned to 0 for the "square
+    // corners" requirement, even though that already IS the theme's default
+    // (EditorTheme.hpp never touches FrameRounding, so it stays ImGui's
+    // stock 0) -- pinned explicitly because this widget's contract depends
+    // on the value, not on the theme happening to agree with it today.
+    int SegmentedStrip(const char* id, const char* const* items, int count,
+                       int active, unsigned enabledMask)
+    {
+        int clicked = -1;
+
+        ImGui::PushID(id);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+
+        for (int i = 0; i < count; ++i)
+        {
+            if (i > 0)
+                ImGui::SameLine();
+
+            const bool isActive  = (i == active);
+            const bool isEnabled = (enabledMask & (1u << i)) != 0;
+
+            if (isActive)
+                ImGui::PushStyleColor(ImGuiCol_Button, Theme::kButtonActive);
+            if (!isEnabled)
+                ImGui::BeginDisabled();
+
+            ImGui::PushID(i);
+            if (ImGui::Button(items[i]))
+                clicked = i;
+            ImGui::PopID();
+
+            if (!isEnabled)
+                ImGui::EndDisabled();
+            if (isActive)
+                ImGui::PopStyleColor();
+        }
+
+        ImGui::PopStyleVar(2);
+        ImGui::PopID();
+        return clicked;
+    }
+
+    // Selectable reserves the FULL row -- SpanAllColumns so the click/hover
+    // surface covers every column when a caller draws this inside a table
+    // row, and the window's own work rect otherwise (imgui.cpp sets every
+    // window's ParentWorkRect = WorkRect in Begin(), so SpanAllColumns
+    // degrades to "span this window" outside a table rather than asserting,
+    // which is what lets this same helper draw both the table rows and the
+    // (table-free) rail rows per spec §11.1). The thumb and name are then an
+    // OVERDRAW on top of that same rect -- SetCursorScreenPos back into it,
+    // not the normal top-down flow -- because Selectable's OWN width fills
+    // the row (size.x == 0), so a plain SameLine() straight after it would
+    // land off to the right of the whole row, not at the thumb's position.
+    //
+    // The cursor is explicitly put back at the row's bottom-left before
+    // returning: Image/TextUnformatted's own ItemSize calls, run at the
+    // manually-centered (shorter-than-rowHeight) positions above, would
+    // otherwise leave window cursor short of the row's true bottom, and the
+    // NEXT sibling (another row, in the common no-trailing-content case)
+    // must not start there. That reset only touches CursorPos, not
+    // CursorPosPrevLine (imgui.cpp SetCursorScreenPos) -- so a caller who DOES
+    // want trailing content (pills, right-aligned extras) can still call bare
+    // ImGui::SameLine() immediately after this returns and land right after
+    // the name, at the name's own vertical center; a table caller stacking
+    // rows should still pin the row height explicitly via
+    // `TableNextRow(0, rowHeight)` rather than lean on this function's own
+    // line-height bookkeeping once trailing content is in play.
+    AssetRowResult RowWithThumb(const char* id, ImTextureID thumb, const char* iconUtf8,
+                                const char* name, bool selected, float indent,
+                                float rowHeight)
+    {
+        AssetRowResult result;
+        if (ImGui::GetCurrentWindowRead()->SkipItems)
+            return result;
+
+        ImGui::PushID(id);
+        const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+
+        result.clicked = ImGui::Selectable("##row", selected,
+                                           ImGuiSelectableFlags_SpanAllColumns |
+                                           ImGuiSelectableFlags_AllowDoubleClick,
+                                           ImVec2(0.0f, rowHeight));
+        result.hovered = ImGui::IsItemHovered();
+
+        const float thumbY = rowMin.y + (rowHeight - kRowThumbSize) * 0.5f;
+        ImGui::SetCursorScreenPos(ImVec2(rowMin.x + indent, thumbY));
+        if (thumb != 0)
+        {
+            ImGui::Image(thumb, ImVec2(kRowThumbSize, kRowThumbSize));
+        }
+        else
+        {
+            // Icon fallback: a Lucide glyph centered in the same 18px cell,
+            // under whichever font is active (every editor face carries the
+            // merged icon range, EditorFonts.cpp), so a missing thumbnail
+            // keeps the row's column alignment rather than shifting it.
+            const ImVec2 iconSize = ImGui::CalcTextSize(iconUtf8);
+            ImGui::SetCursorScreenPos(ImVec2(rowMin.x + indent + (kRowThumbSize - iconSize.x) * 0.5f,
+                                             rowMin.y + (rowHeight - iconSize.y) * 0.5f));
+            ImGui::TextUnformatted(iconUtf8);
+        }
+
+        ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+        const ImVec2 nameSize = ImGui::CalcTextSize(name);
+        ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x,
+                                         rowMin.y + (rowHeight - nameSize.y) * 0.5f));
+        ImGui::TextUnformatted(name);
+
+        // Put the flow cursor back at the row's true bottom (see the doc
+        // comment above) -- CursorPosPrevLine is untouched by this, so a
+        // caller's own SameLine() immediately after still lands beside the
+        // name, not here.
+        ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMin.y + rowHeight));
+
+        ImGui::PopID();
+        return result;
     }
 
     // CURVE IS MIRRORED in data/shaders/tonemap.hlsl (HLSL, branchless min

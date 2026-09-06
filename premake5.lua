@@ -734,6 +734,13 @@ project "ArcaneTests"
         -- test exe fails to link (LNK2019). Nothing in it is called headlessly;
         -- it is pure ImGui, like the skin half of EditGesture.cpp.
         "%{wks.location}/ArcaneEditor/src/Widgets/EditorWidgets.cpp",
+        -- Asset panel widget vocabulary Task 6: EditorFonts is here as a LINK
+        -- dependency, not a unit surface, same reason as EditorWidgets.cpp
+        -- above -- EditorWidgets.cpp's new AssetPill calls GetEditorFonts()
+        -- for its 12px PushFont, and without this the test exe fails to link
+        -- (LNK2019). InstallEditorFonts is never called headlessly; only the
+        -- accessor's empty-set fallback is reachable, same as EditorWidgets.cpp.
+        "%{wks.location}/ArcaneEditor/src/Widgets/EditorFonts.cpp",
         -- Colour pipeline + dense picker Task 7: ColorPickerPopup is here as a
         -- LINK dependency, not a unit surface, same reason as EditorWidgets.cpp
         -- above -- ShaderEditorDocument.cpp (compiled above) now calls
