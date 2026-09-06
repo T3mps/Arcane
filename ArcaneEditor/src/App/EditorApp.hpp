@@ -27,6 +27,7 @@
 #include <Arcane/Host/VerifyReport.hpp>       // --report (Task 9): VerifyReport
 #include <Arcane/Assets/ImageCompare.hpp>     // --compare (Task 9): PixelData/ImageCompareResult
 #include "Panels/AssetBrowser.hpp"
+#include "Panels/AssetPanelModel.hpp"
 #include "Panels/ConsoleBuffer.hpp"
 #include "Panels/DiagnosticStore.hpp"
 #include "App/DialogSlot.hpp"
@@ -1155,6 +1156,34 @@ namespace Arcane::Editor
         std::unique_ptr<Arcane::SceneRenderResolver> m_resolver;
         Arcane::Editor::DocumentHost            m_documents;
         Arcane::Editor::AssetBrowserState       m_assetBrowser;
+        // Asset-manager redesign, Plan 1 Task 5: the pure, cached model behind
+        // the (future) Browse lens -- kept current every frame ahead of ANY
+        // panel draw (DrawEditorUi's RebuildIfDirty call, immediately before
+        // the Assets panel), so a later consumer can read it without its own
+        // rebuild dance. Nothing draws from it yet: the OLD AssetBrowser panel
+        // above is still what's on screen (m_assetBrowser/DrawAssetBrowserPanel);
+        // this is wiring only, no behavior change.
+        Arcane::Editor::AssetPanelModel         m_assetModel;
+        // The model's facade seam, built once per project open
+        // (MakeAssetPanelProviders, EditorAppProject.cpp) and cached here --
+        // rebuilding it every frame would be pointless closure churn for
+        // something that only ever reads through m_runtime/m_cookDiagnostics,
+        // both already stable for the lifetime of one open project.
+        Arcane::Editor::AssetPanelProviders     m_assetPanelProviders;
+        // Builds m_assetPanelProviders' three callables: surfaceFor/refsFor
+        // forward straight to the Assets facade (Tasks 1-3); cookStateFor
+        // composes CookStateOf(kind, HasPermanentCookDiag(g), IsCookPending(g))
+        // -- see CookStateOf's own header comment for why pending is gated on
+        // kind (only Texture/Sprite have a cook pipeline; IsCookPending's
+        // default-true answer for a guid with no diagnostic row would
+        // otherwise show every JSON asset as permanently Queued).
+        Arcane::Editor::AssetPanelProviders MakeAssetPanelProviders();
+        // True when m_cookDiagnostics carries a PERMANENT row for `id` (a
+        // refusal) -- as opposed to IsCookPending's own "pending" reading of
+        // the SAME map, which treats an ABSENT row as pending too. See
+        // CookDiagRow::permanent's own declaration for the permanent/
+        // transient split.
+        [[nodiscard]] bool HasPermanentCookDiag(const Arcane::Guid& id) const;
         double m_editorClock = 0.0;   // the compile service's Poll/Submit clock
 
         // Asset file watcher: a ~1 Hz mtime sweep over the registry's .arcmat

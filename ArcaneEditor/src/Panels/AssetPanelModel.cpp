@@ -71,6 +71,26 @@ namespace Arcane::Editor
         }
     }
 
+    CookState CookStateOf(AssetKind kind, bool permanentDiag, bool pending)
+    {
+        // A permanent refusal always wins -- it says nothing further will
+        // ever happen for this guid without a user fixing the source, so it
+        // outranks any pending-cook signal regardless of kind.
+        if (permanentDiag)
+            return CookState::Refused;
+
+        // Only Texture/Sprite have a real cook pipeline of their own (see
+        // this function's own header comment) -- everything else (materials,
+        // scenes, meshes, data, ...) has nothing to be "pending" about, so
+        // IsCookPending's own default-true answer for a guid with no row
+        // must never leak through as a permanent Queued state for them.
+        const bool cooks = (kind == AssetKind::Texture) || (kind == AssetKind::Sprite);
+        if (!cooks)
+            return CookState::Cooked;
+
+        return pending ? CookState::Queued : CookState::Cooked;
+    }
+
     void AssetPanelModel::MarkDirty(const Arcane::Guid& id)
     {
         if (!m_allDirty)

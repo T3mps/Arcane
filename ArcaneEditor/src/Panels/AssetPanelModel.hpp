@@ -40,6 +40,16 @@ namespace Arcane::Editor
     // unless a permanent refusal diagnostic exists for it.
     enum class CookState : std::uint8_t { Cooked, Queued, Refused, Unknown };
 
+    // The pure cook-state mapping (Task 5): permanentDiag (a permanent cook-
+    // diagnostic row exists for the guid -- a refusal) always wins, regardless
+    // of kind or pending. Otherwise only Texture/Sprite have a real cook
+    // pipeline of their own -- pending is meaningless for every other kind,
+    // which reports Cooked unconditionally (an unrecognized kind with no
+    // diagnostic also defaults to Cooked, never Unknown -- Unknown is
+    // reserved for a guid the model has no provider answer for at all, see
+    // AssetPanelEntry::cook's own default).
+    [[nodiscard]] CookState CookStateOf(AssetKind kind, bool permanentDiag, bool pending);
+
     // Per-guid facade queries the model needs, injected by the host (EditorApp,
     // Task 5) so this unit never touches Arcane::Assets/Arcane::Project
     // directly. A left-empty (default-constructed std::function) callable is

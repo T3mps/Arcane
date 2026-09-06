@@ -548,6 +548,40 @@ TEST_CASE("AssetPanelModel Health tallies cook state from the provider", "[edito
 }
 
 // ---------------------------------------------------------------------------
+// (i) CookStateOf: the pure cook-state mapping (Task 5). Refusal always wins;
+// only Texture/Sprite have a real cook pipeline (pending is meaningless for
+// everything else -- they report Cooked unconditionally); an unrecognized
+// kind with no diagnostic defaults to Cooked.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("CookStateOf: refused wins over pending", "[editor]")
+{
+    CHECK(CookStateOf(AssetKind::Texture, /*permanentDiag=*/true, /*pending=*/true) == CookState::Refused);
+    CHECK(CookStateOf(AssetKind::Texture, /*permanentDiag=*/true, /*pending=*/false) == CookState::Refused);
+    CHECK(CookStateOf(AssetKind::Material, /*permanentDiag=*/true, /*pending=*/false) == CookState::Refused);
+}
+
+TEST_CASE("CookStateOf: a pending texture is Queued", "[editor]")
+{
+    CHECK(CookStateOf(AssetKind::Texture, /*permanentDiag=*/false, /*pending=*/true) == CookState::Queued);
+    CHECK(CookStateOf(AssetKind::Sprite, /*permanentDiag=*/false, /*pending=*/true) == CookState::Queued);
+    CHECK(CookStateOf(AssetKind::Texture, /*permanentDiag=*/false, /*pending=*/false) == CookState::Cooked);
+}
+
+TEST_CASE("CookStateOf: a material never reports Queued -- it has no cook pipeline of its own", "[editor]")
+{
+    CHECK(CookStateOf(AssetKind::Material, /*permanentDiag=*/false, /*pending=*/true) == CookState::Cooked);
+    CHECK(CookStateOf(AssetKind::Material, /*permanentDiag=*/false, /*pending=*/false) == CookState::Cooked);
+}
+
+TEST_CASE("CookStateOf: an unrecognized kind with no diagnostic defaults to Cooked", "[editor]")
+{
+    CHECK(CookStateOf(AssetKind::Other, /*permanentDiag=*/false, /*pending=*/true) == CookState::Cooked);
+    CHECK(CookStateOf(AssetKind::Data, /*permanentDiag=*/false, /*pending=*/false) == CookState::Cooked);
+    CHECK(CookStateOf(AssetKind::Scene, /*permanentDiag=*/false, /*pending=*/false) == CookState::Cooked);
+}
+
+// ---------------------------------------------------------------------------
 // Fix round 1: a fold TARGET removed from the registry via per-guid
 // MarkDirty (not MarkAllDirty) must not orphan the dependent that was
 // folded under it -- the dependent's stale (but still IsValid()) foldedUnder

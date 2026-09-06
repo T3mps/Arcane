@@ -2027,10 +2027,19 @@ namespace Arcane::Editor
 
         ConsumeMenuRequests(menuReq, fs, ls);
 
+        // Asset-manager redesign, Plan 1 Task 5: the invariant later tasks
+        // rely on -- the model is current before ANY panel draw, whether or
+        // not the OLD panel below is even visible this frame (a future
+        // consumer must never observe a stale rebuild just because Assets
+        // happened to be docked shut). Cheap when clean (RebuildIfDirty's
+        // own doc comment): no registry walk, no provider calls, unless
+        // something actually marked it dirty since the last frame.
         Arcane::Editor::AssetBrowserActions browserActions;
+        const Arcane::Project* proj = m_runtime->CurrentProject();
+        m_assetModel.RebuildIfDirty(proj ? &proj->Registry() : nullptr, m_assetPanelProviders);
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets))
             browserActions = Arcane::Editor::DrawAssetBrowserPanel(
-                m_assetBrowser, m_runtime->CurrentProject(), m_documents,
+                m_assetBrowser, proj, m_documents,
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::Assets));
         ConsumeBrowserActions(browserActions, ls);
 

@@ -271,6 +271,10 @@ namespace Arcane::Editor
                 ARC_INFO("Assets: discovered new content file '{}' -- registering",
                          dropped.generic_string());
                 m_runtime->RegisterCreatedAsset(dropped);
+                // A new registry entry changes folder grouping (a brand-new
+                // folder, or an existing group's count) -- MarkDirty(guid)
+                // alone would miss that, so the whole model rebuilds.
+                m_assetModel.MarkAllDirty();
             }
         }
 
@@ -300,6 +304,10 @@ namespace Arcane::Editor
                 // a warn (dirty -- never stomped), and open documents whose
                 // PARENT chain contains it re-resolve + recompile.
                 ARC_INFO("material '{}' changed on disk", e.name);
+                // The panel model's cached surface/refs (isInstance, fold
+                // target, ...) may have just changed underneath it -- ask
+                // the providers again next rebuild.
+                m_assetModel.MarkDirty(e.guid);
                 if (m_resolver)
                     m_resolver->InvalidateMaterial(e.guid);
                 m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
@@ -376,6 +384,16 @@ namespace Arcane::Editor
                 changed = true;
             }
 
+            if (changed)
+            {
+                // A fresh source/.meta means a fresh cook-state answer once
+                // the (possibly async) recook lands -- and .meta's four
+                // cook-setting knobs can flip References/DerivesFrom-adjacent
+                // classification too, so the whole entry is re-asked, not
+                // just its cook state.
+                m_assetModel.MarkDirty(e.guid);
+            }
+
             if (changed && m_cookQueue)
             {
                 ARC_INFO("texture '{}' (or its .meta) changed on disk", e.name);
@@ -448,6 +466,10 @@ namespace Arcane::Editor
                 // corrupt drop) -- drop its Problems-pane row.
                 if (m_cookDiagnostics.erase(guid) > 0)
                     diagnosticsChanged = true;
+                // The panel model's cook-state answer for this guid may have
+                // just changed (Queued -> Cooked, or a stale Refused just
+                // erased above) -- ask again next rebuild.
+                m_assetModel.MarkDirty(guid);
             }
         }
 
@@ -522,6 +544,48 @@ namespace Arcane::Editor
     {
         const auto it = m_cookDiagnostics.find(id);
         return it == m_cookDiagnostics.end() || !it->second.permanent;
+    }
+
+    // Asset-manager redesign, Plan 1 Task 5: the OTHER reading of
+    // m_cookDiagnostics -- unlike IsCookPending above, an ABSENT row here
+    // means "no refusal", not "presume pending" (that default is safe only
+    // for the render-layer oracle IsCookPending serves; see its own comment).
+    // CookStateOf's `permanentDiag` parameter is exactly this question.
+    bool EditorApp::HasPermanentCookDiag(const Arcane::Guid& id) const
+    {
+        const auto it = m_cookDiagnostics.find(id);
+        return it != m_cookDiagnostics.end() && it->second.permanent;
+    }
+
+    // Builds the three facade-backed callables AssetPanelModel is driven
+    // through -- called once per project open (OnProjectOpened) and cached
+    // in m_assetPanelProviders; the model itself never touches the facade
+    // directly (AssetPanelModel.hpp's own header comment).
+    Arcane::Editor::AssetPanelProviders EditorApp::MakeAssetPanelProviders()
+    {
+        Arcane::Editor::AssetPanelProviders p;
+        p.surfaceFor = [this](const Arcane::Guid& g) -> std::optional<Arcane::MaterialSurface>
+        {
+            return m_runtime ? m_runtime->AssetsFacade().MaterialSurfaceFor(g) : std::nullopt;
+        };
+        p.refsFor = [this](const Arcane::Guid& g) -> std::optional<std::vector<Arcane::AssetRef>>
+        {
+            return m_runtime ? m_runtime->AssetsFacade().ListAssetReferences(g) : std::nullopt;
+        };
+        p.cookStateFor = [this](const Arcane::Guid& g) -> Arcane::Editor::CookState
+        {
+            // CookStateOf needs the ASSET KIND (only Texture/Sprite cook) --
+            // a single O(1) Resolve() against the open project's registry,
+            // not the O(n) BuildAssetEntries sweep PollAssetWatch uses (that
+            // one needs every entry every tick; this needs one guid's kind).
+            const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+            Arcane::Editor::AssetKind kind = Arcane::Editor::AssetKind::Other;
+            if (project)
+                if (const auto mountPath = project->Registry().Resolve(g))
+                    kind = Arcane::Editor::AssetKindOf(*mountPath);
+            return Arcane::Editor::CookStateOf(kind, HasPermanentCookDiag(g), IsCookPending(g));
+        };
+        return p;
     }
 
     void EditorApp::PublishCookDiagnostics()
@@ -659,6 +723,9 @@ namespace Arcane::Editor
         // a diagnosable no-op instead.
         if (!m_runtime->RegisterCreatedAsset(target))
             return {};
+        // A new registry entry changes folder grouping -- see PollAssetWatch's
+        // drop-discovery comment above for the same reasoning.
+        m_assetModel.MarkAllDirty();
         return data.id;
     }
 
@@ -694,6 +761,7 @@ namespace Arcane::Editor
         // away -- same reasoning as CreateMaterialAt/CreateInstanceAt.
         if (!m_runtime->RegisterCreatedAsset(target))
             return {};
+        m_assetModel.MarkAllDirty();
         return data.id;
     }
 
@@ -766,7 +834,8 @@ namespace Arcane::Editor
         }
         // Register with the open project's registry so the new asset appears in
         // the browser and resolves by GUID IMMEDIATELY (not on next project open).
-        m_runtime->RegisterCreatedAsset(path);
+        if (m_runtime->RegisterCreatedAsset(path))
+            m_assetModel.MarkAllDirty();
         m_documents.OpenPath(path);
     }
 

@@ -1068,6 +1068,17 @@ namespace Arcane::Editor
             // has already rendered, so it cannot repeat this race.
         }
 
+        // Asset-manager redesign, Plan 1 Task 5: a project switch invalidates
+        // both halves of the model -- the cached entries (a fresh
+        // AssetRegistry underneath) and the facade seam they were built
+        // through (m_cookDiagnostics/m_cookQueue were just re-armed above,
+        // for a DIFFERENT project). Rebuild the seam, drop every cached
+        // entry, and arm a full rebuild for whenever DrawEditorUi's
+        // RebuildIfDirty next runs -- see m_assetModel's own declaration.
+        m_assetModel.ResetForProjectSwitch();
+        m_assetPanelProviders = MakeAssetPanelProviders();
+        m_assetModel.MarkAllDirty();
+
         EnsureScene();
         // Compute the real title now that project/scene state is final,
         // rather than the "Untitled" placeholder a mid-boot call would have

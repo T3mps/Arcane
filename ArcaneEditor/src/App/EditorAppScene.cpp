@@ -292,7 +292,8 @@ namespace Arcane::Editor
         // the one just stamped. A scene saved outside the project's content root
         // cannot be registered -- Runtime/Project already log exactly why, and it is
         // not a save failure: the bytes are on disk either way.
-        m_runtime->RegisterCreatedAsset(file);
+        if (m_runtime->RegisterCreatedAsset(file))
+            m_assetModel.MarkAllDirty();
 
         m_scene.Adopt(file, id, *m_undo);
         m_recents.NoteSceneOpened(m_runtime->CurrentProject(), file);
