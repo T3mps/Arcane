@@ -181,15 +181,36 @@ namespace Arcane::Editor
                 queue.push_front(id);   // LIFO
         }
 
+        // What one Harvest call did. THREE outcomes, not two, because a
+        // dropped VEHICLE and a refused MATERIAL must not be memoized the
+        // same way: on a dropped vehicle the material is fine and the FRAME
+        // was not, so it goes back on the queue to be re-resolved against the
+        // replacement rather than being written off.
+        enum class HarvestOutcome : std::uint8_t { Done, Refused, Retry };
+
         bool EnsureVehicle(Arcane::NriGraphContext& chrome);
+        void ResetVehicle();                      // destroy it + re-queue what it scoped
+        void DropVehicle();                       // ResetVehicle, as a FAILURE (spends budget)
+        void GiveUp(std::string_view why);        // no previews at all, this session
         void StartOne(const Arcane::Guid& id, double now);
         [[nodiscard]] static bool AllStagesLanded(const Pending& p);
         [[nodiscard]] bool Publish(Pending& p);   // pending -> ready; false = refused
-        bool Harvest(Ready& r);                   // ONE device idle
+        HarvestOutcome Harvest(Ready& r);         // ONE device idle
         std::uint64_t EnsureTexture(const Arcane::Guid& material, Entry& e) const;
+        void ReleaseThumbTexture(Entry& e);       // the chrome-cache release sequence
         // BY VALUE, deliberately: every caller passes a Guid that lives INSIDE
         // the `pending` node this function erases.
         void Fail(Arcane::Guid id, std::string_view why);
+
+        // How many times the vehicle has been dropped this session. The budget
+        // this feeds is what keeps DropVehicle's re-queue from becoming an
+        // unbounded rebuild-render-fail loop -- see DropVehicle.
+        int vehicleDrops = 0;
+        // Latched by GiveUp: this session renders no previews at all. Checked
+        // at every entry point that would otherwise start work again, so a
+        // write-off is genuinely terminal rather than something the next
+        // Request() quietly revives.
+        bool givenUp = false;
     };
 
     // =====================================================================
@@ -211,20 +232,135 @@ namespace Arcane::Editor
         delete m_impl;
     }
 
+    // ===== DESTROYING THE VEHICLE INVALIDATES `ready`, NOT JUST `ctx` =====
+    // THE BUG THIS EXISTS TO PREVENT, because it is a SILENT one: a Ready
+    // carries either `spriteMaterial` -- a slot index into the Batcher2D being
+    // destroyed here -- or `meshSlot`, an index into the destroyed context's
+    // bindless material table. Neither means anything to the replacement
+    // EnsureVehicle builds on the next Pump, and NEITHER FAILS LOUDLY:
+    // Batcher2D::QuadMaterial falls back to the plain sprite pipeline for an
+    // unknown id with no warning at all. So a surviving Ready would harvest
+    // SUCCESSFULLY and write an untextured quad -- or, once that slot has been
+    // re-registered, ANOTHER MATERIAL'S PIXELS -- to <guid>.png, which
+    // PrimeFromDisk then trusts on every later boot. Wrong pixels, persisted,
+    // forever.
+    //
+    // They are RE-QUEUED rather than dropped: the material is fine, whatever
+    // took the vehicle out was not, and re-resolving costs one JSON load plus
+    // (for a sprite or a chain) a cache-hot recompile. `pending` is
+    // deliberately left alone -- Publish registers into whatever `batch` is
+    // current at the moment it runs, so an in-flight compile lands correctly
+    // on the replacement vehicle.
+    //
+    // NO BUDGET IS SPENT HERE. This is the neutral "the vehicle is gone" half,
+    // which teardown needs as much as a failed frame does; DropVehicle below
+    // is the FAILURE flavour that also pays the budget.
+    void MaterialPreviewHarvester::Impl::ResetVehicle()
+    {
+        ctx.reset();
+        batch.reset();
+        meshMats.reset();
+        sphere = {};
+        for (const Ready& r : ready)
+        {
+            inFlight.erase(r.id);   // ...so Push's dedupe cannot swallow it
+            Push(r.id);
+        }
+        ready.clear();
+    }
+
+    // THE FAILURE FLAVOUR, and the budget is what makes re-queueing safe at
+    // all. Without it a vehicle that fails to render every frame would
+    // rebuild, fail, re-queue and rebuild again forever, spending a frame's
+    // worth of validation errors per frame for the rest of the session --
+    // which is what dropping the vehicle ALONE never prevented, since the next
+    // Pump rebuilds it immediately. After kMaxVehicleDrops the whole pipeline
+    // is written off exactly the way a failed CreateOffscreen writes it off.
+    void MaterialPreviewHarvester::Impl::DropVehicle()
+    {
+        ResetVehicle();
+        constexpr int kMaxVehicleDrops = 3;
+        if (++vehicleDrops >= kMaxVehicleDrops)
+            GiveUp("the material-preview vehicle failed " +
+                   std::to_string(vehicleDrops) + " times");
+    }
+
+    // ===== NO PREVIEWS AT ALL, FOR THE REST OF THE SESSION =====
+    // The ONE write-off path, reached from the two places previews can stop
+    // being possible: CreateOffscreen refusing outright, and the retry budget
+    // above running out. Everything still in the pipeline is memoized as
+    // failed so nothing re-attempts it, and `givenUp` is what makes that
+    // terminal rather than something the next Request() quietly revives --
+    // without it, a panel drawing rows would push work back in every frame and
+    // the loop this budget exists to bound would simply resume.
+    void MaterialPreviewHarvester::Impl::GiveUp(std::string_view why)
+    {
+        if (!givenUp)
+            ARC_WARN("[thumbs] {} -- materials keep their kind icon for the rest of "
+                     "this session", why);
+        givenUp = true;
+        for (const Arcane::Guid& g : inFlight)
+            failed.insert(g);
+        for (const Ready& r : ready)
+            failed.insert(r.id);
+        queue.clear();
+        pending.clear();
+        ready.clear();
+        inFlight.clear();
+    }
+
+    // ===== RELEASING ONE THUMBNAIL'S CHROME-CACHE TEXTURE =====
+    // The exact sequence a re-harvest owes (NriGraphContext.hpp item (2) under
+    // TWO CONTEXTS, TWO LANES), factored out because there are TWO callers
+    // that owe it: the re-harvest in Harvest, and Clear() on a project switch.
+    //
+    // NriTextureCache::Invalidate destroys the texture, and NRI does not
+    // ref-count -- so a later Resolve may land its replacement on the address
+    // this one just vacated. ImGuiNri caches per texture by RAW POINTER, so a
+    // bit-identical id would report a cache HIT on a descriptor set naming the
+    // DESTROYED texture. The evict therefore runs BEFORE the destroy, and
+    // unconditionally rather than "if the pointer changed" -- an unchanged
+    // pointer is precisely the case a recycled address fakes.
+    //
+    // COST, stated because it is not free: InvalidateUserTextureNow idles the
+    // whole device unconditionally (ImGuiNri.cpp's own note). Both call sites
+    // are rare -- a material edit, a project switch -- and the `e.texture == 0`
+    // guard means an entry nothing ever uploaded costs nothing at all.
+    void MaterialPreviewHarvester::Impl::ReleaseThumbTexture(Entry& e)
+    {
+        if (e.texture == 0)
+            return;
+        if (Arcane::NriGraphContext* chrome = Chrome())
+        {
+            if (Arcane::ImGuiNriNode* hud = chrome->ImGuiHud())
+                hud->InvalidateUserTextureNow(
+                    reinterpret_cast<nri::Texture*>(static_cast<std::intptr_t>(e.texture)));
+            chrome->InvalidateContentTexture(e.thumbId);
+        }
+        e.texture = 0;
+    }
+
     void MaterialPreviewHarvester::Shutdown()
     {
         Impl& im = *m_impl;
         // Order matters only in one direction: the batcher is device-less and
         // the vehicle owns real NRI objects, so the vehicle goes while the
-        // device it borrowed is still alive.
-        im.ctx.reset();
-        im.batch.reset();
-        im.meshMats.reset();
-        im.sphere = {};
+        // device it borrowed is still alive. Through ResetVehicle so the
+        // vehicle-scoped `ready` ids cannot survive this either -- latent
+        // today (nothing pumps after Shutdown) but the identical hazard, and a
+        // second copy of that reasoning is how the two drift apart. NOT
+        // DropVehicle: an orderly teardown is not a failure and must not spend
+        // the retry budget (three project switches would otherwise write the
+        // pipeline off on a perfectly healthy session).
+        im.ResetVehicle();
         // The thumbnails themselves are CPU bytes and survive -- but their
         // nri::Texture* ids named textures the CHROME cache owns, and that
-        // cache dies with the chrome context. Zero them so nothing can hand a
-        // dangling ImTextureID to ImGui afterwards.
+        // cache dies with the chrome context. Zeroed, NOT released: at this
+        // point the chrome context is about to be destroyed, and
+        // ~NriGraphContext's own ordering covers a texture and the ImGuiNri
+        // that cached it when both belong to the SAME context (see
+        // EditorApp's m_graphLogoTexture, which states the distinction).
+        // Paying N device idles on the way out would buy nothing.
         for (auto& [id, e] : im.entries)
             e.texture = 0;
     }
@@ -232,6 +368,21 @@ namespace Arcane::Editor
     void MaterialPreviewHarvester::Clear()
     {
         Impl& im = *m_impl;
+        // ===== RELEASE FIRST, WHILE THE CHROME CONTEXT IS STILL ALIVE =====
+        // A project switch KEEPS the chrome context and its NriTextureCache by
+        // design (EditorApp::TeardownGraphForSwitch), so every synthetic
+        // thumbnail guid stays Resident in it -- and the incoming project
+        // mints fresh Guid::Generate() ids, so nothing can ever address the
+        // old ones again. Erasing the maps without this loop leaks one 64x64
+        // texture plus one pointer-keyed ImGuiNri entry per thumbnailed
+        // material, per switch, for the life of the process.
+        //
+        // BEFORE Shutdown(), which zeroes e.texture (its own comment says why
+        // that is right at exit) and would otherwise make every release below
+        // a silent no-op.
+        for (auto& [id, e] : im.entries)
+            im.ReleaseThumbTexture(e);
+
         // A Guid means something else in a different project, and the
         // batcher's registered material slots are the OLD project's, so the
         // vehicle goes with everything else. The next Pump rebuilds it.
@@ -243,6 +394,11 @@ namespace Arcane::Editor
         im.failed.clear();
         im.entries.clear();
         im.thumbToMaterial.clear();
+        // A fresh project gets a fresh budget AND a fresh write-off: the
+        // outgoing project's failures say nothing about this one's, and a
+        // switch rebuilds the render bridge anyway.
+        im.vehicleDrops = 0;
+        im.givenUp = false;
     }
 
     // =====================================================================
@@ -251,7 +407,7 @@ namespace Arcane::Editor
     void MaterialPreviewHarvester::Request(const Arcane::Guid& material)
     {
         Impl& im = *m_impl;
-        if (!material.IsValid())
+        if (!material.IsValid() || im.givenUp)
             return;
         // The steady-state cost of the Browse draw's per-frame push for every
         // visible row: three hash lookups and out.
@@ -291,7 +447,12 @@ namespace Arcane::Editor
             std::error_code ec;
             std::filesystem::remove(png, ec);
         }
-        im.Push(material);
+        // The PNG goes either way -- it IS stale, and a session that has given
+        // up on previews should still not leave a wrong picture on disk for
+        // the NEXT session (which starts with a fresh vehicle) to trust.
+        // Re-queueing is what a written-off session skips.
+        if (!im.givenUp)
+            im.Push(material);
     }
 
     std::size_t MaterialPreviewHarvester::PendingCount() const
@@ -604,7 +765,7 @@ namespace Arcane::Editor
     {
         if (ctx)
             return true;
-        if (!services.hostConfig)
+        if (givenUp || !services.hostConfig)
             return false;
 
         // NodeSet{} -- batch + post + tonemap + mesh and nothing else. A
@@ -617,16 +778,10 @@ namespace Arcane::Editor
             // already degrades to: kind icons instead of pictures. The refusal
             // is already logged + latched inside CreateOffscreen. Every queued
             // material is dropped so this cannot re-attempt every frame.
-            ARC_WARN("[thumbs] the material-preview context could not be created "
-                     "-- materials keep their kind icon this session");
-            // Memoize the refusal across the WHOLE pipeline so this cannot be
-            // re-attempted (and re-logged) on every single frame.
-            for (const Arcane::Guid& g : inFlight)
-                failed.insert(g);
-            queue.clear();
-            pending.clear();
-            ready.clear();
-            inFlight.clear();
+            // Through the ONE write-off path, so this cannot be re-attempted
+            // (or re-logged) on every single frame. The refusal itself is
+            // already logged + latched inside CreateOffscreen.
+            GiveUp("the material-preview context could not be created");
             return false;
         }
 
@@ -662,13 +817,15 @@ namespace Arcane::Editor
         return true;
     }
 
-    bool MaterialPreviewHarvester::Impl::Harvest(Ready& r)
+    MaterialPreviewHarvester::Impl::HarvestOutcome
+    MaterialPreviewHarvester::Impl::Harvest(Ready& r)
     {
         // Pump has already made both of these true (it creates the vehicle
-        // before it dequeues anything); re-read rather than assume.
+        // before it dequeues anything); re-read rather than assume. Retry, not
+        // Refused: a vanished vehicle says nothing about this material.
         Arcane::NriGraphContext* chrome = Chrome();
         if (!chrome || !ctx || !batch)
-            return false;
+            return HarvestOutcome::Retry;
 
         Arcane::GlobalParams globals;
         globals.time = kThumbTime;
@@ -753,24 +910,29 @@ namespace Arcane::Editor
         if (ctx->RenderFrameOffscreen(vp) != Arcane::NriGraphContext::FrameOutcome::Presented)
         {
             // Skipped is impossible at a fixed 64px; Failed has already
-            // latched + logged. Either way this material gets no picture, and
-            // the vehicle is dropped rather than spending a frame's worth of
-            // validation errors per thumbnail for the rest of the session --
-            // the same posture ShaderEditorDocument takes for its preview.
+            // latched + logged. The vehicle is dropped so the replacement is
+            // built from scratch rather than re-recording through whatever
+            // left the graph in a bad state -- and DropVehicle is what makes
+            // that safe, by re-queueing every `ready` entry whose slot indices
+            // the destroyed vehicle scoped (read its comment: a stale one
+            // harvests SUCCESSFULLY into the wrong pixels). It also owns the
+            // retry budget, which is what actually bounds a vehicle that fails
+            // every time -- dropping alone never did, since the next Pump
+            // rebuilds it immediately.
             ARC_ERROR("[thumbs] the preview frame for material {} failed "
                       "-- dropping the preview vehicle", r.id.ToString());
-            ctx.reset();
-            batch.reset();
-            meshMats.reset();
-            return false;
+            DropVehicle();
+            return HarvestOutcome::Retry;
         }
 
         std::uint32_t w = 0, h = 0;
         std::vector<unsigned char> rgba;
         // TIGHT RGBA8, already swizzled out of the output's BGRA. A false is
         // NOT a run failure (ReadCapture's own contract) -- just no picture.
+        // Refused, not Retry: the frame itself was fine, so retrying it would
+        // idle the device again for the same answer.
         if (!ctx->ReadCapture(w, h, rgba) || w == 0 || h == 0)
-            return false;
+            return HarvestOutcome::Refused;
 
         // ===== THE CACHE SWAP, AND WHAT A RE-HARVEST OWES ================
         Entry& e = entries[r.id];
@@ -782,27 +944,13 @@ namespace Arcane::Editor
             e.thumbId = Arcane::Guid::Generate();
             thumbToMaterial.emplace(e.thumbId, r.id);
         }
-        if (e.texture != 0)
-        {
-            // RE-HARVEST. NriTextureCache::Invalidate destroys the texture and
-            // the next Resolve creates a replacement -- and NRI does not
-            // ref-count, so that replacement may land on the address the old
-            // one just vacated. ImGuiNri caches per texture by RAW POINTER, so
-            // a bit-identical id would report a cache HIT on a descriptor set
-            // naming the DESTROYED texture (NriGraphContext.hpp, item (2)
-            // under TWO CONTEXTS TWO LANES).
-            //
-            // BEFORE, and unconditionally rather than "if the pointer changed"
-            // -- an unchanged pointer is precisely the case a recycled address
-            // fakes. NOTHING RENDERS BETWEEN THE TWO CALLS: both run inside
-            // one Pump, at phase 13, strictly after this frame's render and
-            // strictly before the next one's.
-            if (Arcane::ImGuiNriNode* hud = chrome->ImGuiHud())
-                hud->InvalidateUserTextureNow(
-                    reinterpret_cast<nri::Texture*>(static_cast<std::intptr_t>(e.texture)));
-            chrome->InvalidateContentTexture(e.thumbId);
-            e.texture = 0;
-        }
+        // RE-HARVEST: release the old texture (and the chrome ImGuiNri entry
+        // keyed on its raw pointer) BEFORE the new bytes go in -- the full
+        // reasoning is on ReleaseThumbTexture. NOTHING RENDERS BETWEEN ITS TWO
+        // CALLS: they run inside one Pump, at phase 13, strictly after this
+        // frame's render and strictly before the next one's. A no-op on a
+        // first harvest.
+        ReleaseThumbTexture(e);
 
         e.pixels.width = w;
         e.pixels.height = h;
@@ -812,10 +960,21 @@ namespace Arcane::Editor
         // ===== PERSIST (the UE lesson) ==================================
         // maxWidth 0: these bytes are ALREADY the thumbnail size, and the
         // writer's cap is a downscale, not a target.
+        //
+        // A FAILURE IS NOT FATAL BUT IT IS NOT SILENT EITHER: the thumbnail is
+        // live in the cache regardless, so the session is fine -- but a
+        // read-only Saved/, a full disk or a bad path would otherwise turn the
+        // whole persistence path off with nothing to read, and every later
+        // boot would silently pay the full harvest again. (The writer logs its
+        // own WARN too; this one names the material, which is what makes the
+        // pattern visible when it is one material rather than all of them.)
         if (const std::filesystem::path png = ThumbPath(r.id); !png.empty())
-            (void)Arcane::WriteThumbnailPngRgba(png, w, h, std::move(rgba), 0);
+            if (!Arcane::WriteThumbnailPngRgba(png, w, h, std::move(rgba), 0))
+                ARC_WARN("[thumbs] could not persist the preview for material {} to '{}' "
+                         "-- it will be re-harvested on the next boot",
+                         r.id.ToString(), png.generic_string());
 
-        return true;
+        return HarvestOutcome::Done;
     }
 
     std::uint64_t MaterialPreviewHarvester::Impl::EnsureTexture(const Arcane::Guid& material,
@@ -883,17 +1042,31 @@ namespace Arcane::Editor
             Impl::Ready r = std::move(im.ready.back());
             im.ready.pop_back();
             im.inFlight.erase(r.id);
-            if (!im.Harvest(r))
+            switch (im.Harvest(r))
             {
-                // Harvest already logged whatever went wrong. Memoize the
-                // refusal so a broken material cannot idle the device once a
-                // frame forever.
-                im.failed.insert(r.id);
-            }
-            else
-            {
-                ARC_INFO("[thumbs] harvested a 64px preview for material {} ({} left)",
-                         r.id.ToString(), PendingCount());
+                case Impl::HarvestOutcome::Done:
+                    ARC_INFO("[thumbs] harvested a 64px preview for material {} ({} left)",
+                             r.id.ToString(), PendingCount());
+                    break;
+                case Impl::HarvestOutcome::Refused:
+                    // Harvest already logged whatever went wrong. Memoize it so
+                    // a broken material cannot idle the device once a frame
+                    // forever.
+                    im.failed.insert(r.id);
+                    break;
+                case Impl::HarvestOutcome::Retry:
+                    // The VEHICLE failed, not the material. DropVehicle has
+                    // already re-queued every OTHER `ready` entry and taken a
+                    // bite out of the retry budget; this one is the entry it
+                    // could not see, because Pump popped it before the call.
+                    // Unless that budget just ran out, in which case the
+                    // pipeline is written off and reviving one entry would
+                    // restart exactly the loop the budget bounds.
+                    if (im.givenUp)
+                        im.failed.insert(r.id);
+                    else
+                        im.Push(r.id);
+                    break;
             }
             return;   // one device idle per frame, no matter what else is due
         }
