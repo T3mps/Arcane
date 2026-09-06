@@ -263,7 +263,17 @@ reflection grows per-field attributes.
 
 Built in one pass on project open (`ListAssetReferences` per asset → forward map,
 inverted map, inbound counts); re-walks single guids on save/watcher/create/delete
-events. Last-known-good on `nullopt` (§3.2).
+events. Last-known-good on `nullopt` (§3.2). Two disciplines adopted from UE's
+registry (2026-09-06 source review of the `.example` dump):
+
+- **Incremental rebuild order** (UE `AssetRegistry.cpp:7034-7041`): when re-walking
+  one asset, first iterate its OLD outbound refs and remove it from each target's
+  referencer list, then clear and re-add. Skipping the removal pass is the classic
+  incremental-index corruption.
+- **Tombstones for deleted/unresolvable targets** (UE keeps an empty depends-node
+  so "who referenced the missing asset" survives): a referenced guid that no longer
+  resolves keeps an index node holding its referencers — exactly the "dangling
+  reference" list the Status lens can report.
 
 **Unused = zero inbound references**, applied **only to kinds whose consumers the
 index fully sees: Texture, Material, Sprite, Mesh.** Scenes are roots (never
@@ -293,8 +303,14 @@ refused, created, deleted). No persistence.
 - Nodes/edges straight from the index; edge labels from `AssetRefKind`
   (derives / uses); "samples" is a display label for a material's `References`
   edges, derived from the source asset's kind — not a third `AssetRefKind`.
-- **Focus is mandatory in practice:** default focus = boot scene; "everything" is
-  allowed only under a node cap (~100) before the lens demands a scope.
+- **Scoping model** (revised 2026-09-06 after the UE Reference Viewer review —
+  its shape beats our original flat node cap): default focus = boot scene;
+  **depth limit default 2** from the focus in each direction; **per-node breadth
+  cap (~20)** where overflow collapses into a synthetic "+N more" node — never
+  silent truncation (UE `EdGraph_ReferenceViewer.cpp:912-924`) — with edges
+  sorted most-important-first (`DerivesFrom` before `References`) before the cut
+  so truncation drops the least interesting links. "Everything" remains allowed
+  under the same caps.
 - Layout: layered left→right by dependency depth (sources left, scenes right,
   matching the mocks); computed each build, not persisted; no physics simulation.
 - Rendering reuses the shader editor's canvas vocabulary (pan/zoom, grid, node
@@ -400,6 +416,15 @@ never renders an unknown as a zero — unknown is `—`.
   ever).
 - Material-subkind attributes on reflection (would retire the field-name/component
   heuristics; when reflection grows attributes).
+- An mtime-keyed on-disk cache of parse results (UE's `FDiskCachedAssetData`
+  shape: mtime + refs + subkind per asset, invalidated by one timestamp compare) —
+  trigger: cold-open parse time becomes noticeable (~5k+ assets). Until then,
+  parse-on-open is milliseconds.
+- Save-time reference stamping generalized beyond scenes (write outbound refs
+  into artifacts/sidecars at save, UE's package-header harvest model) — same
+  trigger.
+- Time-sliced filtering / async text filter (UE `SAssetView` budget model) —
+  UE-scale machinery; not before ~10k assets.
 
 ## 16. Decision log
 

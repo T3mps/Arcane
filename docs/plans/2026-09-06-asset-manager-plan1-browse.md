@@ -661,9 +661,21 @@ public:
   changes, also `Invalidate` every registry material whose `MaterialSurfaceFor`
   chain passes through M (walk the model's refs: instances hold a `DerivesFrom`
   ref to M).
-- [ ] **Step 3: Pump site:** call `m_materialThumbs->Pump(...)` once per frame in
-  `PumpEditorDocuments` (next to `PollAssetWatch`). First population: on project
-  open, `Invalidate` every material in the registry — they harvest one per frame.
+- [ ] **Step 3: Persist harvests (the UE lesson — persisted thumbs beat re-renders;
+  cf. UE's in-package `FObjectThumbnail` + `EThumbnailRenderFrequency::OnAssetSave`):**
+  after a successful harvest, write the 64px RGBA to
+  `<project>/Saved/Thumbnails/<guid>.png` via `Arcane::WriteThumbnailPngRgba`
+  (`Assets.hpp:375`); on project open, do NOT queue harvests — load existing PNGs
+  via `Arcane::LoadDisplayPixels` (`Assets.hpp:348`, maxSize 64) straight into the
+  chrome-cache pixel supply, and queue a harvest ONLY for materials with no PNG or
+  whose `.arcmat` mtime is newer than the PNG's. Each `Invalidate` deletes the
+  PNG's claim (re-harvest overwrites it). This turns N-device-idles-at-boot into
+  zero for an unchanged project.
+- [ ] **Step 4: Pump site + ordering:** call `m_materialThumbs->Pump(...)` once per
+  frame in `PumpEditorDocuments` (next to `PollAssetWatch`). The queue is a LIFO
+  stack and the Browse draw pushes any *visible* un-thumbed material each frame —
+  so the frame's one harvest is always something on screen (UE's pool is LIFO for
+  exactly this reason, `AssetThumbnail.cpp:2104-2120`).
 - [ ] **Step 4: Build + boot ReferenceProject; watch the log** — three materials
   harvest within ~3 frames, no device-lost, no per-frame idle after that.
   `[gpu]`-adjacent risk: run `ArcaneTests.exe "[gpu]"` once to confirm no
@@ -761,7 +773,9 @@ public:
   `requestCreateKind` for that kind; click sets `state.railKind` +
   `model.SetKindFilter`.
 - [ ] **Step 2: Implement the table:** one `BeginTable("##assets", 1,
-  RowBg | ScrollY | NoSavedSettings)`; iterate `model.Rows()`:
+  RowBg | ScrollY | NoSavedSettings)`; iterate `model.Rows()` **through an
+  `ImGuiListClipper`** (rows are fixed 24px, so the clipper is exact; group rows
+  count as rows — the flat row vector makes this trivial). Per clipped row:
   `Type::Group` → `HeaderBand`-style chrome row with chevron (toggles
   `SetGroupOpen`), name, dim count; `Type::Asset` → `RowWithThumb` (thumb from
   seam, fallback = `KindIcon` — reuse the switch from `AssetBrowser.cpp:16-39`),
@@ -875,8 +889,15 @@ public:
         const Arcane::Project& project);
 ```
 
-- [ ] **Step 1: Failing tests** for `ValidateCreateName` (empty, path separators,
-  duplicate-in-dir via a temp dir, valid) — `[editor]`.
+- [ ] **Step 1: Failing tests** for `ValidateCreateName` (empty, illegal chars,
+  path separators, duplicate-in-dir via a temp dir, valid) — `[editor]`.
+  Validation rules, in UE's deliberate cheap→expensive order
+  (`AssetViewUtils.cpp:1420-1509` precedent): (1) character deny-set
+  `\ / : * ? " < > |` plus leading/trailing dots and spaces; (2) length (stem +
+  extension + target dir must stay under 240 chars absolute); (3) uniqueness in
+  the target directory — with a DISTINCT message ("a <kind> named X already
+  exists here") from the illegal-char message, so the fix is obvious. Return
+  `{ok, message}`; the dialog shows `message` dim under the Name well.
 - [ ] **Step 2: Run** — FAIL. **Step 3: Implement** validation + the ImGui modal
   per the CreateFlow mock: Name well, Location combo (distinct registry folders +
   the kind default `materials/`|`meshes/`|`sprites/`|`scenes/`), kind fields:
