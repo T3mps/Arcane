@@ -9,6 +9,7 @@
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Assets/ArtifactReader.hpp>   // TextureInfo -- TextureInfoFor's payload
 #include <Arcane/Assets/ImageIo.hpp>
+#include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface -- MaterialSurfaceFor's payload
 #include <Arcane/Project/AssetId.hpp>
 
 #include <Json.hpp>
@@ -262,6 +263,23 @@ namespace Arcane
         // the class's shape changed again this arc, so ReferenceProject.slnx
         // needs the same rebuild those two additions required.
         virtual void SetCookPendingProbe(std::function<bool(const Guid&)> probe) = 0;
+
+        // Asset-manager arc (ABI v22): the material SUBKIND for `id`, resolved
+        // through the installed AssetResolver. Reads the .arcmat "kind" string
+        // ("fullscreen"/"sprite"/"mesh"); an INSTANCE file carries no kind --
+        // only "parent" -- so this walks the parent chain (bounded, cycle-safe)
+        // to the base material's kind. nullopt: not a material, unreadable, or
+        // an unresolvable/cyclic chain. Appended at the END of the interface
+        // (the ArtifactFor/InvalidateArtifact/SetCookPendingProbe precedent
+        // above -- this class's "new virtuals go at the end" rule).
+        //
+        // ABI v22 STAYS OPEN for one more addition: Task 2 of this same arc
+        // appends `ListAssetReferences` immediately after this virtual, under
+        // this SAME number (see PluginABI.hpp's v22 ledger entry, which this
+        // one extends) -- exactly the shape the v21 ledger's own extension
+        // paragraph documents for ArtifactFor/InvalidateArtifact/
+        // SetCookPendingProbe.
+        virtual std::optional<MaterialSurface> MaterialSurfaceFor(const Guid& id) = 0;
     };
 
     // -----------------------------------------------------------------

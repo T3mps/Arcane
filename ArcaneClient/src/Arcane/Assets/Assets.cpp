@@ -630,6 +630,43 @@ namespace Arcane
                 m_cookPendingProbe = std::move(probe);
             }
 
+            // Asset-manager arc (ABI v22): see Assets.hpp's own doc comment for the
+            // full contract. Reuses GetJson(AssetId) -- the SAME cached loader, the
+            // SAME installed resolver, the SAME warn-once memo on an unresolvable id
+            // -- rather than opening a second JSON-reading route into this facade.
+            // Bounded depth (8), not a visited-set: a two-hop cycle just alternates
+            // for a few iterations and then hits the bound, which is cheaper than
+            // tracking a chain and gives the same "never hangs" guarantee.
+            std::optional<MaterialSurface> MaterialSurfaceFor(const Guid& id) override
+            {
+                Guid current = id;
+                for (int depth = 0; depth < 8; ++depth)
+                {
+                    auto json = GetJson(AssetId::FromGuid(current));
+                    if (!json)
+                        return std::nullopt;
+                    if (auto it = json->find("kind"); it != json->end() && it->is_string())
+                        return MaterialSurfaceForKind(it->get<std::string>());
+                    if (auto it = json->find("parent"); it != json->end() && it->is_string())
+                    {
+                        const auto parent = Guid::FromString(it->get<std::string>());
+                        if (!parent || !parent->IsValid() || *parent == current)
+                            return std::nullopt;
+                        current = *parent;
+                        continue;
+                    }
+                    // A material file with neither kind nor parent: LoadMaterialAsset
+                    // defaults such a file to "fullscreen" (MaterialAsset.cpp's own
+                    // load default), but only if it IS a material -- gate on the
+                    // "type" discriminator so an unrelated JSON asset (no kind, no
+                    // parent, not a material) never silently reads as Fullscreen.
+                    if (auto it = json->find("type"); it != json->end() && *it == "material")
+                        return MaterialSurface::Fullscreen;
+                    return std::nullopt;
+                }
+                return std::nullopt;   // chain too deep / cyclic
+            }
+
             uint64_t TotalBytes() const
             {
                 return m_bytes.TotalBytes() +

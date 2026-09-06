@@ -521,7 +521,42 @@ namespace Arcane
     //     modules in the two trees -- ReferenceProject/Source/ and Gacha's
     //     Game/Source/ -- returns nothing, so none of these additions break
     //     either module either.
-    inline constexpr uint32_t kGamePluginABIVersion = 21;
+    // v22 (2026-09-06, asset-manager arc, Task 1 -- the Assets panel rebuild):
+    //     `Assets` (Assets/Assets.hpp, an ARCANE_API PURE-VIRTUAL facade) gained
+    //     `MaterialSurfaceFor(const Guid&)`, APPENDED immediately after
+    //     `SetCookPendingProbe` -- the tail of the class, the exact "new
+    //     virtuals go at the end" shape the v21 ledger extension above
+    //     (:482-517) already used for `ArtifactFor`/`InvalidateArtifact`/
+    //     `SetCookPendingProbe` themselves.
+    //     Checked against the same "does this actually corrupt a mixed
+    //     pairing" bar every entry above applies: an append reshuffles no
+    //     EXISTING vtable slot, and -- unlike Batcher2D, which a plugin's own
+    //     header-only RenderSubmissionSystem dispatches through -- nothing in
+    //     a game module ever SUBCLASSES `Assets`. The one concrete class,
+    //     `AssetsImpl`, is private to Assets.cpp behind the single
+    //     `Assets::Create()` factory; a module only ever CALLS through the
+    //     pointer the host hands it, never implements the vtable itself. On
+    //     that bar this bump is NOT a corruption finding -- the same honest
+    //     call the v17 entry above made for its own all-additive mesh
+    //     vocabulary (:319-321) -- and is recorded here as the arc's own
+    //     documentation stamp ("a module was built knowing this query
+    //     exists"), not dressed up as a safety fix it does not need.
+    //     MEASURED, not assumed: `grep -rn` for `MaterialSurfaceFor`,
+    //     `Assets::`, `->PixelsFor`, `->TextureInfoFor`, `assets->` and
+    //     `Assets.hpp` over BOTH game modules in the two trees --
+    //     ReferenceProject/Source/ (GameApi.hpp, ReferenceGame.cpp) and
+    //     Gacha's Game/Source/ (GameApi.hpp, Aphelyon.cpp) -- returns
+    //     nothing, so no module in either tree breaks on this bump.
+    //     THIS ENTRY STAYS OPEN, not closed: Task 2 of the same arc appends a
+    //     second virtual, `ListAssetReferences`, immediately after this one,
+    //     UNDER THIS SAME v22 NUMBER -- no further bump -- and will extend
+    //     this entry the way the v21 entry above was itself extended three
+    //     times (Task 7, Task 12 x2, desk-fix 2) without moving its number.
+    //     THE SCENE FILE FORMAT DID NOT MOVE: Scene::kSceneJsonVersion stays
+    //     at 3. ReferenceProject is restamped with this change, the same
+    //     precedent v16 through v21 set (Gacha's Game restamp is this arc's
+    //     own follow-up in that repo, tracked there rather than here).
+    inline constexpr uint32_t kGamePluginABIVersion = 22;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

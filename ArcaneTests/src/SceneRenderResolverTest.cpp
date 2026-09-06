@@ -235,6 +235,11 @@ namespace
         // the cook-pending quiet seam.
         void SetCookPendingProbe(std::function<bool(const Arcane::Guid&)>) override {}
 
+        // Asset-manager arc, ABI v22 (interface-completeness only, same
+        // reasoning as ArtifactFor/InvalidateArtifact/SetCookPendingProbe
+        // above): nothing in this suite resolves a material subkind.
+        std::optional<Arcane::MaterialSurface> MaterialSurfaceFor(const Arcane::Guid&) override { return std::nullopt; }
+
         int pixelsForCalls       = 0;
         int textureInfoForCalls  = 0;
         int evictingCalls        = 0;
