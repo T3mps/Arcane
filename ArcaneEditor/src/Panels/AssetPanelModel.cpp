@@ -1,0 +1,414 @@
+#include <Panels/AssetPanelModel.hpp>
+
+#include <Arcane/Project/AssetRegistry.hpp>
+
+#include <algorithm>
+#include <map>
+
+namespace Arcane::Editor
+{
+    namespace
+    {
+        // Same label strings as AssetBrowser.cpp's file-local KindLabel (that
+        // copy has internal linkage, so it cannot be reused directly from
+        // here); Task 15 unifies them once AssetBrowser.* is retired.
+        const char* RailKindLabel(AssetKind kind)
+        {
+            switch (kind)
+            {
+                case AssetKind::Material:   return "Material";
+                case AssetKind::Texture:    return "Texture";
+                case AssetKind::Audio:      return "Audio";
+                case AssetKind::Font:       return "Font";
+                case AssetKind::Data:       return "Data";
+                case AssetKind::Scene:      return "Scene";
+                case AssetKind::Sprite:     return "Sprite";
+                case AssetKind::Diagnostic: return "Diagnostic";
+                case AssetKind::Mesh:       return "Mesh";
+                case AssetKind::Other:      return "Other";
+            }
+            return "Other";
+        }
+
+        // folder = the directory portion of the mount path after "scheme://";
+        // root files fold into the synthetic "Content/" bucket (spec s5/s6).
+        // name = stem, fileName = stem + extension (rows show this).
+        AssetPanelEntry MakeBaseEntry(const Arcane::Guid& guid, const std::string& mountPath)
+        {
+            AssetPanelEntry e;
+            e.guid = guid;
+            e.mountPath = mountPath;
+            e.kind = AssetKindOf(mountPath);
+
+            std::string_view rest = mountPath;
+            if (const std::size_t scheme = rest.find("://"); scheme != std::string_view::npos)
+                rest = rest.substr(scheme + 3);
+
+            const std::size_t slash = rest.rfind('/');
+            const std::string_view file = (slash == std::string_view::npos)
+                                               ? rest : rest.substr(slash + 1);
+            e.folder = (slash == std::string_view::npos)
+                           ? std::string("Content/")
+                           : std::string(rest.substr(0, slash + 1));
+
+            e.fileName = std::string(file);
+            const std::size_t dot = file.rfind('.');
+            e.name = std::string(dot == std::string_view::npos ? file : file.substr(0, dot));
+            return e;
+        }
+
+        // Bridges an AssetPanelEntry into the AssetBrowser.hpp AssetEntry
+        // shape so MatchesFilter's case-insensitive name/mount-path search is
+        // reused verbatim rather than re-implemented here.
+        AssetEntry ToAssetEntry(const AssetPanelEntry& e)
+        {
+            AssetEntry a;
+            a.guid = e.guid;
+            a.mountPath = e.mountPath;
+            a.name = e.name;
+            a.kind = e.kind;
+            return a;
+        }
+    }
+
+    void AssetPanelModel::MarkDirty(const Arcane::Guid& id)
+    {
+        if (!m_allDirty)
+            m_dirty.insert(id);
+    }
+
+    void AssetPanelModel::MarkAllDirty()
+    {
+        m_allDirty = true;
+        m_dirty.clear();
+    }
+
+    bool AssetPanelModel::RebuildIfDirty(const Arcane::AssetRegistry* registry,
+                                         const AssetPanelProviders& p)
+    {
+        if (!registry)
+        {
+            const bool hadAnything = !m_entries.empty() || !m_rows.empty() || !m_rail.empty();
+            m_entries.clear();
+            m_dirty.clear();
+            m_allDirty = false;
+            m_rows.clear();
+            m_rail.clear();
+            m_shownAssetCount = 0;
+            m_rowsDirty = false;
+            return hadAnything;
+        }
+
+        if (!m_allDirty && m_dirty.empty() && !m_rowsDirty)
+            return false;   // cheap path: nothing to do
+
+        const std::vector<std::pair<Arcane::Guid, std::string>> all = registry->All();
+
+        // Live guid -> mount path: target-kind lookups for fold/sliced below,
+        // and to drop cache entries the registry no longer carries.
+        std::unordered_map<Arcane::Guid, const std::string*> live;
+        live.reserve(all.size());
+        for (const auto& [guid, mountPath] : all)
+            live.emplace(guid, &mountPath);
+
+        bool entriesChanged = false;
+
+        for (auto it = m_entries.begin(); it != m_entries.end(); )
+        {
+            if (!live.count(it->first)) { it = m_entries.erase(it); entriesChanged = true; }
+            else ++it;
+        }
+
+        auto rebuildOne = [&](const Arcane::Guid& guid, const std::string& mountPath)
+        {
+            AssetPanelEntry e = MakeBaseEntry(guid, mountPath);
+
+            if (e.kind == AssetKind::Material && p.surfaceFor)
+                e.surface = p.surfaceFor(guid);
+
+            const std::optional<std::vector<Arcane::AssetRef>> refs =
+                p.refsFor ? p.refsFor(guid) : std::nullopt;
+
+            int derivesFromCount = 0;
+            Arcane::Guid derivesFromTarget;
+            bool hasTextureReference = false;   // a References-kind ref to a texture
+            if (refs)
+            {
+                for (const Arcane::AssetRef& ref : *refs)
+                {
+                    if (ref.kind == Arcane::AssetRefKind::DerivesFrom)
+                    {
+                        ++derivesFromCount;
+                        derivesFromTarget = ref.target;
+                    }
+                    else if (ref.kind == Arcane::AssetRefKind::References)
+                    {
+                        const auto itT = live.find(ref.target);
+                        if (itT != live.end() && AssetKindOf(*itT->second) == AssetKind::Texture)
+                            hasTextureReference = true;
+                    }
+                }
+            }
+
+            // An instance material carries a `parent` DerivesFrom -- see
+            // ListAssetReferences's own doc comment (Assets.hpp). Only
+            // meaningful for materials: a folding sprite's DerivesFrom names a
+            // TEXTURE, never another material.
+            e.isInstance = (e.kind == AssetKind::Material) && (derivesFromCount > 0);
+
+            // Fold: exactly one DerivesFrom, and it resolves to a texture.
+            if (derivesFromCount == 1)
+            {
+                const auto itT = live.find(derivesFromTarget);
+                if (itT != live.end() && AssetKindOf(*itT->second) == AssetKind::Texture)
+                    e.foldedUnder = derivesFromTarget;
+            }
+
+            // Sliced: a sprite that did NOT fold but still names a texture via
+            // a References-kind ref (controller ruling, Task 4).
+            e.sliced = (e.kind == AssetKind::Sprite) && !e.foldedUnder.IsValid() && hasTextureReference;
+
+            e.cook = p.cookStateFor ? p.cookStateFor(guid) : CookState::Unknown;
+
+            m_entries[guid] = std::move(e);
+        };
+
+        if (m_allDirty)
+        {
+            for (const auto& [guid, mountPath] : all)
+                rebuildOne(guid, mountPath);
+            entriesChanged = true;
+        }
+        else if (!m_dirty.empty())
+        {
+            for (const Arcane::Guid& guid : m_dirty)
+            {
+                const auto it = live.find(guid);
+                if (it != live.end())
+                    rebuildOne(guid, *it->second);
+            }
+            entriesChanged = true;
+        }
+
+        if (entriesChanged)
+        {
+            // Aggregate derivedChildren from foldedUnder -- a pure re-
+            // derivation over ALREADY-CACHED entries, no provider calls. This
+            // is what keeps a single-guid MarkDirty cheap: only the dirtied
+            // guid's provider callables were invoked above, never its peers'.
+            for (auto& [guid, e] : m_entries)
+                e.derivedChildren.clear();
+            for (auto& [guid, e] : m_entries)
+            {
+                if (!e.foldedUnder.IsValid())
+                    continue;
+                const auto pit = m_entries.find(e.foldedUnder);
+                if (pit != m_entries.end())
+                    pit->second.derivedChildren.push_back(guid);
+            }
+            for (auto& [guid, e] : m_entries)
+            {
+                std::sort(e.derivedChildren.begin(), e.derivedChildren.end(),
+                         [this](const Arcane::Guid& a, const Arcane::Guid& b)
+                         { return m_entries.at(a).fileName < m_entries.at(b).fileName; });
+            }
+        }
+
+        m_dirty.clear();
+        m_allDirty = false;
+
+        if (entriesChanged)
+            m_rowsDirty = true;
+
+        if (m_rowsDirty)
+        {
+            RebuildRows();
+            m_rowsDirty = false;
+        }
+
+        return true;
+    }
+
+    void AssetPanelModel::SetSearch(std::string_view s)
+    {
+        if (m_search == s)
+            return;
+        m_search = std::string(s);
+        m_rowsDirty = true;
+    }
+
+    void AssetPanelModel::SetKindFilter(int kindOrMinus1)
+    {
+        if (m_kindFilter == kindOrMinus1)
+            return;
+        m_kindFilter = kindOrMinus1;
+        m_rowsDirty = true;
+    }
+
+    void AssetPanelModel::SetGroupOpen(const std::string& folder, bool open)
+    {
+        m_groupOpen[folder] = open;
+        m_rowsDirty = true;
+    }
+
+    void AssetPanelModel::SetChildrenOpen(const Arcane::Guid& texture, bool open)
+    {
+        m_childrenOpen[texture] = open;
+        m_rowsDirty = true;
+    }
+
+    bool AssetPanelModel::MatchesEntryFilter(const AssetPanelEntry& e) const
+    {
+        return MatchesFilter(ToAssetEntry(e), m_kindFilter, m_search);
+    }
+
+    void AssetPanelModel::RebuildRows()
+    {
+        m_rows.clear();
+        m_shownAssetCount = 0;
+
+        // Rail counts ignore the kind filter (the rail is what PICKS it) but
+        // honor search, and count folded children too -- the same "folded
+        // children included" rule Health().total states, extended to this
+        // per-kind view.
+        int kindCounts[kAssetKindCount] = {};
+
+        // Per-folder, TOP-LEVEL (unfolded) entries that pass BOTH filters --
+        // folded children are never folder peers; they render nested under
+        // their parent instead (fold semantics).
+        std::map<std::string, std::vector<const AssetPanelEntry*>> byFolder;
+
+        for (const auto& [guid, e] : m_entries)
+        {
+            if (MatchesFilter(ToAssetEntry(e), -1, m_search))
+                ++kindCounts[static_cast<int>(e.kind)];
+
+            const bool matches = MatchesEntryFilter(e);
+            if (matches)
+                ++m_shownAssetCount;
+
+            if (!e.foldedUnder.IsValid() && matches)
+                byFolder[e.folder].push_back(&e);
+        }
+
+        for (auto& [folder, vec] : byFolder)
+        {
+            std::sort(vec.begin(), vec.end(),
+                     [](const AssetPanelEntry* a, const AssetPanelEntry* b)
+                     { return a->fileName < b->fileName; });
+        }
+
+        for (const auto& [folder, vec] : byFolder)
+        {
+            if (vec.empty())
+                continue;   // groups with zero visible rows are dropped
+
+            AssetPanelRow group;
+            group.type = AssetPanelRow::Type::Group;
+            group.groupName = folder;
+            group.groupCount = static_cast<int>(vec.size());
+            m_rows.push_back(std::move(group));
+
+            const auto openIt = m_groupOpen.find(folder);
+            const bool open = (openIt == m_groupOpen.end()) ? true : openIt->second;   // default OPEN
+            if (!open)
+                continue;
+
+            for (const AssetPanelEntry* parent : vec)
+            {
+                AssetPanelRow row;
+                row.type = AssetPanelRow::Type::Asset;
+                row.guid = parent->guid;
+                m_rows.push_back(row);
+
+                if (parent->derivedChildren.empty())
+                    continue;
+
+                const auto childIt = m_childrenOpen.find(parent->guid);
+                const bool childrenOpen = (childIt != m_childrenOpen.end()) && childIt->second;   // default COLLAPSED
+                if (!childrenOpen)
+                    continue;
+
+                std::vector<const AssetPanelEntry*> children;
+                children.reserve(parent->derivedChildren.size());
+                for (const Arcane::Guid& childGuid : parent->derivedChildren)
+                {
+                    const auto cit = m_entries.find(childGuid);
+                    if (cit == m_entries.end())
+                        continue;
+                    if (!MatchesEntryFilter(cit->second))   // children match search INDEPENDENTLY
+                        continue;
+                    children.push_back(&cit->second);
+                }
+                std::sort(children.begin(), children.end(),
+                         [](const AssetPanelEntry* a, const AssetPanelEntry* b)
+                         { return a->fileName < b->fileName; });
+
+                for (const AssetPanelEntry* child : children)
+                {
+                    AssetPanelRow childRow;
+                    childRow.type = AssetPanelRow::Type::Child;
+                    childRow.guid = child->guid;
+                    m_rows.push_back(childRow);
+                }
+            }
+        }
+
+        m_rail.clear();
+        int totalMatching = 0;
+        for (int i = 0; i < kAssetKindCount; ++i)
+            totalMatching += kindCounts[i];
+        m_rail.push_back({ -1, "All", totalMatching });
+        for (int i = 0; i < kAssetKindCount; ++i)
+        {
+            if (kindCounts[i] == 0)
+                continue;   // the rail hides zero-count kinds
+            m_rail.push_back({ i, RailKindLabel(static_cast<AssetKind>(i)), kindCounts[i] });
+        }
+    }
+
+    HealthCounts AssetPanelModel::Health() const
+    {
+        HealthCounts h;
+        h.total = static_cast<int>(m_entries.size());   // folded children included
+        for (const auto& [guid, e] : m_entries)
+        {
+            switch (e.cook)
+            {
+                case CookState::Cooked:  ++h.cooked;  break;
+                case CookState::Queued:  ++h.queued;  break;
+                case CookState::Refused: ++h.refused; break;
+                case CookState::Unknown: break;
+            }
+        }
+        return h;
+    }
+
+    const AssetPanelEntry* AssetPanelModel::Find(const Arcane::Guid& id) const
+    {
+        const auto it = m_entries.find(id);
+        return it == m_entries.end() ? nullptr : &it->second;
+    }
+
+    bool AssetPanelModel::Filtered() const
+    {
+        return !m_search.empty() || m_kindFilter != -1;
+    }
+
+    void AssetPanelModel::ResetForProjectSwitch()
+    {
+        m_entries.clear();
+        m_dirty.clear();
+        m_allDirty = true;
+        m_rows.clear();
+        m_rail.clear();
+        m_shownAssetCount = 0;
+        m_rowsDirty = true;
+        m_search.clear();
+        m_kindFilter = -1;
+        m_groupOpen.clear();
+        m_childrenOpen.clear();
+        selected = Arcane::Guid{};
+        selectionStamp = 0;
+    }
+}

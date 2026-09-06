@@ -816,6 +816,13 @@ project "ArcaneTests"
         -- so the [editor][cook] units drive its PURE halves directly with a
         -- real temp-dir fixture, same pattern as CookQueue.cpp above.
         "%{wks.location}/ArcaneEditor/src/Project/ContentDiscovery.cpp",
+        -- Asset-manager arc (Plan 1, Task 4): AssetPanelModel (the cached,
+        -- foldable model behind the Assets panel's Browse lens) source-
+        -- compiles into the test exe so the [editor] units drive it directly
+        -- with fake provider lambdas -- no ImGui and no engine facade in it
+        -- at all, same "pure logic" pattern as CookQueue/ContentDiscovery
+        -- above.
+        "%{wks.location}/ArcaneEditor/src/Panels/AssetPanelModel.cpp",
     }
 
     includedirs {
