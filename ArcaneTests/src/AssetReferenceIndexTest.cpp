@@ -127,6 +127,33 @@ TEST_CASE("AssetReferenceIndex tombstones an unresolvable target and reports it 
     CHECK(idx.DanglingTargets() == std::vector<Arcane::Guid>{ M });
 }
 
+// Self-review addition: Update's step 2 (asset deleted) and step 4
+// (re-walk) both call RemoveOutboundEdges, but the brief's own case just
+// below only drives the letting-go through step 4 (a re-walk with an empty
+// refs list). This case drives the SAME downstream tombstone GC through
+// step 2 instead -- A itself is deleted rather than re-walked -- proving
+// the "referencer itself being deleted" half of Update's doc comment
+// ("whether by a re-walk that drops the edge or by the referencer itself
+// being deleted") independently of the re-walk half. A has no other
+// referencer either, so this also proves a deleted, unreferenced asset
+// leaves no trace of its own (Update step 2's last clause).
+TEST_CASE("AssetReferenceIndex garbage-collects a tombstone when its referencer is deleted, not just re-walked", "[editor]")
+{
+    const auto A = ParseGuid("7e5d0009-0001-4001-8001-00000000000a");
+    const auto M = ParseGuid("7e5d0009-0001-4001-8001-0000000000dd");
+
+    AssetReferenceIndex idx;
+    idx.Update(A, true, Refs({ { M, Arcane::AssetRefKind::References } }));
+    REQUIRE(idx.Find(M));
+
+    idx.Update(A, false, std::nullopt);   // A deleted, not re-walked
+
+    CHECK(idx.Find(M) == nullptr);
+    CHECK(idx.Find(A) == nullptr);   // A itself had no referencer of its own
+    CHECK(idx.DanglingTargets().empty());
+    CHECK(idx.NodeCount() == 0);
+}
+
 TEST_CASE("AssetReferenceIndex garbage-collects a tombstone when its last referencer lets go", "[editor]")
 {
     // ...then Update(A, true, Refs({})) -> Find(M) == nullptr.
