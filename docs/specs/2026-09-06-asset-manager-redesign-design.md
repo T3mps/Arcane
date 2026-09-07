@@ -488,6 +488,12 @@ zero red — `ArcaneRuntime/dx12` PassedOnFallback (its documented steady state:
 is no `dx12/runtime-scene.png`, only `vulkan/`), the other three Passed, all four at
 `diffCount=0`.
 
+**Gate self-test**, `golden-gate.ps1 -SelfTest`, Debug: **PASSED** — all four lanes
+launched and caught the deliberately broken scene by `exitReason=compare-failed`, and
+the tree (source plus both staged copies) restored clean afterwards. So the green
+above comes from a gate observed *failing* on this tree, not one that merely never
+fails.
+
 **The editor-ui re-bless** — the first since 2026-08-30 (`97abd074`) — was expected
 and legitimate: the lane diffed against a panel that no longer exists. Before
 blessing, the diff artifact was read, and the differing pixels (57428, identically
@@ -526,6 +532,18 @@ which is what re-proves editor-ui is backend-invariant rather than assuming it.
    not merely a non-empty result. With 2+ derived sprites an "Open existing"
    affordance would have to guess which, and the editor's never-guess principle
    forbids it.
+8. **Keyboard-nav scrolling is gated OFF-SCREEN-ONLY** — a *behavioral* departure.
+   The plan prescribed `SetScrollHereY` whenever the selection stamp differs; as
+   shipped, the panel scrolls only when the newly selected row is actually off
+   screen, so selecting an already-visible row no longer yanks the list under the
+   pointer. Adjudicated sound on its merits during Task 10's re-review rather than
+   reverted to the prescribed origin-gating.
+9. **The refused marker is a thumb-corner badge**, not a prepended glyph — a *visual*
+   departure. The plan specified prepending `ICON_LC_TRIANGLE_ALERT` to the row; as
+   shipped it occupies its own slot as a 10px badge overlaid on the thumbnail's
+   corner, so it cannot displace the name column or desync the row's fixed anchor.
+   Its legibility over real thumbnail pixels is a desk item precisely because no
+   refused fixture exists to test it headlessly.
 
 ### Recorded follow-ups (new, on top of §15's list)
 

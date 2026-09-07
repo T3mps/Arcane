@@ -1091,6 +1091,10 @@ ledger — dispatches, rulings, fix rounds and every deferred minor — is
   0 red. The editor-ui re-bless was expected (the lane diffed against a panel that
   no longer exists), was verified confined to the Assets panel band before blessing,
   was made against the **source** tree, and was restaged to **both** hosts.
+- Gate self-test (`golden-gate.ps1 -SelfTest`, Debug): **PASSED** — all four lanes
+  launched and caught the deliberately broken scene by `exitReason=compare-failed`,
+  and the tree (source plus both staged copies) restored clean afterwards. The green
+  above is therefore from a gate observed *failing* on this tree.
 
 Spec addendum: `docs/specs/2026-09-06-asset-manager-redesign-design.md` **§17
 LANDED (Plan 1)** — scope, measured close, the seven recorded deviations, and the
