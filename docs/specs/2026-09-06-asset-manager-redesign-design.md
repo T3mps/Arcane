@@ -258,9 +258,23 @@ width**) is session-only in v1.
   indentation meanings, kept visually distinct as today (chrome group bands vs dim
   child rows). A **refused** asset gets a small amber triangle on its row; queued
   gets no row marker.
-- **Preview pane:** 140px thumb, name + kind/subkind pills, path, guid
-  (click-to-copy), cook line, `Derived (N)` list (click selects the child), actions
-  mirroring the context menu.
+- **Preview pane:** **compact, side-by-side header** (2026-09-07, fourth
+  revision, user-directed — a live screenshot showed the sidebar scrolling
+  while the space right of the thumb sat empty): the 140px thumb sits on the
+  left, and to its right a metadata block stacks name + kind/subkind pills,
+  then path, then guid (click-to-copy, same path hover tooltip as today) —
+  same content as before, just arranged beside the thumb instead of below it,
+  which is what removes the wasted width and shrinks the header's total
+  height. §11.2's 140px thumb value is unchanged; this is a rearrangement, not
+  a resize — the thumb keeps scaling via `min(140, avail)` when the pane is
+  narrower than that. Below roughly **250px of pane width** (exact breakpoint
+  is an implementer tuning value, not a pinned constant) the header falls back
+  to today's stacked form — thumb above, metadata below — since the metadata
+  column no longer has room to stay legible beside the thumb; the 165px
+  default pane width stays on this stacked fallback, so the compact header is
+  something a user sees only after dragging the pane wider, exactly the
+  screenshot's situation. `Derived (N)` list (click selects the child) and the
+  full-width action buttons stay below, unchanged by this revision.
 - **Context menu** (every representation): kind-specific entries first (New
   Instance…, Set as Boot Scene, Create Sprite — today's exactly), then `Create ▸`
   (the full unified menu), then Show in Explorer, Copy Path, **Copy Guid** (new).
@@ -869,3 +883,73 @@ This is a **design-only pass**: the live panel does not yet have a
 `diagnostics/` mount root or any per-mount-root default-collapsed behavior — a
 further follow-up implementation task is owed, on top of the still-current
 root-anchoring implementation (`5be0302b`) this revision builds on.
+
+**Correction, recorded after the fact:** mount-rooting *did* land in code
+shortly after this design pass, in `4a9f3cb0` — one depth-0 root group per
+populated mount, `diagnostics/` a sibling of `Content/` ordered after it,
+default-collapsed, with an explicit keying fix so a real `game://diagnostics/`
+directory can never alias the `diag://` mount's own synthetic root. A further
+commit, `c0ca6edc`, then changed asset-row indentation per direct user
+follow-up ("for the rows to be indented starting at their icons, so the row is
+farther indented than it already is"): asset and fold-child rows now sit one
+full 20px level beneath their own group's band rather than flush with it (a
+row under a band at indent X now starts at X+20; fold children at X+40). **The
+`OptionBC.dc.html` mock was not updated for this row-indent refinement** — it
+still draws asset rows flush with their group band's own indent, matching
+every revision through this one, not the live panel's current X+20 shape. This
+is flagged rather than silently fixed here because it is a geometry change
+outside this pass's scope (compact preview header only) and, per this
+document's own pattern, geometry changes to the redline have each gotten their
+own numbered design pass and explicit sign-off; it should get the same
+treatment rather than be folded into an unrelated revision's commit.
+
+### 2026-09-07 user-directed, fourth revision: compact preview header (design pass)
+
+The user, with a screenshot of the live panel: the preview sidebar needed
+scrolling while the space to the right of the thumb sat wasted. §6's preview-
+pane bullet above is the ALREADY-AMENDED text. Pinned shape: the header goes
+side-by-side (140px thumb left, metadata block right — name, kind/subkind
+pills, then path, then guid, same content and click-to-copy/tooltip behavior
+as before); `Derived (N)` and the action buttons stay below, unchanged; the
+thumb keeps its existing `min(140, avail)` scaling; below roughly 250px of
+pane width (implementer-tunable, not pinned) the header falls back to the
+prior stacked form, so the 165px default pane is unaffected — this only pays
+off once the user drags the pane wider, exactly the reported screenshot's
+situation. §11.2's 140px thumb value is unchanged; this revision is
+arrangement, not sizing.
+
+The `OptionBC.dc.html` mock was reworked at the board's 330px pane width: the
+thumb (previously 160px, centered above the metadata in its own row — a
+pre-existing minor deviation from §11.2's pinned 140px that this revision
+happened to correct as a side effect of rebuilding the header) moved to a
+140px flex-none box on the left of a new row, with the name/pill row and the
+path/guid block stacked in a `flex: 1` column beside it. Because the combined
+metadata column (name row + path/guid block, roughly 80px tall) is shorter
+than the 140px thumb, the row's total height is thumb-bound at 140px — down
+from the old stacked total of roughly 250px (160px thumb + gaps + name row +
+path/guid block) — a net vertical savings of roughly 100px, freeing the exact
+kind of headroom the reported live-panel bug needed. This **deletes** rows
+rather than adding them, so there was no frame-overflow risk this round;
+verified by re-rendering and viewing the PNG anyway, per house discipline.
+
+One defect caught and fixed during the same pass, before considering it done:
+the first render showed the `path` value (`textures/uv_marker.png`) clipped
+hard against the pane's right edge, since the compact metadata column is only
+about 154px wide at 330px pane width and nothing constrained the value span to
+that width. Fixed with `min-width: 0` on the containing flex rows/columns plus
+`overflow: hidden; text-overflow: ellipsis; white-space: nowrap` on the path
+value span, so a too-long path now truncates with an ellipsis (matching the
+guid row's own existing `…` convention) instead of spilling past the pane
+boundary. Re-rendered and re-viewed to confirm the fix.
+
+The mock's preview pane never drew a `cook` line (only name/pills, path, and
+guid) in any prior revision — §6's own text has always listed one (`path,
+guid, cook line`), but the fixture asset in the mock is a healthy, already-
+cooked texture with nothing to show there. This revision did not add one: the
+brief asked to rearrange existing content, not introduce new content, so the
+absence is unchanged from every earlier board, not a new gap.
+
+This is a **design-only pass**: the live panel's preview pane still stacks
+thumb-above-metadata at every pane width as of `c0ca6edc`; a follow-up
+implementation task is owed to add the side-by-side header and its
+narrow-width fallback.
