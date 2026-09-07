@@ -545,6 +545,48 @@ which is what re-proves editor-ui is backend-invariant rather than assuming it.
    Its legibility over real thumbnail pixels is a desk item precisely because no
    refused fixture exists to test it headlessly.
 
+### Final-review fix wave (post-Task 16)
+
+A whole-branch review of `59dd6414..218a7ca6` returned one Critical and five
+Importants; all six were fixed in one wave, `4bafd062` (engine) and `b61f24c9`
+(editor) plus this documentation commit.
+
+**The two engine queries are genuinely parse-on-call as of this wave** — §3's
+"no engine-side cache (the editor's index and model are the caches)" was
+*specified* in Plan 1 but not *implemented*: both queries routed their JSON
+through the facade's cached loader, which keys on the canonical path, never
+consults the mtime, and memoizes failures for the process lifetime (nothing
+evicts it). Every per-guid re-ask therefore returned the first parse — subkind
+pills, `isInstance`, fold/sliced state and the material-picker filter frozen for
+the session while thumbnails updated around them — and a file caught mid-save
+was latched broken forever, which made §3.2's "retries on the next change event"
+unimplementable above the facade. They now read and parse the resolved file on
+every call, through a helper that touches neither side of the cache; the cache's
+other consumers keep today's parse-once semantics deliberately. Four regression
+cases in `AssetReferencesTest.cpp` pin it, each rewriting a file in place and
+re-asking through the same `Assets` instance; three of the four were proven RED
+against the cached path before the fix.
+
+The editor half: the panel model was never dirtied by the editor's **own**
+material saves (`onAssetSaved` re-baselines the watcher mtime, so nothing else
+could notice them), nor by crash-report registration — both now `MarkAllDirty`,
+which is also what `PollAssetWatch`'s external-material-edit branch now does,
+since an instance's surface resolves *through* the edited material's parent
+chain and a per-guid mark leaves every descendant stale. And **create failures
+now reach Problems** as §7/§13 bind, under an `assets:create` key accumulated
+per project beside the existing report and cook accumulators; the modal is
+unchanged and the row carries the same message.
+
+**Scoping §7's bypass invariant, for the record.** "No creation path may bypass
+`CreateAssetRequest`" governs the *dialog-backed* create paths — the ones §7
+enumerates as producers. Two one-click mints stay deliberately outside it,
+matching §6's "today's exactly": the row/preview-pane **Create Sprite** quick
+action (mint-or-reuse for the selected texture, no name or location to choose)
+and the Inspector's **texture-drop auto-mint**. Both are drag/drop-scale
+gestures with nothing for a dialog to ask; routing them through the request
+would add a modal to a one-click affordance. Everything that names a file goes
+through the request, and Task 12 proved that invariant by call-site census.
+
 ### Recorded follow-ups (new, on top of §15's list)
 
 - **A pre-existing `DrawModals` re-arm defect**, found during Task 12 and

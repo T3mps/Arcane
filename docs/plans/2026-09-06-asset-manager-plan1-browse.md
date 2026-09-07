@@ -1097,7 +1097,7 @@ ledger — dispatches, rulings, fix rounds and every deferred minor — is
   above is therefore from a gate observed *failing* on this tree.
 
 Spec addendum: `docs/specs/2026-09-06-asset-manager-redesign-design.md` **§17
-LANDED (Plan 1)** — scope, measured close, the seven recorded deviations, and the
+LANDED (Plan 1)** — scope, measured close, the nine recorded deviations, and the
 new follow-ups.
 
 **Step 4's checkbox means the desk checklist was WRITTEN, not walked.** It is
