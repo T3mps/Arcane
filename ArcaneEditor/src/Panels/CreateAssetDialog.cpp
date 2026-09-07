@@ -307,6 +307,107 @@ namespace Arcane::Editor
             ImGui::EndChild();
             ImGui::PopStyleColor();
         }
+
+        // Every texture in the project, name-sorted -- the Sprite dialog's
+        // texture picker candidate list. Kind-filtered at the SOURCE, same
+        // reasoning as BuildMaterialCandidates above.
+        std::vector<const AssetPanelEntry*> BuildTextureCandidates(const AssetPanelModel& model)
+        {
+            std::vector<const AssetPanelEntry*> out;
+            for (const auto& [guid, e] : model.Entries())
+            {
+                (void)guid;
+                if (e.kind == AssetKind::Texture)
+                    out.push_back(&e);
+            }
+            std::sort(out.begin(), out.end(),
+                      [](const AssetPanelEntry* a, const AssetPanelEntry* b)
+                      { return a->name < b->name; });
+            return out;
+        }
+
+        // Sprite: the source-texture picker. Same combo-shaped toggle-over-
+        // inline-list widget as DrawParentPicker above (a Button substitutes
+        // for BeginCombo for the reason given in that function's comment),
+        // filtered to AssetKind::Texture -- a sprite's ONE asset-valued field
+        // (spec s7: "Sprite -> texture picker"). No subkind pill: a texture
+        // carries no MaterialSurface to show.
+        void DrawTexturePicker(CreateDialogState& st, const AssetPanelModel& model)
+        {
+            const std::vector<const AssetPanelEntry*> candidates = BuildTextureCandidates(model);
+
+            ImGui::TextDisabled("Texture");
+
+            const AssetPanelEntry* chosen = st.texture.IsValid() ? model.Find(st.texture) : nullptr;
+            // A picked texture that vanished from the model (deleted mid-
+            // dialog) must not read as still-picked -- drop it, same guard
+            // DrawParentPicker applies to its own chosen parent.
+            if (st.texture.IsValid() && !chosen)
+                st.texture = Arcane::Guid{};
+
+            char label[192];
+            std::snprintf(label, sizeof(label), "%s##createtexture",
+                          chosen ? chosen->name.c_str() : "select...");
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImGui::GetStyleColorVec4(ImGuiCol_FrameBgActive));
+            ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
+            const bool textureClicked = ImGui::Button(label, ImVec2(-FLT_MIN, 0.0f));
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor(3);
+            if (textureClicked)
+                st.pickerOpen = !st.pickerOpen;
+            {
+                const ImVec2 itemMin = ImGui::GetItemRectMin();
+                const ImVec2 itemMax = ImGui::GetItemRectMax();
+                const ImVec2 glyph = ImGui::CalcTextSize(ICON_LC_CHEVRON_DOWN);
+                ImGui::GetWindowDrawList()->AddText(
+                    ImVec2(itemMax.x - glyph.x - ImGui::GetStyle().FramePadding.x,
+                           itemMin.y + ((itemMax.y - itemMin.y) - glyph.y) * 0.5f),
+                    ImGui::GetColorU32(ImGuiCol_TextDisabled), ICON_LC_CHEVRON_DOWN);
+            }
+
+            if (!st.pickerOpen)
+                return;
+
+            const float captionRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+            ImGui::TextDisabled("textures only");
+            char counts[48];
+            std::snprintf(counts, sizeof(counts), "%d of %d assets",
+                          static_cast<int>(candidates.size()),
+                          static_cast<int>(model.Entries().size()));
+            ImGui::SameLine();
+            ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),
+                                          captionRight - ImGui::CalcTextSize(counts).x));
+            ImGui::TextDisabled("%s", counts);
+
+            const int rows = std::min(static_cast<int>(candidates.size()), kPickerVisibleRows);
+            const float height = std::max(kPickerRowHeight, kPickerRowHeight * static_cast<float>(rows))
+                               + ImGui::GetStyle().WindowPadding.y * 2.0f;
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::kWell);
+            if (ImGui::BeginChild("##createtexturelist", ImVec2(-FLT_MIN, height), ImGuiChildFlags_Borders))
+            {
+                if (candidates.empty())
+                {
+                    ImGui::TextDisabled("no textures in this project yet");
+                }
+                for (const AssetPanelEntry* e : candidates)
+                {
+                    ImGui::PushID(e->guid.ToString().c_str());
+                    const AssetRowResult res =
+                        RowWithThumb("##pick", 0, ICON_LC_IMAGE, e->name.c_str(),
+                                     st.texture == e->guid, 0.0f, kPickerRowHeight);
+                    if (res.clicked)
+                    {
+                        st.texture = e->guid;
+                        st.pickerOpen = false;
+                    }
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+        }
     }
 
     std::optional<CreateAssetResult> DrawCreateAssetDialog(CreateDialogState& st,
@@ -361,18 +462,47 @@ namespace Arcane::Editor
                     ready = ready && st.parent.IsValid();
                     break;
                 case CreateAssetKind::Mesh:
+                    // No kind-specific field: MeshAssetData's own defaults (a
+                    // unit Cube) are already a complete, valid asset -- Name +
+                    // Location above is everything EditorApp::MintMeshAsset
+                    // needs (spec s7: "Mesh gets the dialog (name + location,
+                    // default cube data as today)").
+                    break;
                 case CreateAssetKind::Sprite:
+                {
+                    DrawTexturePicker(st, model);
+                    ready = ready && st.texture.IsValid();
+
+                    // Mint-or-reuse notice (spec s7): the MODEL's own fold
+                    // data, not a fresh registry/disk scan -- Find(texture)->
+                    // derivedChildren IS "sprites folded 1:1 under this
+                    // texture" (AssetPanelModel's own aggregation, rebuilt
+                    // every RebuildIfDirty), so this reads as of the same
+                    // frame the Browse table's own fold rows do. Purely
+                    // informational: Create stays enabled either way --
+                    // EditorApp::MintOrReuseSpriteForTexture's own policy
+                    // reuses a single match rather than minting a duplicate,
+                    // so clicking Create here is never wrong, only redundant
+                    // with the shortcut this notice offers.
+                    const AssetPanelEntry* tex =
+                        st.texture.IsValid() ? model.Find(st.texture) : nullptr;
+                    if (tex && !tex->derivedChildren.empty())
+                    {
+                        ImGui::Spacing();
+                        ImGui::TextDisabled("a 1:1 sprite already exists");
+                        if (ImGui::Button("Open existing", ImVec2(-FLT_MIN, 0.0f)))
+                        {
+                            CreateAssetResult r;
+                            r.kind         = st.request.kind;
+                            r.openExisting = tex->derivedChildren.front();
+                            result         = std::move(r);
+                            keepOpen       = false;
+                        }
+                    }
+                    break;
+                }
                 case CreateAssetKind::Scene:
-                    // Task 13 fills these in (Sprite's texture picker + its
-                    // mint-or-reuse notice, Scene's "set as boot"). Until then
-                    // the request is honoured as far as it HAS an answer --
-                    // the shared Name + Location anatomy renders -- and says
-                    // plainly why it stops, rather than the menu entry being a
-                    // silent no-op (spec s13).
-                    ImGui::TextDisabled(
-                        "%s creation arrives with the next task.",
-                        CreateNounForExtension(CreateKindExtension(st.request.kind)));
-                    ready = false;
+                    ImGui::Checkbox("Set as boot scene", &st.setAsBoot);
                     break;
             }
 

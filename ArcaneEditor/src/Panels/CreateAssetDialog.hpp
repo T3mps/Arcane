@@ -19,11 +19,10 @@
 //     pure helpers already use.
 //   * the .cpp is the ImGui modal, and is compiled into ArcaneEditor ONLY.
 //
-// Task 13 extends `CreateAssetKind`'s fields (Sprite's texture picker + its
-// mint-or-reuse notice, Scene's "set as boot" checkbox) and their dispatch;
-// this task ships Material + MaterialInstance end-to-end and opens the shared
-// Name+Location anatomy with a disabled Create for the other three (see
-// DrawCreateAssetDialog's own comment).
+// Task 12 shipped Material + MaterialInstance end-to-end; Task 13 completes
+// the other three -- Mesh (Name + Location alone is enough), Sprite (a
+// texture picker + its mint-or-reuse notice), Scene (a "set as boot"
+// checkbox) -- and their dispatch (see DrawCreateAssetDialog's own comment).
 
 #include "Panels/AssetBrowser.hpp"   // AssetKind (the producer-side reconciliation below)
 
@@ -316,20 +315,27 @@ namespace Arcane::Editor
         std::string name; std::string folder;    // relative to Content/
         int surface = 0;                          // Material: MaterialSurface value
         Arcane::Guid parent, texture; bool setAsBoot = false;
+        // Task 13: Sprite's mint-or-reuse notice carries an "Open existing"
+        // button (spec s7: "it says so and offers to open it") -- when this
+        // is valid, EVERY other field above is meaningless: ConsumeCreateResult
+        // selects + opens THIS already-registered sprite instead of dispatching
+        // a mint, closing the dialog without creating anything. A second result
+        // shape rather than overloading `texture` (which already names the
+        // SOURCE texture the user picked, not the derived sprite to open).
+        Arcane::Guid openExisting;
     };
 
     // Draw the modal for `st.request.kind`. Returns a completed result the
-    // frame Create was clicked, nullopt otherwise (including every frame the
-    // dialog is merely up). Cancel / Escape / the title bar's x close it and
-    // return nullopt.
+    // frame Create (or Sprite's "Open existing") was clicked, nullopt
+    // otherwise (including every frame the dialog is merely up). Cancel /
+    // Escape / the title bar's x close it and return nullopt.
     //
-    // TASK 12 SCOPE: Material and MaterialInstance carry their full field set.
-    // Mesh/Sprite/Scene requests open the SHARED Name + Location anatomy with
-    // Create disabled and one dim line saying the rest arrives next -- chosen
-    // over refusing to open at all so the request plumbing every producer just
-    // gained is VISIBLY end-to-end rather than a silent no-op (spec s13's own
-    // rule against silent failure), at the cost of two lines this task's
-    // successor deletes.
+    // Material and MaterialInstance carry their full field set (Task 12);
+    // Task 13 completes the other three: Mesh needs nothing beyond the
+    // shared Name + Location anatomy (MeshAssetData's own defaults are
+    // already a complete, valid asset); Sprite gets a texture picker plus
+    // the mint-or-reuse notice (model fold data); Scene gets a "set as
+    // boot" checkbox.
     std::optional<CreateAssetResult> DrawCreateAssetDialog(CreateDialogState& st,
                                                            const AssetPanelModel& model,
                                                            const Arcane::Project& project);

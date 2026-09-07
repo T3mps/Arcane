@@ -842,7 +842,8 @@ namespace Arcane::Editor
     // sprite save/delete like m_materialMtimes) if per-project sprite counts
     // grow large enough for this to show up as a hitch; that index does not
     // exist yet and is not built here.
-    Arcane::Guid EditorApp::MintOrReuseSpriteForTexture(const Arcane::Guid& textureGuid)
+    Arcane::Guid EditorApp::MintOrReuseSpriteForTexture(const Arcane::Guid& textureGuid,
+                                                        const std::filesystem::path* target)
     {
         const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
         if (!project || !textureGuid.IsValid())
@@ -867,25 +868,37 @@ namespace Arcane::Editor
         if (matches == 1)
             return unique;   // exactly one match -- reuse it, never guess among duplicates
 
-        const auto texPath = project->ResolveAsset(Arcane::AssetId::FromGuid(textureGuid));
-        if (!texPath)
+        // Fresh-mint branch. Task 13: a caller-supplied `target` (the dialog's
+        // already-unique Name+Location) replaces the auto-placed-sibling
+        // default; a null one (the quick "Create Sprite" row/context action's
+        // call) keeps the original placement, "-N" loop included.
+        std::filesystem::path mintPath;
+        if (target)
         {
-            ARC_WARN("Arcane Editor: could not mint a sprite -- texture '{}' did not "
-                     "resolve to a file", textureGuid.ToString());
-            return {};
+            mintPath = *target;
         }
-        std::filesystem::path target = texPath->parent_path() / (texPath->stem().string() + ".arcsprite");
-        for (int i = 1; std::filesystem::exists(target); ++i)   // never clobber an existing file
-            target = texPath->parent_path() /
-                     (texPath->stem().string() + "-" + std::to_string(i) + ".arcsprite");
+        else
+        {
+            const auto texPath = project->ResolveAsset(Arcane::AssetId::FromGuid(textureGuid));
+            if (!texPath)
+            {
+                ARC_WARN("Arcane Editor: could not mint a sprite -- texture '{}' did not "
+                         "resolve to a file", textureGuid.ToString());
+                return {};
+            }
+            mintPath = texPath->parent_path() / (texPath->stem().string() + ".arcsprite");
+            for (int i = 1; std::filesystem::exists(mintPath); ++i)   // never clobber an existing file
+                mintPath = texPath->parent_path() /
+                          (texPath->stem().string() + "-" + std::to_string(i) + ".arcsprite");
+        }
 
         Arcane::SpriteAssetData data;
         data.id      = Arcane::Guid::Generate();
-        data.name    = target.stem().string();
+        data.name    = mintPath.stem().string();
         data.texture = textureGuid;
-        if (!Arcane::SaveSpriteAsset(target, data))
+        if (!Arcane::SaveSpriteAsset(mintPath, data))
         {
-            ARC_WARN("Arcane Editor: could not mint a sprite at '{}'", target.generic_string());
+            ARC_WARN("Arcane Editor: could not mint a sprite at '{}'", mintPath.generic_string());
             return {};
         }
         // Register immediately -- same reasoning as CreateInstanceAt above: an
@@ -899,7 +912,7 @@ namespace Arcane::Editor
         // into whatever field triggered the mint. The file stays on disk
         // (never deleted) and the caller sees Nil, so the drop/menu action is
         // a diagnosable no-op instead.
-        if (!m_runtime->RegisterCreatedAsset(target))
+        if (!m_runtime->RegisterCreatedAsset(mintPath))
             return {};
         // A new registry entry changes folder grouping -- see PollAssetWatch's
         // drop-discovery comment above for the same reasoning.
@@ -909,20 +922,16 @@ namespace Arcane::Editor
 
     // F2a, Task 9: always mints (never reuses -- there is no source asset to
     // key a reuse policy off, unlike MintOrReuseSpriteForTexture above).
-    // Placement mirrors CreateInstanceAt's save-dialog target directory
-    // (`Root() / "Content"`), and the "-N" uniqueness loop mirrors
-    // MintOrReuseSpriteForTexture's own (:325-328) -- just with no sibling
-    // file to sit next to, so the target starts at the content root itself.
-    Arcane::Guid EditorApp::MintMeshAsset()
+    // Task 13: `target` is now the CALLER's (ConsumeCreateResult's) dialog-
+    // validated Name+Location -- the hardcoded "Content/New Mesh[-N]" default
+    // and its "-N" uniquify loop are gone, the same shortcut
+    // MintOrReuseSpriteForTexture's own dialog branch takes above (Name+
+    // Location already proved unique at Create-click time).
+    Arcane::Guid EditorApp::MintMeshAsset(const std::filesystem::path& target)
     {
         const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
         if (!project)
             return {};
-
-        const std::filesystem::path contentDir = project->Root() / "Content";
-        std::filesystem::path target = contentDir / "New Mesh.arcmesh";
-        for (int i = 1; std::filesystem::exists(target); ++i)   // never clobber an existing file
-            target = contentDir / ("New Mesh-" + std::to_string(i) + ".arcmesh");
 
         // MeshAssetData's own defaults (source = Cube, everything else at its
         // struct default) are already a complete, valid asset -- see
@@ -935,8 +944,8 @@ namespace Arcane::Editor
             ARC_WARN("Arcane Editor: could not create a mesh at '{}'", target.generic_string());
             return {};
         }
-        // Register immediately so the browser and OpenPath below see it right
-        // away -- same reasoning as CreateMaterialAt/CreateInstanceAt.
+        // Register immediately so the browser sees it right away -- same
+        // reasoning as CreateMaterialAt/CreateInstanceAt.
         if (!m_runtime->RegisterCreatedAsset(target))
             return {};
         m_assetModel.MarkAllDirty();

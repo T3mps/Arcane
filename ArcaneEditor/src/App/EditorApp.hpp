@@ -1502,15 +1502,35 @@ namespace Arcane::Editor
         // texture (never guess among duplicates). Nil on failure (no project,
         // invalid input, or an unresolvable/unwritable path). Never opens a
         // dialog; the caller (browser action consumer / Inspector drop
-        // branch) decides whether to also open a document.
-        Arcane::Guid MintOrReuseSpriteForTexture(const Arcane::Guid& textureGuid);
-        // F2a, Task 9: the Asset Browser's "+ Mesh" button. A mesh needs no
-        // reuse-or-mint policy the way a sprite does (there is no source
-        // asset to key reuse off) -- always mints a fresh ".../Content/New
-        // Mesh[-N].arcmesh" with MeshAssetData's own defaults (a unit Cube).
-        // Nil on failure (no project); never opens a dialog or a document --
-        // same "the caller decides" split as MintOrReuseSpriteForTexture.
-        Arcane::Guid MintMeshAsset();
+        // branch / Task 13's ConsumeCreateResult) decides whether to also
+        // open a document.
+        //
+        // `target`, Task 13: the dialog's validated Name+Location choice.
+        // Null (the pre-Task-13 shape, still what the quick "Create Sprite"
+        // row/context action passes) keeps the auto-placed-sibling branch
+        // exactly as it was, "-N" loop included; non-null replaces ONLY that
+        // placement on the fresh-mint branch -- the reuse check above still
+        // runs first and still wins on a single match, `target` or not, so a
+        // dialog Create against an already-wrapped texture reuses rather than
+        // minting a same-texture duplicate under a different name. No "-N"
+        // loop needed on this branch: ValidateCreateName already proved the
+        // path unique at Create-click time (same shortcut CreateMaterialAt/
+        // CreateInstanceAt take on their own dialog-supplied path).
+        Arcane::Guid MintOrReuseSpriteForTexture(const Arcane::Guid& textureGuid,
+                                                 const std::filesystem::path* target = nullptr);
+        // F2a, Task 9: mints a fresh .arcmesh at `target` -- MeshAssetData's
+        // own defaults (a unit Cube) are already a complete, valid asset, so
+        // identity is the only thing this sets. A mesh needs no reuse-or-mint
+        // policy the way a sprite does (there is no source asset to key reuse
+        // off). Nil on failure (no project); never opens a dialog or a
+        // document -- same "the caller decides" split as
+        // MintOrReuseSpriteForTexture.
+        //
+        // Task 13: `target` used to be computed internally (a hardcoded
+        // ".../Content/New Mesh[-N].arcmesh", "-N" uniquify loop included) --
+        // now it is the caller's (ConsumeCreateResult's) dialog-validated
+        // Name+Location, unique already, so no loop survives here either.
+        Arcane::Guid MintMeshAsset(const std::filesystem::path& target);
         Arcane::Editor::DocServices MakeDocServices();
 
         // Problems-panel row click -> editor navigation. One switch over

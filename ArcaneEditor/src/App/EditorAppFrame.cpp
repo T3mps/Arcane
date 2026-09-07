@@ -2339,10 +2339,12 @@ namespace Arcane::Editor
             }
         }
         // Asset-manager redesign spec s7: "the silent + Mesh toolbar button
-        // dies; Mesh gets the [unified Create] dialog". AssetsPanelActions
-        // carries no createMesh field (AssetBrowserActions's old one-off) --
-        // Task 12's requestCreateKind==Mesh path is the replacement, and
-        // MintMeshAsset (EditorApp.hpp) stays available for it to call.
+        // dies; Mesh gets the [unified Create] dialog." Retired for good in
+        // Task 13: AssetBrowserActions::createMesh (the dead old panel's own
+        // flag) is deleted, and requestCreateKind==Mesh above already routes
+        // through BeginCreateAsset -> ConsumeCreateResult's Mesh arm
+        // (MintMeshAsset) -- there is no separate createMesh consumer here,
+        // by design.
         if (!browserActions.openScene.empty())
         {
             // A scene double-clicked in the browser is not a document -- it
@@ -2430,6 +2432,12 @@ namespace Arcane::Editor
                 break;
             case Arcane::Editor::CreateAssetKind::Sprite:
                 m_createDialog.texture = request.prefillParent;
+                // Same "start expanded when there is nothing to show yet"
+                // rule as MaterialInstance's parent picker above -- a Sprite
+                // request with no prefilled texture (the rail `+`, the
+                // toolbar/Assets-menu "Sprite...", a row's Create submenu)
+                // cannot be completed without picking one either.
+                m_createDialog.pickerOpen = !request.prefillParent.IsValid();
                 break;
             default:
                 break;
@@ -2443,6 +2451,17 @@ namespace Arcane::Editor
         if (!proj)
         {
             m_modalErrors.Push("Create Failed", "The project closed before the asset was created.");
+            return;
+        }
+
+        // Sprite's mint-or-reuse notice, "Open existing" (Task 13): every
+        // OTHER field on `r` is meaningless here -- select + open the already-
+        // registered sprite and stop, same "no bypass, just no mint" shape as
+        // every other branch below going through this one dispatcher.
+        if (r.openExisting.IsValid())
+        {
+            m_assetModel.Select(r.openExisting);
+            OpenAssetDocument(r.openExisting);
             return;
         }
 
@@ -2477,15 +2496,38 @@ namespace Arcane::Editor
                 created = CreateInstanceAt(target, r.parent);
                 break;
             case Arcane::Editor::CreateAssetKind::Mesh:
+                created = MintMeshAsset(target);
+                break;
             case Arcane::Editor::CreateAssetKind::Sprite:
+                created = MintOrReuseSpriteForTexture(r.texture, &target);
+                break;
             case Arcane::Editor::CreateAssetKind::Scene:
-                // UNREACHABLE today: the dialog disables Create for these three
-                // until Task 13 gives them their fields and this switch its
-                // remaining arms. Reported rather than silently dropped, so if
-                // it ever DOES arrive the reason is on screen (spec s13).
-                m_modalErrors.Push("Create Failed",
-                                   "That asset kind cannot be created yet.");
-                return;
+            {
+                // Task 13: a scratch registry, never the live editing session
+                // -- a scene is not a DocumentHost document (spec s6), so
+                // "create" must not replace what the user is currently
+                // editing. CreateEmpty's own shape (a root + a Main Camera)
+                // is what New Scene ships, so this mints the SAME starting
+                // point New Scene does, just serialized straight to `target`
+                // without ever touching m_runtime->Registry().
+                Astra::Registry scratch;
+                Arcane::Scene::CreateEmpty(scratch);
+                std::string err;
+                if (Arcane::Scene::SaveSceneFile(target, scratch, Arcane::Guid::Generate(), &err))
+                {
+                    if (const auto registered = m_runtime->RegisterCreatedAsset(target))
+                    {
+                        m_assetModel.MarkAllDirty();
+                        created = *registered;
+                    }
+                }
+                else
+                {
+                    ARC_WARN("Arcane Editor: could not create a scene at '{}': {}",
+                             target.generic_string(), err);
+                }
+                break;
+            }
         }
 
         if (!created.IsValid())
@@ -2494,12 +2536,44 @@ namespace Arcane::Editor
                                "Could not create '" + target.generic_string() + "' (see Console).");
             return;
         }
-        // Land SELECTED in the Browse lens. Both mints already registered the
-        // asset and marked the model dirty, so the next frame's RebuildIfDirty
-        // (DrawEditorUi's, ahead of every panel draw) has an entry for this
-        // guid -- and the panel's scroll-to-selection stamp brings it into
-        // view on that same frame. Select() only records the guid + bumps the
-        // stamp, so calling it before the rebuild is correct, not early.
+
+        // Kind-specific post-mint effects the dispatcher owns: Material and
+        // MaterialInstance already open their own document inside
+        // CreateMaterialAt/CreateInstanceAt, but MintMeshAsset/
+        // MintOrReuseSpriteForTexture deliberately don't (their own doc
+        // comments: "the caller decides") -- so the caller, here, does.
+        // Scene never opens as a document at all (it replaces the editing
+        // session instead, via the openScene action's unsaved-changes guard
+        // -- ConsumeBrowserActions above) -- `setAsBoot` is its only other
+        // effect, and reuses the SAME message text the row/preview-pane
+        // "Set as Boot Scene" quick action already logs (this file, ~:2366).
+        switch (r.kind)
+        {
+            case Arcane::Editor::CreateAssetKind::Mesh:
+            case Arcane::Editor::CreateAssetKind::Sprite:
+                OpenAssetDocument(created);
+                break;
+            case Arcane::Editor::CreateAssetKind::Scene:
+                if (r.setAsBoot)
+                {
+                    if (m_runtime->SetProjectBootScene(created))
+                        ARC_INFO("Boot scene set to {}", created.ToString());
+                    else
+                        m_modalErrors.Push("Scene Error",
+                                           "Could not write the project's boot scene (see Console).");
+                }
+                break;
+            default:
+                break;
+        }
+
+        // Land SELECTED in the Browse lens. Every mint above already
+        // registered the asset and marked the model dirty, so the next
+        // frame's RebuildIfDirty (DrawEditorUi's, ahead of every panel draw)
+        // has an entry for this guid -- and the panel's scroll-to-selection
+        // stamp brings it into view on that same frame. Select() only
+        // records the guid + bumps the stamp, so calling it before the
+        // rebuild is correct, not early.
         m_assetModel.Select(created);
     }
 

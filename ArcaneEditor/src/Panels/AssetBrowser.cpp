@@ -86,16 +86,11 @@ namespace Arcane::Editor
                     state.kindFilter = k;
             ImGui::EndCombo();
         }
-        ImGui::SameLine();
-        // F2a, Task 9: mint a fresh .arcmesh and open it. A mesh needs no
-        // source row to hang a context-menu action off (unlike "Create
-        // Sprite" on a Texture row) -- BuildMeshData's default MeshAssetData
-        // (Cube) is already a complete, valid asset -- so this lives here, in
-        // the panel's own toolbar, rather than on any row.
-        if (ImGui::Button(ICON_LC_PLUS " Mesh"))
-            actions.createMesh = true;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Create a new .arcmesh asset");
+        // Asset-manager redesign spec s7: "the silent + Mesh toolbar button
+        // dies; Mesh gets the [unified Create] dialog." Retired in Task 13
+        // (this panel is itself unreachable -- superseded by AssetsPanel.cpp
+        // -- but its "+ Mesh" button and the createMesh flag it set both
+        // outlived that switch until now).
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputTextWithHint("##search", "search...", state.search, sizeof(state.search));

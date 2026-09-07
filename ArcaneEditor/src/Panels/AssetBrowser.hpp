@@ -216,15 +216,6 @@ namespace Arcane::Editor
         // mint and opens the result (see AssetBrowserActions consumer).
         Arcane::Guid createSpriteFrom;
 
-        // F2a, Task 9: the toolbar "+ Mesh" button. Unlike createSpriteFrom
-        // above, a mesh names no source row -- BuildMeshData's default
-        // MeshAssetData (Cube) is a complete, valid starting asset on its
-        // own -- so this is a bare flag rather than a Guid: there is nothing
-        // for the panel to hand back beyond "one was requested". The app
-        // mints a fresh sibling file and opens it, same two-step shape as
-        // createSpriteFrom's consumer.
-        bool createMesh = false;
-
         // A scene is NOT a DocumentHost document -- double-clicking one must load
         // it into the editor session (replacing the Edit-mode registry), not open
         // a tab. The panel hands back the resolved path; the host is the one that

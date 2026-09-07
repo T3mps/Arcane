@@ -194,12 +194,18 @@ namespace Arcane::Editor
         // "Create" submenu -- the invariant ("no creation path may bypass
         // CreateAssetRequest") is only cheap to hold if there is one list.
         //
-        // `enabled` is the ONLY difference between the two call sites: the
-        // toolbar's entries are live from Task 12, the row context menu's stay
-        // disabled until Task 13 gives them their prefill (a row's Create ▸
-        // Sprite... means "from THIS texture", which is a Task 13 field).
-        // A parameter rather than a second copy of the list, so the two can
-        // never drift in spelling, order, icon or separator placement.
+        // `enabled` was the only difference between the two call sites while
+        // Mesh/Sprite/Scene had no dialog fields to land on (Task 12): the
+        // toolbar's entries went live then, the row context menu's stayed
+        // disabled. Both are live as of Task 13 -- kept as a parameter rather
+        // than collapsed to a bare call so a future producer (Plan 3's graph
+        // pin-drag) can still gate itself the same way without a third copy
+        // of this list. No per-row prefill flows through here: a row's own
+        // "Create ▸ Sprite..." does not pre-pick THIS row's texture (the
+        // dedicated "Create Sprite" quick action above it already covers
+        // that exact case, mint-or-reuse and open included) -- the generic
+        // submenu opens the SAME dialog the toolbar's `+ Create` does, empty
+        // texture field and all.
         void DrawCreateMenuEntries(AssetsPanelActions& actions, bool enabled)
         {
             ImGui::BeginDisabled(!enabled);
@@ -211,8 +217,6 @@ namespace Arcane::Editor
             entry(ICON_LC_PALETTE " Material...",         CreateAssetKind::Material);
             entry(ICON_LC_LAYERS  " Material Instance...", CreateAssetKind::MaterialInstance);
             ImGui::Separator();
-            // Raise the request NOW; the dialog grows their fields in Task 13
-            // (DrawCreateAssetDialog's own scope comment).
             entry(ICON_LC_BOX          " Mesh...",   CreateAssetKind::Mesh);
             entry(ICON_LC_STICKER      " Sprite...", CreateAssetKind::Sprite);
             entry(ICON_LC_CLAPPERBOARD " Scene...",  CreateAssetKind::Scene);
@@ -436,9 +440,9 @@ namespace Arcane::Editor
 
             if (ImGui::BeginMenu("Create"))
             {
-                // Disabled until Task 13 -- see DrawCreateMenuEntries's own
+                // Live since Task 13 -- see DrawCreateMenuEntries's own
                 // comment on the `enabled` parameter.
-                DrawCreateMenuEntries(actions, /*enabled=*/false);
+                DrawCreateMenuEntries(actions, /*enabled=*/true);
                 ImGui::EndMenu();
             }
             ImGui::Separator();
