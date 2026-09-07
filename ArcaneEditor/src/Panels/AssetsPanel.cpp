@@ -101,8 +101,9 @@ namespace Arcane::Editor
         }
 
         // The full LAYOUT clamp: the sane range above, THEN a further cap on
-        // the pane so the table (rail + 3 ItemSpacing gaps + the splitter
-        // bar + the pane, all inside `panelWidth`) never drops below
+        // the pane so the table (rail + the splitter bar + the pane, all
+        // inside `panelWidth` -- see the 2026-09-07 flush-gutters note below,
+        // no ItemSpacing gaps are budgeted any more) never drops below
         // kMinReadableTableWidth. Used every frame to compute a purely
         // local, throwaway DRAWN width -- never fed back into the stored
         // desired width (see ClampPreviewSaneRange's own comment on why
@@ -110,6 +111,15 @@ namespace Arcane::Editor
         // showPreview only ever calls this at panelWidth >= 720, where even
         // the pane's own max clamp (kPreviewPaneMaxWidth) leaves the table
         // comfortably above its floor.
+        //
+        // 2026-09-07 (user nitpick, mock parity): rail|table and
+        // table|splitter|pane now sit FLUSH (DrawBrowseLens's SameLine(0,0)
+        // calls) -- OptionBC.dc.html has no gap between these regions, only
+        // 1px hairline borders the rail and the table each own on their own
+        // right edge. This budget must stay in lockstep with that layout:
+        // panelWidth == kRailWidth + tableWidth + kPreviewSplitBarPx +
+        // drawnWidth EXACTLY now (no `ItemSpacing.x * 3.0f` term), matching
+        // DrawBrowseLens's own `tableWidth` formula term-for-term.
         float ClampPreviewForLayout(float desired, float panelWidth)
         {
             float w = ClampPreviewSaneRange(desired);
@@ -119,7 +129,6 @@ namespace Arcane::Editor
             // that floor, this is the same constraint expressed in the
             // pane's own units).
             const float previewWidthCap = panelWidth - kRailWidth
-                                         - ImGui::GetStyle().ItemSpacing.x * 3.0f
                                          - kPreviewSplitBarPx - kMinReadableTableWidth;
             if (previewWidthCap < w)
                 w = std::max(kPreviewPaneMinWidth, previewWidthCap);
@@ -671,6 +680,26 @@ namespace Arcane::Editor
                     ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMin.y + kRailRowHeight));
 
                     ImGui::PopID();
+                }
+
+                // User nitpick (2026-09-07, mock parity): OptionBC.dc.html's
+                // rail `<div>` carries `border-right: 1px solid #333333` --
+                // the ONLY separator the mock draws between rail and table
+                // (DrawBrowseLens's SameLine(0,0) removed the ItemSpacing.x
+                // gutter that used to read as unwanted padding there).
+                // Theme::kSeparator IS that exact hex (same mapping the
+                // header-band line and AssetPill's border already use).
+                // Drawn 1px INSIDE the child's own right edge, not exactly on
+                // it -- a line submitted flush against a child window's own
+                // ClipRect boundary is a coin flip on whether it survives
+                // clipping, where an inset pixel reads identically to a
+                // CSS border-box border and is never at risk.
+                {
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    const ImVec2 wp = ImGui::GetWindowPos();
+                    const float lineX = wp.x + ImGui::GetWindowWidth() - 1.0f;
+                    dl->AddLine(ImVec2(lineX, wp.y), ImVec2(lineX, wp.y + ImGui::GetWindowHeight()),
+                               ImGui::GetColorU32(Theme::kSeparator));
                 }
             }
             ImGui::EndChild();
@@ -1425,25 +1454,34 @@ namespace Arcane::Editor
                 ? ClampPreviewForLayout(state.previewPaneWidth, panelWidth)
                 : 0.0f;
 
+            // 2026-09-07 (user nitpick, mock parity): rail|table and
+            // table|splitter|pane sit FLUSH -- SameLine(0.0f, 0.0f) zeroes
+            // the ItemSpacing.x gutter SameLine() would otherwise insert.
+            // OptionBC.dc.html has no gap here either: the rail's own
+            // `border-right: 1px solid #333333` (DrawRail's new hairline,
+            // below) and the table's own `border-right` (the splitter's
+            // existing at-rest paint, already a 1px hairline centered in its
+            // hit strip -- PreviewPaneSplitter, untouched) are the ONLY
+            // separators, not an 8px void on each side of them. The width
+            // budget below is updated in lockstep -- see ClampPreviewForLayout's
+            // own 2026-09-07 comment for the identity this must hold.
             DrawRail(state, model, actions);
-            ImGui::SameLine();
+            ImGui::SameLine(0.0f, 0.0f);
 
-            // Reserve the (resizable) preview pane plus the splitter bar and
-            // all three SameLine gaps (rail|table, table|splitter,
-            // splitter|preview) when it is shown; 0.0f keeps DrawTable's own
-            // "fill everything left on this line" default when it is not.
+            // Reserve the (resizable) preview pane plus the splitter bar,
+            // with NO ItemSpacing gutters any more (see above); 0.0f keeps
+            // DrawTable's own "fill everything left on this line" default
+            // when the pane is hidden.
             const float tableWidth = showPreview
-                ? std::max(0.0f, panelWidth - kRailWidth
-                                  - ImGui::GetStyle().ItemSpacing.x * 3.0f
-                                  - kPreviewSplitBarPx - drawnWidth)
+                ? std::max(0.0f, panelWidth - kRailWidth - kPreviewSplitBarPx - drawnWidth)
                 : 0.0f;
             DrawTable(state, model, project, docs, services, actions, bootGuid, tableWidth);
 
             if (showPreview)
             {
-                ImGui::SameLine();
+                ImGui::SameLine(0.0f, 0.0f);
                 PreviewPaneSplitter(state.previewPaneWidth);
-                ImGui::SameLine();
+                ImGui::SameLine(0.0f, 0.0f);
                 DrawPreviewPane(model, project, docs, services, actions, drawnWidth);
             }
         }
