@@ -738,6 +738,19 @@ namespace Arcane::Editor
                 model.SetGroupOpen(row.groupName, newOpen);
             }
 
+            // Nested-groups review fix round 1, Important 2: the MODEL shows this group's content
+            // regardless of `open` while search is active (RebuildRows' own
+            // override, immediately above this row's own asset rows in
+            // Rows()) -- painting the real (possibly stale/closed) `open`
+            // flag here would draw a right-pointing "collapsed" chevron
+            // directly above rows that are visibly right there, and make the
+            // toggle look inert. `effectiveOpen` is DISPLAY ONLY: the click
+            // above still flips the REAL `open` flag unconditionally (a
+            // harmless write while searching -- it takes effect the moment
+            // the search box clears).
+            const bool searchActive = state.search[0] != '\0';
+            const bool effectiveOpen = open || searchActive;
+
             ImDrawList* dl = ImGui::GetWindowDrawList();
             const float padX = ImGui::GetStyle().FramePadding.x;
             const float textY = rowMin.y + (kTableRowHeight - ImGui::GetTextLineHeight()) * 0.5f;
@@ -748,7 +761,7 @@ namespace Arcane::Editor
             // to before this pass.
             const float groupIndent = static_cast<float>(row.groupDepth) * kGroupIndent;
 
-            const char* chevron = open ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT;
+            const char* chevron = effectiveOpen ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT;
             dl->AddText(ImVec2(rowMin.x + groupIndent + padX, textY), ImGui::GetColorU32(ImGuiCol_Text), chevron);
             const float chevronW = ImGui::CalcTextSize(chevron).x;
 
@@ -765,11 +778,22 @@ namespace Arcane::Editor
             // (the §11.1 "RowWithThumb: ... right-aligned extras" reading
             // this row no longer follows; RowWithThumb's own trailing-pill
             // convention is untouched -- this is DrawGroupRow only).
-            constexpr float kGroupCountGap = 6.0f;
-            char countBuf[16];
-            std::snprintf(countBuf, sizeof(countBuf), "%d", row.groupCount);
-            dl->AddText(ImVec2(nameX + nameW + kGroupCountGap, textY),
-                       ImGui::GetColorU32(ImGuiCol_TextDisabled), countBuf);
+            //
+            // Nested-groups review fix round 1, rider 8: a BRIDGE row (Critical 1 -- an ancestor
+            // synthesized with zero of its own visible rows, present only
+            // because a descendant matches) would otherwise paint a literal
+            // "0" here, reading as "this group is empty" when its subtree
+            // plainly is not (the very rows under it prove that). Suppressed
+            // for groupCount == 0 only -- a real, populated group's count
+            // still always shows, including a single-item "1".
+            if (row.groupCount > 0)
+            {
+                constexpr float kGroupCountGap = 6.0f;
+                char countBuf[16];
+                std::snprintf(countBuf, sizeof(countBuf), "%d", row.groupCount);
+                dl->AddText(ImVec2(nameX + nameW + kGroupCountGap, textY),
+                           ImGui::GetColorU32(ImGuiCol_TextDisabled), countBuf);
+            }
 
             ImGui::PopID();
         }
@@ -831,6 +855,18 @@ namespace Arcane::Editor
 
             const bool hasChildren = (e.kind == AssetKind::Texture) && !e.derivedChildren.empty();
             const bool childrenOpen = hasChildren && ChildrenAreOpen(state, e.guid);
+            // Nested-groups review fix round 1, Important 2's consistency
+            // twin (not itself named by the review, but the identical bug
+            // class): since Important 4 the MODEL renders a matching derived
+            // child regardless of `childrenOpen` while search is active, so
+            // painting the real (possibly closed) flag here would show a
+            // right-pointing "collapsed" chevron and a stale count pill
+            // directly above a child row that is visibly right there.
+            // `effectiveChildrenOpen` is DISPLAY ONLY -- the toggle below
+            // still flips the REAL flag, same reasoning as DrawGroupRow's
+            // own `effectiveOpen` just above it in this file.
+            const bool searchActive = state.search[0] != '\0';
+            const bool effectiveChildrenOpen = childrenOpen || searchActive;
             const bool refused = (e.cook == CookState::Refused);
             // 2026-09-07 nested folder groups: the row's own group-nesting
             // indent (20px/depth, spec s6/s11.2) stacks UNDER the existing
@@ -882,7 +918,7 @@ namespace Arcane::Editor
                     state.childrenOpen[e.guid] = newOpen;
                     model.SetChildrenOpen(e.guid, newOpen);
                 }
-                const char* chevron = childrenOpen ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT;
+                const char* chevron = effectiveChildrenOpen ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT;
                 const ImVec2 cs = ImGui::CalcTextSize(chevron);
                 ImGui::GetWindowDrawList()->AddText(
                     ImVec2(rowMin.x + groupIndentPx + (kChildIndent - cs.x) * 0.5f,
@@ -952,7 +988,7 @@ namespace Arcane::Editor
                 placePill("boot", 1);
             if (e.kind == AssetKind::Sprite && e.sliced)
                 placePill("sliced");
-            if (hasChildren && !childrenOpen)
+            if (hasChildren && !effectiveChildrenOpen)
             {
                 char buf[16];
                 std::snprintf(buf, sizeof(buf), "%d", static_cast<int>(e.derivedChildren.size()));

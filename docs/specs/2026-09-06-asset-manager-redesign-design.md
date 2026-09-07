@@ -202,9 +202,19 @@ width**) is session-only in v1.
   a parent hides its whole subtree — but each descendant group keeps its own open
   flag, so reopening the parent restores whatever sub-state it had. Asset rows
   indent to their group's depth plus their existing base offset, so they read as
-  belonging to that group; search overrides collapse the same way it already does
-  for fold children (§8): a matching row inside a collapsed ancestor still shows,
-  with its group chain visible. Rows are Name-only: 18px thumb, name, pills (subkind,
+  belonging to that group. **Search reveals matches uniformly** (2026-09-07 review
+  fix round 1, Important 4 — this is the corrected wording; an earlier draft of this
+  paragraph attributed the rule to an existing fold-child precedent that, on
+  inspection, had never actually shipped that override): while a search is active,
+  collapse is bypassed at **every** level — a group's own closed flag, any ancestor's,
+  and a texture's own folded-children flag all stop hiding a row that matches, and
+  every group on the path down to it still renders (even one with zero of its own
+  matching entries) so the tree's context stays visible. A directory that holds no
+  files of its own but has a populated descendant (whether from nesting alone or
+  because a kind filter left its own entries at zero) still gets a group row —
+  its count is suppressed rather than shown as a bare `0` — so a subtree's chevron
+  is always reachable to reopen it, never orphaned behind an ancestor that itself
+  never renders. Rows are Name-only: 18px thumb, name, pills (subkind,
   `boot`, `sliced`, `derived`). Derived 1:1 sprites render only as indented children
   under their texture, **default collapsed** with a count pill, keeping their own
   **extra +20px fold indent** on top of the group's own depth indent — two
@@ -672,3 +682,59 @@ re-rendered against it; the README binding table records the amendment. This is 
 **design-only pass**: the live panel does not yet implement nested groups; a
 follow-up implementation task lands the behavior against this spec text and the
 amended mock.
+
+### 2026-09-07 implementation + review fix round 1: in-table nested folder groups
+
+The follow-up implementation task landed against the design pass above
+(`AssetPanelModel`/`AssetsPanel` — see `.superpowers/sdd/2026-09-06-asset-manager-
+plan1/followup-treeview-impl-report.md` for the full record), then a review pass
+returned 1 Critical + 4 Important findings, fixed in one round on top of it. The §6
+paragraph above is the ALREADY-CORRECTED text (this entry records what changed and
+why, not a second copy of the rule):
+
+- **Critical 1 — ancestor bridge is now unconditional, not search-gated.** The
+  first cut only synthesized a zero-own-count ancestor group row while a search was
+  active. A kind filter alone (no search) routinely produces the identical shape —
+  an ancestor with zero own entries under the active filter, a descendant with some
+  — and left it genuinely unreachable: no bridge row meant no chevron to reopen a
+  stale-closed ancestor, while the rail still counted the (invisible) descendant
+  asset. Bridging now happens unconditionally; `searchActive` still governs
+  whether COLLAPSE itself is bypassed (that part was already correct), just no
+  longer whether the bridge ROW exists at all.
+- **Important 4 (controller ruling) — search now also overrides FOLD collapse.**
+  Before this round, a matching derived sprite under a collapsed texture stayed
+  hidden during a search that correctly revealed matches under a collapsed folder
+  — an inconsistency, since both are "collapse" in the same sense. Search now
+  reveals a matching fold child regardless of the texture's own `childrenOpen`
+  flag, uniformly with group collapse. §6's own wording is corrected in place
+  (above) to state this as one uniform rule rather than citing a fold-child
+  precedent that, on inspection, had never itself shipped a search override before
+  this round — that citation was aspirational, not historical, and is retracted.
+- **Important 2 (+ its DrawAssetRow twin, taken as a rider) — honest chevrons under
+  search.** With content now rendered regardless of the real open/collapsed flag,
+  painting that same stale flag on the chevron glyph made the toggle look inert (a
+  right-pointing "collapsed" arrow sitting directly above visibly-expanded rows).
+  The chevron (group rows, and — by the same bug class — the texture-row fold
+  expander) now paints an EFFECTIVE open state (`realFlag || searchActive`)
+  display-only; clicking still flips the real, persisted flag, which simply has no
+  visible effect until the search box clears.
+- **Rider 8 — bridge rows suppress a literal `0`.** A zero-own-count bridge row
+  (Critical 1) no longer paints a bare `0` next to its label, which read as "this
+  group is empty" directly contradicting the visible rows beneath it. A real,
+  populated group's count is unaffected, including a genuine `1`.
+- **Important 5 — behavior change, flat projects included (recorded, not new to
+  this round).** `showChildren`'s `searchActive || GroupOpenOrDefault(...)` form
+  never special-cased depth — it applied to EVERY group, top-level (depth 0,
+  "flat") groups included, from the original nested-groups implementation
+  onward. That implementation's own report discussed it only in nested terms and
+  never called out that a genuinely flat, unnested project is affected too:
+  searching while a top-level group is collapsed shows its matching rows, where
+  the panel's ORIGINAL (pre-nesting) Plan 1 behavior left the group's header
+  visible but its contents hidden, exactly as if the search had not run. No test
+  ever pinned this either way. This review is what surfaces and records it —
+  Important 4, landing in this same round, is a DIFFERENT, genuinely new
+  extension of the identical principle to fold (derived-child) collapse, not the
+  source of the group-level behavior described here. Test (ii) in the impl
+  report's fix-round addendum is this case's regression pin.
+
+Not pushed, per house convention.

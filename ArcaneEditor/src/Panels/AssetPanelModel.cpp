@@ -362,30 +362,40 @@ namespace Arcane::Editor
                      { return a->fileName < b->fileName; });
         }
 
-        // Which folders get a GROUP ROW at all. Base rule (unchanged): only
-        // folders with >=1 own matching entry ("groups with zero visible rows
-        // are... dropped", spec s6). Search addendum (2026-09-07): while
-        // searching, a folder with ZERO own matches still gets a (groupCount==0)
-        // context row if it is an ANCESTOR of some folder that does -- "a
-        // matching row under a collapsed ancestor still shows, with its
-        // ancestor group rows shown". Outside search this bridging row is never
-        // synthesized: an intermediate directory with no files of its own and
-        // only nested subfolders does not currently render its own group row
-        // (no fixture in this arc has that shape -- see the impl report).
+        // Which folders get a GROUP ROW at all. Base rule (unchanged): a
+        // folder with >=1 own matching entry always gets one ("groups with
+        // zero visible rows are... dropped", spec s6). PLUS (nested-groups
+        // review fix round 1, Critical 1): every ANCESTOR of such a folder ALSO gets a
+        // (groupCount==0) bridge row, UNCONDITIONALLY -- not gated on search.
+        //
+        // A kind filter (the rail, not just the search box) routinely leaves
+        // an ancestor with ZERO own matching entries while a DESCENDANT still
+        // has some -- e.g. the rail filtered to Materials while "fx/" holds
+        // only textures and "fx/glow/" holds a material. The first cut of
+        // this feature only bridged under search, which left exactly that
+        // shape UNREACHABLE: with "fx/" absent from byFolder (all its own
+        // entries kind-filtered out) and never bridged, "fx/glow/" existed
+        // only if EVERY ancestor's m_groupOpen happened to default-true --
+        // and a STALE closed flag on "fx/" (set earlier, while it still had
+        // its own visible entries and its own chevron to click) hid the whole
+        // subtree with NO group row left to reopen it, while the rail still
+        // counted the material. Bridging always -- search or not -- means
+        // every subtree keeps a chevron: still hideable by a closed ancestor
+        // (AncestorsOpen below), but never UNREACHABLY so. A bridge folder's
+        // own subtree is never empty by construction (it exists only because
+        // some DESCENDANT has a match), so "groups with zero visible rows are
+        // dropped" still holds -- a bridge row is never itself the zero case
+        // that rule means to drop.
         const bool searchActive = !m_search.empty();
         std::set<std::string> renderFolders;
         for (const auto& [folder, vec] : byFolder)
-            renderFolders.insert(folder);
-        if (searchActive)
         {
-            for (const auto& [folder, vec] : byFolder)
+            renderFolders.insert(folder);
+            std::string parent = GroupParentOf(folder);
+            while (!parent.empty())
             {
-                std::string parent = GroupParentOf(folder);
-                while (!parent.empty())
-                {
-                    renderFolders.insert(parent);
-                    parent = GroupParentOf(parent);
-                }
+                renderFolders.insert(parent);
+                parent = GroupParentOf(parent);
             }
         }
 
@@ -400,13 +410,15 @@ namespace Arcane::Editor
             // Cascading collapse: an ancestor's closed flag hides this row (and
             // therefore everything under it, transitively, via each descendant's
             // own AncestorsOpen check) UNLESS search is active, in which case
-            // every renderFolders entry is, by construction, on the path to a
-            // real match and shows unconditionally (2026-09-07 ruling: search
-            // overrides collapse at every level of the chain, including a row's
-            // own immediate group -- the direct generalization of the existing
-            // fold-child "one level" rule to an arbitrary-depth chain; see the
-            // impl report for why this is a deliberate reading, not a literal
-            // one-line spec quote).
+            // this row shows unconditionally (2026-09-07 ruling, nested-groups
+            // review fix round 1: search reveals matches UNIFORMLY -- collapse
+            // is overridden at every level of the chain, including a row's own
+            // immediate group, not just a shallower ancestor). NOTE this is
+            // now independent of WHY `folder` is in renderFolders: since Critical 1's fix a bridge
+            // folder (ownCount==0, present only because a descendant matches)
+            // is bridged unconditionally, search or not -- `searchActive` here
+            // still only controls whether COLLAPSE is bypassed, not whether the
+            // row exists at all.
             const bool visible = searchActive || AncestorsOpen(m_groupOpen, folder);
             if (!visible)
                 continue;
@@ -440,7 +452,16 @@ namespace Arcane::Editor
 
                 const auto childIt = m_childrenOpen.find(parent->guid);
                 const bool childrenOpen = (childIt != m_childrenOpen.end()) && childIt->second;   // default COLLAPSED
-                if (!childrenOpen)
+                // Nested-groups review fix round 1, Important 4 (controller ruling): search reveals
+                // matches UNIFORMLY -- the fold gate is overridden under active
+                // search exactly like group collapse is, above. Before this fix
+                // a matching derived sprite under a COLLAPSED texture stayed
+                // hidden even while the identical search revealed rows under a
+                // collapsed FOLDER, which was the inconsistency the ruling
+                // closed (spec s6's fold-precedent wording is corrected
+                // alongside this fix -- see docs/specs/2026-09-06-asset-
+                // manager-redesign-design.md s6/s17).
+                if (!childrenOpen && !searchActive)
                     continue;
 
                 std::vector<const AssetPanelEntry*> children;

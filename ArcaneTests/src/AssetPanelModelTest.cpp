@@ -121,7 +121,14 @@ TEST_CASE("AssetPanelModel groups by folder and sorts groups/rows lexicographica
     REQUIRE(model.RebuildIfDirty(&registry, fake.Make()));
 
     const auto& rows = model.Rows();
-    REQUIRE(rows.size() == 8);   // 3 groups + 5 assets
+    // 4 groups + 5 assets: "fx/" itself holds no file of its own (only the
+    // nested "fx/glow/" does) -- review fix round 1, Critical 1's
+    // unconditional ancestor bridge means it STILL gets a group row (own
+    // count 0), immediately before "fx/glow/" in preorder, so a stale-closed
+    // "fx/" is never left with no chevron to reopen it. This fixture
+    // predates that fix and is exactly the shape it targets; the row count
+    // and indices below reflect the corrected (bridged) behavior.
+    REQUIRE(rows.size() == 9);
 
     CHECK(rows[0].type == AssetPanelRow::Type::Group);
     CHECK(rows[0].groupName == "Content/");
@@ -130,16 +137,24 @@ TEST_CASE("AssetPanelModel groups by folder and sorts groups/rows lexicographica
     CHECK(rows[1].guid == readmeId);
 
     CHECK(rows[2].type == AssetPanelRow::Type::Group);
-    CHECK(rows[2].groupName == "fx/glow/");
-    CHECK(rows[2].groupCount == 1);
-    CHECK(rows[3].guid == particleId);
+    CHECK(rows[2].groupName == "fx/");
+    CHECK(rows[2].groupLabel == "fx/");
+    CHECK(rows[2].groupDepth == 0);
+    CHECK(rows[2].groupCount == 0);   // bridge row -- no file of its own
 
-    CHECK(rows[4].type == AssetPanelRow::Type::Group);
-    CHECK(rows[4].groupName == "materials/");
-    CHECK(rows[4].groupCount == 3);
-    CHECK(rows[5].guid == alphaId);   // fileName order: alpha < beta < inst
-    CHECK(rows[6].guid == betaId);
-    CHECK(rows[7].guid == instId);
+    CHECK(rows[3].type == AssetPanelRow::Type::Group);
+    CHECK(rows[3].groupName == "fx/glow/");
+    CHECK(rows[3].groupLabel == "glow/");
+    CHECK(rows[3].groupDepth == 1);
+    CHECK(rows[3].groupCount == 1);
+    CHECK(rows[4].guid == particleId);
+
+    CHECK(rows[5].type == AssetPanelRow::Type::Group);
+    CHECK(rows[5].groupName == "materials/");
+    CHECK(rows[5].groupCount == 3);
+    CHECK(rows[6].guid == alphaId);   // fileName order: alpha < beta < inst
+    CHECK(rows[7].guid == betaId);
+    CHECK(rows[8].guid == instId);
 
     const AssetPanelEntry* inst  = model.Find(instId);
     const AssetPanelEntry* alpha = model.Find(alphaId);
@@ -952,6 +967,334 @@ TEST_CASE("AssetPanelModel fold child inside a nested group carries its group's 
     CHECK(swatchDepth == 1);     // base(=1) + 0 -- the panel adds no fold indent for a plain asset row
     CHECK(fullDepth == 1);       // base(=1) too -- the panel stacks ITS OWN +20 fold indent on top of
                                  // this same depth, giving the compound 20*1 + 20 = 40px total
+
+    fs::remove_all(dir, ec);
+}
+
+// ---------------------------------------------------------------------------
+// Review fix round 1 (2026-09-07): 1 Critical + 4 Important findings against
+// the nested-groups pass above, fixed in one round. Every case below is a
+// regression pin for one specific finding -- see the pass's own doc comments
+// in AssetPanelModel.cpp/AssetsPanel.cpp and
+// docs/specs/2026-09-06-asset-manager-redesign-design.md s6/s17 for the
+// rulings these enforce.
+// ---------------------------------------------------------------------------
+
+// Important 3 (i): search overrides a group's OWN closed flag (not just an
+// ancestor's) -- the `searchActive && !open && ownCount>0` branch, distinct
+// from case (c) above (which closed the ANCESTOR "textures/", not "patterns/"
+// itself). This branch already existed before this review round; it simply
+// had no dedicated test until now.
+TEST_CASE("AssetPanelModel search overrides a nested group's OWN closed flag, not just an ancestor's", "[editor]")
+{
+    NestedFixture f = MakeNestedFixture("arcane_asset_panel_model_selfcollapse_search_test");
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+
+    // Close "patterns/" ITSELF (its ancestor "textures/" stays open) --
+    // baseline: without search, its own rows are hidden, header stays.
+    model.SetGroupOpen("textures/patterns/", false);
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+    REQUIRE(FindGroupRow(model.Rows(), "textures/patterns/"));
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.tilesId));
+
+    // Search for "tiles" -- patterns/'s OWN closed flag must not hide its own
+    // matching entry.
+    model.SetSearch("tiles");
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+    CHECK(HasAssetRow(model.Rows(), f.tilesId));
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.noiseId));   // doesn't match "tiles"
+
+    std::error_code cleanupEc;
+    fs::remove_all(f.dir, cleanupEc);
+}
+
+// Important 3 (ii): the FLAT-project twin of the case above -- proves the
+// group-collapse-plus-search override is not a nesting-only effect (spec s17,
+// Important 5's own entry). No folder nesting anywhere in this fixture: a
+// single top-level "Content/" group, no depth>0 group exists at all.
+TEST_CASE("AssetPanelModel search overrides a collapsed TOP-LEVEL group in a flat project (no nesting anywhere)", "[editor]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_flat_collapse_search_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    WriteFile(dir, "glow_effect.png", "bytes-glow");
+    WriteFile(dir, "other.png", "bytes-other");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 2);
+    const auto all = registry.All();
+    const Arcane::Guid glowId  = GuidForPath(all, "game://glow_effect.png");
+    const Arcane::Guid otherId = GuidForPath(all, "game://other.png");
+    REQUIRE(glowId.IsValid());
+    REQUIRE(otherId.IsValid());
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    // Baseline (no search): closing the only group hides its rows, exactly
+    // as pre-nesting Plan 1 behaved.
+    model.SetGroupOpen("Content/", false);
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    REQUIRE(FindGroupRow(model.Rows(), "Content/"));
+    CHECK_FALSE(HasAssetRow(model.Rows(), glowId));
+    CHECK_FALSE(HasAssetRow(model.Rows(), otherId));
+
+    // Search while still closed: the matching row must show -- this is the
+    // behavior spec s17 (Important 5) records as changed from pre-nesting
+    // Plan 1, and pins as depth-independent (a depth-0-only project is
+    // affected exactly like a nested one).
+    model.SetSearch("glow");
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    CHECK(HasAssetRow(model.Rows(), glowId));
+    CHECK_FALSE(HasAssetRow(model.Rows(), otherId));   // doesn't match "glow"
+
+    fs::remove_all(dir, ec);
+}
+
+// Important 3 (iii) + Important 4 (controller ruling): search now overrides
+// FOLD collapse too, not just group collapse -- a matching derived sprite
+// under a texture whose fold is at its (default) COLLAPSED state must still
+// show. Both the texture and its derived sprite must match the search term
+// for the child to be reachable at all (case (c) in the fold-child tests
+// above: "a non-matching parent hides even a matching child" -- unchanged by
+// this round).
+TEST_CASE("AssetPanelModel search overrides a texture's OWN fold collapse (derived child), uniformly with group collapse", "[editor]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_fold_search_override_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "sprites");
+
+    WriteFile(dir, "hero.png", "not a real png, just bytes");   // sidecar-minted guid
+    WriteFile(dir / "sprites", "hero_full.arcsprite",
+             R"({"id":"a2000001-0001-4001-8001-000000000001","type":"sprite","name":"HeroFull"})");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 2);
+    const auto all = registry.All();
+    const Arcane::Guid heroTexId  = GuidForPath(all, "game://hero.png");
+    const Arcane::Guid heroFullId = *Arcane::Guid::FromString("a2000001-0001-4001-8001-000000000001");
+    REQUIRE(heroTexId.IsValid());
+
+    FakeProviders fake;
+    fake.refsByGuid[heroFullId] = { { heroTexId, Arcane::AssetRefKind::DerivesFrom } };   // 1:1 -> folds
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    REQUIRE(model.Find(heroTexId)->derivedChildren.size() == 1);
+
+    // Baseline, no search: fold defaults COLLAPSED (never called
+    // SetChildrenOpen) -- the derived child is not a row at all.
+    bool sawFullBaseline = false;
+    for (const auto& row : model.Rows())
+        if (row.guid == heroFullId) sawFullBaseline = true;
+    CHECK_FALSE(sawFullBaseline);
+
+    // Search for "hero" -- matches BOTH hero.png (the parent, so it's a
+    // visible row at all) and hero_full.arcsprite (the folded child). The
+    // fold's own childrenOpen flag was never touched -- still default
+    // COLLAPSED -- yet the matching child must now show.
+    model.SetSearch("hero");
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    bool sawFullAsChild = false;
+    for (const auto& row : model.Rows())
+        if (row.guid == heroFullId && row.type == AssetPanelRow::Type::Child)
+            sawFullAsChild = true;
+    CHECK(sawFullAsChild);
+
+    fs::remove_all(dir, ec);
+}
+
+// Critical 1's own regression pin: a kind filter (not search) leaving an
+// ANCESTOR with zero own visible entries, while a STALE closed flag sits on
+// that ancestor from before the filter was applied, must not strand the
+// descendant permanently unreachable. Before this fix, "fx/" (all-texture)
+// vanished from Rows() entirely once the rail filtered to Materials (its
+// only entry no longer matched), taking "fx/glow/" (the one material) down
+// with it -- with no chevron anywhere to bring it back.
+TEST_CASE("AssetPanelModel bridges a kind-filtered-empty ancestor unconditionally, so a stale-closed ancestor stays reachable", "[editor]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_kindfilter_bridge_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "fx" / "glow");
+
+    WriteFile(dir / "fx", "spark.png", "bytes-spark");
+    WriteFile(dir / "fx" / "glow", "glow.arcmat",
+             R"({"id":"a3000001-0001-4001-8001-000000000001","type":"material","kind":"fullscreen"})");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 2);
+    const auto all = registry.All();
+    const Arcane::Guid sparkId = GuidForPath(all, "game://fx/spark.png");
+    const Arcane::Guid glowId  = *Arcane::Guid::FromString("a3000001-0001-4001-8001-000000000001");
+    REQUIRE(sparkId.IsValid());
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    // Simulate the real sequence: the user closes "fx/" while it still has
+    // its own visible entry (under "All", no filter yet) -- a perfectly
+    // ordinary interaction, nothing stale about it YET.
+    model.SetGroupOpen("fx/", false);
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    REQUIRE(FindGroupRow(model.Rows(), "fx/"));         // header still shows (own-collapse rule)
+    CHECK_FALSE(HasAssetRow(model.Rows(), sparkId));    // ...but its content is hidden, as closed
+
+    // Now the rail filters to Materials. "fx/"'s own entry (a texture) no
+    // longer matches -- its own byFolder bucket is empty -- while "fx/glow/"
+    // (a material) still does. "fx/"'s closed flag is now STALE relative to
+    // what's visible under this filter.
+    model.SetKindFilter(static_cast<int>(AssetKind::Material));
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    // The bridge: "fx/" still gets a row (Critical 1) -- zero own count,
+    // rider 8 says its UI paints no "0", but the DATA is exactly 0 here.
+    const AssetPanelRow* fxRow = FindGroupRow(model.Rows(), "fx/");
+    REQUIRE(fxRow);
+    CHECK(fxRow->groupCount == 0);
+
+    // "fx/glow/" is correctly HIDDEN (its ancestor is genuinely closed, and
+    // no search is active to override that) -- but, critically, REACHABLE:
+    // there is a chevron on "fx/" to click.
+    CHECK_FALSE(FindGroupRow(model.Rows(), "fx/glow/"));
+    CHECK_FALSE(HasAssetRow(model.Rows(), glowId));
+
+    // Reopen "fx/" (the user clicking the chevron the bridge row provides) --
+    // "fx/glow/" and its material become visible. Before Critical 1's fix
+    // there was no "fx/" row left to click at all under this filter.
+    model.SetGroupOpen("fx/", true);
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    REQUIRE(FindGroupRow(model.Rows(), "fx/glow/"));
+    CHECK(HasAssetRow(model.Rows(), glowId));
+
+    fs::remove_all(dir, ec);
+}
+
+// Rider (reviewer minor 6): cascade across >1 level -- closing a GRANDPARENT
+// must hide both its child AND grandchild groups, not just the immediate
+// child (the only depth tested before this round was a single parent->child
+// hop). Every level here has its own file, so no bridging is involved --
+// this isolates the AncestorsOpen multi-hop walk specifically.
+TEST_CASE("AssetPanelModel cascading collapse reaches through a grandparent (depth >= 2)", "[editor]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_depth2_cascade_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "a" / "b" / "c");
+
+    WriteFile(dir / "a", "file1.png", "bytes-1");
+    WriteFile(dir / "a" / "b", "file2.png", "bytes-2");
+    WriteFile(dir / "a" / "b" / "c", "file3.png", "bytes-3");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 3);
+    const auto all = registry.All();
+    const Arcane::Guid file1Id = GuidForPath(all, "game://a/file1.png");
+    const Arcane::Guid file2Id = GuidForPath(all, "game://a/b/file2.png");
+    const Arcane::Guid file3Id = GuidForPath(all, "game://a/b/c/file3.png");
+    REQUIRE(file1Id.IsValid());
+    REQUIRE(file2Id.IsValid());
+    REQUIRE(file3Id.IsValid());
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    REQUIRE(FindGroupRow(model.Rows(), "a/"));
+    REQUIRE(FindGroupRow(model.Rows(), "a/b/"));
+    REQUIRE(FindGroupRow(model.Rows(), "a/b/c/"));
+    CHECK(FindGroupRow(model.Rows(), "a/b/")->groupDepth == 1);
+    CHECK(FindGroupRow(model.Rows(), "a/b/c/")->groupDepth == 2);
+
+    // Close the GRANDPARENT "a/" only -- "a/b/" and "a/b/c/" are never
+    // touched, so their own open flags stay at the default (open).
+    model.SetGroupOpen("a/", false);
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    REQUIRE(FindGroupRow(model.Rows(), "a/"));            // "a/"'s own header stays
+    CHECK_FALSE(HasAssetRow(model.Rows(), file1Id));
+    CHECK_FALSE(FindGroupRow(model.Rows(), "a/b/"));       // cascaded away, 1 hop down
+    CHECK_FALSE(HasAssetRow(model.Rows(), file2Id));
+    CHECK_FALSE(FindGroupRow(model.Rows(), "a/b/c/"));     // cascaded away, 2 hops down
+    CHECK_FALSE(HasAssetRow(model.Rows(), file3Id));
+
+    // Reopen "a/" -- everything comes back, "a/b/" and "a/b/c/" restored to
+    // their own (never-touched, still-open) state.
+    model.SetGroupOpen("a/", true);
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    CHECK(HasAssetRow(model.Rows(), file1Id));
+    REQUIRE(FindGroupRow(model.Rows(), "a/b/"));
+    CHECK(HasAssetRow(model.Rows(), file2Id));
+    REQUIRE(FindGroupRow(model.Rows(), "a/b/c/"));
+    CHECK(HasAssetRow(model.Rows(), file3Id));
+
+    fs::remove_all(dir, ec);
+}
+
+// Rider (reviewer minor 7): sibling leaf-name collision -- two DIFFERENT
+// top-level directories that both nest a "patterns/" subfolder must produce
+// two DISTINCT group rows (distinct groupName full-path keys, hence
+// independent open-state), even though they share the identical groupLabel.
+TEST_CASE("AssetPanelModel keeps sibling groups with the same leaf label distinct (a/patterns/ vs b/patterns/)", "[editor]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_sibling_leaf_collision_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "a" / "patterns");
+    fs::create_directories(dir / "b" / "patterns");
+
+    WriteFile(dir / "a" / "patterns", "a_pattern.png", "bytes-a-pattern");
+    WriteFile(dir / "b" / "patterns", "b_pattern.png", "bytes-b-pattern");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 2);
+    const auto all = registry.All();
+    const Arcane::Guid aPatternId = GuidForPath(all, "game://a/patterns/a_pattern.png");
+    const Arcane::Guid bPatternId = GuidForPath(all, "game://b/patterns/b_pattern.png");
+    REQUIRE(aPatternId.IsValid());
+    REQUIRE(bPatternId.IsValid());
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    const AssetPanelRow* aPatterns = FindGroupRow(model.Rows(), "a/patterns/");
+    const AssetPanelRow* bPatterns = FindGroupRow(model.Rows(), "b/patterns/");
+    REQUIRE(aPatterns);
+    REQUIRE(bPatterns);
+    CHECK(aPatterns->groupLabel == "patterns/");
+    CHECK(bPatterns->groupLabel == "patterns/");           // same LABEL...
+    CHECK(aPatterns->groupName != bPatterns->groupName);   // ...but distinct KEYS
+    CHECK(aPatterns->groupDepth == 1);
+    CHECK(bPatterns->groupDepth == 1);
+
+    // Closing ONE does not affect the other -- proves the label collision
+    // never aliases their open-state (both keyed by the FULL path).
+    model.SetGroupOpen("a/patterns/", false);
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    CHECK_FALSE(HasAssetRow(model.Rows(), aPatternId));
+    CHECK(HasAssetRow(model.Rows(), bPatternId));          // untouched sibling
 
     fs::remove_all(dir, ec);
 }
