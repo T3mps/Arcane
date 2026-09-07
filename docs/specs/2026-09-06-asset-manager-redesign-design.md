@@ -183,7 +183,13 @@ splitter between the table and the pane (session-only state, clamped to
 splitter itself clamps the pane down before that hide rule has to (the table
 never drops below readable width). See §17 (2026-09-07) for the follow-up that
 changed the pane from a pinned 330px to this default+resizable shape. Folder
-groups default expanded (derived children default collapsed, §6). Panel state
+groups default expanded (derived children default collapsed, §6), **with one
+recorded exception (2026-09-07, third revision, user-directed, mount-rooted):
+the `diagnostics/` mount root (`diag://`) defaults COLLAPSED.** This is the
+whole point of giving it its own root — crash-report `.arcdiag` files collapse
+into one quiet `diagnostics/ N` band instead of polluting the `Content/` tree
+the user actually works in. No other group gets this treatment; it is a
+per-mount-root default, not a general rule. Panel state
 (active lens, rail filter, search, group collapse, **and the preview pane's
 width**) is session-only in v1.
 
@@ -193,40 +199,58 @@ width**) is session-only in v1.
   counts from the model. The hover `+` appears **only on kinds with a Create
   entry** (Materials, Sprites, Meshes, Scenes) and opens the unified Create menu
   pre-scoped to that kind. Textures/Data/Audio/Font get no `+`.
-- **Table:** `Content/` is the table's own root group, depth 0, holding the
-  project's root-level files as its direct rows (2026-09-07, second revision that
-  day, user-directed, **root-anchored**: "I want the entire table to have
-  indention status, showing folder hierarchy"). Every content directory nests
-  inside it as a child group — a directory's depth is **1 + its nesting depth
-  below `Content/`** (a top-level directory like `materials/` is depth 1;
-  `textures/patterns/` is depth 2) — sorted lexicographically at each level,
-  collapsible (session state). **Nested directories render as indented child
-  groups inside this same table** (not a separate tree panel, no breadcrumbs):
-  20px indent per depth, and a group's label shows only its leaf segment
-  (`patterns/`, not `textures/patterns/`; `Content/` keeps its own name — it is
-  the one group that never shortens to nothing). Collapse cascades downward from
-  whichever group is closed — closing `Content/` itself empties the whole table,
-  since every directory now descends from it — but each descendant group keeps
-  its own open flag, so reopening a parent (`Content/` included) restores
-  whatever sub-state its children had. Asset rows indent to their group's depth
-  plus their existing base offset, so they read as belonging to that group.
+- **Table:** **one depth-0 root group per populated mount** (2026-09-07, third
+  revision that day, user-directed, **mount-rooted**), honest about where assets
+  actually live — no synthetic bucketing of one mount's files into another's
+  tree. `Content/` (`game://`, the project's primary mount) is always first,
+  default-**open**, and holds the project's root-level files as its direct rows;
+  everything the first two revisions described about it (root-anchored: "I want
+  the entire table to have indention status, showing folder hierarchy") is
+  unchanged *within* `Content/`'s own subtree. Other populated mounts appear as
+  sibling depth-0 root groups in the same table, ordered lexicographically after
+  `Content/` — today that is `diagnostics/` (`diag://`, crash-report `.arcdiag`
+  files); a future `engine://` or `plugin://` mount would appear the same way if
+  it ever registers assets. **`diagnostics/` defaults COLLAPSED** — the one
+  recorded exception to groups-default-open (§5) — so crash reports collapse
+  into a single quiet `diagnostics/ N` band instead of polluting the `Content/`
+  tree the user actually works in. Every content directory nests inside its own
+  mount root as a child group — a directory's depth is **1 + its nesting depth
+  below its own mount root** (a top-level directory like `materials/` under
+  `Content/` is depth 1; `textures/patterns/` is depth 2) — sorted
+  lexicographically at each level within its mount, collapsible (session state).
+  **Nested directories render as indented child groups inside this same table**
+  (not a separate tree panel, no breadcrumbs): 20px indent per depth, and a
+  group's label shows only its leaf segment (`patterns/`, not
+  `textures/patterns/`; a mount root like `Content/` or `diagnostics/` keeps its
+  own name — it is the one kind of group that never shortens to nothing).
+  Collapse cascades downward from whichever group is closed — closing a mount
+  root empties that root's own subtree (closing `Content/` empties everything
+  under `Content/`; `diagnostics/` starts in exactly that state) — but mount
+  roots are peers, never ancestors of each other, so closing one never touches
+  another's rows. Each descendant group otherwise keeps its own open flag, so
+  reopening a parent (its own mount root included) restores whatever sub-state
+  its children had. Asset rows indent to their group's depth plus their existing
+  base offset, so they read as belonging to that group.
   **Search reveals matches uniformly** (2026-09-07 review fix round 1, Important
   4 — this is the corrected wording; an earlier draft of this paragraph
   attributed the rule to an existing fold-child precedent that, on inspection,
   had never actually shipped that override): while a search is active, collapse
-  is bypassed at **every** level — a group's own closed flag, any ancestor's
-  (`Content/`'s included, now that it is every directory's ancestor), and a
-  texture's own folded-children flag all stop hiding a row that matches, and
-  every group on the path down to it still renders (even one with zero of its own
-  matching entries) so the tree's context stays visible. A directory that holds no
-  files of its own but has a populated descendant (whether from nesting alone or
-  because a kind filter left its own entries at zero) still gets a group row —
-  its count is suppressed rather than shown as a bare `0` — so a subtree's chevron
-  is always reachable to reopen it, never orphaned behind an ancestor that itself
-  never renders; **`Content/` is this bridge's unconditional case** — it always
-  renders as the table's anchor even in a project with zero loose root files (its
-  own count suppressed the same way, never a bare `0`), because every other group
-  now needs it as an ancestor row to hang from. Rows are Name-only: 18px thumb, name, pills (subkind,
+  is bypassed at **every** level — a group's own closed flag, any ancestor's up
+  to and including its own mount root, and a texture's own folded-children flag
+  all stop hiding a row that matches, and every group on the path down to it
+  still renders (even one with zero of its own matching entries) so the tree's
+  context stays visible — a search matching a `.arcdiag` file pops `diagnostics/`
+  open under the same rule, its default-collapsed state notwithstanding. A
+  directory that holds no files of its own but has a populated descendant
+  (whether from nesting alone or because a kind filter left its own entries at
+  zero) still gets a group row — its count is suppressed rather than shown as a
+  bare `0` — so a subtree's chevron is always reachable to reopen it, never
+  orphaned behind an ancestor that itself never renders; **every mount root is
+  this bridge's unconditional case for its own subtree** — `Content/` and
+  `diagnostics/` each always render, even with zero loose root files or zero
+  diagnostics respectively (count suppressed the same way, never a bare `0`),
+  because every directory beneath a mount needs that mount's own root row to
+  hang from. Rows are Name-only: 18px thumb, name, pills (subkind,
   `boot`, `sliced`, `derived`). Derived 1:1 sprites render only as indented children
   under their texture, **default collapsed** with a count pill, keeping their own
   **extra +20px fold indent** on top of the group's own depth indent — two
@@ -779,4 +803,68 @@ viewing the PNG. This is a **design-only pass**: the live panel implements the
 first revision's (non-root-anchored) shape as of the review-fix-round-1 landing
 above; a follow-up implementation task is owed to move it to root-anchored.
 
+**Correction, recorded after the fact:** root-anchoring *did* land in code
+shortly after this design pass, in `5be0302b` — `GroupParentOf` now resolves
+every top-level directory's parent to `Content/` (was `""`), plus
+`GroupDepthOf`'s matching `1 + nesting` formula; cascading collapse, the
+unconditional ancestor bridge, its suppressed-zero count, search-overrides-
+collapse, and the panel's `groupDepth * kGroupIndent` math all fell out of the
+existing machinery unchanged once `Content/` became every directory's ancestor.
+So the "owed" line above is stale as of that commit — recorded here rather than
+edited away, so the design-pass record still shows what was true at the moment
+it was written.
+
 Not pushed, per house convention.
+
+### 2026-09-07 user-directed, third revision: mount-rooted asset tree (design pass)
+
+The user's own ruling, approved by the coordinator: the table becomes
+**mount-rooted** — one depth-0 root group per mount that holds registered
+assets, honest about locations, rather than one universal root. This is layered
+on top of the second revision's root-anchoring, not a reversal of it:
+`Content/` (`game://`) keeps everything the second revision gave it (real
+depth-0 root, root files as direct rows, every directory below it nested and
+indented, default-**open**) — the change is that `Content/` is no longer
+*the* root, it is *a* root, first among peers. §5 and §6 above are the
+ALREADY-AMENDED text (this entry records what changed and why):
+
+- **`diagnostics/` (`diag://`) is a new sibling depth-0 root**, appearing after
+  the entire `Content/` subtree, ordered lexicographically among any other
+  populated mounts (`Content/` itself always sorts first, by convention, not
+  alphabetically — it is the primary mount). Depth within `diagnostics/` follows
+  the same `1 + nesting below its own mount root` formula §6 already established
+  for `Content/`, just anchored at a different root.
+- **`diagnostics/` defaults COLLAPSED** — recorded in §5 as the one exception to
+  groups-default-open. This is the entire point of the mount-rooted shape: crash
+  reports (`.arcdiag` files) were previously either invisible to the tree
+  entirely or, worse, would have needed synthetic bucketing into `Content/` to
+  show up at all (dishonest about where they actually live, on a different
+  mount). A collapsed sibling root gives them exactly one quiet row —
+  `diagnostics/ N` — until someone deliberately opens it.
+- **Future mounts follow the identical pattern.** `engine://` or `plugin://`
+  would each get their own sibling depth-0 root, default-open (only
+  `diagnostics/` is pinned collapsed; a future mount's default is a decision for
+  whoever adds it, not inherited from this ruling), the moment they register at
+  least one asset. A mount that registers nothing never gets a row — the
+  ancestor bridge's unconditional rendering applies to a mount root with a
+  populated descendant, not to every theoretically-possible mount.
+- **No more synthetic bucketing.** Before this revision, the only honest way to
+  represent a `diag://` asset in a `Content/`-only tree would have been to fake
+  it as a `Content/` subdirectory or drop it from the panel; mount-rooting
+  removes that dishonesty at the root of the table, not just for this one mount.
+
+The `OptionBC.dc.html` mock was amended a third time the same day: one row
+added — a collapsed `diagnostics/ 3` root band (right-pointing chevron, dim
+count, depth 0, same base indent as `Content/`) placed immediately after
+`Content/`'s entire subtree. To hold the fixed 976×640 frame with no clipping
+(the frame lesson from the first revision, re-applied), the `patterns/` demo
+group was trimmed from two rows to one (`noise_blue.png` dropped, `tiles_stone.png`
+kept, count pill `2` → `1`) — a net-zero row-count change, not a reduction in
+what the shape demonstrates. Verified by re-rendering and viewing the PNG; the
+new row and its collapsed-chevron affordance read clearly, and no earlier row
+was clipped.
+
+This is a **design-only pass**: the live panel does not yet have a
+`diagnostics/` mount root or any per-mount-root default-collapsed behavior — a
+further follow-up implementation task is owed, on top of the still-current
+root-anchoring implementation (`5be0302b`) this revision builds on.
