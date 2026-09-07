@@ -830,6 +830,14 @@ project "ArcaneTests"
         -- at all, same "pure logic" pattern as CookQueue/ContentDiscovery
         -- above.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetPanelModel.cpp",
+        -- Asset-manager arc (Plan 2, Task 3): AssetReferenceIndex (the pure
+        -- inverted-reference index over ListAssetReferences answers --
+        -- inbound counts, tombstones, dangling targets) source-compiles
+        -- into the test exe so the [editor] units drive it directly with
+        -- hand-built AssetRef lists, no ImGui and no engine facade in it at
+        -- all, same "pure logic" pattern as AssetPanelModel.cpp above.
+        "%{wks.location}/ArcaneEditor/src/Panels/AssetReferenceIndex.cpp",
+        "%{wks.location}/ArcaneTests/src/AssetReferenceIndexTest.cpp",
     }
 
     includedirs {
