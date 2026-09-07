@@ -12,11 +12,13 @@
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope/WriteFile -- valid .arcdiag fixtures
 #include <Arcane/Project/AssetRegistry.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace Arcane::Editor;
@@ -69,6 +71,14 @@ namespace
         std::unordered_map<Arcane::Guid, CookState> cookByGuid;
         std::unordered_map<Arcane::Guid, Arcane::MaterialSurface> surfaceByGuid;
 
+        // Plan 2 Task 4: guids whose refsFor answer is a HARD nullopt -- the
+        // "exists but could not be read/parsed this walk" shape (spec s3.2's
+        // last-known-good contract). Deliberately distinct from an ABSENT
+        // refsByGuid entry, which answers an EMPTY vector (a readable asset
+        // that simply references nothing) and therefore legitimately retracts
+        // every edge it used to contribute.
+        std::unordered_set<Arcane::Guid> nullRefsGuids;
+
         std::unordered_map<Arcane::Guid, int> refsCalls;
         std::unordered_map<Arcane::Guid, int> cookCalls;
         std::unordered_map<Arcane::Guid, int> surfaceCalls;
@@ -79,6 +89,8 @@ namespace
             p.refsFor = [this](const Arcane::Guid& g) -> std::optional<std::vector<Arcane::AssetRef>>
             {
                 ++refsCalls[g];
+                if (nullRefsGuids.count(g) != 0)
+                    return std::nullopt;
                 const auto it = refsByGuid.find(g);
                 return it == refsByGuid.end() ? std::vector<Arcane::AssetRef>{} : it->second;
             };
@@ -1678,4 +1690,428 @@ TEST_CASE("AssetPanelModel mount-rooted: a real game://diagnostics/ directory ne
 
     fs::remove_all(gameDir, ec);
     fs::remove_all(diagDir, ec);
+}
+
+// ---------------------------------------------------------------------------
+// Plan 2 Task 4: the AssetReferenceIndex wired THROUGH the model -- the model
+// feeds the index the very same `refsFor` answer each rebuilt guid already
+// fetches (never a second ask -- case (f) above is the standing pin on that),
+// derives `AssetPanelEntry::unused` from the index's inbound counts under spec
+// s9.1's eligibility rule, and tallies it into HealthCounts for the bottom-bar
+// digest. Same real-registry + FakeProviders discipline as every case above.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    bool ContainsGuid(const std::vector<Arcane::Guid>& v, const Arcane::Guid& g)
+    {
+        return std::find(v.begin(), v.end(), g) != v.end();
+    }
+}
+
+// (0) The pure rule itself, EXHAUSTIVELY over AssetKind -- the same treatment
+// CookStateOf gets above, and the only place Diagnostic/Other are pinned (no
+// fixture below reaches them). Spec s9.1's list is a verbatim requirement, so
+// a kind silently changing sides here has to fail a test.
+TEST_CASE("IsUnusedEligible: exactly Texture/Material/Sprite/Mesh (spec s9.1)", "[editor]")
+{
+    CHECK(IsUnusedEligible(AssetKind::Texture));
+    CHECK(IsUnusedEligible(AssetKind::Material));
+    CHECK(IsUnusedEligible(AssetKind::Sprite));
+    CHECK(IsUnusedEligible(AssetKind::Mesh));
+
+    CHECK_FALSE(IsUnusedEligible(AssetKind::Scene));        // roots -- never unused
+    CHECK_FALSE(IsUnusedEligible(AssetKind::Data));         // consumed by game code the index cannot see
+    CHECK_FALSE(IsUnusedEligible(AssetKind::Audio));
+    CHECK_FALSE(IsUnusedEligible(AssetKind::Font));
+    CHECK_FALSE(IsUnusedEligible(AssetKind::Diagnostic));
+    CHECK_FALSE(IsUnusedEligible(AssetKind::Other));
+
+    // Exhaustive: every value of AssetKind is accounted for above, so a newly
+    // added kind can never default into eligibility unnoticed.
+    int eligible = 0;
+    for (int i = 0; i < kAssetKindCount; ++i)
+        if (IsUnusedEligible(static_cast<AssetKind>(i)))
+            ++eligible;
+    CHECK(eligible == 4);
+}
+
+// (1) Eligibility: spec s9.1's list is EXACTLY {Texture, Material, Sprite,
+// Mesh}. Scene/Data/Audio/Font/Diagnostic/Other are exempt -- their consumers
+// are game code the index cannot see, so a zero-inbound one is never accused.
+// Also pins the CASCADE half of the rule: a dead 1:1 sprite has zero inbound
+// of its own and flags FIRST (removing it is what would then surface its
+// texture), so this fixture's count is 2, not 1.
+TEST_CASE("AssetPanelModel unused: zero-inbound eligible kinds only (spec s9.1)", "[editor]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_unused_kinds_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "sprites");
+
+    WriteFile(dir, "used.png", "bytes-used");        // texture A -- the sprite derives from it
+    WriteFile(dir, "orphan.png", "bytes-orphan");    // texture B -- nothing points at it
+    WriteFile(dir / "sprites", "used_full.arcsprite",
+             R"({"id":"d1000001-0001-4001-8001-000000000001","type":"sprite","name":"UsedFull"})");
+    WriteFile(dir, "notes.json", R"({"id":"d1000001-0001-4001-8001-000000000002"})");        // Data -- exempt
+    WriteFile(dir, "level.arcscene",
+             R"({"id":"d1000001-0001-4001-8001-000000000003","version":4,"entities":[]})");   // Scene -- a root, exempt
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 5);
+    const auto all = registry.All();
+
+    const Arcane::Guid usedTexId   = GuidForPath(all, "game://used.png");
+    const Arcane::Guid orphanTexId = GuidForPath(all, "game://orphan.png");
+    const Arcane::Guid spriteId    = *Arcane::Guid::FromString("d1000001-0001-4001-8001-000000000001");
+    const Arcane::Guid notesId     = *Arcane::Guid::FromString("d1000001-0001-4001-8001-000000000002");
+    const Arcane::Guid sceneId     = *Arcane::Guid::FromString("d1000001-0001-4001-8001-000000000003");
+    REQUIRE(usedTexId.IsValid());
+    REQUIRE(orphanTexId.IsValid());
+
+    FakeProviders fake;
+    fake.refsByGuid[spriteId] = { { usedTexId, Arcane::AssetRefKind::DerivesFrom } };
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, fake.Make()));
+
+    REQUIRE(model.Find(usedTexId));
+    REQUIRE(model.Find(orphanTexId));
+    REQUIRE(model.Find(spriteId));       // a folded child is still an ENTRY
+    REQUIRE(model.Find(notesId));
+    REQUIRE(model.Find(sceneId));
+
+    // The index saw the sprite's DerivesFrom edge -- inbound counts include
+    // BOTH edge kinds (References AND DerivesFrom), which is what makes the
+    // cascade rule work at all.
+    CHECK(model.RefIndex().InboundCount(usedTexId) == 1);
+    CHECK(model.RefIndex().InboundCount(orphanTexId) == 0);
+    CHECK(model.RefIndex().InboundCount(spriteId) == 0);
+
+    CHECK_FALSE(model.Find(usedTexId)->unused);   // one inbound -- in use
+    CHECK(model.Find(orphanTexId)->unused);        // texture, zero inbound
+    CHECK(model.Find(spriteId)->unused);           // sprite, zero inbound -- the cascade root
+
+    // Exempt kinds: zero inbound (proven, not assumed) yet never flagged.
+    CHECK(model.RefIndex().InboundCount(notesId) == 0);
+    CHECK(model.RefIndex().InboundCount(sceneId) == 0);
+    CHECK_FALSE(model.Find(notesId)->unused);
+    CHECK_FALSE(model.Find(sceneId)->unused);
+
+    CHECK(model.Health().unused == 2);
+
+    // UnusedGuids() is sorted by entry NAME -- "orphan" < "used_full".
+    const std::vector<Arcane::Guid> unused = model.UnusedGuids();
+    REQUIRE(unused.size() == 2);
+    CHECK(unused[0] == orphanTexId);
+    CHECK(unused[1] == spriteId);
+
+    fs::remove_all(dir, ec);
+}
+
+// (2) Incremental: re-pointing one asset's refs and dirtying ONLY it must swap
+// the flags on both the old and the new target -- the remove-before-re-add
+// discipline flowing through the model seam. Untouched entries' inbound counts
+// change here, which is exactly why the unused pass re-runs over ALL entries
+// on a per-guid rebuild.
+TEST_CASE("AssetPanelModel unused updates incrementally through MarkDirty", "[editor]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_unused_incremental_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "materials");
+
+    WriteFile(dir, "t1.png", "bytes-t1");
+    WriteFile(dir, "t2.png", "bytes-t2");
+    WriteFile(dir / "materials", "m.arcmat",
+             R"({"id":"d2000001-0001-4001-8001-000000000001","type":"material","kind":"fullscreen"})");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 3);
+    const auto all = registry.All();
+
+    const Arcane::Guid t1Id = GuidForPath(all, "game://t1.png");
+    const Arcane::Guid t2Id = GuidForPath(all, "game://t2.png");
+    const Arcane::Guid matId = *Arcane::Guid::FromString("d2000001-0001-4001-8001-000000000001");
+    REQUIRE(t1Id.IsValid());
+    REQUIRE(t2Id.IsValid());
+
+    FakeProviders fake;
+    // References (not DerivesFrom): a DerivesFrom to a texture would FOLD the
+    // material under it, which is a different behavior entirely -- this case
+    // is about inbound counts, nothing else.
+    fake.refsByGuid[matId] = { { t1Id, Arcane::AssetRefKind::References } };
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    CHECK(model.RefIndex().InboundCount(t1Id) == 1);
+    CHECK(model.RefIndex().InboundCount(t2Id) == 0);
+    CHECK_FALSE(model.Find(t1Id)->unused);
+    CHECK(model.Find(t2Id)->unused);
+    CHECK(model.Find(matId)->unused);   // the material itself has zero inbound
+
+    // Re-point the material at t2 and dirty ONLY the material.
+    fake.refsByGuid[matId] = { { t2Id, Arcane::AssetRefKind::References } };
+    model.MarkDirty(matId);
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    CHECK(model.RefIndex().InboundCount(t1Id) == 0);
+    CHECK(model.RefIndex().InboundCount(t2Id) == 1);
+    CHECK(model.Find(t1Id)->unused);         // flags swapped...
+    CHECK_FALSE(model.Find(t2Id)->unused);   // ...both ways
+    CHECK(model.Health().unused == 2);       // t1 + the material
+
+    // The single-ask discipline: the index is fed the SAME answer the entry
+    // build already fetched, so only the dirtied guid was re-asked.
+    CHECK(fake.refsCalls[matId] == 2);
+    CHECK(fake.refsCalls[t1Id] == 1);
+    CHECK(fake.refsCalls[t2Id] == 1);
+
+    fs::remove_all(dir, ec);
+}
+
+// (3) Last-known-good (spec s3.2): a nullopt refs answer for an asset that
+// still EXISTS keeps its outbound edges -- and therefore every inbound count
+// they contribute -- exactly as they were. An unreadable material must never
+// make its texture look orphaned.
+TEST_CASE("AssetPanelModel keeps last-known-good inbound counts on a nullopt refs answer", "[editor]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_unused_lastknowngood_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "materials");
+
+    WriteFile(dir, "tex.png", "bytes-tex");
+    WriteFile(dir / "materials", "m.arcmat",
+             R"({"id":"d3000001-0001-4001-8001-000000000001","type":"material","kind":"fullscreen"})");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 2);
+    const auto all = registry.All();
+
+    const Arcane::Guid texId = GuidForPath(all, "game://tex.png");
+    const Arcane::Guid matId = *Arcane::Guid::FromString("d3000001-0001-4001-8001-000000000001");
+    REQUIRE(texId.IsValid());
+
+    FakeProviders fake;
+    fake.refsByGuid[matId] = { { texId, Arcane::AssetRefKind::References } };
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    REQUIRE(model.RefIndex().InboundCount(texId) == 1);
+    REQUIRE_FALSE(model.Find(texId)->unused);
+
+    // Second ask answers nullopt (unreadable/unparsable this walk), NOT an
+    // empty list -- the distinction the whole last-known-good rule turns on.
+    fake.nullRefsGuids.insert(matId);
+    model.MarkDirty(matId);
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    CHECK(fake.refsCalls[matId] == 2);              // it WAS re-asked...
+    CHECK(model.RefIndex().InboundCount(texId) == 1);   // ...and nothing was retracted
+    CHECK_FALSE(model.Find(texId)->unused);
+    REQUIRE(model.RefIndex().Find(matId));
+    CHECK(model.RefIndex().Find(matId)->outbound.size() == 1);   // forward edge kept too
+
+    fs::remove_all(dir, ec);
+}
+
+// (4) Prune: an entry the registry no longer carries is retracted from the
+// index through the SAME prune loop that drops it from m_entries -- both
+// directions of the tombstone contract.
+//   - delete the REFERENCER: its node vanishes entirely (nothing pointed at
+//     it), and its former target loses that inbound edge -> newly unused.
+//   - delete the TARGET: its node SURVIVES as a tombstone (its referencer
+//     still points at it) and shows up in DanglingTargets().
+// Both halves are exercised twice: once through the per-guid MarkDirty prune
+// loop (the incremental path), then again through a full MarkAllDirty rebuild
+// (the Clear-and-refill path), which must agree.
+TEST_CASE("AssetPanelModel prunes a deleted asset into the index tombstone path", "[editor]")
+{
+    std::error_code ec;
+
+    // --- Half A: the REFERENCER is deleted -------------------------------
+    {
+        const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_prune_referencer_test";
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir / "materials");
+
+        WriteFile(dir, "tex.png", "bytes-tex");
+        WriteFile(dir / "materials", "m.arcmat",
+                 R"({"id":"d4000001-0001-4001-8001-000000000001","type":"material","kind":"fullscreen"})");
+
+        Arcane::AssetRegistry registry;
+        REQUIRE(registry.ScanContent(dir, "game") == 2);
+        const Arcane::Guid texId = GuidForPath(registry.All(), "game://tex.png");
+        const Arcane::Guid matId = *Arcane::Guid::FromString("d4000001-0001-4001-8001-000000000001");
+        REQUIRE(texId.IsValid());
+
+        FakeProviders fake;
+        fake.refsByGuid[matId] = { { texId, Arcane::AssetRefKind::References } };
+
+        AssetPanelModel model;
+        model.MarkAllDirty();
+        AssetPanelProviders providers = fake.Make();
+        REQUIRE(model.RebuildIfDirty(&registry, providers));
+        REQUIRE(model.RefIndex().InboundCount(texId) == 1);
+        REQUIRE_FALSE(model.Find(texId)->unused);
+
+        // Delete the material and re-scan the SAME registry (the mechanics the
+        // existing fold-target-removed prune case uses).
+        fs::remove(dir / "materials" / "m.arcmat", ec);
+        REQUIRE(registry.ScanContent(dir, "game") == 1);
+
+        model.MarkDirty(matId);   // only the REMOVED guid is dirtied
+        REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+        CHECK(model.Find(matId) == nullptr);                    // entry pruned...
+        CHECK(model.RefIndex().Find(matId) == nullptr);          // ...and its node with it
+        CHECK(model.RefIndex().InboundCount(texId) == 0);        // its edge retracted
+        REQUIRE(model.Find(texId));
+        CHECK(model.Find(texId)->unused);                        // newly unused
+        CHECK_FALSE(ContainsGuid(model.RefIndex().DanglingTargets(), matId));
+        CHECK(model.RefIndex().DanglingTargets().empty());
+        CHECK(model.Health().unused == 1);
+
+        // The full-rebuild path must agree with the incremental one.
+        model.MarkAllDirty();
+        REQUIRE(model.RebuildIfDirty(&registry, providers));
+        CHECK(model.RefIndex().InboundCount(texId) == 0);
+        CHECK(model.Find(texId)->unused);
+        CHECK(model.RefIndex().DanglingTargets().empty());
+        CHECK(model.Health().unused == 1);
+
+        fs::remove_all(dir, ec);
+    }
+
+    // --- Half B: the TARGET is deleted (the tombstone case) --------------
+    {
+        const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_prune_target_test";
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir / "materials");
+
+        WriteFile(dir, "tex.png", "bytes-tex");
+        WriteFile(dir / "materials", "m.arcmat",
+                 R"({"id":"d5000001-0001-4001-8001-000000000001","type":"material","kind":"fullscreen"})");
+
+        Arcane::AssetRegistry registry;
+        REQUIRE(registry.ScanContent(dir, "game") == 2);
+        const Arcane::Guid texId = GuidForPath(registry.All(), "game://tex.png");
+        const Arcane::Guid matId = *Arcane::Guid::FromString("d5000001-0001-4001-8001-000000000001");
+        REQUIRE(texId.IsValid());
+
+        FakeProviders fake;
+        fake.refsByGuid[matId] = { { texId, Arcane::AssetRefKind::References } };
+
+        AssetPanelModel model;
+        model.MarkAllDirty();
+        AssetPanelProviders providers = fake.Make();
+        REQUIRE(model.RebuildIfDirty(&registry, providers));
+        REQUIRE(model.RefIndex().DanglingTargets().empty());
+
+        // The texture's guid is sidecar-minted, so removing both the file and
+        // its .meta is what actually drops it from the rescan.
+        fs::remove(dir / "tex.png", ec);
+        fs::remove(dir / "tex.png.meta", ec);
+        REQUIRE(registry.ScanContent(dir, "game") == 1);
+
+        model.MarkDirty(texId);
+        REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+        CHECK(model.Find(texId) == nullptr);   // entry pruned...
+        // ...but the NODE survives as a tombstone: the material still points
+        // at it, so "who referenced the missing asset" is still answerable.
+        CHECK(ContainsGuid(model.RefIndex().DanglingTargets(), texId));
+        REQUIRE(model.RefIndex().Find(texId));
+        CHECK_FALSE(model.RefIndex().Find(texId)->exists);
+        CHECK(model.RefIndex().InboundCount(texId) == 1);
+        REQUIRE(model.Find(matId));
+        CHECK(model.Find(matId)->unused);      // the material itself: zero inbound
+        CHECK(model.Health().unused == 1);     // the deleted texture is no longer an entry
+
+        // Full rebuild: the tombstone is re-minted by the material's own walk.
+        model.MarkAllDirty();
+        REQUIRE(model.RebuildIfDirty(&registry, providers));
+        CHECK(ContainsGuid(model.RefIndex().DanglingTargets(), texId));
+        CHECK(model.Health().unused == 1);
+
+        fs::remove_all(dir, ec);
+    }
+}
+
+// (5) HealthCounts.unused is exactly the flagged-entry count -- the number the
+// bottom-bar digest renders -- and UnusedGuids() enumerates the same set in a
+// stable, name-sorted UI order (Task 8's Unreferenced card reads it verbatim).
+TEST_CASE("AssetPanelModel HealthCounts.unused feeds the digest numbers", "[editor]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_unused_digest_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "materials");
+    fs::create_directories(dir / "meshes");
+    fs::create_directories(dir / "sprites");
+    fs::create_directories(dir / "audio");
+    fs::create_directories(dir / "fonts");
+
+    WriteFile(dir, "hero.png", "bytes-hero");                    // Texture -- referenced twice
+    WriteFile(dir / "materials", "glow.arcmat",
+             R"({"id":"d6000001-0001-4001-8001-000000000001","type":"material","kind":"fullscreen"})");
+    WriteFile(dir / "meshes", "cube.arcmesh",
+             R"({"id":"d6000001-0001-4001-8001-000000000002","type":"mesh"})");
+    WriteFile(dir / "sprites", "slice.arcsprite",
+             R"({"id":"d6000001-0001-4001-8001-000000000003","type":"sprite"})");
+    WriteFile(dir / "audio", "beep.wav", "bytes-beep");           // Audio -- exempt
+    WriteFile(dir / "fonts", "ui.ttf", "bytes-ui");               // Font  -- exempt
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 6);
+    const auto all = registry.All();
+
+    const Arcane::Guid heroId  = GuidForPath(all, "game://hero.png");
+    const Arcane::Guid beepId  = GuidForPath(all, "game://audio/beep.wav");
+    const Arcane::Guid fontId  = GuidForPath(all, "game://fonts/ui.ttf");
+    const Arcane::Guid glowId  = *Arcane::Guid::FromString("d6000001-0001-4001-8001-000000000001");
+    const Arcane::Guid cubeId  = *Arcane::Guid::FromString("d6000001-0001-4001-8001-000000000002");
+    const Arcane::Guid sliceId = *Arcane::Guid::FromString("d6000001-0001-4001-8001-000000000003");
+    REQUIRE(heroId.IsValid());
+    REQUIRE(beepId.IsValid());
+    REQUIRE(fontId.IsValid());
+
+    FakeProviders fake;
+    fake.refsByGuid[glowId]  = { { heroId, Arcane::AssetRefKind::References } };
+    fake.refsByGuid[sliceId] = { { heroId, Arcane::AssetRefKind::References } };   // sliced -> stays a peer
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, fake.Make()));
+
+    const HealthCounts health = model.Health();
+    CHECK(health.total == 6);
+
+    int flagged = 0;
+    for (const auto& [guid, e] : model.Entries())
+        if (e.unused)
+            ++flagged;
+    CHECK(health.unused == flagged);
+    CHECK(health.unused == 3);   // glow (material), cube (mesh), slice (sprite)
+
+    CHECK_FALSE(model.Find(heroId)->unused);   // two inbound
+    CHECK_FALSE(model.Find(beepId)->unused);   // Audio -- exempt
+    CHECK_FALSE(model.Find(fontId)->unused);   // Font  -- exempt
+
+    // Name-sorted: "cube" < "glow" < "slice".
+    const std::vector<Arcane::Guid> unused = model.UnusedGuids();
+    REQUIRE(unused.size() == static_cast<std::size_t>(health.unused));
+    CHECK(unused[0] == cubeId);
+    CHECK(unused[1] == glowId);
+    CHECK(unused[2] == sliceId);
+
+    fs::remove_all(dir, ec);
 }

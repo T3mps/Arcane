@@ -104,6 +104,14 @@ namespace Arcane::Editor
         // The node for `id`, or nullptr if this index has no entry for it
         // at all (never walked, never named as a target, or already
         // garbage-collected).
+        //
+        // LIFETIME: the returned pointer is stable across Updates to
+        // UNRELATED guids (m_nodes is an unordered_map -- rehashing moves
+        // buckets, never the mapped values), but is INVALIDATED the moment
+        // this node itself is erased -- Update's step 2/4 garbage-collects a
+        // tombstone as soon as its last referencer lets go, and a deleted
+        // asset's own node goes with it. Never cache one across a rebuild
+        // pass; re-Find() instead.
         [[nodiscard]] const Node* Find(const Arcane::Guid& id) const;
 
         // Every tombstone (exists == false) that still has at least one

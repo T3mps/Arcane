@@ -362,10 +362,12 @@ namespace Arcane::Editor
 
         // Bottom bar band: left = context ("N assets - S selected", becoming
         // "X of N shown" once rail or search filters) -- right = the digest
-        // chip (amber refused count + dim cooking/unused). Spec s13: the
-        // digest never renders an unknown as a zero -- HealthCounts has no
-        // "unused" field yet (Plan 2's AssetReferenceIndex adds it), so that
-        // segment is ALWAYS the literal em-dash here, never a fabricated 0.
+        // chip (amber refused count + dim cooking/unused). All three numbers
+        // are LIVE as of Plan 2 Task 4: `unused` used to render as a literal
+        // em-dash (spec s13 -- the digest never fabricates a 0 for a number it
+        // cannot know) because HealthCounts had no such field; the model's
+        // AssetReferenceIndex now supplies it. Click-through to the Status
+        // lens arrives with Task 8, not here.
         void DrawBottomBar(const AssetPanelModel& model)
         {
             if (!ImGui::BeginChild("##assetsbottombar", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
@@ -417,7 +419,7 @@ namespace Arcane::Editor
                           ICON_LC_TRIANGLE_ALERT, health.refused);
             char restPart[96];
             std::snprintf(restPart, sizeof(restPart),
-                          " \xC2\xB7 %d cooking \xC2\xB7 \xE2\x80\x94 unused", health.queued);
+                          " \xC2\xB7 %d cooking \xC2\xB7 %d unused", health.queued, health.unused);
             char digestFull[160];
             std::snprintf(digestFull, sizeof(digestFull), "%s%s", refusedPart, restPart);
             const float digestWidth = ImGui::CalcTextSize(digestFull).x;

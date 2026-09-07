@@ -18,7 +18,8 @@
 // this file's own RailKindLabel both used to shadow them independently; both
 // collapse onto these, the one shared definition from here on.
 
-#include "Widgets/IconsLucide.h"   // KindIcon glyphs
+#include "Panels/AssetReferenceIndex.hpp"   // the inverted-reference index behind `unused`
+#include "Widgets/IconsLucide.h"            // KindIcon glyphs
 
 #include <Arcane/Assets/Assets.hpp>             // AssetRef, AssetRefKind
 #include <Arcane/Guid.hpp>
@@ -304,6 +305,15 @@ namespace Arcane::Editor
     // AssetPanelEntry::cook's own default).
     [[nodiscard]] CookState CookStateOf(AssetKind kind, bool permanentDiag, bool pending);
 
+    // Which kinds may ever be flagged `unused` (spec s9.1, VERBATIM): exactly
+    // Texture, Material, Sprite and Mesh -- the kinds whose consumers the
+    // reference index fully sees. Scenes are roots (never unused);
+    // Data/Audio/Font are consumed by game code no index observes, so they are
+    // EXEMPT rather than falsely accused; Diagnostic/Other likewise. Sits
+    // beside CookStateOf on purpose -- both are the model's small, pure
+    // per-kind policy rules, and both are unit-testable without a model.
+    [[nodiscard]] bool IsUnusedEligible(AssetKind kind);
+
     // Per-guid facade queries the model needs, injected by the host (EditorApp,
     // Task 5) so this unit never touches Arcane::Assets/Arcane::Project
     // directly. A left-empty (default-constructed std::function) callable is
@@ -347,6 +357,16 @@ namespace Arcane::Editor
         // fold only ever happens on a single `DerivesFrom`). Task 10 renders
         // the "sliced" pill from this.
         bool         sliced = false;
+
+        // Plan 2 Task 4 (spec s9.1): an ELIGIBLE-kind asset (IsUnusedEligible)
+        // that nothing in the project points at -- zero inbound edges in the
+        // model's AssetReferenceIndex, counting BOTH edge kinds (References
+        // AND DerivesFrom). Recomputed over EVERY entry on any rebuild that
+        // touched entries, never only over the dirtied ones: re-pointing one
+        // asset changes the inbound count of two OTHERS (its old target and
+        // its new one), neither of which is itself dirty. An exempt kind is
+        // false here regardless of its inbound count.
+        bool         unused = false;
     };
 
     struct AssetPanelRow
@@ -514,7 +534,11 @@ namespace Arcane::Editor
 
     struct RailEntry { int kind = -1; std::string label; int count = 0; }; // kind -1 = All
 
-    struct HealthCounts { int total = 0, cooked = 0, queued = 0, refused = 0; };
+    // `unused` (Plan 2 Task 4) is the count of entries carrying
+    // AssetPanelEntry::unused -- the bottom-bar digest's third segment and the
+    // Status lens's "unreferenced" stat tile. Folded children count, exactly
+    // like they do for `total`.
+    struct HealthCounts { int total = 0, cooked = 0, queued = 0, refused = 0, unused = 0; };
 
     // Cached, foldable model over an AssetRegistry snapshot: entries rebuild
     // lazily per dirtied guid, rows/rail rebuild lazily when entries or
@@ -555,6 +579,22 @@ namespace Arcane::Editor
         [[nodiscard]] int  ShownAssetCount() const { return m_shownAssetCount; }  // "X of N shown"
         [[nodiscard]] bool Filtered() const;             // search or kind filter active
 
+        // The live reference topology behind `unused` (Plan 2 Task 4), fed by
+        // RebuildIfDirty from the very same refsFor answers each rebuilt entry
+        // already fetches -- never a second parse. Read-only to consumers: the
+        // Status lens reads DanglingTargets()/InboundCount(), the preview pane
+        // reads Find()->outbound. Note Find() returns a pointer that is stable
+        // across UNRELATED updates but invalidated if that node is
+        // tombstone-GC'd -- never cache one across a rebuild pass.
+        [[nodiscard]] const AssetReferenceIndex& RefIndex() const { return m_refIndex; }
+
+        // Every entry flagged `unused`, sorted by entry NAME (mount path
+        // breaks ties, so the order is fully deterministic despite m_entries
+        // being unordered) -- the stable UI order Task 8's Unreferenced card
+        // renders verbatim. Same convention Entries()' own doc comment asks
+        // of its consumers, applied here once so they need not repeat it.
+        [[nodiscard]] std::vector<Arcane::Guid> UnusedGuids() const;
+
         Arcane::Guid   selected;                          // THE shared selection
         std::uint32_t  selectionStamp = 0;                // bump on every change
         void Select(const Arcane::Guid& g) { if (g != selected) { selected = g; ++selectionStamp; } }
@@ -565,6 +605,12 @@ namespace Arcane::Editor
         [[nodiscard]] bool MatchesEntryFilter(const AssetPanelEntry& e) const;
 
         std::unordered_map<Arcane::Guid, AssetPanelEntry> m_entries;
+        // Kept in lockstep with m_entries by RebuildIfDirty: every rebuilt
+        // guid is Update()d with its own (already-fetched) refs answer, every
+        // pruned guid with exists=false. Never queried by RebuildRows -- rows
+        // are pure entry data; this only feeds AssetPanelEntry::unused and the
+        // RefIndex() readers above.
+        AssetReferenceIndex m_refIndex;
         std::unordered_set<Arcane::Guid> m_dirty;
         bool m_allDirty = true;   // fresh model: the first RebuildIfDirty does a full build
         bool m_rowsDirty = true;

@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <set>
+#include <vector>
 
 namespace Arcane::Editor
 {
@@ -89,6 +91,17 @@ namespace Arcane::Editor
         return pending ? CookState::Queued : CookState::Cooked;
     }
 
+    bool IsUnusedEligible(AssetKind kind)
+    {
+        // Spec s9.1's list, verbatim and exhaustive -- the kinds whose
+        // consumers the reference index fully sees. Everything else
+        // (Scene/Data/Audio/Font/Diagnostic/Other) is EXEMPT: a scene is a
+        // root, and data/audio/font assets are pulled in by game code no
+        // index observes, so a zero-inbound one is not evidence of anything.
+        return kind == AssetKind::Texture || kind == AssetKind::Material
+            || kind == AssetKind::Sprite  || kind == AssetKind::Mesh;
+    }
+
     void AssetPanelModel::MarkDirty(const Arcane::Guid& id)
     {
         if (!m_allDirty)
@@ -108,6 +121,7 @@ namespace Arcane::Editor
         {
             const bool hadAnything = !m_entries.empty() || !m_rows.empty() || !m_rail.empty();
             m_entries.clear();
+            m_refIndex.Clear();   // the index tracks m_entries -- never outlive them
             m_dirty.clear();
             m_allDirty = false;
             m_rows.clear();
@@ -150,6 +164,16 @@ namespace Arcane::Editor
             {
                 for (const Arcane::Guid& child : it->second.derivedChildren)
                     cascadeDirty.insert(child);
+                // Plan 2 Task 4: the index tracks entries, so a pruned entry
+                // is retracted here in the same loop that drops it -- FOLDED
+                // CHILDREN INCLUDED (they are ordinary entries, and one that
+                // holds the only DerivesFrom edge to a texture is exactly the
+                // referencer whose loss makes that texture unused). Update's
+                // own step 2 does the rest: this guid's outbound edges are
+                // retracted from every target, and its own node survives ONLY
+                // if something still points at it -- i.e. as a tombstone in
+                // DanglingTargets(), never as a phantom asset.
+                m_refIndex.Update(it->first, /*exists=*/false, std::nullopt);
                 it = m_entries.erase(it);
                 entriesChanged = true;
             }
@@ -210,11 +234,25 @@ namespace Arcane::Editor
 
             e.cook = p.cookStateFor ? p.cookStateFor(guid) : CookState::Unknown;
 
+            // Plan 2 Task 4: feed the reference index THE SAME `refs` optional
+            // the entry build above just consumed -- there is exactly ONE
+            // p.refsFor ask per rebuilt guid and this must never become two
+            // (the per-guid invalidation contract, pinned by the call-count
+            // case in AssetPanelModelTest.cpp). The nullopt shape is carried
+            // through verbatim on purpose: it is what tells the index "could
+            // not read/parse this walk", which keeps its last-known-good
+            // edges instead of retracting them (spec s3.2).
+            m_refIndex.Update(guid, /*exists=*/true, refs);
+
             m_entries[guid] = std::move(e);
         };
 
         if (m_allDirty)
         {
+            // A full rebuild re-walks every asset, so the index is rebuilt
+            // from scratch rather than incrementally patched -- this is also
+            // what drops tombstones for targets nothing points at any more.
+            m_refIndex.Clear();
             for (const auto& [guid, mountPath] : all)
                 rebuildOne(guid, mountPath);
             entriesChanged = true;
@@ -252,6 +290,16 @@ namespace Arcane::Editor
                          [this](const Arcane::Guid& a, const Arcane::Guid& b)
                          { return m_entries.at(a).fileName < m_entries.at(b).fileName; });
             }
+
+            // Plan 2 Task 4 (spec s9.1): `unused` over ALL entries, not just
+            // the dirtied ones. Re-pointing ONE asset changes the inbound
+            // count of two OTHERS -- its old target and its new one -- and
+            // neither is itself dirty, so a dirty-only pass would leave stale
+            // flags on both. This is a pure map lookup per entry: the PARSE
+            // is what per-guid invalidation protects (and it stayed protected
+            // -- no provider is consulted here), never this flag.
+            for (auto& [guid, e] : m_entries)
+                e.unused = IsUnusedEligible(e.kind) && m_refIndex.InboundCount(guid) == 0;
         }
 
         m_dirty.clear();
@@ -567,8 +615,32 @@ namespace Arcane::Editor
                 case CookState::Refused: ++h.refused; break;
                 case CookState::Unknown: break;
             }
+            if (e.unused)
+                ++h.unused;
         }
         return h;
+    }
+
+    std::vector<Arcane::Guid> AssetPanelModel::UnusedGuids() const
+    {
+        // Sorted by NAME, mount path breaking ties -- m_entries is unordered,
+        // so without a total order two same-named assets would swap places
+        // between rebuilds and the Unreferenced card would visibly churn.
+        // Same tie-break BuildAssetEntries already uses for the browse list.
+        std::vector<const AssetPanelEntry*> flagged;
+        for (const auto& [guid, e] : m_entries)
+            if (e.unused)
+                flagged.push_back(&e);
+
+        std::sort(flagged.begin(), flagged.end(),
+                 [](const AssetPanelEntry* a, const AssetPanelEntry* b)
+                 { return a->name != b->name ? a->name < b->name : a->mountPath < b->mountPath; });
+
+        std::vector<Arcane::Guid> out;
+        out.reserve(flagged.size());
+        for (const AssetPanelEntry* e : flagged)
+            out.push_back(e->guid);
+        return out;
     }
 
     const AssetPanelEntry* AssetPanelModel::Find(const Arcane::Guid& id) const
@@ -585,6 +657,7 @@ namespace Arcane::Editor
     void AssetPanelModel::ResetForProjectSwitch()
     {
         m_entries.clear();
+        m_refIndex.Clear();   // a new project's reference topology shares nothing with the old
         m_dirty.clear();
         m_allDirty = true;
         m_rows.clear();
