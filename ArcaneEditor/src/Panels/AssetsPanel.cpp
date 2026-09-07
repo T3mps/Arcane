@@ -1,6 +1,7 @@
 #include "Panels/AssetsPanel.hpp"
 
 #include "Documents/DocumentHost.hpp"
+#include "Panels/AssetActivityLog.hpp"    // AssetActivityEntry/Kind (Task 8's feed, the first reader)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind + the AssetKind bridge (Task 12)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <string_view>
@@ -143,6 +145,24 @@ namespace Arcane::Editor
         constexpr float kStatusProgressHeight  = 4.0f;   // queued card's strip
         constexpr float kStatusPillLineHeight  = 16.0f;  // spec s11.2
         constexpr float kStatusSelectionBorder = 2.0f;   // spec s10's node rule, applied to cards
+
+        // Plan 2 Task 8 additions to the same fixed-geometry block above.
+        //
+        // kStatusRightColumnWidth: the board's two-column split below the
+        // meter -- "Needs attention"/"Unreferenced" left, "Activity"/
+        // "Scenes" right, side by side at the SAME starting Y (the render's
+        // own layout, not this plan's invention). The spec does not pin an
+        // exact split -- an implementer tuning value, not a §11.2 figure,
+        // same footing as kPreviewCompactHeaderMinWidth's own precedent
+        // comment above -- chosen wide enough for a feed row's longest
+        // realistic line ("crate_albedo.png source changed -> queued")
+        // without crowding the left column on a normal panel width.
+        // kStatusProgressCaptionGap is the small vertical gap between the
+        // queued card's progress strip and its new "N of M cooked" caption
+        // (Task 7 review ruling B) -- the same 2px register as
+        // TimelineFeed's own kLineGap and MeterBar's own kSegmentGap.
+        constexpr float kStatusRightColumnWidth    = 300.0f;
+        constexpr float kStatusProgressCaptionGap  = 2.0f;
 
         // The absolute sane-range clamp ONLY -- [kPreviewPaneMinWidth,
         // kPreviewPaneMaxWidth] -- and nothing else. This is the ONLY clamp
@@ -393,9 +413,17 @@ namespace Arcane::Editor
         // are LIVE as of Plan 2 Task 4: `unused` used to render as a literal
         // em-dash (spec s13 -- the digest never fabricates a 0 for a number it
         // cannot know) because HealthCounts had no such field; the model's
-        // AssetReferenceIndex now supplies it. Click-through to the Status
-        // lens arrives with Task 8, not here.
-        void DrawBottomBar(const AssetPanelModel& model)
+        // AssetReferenceIndex now supplies it.
+        //
+        // Plan 2 Task 8: `state` arrives non-const (not just to READ
+        // state.lens for the left context below, but to WRITE it -- the
+        // digest click-through switches lens directly, the same "the Draw*
+        // function mutates state in place" convention DrawToolbar's own
+        // SegmentedStrip handling already uses a few lines above this one).
+        // This function has no header declaration to keep in step (it is
+        // file-local, like every other Draw* helper above) -- only its
+        // single call site in DrawAssetsPanel changes.
+        void DrawBottomBar(AssetsPanelState& state, const AssetPanelModel& model)
         {
             if (!ImGui::BeginChild("##assetsbottombar", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
                                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
@@ -428,7 +456,14 @@ namespace Arcane::Editor
 
             ImGui::SetCursorPosY(padY);
             char left[64];
-            if (filtered)
+            // Status keeps ONE fixed form regardless of filter state (the
+            // lens has no search box of its own to filter against); every
+            // other lens keeps Browse's existing forms VERBATIM (plan doc
+            // Step 4).
+            if (state.lens == AssetLens::Status)
+                std::snprintf(left, sizeof(left), "%d assets \xC2\xB7 %d need attention",
+                              health.total, health.refused + health.queued);
+            else if (filtered)
                 std::snprintf(left, sizeof(left), "%d of %d shown",
                               model.ShownAssetCount(), health.total);
             else
@@ -454,9 +489,21 @@ namespace Arcane::Editor
             ImGui::SameLine();
             ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), rightEdgeX - digestWidth));
             ImGui::SetCursorPosY(padY);
+            const ImVec2 digestScreenPos = ImGui::GetCursorScreenPos();
             ImGui::TextColored(Theme::kAmber, "%s", refusedPart);
             ImGui::SameLine(0.0f, 0.0f);
             ImGui::TextDisabled("%s", restPart);
+
+            // Digest click-through (spec s5): an InvisibleButton laid over
+            // the rect just drawn -- captured BEFORE the two TextColored/
+            // TextDisabled calls above, since neither is meant to change
+            // appearance on hover/press, a bare hit-test overlay is the
+            // smaller change (this file already overlays a full-body
+            // InvisibleButton for the identical reason in DrawAttentionCard).
+            // A no-op when already on Status, per spec.
+            ImGui::SetCursorScreenPos(digestScreenPos);
+            if (ImGui::InvisibleButton("##digestclick", ImVec2(digestWidth, ImGui::GetTextLineHeight())))
+                state.lens = AssetLens::Status;
 
             ImGui::EndChild();
         }
@@ -465,10 +512,22 @@ namespace Arcane::Editor
         // File-local per the brief: rows, child rows and (later, Task 11) the
         // preview pane's Derived list all hover the same asset. Text-and-
         // images only -- never a button (a tooltip is not interactable).
+        //
+        // `forceShow` (Plan 2 Task 8): TimelineFeed draws every row's hover
+        // hit-test INSIDE its own per-row loop (EditorWidgets.cpp), so by
+        // the time this file's caller can react to the result, ImGui's
+        // "last submitted item" is whichever row TimelineFeed drew LAST --
+        // never necessarily the hovered one. The activity feed already
+        // knows (from TimelineFeedResult::hoveredIndex, computed at the
+        // right moment) that a specific row IS hovered, so it passes true
+        // here to skip the (now-wrong) IsItemHovered() re-check entirely.
+        // BeginTooltip() itself positions near the mouse regardless of
+        // "last item", so this is safe. Every existing call site keeps the
+        // default and is unaffected.
         void DrawAssetPeekTooltip(const AssetPanelModel& model, const AssetsPanelServices& services,
-                                  const Arcane::Guid& guid)
+                                  const Arcane::Guid& guid, bool forceShow = false)
         {
-            if (!ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+            if (!forceShow && !ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
                 return;
             const AssetPanelEntry* e = model.Find(guid);
             if (!e)
@@ -1743,9 +1802,17 @@ namespace Arcane::Editor
         // cooked / (cooked + queued) from HealthCounts, the very numbers the
         // meter above already shows. There is no per-asset cook progress to
         // read anywhere in the engine, and this card refuses to fabricate one.
+        //
+        // `queuedCooked`/`queuedCookedAndQueued` (Task 7 review ruling B):
+        // the SAME two HealthCounts numbers `queuedProgress` was already
+        // derived from, passed through a second time so the queued card can
+        // spell the fraction out in words ("N of M cooked") instead of
+        // leaving the bare strip to speak for itself. Meaningless when
+        // `refused` -- callers pass 0/0 for the refused card.
         void DrawAttentionCard(AssetPanelModel& model, const AssetsPanelServices& services,
                                AssetsPanelActions& actions, const AssetPanelEntry& e,
-                               bool refused, float queuedProgress)
+                               bool refused, float queuedProgress,
+                               int queuedCooked, int queuedCookedAndQueued)
         {
             const ImVec2 cardMin   = ImGui::GetCursorScreenPos();
             const float  cardWidth = ImGui::GetContentRegionAvail().x;
@@ -1772,7 +1839,20 @@ namespace Arcane::Editor
             // shapes line up in a mixed list.
             const float rowH  = ImGui::GetFrameHeight();
             const float line2 = refused ? ImGui::GetTextLineHeight() : kStatusProgressHeight;
-            const float bodyH = rowH + style.ItemSpacing.y + line2;
+            // Task 7 review ruling B: the queued card grows a THIRD line --
+            // the "N of M cooked" caption beneath the progress strip --
+            // measured at StatTile's own 13px label size. A brief
+            // PushFont/PopFont pair purely to read GetTextLineHeight(); the
+            // refused card never carries this line, so it costs it nothing.
+            float line3 = 0.0f;
+            if (!refused)
+            {
+                ImGui::PushFont(GetEditorFonts().interRegular, 13.0f);
+                line3 = ImGui::GetTextLineHeight();
+                ImGui::PopFont();
+            }
+            const float bodyH = rowH + style.ItemSpacing.y + line2
+                              + (refused ? 0.0f : (kStatusProgressCaptionGap + line3));
 
             // ONE body hit target, submitted FIRST and covering the whole card
             // body, with SetNextItemAllowOverlap so the two buttons submitted
@@ -1894,6 +1974,13 @@ namespace Arcane::Editor
                         line += *detail;
                     }
                 }
+                // Task 7 review ruling C: the board's own tail, pointing at
+                // the Problems pane for the full diagnostic -- appended
+                // UNCONDITIONALLY, whether or not a per-guid detail resolved
+                // above. Already in TextDisabled tone: the whole line below
+                // draws in Theme::kTextDim, tail included, so no separate
+                // color segment is needed for "in TextDisabled tone".
+                line += " \xC2\xB7 details in Problems";
                 // BeginCardFrame does NOT constrain caller content width, so
                 // the wrap is this function's job -- one line, ellipsized to
                 // the card's inner width.
@@ -1912,6 +1999,17 @@ namespace Arcane::Editor
                     dl->AddRectFilled(ImVec2(innerMin.x, line2Y),
                                       ImVec2(innerMin.x + innerW * frac, line2Y + kStatusProgressHeight),
                                       ImGui::GetColorU32(Theme::kGrab));
+
+                // Task 7 review ruling B: the strip alone never said WHAT
+                // fraction it was a fraction OF -- this caption makes the
+                // pipeline semantics explicit.
+                char caption[32];
+                std::snprintf(caption, sizeof(caption), "%d of %d cooked",
+                             queuedCooked, queuedCookedAndQueued);
+                ImGui::PushFont(GetEditorFonts().interRegular, 13.0f);
+                dl->AddText(ImVec2(innerMin.x, line2Y + kStatusProgressHeight + kStatusProgressCaptionGap),
+                           ImGui::GetColorU32(Theme::kTextDim), caption);
+                ImGui::PopFont();
             }
 
             EndCardFrame();
@@ -1929,15 +2027,227 @@ namespace Arcane::Editor
             }
         }
 
-        // ---- Plan 2 Task 7: the Status lens body, part 1 (spec s9.2) -------
-        // Tiles row, cook-pipeline meter, needs-attention cards. The
-        // Unreferenced card, the activity feed and the Scenes rollup are Task
-        // 8's -- deliberately ABSENT rather than stubbed, so nothing here has
-        // to be un-drawn later. `state`/`docs` are unused by part 1 (nothing
-        // it draws switches lens or opens a document) but are carried on the
-        // signature Task 8's Reveal button and feed rows consume.
-        void DrawStatusLens(AssetsPanelState& /*state*/, AssetPanelModel& model,
-                            DocumentHost& /*docs*/, const AssetsPanelServices& services,
+        // ---- Plan 2 Task 8: activity-feed age/title formatting --------------
+        // File-local, TimelineFeed's sole caller: the widget itself stays
+        // model-free (EditorWidgets.hpp's own doc comment), so every bit of
+        // "what does this entry MEAN" policy lives here instead.
+        std::string FormatActivityAge(std::chrono::steady_clock::time_point when)
+        {
+            const auto elapsed = std::chrono::steady_clock::now() - when;
+            const long long secs = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
+            if (secs < 60)
+                return "just now";
+            char buf[32];
+            const long long mins = secs / 60;
+            if (mins < 60)
+            {
+                std::snprintf(buf, sizeof(buf), "%lld min ago", mins);
+                return buf;
+            }
+            std::snprintf(buf, sizeof(buf), "%lld h ago", mins / 60);
+            return buf;
+        }
+
+        // Title per AssetActivityKind (plan doc Step 2). SourceChanged is the
+        // one kind whose title depends on live model state rather than the
+        // entry alone: "-> queued" only when the guid STILL resolves AND its
+        // kind still cooks (Texture/Sprite, the exact CookStateOf rule) --
+        // an entry whose asset has since vanished, or that never had a real
+        // cook pipeline, reads as the plain form.
+        std::string ActivityTitle(const AssetPanelModel& model, const AssetActivityEntry& entry)
+        {
+            switch (entry.kind)
+            {
+                case AssetActivityKind::Cooked:      return "cooked";
+                case AssetActivityKind::CookRefused: return "cook refused";
+                case AssetActivityKind::Created:     return "created";
+                case AssetActivityKind::Deleted:     return "deleted";
+                case AssetActivityKind::SourceChanged:
+                {
+                    const AssetPanelEntry* e = model.Find(entry.guid);
+                    const bool cooks = e && (e->kind == AssetKind::Texture || e->kind == AssetKind::Sprite);
+                    return cooks ? "source changed \xE2\x86\x92 queued" : "source changed";
+                }
+            }
+            return "";
+        }
+
+        // ---- Plan 2 Task 8: the Unreferenced card (spec s9.2, step 1) ------
+        // One CardFrame holding an inset Theme::kWell well of rows -- 18px
+        // thumb + a chip-style fileName (AssetPill, the same chip idiom every
+        // other row in this file uses for a name label) + a small Reveal
+        // button -- one row per model.UnusedGuids(), that ordering already
+        // pinned (Task 4) so this card never needs its own sort. ItemSpacing.y
+        // is zeroed for the row loop so the drawn well height (rowH * count,
+        // computed up front so the fill can be painted BEHIND the rows)
+        // matches the rows' own actual pitch exactly -- the same "vertical-
+        // only, don't trust automatic per-item spacing" fix DrawAssetsPanel's
+        // own toolbar-gap comment applies elsewhere in this file.
+        void DrawUnreferencedCard(AssetsPanelState& state, AssetPanelModel& model,
+                                  const AssetsPanelServices& services)
+        {
+            const float cardWidth = ImGui::GetContentRegionAvail().x;
+            if (!BeginCardFrame("##unreferenced", 0, cardWidth))
+                return;
+
+            const std::vector<Arcane::Guid> unused = model.UnusedGuids();
+            if (unused.empty())
+            {
+                ImGui::TextDisabled("everything is referenced");
+            }
+            else
+            {
+                const ImGuiStyle& style = ImGui::GetStyle();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 wellMin   = ImGui::GetCursorScreenPos();
+                const float  wellWidth = ImGui::GetContentRegionAvail().x;
+                const float  rowH      = kTableRowHeight;
+                dl->AddRectFilled(wellMin,
+                                  ImVec2(wellMin.x + wellWidth, wellMin.y + rowH * static_cast<float>(unused.size())),
+                                  ImGui::GetColorU32(Theme::kWell));
+
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x, 0.0f));
+                for (const Arcane::Guid& guid : unused)
+                {
+                    const AssetPanelEntry* e = model.Find(guid);
+                    if (!e)
+                        continue;   // pruned between UnusedGuids() and now -- skip, don't fabricate a row
+
+                    ImGui::PushID(guid.ToString().c_str());
+                    const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+
+                    // Thumb: same 18px well-plus-kind-icon fallback
+                    // DrawAttentionCard's own line 1 uses.
+                    const float thumbY = rowMin.y + (rowH - kAssetRowThumbSize) * 0.5f;
+                    const std::uint64_t thumb = services.resolveAssetThumb ? services.resolveAssetThumb(guid) : 0;
+                    if (thumb != 0)
+                    {
+                        dl->AddImage(static_cast<ImTextureID>(thumb), ImVec2(rowMin.x, thumbY),
+                                    ImVec2(rowMin.x + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
+                    }
+                    else
+                    {
+                        dl->AddRectFilled(ImVec2(rowMin.x, thumbY),
+                                          ImVec2(rowMin.x + kAssetRowThumbSize, thumbY + kAssetRowThumbSize),
+                                          ImGui::GetColorU32(Theme::kWell));
+                        const char* kindIcon = KindIcon(e->kind);
+                        const ImVec2 ks = ImGui::CalcTextSize(kindIcon);
+                        dl->AddText(ImVec2(rowMin.x + (kAssetRowThumbSize - ks.x) * 0.5f,
+                                           thumbY + (kAssetRowThumbSize - ks.y) * 0.5f),
+                                   ImGui::GetColorU32(ImGuiCol_Text), kindIcon);
+                    }
+
+                    // Reveal, right-aligned within the well.
+                    const float revealW = ImGui::CalcTextSize("Reveal").x + style.FramePadding.x * 2.0f;
+                    const float revealX = wellMin.x + wellWidth - revealW;
+
+                    // Name, chip-style -- AssetPill, vertically centered the
+                    // same way DrawAttentionCard positions its own trailing
+                    // pill (rowH - kStatusPillLineHeight, halved).
+                    ImGui::SetCursorScreenPos(ImVec2(rowMin.x + kAssetRowThumbSize + style.ItemInnerSpacing.x,
+                                                     rowMin.y + (rowH - kStatusPillLineHeight) * 0.5f));
+                    AssetPill(e->fileName.c_str());
+
+                    ImGui::SetCursorScreenPos(ImVec2(revealX, rowMin.y + (rowH - ImGui::GetFrameHeight()) * 0.5f));
+                    if (ImGui::Button("Reveal"))
+                    {
+                        // Ruling 10 (plan doc): clear every filter, switch to
+                        // Browse, select the guid -- DrawTable's own scroll-
+                        // to-selection machinery (:1100-1114-ish, keyed off
+                        // state.seenSelectionStamp vs model.selectionStamp)
+                        // does the rest once Browse redraws next frame.
+                        model.SetSearch("");
+                        state.search[0] = '\0';
+                        model.SetKindFilter(-1);
+                        state.railKind = -1;   // -1 = All, the rail's own spelling
+                        state.lens = AssetLens::Browse;
+                        model.Select(guid);
+                    }
+
+                    // Reserve the FULL row as one item -- EndCardFrame's own
+                    // EndGroup measures the union of real items, so every row
+                    // needs at least one spanning the whole (wellWidth, rowH)
+                    // rect, not just the Reveal button's own small one.
+                    ImGui::SetCursorScreenPos(rowMin);
+                    ImGui::Dummy(ImVec2(wellWidth, rowH));
+
+                    ImGui::PopID();
+                }
+                ImGui::PopStyleVar();
+
+                ImGui::TextDisabled("nothing points at these");
+            }
+
+            EndCardFrame();
+        }
+
+        // ---- Plan 2 Task 8: one Scenes-rollup card (spec s9.2, step 3) -----
+        // name (+ boot pill, the SAME source DrawAssetRow's own pill uses) ·
+        // a count line derived from the reference index · a disabled "Focus
+        // in Graph" placeholder (Plan 3 wires it up -- BeginDisabled, not a
+        // stub that pretends to do something).
+        void DrawSceneCard(AssetPanelModel& model, const AssetPanelEntry& e, const Arcane::Guid& bootGuid)
+        {
+            if (!BeginCardFrame(e.guid.ToString().c_str(), 0, ImGui::GetContentRegionAvail().x))
+                return;
+
+            ImGui::Text("%s %s", KindIcon(e.kind), e.fileName.c_str());
+            if (bootGuid.IsValid() && e.guid == bootGuid)
+            {
+                ImGui::SameLine();
+                AssetPill("boot", 1);
+            }
+
+            // n = distinct outbound targets (spec s9.1's dual-edge
+            // accounting -- References AND DerivesFrom both count towards a
+            // scene's own dependency count). The index's manifest already
+            // dedups; this counts distinct DEFENSIVELY rather than trust
+            // that invariant a second time from a display-only consumer.
+            std::vector<Arcane::Guid> targets;
+            if (const AssetReferenceIndex::Node* node = model.RefIndex().Find(e.guid))
+            {
+                targets.reserve(node->outbound.size());
+                for (const Arcane::AssetRef& ref : node->outbound)
+                    targets.push_back(ref.target);
+                std::sort(targets.begin(), targets.end());
+                targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+            }
+
+            int needsAttention = 0;
+            for (const Arcane::Guid& target : targets)
+                if (const AssetPanelEntry* t = model.Find(target);
+                    t && (t->cook == CookState::Refused || t->cook == CookState::Queued))
+                    ++needsAttention;
+
+            char line[64];
+            if (needsAttention > 0)
+                std::snprintf(line, sizeof(line), "%d assets \xC2\xB7 %d need attention",
+                             static_cast<int>(targets.size()), needsAttention);
+            else
+                std::snprintf(line, sizeof(line), "%d assets \xC2\xB7 all cooked",
+                             static_cast<int>(targets.size()));
+            ImGui::TextDisabled("%s", line);
+
+            ImGui::BeginDisabled();
+            ImGui::Button("Focus in Graph");
+            ImGui::EndDisabled();
+
+            EndCardFrame();
+        }
+
+        // ---- Plan 2 Task 7/8: the Status lens body (spec s9.2) -------------
+        // Tiles row, cook-pipeline meter, then a two-column split matching
+        // the board's own layout (`renders/OptionE-Status-FINAL.png`):
+        // "Needs attention"/"Unreferenced" left, "Activity"/"Scenes" right,
+        // both starting at the same Y. A table rather than hand-rolled
+        // column math -- ImGui's own per-cell auto-height handles two
+        // UNEQUAL-height columns without this file inventing a second
+        // version of that logic; NoSavedSettings for the same reason every
+        // other table in this file carries it (session-only layout, nothing
+        // to persist to imgui.ini).
+        void DrawStatusLens(AssetsPanelState& state, AssetPanelModel& model,
+                            const Arcane::Project* project, DocumentHost& /*docs*/,
+                            const AssetsPanelServices& services,
                             AssetsPanelActions& actions)
         {
             // AlwaysUseWindowPadding: a bordered-less child gets NO padding by
@@ -1994,47 +2304,135 @@ namespace Arcane::Editor
             MeterBar("##cookmeter", segments, static_cast<int>(std::size(segments)),
                      ImGui::GetContentRegionAvail().x);
 
-            // ---- needs attention.
+            // ---- two-column body: LEFT (Needs attention -> Unreferenced),
+            // RIGHT (Activity -> Scenes) -- the board's own side-by-side
+            // placement (OptionE-Status-FINAL.png: "Needs attention" and
+            // "Activity" sit at the same Y).
             ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
-            ImGui::TextDisabled("Needs attention");
-
-            // model.Entries() is an unordered_map -- its own doc comment
-            // requires a displaying consumer to sort. Name, then mount path as
-            // the tie-break: the exact ordering AssetPanelModel::UnusedGuids
-            // already pins for Task 8's card, so the two lists cannot read as
-            // sorted by different rules.
-            std::vector<const AssetPanelEntry*> refused, queued;
-            for (const auto& [guid, entry] : model.Entries())
+            if (ImGui::BeginTable("##statuscolumns", 2, ImGuiTableFlags_NoSavedSettings))
             {
-                if (entry.cook == CookState::Refused)     refused.push_back(&entry);
-                else if (entry.cook == CookState::Queued) queued.push_back(&entry);
-            }
-            const auto byName = [](const AssetPanelEntry* a, const AssetPanelEntry* b)
-            { return a->name != b->name ? a->name < b->name : a->mountPath < b->mountPath; };
-            std::sort(refused.begin(), refused.end(), byName);
-            std::sort(queued.begin(), queued.end(), byName);
+                ImGui::TableSetupColumn("##left",  ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("##right", ImGuiTableColumnFlags_WidthFixed, kStatusRightColumnWidth);
+                ImGui::TableNextRow();
 
-            if (refused.empty() && queued.empty())
-            {
-                // Empty state (a desk item -- the board only draws the
-                // populated form, so this one line is the whole design).
-                ImGui::TextDisabled("nothing needs attention");
-            }
-            else
-            {
-                // Ruling 12: ONE fraction for every queued card, derived from
-                // the same HealthCounts the meter shows. Zero-safe -- a
-                // non-empty `queued` list implies health.queued > 0, but the
-                // guard costs nothing and does not depend on that reasoning.
-                const int cookedAndQueued = health.cooked + health.queued;
-                const float queuedProgress = cookedAndQueued > 0
-                    ? static_cast<float>(health.cooked) / static_cast<float>(cookedAndQueued)
-                    : 0.0f;
+                // ---- LEFT: needs attention, then Unreferenced.
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextDisabled("Needs attention");
 
-                for (const AssetPanelEntry* e : refused)
-                    DrawAttentionCard(model, services, actions, *e, /*refused=*/true, 0.0f);
-                for (const AssetPanelEntry* e : queued)
-                    DrawAttentionCard(model, services, actions, *e, /*refused=*/false, queuedProgress);
+                // model.Entries() is an unordered_map -- its own doc comment
+                // requires a displaying consumer to sort. Name, then mount
+                // path as the tie-break: the exact ordering
+                // AssetPanelModel::UnusedGuids already pins for the
+                // Unreferenced card, so the lists cannot read as sorted by
+                // different rules.
+                std::vector<const AssetPanelEntry*> refused, queued;
+                for (const auto& [guid, entry] : model.Entries())
+                {
+                    if (entry.cook == CookState::Refused)     refused.push_back(&entry);
+                    else if (entry.cook == CookState::Queued) queued.push_back(&entry);
+                }
+                const auto byName = [](const AssetPanelEntry* a, const AssetPanelEntry* b)
+                { return a->name != b->name ? a->name < b->name : a->mountPath < b->mountPath; };
+                std::sort(refused.begin(), refused.end(), byName);
+                std::sort(queued.begin(), queued.end(), byName);
+
+                if (refused.empty() && queued.empty())
+                {
+                    // Empty state (a desk item -- the board only draws the
+                    // populated form, so this one line is the whole design).
+                    ImGui::TextDisabled("nothing needs attention");
+                }
+                else
+                {
+                    // Ruling 12: ONE fraction for every queued card, derived
+                    // from the same HealthCounts the meter shows. Zero-safe
+                    // -- a non-empty `queued` list implies health.queued > 0,
+                    // but the guard costs nothing and does not depend on
+                    // that reasoning.
+                    const int cookedAndQueued = health.cooked + health.queued;
+                    const float queuedProgress = cookedAndQueued > 0
+                        ? static_cast<float>(health.cooked) / static_cast<float>(cookedAndQueued)
+                        : 0.0f;
+
+                    for (const AssetPanelEntry* e : refused)
+                        DrawAttentionCard(model, services, actions, *e, /*refused=*/true, 0.0f, 0, 0);
+                    for (const AssetPanelEntry* e : queued)
+                        DrawAttentionCard(model, services, actions, *e, /*refused=*/false, queuedProgress,
+                                          health.cooked, cookedAndQueued);
+                }
+
+                ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
+                ImGui::TextDisabled("Unreferenced");
+                DrawUnreferencedCard(state, model, services);
+
+                // ---- RIGHT: Activity, then Scenes.
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextDisabled("Activity");
+                if (!services.activity || services.activity->Size() == 0)
+                {
+                    ImGui::TextDisabled("no activity yet");
+                }
+                else
+                {
+                    // Frame-lifetime string storage (plan doc Step 2): build
+                    // every row's std::strings into a vector reserved to the
+                    // EXACT final count first (Size(), never re-grown after),
+                    // so the vector never reallocates once we start taking
+                    // .c_str() pointer views into it below -- the SSO trap
+                    // this file's brief calls out by name.
+                    struct ActivityRow { std::string age, title, detail; Arcane::Guid guid; };
+                    std::vector<ActivityRow> rows;
+                    rows.reserve(services.activity->Size());
+                    services.activity->ForEachNewestFirst([&](const AssetActivityEntry& entry)
+                    {
+                        ActivityRow row;
+                        row.age   = FormatActivityAge(entry.when);
+                        row.title = ActivityTitle(model, entry);
+                        const std::string base = entry.name.empty() ? entry.guid.ToString() : entry.name;
+                        row.detail = entry.detail.empty() ? base : (base + " \xE2\x80\x94 " + entry.detail);
+                        row.guid  = entry.guid;
+                        rows.push_back(std::move(row));
+                    });
+
+                    std::vector<TimelineEntry> feedEntries;
+                    feedEntries.reserve(rows.size());
+                    for (const ActivityRow& row : rows)
+                        feedEntries.push_back(TimelineEntry{ row.age.c_str(), row.title.c_str(), row.detail.c_str() });
+
+                    const TimelineFeedResult feedResult = TimelineFeed("##activityfeed", feedEntries.data(),
+                                                                       static_cast<int>(feedEntries.size()));
+                    if (feedResult.hoveredIndex >= 0)
+                        DrawAssetPeekTooltip(model, services,
+                                            rows[static_cast<std::size_t>(feedResult.hoveredIndex)].guid,
+                                            /*forceShow=*/true);
+                    if (feedResult.clickedIndex >= 0)
+                        model.Select(rows[static_cast<std::size_t>(feedResult.clickedIndex)].guid);
+                }
+
+                ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
+                ImGui::TextDisabled("Scenes");
+
+                // bootGuid: the SAME source DrawAssetRow's own "boot" pill
+                // reads (DrawBrowseLens's own parse of the manifest), never a
+                // second one -- an unparseable bootScene resolves to the nil
+                // guid, which no real scene guid ever equals.
+                const Arcane::Guid bootGuid = project
+                    ? Arcane::Guid::FromString(project->Manifest().bootScene).value_or(Arcane::Guid::Nil())
+                    : Arcane::Guid::Nil();
+
+                std::vector<const AssetPanelEntry*> scenes;
+                for (const auto& [guid, entry] : model.Entries())
+                    if (entry.kind == AssetKind::Scene)
+                        scenes.push_back(&entry);
+                std::sort(scenes.begin(), scenes.end(), byName);
+
+                if (scenes.empty())
+                    ImGui::TextDisabled("no scenes");
+                else
+                    for (const AssetPanelEntry* e : scenes)
+                        DrawSceneCard(model, *e, bootGuid);
+
+                ImGui::EndTable();
             }
 
             ImGui::EndChild();
@@ -2082,7 +2480,7 @@ namespace Arcane::Editor
             else if (state.lens == AssetLens::Browse)
                 DrawBrowseLens(state, model, project, docs, services, actions);
             else if (state.lens == AssetLens::Status)
-                DrawStatusLens(state, model, docs, services, actions);
+                DrawStatusLens(state, model, project, docs, services, actions);
             else
                 // Graph only, now that Status has landed (Plan 2 Task 7).
                 // Unreachable in practice -- kLensEnabledMask keeps the Graph
@@ -2092,7 +2490,7 @@ namespace Arcane::Editor
         }
         ImGui::EndChild();
 
-        DrawBottomBar(model);
+        DrawBottomBar(state, model);
 
         ImGui::End();
         return actions;

@@ -289,11 +289,23 @@ namespace Arcane::Editor
     // call (Task 8's feed builds frame-local std::strings first).
     struct TimelineEntry { const char* age; const char* title; const char* detail; };
 
+    // Plan 2 Task 8 (controller ruling A, sole caller: the Assets panel's
+    // activity feed): which row (if any) is hovered/clicked THIS frame, -1
+    // for neither. Computed INSIDE TimelineFeed's own per-row loop -- by the
+    // time a caller could otherwise react to a hover, ImGui's "last
+    // submitted item" is whichever row was drawn LAST, not necessarily the
+    // hovered one, so the widget must answer this itself.
+    struct TimelineFeedResult { int hoveredIndex = -1; int clickedIndex = -1; };
+
     // Vertical timeline: a 1px Theme::kSeparator line connecting a 7px
     // Theme::kGrab dot per entry (spec §11.2: "feed dots 7px"), each dot
     // vertically centered on its entry's first text line. Per entry: dim age
-    // then normal title on line one, dim detail on line two beneath.
-    void TimelineFeed(const char* id, const TimelineEntry* entries, int count);
+    // then normal title on line one, dim detail on line two beneath. Every
+    // pixel drawn is unchanged from the pre-Task-8 version -- the only
+    // addition is one InvisibleButton per row (submitted before that row's
+    // own drawlist paint, so the paint stays pure overdraw) giving each
+    // entry its own hover/click hit target; see TimelineFeedResult.
+    TimelineFeedResult TimelineFeed(const char* id, const TimelineEntry* entries, int count);
 
     // ---- colour ---------------------------------------------------------------
     // sRGB <-> linear, the IEC 61966-2-1 piecewise curve. This is the SAME

@@ -1045,16 +1045,29 @@ namespace Arcane::Editor
     //
     // `id` scopes the feed for the same headroom reason as StatTile's --
     // nothing inside needs it today.
-    void TimelineFeed(const char* id, const TimelineEntry* entries, int count)
+    //
+    // Plan 2 Task 8 (controller ruling A): each row gets its own
+    // InvisibleButton, sized to that row's two text lines and submitted
+    // BEFORE the row's own drawlist paint (an InvisibleButton draws
+    // nothing, so paint order is unaffected either way -- submitted first
+    // purely so every subsequent AddText/AddLine/AddCircleFilled call below
+    // stays pure overdraw, this file's usual discipline). IsItemHovered()
+    // is checked immediately after each row's own button, which is the only
+    // point at which "last submitted item" reliably names THAT row -- a
+    // caller checking hover after TimelineFeed returns would only ever see
+    // the LAST row's button. Rows never overlap (disjoint Y ranges), so at
+    // most one can be hovered/clicked in a given frame.
+    TimelineFeedResult TimelineFeed(const char* id, const TimelineEntry* entries, int count)
     {
+        TimelineFeedResult result;
         if (ImGui::GetCurrentWindowRead()->SkipItems)
-            return;
+            return result;
 
         ImGui::PushID(id);
         if (count <= 0)
         {
             ImGui::PopID();
-            return;
+            return result;
         }
 
         const ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -1070,11 +1083,23 @@ namespace Arcane::Editor
         const float textX = pos.x + kDotSize + kTextGap;
         const float lineHeight = ImGui::GetTextLineHeight();
         const float width = ImGui::GetContentRegionAvail().x;
+        const float rowHeight = lineHeight * 2.0f + kLineGap;   // age/title line + detail line
 
         float y = pos.y;
         ImVec2 prevDotCenter{};
         for (int i = 0; i < count; ++i)
         {
+            // Per-entry hit target -- placed first (see the function's own
+            // comment on why paint order doesn't care).
+            ImGui::SetCursorScreenPos(ImVec2(pos.x, y));
+            ImGui::PushID(i);
+            const bool clicked = ImGui::InvisibleButton("##row", ImVec2(width, rowHeight));
+            if (ImGui::IsItemHovered())
+                result.hoveredIndex = i;
+            if (clicked)
+                result.clickedIndex = i;
+            ImGui::PopID();
+
             const ImVec2 dotCenter(lineX, y + lineHeight * 0.5f);
             if (i > 0)
                 dl->AddLine(prevDotCenter, dotCenter, ImGui::GetColorU32(Theme::kSeparator), 1.0f);
@@ -1098,8 +1123,13 @@ namespace Arcane::Editor
                 y += kEntryGap;
         }
 
+        // Cursor drifted through the per-row SetCursorScreenPos calls above
+        // -- reset to `pos` so this closing Dummy reserves the identical
+        // (width, total height) footprint the pre-Task-8 version did.
+        ImGui::SetCursorScreenPos(pos);
         ImGui::Dummy(ImVec2(width, y - pos.y));
         ImGui::PopID();
+        return result;
     }
 
     // CURVE IS MIRRORED in data/shaders/tonemap.hlsl (HLSL, branchless min
