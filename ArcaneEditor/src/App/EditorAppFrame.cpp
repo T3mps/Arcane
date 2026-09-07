@@ -2446,10 +2446,40 @@ namespace Arcane::Editor
     // THE ONE DISPATCHER. A completed dialog result -> the matching mint.
     void EditorApp::ConsumeCreateResult(const Arcane::Editor::CreateAssetResult& r)
     {
+        // Spec s7 ("failures route through the existing ModalErrorQueue +
+        // Problems") and s13's identical pairing. The modal is the immediate
+        // notice and dies with its OK button; the Problems row is the trace
+        // that outlives it. One helper so the three failure exits below cannot
+        // drift apart on wording, code, or scope -- and so the row's message is
+        // the SAME string the modal showed. See m_createDiagnostics'
+        // member-rationale comment (EditorApp.hpp) for the "assets:create" key
+        // ownership and why the accumulator is per-project.
+        auto failCreate = [this](std::string message, std::string detail, std::string file)
+        {
+            m_modalErrors.Push("Create Failed", message);
+
+            Arcane::Diagnostic d;
+            d.severity = Arcane::DiagSeverity::Error;
+            d.scope    = Arcane::DiagScope::Assets;
+            d.code     = "assets.create.failed";
+            d.message  = std::move(message);
+            d.detail   = std::move(detail);
+            // A File locator, whose click is a DOCUMENTED no-op (RouteLocator's
+            // File branch only matches open shader documents) -- exactly the
+            // build.module.failed row's precedent. There is deliberately no
+            // Asset locator: the create FAILED, so no guid exists to point at.
+            if (!file.empty())
+                d.locator = Arcane::DiagLocator::File(std::move(file));
+            m_createDiagnostics.push_back(std::move(d));
+            Arcane::Diagnostics::Publish("assets:create", m_createDiagnostics);
+        };
+
         const Arcane::Project* proj = m_runtime->CurrentProject();
         if (!proj)
         {
-            m_modalErrors.Push("Create Failed", "The project closed before the asset was created.");
+            failCreate("The project closed before the asset was created.",
+                       "The create dialog outlived the project it was opened for.",
+                       /*file=*/"");
             return;
         }
 
@@ -2475,10 +2505,9 @@ namespace Arcane::Editor
         std::filesystem::create_directories(dir, ec);
         if (ec)
         {
-            m_modalErrors.Push("Create Failed",
-                               "Could not create the folder '" + dir.generic_string() +
-                               "' (see Console).");
             ARC_WARN("Arcane Editor: could not create '{}': {}", dir.generic_string(), ec.message());
+            failCreate("Could not create the folder '" + dir.generic_string() + "' (see Console).",
+                       ec.message(), dir.generic_string());
             return;
         }
 
@@ -2531,8 +2560,9 @@ namespace Arcane::Editor
 
         if (!created.IsValid())
         {
-            m_modalErrors.Push("Create Failed",
-                               "Could not create '" + target.generic_string() + "' (see Console).");
+            failCreate("Could not create '" + target.generic_string() + "' (see Console).",
+                       "The mint for this kind refused or the file could not be written.",
+                       target.generic_string());
             return;
         }
 

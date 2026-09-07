@@ -120,6 +120,17 @@ namespace Arcane::Editor
             // at :1858 and the assisted-rename rewrite at :4122), so one hook
             // here covers both rather than two calls at the document.
             InvalidateMaterialThumb(id);
+            // Final fix wave (I1): the panel model's providers cached this
+            // material's surface/refs, and the save may have changed both (kind
+            // edited, parent re-pointed, a texture param added). The re-baseline
+            // just below deliberately makes PollAssetWatch blind to our OWN
+            // save, so this is the ONLY site that can dirty the model for it.
+            // MarkAllDirty rather than MarkDirty(id): an INSTANCE's surface
+            // resolves through its parent chain, so a saved base invalidates
+            // every descendant's answer, not just its own -- and at the current
+            // scale (tens of assets, one rebuild) the whole-model rebuild is
+            // cheaper than the dependency walk that would narrow it.
+            m_assetModel.MarkAllDirty();
             // Re-baseline the file watcher: our own save is not an external
             // edit and must not bounce back as a reload.
             if (const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject()
@@ -450,7 +461,17 @@ namespace Arcane::Editor
                 // The panel model's cached surface/refs (isInstance, fold
                 // target, ...) may have just changed underneath it -- ask
                 // the providers again next rebuild.
-                m_assetModel.MarkDirty(e.guid);
+                //
+                // Final fix wave (I1): WIDENED from MarkDirty(e.guid) to the
+                // whole model, for the same reason as onAssetSaved's mark (see
+                // its comment) -- an instance's surface resolves THROUGH this
+                // material's parent chain, so an edit here changes what every
+                // descendant answers, and a per-guid mark leaves those rows
+                // showing the old subkind until something unrelated dirties
+                // them. Replaced rather than augmented: MarkAllDirty subsumes
+                // the per-guid mark, and keeping both would just read as though
+                // this guid needed something the others don't.
+                m_assetModel.MarkAllDirty();
                 if (m_resolver)
                     m_resolver->InvalidateMaterial(e.guid);
                 // Asset-manager Task 8: an external .arcmat edit changes what
@@ -1095,6 +1116,11 @@ namespace Arcane::Editor
     // fallback, which correctly leaves this empty.
     // m_createDialog (asset-manager Task 12): an in-flight create dialog's
     // parent/texture Guids and folder index all name the OUTGOING project.
+    // m_createDiagnostics (asset-manager final fix wave): the failed-create
+    // Problems accumulator ConsumeCreateResult republishes THE WHOLE OF on the
+    // next failure -- its rows' messages and File locators name paths under the
+    // outgoing project's Content tree, the same staleness class
+    // m_reportDiagnostics and m_cookDiagnostics below already document.
     // m_pendingReports / m_reportDiagnostics (GPU crash diagnostics arc,
     // Task 9): m_pendingReports is a report path already queued against the
     // outgoing project by OnReportWritten -- draining it post-switch would
@@ -1143,6 +1169,13 @@ namespace Arcane::Editor
         // discontinuity, and a stale `open` would re-raise it against the new
         // project with the old project's fields.
         m_createDialog = {};
+        // Final fix wave (I3): the failed-create Problems accumulator. Same
+        // staleness class m_reportDiagnostics/m_cookDiagnostics document --
+        // every row's message and File locator name a path under the OUTGOING
+        // project's Content tree, and m_consoleDiag.store.ClearAll() above only
+        // clears the PUBLISHED "assets:create" set, so without this the next
+        // post-switch failure would republish and resurrect all of them.
+        m_createDiagnostics.clear();
         m_dialogs.ClearAll();
         m_modalErrors.Clear();
         m_materialMtimes.clear();
@@ -1995,6 +2028,14 @@ namespace Arcane::Editor
                 m_runtime ? m_runtime->RegisterCreatedAsset(diagPath) : std::nullopt;
             if (!id)
                 continue;
+
+            // Final fix wave (I2): a .arcdiag just entered the registry, so the
+            // panel model's entry list is short by one -- the same
+            // drop-discovery reasoning as every other RegisterCreatedAsset
+            // consumer (Task 5). Without this the row appears only when
+            // something unrelated dirties the model, while the Problems row
+            // published just below already points the user AT the browser.
+            m_assetModel.MarkAllDirty();
 
             // KEY OWNERSHIP: "diagnostics:reports" -- accumulate (never
             // clear here) across the whole session; each report gets its

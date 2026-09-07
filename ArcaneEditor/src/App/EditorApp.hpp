@@ -1674,6 +1674,19 @@ namespace Arcane::Editor
         // writer.
         std::vector<Arcane::Diagnostic>    m_reportDiagnostics;
 
+        // KEY OWNERSHIP: "assets:create" -- the failed-create trail, spec s7's
+        // "failures route through the existing ModalErrorQueue + Problems" and
+        // s13's same pairing. Accumulated across the CURRENT project's session
+        // exactly like m_reportDiagnostics above (one row per failed create,
+        // republished whole so an earlier failure survives a later one under
+        // publication-group replace semantics), and reset by
+        // ResetPerProjectState for the same reason: every row's detail line
+        // names a path under the OUTGOING project's Content tree. Main-thread
+        // only -- ConsumeCreateResult, the one create dispatcher, is the only
+        // writer. The modal is the immediate notice; this is the trace that
+        // outlives the modal's OK button.
+        std::vector<Arcane::Diagnostic>    m_createDiagnostics;
+
 #if !defined(ARCANE_DIST)
         // ---- Deliberate GPU fault (GPU crash diagnostics arc, Task 11) ------
         // The desk battery's trigger: Build -> Diagnostics -> Crash GPU

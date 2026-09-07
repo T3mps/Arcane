@@ -768,8 +768,12 @@ namespace Arcane::Editor
         if (givenUp || !services.hostConfig)
             return false;
 
-        // NodeSet{} -- batch + post + tonemap + mesh and nothing else. A
+        // No NodeSet argument: CreateOffscreen's own `const NodeSet& nodes = {}`
+        // default is what we want -- hostHud/pickOutline/gameUi all false, so
+        // the vehicle is batch + post + tonemap + mesh and nothing else. A
         // thumbnail has no host chrome, no game HUD and nothing to pick.
+        // (This comment used to name a `NodeSet{}` argument the call has never
+        // passed; the effective node set is the same either way.)
         ctx = Arcane::NriGraphContext::CreateOffscreen(*services.hostConfig, chrome.Device(),
                                                        kThumbSize, kThumbSize);
         if (!ctx)
