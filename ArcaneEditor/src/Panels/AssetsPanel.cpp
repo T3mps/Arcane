@@ -62,11 +62,11 @@ namespace Arcane::Editor
         //
         // 2026-09-07 follow-up (spec s5/s11.2 addendum): the pane's width
         // is no longer a single pinned constant -- it is user-resizable
-        // via a drag splitter (AssetsPanelState::previewPaneWidth,
-        // session-only, matching every other field on that struct). What
-        // was `kPreviewPaneWidth = 330.0f` becomes a default + clamp range:
-        // half the old pinned width, resizable within [min, max].
-        constexpr float kPreviewPaneDefaultWidth = 165.0f;
+        // via a drag splitter (AssetsPanelState::previewPaneWidth, the
+        // DESIRED width, session-only, matching every other field on that
+        // struct). What was `kPreviewPaneWidth = 330.0f` becomes a default
+        // (AssetsPanel.hpp's kAssetsPreviewPaneDefaultWidth, half the old
+        // pinned width) + a clamp range, resizable within [min, max].
         constexpr float kPreviewPaneMinWidth     = 120.0f;
         constexpr float kPreviewPaneMaxWidth     = 480.0f;
         // The table's own readable-width floor: the splitter clamps the
@@ -81,24 +81,46 @@ namespace Arcane::Editor
         constexpr float kPreviewThumbSize        = 140.0f;
         constexpr float kActionButtonHeight      = 24.0f;
 
-        // Clamp the pane's width to [kPreviewPaneMinWidth, kPreviewPaneMaxWidth],
-        // then further cap it so the table (rail + 3 ItemSpacing gaps + the
-        // splitter bar + the pane, all inside `panelWidth`) never drops
-        // below kMinReadableTableWidth. The two floors cannot actually
-        // fight in practice -- showPreview only ever calls this at
-        // panelWidth >= 720, where even the pane's max clamp
-        // (kPreviewPaneMaxWidth) leaves the table comfortably above its
-        // floor -- but the table-floor cap is still evaluated every frame
-        // (not just mid-drag) so a WINDOW resize that narrows `panelWidth`
-        // reclamps an already-wide pane without needing a fresh drag.
-        float ClampPreviewPaneWidth(float desired, float panelWidth)
+        // The absolute sane-range clamp ONLY -- [kPreviewPaneMinWidth,
+        // kPreviewPaneMaxWidth] -- and nothing else. This is the ONLY clamp
+        // ever applied to a value before it is written into
+        // AssetsPanelState::previewPaneWidth (the splitter's drag and its
+        // double-click reset, both below, are the field's only two
+        // writers). Keeping the table-floor cap OUT of this function is
+        // exactly what a 2026-09-07 review fix required: that cap (see
+        // ClampPreviewForLayout) depends on `panelWidth`, which changes on
+        // every window resize, so folding it into the STORED desired width
+        // would silently and PERMANENTLY forget the user's real preference
+        // the instant the panel transiently narrows, with no way back once
+        // it widens again -- a ratchet, not a clamp.
+        float ClampPreviewSaneRange(float desired)
         {
-            float w = std::clamp(desired, kPreviewPaneMinWidth, kPreviewPaneMaxWidth);
-            const float floorForTable = panelWidth - kRailWidth
-                                       - ImGui::GetStyle().ItemSpacing.x * 3.0f
-                                       - kPreviewSplitBarPx - kMinReadableTableWidth;
-            if (floorForTable < w)
-                w = std::max(kPreviewPaneMinWidth, floorForTable);
+            return std::clamp(desired, kPreviewPaneMinWidth, kPreviewPaneMaxWidth);
+        }
+
+        // The full LAYOUT clamp: the sane range above, THEN a further cap on
+        // the pane so the table (rail + 3 ItemSpacing gaps + the splitter
+        // bar + the pane, all inside `panelWidth`) never drops below
+        // kMinReadableTableWidth. Used every frame to compute a purely
+        // local, throwaway DRAWN width -- never fed back into the stored
+        // desired width (see ClampPreviewSaneRange's own comment on why
+        // not). The two floors cannot actually fight in practice --
+        // showPreview only ever calls this at panelWidth >= 720, where even
+        // the pane's own max clamp (kPreviewPaneMaxWidth) leaves the table
+        // comfortably above its floor.
+        float ClampPreviewForLayout(float desired, float panelWidth)
+        {
+            float w = ClampPreviewSaneRange(desired);
+            // How far the pane's DRAWN width can grow this frame before the
+            // table would drop under its own readable floor -- a cap ON THE
+            // PANE (not a floor under the table; kMinReadableTableWidth is
+            // that floor, this is the same constraint expressed in the
+            // pane's own units).
+            const float previewWidthCap = panelWidth - kRailWidth
+                                         - ImGui::GetStyle().ItemSpacing.x * 3.0f
+                                         - kPreviewSplitBarPx - kMinReadableTableWidth;
+            if (previewWidthCap < w)
+                w = std::max(kPreviewPaneMinWidth, previewWidthCap);
             return w;
         }
 
@@ -1032,7 +1054,27 @@ namespace Arcane::Editor
         // panel's state session-only, unlike the Material panel's persisted
         // split ratio. Double-click restores the default width, same as
         // PaneSplitter's own reset gesture.
-        void PreviewPaneSplitter(float& width, float panelWidth)
+        //
+        // 2026-09-07 review fix: `drawnWidth` (this frame's already-clamped
+        // layout width, computed once by the caller via
+        // ClampPreviewForLayout) and `desiredWidth` (AssetsPanelState::
+        // previewPaneWidth, the STORED field) are now two separate
+        // parameters -- this function is the field's ONLY writer, and it
+        // writes it in exactly two places below (an active drag, and the
+        // double-click reset), through ClampPreviewSaneRange only. Baselining
+        // the drag off `drawnWidth` (where the bar is actually drawn this
+        // frame) rather than the stale `desiredWidth` matters when the pane
+        // is CURRENTLY capped down by ClampPreviewForLayout's table-floor
+        // term (panel narrower than the user's real desired width): the
+        // splitter still tracks the mouse 1:1 from wherever it visually
+        // sits, instead of needing the drag to first "use up" the gap
+        // between the stale desired value and today's cap before anything
+        // moves. Because the table-floor cap never touches `desiredWidth`
+        // itself, a drag that happens while capped still records the user's
+        // true intent (bounded only by the sane range), and the pane
+        // springs back out to it the next time the panel widens with no
+        // further dragging needed.
+        void PreviewPaneSplitter(float drawnWidth, float& desiredWidth)
         {
             const ImVec2 size(kPreviewSplitBarPx, ImGui::GetContentRegionAvail().y);
             if (size.x <= 0.0f || size.y <= 0.0f)
@@ -1050,10 +1092,10 @@ namespace Arcane::Editor
                 // Dragging the splitter LEFT (negative MouseDelta.x) hands
                 // the table's space to the pane -- width grows by the same
                 // distance the mouse moved, hence the sign flip.
-                width = ClampPreviewPaneWidth(width - ImGui::GetIO().MouseDelta.x, panelWidth);
+                desiredWidth = ClampPreviewSaneRange(drawnWidth - ImGui::GetIO().MouseDelta.x);
             }
             if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                width = kPreviewPaneDefaultWidth;
+                desiredWidth = kAssetsPreviewPaneDefaultWidth;
 
             // Same three-tone ramp as ShaderEditorDocument's PaneSplitter
             // and ImGui's own docking splitter: hairline at rest, one step
@@ -1239,13 +1281,23 @@ namespace Arcane::Editor
             const float panelWidth = ImGui::GetContentRegionAvail().x;
             const bool showPreview = panelWidth >= kPreviewHidePanelWidth;
 
-            // 2026-09-07 follow-up: reclamp every frame, not only mid-drag --
-            // a WINDOW resize (no splitter interaction at all) can shrink
-            // `panelWidth` out from under an already-wide pane, and this is
-            // the one place that catches it before the layout below reads
-            // `state.previewPaneWidth`.
-            if (showPreview)
-                state.previewPaneWidth = ClampPreviewPaneWidth(state.previewPaneWidth, panelWidth);
+            // 2026-09-07 review fix: `drawnWidth` is a purely LOCAL, per-frame
+            // clamp of `state.previewPaneWidth` (the stored DESIRED width) --
+            // it is what the layout below actually draws against, and it is
+            // thrown away at the end of this function. The first cut of this
+            // feature instead reassigned `state.previewPaneWidth` here
+            // directly, which meant a transient panel-narrowing (a plain
+            // window resize, no splitter interaction at all) silently and
+            // PERMANENTLY reduced whatever the user had actually dragged to,
+            // with no way back once the panel widened again -- a ratchet,
+            // not a clamp. Keeping the two separate means a WINDOW resize
+            // still reclamps the DRAWN width every frame (so the table never
+            // gets crushed), while the DESIRED width survives the narrow
+            // interval untouched and reasserts itself the moment there is
+            // room again.
+            const float drawnWidth = showPreview
+                ? ClampPreviewForLayout(state.previewPaneWidth, panelWidth)
+                : 0.0f;
 
             DrawRail(state, model, actions);
             ImGui::SameLine();
@@ -1257,16 +1309,16 @@ namespace Arcane::Editor
             const float tableWidth = showPreview
                 ? std::max(0.0f, panelWidth - kRailWidth
                                   - ImGui::GetStyle().ItemSpacing.x * 3.0f
-                                  - kPreviewSplitBarPx - state.previewPaneWidth)
+                                  - kPreviewSplitBarPx - drawnWidth)
                 : 0.0f;
             DrawTable(state, model, project, docs, services, actions, bootGuid, tableWidth);
 
             if (showPreview)
             {
                 ImGui::SameLine();
-                PreviewPaneSplitter(state.previewPaneWidth, panelWidth);
+                PreviewPaneSplitter(drawnWidth, state.previewPaneWidth);
                 ImGui::SameLine();
-                DrawPreviewPane(model, project, docs, services, actions, state.previewPaneWidth);
+                DrawPreviewPane(model, project, docs, services, actions, drawnWidth);
             }
         }
     }

@@ -40,6 +40,14 @@ namespace Arcane::Editor
     // shifts"), but both stay disabled until their own plan lands.
     enum class AssetLens : std::uint8_t { Browse, Graph, Status };
 
+    // The preview pane's default width (2026-09-07 follow-up). Lives here,
+    // not as a second literal duplicated in AssetsPanel.cpp, so
+    // AssetsPanelState's own field default below and the splitter's
+    // double-click-reset target (AssetsPanel.cpp) can never drift apart --
+    // a review minor on the first cut of this feature, where both spellings
+    // independently hardcoded 165.0f.
+    inline constexpr float kAssetsPreviewPaneDefaultWidth = 165.0f;
+
     // Session-only UI state (spec s5: panel state is session-only in v1).
     // `search` feeds AssetPanelModel::SetSearch every frame. `railKind` is
     // unused until Task 10 wires the rail -- left at -1 (All) so feeding it
@@ -54,16 +62,25 @@ namespace Arcane::Editor
         std::uint32_t seenSelectionStamp = 0; // scroll-to-selection once
 
         // 2026-09-07 follow-up (spec s5/s11.2 addendum, post-Task-11): the
-        // preview pane's width, user-resizable via a drag splitter between
-        // the table and the pane. Session-only, same convention as every
-        // other field here -- NOT persisted to imgui.ini (contrast the
+        // preview pane's DESIRED width, user-resizable via a drag splitter
+        // between the table and the pane. Session-only, same convention as
+        // every other field here -- NOT persisted to imgui.ini (contrast the
         // Material panel's ShaderEditorDocument PaneSplitter ratio, which IS
-        // persisted; this one deliberately is not). The literal default
-        // (165.0f) duplicates AssetsPanel.cpp's kPreviewPaneDefaultWidth,
-        // which -- along with the clamp range kPreviewPaneMinWidth/
-        // kPreviewPaneMaxWidth ([120, 480]) -- is where the splitter itself
-        // lives.
-        float previewPaneWidth = 165.0f;
+        // persisted; this one deliberately is not).
+        //
+        // "Desired", precisely: this field is written ONLY by the splitter's
+        // drag and its double-click reset (both in AssetsPanel.cpp) -- never
+        // by the per-frame layout clamp, which computes a separate, purely
+        // local DRAWN width instead (ClampPreviewForLayout). A review fix
+        // (2026-09-07): the first cut clamped this field itself every frame,
+        // which meant a transient panel-narrowing (a window resize, nothing
+        // the user asked of the pane) silently and PERMANENTLY reduced
+        // whatever the user had actually dragged to, with no way back once
+        // the panel widened again. Splitting "what the user wants" from
+        // "what fits on screen this frame" is what fixes that: the wide
+        // value survives the narrow interval untouched and reasserts itself
+        // the moment there is room again.
+        float previewPaneWidth = kAssetsPreviewPaneDefaultWidth;
 
         // Task 10: session-only fold/group open state, MIRRORING
         // AssetPanelModel's own private m_groupOpen/m_childrenOpen (same
