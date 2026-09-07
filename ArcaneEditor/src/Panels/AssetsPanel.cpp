@@ -757,11 +757,25 @@ namespace Arcane::Editor
             ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(Theme::kChrome));
 
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+            const float rowWidth = ImGui::GetContentRegionAvail().x;
             const float padX = ImGui::GetStyle().FramePadding.x;
             const float textY = rowMin.y + (kTableRowHeight - ImGui::GetTextLineHeight()) * 0.5f;
 
-            ImGui::GetWindowDrawList()->AddText(ImVec2(rowMin.x + padX, textY),
-                                                ImGui::GetColorU32(ImGuiCol_TextDisabled), "Name");
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddText(ImVec2(rowMin.x + padX, textY),
+                       ImGui::GetColorU32(ImGuiCol_TextDisabled), "Name");
+
+            // User nitpick (2026-09-07): the mock's header <div> carries
+            // `border-bottom: 1px solid #333333` (OptionBC.dc.html) --
+            // Theme::kSeparator IS that exact hex (AssetPill's own comment
+            // makes the same mapping for its border), so no new token is
+            // needed. Full row width, drawn at the row's own bottom edge
+            // (rowMin.y + kTableRowHeight is already pixel-integral -- same
+            // "no +0.5" convention DrawBottomBar's own hairline divider
+            // uses just above this file, and it measures crisp there too).
+            const float lineY = rowMin.y + kTableRowHeight;
+            dl->AddLine(ImVec2(rowMin.x, lineY), ImVec2(rowMin.x + rowWidth, lineY),
+                       ImGui::GetColorU32(Theme::kSeparator));
         }
 
         // ---- Task 10: one top-level asset row (spec s6/s11.2) --------------
