@@ -54,15 +54,53 @@ namespace Arcane::Editor
         constexpr float kTooltipWidth     = 210.0f;
         constexpr float kTooltipThumbSize = 64.0f;
 
-        // Task 11 (spec s5/s6/s11.2) fixed geometry: the preview pane is a
-        // pinned 330px column, hidden below a 720px panel width (the table
-        // never drops below readable width -- spec s5); its thumb is 140px;
-        // its action buttons are full-width and 24px tall (§11.2's table row
-        // height, reused rather than inventing a new pinned value).
-        constexpr float kPreviewPaneWidth      = 330.0f;
-        constexpr float kPreviewHidePanelWidth = 720.0f;
-        constexpr float kPreviewThumbSize      = 140.0f;
-        constexpr float kActionButtonHeight    = 24.0f;
+        // Task 11 (spec s5/s6/s11.2) fixed geometry: the preview pane is
+        // hidden below a 720px panel width (the table never drops below
+        // readable width -- spec s5); its thumb is 140px; its action
+        // buttons are full-width and 24px tall (§11.2's table row height,
+        // reused rather than inventing a new pinned value).
+        //
+        // 2026-09-07 follow-up (spec s5/s11.2 addendum): the pane's width
+        // is no longer a single pinned constant -- it is user-resizable
+        // via a drag splitter (AssetsPanelState::previewPaneWidth,
+        // session-only, matching every other field on that struct). What
+        // was `kPreviewPaneWidth = 330.0f` becomes a default + clamp range:
+        // half the old pinned width, resizable within [min, max].
+        constexpr float kPreviewPaneDefaultWidth = 165.0f;
+        constexpr float kPreviewPaneMinWidth     = 120.0f;
+        constexpr float kPreviewPaneMaxWidth     = 480.0f;
+        // The table's own readable-width floor: the splitter clamps the
+        // pane down (rather than letting it squeeze the table into a
+        // sliver) before the <720px hide rule would otherwise have to do
+        // that job wholesale (requirement 3 of the follow-up brief).
+        constexpr float kMinReadableTableWidth   = 200.0f;
+        // The divider's hit width -- same recipe as ShaderEditorDocument.cpp's
+        // PaneSplitter (kSplitBarPx), a few-px InvisibleButton strip.
+        constexpr float kPreviewSplitBarPx       = 6.0f;
+        constexpr float kPreviewHidePanelWidth   = 720.0f;
+        constexpr float kPreviewThumbSize        = 140.0f;
+        constexpr float kActionButtonHeight      = 24.0f;
+
+        // Clamp the pane's width to [kPreviewPaneMinWidth, kPreviewPaneMaxWidth],
+        // then further cap it so the table (rail + 3 ItemSpacing gaps + the
+        // splitter bar + the pane, all inside `panelWidth`) never drops
+        // below kMinReadableTableWidth. The two floors cannot actually
+        // fight in practice -- showPreview only ever calls this at
+        // panelWidth >= 720, where even the pane's max clamp
+        // (kPreviewPaneMaxWidth) leaves the table comfortably above its
+        // floor -- but the table-floor cap is still evaluated every frame
+        // (not just mid-drag) so a WINDOW resize that narrows `panelWidth`
+        // reclamps an already-wide pane without needing a fresh drag.
+        float ClampPreviewPaneWidth(float desired, float panelWidth)
+        {
+            float w = std::clamp(desired, kPreviewPaneMinWidth, kPreviewPaneMaxWidth);
+            const float floorForTable = panelWidth - kRailWidth
+                                       - ImGui::GetStyle().ItemSpacing.x * 3.0f
+                                       - kPreviewSplitBarPx - kMinReadableTableWidth;
+            if (floorForTable < w)
+                w = std::max(kPreviewPaneMinWidth, floorForTable);
+            return w;
+        }
 
         // KindIcon/KindLabel (the row icon glyph / the peek tooltip's kind
         // pill text): Panels/AssetPanelModel.hpp's shared definitions, as of
@@ -983,6 +1021,52 @@ namespace Arcane::Editor
             ImGui::PopID();
         }
 
+        // ---- 2026-09-07 follow-up: the table<->preview drag splitter --------
+        // Mirrors ShaderEditorDocument.cpp's `PaneSplitter` recipe -- an
+        // InvisibleButton owns the gap, and because ImGui holds ActiveId for
+        // as long as the button is held, MouseDelta keeps arriving every
+        // frame even after the cursor leaves the strip -- but works directly
+        // in PIXELS rather than a 0..1 fraction (this pane's width is
+        // already a pixel value, same convention as kRailWidth/kPreviewPane*
+        // above) and never calls MarkIniSettingsDirty: spec s5 keeps this
+        // panel's state session-only, unlike the Material panel's persisted
+        // split ratio. Double-click restores the default width, same as
+        // PaneSplitter's own reset gesture.
+        void PreviewPaneSplitter(float& width, float panelWidth)
+        {
+            const ImVec2 size(kPreviewSplitBarPx, ImGui::GetContentRegionAvail().y);
+            if (size.x <= 0.0f || size.y <= 0.0f)
+                return;   // degenerate region -- InvisibleButton asserts on zero
+
+            const ImVec2 p0 = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##previewsplit", size);
+            const bool held    = ImGui::IsItemActive();
+            const bool hovered = ImGui::IsItemHovered();
+            if (held || hovered)
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+            if (held)
+            {
+                // Dragging the splitter LEFT (negative MouseDelta.x) hands
+                // the table's space to the pane -- width grows by the same
+                // distance the mouse moved, hence the sign flip.
+                width = ClampPreviewPaneWidth(width - ImGui::GetIO().MouseDelta.x, panelWidth);
+            }
+            if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                width = kPreviewPaneDefaultWidth;
+
+            // Same three-tone ramp as ShaderEditorDocument's PaneSplitter
+            // and ImGui's own docking splitter: hairline at rest, one step
+            // brighter and one pixel wider on hover, brightest while held.
+            const ImU32 col = ImGui::GetColorU32(held    ? ImGuiCol_SeparatorActive
+                                               : hovered ? ImGuiCol_SeparatorHovered
+                                                         : ImGuiCol_Separator);
+            const float line = (held || hovered) ? 2.0f : 1.0f;
+            const ImVec2 a(p0.x + (size.x - line) * 0.5f, p0.y);
+            const ImVec2 b(a.x + line, p0.y + size.y);
+            ImGui::GetWindowDrawList()->AddRectFilled(a, b, col);
+        }
+
         // ---- Task 11: the preview pane (spec s5/s6/s11.2) -------------------
         // Layout order, pinned by the brief: 140px thumb -> name + kind/
         // subkind/inst pills -> path row -> guid row (click copies) -> cook
@@ -991,9 +1075,9 @@ namespace Arcane::Editor
         // kind-specific action). Empty selection is a dim "no selection"
         // line -- no other row renders in that state.
         void DrawPreviewPane(AssetPanelModel& model, const Arcane::Project* project, DocumentHost& docs,
-                            const AssetsPanelServices& services, AssetsPanelActions& actions)
+                            const AssetsPanelServices& services, AssetsPanelActions& actions, float width)
         {
-            if (!ImGui::BeginChild("##assetspreview", ImVec2(kPreviewPaneWidth, 0.0f), ImGuiChildFlags_None))
+            if (!ImGui::BeginChild("##assetspreview", ImVec2(width, 0.0f), ImGuiChildFlags_None))
             {
                 ImGui::EndChild();
                 return;
@@ -1012,9 +1096,21 @@ namespace Arcane::Editor
             // border seam (spec s6.1: "the Lucide kind icon on a well
             // background") -- the same image/icon composition
             // `DrawAssetPeekTooltip` uses at 64px, scaled up and framed.
+            //
+            // 2026-09-07 follow-up: the pane can now be dragged down to
+            // kPreviewPaneMinWidth (120px), which minus this child's own
+            // WindowPadding does not clear 140px. Rather than add a second
+            // centering codepath, the thumb SCALES to whatever is actually
+            // available (min-clamped against the 140px pinned size) -- one
+            // extra local, reused at all four call sites below, instead of
+            // a separate offset computation. At the shipped 165px default
+            // (avail ~= 149px after padding) this is a no-op: 140 < avail,
+            // so `thumbSize` is still exactly 140 and nothing about the
+            // Task 11 layout changes.
+            const float thumbSize = std::min(kPreviewThumbSize, ImGui::GetContentRegionAvail().x);
             {
                 const ImVec2 thumbMin = ImGui::GetCursorScreenPos();
-                const ImVec2 thumbMax(thumbMin.x + kPreviewThumbSize, thumbMin.y + kPreviewThumbSize);
+                const ImVec2 thumbMax(thumbMin.x + thumbSize, thumbMin.y + thumbSize);
                 ImDrawList* dl = ImGui::GetWindowDrawList();
                 const std::uint64_t thumb = services.resolveAssetThumb ? services.resolveAssetThumb(e->guid) : 0;
                 if (thumb != 0)
@@ -1026,12 +1122,12 @@ namespace Arcane::Editor
                     dl->AddRectFilled(thumbMin, thumbMax, ImGui::GetColorU32(Theme::kWell));
                     const char* icon = KindIcon(e->kind);
                     const ImVec2 iconSize = ImGui::CalcTextSize(icon);
-                    dl->AddText(ImVec2(thumbMin.x + (kPreviewThumbSize - iconSize.x) * 0.5f,
-                                       thumbMin.y + (kPreviewThumbSize - iconSize.y) * 0.5f),
+                    dl->AddText(ImVec2(thumbMin.x + (thumbSize - iconSize.x) * 0.5f,
+                                       thumbMin.y + (thumbSize - iconSize.y) * 0.5f),
                                ImGui::GetColorU32(ImGuiCol_Text), icon);
                 }
                 dl->AddRect(thumbMin, thumbMax, ImGui::GetColorU32(Theme::kSeparator));
-                ImGui::Dummy(ImVec2(kPreviewThumbSize, kPreviewThumbSize));
+                ImGui::Dummy(ImVec2(thumbSize, thumbSize));
             }
 
             // ---- name (stem) + kind pill + subkind/inst pills
@@ -1134,31 +1230,43 @@ namespace Arcane::Editor
                 ? Arcane::Guid::FromString(project->Manifest().bootScene).value_or(Arcane::Guid::Nil())
                 : Arcane::Guid::Nil();
 
-            // Spec s5: preview pane fixed 330px, hidden below a 720px PANEL
-            // width so the table never drops below readable width. Measured
-            // here, before anything in this body has drawn -- at this exact
-            // point ImGui's content-region-avail IS the whole rail+table+
-            // preview budget for the frame, uncontested by anything this
-            // function itself has submitted yet.
+            // Spec s5: preview pane hidden below a 720px PANEL width so the
+            // table never drops below readable width. Measured here, before
+            // anything in this body has drawn -- at this exact point
+            // ImGui's content-region-avail IS the whole rail+table+preview
+            // budget for the frame, uncontested by anything this function
+            // itself has submitted yet.
             const float panelWidth = ImGui::GetContentRegionAvail().x;
             const bool showPreview = panelWidth >= kPreviewHidePanelWidth;
+
+            // 2026-09-07 follow-up: reclamp every frame, not only mid-drag --
+            // a WINDOW resize (no splitter interaction at all) can shrink
+            // `panelWidth` out from under an already-wide pane, and this is
+            // the one place that catches it before the layout below reads
+            // `state.previewPaneWidth`.
+            if (showPreview)
+                state.previewPaneWidth = ClampPreviewPaneWidth(state.previewPaneWidth, panelWidth);
 
             DrawRail(state, model, actions);
             ImGui::SameLine();
 
-            // Reserve exactly kPreviewPaneWidth (plus both SameLine gaps)
-            // for the preview when it is shown; 0.0f keeps DrawTable's own
+            // Reserve the (resizable) preview pane plus the splitter bar and
+            // all three SameLine gaps (rail|table, table|splitter,
+            // splitter|preview) when it is shown; 0.0f keeps DrawTable's own
             // "fill everything left on this line" default when it is not.
             const float tableWidth = showPreview
                 ? std::max(0.0f, panelWidth - kRailWidth
-                                  - ImGui::GetStyle().ItemSpacing.x * 2.0f - kPreviewPaneWidth)
+                                  - ImGui::GetStyle().ItemSpacing.x * 3.0f
+                                  - kPreviewSplitBarPx - state.previewPaneWidth)
                 : 0.0f;
             DrawTable(state, model, project, docs, services, actions, bootGuid, tableWidth);
 
             if (showPreview)
             {
                 ImGui::SameLine();
-                DrawPreviewPane(model, project, docs, services, actions);
+                PreviewPaneSplitter(state.previewPaneWidth, panelWidth);
+                ImGui::SameLine();
+                DrawPreviewPane(model, project, docs, services, actions, state.previewPaneWidth);
             }
         }
     }

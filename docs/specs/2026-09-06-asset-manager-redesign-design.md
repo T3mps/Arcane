@@ -173,10 +173,15 @@ menu — no dock churn). Three fixed bands:
 - **Body:** the active lens over the shared model.
 
 Rules: any ImGui table is authored `NoSavedSettings` (the imgui.ini veto lesson).
-Narrow docks: rail fixed 180px, preview fixed 330px; below a 720px panel width the
-preview hides first — the table never drops below readable width. Folder groups
-default expanded (derived children default collapsed, §6). Panel state (active
-lens, rail filter, search, group collapse) is session-only in v1.
+Narrow docks: rail fixed 180px; preview **default 165px, user-resizable via a drag
+splitter between the table and the pane (session-only state, clamped to
+[120px, 480px])** — below a 720px panel width the preview hides first, and the
+splitter itself clamps the pane down before that hide rule has to (the table
+never drops below readable width). See §17 (2026-09-07) for the follow-up that
+changed the pane from a pinned 330px to this default+resizable shape. Folder
+groups default expanded (derived children default collapsed, §6). Panel state
+(active lens, rail filter, search, group collapse, **and the preview pane's
+width**) is session-only in v1.
 
 ## 6. Browse lens
 
@@ -349,7 +354,7 @@ comparison — web AA vs ImGui AA makes automated pixel diffs false-fail).
 |---|---|
 | dock tab strip / toolbar wells / bottom bar | 30px / 24px / 24px |
 | table rows / rail rows / group rows | 24px / 26px / 24px (chrome bg) |
-| rail / preview pane widths | 180px / 330px |
+| rail / preview pane widths | 180px (fixed) / 165px default, resizable [120px, 480px] (§17, 2026-09-07) |
 | row thumb / tooltip thumb / preview thumb | 18px / 64px / 140px |
 | tooltip width | 210px |
 | pills | 12px text, 16px line, 1px `#333333` border |
@@ -607,3 +612,10 @@ through the request, and Task 12 proved that invariant by call-site census.
 The ABI 21 → 22 bump stacks a second Game-module rebuild obligation onto Aphelyon's
 already-held ABI-21 debt (§14 recorded it as recorded-not-blocking). Gacha `main`
 stays at `5923da65`.
+
+### Post-landing user-directed change — 2026-09-07
+
+The preview pane changed from a pinned 330px to a **165px default, user-resizable
+via a drag splitter** (session-only state, clamped [120px, 480px]; the splitter
+itself yields to the existing <720px hide rule) — §5 and §11.2 above are the
+edited arbiter; the redline mocks still show 330px and were **not** re-rendered.

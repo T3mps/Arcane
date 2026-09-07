@@ -53,6 +53,18 @@ namespace Arcane::Editor
         int  railKind = -1;                 // -1 = All
         std::uint32_t seenSelectionStamp = 0; // scroll-to-selection once
 
+        // 2026-09-07 follow-up (spec s5/s11.2 addendum, post-Task-11): the
+        // preview pane's width, user-resizable via a drag splitter between
+        // the table and the pane. Session-only, same convention as every
+        // other field here -- NOT persisted to imgui.ini (contrast the
+        // Material panel's ShaderEditorDocument PaneSplitter ratio, which IS
+        // persisted; this one deliberately is not). The literal default
+        // (165.0f) duplicates AssetsPanel.cpp's kPreviewPaneDefaultWidth,
+        // which -- along with the clamp range kPreviewPaneMinWidth/
+        // kPreviewPaneMaxWidth ([120, 480]) -- is where the splitter itself
+        // lives.
+        float previewPaneWidth = 165.0f;
+
         // Task 10: session-only fold/group open state, MIRRORING
         // AssetPanelModel's own private m_groupOpen/m_childrenOpen (same
         // defaults: a folder absent from `groupOpen` is OPEN, a texture
