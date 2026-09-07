@@ -295,7 +295,18 @@ namespace Arcane
         // ("fullscreen"/"sprite"/"mesh"); an INSTANCE file carries no kind --
         // only "parent" -- so this walks the parent chain (bounded, cycle-safe)
         // to the base material's kind. nullopt: not a material, unreadable, or
-        // an unresolvable/cyclic chain. Appended at the END of the interface
+        // an unresolvable/cyclic chain.
+        //
+        // PARSE-ON-CALL (spec s3, "no engine-side cache -- the editor's index and
+        // model are the caches"): this query and ListAssetReferences below read
+        // and parse the resolved file on EVERY call. They neither consult nor
+        // populate this facade's JSON cache, so a re-ask after a save sees the
+        // NEW file, and a file caught mid-save is retried on the next ask rather
+        // than latched broken for the session. Both are therefore O(file) per
+        // call: the editor's dirty-marked model, not this facade, is what decides
+        // how often they are asked.
+        //
+        // Appended at the END of the interface
         // (the ArtifactFor/InvalidateArtifact/SetCookPendingProbe precedent
         // above -- this class's "new virtuals go at the end" rule).
         //

@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -456,6 +457,52 @@ namespace Arcane
                 return ptr;
             }
 
+            // Asset-manager arc, final fix wave: the UNCACHED JSON read, for the
+            // two panel queries ONLY (MaterialSurfaceFor / ListAssetReferences
+            // below). Spec s3 pins them as "parse-on-call, no engine-side cache
+            // (the editor's index and model are the caches)", and
+            // JsonForResolved above structurally cannot serve that: it keys on
+            // the canonical path, never consults the file's mtime, and memoizes
+            // FAILURES for the process lifetime (nothing evicts m_json --
+            // InvalidateArtifact touches pixels/textureInfo/artifacts only). A
+            // query routed through it answers every later re-ask with the FIRST
+            // parse -- subkind pills, isInstance, fold/sliced state and the
+            // material-picker filter frozen for the session -- and a file caught
+            // MID-SAVE latches broken forever, which makes s3.2's "keeps the
+            // last-known refs and retries on the next change event" impossible to
+            // implement above this facade.
+            //
+            // Deliberately NOT an mtime check bolted onto m_json: every other
+            // consumer of that cache (both public GetJson overloads and their
+            // callers) is written against today's parse-once semantics, and
+            // widening the blast radius to the whole facade to fix two queries is
+            // the wrong trade. This reads, parses, and inserts nothing on either
+            // the success or the failure side -- so it never evicts a live entry
+            // through EnforceBudget either.
+            std::optional<nlohmann::json> ParseJsonUncached(const std::filesystem::path& resolved)
+            {
+                auto raw = ReadFileBytes(resolved);
+                if (raw.empty())
+                {
+                    ARC_WARN("Assets: JSON file not found or empty: {}",
+                             resolved.string());
+                    return std::nullopt;
+                }
+
+                auto doc = nlohmann::json::parse(
+                    raw.begin(), raw.end(),
+                    /*cb=*/nullptr,
+                    /*allow_exceptions=*/false);
+                if (doc.is_discarded())
+                {
+                    ARC_WARN("Assets: JSON parse failed: {}",
+                             resolved.string());
+                    return std::nullopt;
+                }
+
+                return doc;
+            }
+
             // Decode-once pixel supply behind PixelsFor(Guid). `resolved`/
             // `key` are the already-resolved path + CacheKey every route
             // through this facade canonicalises to, so a Guid and the loose
@@ -768,9 +815,12 @@ namespace Arcane
             }
 
             // Asset-manager arc (ABI v22): see Assets.hpp's own doc comment for the
-            // full contract. Reuses GetJson(AssetId) -- the SAME cached loader, the
-            // SAME installed resolver, the SAME warn-once memo on an unresolvable id
-            // -- rather than opening a second JSON-reading route into this facade.
+            // full contract. Takes the SAME resolution step (ResolveId, the SAME
+            // installed resolver, the SAME warn-once memo on an unresolvable id) as
+            // every other accessor on this facade, then parses through
+            // ParseJsonUncached -- NOT the cached JsonForResolved -- because spec
+            // s3 pins this query parse-on-call; see that helper's own comment for
+            // why the cache cannot serve it and why the cache is left alone.
             // Bounded depth (8), not a visited-set: a two-hop cycle just alternates
             // for a few iterations and then hits the bound, which is cheaper than
             // tracking a chain and gives the same "never hangs" guarantee.
@@ -779,8 +829,24 @@ namespace Arcane
                 Guid current = id;
                 for (int depth = 0; depth < 8; ++depth)
                 {
-                    auto json = GetJson(AssetId::FromGuid(current));
+                    const auto resolved = ResolveId(AssetId::FromGuid(current));
+                    if (!resolved)
+                        return std::nullopt;
+                    const auto json = ParseJsonUncached(*resolved);
                     if (!json)
+                        return std::nullopt;
+                    // The "type" discriminator, hoisted AHEAD of the "kind" read
+                    // (Task 1's deferred minor): the kind branch used to answer
+                    // before confirming this file is a material at all, asymmetric
+                    // with the neither-kind-nor-parent fallback's own gate below.
+                    // It rejects a CONTRADICTING type rather than requiring a
+                    // present one -- SaveMaterialAsset writes "type":"material"
+                    // (MaterialAsset.cpp:147) but hand-authored .arcmat files
+                    // predating it (ReferenceProject's own three) carry only
+                    // "kind", and those must keep resolving.
+                    if (auto it = json->find("type");
+                        it != json->end() && it->is_string() &&
+                        it->get<std::string>() != "material")
                         return std::nullopt;
                     if (auto it = json->find("kind"); it != json->end() && it->is_string())
                         return MaterialSurfaceForKind(it->get<std::string>());
@@ -806,11 +872,12 @@ namespace Arcane
 
             // Asset-manager arc (ABI v22, Task 2): see Assets.hpp's own doc
             // comment for the full contract. Reuses ResolveId (the SAME
-            // resolution step MaterialSurfaceFor above takes, just to learn
-            // the FORMAT) and GetJson(AssetId) (the SAME cached loader, SAME
-            // installed resolver, SAME warn-once memo every other JSON-
-            // backed accessor on this facade shares) rather than opening a
-            // second read route into this facade.
+            // resolution step MaterialSurfaceFor above takes, and the SAME
+            // warn-once memo on an unresolvable id every other accessor on
+            // this facade shares) -- to learn the FORMAT and, for the JSON
+            // formats, to open the file. The parse goes through
+            // ParseJsonUncached, NOT the cached JsonForResolved, because spec
+            // s3 pins this query parse-on-call; see that helper's own comment.
             std::optional<std::vector<AssetRef>> ListAssetReferences(const Guid& id) override
             {
                 const auto resolved = ResolveId(AssetId::FromGuid(id));
@@ -830,7 +897,9 @@ namespace Arcane
                 for (std::string_view e : kLeaf)   if (ext == e) return std::vector<AssetRef>{};
                 for (std::string_view e : kOpaque) if (ext == e) return std::vector<AssetRef>{};
 
-                const auto json = GetJson(AssetId::FromGuid(id));
+                // Parse-on-call, and off the ALREADY-resolved path above --
+                // no second ResolveId round trip for the same guid.
+                const auto json = ParseJsonUncached(*resolved);
                 if (!json)
                     return std::nullopt;
 

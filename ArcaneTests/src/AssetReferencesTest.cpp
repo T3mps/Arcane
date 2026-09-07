@@ -529,3 +529,185 @@ TEST_CASE("ListAssetReferences never returns nullopt for any AssetKindOf-recogni
 
     fs::remove_all(dir, ec);
 }
+
+// ---------------------------------------------------------------------------
+// Final fix wave (C1): the two panel queries are PARSE-ON-CALL.
+//
+// Spec s3 pins them "parse-on-call, no engine-side cache -- the editor's index
+// and model are the caches". They used to route through this facade's cached
+// JSON loader, which keys on the canonical path, never consults the mtime, and
+// memoizes failures for the process lifetime (nothing evicts it). Every case
+// below FAILS against that older path -- it answers with the FIRST parse
+// forever -- and passes only once both queries read the file on each call.
+//
+// Each case rewrites a file IN PLACE and re-asks through the SAME Assets
+// instance and the SAME resolver: a fresh instance would prove nothing,
+// because a fresh cache is empty by construction.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("MaterialSurfaceFor re-parses a rewritten material (parse-on-call)", "[assets]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arc_matsurface_freshness_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    const char* kGuid = "7e5a0009-0001-4001-8001-000000000001";
+    const auto mat = WriteFile(dir, "shifting.arcmat",
+        R"({"id":"7e5a0009-0001-4001-8001-000000000001","kind":"sprite","name":"S","params":{},"type":"material"})");
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        return id.Value().ToString() == kGuid ? std::optional<fs::path>(mat) : std::nullopt;
+    });
+
+    const auto idOpt = Arcane::Guid::FromString(kGuid);
+    REQUIRE(idOpt.has_value());
+
+    REQUIRE(assets->MaterialSurfaceFor(*idOpt) == Arcane::MaterialSurface::Sprite);
+
+    // The user edits the material's kind and saves; the panel model marks the
+    // guid dirty and re-asks. It must get the NEW answer, not the first one --
+    // otherwise the subkind pill is frozen for the whole session.
+    WriteFile(dir, "shifting.arcmat",
+        R"({"id":"7e5a0009-0001-4001-8001-000000000001","kind":"mesh","name":"S","params":{},"type":"material"})");
+    REQUIRE(assets->MaterialSurfaceFor(*idOpt) == Arcane::MaterialSurface::Mesh);
+
+    // ...and again, to "post": a third distinct answer proves the second was
+    // not merely a one-shot cache miss.
+    WriteFile(dir, "shifting.arcmat",
+        R"({"id":"7e5a0009-0001-4001-8001-000000000001","kind":"fullscreen","name":"S","params":{},"type":"material"})");
+    REQUIRE(assets->MaterialSurfaceFor(*idOpt) == Arcane::MaterialSurface::Fullscreen);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("A parse failure is not memoized -- the next call retries (spec s3.2)", "[assets]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arc_parse_retry_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // Caught MID-SAVE: a truncated file that parses as nothing. Both queries
+    // must say nullopt now and answer for real once the save completes -- s3.2's
+    // "keeps the last-known refs and retries on the next change event" is
+    // unimplementable above a facade that latches the failure permanently.
+    const char* kMatGuid = "7e5a000a-0001-4001-8001-000000000001";
+    const char* kTexGuid = "7e5a000a-0001-4001-8001-000000000002";
+    const auto mat = WriteFile(dir, "midsave.arcmat", R"({"id":"7e5a000a-0001-4001-80)");
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        return id.Value().ToString() == kMatGuid ? std::optional<fs::path>(mat) : std::nullopt;
+    });
+
+    const auto matId = Arcane::Guid::FromString(kMatGuid);
+    const auto texId = Arcane::Guid::FromString(kTexGuid);
+    REQUIRE(matId.has_value());
+    REQUIRE(texId.has_value());
+
+    REQUIRE_FALSE(assets->MaterialSurfaceFor(*matId).has_value());    // unreadable -> nullopt
+    REQUIRE_FALSE(assets->ListAssetReferences(*matId).has_value());   // could-not-read -> nullopt
+
+    // The save completes.
+    WriteFile(dir, "midsave.arcmat",
+        std::string(R"({"id":")") + kMatGuid + R"(","kind":"mesh","name":"M","type":"material",)" +
+        R"("params":{"BaseTexture":{"type":"texture","value":")" + kTexGuid + R"("}}})");
+
+    REQUIRE(assets->MaterialSurfaceFor(*matId) == Arcane::MaterialSurface::Mesh);
+    const auto refs = assets->ListAssetReferences(*matId);
+    REQUIRE(refs.has_value());
+    REQUIRE(ContainsRef(*refs, *texId, Arcane::AssetRefKind::References));
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("ListAssetReferences re-parses a rewritten sprite (parse-on-call)", "[assets]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arc_refs_freshness_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    const char* kSpriteGuid = "7e5a000b-0001-4001-8001-000000000001";
+    const char* kTexGuid    = "7e5a000b-0001-4001-8001-000000000002";
+    const auto sprite = WriteFile(dir, "shifting.arcsprite",
+        std::string(R"({"id":")") + kSpriteGuid + R"(","texture":")" + kTexGuid + R"("})");
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        return id.Value().ToString() == kSpriteGuid ? std::optional<fs::path>(sprite)
+                                                    : std::nullopt;
+    });
+
+    const auto spriteId = Arcane::Guid::FromString(kSpriteGuid);
+    const auto texId    = Arcane::Guid::FromString(kTexGuid);
+    REQUIRE(spriteId.has_value());
+    REQUIRE(texId.has_value());
+
+    // Whole-texture wrap: the DerivesFrom edge Browse folds on.
+    {
+        const auto refs = assets->ListAssetReferences(*spriteId);
+        REQUIRE(refs.has_value());
+        REQUIRE(ContainsRef(*refs, *texId, Arcane::AssetRefKind::DerivesFrom));
+    }
+
+    // The sprite gains a sub-rect (the "sliced" pill's own datum). The SAME
+    // guid must now report References, or the pill and the fold stay frozen at
+    // whatever they were the first time anyone asked.
+    WriteFile(dir, "shifting.arcsprite",
+        std::string(R"({"id":")") + kSpriteGuid + R"(","texture":")" + kTexGuid +
+        R"(","sourceSize":[32,32]})");   // non-zero sourceSize IS the sliced discriminator
+    {
+        const auto refs = assets->ListAssetReferences(*spriteId);
+        REQUIRE(refs.has_value());
+        REQUIRE(ContainsRef(*refs, *texId, Arcane::AssetRefKind::References));
+    }
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("MaterialSurfaceFor rejects a file whose type contradicts 'material'", "[assets]")
+{
+    // The hoisted "type" gate (Task 1's deferred minor, taken in this same fix
+    // wave): the "kind" branch used to answer before confirming the file is a
+    // material at all. A non-material JSON that happens to carry a "kind"
+    // string must not read as a material subkind. The gate rejects a
+    // CONTRADICTING type only -- a hand-authored .arcmat with "kind" and no
+    // "type" (ReferenceProject's own three) still resolves, and that asymmetry
+    // is exactly what the second half of this case pins.
+    const fs::path dir = fs::temp_directory_path() / "arc_matsurface_typegate_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    const char* kImposterGuid = "7e5a000c-0001-4001-8001-000000000001";
+    const char* kBareGuid     = "7e5a000c-0001-4001-8001-000000000002";
+    const auto imposter = WriteFile(dir, "imposter.json",
+        std::string(R"({"id":")") + kImposterGuid + R"(","type":"prefab","kind":"sprite"})");
+    const auto bare = WriteFile(dir, "bare.arcmat",
+        std::string(R"({"id":")") + kBareGuid + R"(","kind":"sprite","params":{}})");
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        const std::string g = id.Value().ToString();
+        if (g == kImposterGuid) return imposter;
+        if (g == kBareGuid)     return bare;
+        return std::nullopt;
+    });
+
+    const auto imposterId = Arcane::Guid::FromString(kImposterGuid);
+    const auto bareId     = Arcane::Guid::FromString(kBareGuid);
+    REQUIRE(imposterId.has_value());
+    REQUIRE(bareId.has_value());
+
+    REQUIRE_FALSE(assets->MaterialSurfaceFor(*imposterId).has_value());
+    REQUIRE(assets->MaterialSurfaceFor(*bareId) == Arcane::MaterialSurface::Sprite);
+
+    fs::remove_all(dir, ec);
+}
