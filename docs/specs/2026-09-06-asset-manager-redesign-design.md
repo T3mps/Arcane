@@ -193,28 +193,40 @@ width**) is session-only in v1.
   counts from the model. The hover `+` appears **only on kinds with a Create
   entry** (Materials, Sprites, Meshes, Scenes) and opens the unified Create menu
   pre-scoped to that kind. Textures/Data/Audio/Font get no `+`.
-- **Table:** groups = one per distinct content directory (root files under
-  `Content/`), sorted lexicographically, collapsible (session state). **Nested
-  directories render as indented child groups inside this same table** (2026-09-07,
-  user-directed "middle form" — not a separate tree panel, no breadcrumbs): 20px
-  indent per nesting depth, and a nested group's label shows only its leaf segment
-  (a group under `fx/` reads `glow/`, not `fx/glow/`). Collapse cascades — collapsing
-  a parent hides its whole subtree — but each descendant group keeps its own open
-  flag, so reopening the parent restores whatever sub-state it had. Asset rows
-  indent to their group's depth plus their existing base offset, so they read as
-  belonging to that group. **Search reveals matches uniformly** (2026-09-07 review
-  fix round 1, Important 4 — this is the corrected wording; an earlier draft of this
-  paragraph attributed the rule to an existing fold-child precedent that, on
-  inspection, had never actually shipped that override): while a search is active,
-  collapse is bypassed at **every** level — a group's own closed flag, any ancestor's,
-  and a texture's own folded-children flag all stop hiding a row that matches, and
+- **Table:** `Content/` is the table's own root group, depth 0, holding the
+  project's root-level files as its direct rows (2026-09-07, second revision that
+  day, user-directed, **root-anchored**: "I want the entire table to have
+  indention status, showing folder hierarchy"). Every content directory nests
+  inside it as a child group — a directory's depth is **1 + its nesting depth
+  below `Content/`** (a top-level directory like `materials/` is depth 1;
+  `textures/patterns/` is depth 2) — sorted lexicographically at each level,
+  collapsible (session state). **Nested directories render as indented child
+  groups inside this same table** (not a separate tree panel, no breadcrumbs):
+  20px indent per depth, and a group's label shows only its leaf segment
+  (`patterns/`, not `textures/patterns/`; `Content/` keeps its own name — it is
+  the one group that never shortens to nothing). Collapse cascades downward from
+  whichever group is closed — closing `Content/` itself empties the whole table,
+  since every directory now descends from it — but each descendant group keeps
+  its own open flag, so reopening a parent (`Content/` included) restores
+  whatever sub-state its children had. Asset rows indent to their group's depth
+  plus their existing base offset, so they read as belonging to that group.
+  **Search reveals matches uniformly** (2026-09-07 review fix round 1, Important
+  4 — this is the corrected wording; an earlier draft of this paragraph
+  attributed the rule to an existing fold-child precedent that, on inspection,
+  had never actually shipped that override): while a search is active, collapse
+  is bypassed at **every** level — a group's own closed flag, any ancestor's
+  (`Content/`'s included, now that it is every directory's ancestor), and a
+  texture's own folded-children flag all stop hiding a row that matches, and
   every group on the path down to it still renders (even one with zero of its own
   matching entries) so the tree's context stays visible. A directory that holds no
   files of its own but has a populated descendant (whether from nesting alone or
   because a kind filter left its own entries at zero) still gets a group row —
   its count is suppressed rather than shown as a bare `0` — so a subtree's chevron
   is always reachable to reopen it, never orphaned behind an ancestor that itself
-  never renders. Rows are Name-only: 18px thumb, name, pills (subkind,
+  never renders; **`Content/` is this bridge's unconditional case** — it always
+  renders as the table's anchor even in a project with zero loose root files (its
+  own count suppressed the same way, never a bare `0`), because every other group
+  now needs it as an ancestor row to hang from. Rows are Name-only: 18px thumb, name, pills (subkind,
   `boot`, `sliced`, `derived`). Derived 1:1 sprites render only as indented children
   under their texture, **default collapsed** with a count pill, keeping their own
   **extra +20px fold indent** on top of the group's own depth indent — two
@@ -736,5 +748,35 @@ why, not a second copy of the rule):
   extension of the identical principle to fold (derived-child) collapse, not the
   source of the group-level behavior described here. Test (ii) in the impl
   report's fix-round addendum is this case's regression pin.
+
+### 2026-09-07 user-directed, second revision: root-anchored folder tree (design pass)
+
+The user's own ruling: "I want the entire table to have indention status,
+showing folder hierarchy. i think that is best now." This supersedes the first
+revision's shape (top-level directories as depth-0 peers of `Content/`) with a
+strictly **root-anchored** tree: `Content/` becomes the real depth-0 root of the
+whole table — the root files stay its direct rows, and every top-level directory
+becomes an indented depth-1 child of it (a directory's depth is now `1 + its
+nesting below Content/`, so `materials/` is depth 1 and `textures/patterns/`,
+already one level under `textures/` from the first revision, is now depth 2).
+§6 above is the ALREADY-AMENDED text. Collapse cascades from `Content/` over
+everything, since it is now every directory's ancestor; the existing unconditional
+ancestor bridge (this same section, review fix round 1) is what keeps `Content/`
+itself always rendering, count-suppressed, even in a project with zero loose root
+files — `Content/` is simply the bridge's most-unconditional case, not a new
+mechanism. Labels are unchanged (`Content/` keeps its name; nested directories
+already showed leaf segments as of the first revision). §11.2's 20px/level value
+is unchanged; only which depth each existing group sits at moved by one level
+(`patterns/` by two, since it nests below a directory that itself moved).
+
+The `OptionBC.dc.html` mock was amended a second time the same day: every
+existing group and its rows below `Content/` (`materials/`, `meshes/`, `scenes/`,
+`sprites/`, `textures/`, and the nested `patterns/`) shifted 20px deeper —
+`Content/` and its own `sample.asset.json` row are unchanged, still depth 0. Row
+count is identical to the first revision (only indent values changed), so the
+960×620 framing held with no reflow or clipping, verified by re-rendering and
+viewing the PNG. This is a **design-only pass**: the live panel implements the
+first revision's (non-root-anchored) shape as of the review-fix-round-1 landing
+above; a follow-up implementation task is owed to move it to root-anchored.
 
 Not pushed, per house convention.
