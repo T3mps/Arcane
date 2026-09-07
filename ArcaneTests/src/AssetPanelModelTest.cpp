@@ -684,3 +684,274 @@ TEST_CASE("MaterialSurfaceFilterForComponent maps the owning component to its re
     CHECK(MaterialSurfaceFilterForComponent("Transform") == -1);
     CHECK(MaterialSurfaceFilterForComponent("") == -1);
 }
+
+// ---------------------------------------------------------------------------
+// 2026-09-07 follow-up: in-table nested folder groups (spec s6/s11.2, design
+// report .superpowers/sdd/2026-09-06-asset-manager-plan1/followup-treeview-
+// design-report.md). Every case below scans a REAL nested directory tree via
+// AssetRegistry::ScanContent -- no synthetic folder strings -- the same
+// discipline this whole file already uses.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // Shared fixture for (a)/(b)/(c): "textures/" holds one own asset
+    // (crate_albedo.png), nested "textures/patterns/" (depth 1) holds two
+    // (tiles_stone.png, noise_blue.png) -- the same shape as the re-blessed
+    // redline (OptionBC-Browse-FINAL.png)'s own textures/patterns/ example.
+    struct NestedFixture
+    {
+        fs::path dir;
+        Arcane::AssetRegistry registry;
+        Arcane::Guid crateId, tilesId, noiseId;
+    };
+
+    NestedFixture MakeNestedFixture(const char* dirName)
+    {
+        NestedFixture f;
+        f.dir = fs::temp_directory_path() / dirName;
+        std::error_code ec;
+        fs::remove_all(f.dir, ec);
+        fs::create_directories(f.dir / "textures" / "patterns");
+
+        WriteFile(f.dir / "textures", "crate_albedo.png", "bytes-crate");
+        WriteFile(f.dir / "textures" / "patterns", "tiles_stone.png", "bytes-tiles");
+        WriteFile(f.dir / "textures" / "patterns", "noise_blue.png", "bytes-noise");
+
+        REQUIRE(f.registry.ScanContent(f.dir, "game") == 3);
+        const auto all = f.registry.All();
+        f.crateId = GuidForPath(all, "game://textures/crate_albedo.png");
+        f.tilesId = GuidForPath(all, "game://textures/patterns/tiles_stone.png");
+        f.noiseId = GuidForPath(all, "game://textures/patterns/noise_blue.png");
+        REQUIRE(f.crateId.IsValid());
+        REQUIRE(f.tilesId.IsValid());
+        REQUIRE(f.noiseId.IsValid());
+        return f;
+    }
+
+    const AssetPanelRow* FindGroupRow(const std::vector<AssetPanelRow>& rows, const std::string& fullPath)
+    {
+        for (const auto& row : rows)
+            if (row.type == AssetPanelRow::Type::Group && row.groupName == fullPath)
+                return &row;
+        return nullptr;
+    }
+
+    bool HasAssetRow(const std::vector<AssetPanelRow>& rows, const Arcane::Guid& guid,
+                     AssetPanelRow::Type type = AssetPanelRow::Type::Asset)
+    {
+        for (const auto& row : rows)
+            if (row.type == type && row.guid == guid)
+                return true;
+        return false;
+    }
+}
+
+// (a) nested dirs produce depth-tagged groups with leaf labels + full-path
+// open-state keys -- the core geometry data the panel's 20px/level indent
+// and PushID/SetGroupOpen keying both read directly off these fields.
+TEST_CASE("AssetPanelModel nested folder groups carry depth, leaf-segment labels and full-path keys", "[editor]")
+{
+    NestedFixture f = MakeNestedFixture("arcane_asset_panel_model_nested_depth_test");
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&f.registry, fake.Make()));
+
+    const auto& rows = model.Rows();
+
+    const AssetPanelRow* textures = FindGroupRow(rows, "textures/");
+    REQUIRE(textures);
+    CHECK(textures->groupLabel == "textures/");     // top-level: leaf == full name, unchanged
+    CHECK(textures->groupDepth == 0);
+    CHECK(textures->groupCount == 1);                // crate_albedo.png only -- own rows, not rolled up
+
+    const AssetPanelRow* patterns = FindGroupRow(rows, "textures/patterns/");
+    REQUIRE(patterns);
+    CHECK(patterns->groupLabel == "patterns/");      // LEAF segment only, not "textures/patterns/"
+    CHECK(patterns->groupDepth == 1);
+    CHECK(patterns->groupCount == 2);                // tiles_stone.png + noise_blue.png
+
+    // Root "Content/" and other top-level groups are untouched by this pass:
+    // depth 0, label == groupName, exactly as before nesting existed.
+    // (No root-level file in this fixture -- covered structurally by every
+    // pre-existing flat test in this file staying green, case (e).)
+
+    // Preorder: "textures/" group precedes its own asset row, which precedes
+    // the nested "patterns/" group, which precedes ITS asset rows -- the
+    // std::map/std::set lexicographic-with-trailing-slash property the impl
+    // relies on.
+    auto indexOf = [&](auto pred) -> int
+    {
+        for (int i = 0; i < static_cast<int>(rows.size()); ++i)
+            if (pred(rows[i])) return i;
+        return -1;
+    };
+    const int iTextures = indexOf([](const AssetPanelRow& r) { return r.type == AssetPanelRow::Type::Group && r.groupName == "textures/"; });
+    const int iCrate     = indexOf([&](const AssetPanelRow& r) { return r.type == AssetPanelRow::Type::Asset && r.guid == f.crateId; });
+    const int iPatterns  = indexOf([](const AssetPanelRow& r) { return r.type == AssetPanelRow::Type::Group && r.groupName == "textures/patterns/"; });
+    const int iTiles     = indexOf([&](const AssetPanelRow& r) { return r.type == AssetPanelRow::Type::Asset && r.guid == f.tilesId; });
+    REQUIRE((iTextures >= 0 && iCrate >= 0 && iPatterns >= 0 && iTiles >= 0));
+    CHECK(iTextures < iCrate);
+    CHECK(iCrate < iPatterns);
+    CHECK(iPatterns < iTiles);
+
+    std::error_code cleanupEc;
+    fs::remove_all(f.dir, cleanupEc);
+}
+
+// (b) cascading collapse: closing the parent hides its whole subtree
+// (descendant group row AND its asset rows) from Rows(); each descendant
+// group keeps its OWN open flag independently, so reopening the parent
+// restores whatever sub-state the descendant was left in.
+TEST_CASE("AssetPanelModel cascading collapse hides the whole subtree; reopen restores descendant open-state", "[editor]")
+{
+    NestedFixture f = MakeNestedFixture("arcane_asset_panel_model_nested_cascade_test");
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+
+    // Baseline: everything default-open.
+    REQUIRE(FindGroupRow(model.Rows(), "textures/"));
+    REQUIRE(FindGroupRow(model.Rows(), "textures/patterns/"));
+    REQUIRE(HasAssetRow(model.Rows(), f.crateId));
+    REQUIRE(HasAssetRow(model.Rows(), f.tilesId));
+    REQUIRE(HasAssetRow(model.Rows(), f.noiseId));
+
+    // Close the NESTED group itself first (its own toggle) -- its header
+    // stays visible, its own asset rows do not.
+    model.SetGroupOpen("textures/patterns/", false);
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+    REQUIRE(FindGroupRow(model.Rows(), "textures/patterns/"));   // header still shown
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.tilesId));
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.noiseId));
+    CHECK(HasAssetRow(model.Rows(), f.crateId));                  // untouched sibling
+
+    // Now close the PARENT ("textures/") -- the whole subtree (patterns/'s
+    // group row included) must vanish from Rows(), on top of textures/'s
+    // own crate_albedo.png row.
+    model.SetGroupOpen("textures/", false);
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+    REQUIRE(FindGroupRow(model.Rows(), "textures/"));             // textures/'s own header still shown
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.crateId));
+    CHECK_FALSE(FindGroupRow(model.Rows(), "textures/patterns/"));   // cascaded away entirely
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.tilesId));
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.noiseId));
+
+    // Reopen the parent: patterns/'s group row comes back, but its OWN
+    // closed flag (set above, never touched by the parent's toggle) is
+    // restored exactly as left -- its asset rows stay hidden.
+    model.SetGroupOpen("textures/", true);
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+    REQUIRE(FindGroupRow(model.Rows(), "textures/"));
+    CHECK(HasAssetRow(model.Rows(), f.crateId));
+    REQUIRE(FindGroupRow(model.Rows(), "textures/patterns/"));    // subtree back
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.tilesId));            // ...but still collapsed, as left
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.noiseId));
+
+    std::error_code cleanupEc;
+    fs::remove_all(f.dir, cleanupEc);
+}
+
+// (c) search overrides collapse, consistent with the existing fold-child
+// rule (§8) generalized one level: a matching row under a collapsed
+// ancestor still shows, and every group row on the path down to it shows
+// too (tree context), even ones with zero OWN matching entries. A non-
+// matching sibling stays hidden; groups with truly nothing visible under
+// them are still dropped (never asserted here because none exist in this
+// fixture -- every group on the path to a match).
+TEST_CASE("AssetPanelModel search overrides collapse for nested groups, showing ancestor group rows for context", "[editor]")
+{
+    NestedFixture f = MakeNestedFixture("arcane_asset_panel_model_nested_search_test");
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+
+    // Close "textures/" -- the ANCESTOR of the match below.
+    model.SetGroupOpen("textures/", false);
+    model.SetSearch("tiles");     // matches tiles_stone.png only
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+
+    const auto& rows = model.Rows();
+
+    // The match itself shows despite its collapsed ancestor.
+    CHECK(HasAssetRow(rows, f.tilesId));
+
+    // Both group rows on the path to it show, for tree context -- including
+    // "textures/", whose own direct entry (crate_albedo.png) does NOT match
+    // "tiles" and so contributes zero to its own count.
+    const AssetPanelRow* texturesRow = FindGroupRow(rows, "textures/");
+    REQUIRE(texturesRow);
+    CHECK(texturesRow->groupCount == 0);          // own entries only, none match -- see impl report
+    REQUIRE(FindGroupRow(rows, "textures/patterns/"));
+
+    // Non-matching rows, in and out of the collapsed subtree, stay hidden.
+    CHECK_FALSE(HasAssetRow(rows, f.noiseId));    // sibling inside patterns/, doesn't match
+    CHECK_FALSE(HasAssetRow(rows, f.crateId));    // textures/'s own entry, doesn't match
+
+    std::error_code cleanupEc;
+    fs::remove_all(f.dir, cleanupEc);
+}
+
+// (d) compound indent DATA: a fold child (derived sprite) inside a depth-1
+// group carries the same groupDepth as its parent asset row -- the panel
+// stacks its own existing +20px fold indent on top of that (base + 20 + 20).
+// No fixture in the design pass exercised this combination (design report's
+// own "concerns" section); this is that fixture.
+TEST_CASE("AssetPanelModel fold child inside a nested group carries its group's depth on both rows", "[editor]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_nested_fold_compound_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "textures" / "patterns");
+    fs::create_directories(dir / "sprites");
+
+    WriteFile(dir / "textures" / "patterns", "swatch.png", "bytes-swatch");
+    WriteFile(dir / "sprites", "swatch_full.arcsprite",
+             R"({"id":"a1000001-0001-4001-8001-000000000001","type":"sprite","name":"SwatchFull"})");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 2);
+    const auto all = registry.All();
+
+    const Arcane::Guid swatchTexId  = GuidForPath(all, "game://textures/patterns/swatch.png");
+    const Arcane::Guid swatchFullId = *Arcane::Guid::FromString("a1000001-0001-4001-8001-000000000001");
+    REQUIRE(swatchTexId.IsValid());
+
+    FakeProviders fake;
+    fake.refsByGuid[swatchFullId] = { { swatchTexId, Arcane::AssetRefKind::DerivesFrom } };   // 1:1 -> folds
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    REQUIRE(model.Find(swatchTexId));
+    REQUIRE(model.Find(swatchTexId)->derivedChildren.size() == 1);
+
+    model.SetChildrenOpen(swatchTexId, true);   // fold children default collapsed
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    const AssetPanelRow* patterns = FindGroupRow(model.Rows(), "textures/patterns/");
+    REQUIRE(patterns);
+    CHECK(patterns->groupDepth == 1);
+
+    int swatchDepth = -1, fullDepth = -1;
+    for (const auto& row : model.Rows())
+    {
+        if (row.type == AssetPanelRow::Type::Asset && row.guid == swatchTexId) swatchDepth = row.groupDepth;
+        if (row.type == AssetPanelRow::Type::Child && row.guid == swatchFullId) fullDepth = row.groupDepth;
+    }
+    CHECK(swatchDepth == 1);     // base(=1) + 0 -- the panel adds no fold indent for a plain asset row
+    CHECK(fullDepth == 1);       // base(=1) too -- the panel stacks ITS OWN +20 fold indent on top of
+                                 // this same depth, giving the compound 20*1 + 20 = 40px total
+
+    fs::remove_all(dir, ec);
+}

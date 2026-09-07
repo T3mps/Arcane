@@ -53,6 +53,12 @@ namespace Arcane::Editor
         constexpr float kRailRowHeight    = 26.0f;
         constexpr float kTableRowHeight   = 24.0f;
         constexpr float kChildIndent      = 20.0f;
+        // 2026-09-07 nested folder groups (spec s6/s11.2): 20px per nesting
+        // depth, stacked with kChildIndent above rather than merged into it --
+        // the two are independently-motivated 20px units that happen to share
+        // a value and COMPOUND (a fold child inside a depth-1 group sits at
+        // depth*kGroupIndent + kChildIndent from the row's own base).
+        constexpr float kGroupIndent      = 20.0f;
         constexpr float kTooltipWidth     = 210.0f;
         constexpr float kTooltipThumbSize = 64.0f;
 
@@ -736,13 +742,22 @@ namespace Arcane::Editor
             const float padX = ImGui::GetStyle().FramePadding.x;
             const float textY = rowMin.y + (kTableRowHeight - ImGui::GetTextLineHeight()) * 0.5f;
 
+            // 2026-09-07 nested folder groups: the whole row (chevron, label,
+            // count) shifts right by 20px per nesting depth (spec s6/s11.2).
+            // Top-level groups keep depth 0 -> groupIndent 0 -> pixel-identical
+            // to before this pass.
+            const float groupIndent = static_cast<float>(row.groupDepth) * kGroupIndent;
+
             const char* chevron = open ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT;
-            dl->AddText(ImVec2(rowMin.x + padX, textY), ImGui::GetColorU32(ImGuiCol_Text), chevron);
+            dl->AddText(ImVec2(rowMin.x + groupIndent + padX, textY), ImGui::GetColorU32(ImGuiCol_Text), chevron);
             const float chevronW = ImGui::CalcTextSize(chevron).x;
 
-            const float nameX = rowMin.x + padX + chevronW + padX;
-            dl->AddText(ImVec2(nameX, textY), ImGui::GetColorU32(ImGuiCol_Text), row.groupName.c_str());
-            const float nameW = ImGui::CalcTextSize(row.groupName.c_str()).x;
+            // groupLabel is the LEAF segment only ("patterns/" for
+            // "textures/patterns/") -- groupName (the full path) stays the
+            // open-state key just above and in PushID, unchanged.
+            const float nameX = rowMin.x + groupIndent + padX + chevronW + padX;
+            dl->AddText(ImVec2(nameX, textY), ImGui::GetColorU32(ImGuiCol_Text), row.groupLabel.c_str());
+            const float nameW = ImGui::CalcTextSize(row.groupLabel.c_str()).x;
 
             // Ruling 3 (desk pass, 2026-09-07: "I liked the mock") -- the
             // count sits INLINE immediately after the group name, dim, a
@@ -810,18 +825,25 @@ namespace Arcane::Editor
         // ---- Task 10: one top-level asset row (spec s6/s11.2) --------------
         void DrawAssetRow(AssetsPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                           DocumentHost& docs, const AssetsPanelServices& services, AssetsPanelActions& actions,
-                          const AssetPanelEntry& e, const Arcane::Guid& bootGuid)
+                          const AssetPanelEntry& e, const Arcane::Guid& bootGuid, int groupDepth)
         {
             ImGui::PushID(e.guid.ToString().c_str());
 
             const bool hasChildren = (e.kind == AssetKind::Texture) && !e.derivedChildren.empty();
             const bool childrenOpen = hasChildren && ChildrenAreOpen(state, e.guid);
             const bool refused = (e.cook == CookState::Refused);
+            // 2026-09-07 nested folder groups: the row's own group-nesting
+            // indent (20px/depth, spec s6/s11.2) stacks UNDER the existing
+            // expander gutter -- the whole row (expander included, see below)
+            // shifts right by groupIndent first, then reserves its own
+            // kChildIndent for the expander exactly as before. Depth 0 ->
+            // groupIndent 0 -> pixel-identical to before this pass.
+            const float groupIndentPx = static_cast<float>(groupDepth) * kGroupIndent;
             // The expander gutter is reserved only for textures with a
             // folded child -- refused now wears its OWN corner badge on the
             // thumb below (fix round 1, Important 5), so it never competes
             // with the expander for the same slot.
-            const float indent = hasChildren ? kChildIndent : 0.0f;
+            const float indent = groupIndentPx + (hasChildren ? kChildIndent : 0.0f);
 
             const std::uint64_t thumbId = services.resolveAssetThumb ? services.resolveAssetThumb(e.guid) : 0;
             const char* icon = KindIcon(e.kind);
@@ -852,7 +874,7 @@ namespace Arcane::Editor
             // 1, Important 7).
             if (hasChildren)
             {
-                ImGui::SetCursorScreenPos(rowMin);
+                ImGui::SetCursorScreenPos(ImVec2(rowMin.x + groupIndentPx, rowMin.y));
                 const std::string expId = "##exp_" + e.guid.ToString();
                 if (ImGui::InvisibleButton(expId.c_str(), ImVec2(kChildIndent, kTableRowHeight)))
                 {
@@ -863,7 +885,8 @@ namespace Arcane::Editor
                 const char* chevron = childrenOpen ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT;
                 const ImVec2 cs = ImGui::CalcTextSize(chevron);
                 ImGui::GetWindowDrawList()->AddText(
-                    ImVec2(rowMin.x + (kChildIndent - cs.x) * 0.5f, rowMin.y + (kTableRowHeight - cs.y) * 0.5f),
+                    ImVec2(rowMin.x + groupIndentPx + (kChildIndent - cs.x) * 0.5f,
+                          rowMin.y + (kTableRowHeight - cs.y) * 0.5f),
                     ImGui::GetColorU32(ImGuiCol_Text), chevron);
             }
 
@@ -942,7 +965,7 @@ namespace Arcane::Editor
         // ---- Task 10: one derived-child row (spec s6/s11.2) ----------------
         void DrawChildRow(AssetsPanelState& /*state*/, AssetPanelModel& model, const Arcane::Project* project,
                           DocumentHost& docs, const AssetsPanelServices& services, AssetsPanelActions& actions,
-                          const AssetPanelEntry& e)
+                          const AssetPanelEntry& e, int groupDepth)
         {
             ImGui::PushID(e.guid.ToString().c_str());
 
@@ -950,9 +973,15 @@ namespace Arcane::Editor
             const char* icon = KindIcon(e.kind);
             const bool selected = (model.selected == e.guid);
 
+            // 2026-09-07 nested folder groups: the fold-child's own +20px
+            // indent (kChildIndent, unchanged) stacks ON TOP of its group's
+            // 20px/depth indent -- the compound case spec s6/s11.2 calls out
+            // explicitly (a fold child inside a depth-1 group sits at
+            // base + 20 + 20). Depth 0 -> pixel-identical to before this pass.
+            const float indent = static_cast<float>(groupDepth) * kGroupIndent + kChildIndent;
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
-                                                    e.fileName.c_str(), selected, kChildIndent, kTableRowHeight);
+                                                    e.fileName.c_str(), selected, indent, kTableRowHeight);
             ImGui::PopStyleColor();
             if (res.clicked)
                 model.Select(e.guid);
@@ -1092,11 +1121,11 @@ namespace Arcane::Editor
                                 break;
                             case AssetPanelRow::Type::Asset:
                                 if (const AssetPanelEntry* e = model.Find(row.guid))
-                                    DrawAssetRow(state, model, project, docs, services, actions, *e, bootGuid);
+                                    DrawAssetRow(state, model, project, docs, services, actions, *e, bootGuid, row.groupDepth);
                                 break;
                             case AssetPanelRow::Type::Child:
                                 if (const AssetPanelEntry* e = model.Find(row.guid))
-                                    DrawChildRow(state, model, project, docs, services, actions, *e);
+                                    DrawChildRow(state, model, project, docs, services, actions, *e, row.groupDepth);
                                 break;
                         }
 

@@ -342,10 +342,68 @@ namespace Arcane::Editor
     {
         enum class Type : std::uint8_t { Group, Asset, Child };
         Type type = Type::Asset;
-        std::string  groupName;   // Type::Group
+        std::string  groupName;   // Type::Group ONLY: the FULL content-directory path
+                                   // ("textures/patterns/", "materials/", "Content/") --
+                                   // this is the open-state KEY (m_groupOpen, PushID),
+                                   // unchanged in meaning by the 2026-09-07 nested-group
+                                   // pass. NOT what renders as the label any more.
+        std::string  groupLabel;  // Type::Group ONLY: the DISPLAY label -- leaf segment
+                                   // only, plus trailing '/' ("patterns/" for
+                                   // "textures/patterns/"). Top-level dirs and the
+                                   // "Content/" root are their own leaf, so this equals
+                                   // groupName unchanged for depth 0.
+        int          groupDepth = 0;  // Nesting depth of this row's OWNING group -- top-
+                                   // level dirs and the "Content/" root are depth 0, each
+                                   // deeper directory +1 (spec s6, 2026-09-07). Set on
+                                   // Group rows AND on Asset/Child rows (their owning
+                                   // group's depth), so the panel can compute the 20px/
+                                   // level indent without re-deriving it from the guid.
         int          groupCount = 0;
         Arcane::Guid guid;        // Asset/Child
     };
+
+    // Nesting depth of a content-directory string ("a/b/c/" style, "Content/" for the
+    // synthetic root -- AssetPanelEntry::folder's own doc comment). Top-level dirs and
+    // the Content/ root are depth 0; each deeper directory adds 1 (spec s6/s11.2,
+    // 2026-09-07). Every folder string here carries a trailing '/' (MakeBaseEntry's
+    // invariant), so depth is just "how many '/' separators, minus the trailing one".
+    inline int GroupDepthOf(std::string_view folder)
+    {
+        if (folder.empty())
+            return 0;
+        int slashes = 0;
+        for (char c : folder)
+            if (c == '/') ++slashes;
+        return slashes > 0 ? slashes - 1 : 0;
+    }
+
+    // Display label for a group row: the LEAF segment only, trailing '/' kept
+    // ("textures/patterns/" -> "patterns/"). Top-level dirs and "Content/" ARE their
+    // own leaf already, so this returns the input unchanged for depth 0 -- no special-
+    // casing needed (spec s6: "top-level groups unchanged").
+    inline std::string GroupLabelOf(std::string_view folder)
+    {
+        if (folder.empty())
+            return std::string(folder);
+        const std::string_view trimmed = folder.substr(0, folder.size() - 1);   // drop trailing '/'
+        const std::size_t slash = trimmed.rfind('/');
+        return std::string(slash == std::string_view::npos ? trimmed : trimmed.substr(slash + 1)) + "/";
+    }
+
+    // Immediate PARENT content directory of a group folder, or "" if `folder` is
+    // already top-level (or the "Content/" root) -- "textures/patterns/" ->
+    // "textures/"; "materials/" -> ""; "Content/" -> "". Walking this repeatedly
+    // yields the folder's full ancestor chain, root-most last.
+    inline std::string GroupParentOf(std::string_view folder)
+    {
+        if (folder.empty())
+            return {};
+        const std::string_view trimmed = folder.substr(0, folder.size() - 1);
+        const std::size_t slash = trimmed.rfind('/');
+        if (slash == std::string_view::npos)
+            return {};
+        return std::string(trimmed.substr(0, slash + 1));
+    }
 
     struct RailEntry { int kind = -1; std::string label; int count = 0; }; // kind -1 = All
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 
 namespace Arcane::Editor
 {
@@ -283,6 +284,40 @@ namespace Arcane::Editor
         return MatchesFilter(ToAssetEntry(e), m_kindFilter, m_search);
     }
 
+    namespace
+    {
+        // m_groupOpen's own default (OPEN) -- shared by the ancestor-chain walk
+        // and each folder's own toggle below, so both read the identical rule.
+        bool GroupOpenOrDefault(const std::unordered_map<std::string, bool>& groupOpen,
+                                const std::string& folder)
+        {
+            const auto it = groupOpen.find(folder);
+            return it == groupOpen.end() ? true : it->second;
+        }
+
+        // True iff EVERY strict ancestor of `folder` (its parent, grandparent, ...
+        // up to the top-level dir/"Content/" root) is open. `folder` itself is
+        // deliberately excluded -- a group's OWN closed flag gates its OWN
+        // children (RebuildRows' showChildren), never whether its own row
+        // renders (spec s6: "collapsing a parent hides its whole subtree", but
+        // the collapsed parent's own header stays visible -- today's flat
+        // behavior, unchanged by nesting). A folder with no group row of its
+        // own (no direct entries -- never toggled in the UI) simply defaults
+        // open here, which is the correct no-op.
+        bool AncestorsOpen(const std::unordered_map<std::string, bool>& groupOpen,
+                           std::string_view folder)
+        {
+            std::string parent = GroupParentOf(folder);
+            while (!parent.empty())
+            {
+                if (!GroupOpenOrDefault(groupOpen, parent))
+                    return false;
+                parent = GroupParentOf(parent);
+            }
+            return true;
+        }
+    }
+
     void AssetPanelModel::RebuildRows()
     {
         m_rows.clear();
@@ -296,7 +331,15 @@ namespace Arcane::Editor
 
         // Per-folder, TOP-LEVEL (unfolded) entries that pass BOTH filters --
         // folded children are never folder peers; they render nested under
-        // their parent instead (fold semantics).
+        // their parent instead (fold semantics). Keyed by the FULL content-
+        // directory path -- std::map's lexicographic order over strings that
+        // all carry a trailing '/' is already a valid tree PREORDER (a
+        // directory's own key is always immediately followed by every one of
+        // its descendants, before any later sibling subtree: '/' (0x2F) sorts
+        // below every letter/digit a real path segment starts with, so
+        // "textures/" < "textures/patterns/" < "textures0/" holds generally).
+        // This is what lets the single sorted-iteration loop below double as
+        // the nested-group walk with no separate tree structure.
         std::map<std::string, std::vector<const AssetPanelEntry*>> byFolder;
 
         for (const auto& [guid, e] : m_entries)
@@ -319,27 +362,77 @@ namespace Arcane::Editor
                      { return a->fileName < b->fileName; });
         }
 
+        // Which folders get a GROUP ROW at all. Base rule (unchanged): only
+        // folders with >=1 own matching entry ("groups with zero visible rows
+        // are... dropped", spec s6). Search addendum (2026-09-07): while
+        // searching, a folder with ZERO own matches still gets a (groupCount==0)
+        // context row if it is an ANCESTOR of some folder that does -- "a
+        // matching row under a collapsed ancestor still shows, with its
+        // ancestor group rows shown". Outside search this bridging row is never
+        // synthesized: an intermediate directory with no files of its own and
+        // only nested subfolders does not currently render its own group row
+        // (no fixture in this arc has that shape -- see the impl report).
+        const bool searchActive = !m_search.empty();
+        std::set<std::string> renderFolders;
         for (const auto& [folder, vec] : byFolder)
+            renderFolders.insert(folder);
+        if (searchActive)
         {
-            if (vec.empty())
-                continue;   // groups with zero visible rows are dropped
+            for (const auto& [folder, vec] : byFolder)
+            {
+                std::string parent = GroupParentOf(folder);
+                while (!parent.empty())
+                {
+                    renderFolders.insert(parent);
+                    parent = GroupParentOf(parent);
+                }
+            }
+        }
+
+        // std::set<std::string> iterates sorted -- the same valid-preorder
+        // property byFolder relies on above.
+        for (const std::string& folder : renderFolders)
+        {
+            const int depth = GroupDepthOf(folder);
+            const auto vecIt = byFolder.find(folder);
+            const int ownCount = (vecIt != byFolder.end()) ? static_cast<int>(vecIt->second.size()) : 0;
+
+            // Cascading collapse: an ancestor's closed flag hides this row (and
+            // therefore everything under it, transitively, via each descendant's
+            // own AncestorsOpen check) UNLESS search is active, in which case
+            // every renderFolders entry is, by construction, on the path to a
+            // real match and shows unconditionally (2026-09-07 ruling: search
+            // overrides collapse at every level of the chain, including a row's
+            // own immediate group -- the direct generalization of the existing
+            // fold-child "one level" rule to an arbitrary-depth chain; see the
+            // impl report for why this is a deliberate reading, not a literal
+            // one-line spec quote).
+            const bool visible = searchActive || AncestorsOpen(m_groupOpen, folder);
+            if (!visible)
+                continue;
 
             AssetPanelRow group;
             group.type = AssetPanelRow::Type::Group;
-            group.groupName = folder;
-            group.groupCount = static_cast<int>(vec.size());
+            group.groupName = folder;                    // full path -- the open-state key
+            group.groupLabel = GroupLabelOf(folder);      // leaf segment only
+            group.groupDepth = depth;
+            group.groupCount = ownCount;
             m_rows.push_back(std::move(group));
 
-            const auto openIt = m_groupOpen.find(folder);
-            const bool open = (openIt == m_groupOpen.end()) ? true : openIt->second;   // default OPEN
-            if (!open)
+            // This folder's OWN closed flag gates its OWN content (its direct
+            // asset rows below, and -- transitively, via the next iterations'
+            // own AncestorsOpen check -- any nested subgroup) -- same override
+            // under search as the ancestor check just above.
+            const bool showChildren = searchActive || GroupOpenOrDefault(m_groupOpen, folder);
+            if (!showChildren || vecIt == byFolder.end())
                 continue;
 
-            for (const AssetPanelEntry* parent : vec)
+            for (const AssetPanelEntry* parent : vecIt->second)
             {
                 AssetPanelRow row;
                 row.type = AssetPanelRow::Type::Asset;
                 row.guid = parent->guid;
+                row.groupDepth = depth;
                 m_rows.push_back(row);
 
                 if (parent->derivedChildren.empty())
@@ -370,6 +463,7 @@ namespace Arcane::Editor
                     AssetPanelRow childRow;
                     childRow.type = AssetPanelRow::Type::Child;
                     childRow.guid = child->guid;
+                    childRow.groupDepth = depth;   // same group as its parent asset row
                     m_rows.push_back(childRow);
                 }
             }
