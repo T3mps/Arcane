@@ -211,13 +211,14 @@ namespace Arcane::Editor
         }
 
         // See AssetsPanelState::groupOpen/childrenOpen's own doc comment:
-        // these mirror the model's private defaults exactly (group open,
+        // these mirror the model's private defaults exactly (open, except the
+        // diag:// mount root -- GroupDefaultOpen, spec s5 third revision;
         // children collapsed) so the panel can pick the right chevron glyph
         // and compute the flipped value to push through Set*Open.
         bool GroupIsOpen(const AssetsPanelState& state, const std::string& folder)
         {
             const auto it = state.groupOpen.find(folder);
-            return it == state.groupOpen.end() ? true : it->second;
+            return it == state.groupOpen.end() ? GroupDefaultOpen(folder) : it->second;
         }
 
         bool ChildrenAreOpen(const AssetsPanelState& state, const Arcane::Guid& texture)

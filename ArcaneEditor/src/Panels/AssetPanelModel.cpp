@@ -10,8 +10,18 @@ namespace Arcane::Editor
 {
     namespace
     {
-        // folder = the directory portion of the mount path after "scheme://";
-        // root files fold into the synthetic "Content/" bucket (spec s5/s6).
+        // folder = the group KEY (AssetPanelRow::groupName's own doc comment in
+        // the header spells out the two shapes in full) -- MOUNT-ROOTED (spec
+        // s5/s6, 2026-09-07 third revision): the "game" scheme (the project's
+        // primary mount) keeps the UNQUALIFIED shape unchanged from every prior
+        // revision (root files fold into the synthetic "Content/" bucket, a
+        // nested dir is its own bare relative path); every OTHER scheme (e.g.
+        // "diag") gets a QUALIFIED shape, "<scheme>://" + that same
+        // bare-relative-path convention -- "<scheme>://" alone for a rootless
+        // file (that mount's own root), "<scheme>://<relpath>/" nested. This is
+        // what keeps a real "game://diagnostics/" directory's key from ever
+        // colliding with "diag://"'s own root key (see GroupDepthOf's own
+        // header comment for why the two key spaces are provably disjoint).
         // name = stem, fileName = stem + extension (rows show this).
         AssetPanelEntry MakeBaseEntry(const Arcane::Guid& guid, const std::string& mountPath)
         {
@@ -20,16 +30,24 @@ namespace Arcane::Editor
             e.mountPath = mountPath;
             e.kind = AssetKindOf(mountPath);
 
+            std::string scheme;
             std::string_view rest = mountPath;
-            if (const std::size_t scheme = rest.find("://"); scheme != std::string_view::npos)
-                rest = rest.substr(scheme + 3);
+            if (const std::size_t sep = rest.find("://"); sep != std::string_view::npos)
+            {
+                scheme = std::string(rest.substr(0, sep));
+                rest = rest.substr(sep + 3);
+            }
 
             const std::size_t slash = rest.rfind('/');
             const std::string_view file = (slash == std::string_view::npos)
                                                ? rest : rest.substr(slash + 1);
-            e.folder = (slash == std::string_view::npos)
-                           ? std::string("Content/")
-                           : std::string(rest.substr(0, slash + 1));
+            const std::string relDir = (slash == std::string_view::npos)
+                                            ? std::string()
+                                            : std::string(rest.substr(0, slash + 1));
+
+            e.folder = (scheme.empty() || scheme == "game")
+                           ? (relDir.empty() ? std::string("Content/") : relDir)
+                           : (scheme + "://" + relDir);
 
             e.fileName = std::string(file);
             const std::size_t dot = file.rfind('.');
@@ -286,13 +304,15 @@ namespace Arcane::Editor
 
     namespace
     {
-        // m_groupOpen's own default (OPEN) -- shared by the ancestor-chain walk
-        // and each folder's own toggle below, so both read the identical rule.
+        // m_groupOpen's own default -- OPEN for almost every key, except the
+        // diag:// mount root (GroupDefaultOpen, spec s5 third revision) --
+        // shared by the ancestor-chain walk and each folder's own toggle below,
+        // so both read the identical rule.
         bool GroupOpenOrDefault(const std::unordered_map<std::string, bool>& groupOpen,
                                 const std::string& folder)
         {
             const auto it = groupOpen.find(folder);
-            return it == groupOpen.end() ? true : it->second;
+            return it == groupOpen.end() ? GroupDefaultOpen(folder) : it->second;
         }
 
         // True iff EVERY strict ancestor of `folder` (its parent, grandparent, ...
@@ -331,16 +351,43 @@ namespace Arcane::Editor
 
         // Per-folder, TOP-LEVEL (unfolded) entries that pass BOTH filters --
         // folded children are never folder peers; they render nested under
-        // their parent instead (fold semantics). Keyed by the FULL content-
-        // directory path -- std::map's lexicographic order over strings that
-        // all carry a trailing '/' is already a valid tree PREORDER (a
-        // directory's own key is always immediately followed by every one of
-        // its descendants, before any later sibling subtree: '/' (0x2F) sorts
-        // below every letter/digit a real path segment starts with, so
-        // "textures/" < "textures/patterns/" < "textures0/" holds generally).
-        // This is what lets the single sorted-iteration loop below double as
-        // the nested-group walk with no separate tree structure.
-        std::map<std::string, std::vector<const AssetPanelEntry*>> byFolder;
+        // their parent instead (fold semantics). Keyed by the FULL group KEY
+        // (AssetPanelRow::groupName's own doc comment) -- plain lexicographic
+        // order over strings that all carry a trailing '/' is already a valid
+        // tree PREORDER WITHIN one mount (a directory's own key is always
+        // immediately followed by every one of its descendants, before any
+        // later sibling subtree: '/' (0x2F) sorts below every letter/digit a
+        // real path segment starts with, so "textures/" < "textures/patterns/"
+        // < "textures0/" holds generally). This is what lets the single
+        // sorted-iteration loop below double as the nested-group walk with no
+        // separate tree structure.
+        //
+        // MOUNT-ROOTED (spec s6, third revision): plain lexicographic order
+        // is NOT enough across mounts -- "diag://" (qualified) would sort
+        // BETWEEN "Content/" and "materials/" on raw bytes ('C' < 'd' < 'm'),
+        // interleaving diagnostics/ INSIDE Content/'s own subtree instead of
+        // after it entirely (measured, not assumed: this is exactly what a
+        // first cut produced, caught by the tracked-ReferenceProject capture
+        // this pass's own report cites). `GroupKeyLess` fixes the ordering
+        // withOUT touching the KEYS themselves: every unqualified (game/
+        // Content) key sorts before every qualified (any other scheme) key,
+        // unconditionally -- "Content/ is always first" holds regardless of
+        // what a future scheme happens to be named -- and within either
+        // bucket, plain lexicographic order applies exactly as before (so
+        // Content/'s own subtree ordering, and the ordering WITHIN diag://'s
+        // own subtree, are both bit-for-bit unchanged).
+        struct GroupKeyLess
+        {
+            bool operator()(const std::string& a, const std::string& b) const
+            {
+                const bool aQualified = a.find("://") != std::string::npos;
+                const bool bQualified = b.find("://") != std::string::npos;
+                if (aQualified != bQualified)
+                    return !aQualified;   // unqualified (game/Content) always first
+                return a < b;
+            }
+        };
+        std::map<std::string, std::vector<const AssetPanelEntry*>, GroupKeyLess> byFolder;
 
         for (const auto& [guid, e] : m_entries)
         {
@@ -387,7 +434,9 @@ namespace Arcane::Editor
         // dropped" still holds -- a bridge row is never itself the zero case
         // that rule means to drop.
         const bool searchActive = !m_search.empty();
-        std::set<std::string> renderFolders;
+        // GroupKeyLess (defined above byFolder): keeps every mount's subtree
+        // contiguous in iteration order -- see that struct's own comment.
+        std::set<std::string, GroupKeyLess> renderFolders;
         for (const auto& [folder, vec] : byFolder)
         {
             renderFolders.insert(folder);
@@ -399,8 +448,10 @@ namespace Arcane::Editor
             }
         }
 
-        // std::set<std::string> iterates sorted -- the same valid-preorder
-        // property byFolder relies on above.
+        // Iterates sorted under GroupKeyLess -- the same valid-preorder-per-
+        // mount property byFolder relies on above, PLUS every mount's own
+        // subtree staying contiguous (Content/'s entire tree, then each other
+        // populated mount's entire tree, never interleaved).
         for (const std::string& folder : renderFolders)
         {
             const int depth = GroupDepthOf(folder);

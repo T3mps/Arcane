@@ -9,6 +9,7 @@
 
 #include "Panels/AssetPanelModel.hpp"
 
+#include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope/WriteFile -- valid .arcdiag fixtures
 #include <Arcane/Project/AssetRegistry.hpp>
 
 #include <filesystem>
@@ -28,6 +29,26 @@ namespace
         fs::path p = dir / name;
         std::ofstream(p, std::ios::binary) << text;
         return p;
+    }
+
+    // A valid .arcdiag envelope (mount-rooted pass, 2026-09-07 third revision):
+    // .arcdiag is native-but-not-ResolveNativeId -- its guid lives under the
+    // envelope's own "guid" key, never a plain "id" field (AssetRegistry.cpp's
+    // own CRITICAL contract comment; AssetRegistryTest.cpp's "AssetRegistry
+    // classifies .arcdiag by its envelope guid" case is the precedent this
+    // mirrors). A hand-rolled JSON stub the way WriteFile's other callers use
+    // for .arcmat/.arcsprite would be REJECTED by Diag::ReadFile and silently
+    // skipped by the scan -- Diag::WriteFile is the only correct way to seed
+    // one of these fixtures.
+    Arcane::Guid WriteDiagFile(const fs::path& dir, const char* name, std::string_view kind = "hang")
+    {
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        Arcane::Diag::Envelope env;
+        env.guid = Arcane::Guid::Generate();
+        env.kind = std::string(kind);
+        REQUIRE(Arcane::Diag::WriteFile(env, dir / name));
+        return env.guid;
     }
 
     Arcane::Guid GuidForPath(const std::vector<std::pair<Arcane::Guid, std::string>>& all,
@@ -1412,4 +1433,249 @@ TEST_CASE("AssetPanelModel root-anchored: Content/ bridges in with zero root fil
 
     std::error_code cleanupEc;
     fs::remove_all(f.dir, cleanupEc);
+}
+
+// ---------------------------------------------------------------------------
+// Mount-rooted asset tree (2026-09-07, third revision): one depth-0 root
+// group per POPULATED mount scheme -- "Content/" (game://) and "diagnostics/"
+// (diag://) are PEERS in the same table, never one folded into the other.
+// See docs/specs/2026-09-06-asset-manager-redesign-design.md s5/s6/s17 (third
+// revision entry) and followup-treeview-impl-report.md's mount-rooting
+// addendum for the ruling this enforces.
+// ---------------------------------------------------------------------------
+
+// (a) + (d): diag:// assets never fold into Content/ (the honest split this
+// revision exists for), and a diag-mount directory's depth is measured
+// WITHIN the diag mount's own tree -- 1 + nesting below diag's OWN root,
+// exactly the same rule Content/'s subtree already uses, applied to a
+// second, independent root.
+TEST_CASE("AssetPanelModel mount-rooted: diag:// gets its own diagnostics/ root, honestly split from Content/", "[editor]")
+{
+    const fs::path gameDir = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_split_game_test";
+    const fs::path diagDir = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_split_diag_test";
+    std::error_code ec;
+    fs::remove_all(gameDir, ec);
+    fs::remove_all(diagDir, ec);
+    fs::create_directories(gameDir);
+    fs::create_directories(diagDir / "crashes");
+
+    WriteFile(gameDir, "hero.png", "bytes-hero");
+    const Arcane::Guid crash1Id = WriteDiagFile(diagDir, "crash1.arcdiag");
+    const Arcane::Guid crash2Id = WriteDiagFile(diagDir / "crashes", "crash2.arcdiag");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(gameDir, "game") == 1);
+    REQUIRE(registry.AddContent(diagDir, "diag") == 2);   // additive -- ScanContent alone would wipe game://
+
+    const Arcane::Guid heroId = GuidForPath(registry.All(), "game://hero.png");
+    REQUIRE(heroId.IsValid());
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    // Content/ holds ONLY hero.png -- no diag leakage, its own count stays 1.
+    const AssetPanelRow* content = FindGroupRow(model.Rows(), "Content/");
+    REQUIRE(content);
+    CHECK(content->groupCount == 1);
+    CHECK(HasAssetRow(model.Rows(), heroId));
+    CHECK_FALSE(HasAssetRow(model.Rows(), crash1Id));
+    CHECK_FALSE(HasAssetRow(model.Rows(), crash2Id));
+
+    // diagnostics/ exists as its OWN depth-0 root (key "diag://", label
+    // "diagnostics/") -- present even collapsed (its own header always
+    // shows, same rule every other group's own-collapse follows).
+    const AssetPanelRow* diagRoot = FindGroupRow(model.Rows(), "diag://");
+    REQUIRE(diagRoot);
+    CHECK(diagRoot->groupLabel == "diagnostics/");
+    CHECK(diagRoot->groupDepth == 0);
+    CHECK(diagRoot->groupCount == 1);   // crash1.arcdiag only -- its own direct row
+
+    // Open it to inspect the subtree: depth measured WITHIN the diag mount.
+    // NOTE: `content` (above) is a pointer into the PRE-rebuild Rows() vector
+    // -- RebuildIfDirty clears and repopulates that vector, so it must be
+    // re-derived fresh afterward, never reused across a rebuild.
+    model.SetGroupOpen("diag://", true);
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    CHECK(HasAssetRow(model.Rows(), crash1Id));
+    const AssetPanelRow* crashesGroup = FindGroupRow(model.Rows(), "diag://crashes/");
+    REQUIRE(crashesGroup);
+    CHECK(crashesGroup->groupLabel == "crashes/");
+    CHECK(crashesGroup->groupDepth == 1);   // 1 + nesting below diag's OWN root, not Content/'s
+    CHECK(HasAssetRow(model.Rows(), crash2Id));
+
+    // Content/ is untouched by any of the above -- re-derived fresh, not the
+    // stale pre-rebuild pointer above.
+    const AssetPanelRow* contentAfter = FindGroupRow(model.Rows(), "Content/");
+    REQUIRE(contentAfter);
+    CHECK(contentAfter->groupCount == 1);
+    CHECK(HasAssetRow(model.Rows(), heroId));
+
+    fs::remove_all(gameDir, ec);
+    fs::remove_all(diagDir, ec);
+}
+
+// Ordering regression pin: "diag://" (a QUALIFIED key) sorts alphabetically
+// BETWEEN "Content/" ('C') and "materials/" ('m') on raw bytes -- a first cut
+// of mount-rooting used plain lexicographic order over the group keys and
+// that is EXACTLY what it produced: diagnostics/ interleaved INSIDE
+// Content/'s own subtree instead of after it entirely (caught by the tracked-
+// ReferenceProject capture this pass's own report cites, not by any unit
+// test -- this fixture is that missing pin). Every mount's subtree must stay
+// CONTIGUOUS in Rows(): all of Content/'s own rows (any depth) before diag://
+// 's own root row.
+TEST_CASE("AssetPanelModel mount-rooted: Content/'s entire subtree renders contiguously before diag://'s root", "[editor]")
+{
+    const fs::path gameDir = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_order_game_test";
+    const fs::path diagDir = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_order_diag_test";
+    std::error_code ec;
+    fs::remove_all(gameDir, ec);
+    fs::remove_all(diagDir, ec);
+    fs::create_directories(gameDir / "materials");
+    fs::create_directories(diagDir);
+
+    WriteFile(gameDir, "hero.png", "bytes-hero");
+    WriteFile(gameDir / "materials", "mat.arcmat",
+             R"({"id":"c2000001-0001-4001-8001-000000000001","type":"material","kind":"fullscreen"})");
+    WriteDiagFile(diagDir, "crash1.arcdiag");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(gameDir, "game") == 2);
+    REQUIRE(registry.AddContent(diagDir, "diag") == 1);
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, fake.Make()));
+
+    const auto& rows = model.Rows();
+    auto indexOfGroup = [&](const std::string& key) -> int
+    {
+        for (int i = 0; i < static_cast<int>(rows.size()); ++i)
+            if (rows[i].type == AssetPanelRow::Type::Group && rows[i].groupName == key)
+                return i;
+        return -1;
+    };
+
+    const int iContent   = indexOfGroup("Content/");
+    const int iMaterials = indexOfGroup("materials/");
+    const int iDiagRoot  = indexOfGroup("diag://");
+    REQUIRE(iContent >= 0);
+    REQUIRE(iMaterials >= 0);
+    REQUIRE(iDiagRoot >= 0);
+
+    // Content/'s own subtree (root + materials/) is entirely contiguous...
+    CHECK(iContent < iMaterials);
+    // ...and diag://'s root comes AFTER every one of Content/'s rows -- not
+    // wedged between them, which plain byte-order ('C' < 'd' < 'm') would do.
+    CHECK(iMaterials < iDiagRoot);
+
+    fs::remove_all(gameDir, ec);
+    fs::remove_all(diagDir, ec);
+}
+
+// (b) diagnostics/ defaults COLLAPSED while every other mount root (Content/
+// included) defaults open -- with NO explicit SetGroupOpen call on either,
+// straight off MarkAllDirty + RebuildIfDirty.
+TEST_CASE("AssetPanelModel mount-rooted: diagnostics/ defaults collapsed while Content/ defaults open", "[editor]")
+{
+    const fs::path gameDir = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_defaultopen_game_test";
+    const fs::path diagDir = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_defaultopen_diag_test";
+    std::error_code ec;
+    fs::remove_all(gameDir, ec);
+    fs::remove_all(diagDir, ec);
+    fs::create_directories(gameDir);
+    fs::create_directories(diagDir);
+
+    WriteFile(gameDir, "hero.png", "bytes-hero");
+    const Arcane::Guid crashId = WriteDiagFile(diagDir, "crash1.arcdiag");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(gameDir, "game") == 1);
+    REQUIRE(registry.AddContent(diagDir, "diag") == 1);
+    const Arcane::Guid heroId = GuidForPath(registry.All(), "game://hero.png");
+    REQUIRE(heroId.IsValid());
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, fake.Make()));   // no SetGroupOpen anywhere -- pure defaults
+
+    REQUIRE(FindGroupRow(model.Rows(), "Content/"));
+    CHECK(HasAssetRow(model.Rows(), heroId));            // Content/ default OPEN -> visible
+
+    REQUIRE(FindGroupRow(model.Rows(), "diag://"));       // header always shows regardless
+    CHECK_FALSE(HasAssetRow(model.Rows(), crashId));      // diagnostics/ default COLLAPSED -> hidden
+
+    fs::remove_all(gameDir, ec);
+    fs::remove_all(diagDir, ec);
+}
+
+// (c) The keying-collision pin: a REAL "game://diagnostics/" directory (an
+// ordinary user-created folder that happens to be named "diagnostics",
+// nothing to do with the diag:// mount) must NOT alias the diag mount's own
+// synthetic root, even though the two share the identical DISPLAY label
+// ("diagnostics/") -- distinct KEYS, distinct depths, fully independent open
+// flags.
+TEST_CASE("AssetPanelModel mount-rooted: a real game://diagnostics/ directory never collides with the diag:// root", "[editor]")
+{
+    const fs::path gameDir = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_keycollision_game_test";
+    const fs::path diagDir = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_keycollision_diag_test";
+    std::error_code ec;
+    fs::remove_all(gameDir, ec);
+    fs::remove_all(diagDir, ec);
+    fs::create_directories(gameDir / "diagnostics");   // a REAL user directory, game-scheme
+    fs::create_directories(diagDir);
+
+    WriteFile(gameDir / "diagnostics", "note.json", R"({"id":"c1000001-0001-4001-8001-000000000001"})");
+    const Arcane::Guid crashId = WriteDiagFile(diagDir, "crash1.arcdiag");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(gameDir, "game") == 1);
+    REQUIRE(registry.AddContent(diagDir, "diag") == 1);
+    const auto all = registry.All();
+    const Arcane::Guid noteId = GuidForPath(all, "game://diagnostics/note.json");
+    REQUIRE(noteId.IsValid());
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+
+    // Two DISTINCT group rows -- same label, different keys, different mounts.
+    const AssetPanelRow* gameDiagnostics = FindGroupRow(model.Rows(), "diagnostics/");   // UNQUALIFIED: game://
+    const AssetPanelRow* diagRoot        = FindGroupRow(model.Rows(), "diag://");         // QUALIFIED: diag:// root
+    REQUIRE(gameDiagnostics);
+    REQUIRE(diagRoot);
+    CHECK(gameDiagnostics->groupName != diagRoot->groupName);
+    CHECK(gameDiagnostics->groupLabel == "diagnostics/");
+    CHECK(diagRoot->groupLabel == "diagnostics/");            // same LABEL, on purpose
+    CHECK(gameDiagnostics->groupDepth == 1);                  // Content/'s own child
+    CHECK(diagRoot->groupDepth == 0);                         // a mount root in its own right
+
+    // Baseline defaults: game's "diagnostics/" is an ORDINARY directory ->
+    // default OPEN (note.json visible); diag's root -> default COLLAPSED
+    // (crash1 hidden) -- proven with NO explicit toggle yet.
+    CHECK(HasAssetRow(model.Rows(), noteId));
+    CHECK_FALSE(HasAssetRow(model.Rows(), crashId));
+
+    // Close the GAME "diagnostics/" -- the diag:// root must be UNAFFECTED
+    // (still collapsed, by its own independent default, not because of this).
+    model.SetGroupOpen("diagnostics/", false);
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    CHECK_FALSE(HasAssetRow(model.Rows(), noteId));
+    CHECK_FALSE(HasAssetRow(model.Rows(), crashId));   // still collapsed, independently
+
+    // Open the DIAG root -- the game "diagnostics/" must stay exactly as THIS
+    // test left it (closed), never reopened by the diag root's own toggle.
+    model.SetGroupOpen("diag://", true);
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    CHECK(HasAssetRow(model.Rows(), crashId));
+    CHECK_FALSE(HasAssetRow(model.Rows(), noteId));    // still closed, independently
+
+    fs::remove_all(gameDir, ec);
+    fs::remove_all(diagDir, ec);
 }

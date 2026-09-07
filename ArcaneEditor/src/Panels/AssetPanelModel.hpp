@@ -364,19 +364,74 @@ namespace Arcane::Editor
         Arcane::Guid guid;        // Asset/Child
     };
 
-    // Nesting depth of a content-directory string ("a/b/c/" style, "Content/" for the
-    // synthetic root -- AssetPanelEntry::folder's own doc comment). ROOT-ANCHORED
-    // (spec s6, 2026-09-07 second revision): "Content/" is the table's real depth-0
-    // root; EVERY other directory is now 1 + its nesting depth below Content/ -- a
-    // top-level directory like "materials/" is depth 1 (not 0), "textures/patterns/"
-    // is depth 2 (not 1). Every folder string here carries a trailing '/'
-    // (MakeBaseEntry's invariant), so for anything but the literal root, depth is
-    // just "how many '/' separators" (no longer minus one -- that subtraction was
-    // exactly what made a top-level dir depth 0; root-anchoring folds that dir in
-    // as Content/'s own child instead).
+    // MOUNT-ROOTED (spec s5/s6, 2026-09-07 third revision, user-directed): one
+    // depth-0 root group per POPULATED mount scheme, not just "game://"'s
+    // "Content/". `AssetPanelEntry::folder` (and therefore every group KEY --
+    // `AssetPanelRow::groupName`, the `m_groupOpen`/`PushID` identity) now comes
+    // in two shapes:
+    //   - UNQUALIFIED (the "game" scheme -- the project's primary mount, and the
+    //     ONE shape that predates mount-rooting): "Content/" (the root, rootless
+    //     files) or a bare relative dir path ("materials/", "textures/patterns/"),
+    //     EXACTLY as the 2nd (root-anchored) revision left it -- zero format
+    //     change for the default mount, zero blast radius on every game-only
+    //     fixture that predates this revision.
+    //   - QUALIFIED (every OTHER scheme, e.g. "diag"): "<scheme>://" is that
+    //     mount's OWN root (rootless), "<scheme>://<relpath>/" is nested --
+    //     the identical bare-relative-path convention the unqualified shape
+    //     already uses, just carrying an explicit scheme prefix.
+    // This asymmetry is the fix for the KEYING HAZARD the spec calls out
+    // explicitly: a REAL "game://diagnostics/" directory derives the plain
+    // UNQUALIFIED key "diagnostics/" (today's game-only convention, untouched),
+    // which can never collide with "diag://"'s own qualified root key or any of
+    // its "diag://…/" descendants -- "://" can never appear inside a real path
+    // SEGMENT (it is always a scheme boundary in a mount path, and directory
+    // names are built purely from path segments), so the qualified and
+    // unqualified key spaces are disjoint by construction, independent of
+    // whatever a user happens to name a real directory. Labels stay clean
+    // either way (GroupLabelOf below strips the qualification entirely before
+    // rendering) -- only the KEY, never what's shown, carries it.
+    inline std::string MountRootLabel(std::string_view scheme)
+    {
+        if (scheme == "diag")
+            return "diagnostics/";
+        return std::string(scheme) + "/";   // unknown/future scheme -> scheme-named root
+    }
+
+    // Which mount roots default COLLAPSED rather than the usual default-open
+    // (spec s5, third revision): today only "diag://"'s own root key --
+    // crash-report noise starts folded away so it never competes with
+    // Content/ for attention. Every other group -- every OTHER mount root
+    // included -- defaults open, unchanged. Shared verbatim by the model's own
+    // open/closed resolution (AssetPanelModel.cpp's GroupOpenOrDefault) and the
+    // panel's chevron-glyph default (AssetsPanel.cpp's GroupIsOpen) so the two
+    // can never drift apart the way a stale/differing default once did for a
+    // different reason (review fix round 1, Important 2's own precedent).
+    inline bool GroupDefaultOpen(std::string_view groupKey)
+    {
+        return groupKey != "diag://";
+    }
+
+    // Nesting depth of a group KEY (see the shape doc comment just above).
+    // Qualified keys measure depth WITHIN their own mount (their scheme's root
+    // is depth 0, exactly like "Content/" is for the unqualified/game shape);
+    // unqualified keys are unchanged from the root-anchored (2nd) revision.
+    // Every folder string carries a trailing '/' except a qualified root
+    // ("<scheme>://", nothing after it) and the empty string.
     inline int GroupDepthOf(std::string_view folder)
     {
-        if (folder.empty() || folder == "Content/")
+        if (folder.empty())
+            return 0;
+        if (const std::size_t sep = folder.find("://"); sep != std::string_view::npos)
+        {
+            const std::string_view rest = folder.substr(sep + 3);
+            if (rest.empty())
+                return 0;   // this mount's own root
+            int slashes = 0;
+            for (char c : rest)
+                if (c == '/') ++slashes;
+            return slashes;   // same "1 + nesting below the root" rule as unqualified
+        }
+        if (folder == "Content/")
             return 0;
         int slashes = 0;
         for (char c : folder)
@@ -385,28 +440,52 @@ namespace Arcane::Editor
     }
 
     // Display label for a group row: the LEAF segment only, trailing '/' kept
-    // ("textures/patterns/" -> "patterns/"). Top-level dirs and "Content/" ARE their
-    // own leaf already, so this returns the input unchanged for depth 0 -- no special-
-    // casing needed (spec s6: "top-level groups unchanged").
+    // ("textures/patterns/" -> "patterns/"; a qualified root -> its mount's own
+    // label via MountRootLabel, e.g. "diag://" -> "diagnostics/"). A mount
+    // root -- "Content/" or any other -- is its own leaf already, so it never
+    // shortens to nothing (spec s6).
     inline std::string GroupLabelOf(std::string_view folder)
     {
         if (folder.empty())
             return std::string(folder);
+        if (const std::size_t sep = folder.find("://"); sep != std::string_view::npos)
+        {
+            const std::string scheme(folder.substr(0, sep));
+            const std::string_view rest = folder.substr(sep + 3);
+            if (rest.empty())
+                return MountRootLabel(scheme);
+            const std::string_view trimmed = rest.substr(0, rest.size() - 1);
+            const std::size_t slash = trimmed.rfind('/');
+            return std::string(slash == std::string_view::npos ? trimmed : trimmed.substr(slash + 1)) + "/";
+        }
         const std::string_view trimmed = folder.substr(0, folder.size() - 1);   // drop trailing '/'
         const std::size_t slash = trimmed.rfind('/');
         return std::string(slash == std::string_view::npos ? trimmed : trimmed.substr(slash + 1)) + "/";
     }
 
-    // Immediate PARENT content directory of a group folder, or "" if `folder` IS
-    // the "Content/" root (the one group with no parent). ROOT-ANCHORED (spec s6,
-    // 2026-09-07 second revision): "textures/patterns/" -> "textures/" (unchanged);
-    // "materials/" -> **"Content/"** (was "" before root-anchoring -- every
-    // top-level directory is now Content/'s own child, not a sibling with no
-    // parent). Walking this repeatedly yields the folder's full ancestor chain,
-    // root-most last -- "Content/" itself always terminates the walk.
+    // Immediate PARENT of a group KEY, or "" if `folder` IS a mount's own root
+    // (the one group with no parent, per mount). Mount roots are PEERS, never
+    // ancestors of each other (spec s6: "closing one never touches another's
+    // rows") -- each qualified/unqualified tree terminates at its own root
+    // independently. Walking this repeatedly yields the folder's full
+    // ancestor chain within its OWN mount, root-most last.
     inline std::string GroupParentOf(std::string_view folder)
     {
-        if (folder.empty() || folder == "Content/")
+        if (folder.empty())
+            return {};
+        if (const std::size_t sep = folder.find("://"); sep != std::string_view::npos)
+        {
+            const std::string scheme(folder.substr(0, sep));
+            const std::string_view rest = folder.substr(sep + 3);
+            if (rest.empty())
+                return {};   // this mount's own root has no parent
+            const std::string_view trimmed = rest.substr(0, rest.size() - 1);
+            const std::size_t slash = trimmed.rfind('/');
+            if (slash == std::string_view::npos)
+                return scheme + "://";   // a top-level dir under this mount -> its own root
+            return scheme + "://" + std::string(trimmed.substr(0, slash + 1));
+        }
+        if (folder == "Content/")
             return {};   // the literal root has no parent
         const std::string_view trimmed = folder.substr(0, folder.size() - 1);
         const std::size_t slash = trimmed.rfind('/');
