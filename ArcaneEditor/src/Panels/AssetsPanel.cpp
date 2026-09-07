@@ -89,6 +89,25 @@ namespace Arcane::Editor
         constexpr float kPreviewThumbSize        = 140.0f;
         constexpr float kActionButtonHeight      = 24.0f;
 
+        // 2026-09-07 user-directed, fourth revision (spec s6/s17): compact
+        // side-by-side preview header -- thumb left, name/pills/path/guid/
+        // cook stacked beside it, instead of always stacking thumb-above-
+        // metadata. kPreviewCompactHeaderMinWidth is the PANE width (this
+        // function's own `width` parameter, same units as
+        // kPreviewPaneMinWidth/kPreviewPaneMaxWidth above) at and above
+        // which the compact header draws; below it, today's stacked form is
+        // unchanged. The spec calls the exact number an "implementer tuning
+        // value, not a pinned constant" -- 250px is its own suggested
+        // figure, kept verbatim rather than re-deriving a different one; the
+        // shipped 165px default pane stays comfortably below it (spec's own
+        // "stays on the stacked fallback" requirement), see the impl report
+        // for the measured breakpoint math. kPreviewCompactTextColumnMin is
+        // the floor the thumb yields to when the pane is between this
+        // breakpoint and comfortably wide -- the "≥~110px text column"
+        // figure from the same directive.
+        constexpr float kPreviewCompactHeaderMinWidth = 250.0f;
+        constexpr float kPreviewCompactTextColumnMin  = 110.0f;
+
         // The absolute sane-range clamp ONLY -- [kPreviewPaneMinWidth,
         // kPreviewPaneMaxWidth] -- and nothing else. This is the ONLY clamp
         // ever applied to a value before it is written into
@@ -1364,18 +1383,11 @@ namespace Arcane::Editor
             // border seam (spec s6.1: "the Lucide kind icon on a well
             // background") -- the same image/icon composition
             // `DrawAssetPeekTooltip` uses at 64px, scaled up and framed.
-            //
-            // 2026-09-07 follow-up: the pane can now be dragged down to
-            // kPreviewPaneMinWidth (120px), which minus this child's own
-            // WindowPadding does not clear 140px. Rather than add a second
-            // centering codepath, the thumb SCALES to whatever is actually
-            // available (min-clamped against the 140px pinned size) -- one
-            // extra local, reused at all four call sites below, instead of
-            // a separate offset computation. At the shipped 165px default
-            // (avail ~= 149px after padding) this is a no-op: 140 < avail,
-            // so `thumbSize` is still exactly 140 and nothing about the
-            // Task 11 layout changes.
-            const float thumbSize = std::min(kPreviewThumbSize, ImGui::GetContentRegionAvail().x);
+            // Factored into a lambda (2026-09-07, compact-header revision)
+            // since it is now drawn from two call sites (compact/stacked
+            // below) with only `thumbSize` differing -- the drawing itself
+            // is byte-identical to every prior revision.
+            auto drawThumb = [&](float thumbSize)
             {
                 const ImVec2 thumbMin = ImGui::GetCursorScreenPos();
                 const ImVec2 thumbMax(thumbMin.x + thumbSize, thumbMin.y + thumbSize);
@@ -1396,59 +1408,130 @@ namespace Arcane::Editor
                 }
                 dl->AddRect(thumbMin, thumbMax, ImGui::GetColorU32(Theme::kSeparator));
                 ImGui::Dummy(ImVec2(thumbSize, thumbSize));
-            }
+            };
 
-            // ---- name (stem) + kind pill + subkind/inst pills
-            ImGui::TextUnformatted(e->name.c_str());
-            ImGui::SameLine();
-            AssetPill(KindLabel(e->kind));
-            if (const char* sub = SubkindPillText(*e))
+            // ---- name/pills + path/guid/cook rows. Factored into a lambda
+            // (2026-09-07, compact-header revision) for the same reason as
+            // `drawThumb` -- identical content and logic at both call sites,
+            // only the surrounding container differs. `EllipsisToWidth`'s
+            // `GetContentRegionAvail().x` call is UNCHANGED from every prior
+            // revision -- in the stacked branch it still measures the whole
+            // pane child, and in the compact branch it measures the
+            // `##previewMeta` child's own (zero-padding) width instead,
+            // simply by virtue of which window is current when this runs.
+            // That's the ImGui-native equivalent of the mock's own
+            // `min-width: 0` + `overflow: hidden` ellipsis fix (design
+            // report, fourth revision) -- a bounding container, not a width
+            // argument threaded through.
+            auto drawMeta = [&]()
             {
+                // ---- name (stem) + kind pill + subkind/inst pills
+                ImGui::TextUnformatted(e->name.c_str());
                 ImGui::SameLine();
-                AssetPill(sub);
-            }
-            if (e->isInstance)
+                AssetPill(KindLabel(e->kind));
+                if (const char* sub = SubkindPillText(*e))
+                {
+                    ImGui::SameLine();
+                    AssetPill(sub);
+                }
+                if (e->isInstance)
+                {
+                    ImGui::SameLine();
+                    AssetPill("inst");
+                }
+
+                // ---- path row: the content-relative path (scheme prefix
+                // stripped -- ruling 5, 2026-09-07), ellipsized to whatever's
+                // left on the line after the "path" label (EllipsisToWidth
+                // stays the fallback for a still-long relative path at the
+                // pane's narrower widths). A plain text hover tooltip carries
+                // the FULL mount path -- this is NOT the §8 210px peek-tooltip
+                // contract (no thumb, no kind/cook rows), just a path reveal.
+                ImGui::TextDisabled("path");
+                ImGui::SameLine();
+                const std::string_view relPath = ContentRelativePath(e->mountPath);
+                ImGui::TextUnformatted(EllipsisToWidth(relPath, ImGui::GetContentRegionAvail().x).c_str());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", e->mountPath.c_str());
+
+                // ---- guid row: dim, click copies (spec s6: "guid
+                // (click-to-copy)"). Routed through `actions.copyGuid` -- the
+                // SAME field the row context menu's "Copy Guid" entry already
+                // sets (AssetsPanel.cpp's DrawRowContextMenu) -- so the host's
+                // one existing consumer (EditorAppFrame.cpp's
+                // `ImGui::SetClipboardText(browserActions.copyGuid...)`) needs
+                // no new wiring; "panel reports, app performs" stays intact.
+                ImGui::TextDisabled("guid");
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", e->guid.ToString().c_str());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (ImGui::IsItemClicked())
+                    actions.copyGuid = e->guid;
+
+                // ---- cook row: state string, refused in kAmber
+                ImGui::TextDisabled("cook");
+                ImGui::SameLine();
+                if (e->cook == CookState::Refused)
+                    ImGui::TextColored(Theme::kAmber, "%s", CookStateLabel(e->cook));
+                else
+                    ImGui::TextDisabled("%s", CookStateLabel(e->cook));
+            };
+
+            // 2026-09-07 user-directed, fourth revision (spec s6/s17):
+            // side-by-side header at/above kPreviewCompactHeaderMinWidth,
+            // today's stacked form (thumb above, metadata below -- every
+            // prior revision, unchanged) below it. Measured against the
+            // pane's own drawn `width` (this function's parameter, the same
+            // units as kPreviewPaneMinWidth/kPreviewHidePanelWidth), not the
+            // post-padding avail below -- so the breakpoint reads the same
+            // number the splitter drag/double-click reset already use.
+            const bool compactHeader = width >= kPreviewCompactHeaderMinWidth;
+            if (compactHeader)
             {
+                // §11.2's 140px thumb is unchanged; it only yields (via the
+                // same std::min clamp every revision has used) when the
+                // pane is too narrow to also leave a
+                // kPreviewCompactTextColumnMin-wide text column beside it --
+                // exactly the pinned "scaled down via the existing min()
+                // logic" rule.
+                const float avail = ImGui::GetContentRegionAvail().x;
+                const float spacing = ImGui::GetStyle().ItemSpacing.x;
+                const float thumbSize = std::min(kPreviewThumbSize,
+                    std::max(0.0f, avail - spacing - kPreviewCompactTextColumnMin));
+                const float textColumnWidth = std::max(0.0f, avail - thumbSize - spacing);
+
+                ImGui::BeginGroup();
+                drawThumb(thumbSize);
+                ImGui::EndGroup();
                 ImGui::SameLine();
-                AssetPill("inst");
+
+                // Zero WindowPadding on this bounding-only column: it exists
+                // purely to give `drawMeta`'s GetContentRegionAvail() calls a
+                // column-width answer instead of a whole-pane one (see
+                // `drawMeta`'s own comment); a visible inset was never part
+                // of the mock.
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+                if (ImGui::BeginChild("##previewMeta", ImVec2(textColumnWidth, thumbSize), ImGuiChildFlags_None))
+                    drawMeta();
+                ImGui::EndChild();
+                ImGui::PopStyleVar();
             }
-
-            // ---- path row: the content-relative path (scheme prefix
-            // stripped -- ruling 5, 2026-09-07), ellipsized to whatever's
-            // left on the line after the "path" label (EllipsisToWidth
-            // stays the fallback for a still-long relative path at the
-            // pane's narrower widths). A plain text hover tooltip carries
-            // the FULL mount path -- this is NOT the §8 210px peek-tooltip
-            // contract (no thumb, no kind/cook rows), just a path reveal.
-            ImGui::TextDisabled("path");
-            ImGui::SameLine();
-            const std::string_view relPath = ContentRelativePath(e->mountPath);
-            ImGui::TextUnformatted(EllipsisToWidth(relPath, ImGui::GetContentRegionAvail().x).c_str());
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", e->mountPath.c_str());
-
-            // ---- guid row: dim, click copies (spec s6: "guid
-            // (click-to-copy)"). Routed through `actions.copyGuid` -- the
-            // SAME field the row context menu's "Copy Guid" entry already
-            // sets (AssetsPanel.cpp's DrawRowContextMenu) -- so the host's
-            // one existing consumer (EditorAppFrame.cpp's
-            // `ImGui::SetClipboardText(browserActions.copyGuid...)`) needs
-            // no new wiring; "panel reports, app performs" stays intact.
-            ImGui::TextDisabled("guid");
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s", e->guid.ToString().c_str());
-            if (ImGui::IsItemHovered())
-                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-            if (ImGui::IsItemClicked())
-                actions.copyGuid = e->guid;
-
-            // ---- cook row: state string, refused in kAmber
-            ImGui::TextDisabled("cook");
-            ImGui::SameLine();
-            if (e->cook == CookState::Refused)
-                ImGui::TextColored(Theme::kAmber, "%s", CookStateLabel(e->cook));
             else
-                ImGui::TextDisabled("%s", CookStateLabel(e->cook));
+            {
+                // 2026-09-07 follow-up: the pane can now be dragged down to
+                // kPreviewPaneMinWidth (120px), which minus this child's own
+                // WindowPadding does not clear 140px. Rather than add a
+                // second centering codepath, the thumb SCALES to whatever is
+                // actually available (min-clamped against the 140px pinned
+                // size). At the shipped 165px default (avail ~= 149px after
+                // padding) this is a no-op: 140 < avail, so `thumbSize` is
+                // still exactly 140 and nothing about the Task 11 layout
+                // changes.
+                const float thumbSize = std::min(kPreviewThumbSize, ImGui::GetContentRegionAvail().x);
+                drawThumb(thumbSize);
+                drawMeta();
+            }
 
             ImGui::Separator();
 
