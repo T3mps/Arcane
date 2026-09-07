@@ -1,6 +1,7 @@
 #include "Panels/AssetsPanel.hpp"
 
 #include "Documents/DocumentHost.hpp"
+#include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
@@ -483,37 +484,84 @@ namespace Arcane::Editor
 
                     // Trailing block, right-aligned: an optional hover "+"
                     // (creatable kinds only) then the dim count (spec s6).
-                    // Fix round 1 (Important 3): the "+" is a REAL item
-                    // submitted AFTER the row's Selectable, which
-                    // RowWithThumb flags AllowOverlap for exactly this
-                    // reason -- it genuinely receives its own clicks per
-                    // ImGui's front-to-back overlap arbitration
-                    // (imgui.cpp:5112-5118), rather than sitting inert under
-                    // a Selectable that never releases hover to it. Both
-                    // pieces are positioned by absolute screen coordinates,
-                    // not SameLine() (RowWithThumb no longer leaves a real
-                    // "name" item for SameLine to read line-metrics off of;
-                    // see its own doc comment on `trailingPos`).
+                    //
+                    // Fix round 2 (re-review): gating the "+" widget's
+                    // SUBMISSION on `res.hovered` (fix round 1's shape) was
+                    // its own new bug -- `res.hovered` is
+                    // `IsItemHovered()` on a Selectable RowWithThumb now
+                    // ALWAYS flags AllowOverlap, and `IsItemHovered`'s own
+                    // AllowOverlap clause (imgui.cpp:5031-5035) has the
+                    // identical "only when HoveredIdPreviousFrame == me"
+                    // precondition ButtonBehavior's does. Once the "+" is
+                    // submitted and the mouse sits over IT specifically, it
+                    // (unflagged, submitted after the Selectable) legally
+                    // steals HoveredId for that frame -- so
+                    // HoveredIdPreviousFrame going into the NEXT frame is
+                    // the "+"'s id, not the Selectable's, so the
+                    // Selectable's own precondition fails THAT frame,
+                    // `res.hovered` goes false, the "+" is not submitted,
+                    // nothing steals HoveredId, the Selectable re-settles
+                    // true next frame, the "+" reappears -- a permanent
+                    // 2-frame oscillation (a fresh trace is in the fix
+                    // report) that also breaks a press: SmallButton is
+                    // PressedOnClickRelease, so a mouse-down frame sets
+                    // ActiveId, and the very next frame the button is gone,
+                    // so imgui.cpp:5796-5800 clears the stale ActiveId
+                    // before the release ever lands.
+                    //
+                    // Fix: submit the "+" hit-region UNCONDITIONALLY every
+                    // frame for a creatable kind (matching the texture
+                    // expander's own already-correct shape in
+                    // DrawAssetRow -- ITS submission is gated only on the
+                    // frame-invariant `hasChildren`, never on a hover
+                    // flag), and gate only the PAINT on hover. The paint
+                    // condition ORs the row's own hover with the "+"
+                    // hit-region's own hover: the two rects partition the
+                    // row, so exactly one of the two is ever true for a
+                    // given mouse position, and the combined signal never
+                    // itself oscillates (this also incidentally fixes the
+                    // reported horizontal jitter in the trailing count's
+                    // position -- its own anchor no longer depends on
+                    // whether the "+" happens to be painted this frame).
                     char countBuf[16];
                     std::snprintf(countBuf, sizeof(countBuf), "%d", re.count);
                     const float countW = ImGui::CalcTextSize(countBuf).x;
-                    const bool showPlus = res.hovered && RailKindCreatable(re.kind);
-                    const float plusBtnW = ImGui::CalcTextSize(ICON_LC_PLUS).x
-                                          + ImGui::GetStyle().FramePadding.x * 2.0f;
-                    const float trailingW = countW + (showPlus ? (plusBtnW + ImGui::GetStyle().ItemSpacing.x) : 0.0f);
                     const float padX = ImGui::GetStyle().FramePadding.x;
-
-                    float cursorX = std::max(res.trailingPos.x, rowMin.x + rowWidth - padX - trailingW);
                     const float rowCenterY = rowMin.y + kRailRowHeight * 0.5f;
 
-                    if (showPlus)
+                    // Count anchors flush to the row's right edge ALWAYS --
+                    // never shifted by whether the "+" exists or is
+                    // painted, so its position is fixed regardless.
+                    const float countX = std::max(res.trailingPos.x, rowMin.x + rowWidth - padX - countW);
+
+                    if (RailKindCreatable(re.kind))
                     {
-                        ImGui::SetCursorScreenPos(ImVec2(cursorX, rowCenterY - ImGui::GetFrameHeight() * 0.5f));
-                        if (ImGui::SmallButton(ICON_LC_PLUS))
+                        const float plusBtnW = ImGui::CalcTextSize(ICON_LC_PLUS).x
+                                              + ImGui::GetStyle().FramePadding.x * 2.0f;
+                        const float btnH = ImGui::GetFrameHeight();
+                        const ImVec2 btnMin(countX - ImGui::GetStyle().ItemSpacing.x - plusBtnW,
+                                           rowCenterY - btnH * 0.5f);
+
+                        ImGui::SetCursorScreenPos(btnMin);
+                        const bool plusClicked = ImGui::InvisibleButton("##plus", ImVec2(plusBtnW, btnH));
+                        const bool plusHovered = ImGui::IsItemHovered();
+                        if (plusClicked)
                             actions.requestCreateKind = re.kind;
-                        cursorX += plusBtnW + ImGui::GetStyle().ItemSpacing.x;
+
+                        if (res.hovered || plusHovered)
+                        {
+                            ImDrawList* dl = ImGui::GetWindowDrawList();
+                            const ImVec2 btnMax(btnMin.x + plusBtnW, btnMin.y + btnH);
+                            dl->AddRect(btnMin, btnMax,
+                                       ImGui::GetColorU32(plusHovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button));
+                            const ImVec2 glyphSize = ImGui::CalcTextSize(ICON_LC_PLUS);
+                            dl->AddText(ImVec2(btnMin.x + (plusBtnW - glyphSize.x) * 0.5f,
+                                              btnMin.y + (btnH - glyphSize.y) * 0.5f),
+                                       ImGui::GetColorU32(ImGuiCol_Text), ICON_LC_PLUS);
+                        }
                     }
-                    ImGui::SetCursorScreenPos(ImVec2(cursorX, rowCenterY - ImGui::GetTextLineHeight() * 0.5f));
+
+                    ImGui::SetCursorScreenPos(ImVec2(countX, rowCenterY - ImGui::GetTextLineHeight() * 0.5f));
                     ImGui::TextDisabled("%s", countBuf);
 
                     // Absolute-position the NEXT row explicitly rather than
@@ -639,12 +687,38 @@ namespace Arcane::Editor
             // reads as refused rather than losing the marker to the
             // expander (fix round 1, Important 5; spec s6: refused rows
             // wear the amber triangle, unconditionally).
+            //
+            // Fix round 2 (minor, corrects §8.6): the original "-11px"
+            // inset was a guess, not a measurement, and corner-anchoring a
+            // glyph flush against a boundary has zero slack to absorb a
+            // per-glyph render offset -- unlike the expander/group chevrons
+            // above, which are CENTERED in their own cell and so have slack
+            // on both sides. The merged Lucide icons carry a FIXED
+            // GlyphOffset.y=3.0f baked in at atlas-build time
+            // (EditorFonts.cpp:58); whether ImGui's dynamic font sizing
+            // rescales that offset when a PushFont call overrides the size
+            // (as here) is not asserted anywhere in this codebase, so this
+            // fix assumes the WORST case (an absolute, non-scaling 3px
+            // shift) rather than guess a second time: a smaller badge font
+            // (10px, under the 12px pills) plus a 3px inward margin on top
+            // of the CalcTextSize-measured extent keeps the glyph's
+            // rendered pixels inside the 18px thumb cell EVEN IF the offset
+            // does not shrink with the font size -- worst case its bottom
+            // edge lands exactly at the thumb boundary, never past it.
             if (refused)
             {
-                const float thumbY = rowMin.y + (kTableRowHeight - kAssetRowThumbSize) * 0.5f;
-                const ImVec2 badgePos(rowMin.x + indent + kAssetRowThumbSize - 11.0f, thumbY + kAssetRowThumbSize - 11.0f);
+                constexpr float kBadgeFontSize = 10.0f;
+                constexpr float kBadgeMargin    = 3.0f;
+                ImGui::PushFont(GetEditorFonts().interRegular, kBadgeFontSize);
+                const ImVec2 badgeSize = ImGui::CalcTextSize(ICON_LC_TRIANGLE_ALERT);
+                const float thumbY      = rowMin.y + (kTableRowHeight - kAssetRowThumbSize) * 0.5f;
+                const float thumbRight  = rowMin.x + indent + kAssetRowThumbSize;
+                const float thumbBottom = thumbY + kAssetRowThumbSize;
+                const ImVec2 badgePos(thumbRight  - badgeSize.x - kBadgeMargin,
+                                      thumbBottom - badgeSize.y - kBadgeMargin);
                 ImGui::GetWindowDrawList()->AddText(badgePos, ImGui::GetColorU32(Theme::kAmber),
                                                     ICON_LC_TRIANGLE_ALERT);
+                ImGui::PopFont();
             }
 
             // Trailing pills, in spec order: subkind, inst, boot, sliced,
