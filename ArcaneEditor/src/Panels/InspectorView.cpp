@@ -1083,27 +1083,46 @@ namespace Arcane::Editor
                                         modelReachable ? services->assetModel->Find(e.guid) : nullptr;
 
                                     // The subkind filter: exclude a candidate
-                                    // the model CONFIRMS does not match
-                                    // (missing entry, no surface answer yet,
-                                    // or a different surface) -- an unproven
-                                    // match must not slip through a filter
-                                    // whose whole point is "ONLY this
-                                    // surface". Gated on `modelReachable`, NOT
-                                    // just `surfaceFilter >= 0`: a caller that
-                                    // never wires InspectorServices::
-                                    // assetModel at all (every headless test,
-                                    // same convention as mintSpriteForTexture/
-                                    // resolveTexturePreview) must degrade to
-                                    // unfiltered, exactly like an unrecognised
-                                    // owning component -- NOT to "hide every
-                                    // material", which is what an unconditional
-                                    // `surfaceFilter >= 0` gate would do here
-                                    // (panelEntry is always null without a
-                                    // model, and that must not read as "every
-                                    // candidate disproven").
+                                    // ONLY on a CONFIRMED differing surface --
+                                    // `panelEntry` present AND its `surface`
+                                    // resolved AND that value disagrees with
+                                    // `surfaceFilter`. Fix round 1 (review):
+                                    // the first draft also excluded on
+                                    // `!panelEntry` and on a resolved-but-
+                                    // nullopt `surface`, treating "we don't
+                                    // know" the same as "confirmed wrong" --
+                                    // but `MaterialSurfaceFor` returns nullopt
+                                    // for a REAL, registered material whose
+                                    // JSON can't be read or whose parent
+                                    // chain is broken/cyclic, not a phantom
+                                    // asset. `CreateAssetDialog.cpp`'s own
+                                    // parent-material picker (the only other
+                                    // consumer of this exact ambiguity, its
+                                    // `if (e->surface)` guard around the pill)
+                                    // never excludes on a missing surface
+                                    // either -- it omits the pill and leaves
+                                    // the candidate selectable. "Show what we
+                                    // know, say nothing about what we don't":
+                                    // a candidate the model cannot vouch for
+                                    // (guid absent from `Entries()`, or
+                                    // present with an unresolved surface) is
+                                    // shown WITHOUT a pill, same as an
+                                    // unfiltered field. `modelReachable`
+                                    // still degrades the WHOLE filter off for
+                                    // a caller that never wires
+                                    // InspectorServices::assetModel at all
+                                    // (every headless test, same convention
+                                    // as mintSpriteForTexture/
+                                    // resolveTexturePreview) -- `panelEntry`
+                                    // is unconditionally null in that case, so
+                                    // gating on it alone would already read
+                                    // as "nothing confirmed, show everything",
+                                    // but the explicit `modelReachable`
+                                    // conjunct keeps that reasoning visible
+                                    // rather than incidental.
                                     if (surfaceFilter >= 0 && modelReachable
-                                        && (!panelEntry || !panelEntry->surface
-                                            || static_cast<int>(*panelEntry->surface) != surfaceFilter))
+                                        && panelEntry && panelEntry->surface
+                                        && static_cast<int>(*panelEntry->surface) != surfaceFilter)
                                         continue;
 
                                     // Every material candidate gets its

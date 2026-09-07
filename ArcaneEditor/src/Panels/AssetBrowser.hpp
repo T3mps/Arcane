@@ -172,6 +172,11 @@ namespace Arcane::Editor
     // first. No ordering race like AssetKindFilterForFieldName's
     // material/mesh split: "SpriteRenderer" and "MeshRenderer" share no
     // substring, so the two checks below can never both fire for one name.
+    // This DOES assume no future component's name embeds either literal as
+    // a substring of its OWN name (e.g. a hypothetical "MySpriteRendererFX")
+    // -- exactly the same assumption AssetKindFilterForFieldName already
+    // makes about field names, just one level up at the component. Revisit
+    // this function if that ever stops holding.
     [[nodiscard]] inline int MaterialSurfaceFilterForComponent(std::string_view componentName)
     {
         if (componentName.find("SpriteRenderer") != std::string_view::npos)
