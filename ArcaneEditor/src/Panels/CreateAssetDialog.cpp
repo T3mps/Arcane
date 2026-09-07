@@ -319,14 +319,21 @@ namespace Arcane::Editor
         const char* title = CreateKindTitle(st.request.kind);
         const std::vector<FolderChoice> folders = BuildFolderChoices(model, st.request.kind);
 
-        // The frame the request arrived: resolve the folder index against the
-        // list that only EXISTS here (BeginCreateAsset cannot know it), then
-        // open the popup. Every other seeded field was set by BeginCreateAsset.
+        // Re-arm the ImGui popup whenever it isn't currently open -- which
+        // includes a competing dockspace-level modal having closed it out
+        // from under this request (see CreateDialogState::seeded). That is
+        // NOT the same question as "is this a new request": folderIndex is
+        // seeded exactly once per request, against the list that only EXISTS
+        // here (BeginCreateAsset cannot know it), keyed on `st.seeded` rather
+        // than on IsPopupOpen so an interrupted-then-resumed dialog keeps
+        // whatever folder the user had already picked.
         const bool justOpened = !ImGui::IsPopupOpen(title);
         if (justOpened)
+            ImGui::OpenPopup(title);
+        if (!st.seeded)
         {
             st.folderIndex = IndexOfRelativeFolder(folders, DefaultRelativeFolder(st.request.kind));
-            ImGui::OpenPopup(title);
+            st.seeded = true;
         }
 
         // Width pinned to spec s11.2's ~380px EXACTLY (equal min/max on x);

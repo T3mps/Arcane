@@ -2554,25 +2554,38 @@ namespace Arcane::Editor
             }
         }
 
+        // Unsaved-scene confirm's parked intent -- read here, ahead of the
+        // create dialog below, so the create dialog's starvation gate can see
+        // it too. Same snapshot is reused at the "Unsaved Scene" block further
+        // down (a TakePending() mid-frame cannot change what either reads).
+        const Arcane::Editor::SceneIntent pending = m_scene.Pending();
+
         // The unified create dialog (asset-manager Plan 1 Task 12). A
         // dockspace-level modal like the two around it -- opened by the ONE
         // entry (BeginCreateAsset), dispatched by the ONE dispatcher
         // (ConsumeCreateResult), which is the whole of spec s7's "no creation
         // path may bypass CreateAssetRequest".
         //
-        // GATED ON AN EMPTY ERROR QUEUE, and that is load-bearing rather than
-        // taste. Every modal in this function re-arms itself the same way
-        // ("if (!IsPopupOpen(title)) OpenPopup(title)"), and ImGui allows
-        // exactly ONE popup at a given stack level: two such modals up at once
-        // close each other every frame (OpenPopupEx -> ClosePopupToLevel(0)),
-        // which makes both permanently `Appearing` and therefore -- under
-        // AlwaysAutoResize, which hides an appearing window for one frame while
-        // it fits itself -- permanently INVISIBLE. Observed live: a queued
-        // "Open Project Failed" and this dialog starved each other to a blank
-        // screen. The error is the more urgent of the two and must be
-        // acknowledged first, so it wins and the create dialog waits its turn
-        // (its state is untouched, so it draws the frame after OK is clicked).
-        if (m_createDialog.open && !m_modalErrors.Front())
+        // GATED ON AN EMPTY ERROR QUEUE **AND** ON NO PARKED SCENE INTENT --
+        // both load-bearing, not taste. Every modal in this function re-arms
+        // itself the same way ("if (!IsPopupOpen(title)) OpenPopup(title)"),
+        // and ImGui allows exactly ONE popup at a given stack level: two such
+        // modals up at once close each other every frame (OpenPopupEx ->
+        // ClosePopupToLevel(0)), which makes both permanently `Appearing` and
+        // therefore -- under AlwaysAutoResize, which hides an appearing window
+        // for one frame while it fits itself -- permanently INVISIBLE.
+        // Observed live: a queued "Open Project Failed" and this dialog
+        // starved each other to a blank screen. The "Unsaved Scene" modal just
+        // below has the identical re-arm shape and is reachable while the
+        // create dialog is open -- the OS window-close button reaches
+        // SceneSession and parks an Exit intent regardless of any ImGui modal
+        // on screen -- so it must be covered by the same gate or the two
+        // starve each other instead. Both a queued error and a parked scene
+        // intent are more urgent than a create dialog and must be resolved
+        // first, so the create dialog waits its turn either way (its state is
+        // untouched, so it draws again once both are clear).
+        if (m_createDialog.open && !m_modalErrors.Front() &&
+            pending == Arcane::Editor::SceneIntent::None)
         {
             if (const Arcane::Project* createProj = m_runtime->CurrentProject())
             {
@@ -2593,10 +2606,10 @@ namespace Arcane::Editor
         // Unsaved-scene confirm. SceneSession parked the intent (New Scene, Open
         // Scene, Open Project, Exit, LaunchStandalone) because the scene is dirty
         // (or, for LaunchStandalone only, never saved); this popup is where it is
-        // answered. Same re-arm shape as the modal above. Computed once: every
-        // branch below reads the same snapshot, so a TakePending() mid-block
-        // cannot change what the rest of the frame's UI thinks is pending.
-        const Arcane::Editor::SceneIntent pending = m_scene.Pending();
+        // answered. Same re-arm shape as the modal above. `pending` was read
+        // once above (ahead of the create-dialog gate); every branch below
+        // reads that same snapshot, so a TakePending() mid-block cannot change
+        // what the rest of the frame's UI thinks is pending.
         const bool isLaunch = (pending == Arcane::Editor::SceneIntent::LaunchStandalone);
         if (pending != Arcane::Editor::SceneIntent::None &&
             !ImGui::IsPopupOpen("Unsaved Scene"))

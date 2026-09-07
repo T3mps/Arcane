@@ -294,6 +294,15 @@ namespace Arcane::Editor
         Arcane::Guid parent, texture;
         bool setAsBoot = false;
         bool pickerOpen = false;
+        // Set once DrawCreateAssetDialog has seeded folderIndex for THIS
+        // request; BeginCreateAsset resets it to false along with everything
+        // else. Deliberately separate from ImGui's own IsPopupOpen(title):
+        // the popup can be closed out from under an open request by a
+        // competing dockspace-level modal (the error queue, a parked scene
+        // intent) re-arming at the same stack level, and on resume that would
+        // read as "just opened" and silently re-seed folderIndex over
+        // whatever the user had already picked in the Location combo.
+        bool seeded = false;
     };
 
     // What a completed dialog hands back. `folder` is relative to Content/
