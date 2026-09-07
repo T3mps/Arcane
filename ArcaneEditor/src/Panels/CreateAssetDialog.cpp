@@ -484,9 +484,26 @@ namespace Arcane::Editor
                     // reuses a single match rather than minting a duplicate,
                     // so clicking Create here is never wrong, only redundant
                     // with the shortcut this notice offers.
+                    //
+                    // Gated on `== 1`, NOT "non-empty" (fix round 1): the
+                    // core's own reuse gate is `matches == 1` (EditorAppProject.cpp,
+                    // MintOrReuseSpriteForTexture) -- "never guess among
+                    // duplicates" (EditorApp.hpp's own comment on that
+                    // function). A texture with 2+ derived sprites is exactly
+                    // the "several" case the core mints a fresh sibling for,
+                    // so a singular "a 1:1 sprite already exists" notice and an
+                    // `Open existing` that silently picks `.front()` would
+                    // both misrepresent that state -- one guessing among
+                    // duplicates in exactly the spot the core refuses to.
+                    // Simplest fix consistent with the core: show NOTHING
+                    // (plain Name/Location/Texture, Create enabled once the
+                    // name validates) when there is more than one -- Create
+                    // still does the right thing (mints a fresh sibling), the
+                    // notice just isn't offered as a shortcut for an
+                    // ambiguous case.
                     const AssetPanelEntry* tex =
                         st.texture.IsValid() ? model.Find(st.texture) : nullptr;
-                    if (tex && !tex->derivedChildren.empty())
+                    if (tex && tex->derivedChildren.size() == 1)
                     {
                         ImGui::Spacing();
                         ImGui::TextDisabled("a 1:1 sprite already exists");
