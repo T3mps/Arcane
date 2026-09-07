@@ -35,6 +35,15 @@ namespace Arcane::Editor
         // its controls) is what closes the last 2px to the pinned 24.
         constexpr float kToolbarFramePadY = 4.0f;
         constexpr float kBottomBarHeight  = 24.0f;
+        // 2026-09-07 fix (mock parity, automation-measured): the vertical
+        // gap between the toolbar row's bottom edge and the Browse body's
+        // top edge, pixel-scanned off `OptionBC-Browse-FINAL.png` (7px of
+        // pure background between the toolbar's own bottom border and the
+        // body's own top border -- 61->69 border-to-border at the mock's
+        // native resolution). No §5/§11.2 value was previously pinned for
+        // this seam -- see DrawAssetsPanel's own comment for why it had
+        // silently collapsed to 0px live.
+        constexpr float kToolbarBodyGapPx = 7.0f;
 
         // The lens strip's three labels, fixed regardless of which plan has
         // landed (spec s5: "Plan 1 ships the full three-button strip ...
@@ -1426,6 +1435,21 @@ namespace Arcane::Editor
             auto drawMeta = [&]()
             {
                 // ---- name (stem) + kind pill + subkind/inst pills
+                //
+                // 2026-09-07 review note: unlike the `path` row below, the
+                // name here has NO EllipsisToWidth clamp in either branch --
+                // pre-existing (Task 11), not introduced by the compact
+                // header. It reads as a bigger risk now: the compact
+                // column can be as narrow as kPreviewCompactTextColumnMin
+                // (110px), and a long stem plus its trailing kind/subkind/
+                // inst pills (all SameLine-chained) has less room to
+                // overflow into than the old full-pane-width stacked row
+                // did. Deferred rather than fixed here: a correct clamp
+                // has to measure the pill run's own width FIRST and budget
+                // the name against what's left, not reuse EllipsisToWidth's
+                // single-string recipe -- a small feature of its own, out
+                // of scope for a geometry-only padding pass with the
+                // editor's own exe unavailable to re-capture against.
                 ImGui::TextUnformatted(e->name.c_str());
                 ImGui::SameLine();
                 AssetPill(KindLabel(e->kind));
@@ -1511,6 +1535,18 @@ namespace Arcane::Editor
                 // column-width answer instead of a whole-pane one (see
                 // `drawMeta`'s own comment); a visible inset was never part
                 // of the mock.
+                //
+                // 2026-09-07 review note: this child's HEIGHT is `thumbSize`
+                // (116-140px at this breakpoint), coupled to the thumb, not
+                // to `drawMeta`'s own content -- at today's metrics (Inter
+                // 16px body, this row's four lines) the real content stands
+                // ~80px, comfortably inside even the smallest compact
+                // thumbSize, so this is a no-op in practice. A future
+                // larger body font or display scale could grow that content
+                // past `thumbSize` and start clipping/scrolling the `cook`
+                // row inside the box -- not exercised by any capture in
+                // this arc, flagged here rather than sized defensively
+                // against a metrics change nothing today asks for.
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
                 if (ImGui::BeginChild("##previewMeta", ImVec2(textColumnWidth, thumbSize), ImGuiChildFlags_None))
                     drawMeta();
@@ -1658,6 +1694,30 @@ namespace Arcane::Editor
         ImGui::Begin("Assets", open);
 
         DrawToolbar(state, model, actions);
+
+        // 2026-09-07 fix (mock parity): DrawToolbar's own trailing widget is
+        // SegmentedStrip (the lens strip), which pushes ItemSpacing to
+        // (x,0) for its OWN internal buttons so they sit flush against each
+        // other ("collapsed shared borders", EditorWidgets.cpp) and pops it
+        // correctly before returning. But ImGui bakes each item's "next
+        // line" cursor advance in AT PLACEMENT TIME using whatever
+        // ItemSpacing was active THEN -- popping a style var afterward
+        // restores the STYLE STRUCT, not a cursor position that already
+        // advanced under the zeroed value. So the toolbar's own trailing
+        // edge silently inherited that zero too, and the body below sat
+        // flush against it with NO gap, live, even though nothing here ever
+        // asked for that -- confirmed by an automation pixel-scan of the
+        // live capture (0px) against the redline (7px, kToolbarBodyGapPx's
+        // own comment). Fix: an EXPLICIT Dummy for the gap, itself wrapped
+        // in a zeroed ItemSpacing so nothing implicit adds to either side
+        // of it -- deliberately not trusting ImGui's automatic per-item
+        // spacing a second time for this exact seam. Vertical-only; the
+        // horizontal flush gutters DrawBrowseLens's own SameLine(0,0) chain
+        // established are untouched.
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0f));
+        ImGui::Dummy(ImVec2(0.0f, kToolbarBodyGapPx));
+        ImGui::PopStyleVar();
 
         if (ImGui::BeginChild("##assetsbody", ImVec2(0.0f, -kBottomBarHeight)))
         {
