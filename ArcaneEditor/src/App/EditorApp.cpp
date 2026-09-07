@@ -1233,6 +1233,10 @@ namespace Arcane::Editor
         m_assetModel.ResetForProjectSwitch();
         m_assetPanelProviders = MakeAssetPanelProviders();
         m_assetModel.MarkAllDirty();
+        // Asset-manager Plan 2 Task 5: session-only, same as the model
+        // itself -- a switched-to project starts with an empty feed, not
+        // the outgoing project's history.
+        m_assetActivity.Clear();
 
         EnsureScene();
         // Compute the real title now that project/scene state is final,

@@ -26,6 +26,7 @@
 #include <Arcane/Host/ReferenceImages.hpp>    // --compare/--bless (Task 9): ReferenceResolution
 #include <Arcane/Host/VerifyReport.hpp>       // --report (Task 9): VerifyReport
 #include <Arcane/Assets/ImageCompare.hpp>     // --compare (Task 9): PixelData/ImageCompareResult
+#include "Panels/AssetActivityLog.hpp"
 #include "Panels/AssetPanelModel.hpp"
 #include "Panels/AssetsPanel.hpp"
 #include "Panels/ConsoleBuffer.hpp"
@@ -1193,6 +1194,30 @@ namespace Arcane::Editor
         // ANY panel draw (DrawEditorUi's RebuildIfDirty call, immediately
         // before the Assets panel).
         Arcane::Editor::AssetPanelModel         m_assetModel;
+        // Asset-manager redesign, Plan 2 Task 5: the session-only activity
+        // ring behind the Assets panel's activity feed (spec s9.2, Task 8
+        // draws it). MAIN-THREAD ONLY, no mutex -- same precedent
+        // m_cookDiagnostics/CookDiagRow documents at their own declaration
+        // below (:1368-1379 as of this task): every push site is one of
+        // this class's own main-thread-only poll/pump/dispatch paths
+        // (PollAssetWatch, OnCookCompleted, OnArtifactRefused,
+        // ConsumeCreateResult, DoSaveScene, PollDiagnosticReports), so no
+        // cross-thread access is ever reachable here either. Pushed BESIDE
+        // the existing m_assetModel.MarkDirty/MarkAllDirty calls at those
+        // same seams, never in place of them. Cleared on every project
+        // switch (SwitchProject, EditorApp.cpp) -- session-only, like the
+        // model itself is rebuilt fresh.
+        Arcane::Editor::AssetActivityLog        m_assetActivity;
+        // Asset-manager redesign, Plan 2 Task 5: resolves a guid to the
+        // activity log's `name` snapshot when only the guid is in hand
+        // (the cook-completion/refusal seams) -- project->Registry().
+        // Resolve(guid)'s mount path, filename only. Empty string (never a
+        // fallback string) when there is no current project or the guid is
+        // unresolvable; the feed row falls back to the guid string itself
+        // (Task 8). A NAMED helper rather than an inline lambda at each of
+        // the three call sites, specifically so Task 7's recook-diagnostics
+        // consumer can reuse it too.
+        [[nodiscard]] std::string NameOfAsset(const Arcane::Guid& guid) const;
         // Asset-manager redesign, Plan 1 Task 8: LIVE 64px material
         // thumbnails, harvested from a lazily-created offscreen vehicle and
         // persisted to <project>/Saved/Thumbnails (see the class's own header

@@ -22,6 +22,7 @@
 
 #include <glm/glm.hpp>
 
+#include <chrono>   // Asset-manager Plan 2 Task 5: m_assetActivity's now() stamp
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -292,8 +293,18 @@ namespace Arcane::Editor
         // the one just stamped. A scene saved outside the project's content root
         // cannot be registered -- Runtime/Project already log exactly why, and it is
         // not a save failure: the bytes are on disk either way.
-        if (m_runtime->RegisterCreatedAsset(file))
+        // Asset-manager Plan 2 Task 5: the return was discarded above (only
+        // its truthiness gated MarkAllDirty) -- captured here so the
+        // activity feed's Created row can carry the guid AssetRegistry just
+        // read back out of the file, same "new-file branch" scope the
+        // brief's table names.
+        if (const auto registered = m_runtime->RegisterCreatedAsset(file))
+        {
             m_assetModel.MarkAllDirty();
+            m_assetActivity.Push({ std::chrono::steady_clock::now(), *registered,
+                                    file.filename().string(),
+                                    Arcane::Editor::AssetActivityKind::Created, {} });
+        }
 
         m_scene.Adopt(file, id, *m_undo);
         m_recents.NoteSceneOpened(m_runtime->CurrentProject(), file);

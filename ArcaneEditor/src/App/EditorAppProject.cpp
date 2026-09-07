@@ -40,6 +40,7 @@
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>   // NriDiagnostics::FireFault (--crash-gpu on the graph arm)
 
 #include <algorithm>   // std::ranges::find (SwitchProject's take() cherry-pick)
+#include <chrono>      // Asset-manager Plan 2 Task 5: m_assetActivity's now() stamp
 #include <cstddef>     // std::size_t (project_open's switch-local scan-progress callback)
 #include <filesystem>
 #include <memory>
@@ -131,6 +132,13 @@ namespace Arcane::Editor
             // scale (tens of assets, one rebuild) the whole-model rebuild is
             // cheaper than the dependency walk that would narrow it.
             m_assetModel.MarkAllDirty();
+            // Asset-manager Plan 2 Task 5: an in-editor save is activity too
+            // -- SourceChanged, same kind PollAssetWatch's external-edit
+            // branch below logs, since from the feed's perspective "this
+            // material's bytes just changed" reads identically either way.
+            m_assetActivity.Push({ std::chrono::steady_clock::now(), id,
+                                    NameOfAsset(id),
+                                    Arcane::Editor::AssetActivityKind::SourceChanged, {} });
             // Re-baseline the file watcher: our own save is not an external
             // edit and must not bounce back as a reload.
             if (const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject()
@@ -424,11 +432,20 @@ namespace Arcane::Editor
             {
                 ARC_INFO("Assets: discovered new content file '{}' -- registering",
                          dropped.generic_string());
-                m_runtime->RegisterCreatedAsset(dropped);
+                // Asset-manager Plan 2 Task 5: RegisterCreatedAsset's return
+                // was discarded above (the MarkAllDirty rebuild below covers
+                // the model either way) -- captured here ONLY so the
+                // activity feed can carry the guid it just minted.
+                const std::optional<Arcane::Guid> droppedId =
+                    m_runtime->RegisterCreatedAsset(dropped);
                 // A new registry entry changes folder grouping (a brand-new
                 // folder, or an existing group's count) -- MarkDirty(guid)
                 // alone would miss that, so the whole model rebuilds.
                 m_assetModel.MarkAllDirty();
+                if (droppedId)
+                    m_assetActivity.Push({ std::chrono::steady_clock::now(), *droppedId,
+                                            dropped.filename().string(),
+                                            Arcane::Editor::AssetActivityKind::Created, {} });
             }
         }
 
@@ -472,6 +489,10 @@ namespace Arcane::Editor
                 // the per-guid mark, and keeping both would just read as though
                 // this guid needed something the others don't.
                 m_assetModel.MarkAllDirty();
+                // Asset-manager Plan 2 Task 5: an external .arcmat edit is
+                // exactly the activity feed's SourceChanged case.
+                m_assetActivity.Push({ std::chrono::steady_clock::now(), e.guid, e.name,
+                                        Arcane::Editor::AssetActivityKind::SourceChanged, {} });
                 if (m_resolver)
                     m_resolver->InvalidateMaterial(e.guid);
                 // Asset-manager Task 8: an external .arcmat edit changes what
@@ -560,6 +581,12 @@ namespace Arcane::Editor
                 // classification too, so the whole entry is re-asked, not
                 // just its cook state.
                 m_assetModel.MarkDirty(e.guid);
+                // Asset-manager Plan 2 Task 5: a texture source or .meta
+                // sidecar changing on disk is SourceChanged too, same kind
+                // as the material branch above -- the feed does not
+                // distinguish "will recook" from "already re-baked".
+                m_assetActivity.Push({ std::chrono::steady_clock::now(), e.guid, e.name,
+                                        Arcane::Editor::AssetActivityKind::SourceChanged, {} });
             }
 
             if (changed && m_cookQueue)
@@ -638,6 +665,11 @@ namespace Arcane::Editor
                 // just changed (Queued -> Cooked, or a stale Refused just
                 // erased above) -- ask again next rebuild.
                 m_assetModel.MarkDirty(guid);
+                // Asset-manager Plan 2 Task 5: only a guid is in hand here
+                // (no AssetEntry with a name already resolved), so this
+                // goes through the shared NameOfAsset resolver.
+                m_assetActivity.Push({ std::chrono::steady_clock::now(), guid, NameOfAsset(guid),
+                                        Arcane::Editor::AssetActivityKind::Cooked, {} });
             }
             // Asset-manager Task 8: a MATERIAL that names one of these
             // textures as a declared param has been rendering the pre-cook
@@ -688,6 +720,11 @@ namespace Arcane::Editor
             // "cook refusals stay loud" means the panel model must not wait
             // for an unrelated event to notice. Ask again next rebuild.
             m_assetModel.MarkDirty(guid);
+            // Asset-manager Plan 2 Task 5: CookRefused, same Problems-pane
+            // twin the file header above already documents -- `reason` is
+            // CookSession's own failure string.
+            m_assetActivity.Push({ std::chrono::steady_clock::now(), guid, NameOfAsset(guid),
+                                    Arcane::Editor::AssetActivityKind::CookRefused, reason });
         }
 
         if (diagnosticsChanged)
@@ -727,6 +764,12 @@ namespace Arcane::Editor
         // cook-state answer for `id` may have just changed; ask again next
         // rebuild rather than waiting on an unrelated event to notice.
         self->m_assetModel.MarkDirty(id);
+        // Asset-manager Plan 2 Task 5: CookRefused -- detail carries the
+        // refusal KIND string (ArtifactMissing/HashMismatch/
+        // VersionNewerThanEngine), distinct from OnCookCompleted's failure
+        // `reason` text but the same Problems-pane vocabulary either way.
+        self->m_assetActivity.Push({ std::chrono::steady_clock::now(), id, self->NameOfAsset(id),
+                                      Arcane::Editor::AssetActivityKind::CookRefused, kind });
     }
 
     bool EditorApp::IsCookPending(const Arcane::Guid& id) const
@@ -744,6 +787,28 @@ namespace Arcane::Editor
     {
         const auto it = m_cookDiagnostics.find(id);
         return it != m_cookDiagnostics.end() && it->second.permanent;
+    }
+
+    // Asset-manager redesign, Plan 2 Task 5: m_assetActivity's guid->name
+    // resolver for the seams that only ever have a guid in hand (cook
+    // completion/failure, artifact refusal) -- see this method's own
+    // declaration (EditorApp.hpp) for why it is a named member rather than
+    // an inline lambda at each call site. project->Registry().Resolve(g)
+    // returns the registry's mount path ("game://materials/glow.arcmat");
+    // this takes only the filename, matching AssetPanelModel's own `name`
+    // derivation (AssetPanelModel.hpp's BuildAssetEntries). Empty string,
+    // never a placeholder, when there is no current project or the guid
+    // resolves to nothing -- the activity feed's own fallback (Task 8) is
+    // to print the guid itself when `name` is empty.
+    std::string EditorApp::NameOfAsset(const Arcane::Guid& guid) const
+    {
+        const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!project)
+            return {};
+        const auto mountPath = project->Registry().Resolve(guid);
+        if (!mountPath)
+            return {};
+        return std::filesystem::path(*mountPath).filename().string();
     }
 
     // Builds the three facade-backed callables AssetPanelModel is driven
@@ -2036,6 +2101,12 @@ namespace Arcane::Editor
             // something unrelated dirties the model, while the Problems row
             // published just below already points the user AT the browser.
             m_assetModel.MarkAllDirty();
+            // Asset-manager Plan 2 Task 5: a crash report landing in the
+            // registry is a Created event too -- same "new registry entry"
+            // shape as drop discovery above, just a different producer.
+            m_assetActivity.Push({ std::chrono::steady_clock::now(), *id,
+                                    diagPath.filename().string(),
+                                    Arcane::Editor::AssetActivityKind::Created, {} });
 
             // KEY OWNERSHIP: "diagnostics:reports" -- accumulate (never
             // clear here) across the whole session; each report gets its

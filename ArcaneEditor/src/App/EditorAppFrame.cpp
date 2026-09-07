@@ -2596,6 +2596,16 @@ namespace Arcane::Editor
                 break;
         }
 
+        // Asset-manager Plan 2 Task 5: every CreateAssetKind arm above funnels
+        // through this one tail (spec s7's "no creation path may bypass
+        // CreateAssetRequest" -- the same invariant this dispatcher's own
+        // header comment states), so ONE push here covers every kind rather
+        // than one at each mint. `target` is the file this whole dispatcher
+        // just wrote (set once, above, before the switch on r.kind).
+        m_assetActivity.Push({ std::chrono::steady_clock::now(), created,
+                                target.filename().string(),
+                                Arcane::Editor::AssetActivityKind::Created, {} });
+
         // Land SELECTED in the Browse lens. Every mint above already
         // registered the asset and marked the model dirty, so the next
         // frame's RebuildIfDirty (DrawEditorUi's, ahead of every panel draw)
