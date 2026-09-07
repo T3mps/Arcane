@@ -18,6 +18,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Arcane::Editor
 {
@@ -292,8 +293,51 @@ namespace Arcane::Editor
         // hardcoded here for the same reason kAxisBarColors/kHeaderBandColor
         // above are: a spec-pinned hex with no chrome-ramp equivalent, not an
         // oversight.
+        //
+        // SECOND CONSUMER (Plan 2, Task 6): BeginCardFrame's variant 1 --
+        // "the muted-amber acting-on frame" -- reuses this SAME constant for
+        // its border, same TU, no new token. AssetPill and CardFrame are
+        // therefore the two places in the codebase that draw the #7a5a20
+        // acting-on frame; if a third ever needs it, promote it to
+        // EditorTheme.hpp instead of a third hardcode.
         constexpr float kPillLineHeight  = 16.0f;
         constexpr ImU32 kPillAmberBorder = IM_COL32(0x7a, 0x5a, 0x20, 255);
+
+        // ---------------------------------------------------------------------
+        // Status lens vocabulary (Plan 2, asset-manager-redesign-design.md
+        // §9.2/§11.1/§11.2): StatTile, MeterBar, BeginCardFrame/EndCardFrame,
+        // TimelineFeed. Model-free, same as the asset panel vocabulary above.
+        // ---------------------------------------------------------------------
+
+        // BeginCardFrame/EndCardFrame state. A stack, not a single slot: Task
+        // 7's Needs-attention section opens one CardFrame per refused/queued
+        // entry in a loop, and imgui.h's own ImDrawListSplitter doc comment
+        // ("Prefer using your own persistent instance ... as you can stack
+        // them") is exactly why this uses a private ImDrawListSplitter per
+        // card rather than the ImDrawList's built-in convenience
+        // ChannelsSplit/Merge (which "cannot stack a split over another" on
+        // the same list) -- each entry in this stack owns its own splitter,
+        // so sequential (or, if a caller ever nests them, nested) CardFrames
+        // never collide on the same underlying draw list.
+        struct CardFrameState
+        {
+            ImDrawListSplitter splitter;
+            ImDrawList* drawList = nullptr;
+            ImVec2 pos{};
+            float width = 0.0f;
+            int variant = 0;
+        };
+
+        // File-local by construction (anonymous namespace): ImGui itself is
+        // main-thread-only in this codebase, so a single stack shared by every
+        // window is safe -- exactly the same assumption FieldGrid/HeaderBand's
+        // caller-held state relies on, just inverted (their state lives on the
+        // CALLER's stack via an RAII type; Begin/EndCardFrame are plain
+        // functions, so the stack has to live somewhere between the two calls).
+        std::vector<CardFrameState> g_cardFrameStack;
+
+        // Inner padding shared by BeginCardFrame/EndCardFrame (spec: 8px).
+        constexpr float kCardFramePadding = 8.0f;
     }
 
     // capacity() + 1 is BufSize's own C++ spelling (imgui.h:2772); the +1 is
@@ -766,6 +810,286 @@ namespace Arcane::Editor
 
         ImGui::PopID();
         return result;
+    }
+
+    // Bordered card: leading icon (ambient size) + PushFont'd 24px number on
+    // the first line, 13px label on the second. variant 1 tints ONLY the icon
+    // Theme::kAmber; the number is always ImGuiCol_Text (spec §11.2's amber
+    // rule -- amber marks the refused tile's icon, never the count). Fill is
+    // Theme::kPanelRaised (a step up from the panel it sits on, same "raised"
+    // read as a highlighted metric), border Theme::kSeparator regardless of
+    // variant -- amber stays confined to the icon exactly as documented.
+    //
+    // `id` scopes the tile the same way RowWithThumb's does -- nothing inside
+    // needs it today (the only real item is the closing Dummy, which -- like
+    // AssetPill's -- carries no string id of its own), but a caller drawing
+    // several tiles in one row still gets a clean, collision-free ID scope
+    // for whatever gets added under a tile later (a hover tooltip, say).
+    void StatTile(const char* id, const char* number, const char* label,
+                  const char* iconUtf8, int variant, const ImVec2& size)
+    {
+        if (ImGui::GetCurrentWindowRead()->SkipItems)
+            return;
+
+        ImGui::PushID(id);
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+                          ImGui::GetColorU32(Theme::kPanelRaised));
+        dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+                   ImGui::GetColorU32(Theme::kSeparator));
+
+        constexpr float kPad = 8.0f;
+        const bool hasIcon = iconUtf8 != nullptr && iconUtf8[0] != '\0';
+
+        // Icon measured/drawn at the AMBIENT font (whatever is active when
+        // StatTile is called, typically the 16px UI default) -- only the
+        // 24px number below gets its own PushFont.
+        const ImVec2 iconSize = hasIcon ? ImGui::CalcTextSize(iconUtf8) : ImVec2(0.0f, 0.0f);
+
+        ImGui::PushFont(GetEditorFonts().interRegular, 24.0f);
+        const ImVec2 numberSize = ImGui::CalcTextSize(number);
+        const float rowY = pos.y + kPad;
+        float x = pos.x + kPad;
+        if (hasIcon)
+        {
+            const ImU32 iconColor = (variant == 1) ? ImGui::GetColorU32(Theme::kAmber)
+                                                    : ImGui::GetColorU32(ImGuiCol_Text);
+            dl->AddText(ImVec2(x, rowY + (numberSize.y - iconSize.y) * 0.5f), iconColor, iconUtf8);
+            x += iconSize.x + ImGui::GetStyle().ItemInnerSpacing.x;
+        }
+        dl->AddText(ImVec2(x, rowY), ImGui::GetColorU32(ImGuiCol_Text), number);
+        ImGui::PopFont();
+
+        ImGui::PushFont(GetEditorFonts().interRegular, 13.0f);
+        dl->AddText(ImVec2(pos.x + kPad, rowY + numberSize.y + 2.0f),
+                   ImGui::GetColorU32(Theme::kTextDim), label);
+        ImGui::PopFont();
+
+        // A real item, not just drawlist paint -- see AssetPill's own comment
+        // on its closing Dummy for why (SameLine chaining across a tile row).
+        ImGui::Dummy(size);
+        ImGui::PopID();
+    }
+
+    // Stacked bar over a Theme::kWell track (the "surface" the 2px gaps
+    // between segments reveal), then one legend row -- swatch + "label
+    // count" -- chained left to right, one entry per segment REGARDLESS of
+    // count (a zero-count segment draws no slice but keeps its legend entry,
+    // per the contract).
+    //
+    // `id` scopes the bar the same headroom reason as StatTile's -- nothing
+    // inside needs it today.
+    void MeterBar(const char* id, const MeterSegment* segments, int count, float width)
+    {
+        if (ImGui::GetCurrentWindowRead()->SkipItems)
+            return;
+
+        ImGui::PushID(id);
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        constexpr float kBarHeight  = 12.0f;   // spec §11.2: "10-12px tall"
+        constexpr float kSegmentGap = 2.0f;    // spec §11.2: "2px gaps"
+        constexpr float kSwatchSize = 8.0f;
+        constexpr float kLegendGapY = 6.0f;
+        constexpr float kLegendGapX = 14.0f;
+
+        dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + kBarHeight),
+                          ImGui::GetColorU32(Theme::kWell));
+
+        int total = 0;
+        int visible = 0;
+        for (int i = 0; i < count; ++i)
+        {
+            if (segments[i].count > 0)
+            {
+                total += segments[i].count;
+                ++visible;
+            }
+        }
+
+        if (total > 0)
+        {
+            const float totalGap = kSegmentGap * static_cast<float>(visible > 0 ? visible - 1 : 0);
+            const float usable = (width - totalGap) > 0.0f ? (width - totalGap) : 0.0f;
+            float x = pos.x;
+            int drawn = 0;
+            for (int i = 0; i < count; ++i)
+            {
+                if (segments[i].count <= 0)
+                    continue;
+                const float w = usable * (static_cast<float>(segments[i].count) / static_cast<float>(total));
+                dl->AddRectFilled(ImVec2(x, pos.y), ImVec2(x + w, pos.y + kBarHeight), segments[i].color);
+                x += w;
+                ++drawn;
+                if (drawn < visible)
+                    x += kSegmentGap;
+            }
+        }
+
+        // Legend: one row, direct labels -- "label count" per segment, a
+        // small color swatch leading each. ImGui::GetTextLineHeight() is the
+        // ambient font's line height; nothing here pushes a size, so this
+        // reads at the caller's current font (16px UI default in practice).
+        const float legendY = pos.y + kBarHeight + kLegendGapY;
+        const float legendRowHeight = ImGui::GetTextLineHeight();
+        float legendX = pos.x;
+        char buf[64];
+        for (int i = 0; i < count; ++i)
+        {
+            const float swatchY = legendY + (legendRowHeight - kSwatchSize) * 0.5f;
+            dl->AddRectFilled(ImVec2(legendX, swatchY), ImVec2(legendX + kSwatchSize, swatchY + kSwatchSize),
+                             segments[i].color);
+            legendX += kSwatchSize + ImGui::GetStyle().ItemInnerSpacing.x;
+
+            std::snprintf(buf, sizeof(buf), "%s %d", segments[i].label, segments[i].count);
+            dl->AddText(ImVec2(legendX, legendY), ImGui::GetColorU32(ImGuiCol_Text), buf);
+            legendX += ImGui::CalcTextSize(buf).x + kLegendGapX;
+        }
+
+        ImGui::Dummy(ImVec2(width, kBarHeight + kLegendGapY + legendRowHeight));
+        ImGui::PopID();
+    }
+
+    // Opens a card: pushes `id` (caller content -- buttons, a Recook/Problems
+    // pair -- needs its own id scope, RowWithThumb's reasoning) and a fresh
+    // ImDrawListSplitter, redirects the drawlist to channel 1 (content), and
+    // seats the cursor `kCardFramePadding` in from the card's top-left. The
+    // background+border cannot be drawn yet -- the card's height is whatever
+    // the caller draws next -- so EndCardFrame paints it retroactively into
+    // channel 0 once the content's extent is known.
+    //
+    // The false-return contract mirrors FieldGrid's, not ImGui::Begin's:
+    // SkipItems returns false WITHOUT pushing anything, so the caller must
+    // not call EndCardFrame.
+    bool BeginCardFrame(const char* id, int variant, float width)
+    {
+        if (ImGui::GetCurrentWindowRead()->SkipItems)
+            return false;
+
+        ImGui::PushID(id);
+
+        const float w = (width > 0.0f) ? width : ImGui::GetContentRegionAvail().x;
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        CardFrameState& st = g_cardFrameStack.emplace_back();
+        st.drawList = dl;
+        st.pos = pos;
+        st.width = w;
+        st.variant = variant;
+        st.splitter.Split(dl, 2);
+        st.splitter.SetCurrentChannel(dl, 1);
+
+        ImGui::SetCursorScreenPos(ImVec2(pos.x + kCardFramePadding, pos.y + kCardFramePadding));
+        ImGui::BeginGroup();
+        return true;
+    }
+
+    // Closes the card opened by the matching BeginCardFrame. EndGroup's own
+    // item rect is the "measured group rect" the header promises: it is the
+    // union of every REAL item submitted since BeginGroup (imgui.cpp), which
+    // is exactly why every widget in this file ends in one real item (Dummy,
+    // a Selectable, ...) rather than pure ImDrawList paint -- a caller who
+    // filled a card with nothing but raw AddText/AddImage would measure as
+    // zero-height here.
+    void EndCardFrame()
+    {
+        IM_ASSERT(!g_cardFrameStack.empty());
+        CardFrameState& st = g_cardFrameStack.back();
+
+        ImGui::EndGroup();
+        const ImVec2 groupMax = ImGui::GetItemRectMax();
+
+        const ImVec2 frameMin = st.pos;
+        const ImVec2 frameMax(st.pos.x + st.width, groupMax.y + kCardFramePadding);
+
+        // Channel 0, UNDER the content already painted into channel 1 --
+        // Merge() below flattens 0-then-1, so this fill+border sits behind
+        // the caller's content despite being drawn chronologically after it.
+        st.splitter.SetCurrentChannel(st.drawList, 0);
+        const ImU32 borderColor = (st.variant == 1) ? kPillAmberBorder
+                                                    : ImGui::GetColorU32(Theme::kSeparator);
+        st.drawList->AddRectFilled(frameMin, frameMax, ImGui::GetColorU32(Theme::kChrome));
+        st.drawList->AddRect(frameMin, frameMax, borderColor);
+        st.splitter.Merge(st.drawList);
+
+        // Reserve the FULL card (frame, not just the padded content group) as
+        // one real item so a caller stacking several cards -- or chaining a
+        // SameLine sibling -- gets correct advancement, same discipline as
+        // every other widget in this file.
+        ImGui::SetCursorScreenPos(frameMin);
+        ImGui::Dummy(ImVec2(frameMax.x - frameMin.x, frameMax.y - frameMin.y));
+
+        g_cardFrameStack.pop_back();
+        ImGui::PopID();
+    }
+
+    // Vertical line + dot per entry, each dot centered on its entry's first
+    // text line (age + title); a dim detail line follows beneath. Connects
+    // consecutive dots with individual 1px segments rather than one long
+    // line up front -- every dot shares the same x, so the segments compose
+    // into one continuous line with no separate measuring pass needed.
+    //
+    // `id` scopes the feed for the same headroom reason as StatTile's --
+    // nothing inside needs it today.
+    void TimelineFeed(const char* id, const TimelineEntry* entries, int count)
+    {
+        if (ImGui::GetCurrentWindowRead()->SkipItems)
+            return;
+
+        ImGui::PushID(id);
+        if (count <= 0)
+        {
+            ImGui::PopID();
+            return;
+        }
+
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        constexpr float kDotSize   = 7.0f;    // spec §11.2: "feed dots 7px"
+        constexpr float kDotRadius = kDotSize * 0.5f;
+        constexpr float kTextGap   = 8.0f;    // dot column -> text column, and age -> title
+        constexpr float kEntryGap  = 6.0f;    // between one entry's detail line and the next dot
+        constexpr float kLineGap   = 2.0f;    // age/title line -> detail line
+
+        const float lineX = pos.x + kDotRadius;
+        const float textX = pos.x + kDotSize + kTextGap;
+        const float lineHeight = ImGui::GetTextLineHeight();
+        const float width = ImGui::GetContentRegionAvail().x;
+
+        float y = pos.y;
+        ImVec2 prevDotCenter{};
+        for (int i = 0; i < count; ++i)
+        {
+            const ImVec2 dotCenter(lineX, y + lineHeight * 0.5f);
+            if (i > 0)
+                dl->AddLine(prevDotCenter, dotCenter, ImGui::GetColorU32(Theme::kSeparator), 1.0f);
+
+            // Line one: dim age, then normal title immediately after it.
+            dl->AddText(ImVec2(textX, y), ImGui::GetColorU32(Theme::kTextDim), entries[i].age);
+            const float ageWidth = ImGui::CalcTextSize(entries[i].age).x;
+            dl->AddText(ImVec2(textX + ageWidth + kTextGap, y),
+                       ImGui::GetColorU32(ImGuiCol_Text), entries[i].title);
+            y += lineHeight + kLineGap;
+
+            // Line two: dim detail.
+            dl->AddText(ImVec2(textX, y), ImGui::GetColorU32(Theme::kTextDim), entries[i].detail);
+            y += lineHeight;
+
+            // Dot drawn last so it sits visually on top of the connecting line.
+            dl->AddCircleFilled(dotCenter, kDotRadius, ImGui::GetColorU32(Theme::kGrab));
+
+            prevDotCenter = dotCenter;
+            if (i + 1 < count)
+                y += kEntryGap;
+        }
+
+        ImGui::Dummy(ImVec2(width, y - pos.y));
+        ImGui::PopID();
     }
 
     // CURVE IS MIRRORED in data/shaders/tonemap.hlsl (HLSL, branchless min

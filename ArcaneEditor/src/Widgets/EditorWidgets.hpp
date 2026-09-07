@@ -232,6 +232,69 @@ namespace Arcane::Editor
                                 const char* name, bool selected, float indent,
                                 float rowHeight = 24.0f);
 
+    // ---- status lens vocabulary (Plan 2) -----------------------------------
+    // Model-free ImGui draw helpers the Status lens dashboard draws out of
+    // (docs/specs/2026-09-06-asset-manager-redesign-design.md §9.2/§11.1/
+    // §11.2). Same house idioms as the asset panel vocabulary above: SkipItems
+    // guard, ImDrawList overdraw, one real item reserves layout, PushFont for
+    // sizes -- AssetPill (:578) is the model for StatTile/MeterBar/
+    // TimelineFeed, which are pure display; RowWithThumb (:692) -- which also
+    // hosts caller content needing its own id scope -- is the model for
+    // BeginCardFrame/EndCardFrame.
+
+    // Bordered card: PushFont'd 24px number, 13px label beneath, optional
+    // leading Lucide icon drawn at the ambient UI size (Lucide glyphs are
+    // merged into every editor face, EditorFonts.hpp). variant: 0 = neutral;
+    // 1 = amber ICON ONLY -- the number always stays in text tokens (spec
+    // §11.2's amber rule marks the refused tile's icon, never the count).
+    void StatTile(const char* id, const char* number, const char* label,
+                  const char* iconUtf8, int variant, const ImVec2& size);
+
+    // One caller-colored segment of a MeterBar. `color` is resolved by the
+    // caller (a Theme:: token or otherwise) -- MeterBar draws exactly what it
+    // is given and invents no palette of its own.
+    struct MeterSegment { const char* label; int count; ImU32 color; };
+
+    // Stacked horizontal bar (spec §11.2: 10-12px tall) over a Theme::kWell
+    // track, with segments sized proportional to `count` and 2px gaps between
+    // them that let the track show through ("surface gaps"). One legend row
+    // beneath: swatch + "label count" per segment, chained left to right. A
+    // zero-count segment draws no bar slice but keeps its legend entry (a
+    // healthy project still shows e.g. "refused 0" rather than the label
+    // vanishing).
+    void MeterBar(const char* id, const MeterSegment* segments, int count, float width);
+
+    // Bordered, dynamic-height card region for arbitrary caller content (spec
+    // §9.2's Needs-attention / queued / Unreferenced / Scenes cards). `width`
+    // <= 0 uses the content region's available width; height is whatever the
+    // caller draws between Begin/End, measured via BeginGroup/EndGroup and
+    // painted AFTER the fact through an ImDrawListSplitter (2 channels --
+    // content on 1 while the caller draws, background fill + 1px border on 0
+    // sized from the measured group rect, merged on End) so a dynamic-height
+    // card gets a background with no separate pre-measure pass. variant 1
+    // borrows the SAME muted-amber acting-on frame AssetPill's amber pill
+    // border uses (kPillAmberBorder, EditorWidgets.cpp -- one spec-pinned
+    // hex, two consumers); variant 0 is a plain Theme::kSeparator border. 8px
+    // inner padding, square corners.
+    //
+    // The false-return contract matches FieldGrid's, NOT ImGui::Begin's: a
+    // false return means the host window is skipping items -- draw NO content
+    // and do not call EndCardFrame (nothing was pushed for it to close).
+    bool BeginCardFrame(const char* id, int variant = 0, float width = 0.0f);
+    void EndCardFrame();
+
+    // One activity-feed row's text: a pre-formatted age ("N min ago" etc.,
+    // dim), a title (normal), and a second dim detail line. Plain `const
+    // char*` views -- the caller owns the storage for the duration of the
+    // call (Task 8's feed builds frame-local std::strings first).
+    struct TimelineEntry { const char* age; const char* title; const char* detail; };
+
+    // Vertical timeline: a 1px Theme::kSeparator line connecting a 7px
+    // Theme::kGrab dot per entry (spec §11.2: "feed dots 7px"), each dot
+    // vertically centered on its entry's first text line. Per entry: dim age
+    // then normal title on line one, dim detail on line two beneath.
+    void TimelineFeed(const char* id, const TimelineEntry* entries, int count);
+
     // ---- colour ---------------------------------------------------------------
     // sRGB <-> linear, the IEC 61966-2-1 piecewise curve. This is the SAME
     // transfer nri::Format::RGBA8_SRGB applies in hardware when a texture is
