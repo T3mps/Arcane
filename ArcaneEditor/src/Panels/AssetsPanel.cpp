@@ -2203,6 +2203,28 @@ namespace Arcane::Editor
                             model.SetGroupOpen(folder, true);
                         }
 
+                        // Addendum (coordinator ruling, extending Ruling 10):
+                        // reachable -- a folded 1:1 derived sprite with zero
+                        // inbound IS unused-eligible (kind Sprite), so it can
+                        // be a `Reveal` target while still living under its
+                        // texture's own CLOSED fold. The group chain above
+                        // opens every ANCESTOR GROUP but says nothing about
+                        // fold state, which is a separate flag keyed by the
+                        // PARENT TEXTURE's guid (`foldedUnder`), not by
+                        // folder -- so it needs its own write, same two-map
+                        // spelling the fold chevron's own toggle uses
+                        // (DrawAssetRow's expander handler: state.childrenOpen
+                        // + model.SetChildrenOpen, both keyed by the PARENT's
+                        // guid). Consistent with the tree arc's uniform-
+                        // reveal precedent, where search already overrides
+                        // both group and fold collapse -- Reveal now forces
+                        // the same two collapse dimensions open explicitly.
+                        if (e->foldedUnder.IsValid())
+                        {
+                            state.childrenOpen[e->foldedUnder] = true;
+                            model.SetChildrenOpen(e->foldedUnder, true);
+                        }
+
                         state.lens = AssetLens::Browse;
                         model.Select(guid);
                     }
