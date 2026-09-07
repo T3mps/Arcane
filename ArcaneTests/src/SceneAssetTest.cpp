@@ -17,6 +17,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace
@@ -382,6 +383,189 @@ TEST_CASE("CreateEmpty yields a saveable scene with a root and a camera", "[scen
     const nlohmann::json doc = Arcane::Scene::SaveJson(reg);
     REQUIRE(doc.contains("entities"));
     CHECK(doc["entities"].size() == 2);   // the root + its "Main Camera" child
+}
+
+// ---------------------------------------------------------------------------
+// Schema v4: the save-time asset reference manifest (asset-manager Plan 2,
+// spec s3.3). SaveJson's reflected-field walk already passes over every guid a
+// scene names; v4 records the distinct, sorted, non-identity, non-nil ones as a
+// top-level "assets" array so the asset panel can read a scene's outgoing
+// references without re-scanning it. The four cases below pin the emission
+// rule, the widened load gate, the loader's blindness to the manifest, and the
+// unconditional key.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SaveSceneFile emits a v4 assets manifest: distinct, sorted, identity-excluded, nil-dropped",
+          "[scene][json]")
+{
+    const std::filesystem::path dir  = TempDir("arcane_scene_asset_manifest");
+    const std::filesystem::path file = dir / ("manifest" + std::string(Arcane::Scene::kSceneExt));
+
+    // Chosen so the SORTED order is the REVERSE of the collection order: the
+    // root carries `late` and the child -- walked after it, root-first BFS --
+    // carries `early`. An unsorted manifest comes out [late, early] and fails.
+    const std::optional<Arcane::Guid> early =
+        Arcane::Guid::FromString("11111111-1111-4111-8111-111111111111");
+    const std::optional<Arcane::Guid> late =
+        Arcane::Guid::FromString("ffffffff-ffff-4fff-8fff-ffffffffffff");
+    REQUIRE(early.has_value());
+    REQUIRE(late.has_value());
+
+    Fixture f;
+    // Root: one reference (`late`).
+    f.reg.AddComponent<Arcane::PostProcess>(f.root, Arcane::PostProcess{*late});
+    // Child: `early` named TWICE, from two different components on two
+    // different field names (the dedup case), plus two nil guids that must be
+    // dropped (SpriteRenderer::sprite and MeshRenderer::materialOverride are
+    // left at their nil defaults) -- and both entities already carry an
+    // Identity guid, which the field-NAME rule must exclude.
+    Arcane::SpriteRenderer sr;
+    sr.material = *early;
+    f.reg.AddComponent<Arcane::SpriteRenderer>(f.child, sr);
+    Arcane::MeshRenderer mr;
+    mr.mesh = *early;
+    f.reg.AddComponent<Arcane::MeshRenderer>(f.child, mr);
+
+    std::string err;
+    REQUIRE(Arcane::Scene::SaveSceneFile(file, f.reg, Arcane::Guid::Generate(), &err));
+    CHECK(err.empty());
+
+    std::ifstream in(file, std::ios::binary);
+    const nlohmann::json doc = nlohmann::json::parse(in);
+    REQUIRE(doc["version"].get<int>() == 4);
+    REQUIRE(doc.contains("assets"));
+    REQUIRE(doc["assets"].is_array());
+    REQUIRE(doc["assets"].size() == 2);   // `early` ONCE, despite its two mentions
+    CHECK(doc["assets"][0].get<std::string>() == early->ToString());
+    CHECK(doc["assets"][1].get<std::string>() == late->ToString());
+
+    // Identity guids are the exclusion the field-name rule exists for: every
+    // entity carries one and no asset registry can ever resolve it.
+    const Arcane::Identity* rootInfo = f.reg.GetComponent<Arcane::Identity>(f.root);
+    REQUIRE(rootInfo != nullptr);
+    const std::string rootIdStr = rootInfo->id.ToString();
+    const std::string nilStr    = Arcane::Guid::Nil().ToString();
+    for (const nlohmann::json& g : doc["assets"])
+    {
+        CHECK(g.get<std::string>() != rootIdStr);
+        CHECK(g.get<std::string>() != nilStr);
+    }
+}
+
+TEST_CASE("a v3 scene still loads after the v4 bump", "[scene][json]")
+{
+    // The bump is ADDITIVE, so v3 must keep loading rather than being refused
+    // at the envelope the way v1/v2 are. Stamped with a LITERAL 3, not the
+    // symbolic constant: the claim is that this exact byte sequence survives a
+    // constant that moved, and a symbolic stamp would move with it.
+    const std::filesystem::path dir  = TempDir("arcane_scene_asset_v3");
+    const std::filesystem::path file = dir / ("legacy" + std::string(Arcane::Scene::kSceneExt));
+    const std::string tName(Astra::GetMeta<Arcane::Transform>()->typeName);
+
+    nlohmann::json e0;
+    e0["components"][tName]["position"] = { 100.0, 0.0, 0.0 };
+    e0["parent"] = -1;
+    nlohmann::json doc;
+    doc["id"]       = "00000000-0000-0000-0000-000000000001";
+    doc["version"]  = 3;   // LITERAL -- see above
+    doc["entities"] = nlohmann::json::array({ e0 });
+    std::ofstream(file, std::ios::binary) << doc.dump();
+
+    std::string err;
+    const auto read = Arcane::Scene::ReadSceneFile(file, &err);
+    REQUIRE(read.has_value());
+    CHECK(err.empty());
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry fresh{components};
+    Arcane::RegisterSceneComponents(fresh);
+    REQUIRE(Arcane::Scene::ApplySceneDocument(*read, fresh));
+
+    const Arcane::SceneRoot* sr = fresh.GetResource<Arcane::SceneRoot>();
+    REQUIRE(sr != nullptr);
+    const Arcane::Transform* t = fresh.GetComponent<Arcane::Transform>(sr->entity);
+    REQUIRE(t != nullptr);
+    CHECK(t->position.x == 100.0f);
+}
+
+TEST_CASE("the scene loader never reads the assets manifest", "[scene][json]")
+{
+    // Spec s3.3's safety property, and the reason the manifest can be a mere
+    // index rather than scene data: a stale or hand-corrupted manifest may
+    // mislead the asset panel, but it can never break a scene. Corrupt it past
+    // anything a reader would tolerate -- a string and a bare number where
+    // guid strings belong -- and every entity still loads intact.
+    const std::filesystem::path dir  = TempDir("arcane_scene_asset_manifest_corrupt");
+    const std::filesystem::path file = dir / ("corrupt" + std::string(Arcane::Scene::kSceneExt));
+
+    {
+        Fixture f;
+        std::string err;
+        REQUIRE(Arcane::Scene::SaveSceneFile(file, f.reg, Arcane::Guid::Generate(), &err));
+    }
+
+    nlohmann::json doc;
+    {
+        std::ifstream in(file, std::ios::binary);
+        doc = nlohmann::json::parse(in);
+    }
+    REQUIRE(doc.contains("assets"));
+    doc["assets"] = nlohmann::json::array({ "garbage", 42 });
+    std::ofstream(file, std::ios::binary) << doc.dump();
+
+    std::string err;
+    const auto read = Arcane::Scene::ReadSceneFile(file, &err);
+    REQUIRE(read.has_value());
+    CHECK(err.empty());
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry fresh{components};
+    Arcane::RegisterSceneComponents(fresh);
+    REQUIRE(Arcane::Scene::ApplySceneDocument(*read, fresh));
+
+    const Arcane::SceneRoot* sr = fresh.GetResource<Arcane::SceneRoot>();
+    REQUIRE(sr != nullptr);
+    const Arcane::Transform* rootT = fresh.GetComponent<Arcane::Transform>(sr->entity);
+    REQUIRE(rootT != nullptr);
+    CHECK(rootT->position.x == 100.0f);
+    const auto kids = fresh.GetChildren(sr->entity);
+    REQUIRE(kids.size() == 1);
+    const Arcane::Identity* kidInfo = fresh.GetComponent<Arcane::Identity>(kids[0]);
+    REQUIRE(kidInfo != nullptr);
+    CHECK(kidInfo->name == "Child");
+}
+
+TEST_CASE("the assets manifest is always emitted, even when it is empty", "[scene][json]")
+{
+    // The key is UNCONDITIONAL. That is what lets a consumer read "v4 with no
+    // assets key" as a malformed file instead of having to guess between "this
+    // scene references nothing" and "an older writer produced it".
+    SECTION("a scene with entities but no asset references")
+    {
+        // The Fixture's only guids are Identity ids, which the field-name rule
+        // excludes -- so the manifest is legitimately empty, not missing.
+        Fixture f;
+        const nlohmann::json doc = Arcane::Scene::SaveJson(f.reg);
+        CHECK(doc["entities"].size() == 2);
+        REQUIRE(doc.contains("assets"));
+        CHECK(doc["assets"].is_array());
+        CHECK(doc["assets"].empty());
+    }
+    SECTION("a registry with no SceneRoot at all")
+    {
+        // SaveJson's early return: the one path that never reaches the entity
+        // walk, and so the one an "emit it after the loop" implementation
+        // would silently skip.
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg{components};
+        Arcane::RegisterSceneComponents(reg);
+
+        const nlohmann::json doc = Arcane::Scene::SaveJson(reg);
+        CHECK(doc["entities"].empty());
+        REQUIRE(doc.contains("assets"));
+        CHECK(doc["assets"].is_array());
+        CHECK(doc["assets"].empty());
+    }
 }
 
 TEST_CASE("SaveSceneFile reports an unwritable path instead of throwing", "[scene][json]")

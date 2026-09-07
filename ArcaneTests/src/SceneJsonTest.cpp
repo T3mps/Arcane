@@ -323,6 +323,34 @@ TEST_CASE("scene JSON carries a version and rejects a mismatch", "[json][scene]"
     CHECK(Arcane::Scene::LoadJson(reg, doc));
 }
 
+TEST_CASE("the v4 load gate accepts v3 and still refuses v2", "[json][scene]")
+{
+    // v3 -> v4 (asset-manager Plan 2, spec s3.3) is an ADDITIVE change: v4 adds
+    // a top-level "assets" manifest the loader never reads, and nothing about a
+    // v3 body became unreadable. So the gate is a RANGE
+    // [kSceneJsonVersionMin, kSceneJsonVersion], not the equality it used to be
+    // -- while v2 stays refused, because its Transform really does have an
+    // incompatible on-disk shape (SceneSerializer.hpp's version history).
+    //
+    // Both versions are written as LITERALS, deliberately: the claim under test
+    // is about these exact bytes surviving a constant that moved, and a
+    // symbolic stamp would move with it and prove nothing.
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+
+    nlohmann::json doc;
+    doc["entities"] = nlohmann::json::array();
+
+    doc["version"] = 3;
+    CHECK(Arcane::Scene::LoadJson(reg, doc));   // the pre-manifest schema still loads
+
+    doc["version"] = 2;
+    bool result = true;
+    CHECK_NOTHROW(result = Arcane::Scene::LoadJson(reg, doc));
+    CHECK_FALSE(result);
+}
+
 TEST_CASE("scene with a 3rd component type and a non-parent link round-trips", "[json][scene]")
 {
     nlohmann::json doc;

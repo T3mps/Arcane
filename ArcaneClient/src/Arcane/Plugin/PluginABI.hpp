@@ -578,7 +578,46 @@ namespace Arcane
     //     already calls, never itself a virtual), and no remaining task in
     //     this arc's plan (4 through 16) touches the `Assets` vtable, so
     //     nothing further is scheduled to extend this entry.
-    inline constexpr uint32_t kGamePluginABIVersion = 22;
+    // v23 (2026-09-07, asset-manager arc Plan 2, Task 1 -- the scene reference
+    //     manifest): THE SCENE FILE FORMAT MOVED. `Scene::kSceneJsonVersion`
+    //     (Serialization/SceneSerializer.hpp) goes 3 -> 4, the first format
+    //     move since v16 -- and every ledger entry from v17 through v22 above
+    //     said in so many words "the scene file format did NOT move", so this
+    //     one is the entry that stops saying it.
+    //     What v4 adds: a top-level `"assets": [<guid strings>]` reference
+    //     manifest, emitted at save time as a byproduct of the reflected-field
+    //     walk SaveJson already performs. Nothing a v3 file said changed shape.
+    //     WHY THIS IS A BUMP AT ALL, honestly stated: there is NO vtable, NO
+    //     layout and NO API change here -- `ReflectionJsonWriter` gained a
+    //     DEFAULTED trailing constructor parameter, and nothing else that
+    //     crosses the boundary changed at all. Both classes are header-only and
+    //     compiled into each module from source, so a mixed pairing cannot
+    //     disagree about them the way it could about a real vtable. The bump is
+    //     DOCUMENTARY: it is the v16 precedent (a scene format move IS an
+    //     engine-version fact a project's `engine.abi` should record) plus the
+    //     standing "ABI bumps are cheap during engine dev" rule, and it is
+    //     recorded as exactly that, not dressed up as a corruption fix.
+    //     BACKWARD COMPATIBLE, deliberately, and this is the part that makes
+    //     the bump safe rather than merely cheap: both scene load gates --
+    //     `LoadJson` (SceneSerializer.hpp) and `ReadSceneFile`
+    //     (SceneAsset.hpp) -- widened from an equality test to the range
+    //     [`kSceneJsonVersionMin` = 3, `kSceneJsonVersion` = 4], so every v3
+    //     scene already on disk still loads under an ABI-23 engine. v1/v2 stay
+    //     refused (their Transform shape really is incompatible). The entity
+    //     clipboard's gate (Edit::InstantiateSubtrees) stays an EQUALITY test
+    //     on purpose -- a clipboard payload is written and read by one running
+    //     build and has no old corpus to be compatible with.
+    //     MEASURED, not assumed: `grep -rn` for `SaveJson`, `SceneSerializer`,
+    //     `SaveSceneFile`, `kSceneJsonVersion`, `SerializeSubtrees`,
+    //     `LoadJson`, `ReadSceneFile`, `IsIdentityGuidFieldName` and
+    //     `ReflectionJsonWriter` over BOTH game modules in the two trees --
+    //     ReferenceProject/Source/ (GameApi.hpp, ReferenceGame.cpp) and Gacha's
+    //     Game/Source/ (GameApi.hpp, Aphelyon.cpp) -- returns nothing, so no
+    //     module in either tree touches the serializer this bump is about.
+    //     ReferenceProject is restamped with this change, the precedent v16
+    //     through v22 set (Gacha's Game restamp is this arc's follow-up in that
+    //     repo, tracked there rather than here).
+    inline constexpr uint32_t kGamePluginABIVersion = 23;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

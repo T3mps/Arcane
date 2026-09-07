@@ -10,6 +10,12 @@
 // structs recurse via MetaRegistry. Reader falls back to AliasName for renames; a
 // missing key leaves the default-constructed value (forward/back compatible).
 //
+// The writer optionally COLLECTS the asset-reference guids it walks past, into a
+// caller-owned sink (see ReflectionJsonWriter's constructor). That is the source
+// of a v4 scene's "assets" manifest (SceneSerializer.hpp, spec s3.3) and it is a
+// byproduct of this one walk rather than a second pass -- the walk is the only
+// place that still knows each value's FIELD NAME.
+//
 // No silent drops: a field whose TYPE the bridge cannot represent (containers,
 // raw pointers, an unreflected non-math struct) is NOT quietly skipped -- the
 // visitor latches an "unsupported field type" error the caller must inspect via
@@ -36,6 +42,9 @@
 // type name: an enum whose stored NAME no longer resolves keeps its default. The
 // node still has to BE a string.
 
+#include <Arcane/Guid.hpp>
+#include <Arcane/Serialization/IdentityFieldRule.hpp>
+
 #include <Astra/Reflection/FieldVisitor.hpp>
 #include <Astra/Reflection/FieldInfo.hpp>
 #include <Astra/Reflection/MetaRegistry.hpp>
@@ -50,6 +59,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace Arcane
 {
@@ -330,7 +340,20 @@ namespace Arcane
     class ReflectionJsonWriter : public Astra::IFieldVisitor
     {
     public:
-        explicit ReflectionJsonWriter(nlohmann::json& out) : m_out(out) {}
+        // `assetGuidSink`, when non-null, collects every ASSET-REFERENCE guid
+        // this writer passes over -- the scene manifest's source (schema v4,
+        // spec s3.3). It is a BYPRODUCT of the field walk the writer already
+        // performs, deliberately, rather than a second pass over the finished
+        // document: the walk is the only place that still knows a value's
+        // FIELD NAME, which is what the identity rule turns on.
+        //
+        // Not deduplicated and not sorted here -- the sink is a raw mention
+        // list, and the one caller that emits a manifest (SceneSerializer's
+        // SaveJson) owns both decisions. Null (the default) is every other
+        // caller, including the entity clipboard, and costs one branch.
+        explicit ReflectionJsonWriter(nlohmann::json& out,
+                                      std::vector<Arcane::Guid>* assetGuidSink = nullptr)
+            : m_out(out), m_assetGuidSink(assetGuidSink) {}
 
         void Visit(const Astra::FieldInfo& field, void* instance) override
         {
@@ -363,7 +386,9 @@ namespace Arcane
             if (const Astra::TypeMeta* nested = Astra::GetMeta(field.typeHash))
             {
                 nlohmann::json sub;
-                ReflectionJsonWriter subWriter(sub);
+                // The sub-writer shares this writer's sink, so a guid nested
+                // two or more reflected structs deep still reaches it.
+                ReflectionJsonWriter subWriter(sub, m_assetGuidSink);
                 void* subInstance = static_cast<std::byte*>(instance) + field.offset;
                 for (const Astra::FieldInfo& nf : nested->fields)
                     if (nf.IsSerializable())
@@ -373,6 +398,7 @@ namespace Arcane
                     Fail(subWriter.Error());
                     return;
                 }
+                CollectAssetGuid(field, sub);
                 m_out[std::string(field.name)] = std::move(sub);
                 return;
             }
@@ -392,7 +418,38 @@ namespace Arcane
             if (!m_error) { m_error = true; m_errorMsg = std::move(msg); }
         }
 
+        // Push `written` into the sink if it is an asset-reference guid.
+        //
+        // The test is STRUCTURAL, on the JSON just written, and it is the exact
+        // one the scene structural scan applies to a parsed document
+        // (Assets.cpp's ScanSceneJson) -- an object of exactly two unsigned-
+        // number members `hi` and `lo`. That IS the wire shape Components.hpp's
+        // ASTRA_REFLECT_TYPE(Guid) produces, since Guid's only two reflected
+        // fields are its own `hi`/`lo` u64s and WriteScalar copies a u64
+        // verbatim. Testing the SHAPE rather than the field's type hash keeps
+        // the writer's collector and the fallback scan provably the same rule,
+        // which is what lets a v4 manifest and a pre-v4 scan agree.
+        //
+        // Two guids never reach the sink: an IDENTITY field (the shared
+        // Arcane::IsIdentityGuidFieldName rule -- the entity's own id, which no
+        // asset registry can resolve) and a NIL guid (an unset slot, not a
+        // reference to the nil asset).
+        void CollectAssetGuid(const Astra::FieldInfo& field, const nlohmann::json& written)
+        {
+            if (!m_assetGuidSink || Arcane::IsIdentityGuidFieldName(field.name))
+                return;
+            if (!written.is_object() || written.size() != 2 ||
+                !written.contains("hi") || !written.contains("lo") ||
+                !written["hi"].is_number_unsigned() || !written["lo"].is_number_unsigned())
+                return;
+            const Arcane::Guid g{ written["hi"].get<std::uint64_t>(),
+                                  written["lo"].get<std::uint64_t>() };
+            if (g.IsValid())
+                m_assetGuidSink->push_back(g);
+        }
+
         nlohmann::json& m_out;
+        std::vector<Arcane::Guid>* m_assetGuidSink = nullptr;
         bool m_error = false;
         std::string m_errorMsg;
     };

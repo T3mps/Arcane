@@ -10,12 +10,19 @@
 // Schema:
 //   {
 //     "version": <int>,
+//     "assets":  [ "<guid>", ... ],             // v4+; always present, may be empty
 //     "entities": [
 //       { "components": { "<TypeName>": { ...fields... }, ... },
 //         "parent": <index|-1>,
 //         "links":  [ <index>, ... ] }          // optional; non-hierarchical
 //     ]
 //   }
+//
+// "assets" is the scene's REFERENCE MANIFEST: the distinct, sorted asset guids
+// the entity roster names. It is an INDEX, not scene data -- the loader never
+// reads it, so a stale or hand-edited manifest can mislead a reader (the asset
+// panel's reference graph, or a preload set derived without loading the scene)
+// but can never break a scene.
 //
 // Entities are ordered root-first (BFS) so parent/link indices refer to entries in
 // the same array. A version mismatch is detected and reported (LoadJson returns
@@ -33,9 +40,11 @@
 
 #include <Json.hpp>
 
+#include <algorithm>
 #include <new>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace Arcane::Scene
@@ -59,7 +68,27 @@ namespace Arcane::Scene
     //
     // There is no upgrade path, deliberately: the corpus is two authored files
     // and both were re-authored with the spine (F1 decisions ledger).
-    inline constexpr int kSceneJsonVersion = 3;
+    //
+    // v4 (2026-09-07, asset-manager Plan 2, engine ABI 23, spec s3.3) is the
+    // OTHER class of change, and the first of its kind here: purely ADDITIVE.
+    // It adds the top-level "assets" reference manifest documented above and
+    // changes nothing a v3 file already said, so unlike every bump before it,
+    // v4 does NOT invalidate its predecessor -- see kSceneJsonVersionMin.
+    inline constexpr int kSceneJsonVersion = 4;
+
+    // The OLDEST schema this build still loads. v4's addition is additive, so a
+    // v3 file is read exactly as it always was (the loader simply never looks
+    // for a manifest, and its absence is not an error). v1/v2 stay REFUSED:
+    // their Transform has a genuinely incompatible on-disk shape, which is the
+    // whole reason the v3 bump was a bump.
+    //
+    // The two gates that enforce this range are LoadJson below and
+    // ReadSceneFile (SceneAsset.hpp). The entity-clipboard gate
+    // (Edit::InstantiateSubtrees, EntityOps.cpp) deliberately stays an EQUALITY
+    // test against kSceneJsonVersion: a clipboard payload is written by the
+    // same running build that reads it, never persisted, so it has no old
+    // corpus to stay compatible with.
+    inline constexpr int kSceneJsonVersionMin = 3;
 
     // Walks a type's serializable reflected fields, driving the given visitor.
     // (The seam's per-type walk, reused outside ComponentRegistry for known types.)
@@ -74,16 +103,30 @@ namespace Arcane::Scene
     }
 
     // Serializes every reflected + serializable component on the scene subtree,
-    // keyed by reflected type name, plus parent + non-hierarchical links. Returns
-    // { "version", "entities": [...] }.
+    // keyed by reflected type name, plus parent + non-hierarchical links, plus
+    // the v4 asset reference manifest. Returns
+    // { "version", "assets": [...], "entities": [...] }.
+    //
+    // "assets" is emitted UNCONDITIONALLY -- including for the no-SceneRoot
+    // early return below, and as an empty array for a scene that references
+    // nothing. That is what lets a consumer read "v4 and no assets key" as a
+    // malformed file rather than having to guess between "references nothing"
+    // and "written by something that did not emit manifests".
     inline nlohmann::json SaveJson(const Astra::Registry& reg)
     {
         nlohmann::json doc;
         doc["version"] = kSceneJsonVersion;
+        doc["assets"] = nlohmann::json::array();
         doc["entities"] = nlohmann::json::array();
 
         const SceneRoot* sceneRoot = reg.GetResource<SceneRoot>();
         if (!sceneRoot) return doc;
+
+        // Every asset-reference guid the component walk below passes over, in
+        // mention order and with repeats -- the writer's sink is deliberately
+        // raw (ReflectionJson.hpp). Distinctness and ordering are decided once,
+        // after the loop.
+        std::vector<Arcane::Guid> sceneAssets;
 
         std::vector<Astra::Entity> order;
         order.push_back(sceneRoot->entity);
@@ -123,7 +166,7 @@ namespace Arcane::Scene
                     continue;
                 }
                 nlohmann::json cj;
-                ReflectionJsonWriter writer(cj);
+                ReflectionJsonWriter writer(cj, &sceneAssets);
                 desc->visitFields(instance, writer);   // writer READS; const_cast is safe
                 // writer.HasError() is intentionally not checked here: SAVE is
                 // best-effort (there is no error channel back to the scene-save
@@ -153,6 +196,22 @@ namespace Arcane::Scene
 
             doc["entities"].push_back(std::move(entry));
         }
+
+        // The manifest: distinct targets, one entry per referenced asset rather
+        // than one per mention (a scene routinely names the same material from
+        // several components), sorted by canonical guid string so re-saving an
+        // unchanged scene produces an unchanged block -- the manifest must not
+        // add noise to a diff just because the entity walk visited components in
+        // a different order.
+        std::unordered_set<Arcane::Guid> seen;
+        std::vector<std::string> manifest;
+        manifest.reserve(sceneAssets.size());
+        for (const Arcane::Guid& g : sceneAssets)
+            if (seen.insert(g).second)
+                manifest.push_back(g.ToString());
+        std::sort(manifest.begin(), manifest.end());
+        doc["assets"] = std::move(manifest);
+
         return doc;
     }
 
@@ -250,11 +309,20 @@ namespace Arcane::Scene
         {
             if (!doc.is_object() || !doc.contains("entities")) return false;
 
-            // Version gate: a missing/wrong-typed/mismatched version is reported
-            // (clean false), never silently mis-parsed as the current schema.
+            // Version gate: a missing/wrong-typed/out-of-range version is
+            // reported (clean false), never silently mis-parsed as the current
+            // schema. A RANGE since v4, because v4 is purely additive over v3
+            // (see kSceneJsonVersionMin) -- a NEWER-than-this-build version is
+            // still refused, since this loader cannot know what it would be
+            // mis-reading.
+            //
+            // Nothing below reads "assets": the manifest is a save-side index
+            // and the loader is deliberately blind to it, so a stale or
+            // hand-corrupted one cannot cost a scene a single entity.
             const auto vit = doc.find("version");
             if (vit == doc.end() || !vit->is_number_integer()) return false;
-            if (vit->get<int>() != kSceneJsonVersion) return false;
+            const int version = vit->get<int>();
+            if (version < kSceneJsonVersionMin || version > kSceneJsonVersion) return false;
 
             const auto& entities = doc["entities"];
             if (!entities.is_array()) return false;

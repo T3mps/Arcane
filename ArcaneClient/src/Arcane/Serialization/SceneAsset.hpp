@@ -3,7 +3,7 @@
 // SceneAsset: the .arcscene FILE layer over SceneSerializer's in-memory
 // SaveJson/LoadJson. On disk a scene is a native JSON asset -- a top-level "id"
 // (the Guid AssetRegistry mints and resolves by) wrapped around the same
-// {version, entities} document SaveJson already produces.
+// {version, assets, entities} document SaveJson already produces.
 //
 // The READ and the APPLY are deliberately separate calls. Every caller must
 // validate a file BEFORE destroying the scene it already has: a failed Open
@@ -45,7 +45,7 @@ namespace Arcane::Scene
     struct SceneDocument
     {
         Arcane::Guid   id;
-        nlohmann::json doc;   // { "version", "entities" } -- LoadJson's input
+        nlohmann::json doc;   // { "version", "assets", "entities" } -- LoadJson's input
     };
 
     namespace Detail
@@ -102,10 +102,15 @@ namespace Arcane::Scene
                 Detail::SetError(error, file.generic_string() + " has no schema version");
                 return std::nullopt;
             }
-            if (vit->get<int>() != kSceneJsonVersion)
+            // A RANGE, matching LoadJson's own gate exactly (SceneSerializer.hpp)
+            // -- this gate must never be stricter than the loader it guards.
+            // v4 is additive over v3, so both load; v1/v2 stay refused.
+            const int version = vit->get<int>();
+            if (version < kSceneJsonVersionMin || version > kSceneJsonVersion)
             {
                 Detail::SetError(error, file.generic_string() + " is scene schema version " +
-                                        std::to_string(vit->get<int>()) + "; this engine reads " +
+                                        std::to_string(version) + "; this engine reads " +
+                                        std::to_string(kSceneJsonVersionMin) + " through " +
                                         std::to_string(kSceneJsonVersion));
                 return std::nullopt;
             }

@@ -4,6 +4,7 @@
 #include <Arcane/Assets/AssetCache.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Serialization/IdentityFieldRule.hpp>   // Arcane::IsIdentityGuidFieldName
 
 #include <Json.hpp>
 #include <stb_image.h>
@@ -108,22 +109,6 @@ namespace Arcane
             return (*it)[0].get<float>() != 0.0f || (*it)[1].get<float>() != 0.0f;
         }
 
-        // Task 3 (asset-manager arc): a Guid field whose NAME says it is an
-        // IDENTITY, not an asset reference -- exactly "id"/"guid", case-
-        // insensitive. THIS IS A MIRROR of ArcaneEditor's Panels/
-        // AssetPanelModel.hpp::IsIdentityGuidFieldName (AssetPanelModel.hpp:207):
-        // this engine-side facade cannot include an editor header (the
-        // directional rule in CLAUDE.md -- engine never depends on editor),
-        // so the rule is copied here rather than shared. Keep the two in
-        // sync by hand if either one ever changes.
-        bool IsIdentityGuidFieldName(std::string_view fieldName)
-        {
-            std::string lower(fieldName);
-            std::transform(lower.begin(), lower.end(), lower.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            return lower == "id" || lower == "guid";
-        }
-
         // Task 3 (asset-manager arc): hi/lo -> Guid reconstruction for the
         // scene structural scan below. This PROVABLY mirrors the reflection-
         // >JSON bridge's own wire encoding rather than guessing a byte order:
@@ -141,15 +126,18 @@ namespace Arcane
 
         // Task 3 (asset-manager arc): recursive structural walk of a parsed
         // .arcscene document, collecting every {"hi":u64,"lo":u64} guid-
-        // shaped field except an identity field (IsIdentityGuidFieldName
-        // above). That two-field shape is exactly what Components.hpp's
-        // ASTRA_REFLECT_TYPE(Guid) writes for every Guid-typed component
-        // field (SpriteRenderer::material/sprite, MeshRenderer::mesh/
-        // materialOverride, PostProcess::material, Identity::id, ...) --
-        // verified against the real ReferenceProject/Content/scenes/
-        // main.arcscene fixture. A nil guid ({"hi":0,"lo":0}) and a guid the
-        // installed resolver cannot place are both dropped here via
-        // `resolvable` -- see ScanSceneReferences below for what that
+        // shaped field except an identity field (the shared
+        // Arcane::IsIdentityGuidFieldName rule, Serialization/
+        // IdentityFieldRule.hpp -- the same one the v4 save-time manifest
+        // collector applies, which is what makes this fallback scan and a v4
+        // manifest agree on which guids count). That two-field shape is
+        // exactly what Components.hpp's ASTRA_REFLECT_TYPE(Guid) writes for
+        // every Guid-typed component field (SpriteRenderer::material/sprite,
+        // MeshRenderer::mesh/materialOverride, PostProcess::material,
+        // Identity::id, ...) -- verified against the real ReferenceProject/
+        // Content/scenes/main.arcscene fixture. A nil guid ({"hi":0,"lo":0})
+        // and a guid the installed resolver cannot place are both dropped here
+        // via `resolvable` -- see ScanSceneReferences below for what that
         // predicate means.
         //
         // No visited-set / depth bound: a JSON document is a tree by
