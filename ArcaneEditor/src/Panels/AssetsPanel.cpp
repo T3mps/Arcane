@@ -15,6 +15,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -51,6 +52,16 @@ namespace Arcane::Editor
         constexpr float kChildIndent      = 20.0f;
         constexpr float kTooltipWidth     = 210.0f;
         constexpr float kTooltipThumbSize = 64.0f;
+
+        // Task 11 (spec s5/s6/s11.2) fixed geometry: the preview pane is a
+        // pinned 330px column, hidden below a 720px panel width (the table
+        // never drops below readable width -- spec s5); its thumb is 140px;
+        // its action buttons are full-width and 24px tall (§11.2's table row
+        // height, reused rather than inventing a new pinned value).
+        constexpr float kPreviewPaneWidth      = 330.0f;
+        constexpr float kPreviewHidePanelWidth = 720.0f;
+        constexpr float kPreviewThumbSize      = 140.0f;
+        constexpr float kActionButtonHeight    = 24.0f;
 
         // Copied from AssetBrowser.cpp:16-39 (internal linkage there, so it
         // cannot be reused across translation units -- same "copy the
@@ -782,11 +793,16 @@ namespace Arcane::Editor
         }
 
         // ---- Task 10: the table (spec s6/s11.2) ----------------------------
+        // `width` is 0.0f (ImGui's own "fill everything left on this line")
+        // when Task 11's preview pane is hidden; otherwise the caller passes
+        // the exact remainder after reserving the rail and the pinned 330px
+        // preview column, so the three stay side by side without the table
+        // fighting the preview for space.
         void DrawTable(AssetsPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                        DocumentHost& docs, const AssetsPanelServices& services, AssetsPanelActions& actions,
-                       const Arcane::Guid& bootGuid)
+                       const Arcane::Guid& bootGuid, float width)
         {
-            if (!ImGui::BeginChild("##assetscenter", ImVec2(0.0f, 0.0f)))
+            if (!ImGui::BeginChild("##assetscenter", ImVec2(width, 0.0f)))
             {
                 ImGui::EndChild();
                 return;
@@ -938,7 +954,171 @@ namespace Arcane::Editor
             ImGui::EndChild();
         }
 
-        // ---- Task 10: the Browse lens body (rail + table) ------------------
+        // ---- Task 11: one Derived-list row (spec s6/s11.2) -----------------
+        // "Derived (N) list (each row: sprite icon + name; click Selects the
+        // child)". `derivedChildren` is always a 1:1 folded sprite (the
+        // model's own fold rule, AssetPanelEntry::derivedChildren's doc
+        // comment: "1:1 sprites folded under me"), so `KindIcon(child->kind)`
+        // reads as the sprite glyph unconditionally -- resolved through the
+        // entry rather than hardcoding the icon so a future fold rule change
+        // cannot silently desync this row from what it actually names.
+        // Shares the same peek tooltip every other representation uses
+        // (spec s8).
+        void DrawDerivedRow(AssetPanelModel& model, const AssetsPanelServices& services,
+                            const Arcane::Guid& childGuid)
+        {
+            const AssetPanelEntry* child = model.Find(childGuid);
+            if (!child)
+                return;
+
+            ImGui::PushID(child->guid.ToString().c_str());
+            const std::string label = std::string(KindIcon(child->kind)) + " " + child->fileName;
+            if (ImGui::Selectable(label.c_str(), model.selected == child->guid))
+                model.Select(child->guid);
+            DrawAssetPeekTooltip(model, services, child->guid);
+            ImGui::PopID();
+        }
+
+        // ---- Task 11: the preview pane (spec s5/s6/s11.2) -------------------
+        // Layout order, pinned by the brief: 140px thumb -> name + kind/
+        // subkind/inst pills -> path row -> guid row (click copies) -> cook
+        // row -> separator -> Derived (N) list -> separator -> full-width
+        // action buttons (Open, Show in Explorer, Copy Path, + one
+        // kind-specific action). Empty selection is a dim "no selection"
+        // line -- no other row renders in that state.
+        void DrawPreviewPane(AssetPanelModel& model, const Arcane::Project* project, DocumentHost& docs,
+                            const AssetsPanelServices& services, AssetsPanelActions& actions)
+        {
+            if (!ImGui::BeginChild("##assetspreview", ImVec2(kPreviewPaneWidth, 0.0f), ImGuiChildFlags_None))
+            {
+                ImGui::EndChild();
+                return;
+            }
+
+            const AssetPanelEntry* e = model.selected.IsValid() ? model.Find(model.selected) : nullptr;
+            if (!e)
+            {
+                ImGui::TextDisabled("No selection");
+                ImGui::EndChild();
+                return;
+            }
+
+            // ---- 140px thumb: real thumb when resolvable, else the kind
+            // icon centered over a `kWell` backdrop with a `kSeparator`
+            // border seam (spec s6.1: "the Lucide kind icon on a well
+            // background") -- the same image/icon composition
+            // `DrawAssetPeekTooltip` uses at 64px, scaled up and framed.
+            {
+                const ImVec2 thumbMin = ImGui::GetCursorScreenPos();
+                const ImVec2 thumbMax(thumbMin.x + kPreviewThumbSize, thumbMin.y + kPreviewThumbSize);
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const std::uint64_t thumb = services.resolveAssetThumb ? services.resolveAssetThumb(e->guid) : 0;
+                if (thumb != 0)
+                {
+                    dl->AddImage(static_cast<ImTextureID>(thumb), thumbMin, thumbMax);
+                }
+                else
+                {
+                    dl->AddRectFilled(thumbMin, thumbMax, ImGui::GetColorU32(Theme::kWell));
+                    const char* icon = KindIcon(e->kind);
+                    const ImVec2 iconSize = ImGui::CalcTextSize(icon);
+                    dl->AddText(ImVec2(thumbMin.x + (kPreviewThumbSize - iconSize.x) * 0.5f,
+                                       thumbMin.y + (kPreviewThumbSize - iconSize.y) * 0.5f),
+                               ImGui::GetColorU32(ImGuiCol_Text), icon);
+                }
+                dl->AddRect(thumbMin, thumbMax, ImGui::GetColorU32(Theme::kSeparator));
+                ImGui::Dummy(ImVec2(kPreviewThumbSize, kPreviewThumbSize));
+            }
+
+            // ---- name (stem) + kind pill + subkind/inst pills
+            ImGui::TextUnformatted(e->name.c_str());
+            ImGui::SameLine();
+            AssetPill(KindLabel(e->kind));
+            if (const char* sub = SubkindPillText(*e))
+            {
+                ImGui::SameLine();
+                AssetPill(sub);
+            }
+            if (e->isInstance)
+            {
+                ImGui::SameLine();
+                AssetPill("inst");
+            }
+
+            // ---- path row (mount path, ellipsized to whatever's left on
+            // the line after the "path" label)
+            ImGui::TextDisabled("path");
+            ImGui::SameLine();
+            ImGui::TextUnformatted(EllipsisToWidth(e->mountPath, ImGui::GetContentRegionAvail().x).c_str());
+
+            // ---- guid row: dim, click copies (spec s6: "guid
+            // (click-to-copy)"). Routed through `actions.copyGuid` -- the
+            // SAME field the row context menu's "Copy Guid" entry already
+            // sets (AssetsPanel.cpp's DrawRowContextMenu) -- so the host's
+            // one existing consumer (EditorAppFrame.cpp's
+            // `ImGui::SetClipboardText(browserActions.copyGuid...)`) needs
+            // no new wiring; "panel reports, app performs" stays intact.
+            ImGui::TextDisabled("guid");
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", e->guid.ToString().c_str());
+            if (ImGui::IsItemHovered())
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (ImGui::IsItemClicked())
+                actions.copyGuid = e->guid;
+
+            // ---- cook row: state string, refused in kAmber
+            ImGui::TextDisabled("cook");
+            ImGui::SameLine();
+            if (e->cook == CookState::Refused)
+                ImGui::TextColored(Theme::kAmber, "%s", CookStateLabel(e->cook));
+            else
+                ImGui::TextDisabled("%s", CookStateLabel(e->cook));
+
+            ImGui::Separator();
+
+            // ---- Derived (N) list
+            char derivedHeader[32];
+            std::snprintf(derivedHeader, sizeof(derivedHeader), "Derived (%d)",
+                          static_cast<int>(e->derivedChildren.size()));
+            ImGui::TextUnformatted(derivedHeader);
+            for (const Arcane::Guid& childGuid : e->derivedChildren)
+                DrawDerivedRow(model, services, childGuid);
+
+            ImGui::Separator();
+
+            // ---- action buttons: full-width, 24px tall. Open reuses the
+            // SAME routing helper double-click/Enter use (spec: "Open (same
+            // routing as double-click)"); the trailing kind-specific action
+            // mirrors DrawRowContextMenu's own kind-specific entries exactly
+            // (same label text, same action field).
+            const ImVec2 btnSize(-FLT_MIN, kActionButtonHeight);
+            if (ImGui::Button(ICON_LC_EXTERNAL_LINK " Open", btnSize))
+                OpenAssetRow(*e, project, docs, actions);
+            if (ImGui::Button(ICON_LC_FOLDER_OPEN " Show in Explorer", btnSize))
+                actions.showInExplorer = e->guid;
+            if (ImGui::Button(ICON_LC_COPY " Copy Path", btnSize))
+                actions.copyPath = e->guid;
+
+            if (e->kind == AssetKind::Material)
+            {
+                if (ImGui::Button(ICON_LC_LAYERS " New Instance...", btnSize))
+                    actions.createInstanceOf = e->guid;
+            }
+            else if (e->kind == AssetKind::Scene)
+            {
+                if (ImGui::Button(ICON_LC_FLAG " Set as Boot Scene", btnSize))
+                    actions.setBootScene = e->guid;
+            }
+            else if (e->kind == AssetKind::Texture)
+            {
+                if (ImGui::Button(ICON_LC_STICKER " Create Sprite", btnSize))
+                    actions.createSpriteFrom = e->guid;
+            }
+
+            ImGui::EndChild();
+        }
+
+        // ---- Task 10/11: the Browse lens body (rail + table + preview) -----
         void DrawBrowseLens(AssetsPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                            DocumentHost& docs, const AssetsPanelServices& services, AssetsPanelActions& actions)
         {
@@ -950,9 +1130,32 @@ namespace Arcane::Editor
                 ? Arcane::Guid::FromString(project->Manifest().bootScene).value_or(Arcane::Guid::Nil())
                 : Arcane::Guid::Nil();
 
+            // Spec s5: preview pane fixed 330px, hidden below a 720px PANEL
+            // width so the table never drops below readable width. Measured
+            // here, before anything in this body has drawn -- at this exact
+            // point ImGui's content-region-avail IS the whole rail+table+
+            // preview budget for the frame, uncontested by anything this
+            // function itself has submitted yet.
+            const float panelWidth = ImGui::GetContentRegionAvail().x;
+            const bool showPreview = panelWidth >= kPreviewHidePanelWidth;
+
             DrawRail(state, model, actions);
             ImGui::SameLine();
-            DrawTable(state, model, project, docs, services, actions, bootGuid);
+
+            // Reserve exactly kPreviewPaneWidth (plus both SameLine gaps)
+            // for the preview when it is shown; 0.0f keeps DrawTable's own
+            // "fill everything left on this line" default when it is not.
+            const float tableWidth = showPreview
+                ? std::max(0.0f, panelWidth - kRailWidth
+                                  - ImGui::GetStyle().ItemSpacing.x * 2.0f - kPreviewPaneWidth)
+                : 0.0f;
+            DrawTable(state, model, project, docs, services, actions, bootGuid, tableWidth);
+
+            if (showPreview)
+            {
+                ImGui::SameLine();
+                DrawPreviewPane(model, project, docs, services, actions);
+            }
         }
     }
 
