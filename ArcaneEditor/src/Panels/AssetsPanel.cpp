@@ -1055,26 +1055,38 @@ namespace Arcane::Editor
         // split ratio. Double-click restores the default width, same as
         // PaneSplitter's own reset gesture.
         //
-        // 2026-09-07 review fix: `drawnWidth` (this frame's already-clamped
-        // layout width, computed once by the caller via
-        // ClampPreviewForLayout) and `desiredWidth` (AssetsPanelState::
-        // previewPaneWidth, the STORED field) are now two separate
-        // parameters -- this function is the field's ONLY writer, and it
-        // writes it in exactly two places below (an active drag, and the
-        // double-click reset), through ClampPreviewSaneRange only. Baselining
-        // the drag off `drawnWidth` (where the bar is actually drawn this
-        // frame) rather than the stale `desiredWidth` matters when the pane
-        // is CURRENTLY capped down by ClampPreviewForLayout's table-floor
-        // term (panel narrower than the user's real desired width): the
-        // splitter still tracks the mouse 1:1 from wherever it visually
-        // sits, instead of needing the drag to first "use up" the gap
-        // between the stale desired value and today's cap before anything
-        // moves. Because the table-floor cap never touches `desiredWidth`
-        // itself, a drag that happens while capped still records the user's
-        // true intent (bounded only by the sane range), and the pane
-        // springs back out to it the next time the panel widens with no
-        // further dragging needed.
-        void PreviewPaneSplitter(float drawnWidth, float& desiredWidth)
+        // 2026-09-07 review fix, round 2: the drag write baselines off the
+        // PRIOR `desiredWidth` itself -- NOT off `drawnWidth` (this frame's
+        // already-clamped layout width). Round 1's fix baselined off
+        // `drawnWidth` specifically so a capped drag would track the mouse
+        // from wherever the bar visually sat, but that reopened the same
+        // ratchet bug class through the write path instead of the read
+        // path: `IsItemActive()` goes true on the PRESS frame with
+        // `MouseDelta == (0,0)`, so `desiredWidth = Clamp(drawnWidth - 0) =
+        // drawnWidth` -- a bare, zero-motion click silently snapped the
+        // stored desired width down to whatever the table-floor cap
+        // currently was, and a sustained drag while capped re-baselined off
+        // that same (unchanging, while still capped) `drawnWidth` every
+        // frame instead of accumulating, so it never moved past one
+        // frame's delta. Baselining off `desiredWidth` fixes both: a
+        // zero-delta press is a no-op (`desiredWidth - 0 == desiredWidth`),
+        // and a multi-frame drag accumulates against the field's own
+        // running value exactly the way `ShaderEditorDocument.cpp`'s
+        // `PaneSplitter` accumulates its ratio, frame over frame, for as
+        // long as ActiveId is held. This function is `desiredWidth`'s ONLY
+        // writer (drag below, double-click reset below that), and both
+        // writes go through `ClampPreviewSaneRange` ONLY -- never
+        // `ClampPreviewForLayout` -- so the table-floor cap still never
+        // touches the stored value, only the caller's throwaway
+        // `drawnWidth` local (DrawBrowseLens). The visible trade-off: a
+        // drag that SHRINKS the pane while it is already capped needs to
+        // first travel however many pixels separate the stale desired
+        // value from today's cap before the pane visibly moves (there is
+        // no way around this without re-corrupting the stored value on
+        // every capped frame, which is the exact bug this fixes) -- widening
+        // the panel afterward still snaps back to wherever that drag
+        // actually left `desiredWidth`, not to the cap.
+        void PreviewPaneSplitter(float& desiredWidth)
         {
             const ImVec2 size(kPreviewSplitBarPx, ImGui::GetContentRegionAvail().y);
             if (size.x <= 0.0f || size.y <= 0.0f)
@@ -1091,8 +1103,12 @@ namespace Arcane::Editor
             {
                 // Dragging the splitter LEFT (negative MouseDelta.x) hands
                 // the table's space to the pane -- width grows by the same
-                // distance the mouse moved, hence the sign flip.
-                desiredWidth = ClampPreviewSaneRange(drawnWidth - ImGui::GetIO().MouseDelta.x);
+                // distance the mouse moved, hence the sign flip. Baselined
+                // off `desiredWidth` itself (see the function comment) --
+                // a zero-motion press is a no-op, and a held multi-frame
+                // drag accumulates correctly instead of re-snapping to a
+                // capped value every frame.
+                desiredWidth = ClampPreviewSaneRange(desiredWidth - ImGui::GetIO().MouseDelta.x);
             }
             if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                 desiredWidth = kAssetsPreviewPaneDefaultWidth;
@@ -1316,7 +1332,7 @@ namespace Arcane::Editor
             if (showPreview)
             {
                 ImGui::SameLine();
-                PreviewPaneSplitter(drawnWidth, state.previewPaneWidth);
+                PreviewPaneSplitter(state.previewPaneWidth);
                 ImGui::SameLine();
                 DrawPreviewPane(model, project, docs, services, actions, drawnWidth);
             }
