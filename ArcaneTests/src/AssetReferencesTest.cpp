@@ -657,6 +657,54 @@ TEST_CASE("A v4 scene missing its manifest falls back to the structural scan", "
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("A scene with no \"version\" key at all falls back to the structural scan", "[assets]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arc_listrefs_v4_noversion_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // No "version" key whatsoever -- not merely < 4, ABSENT. The fast
+    // path's gate reads `vit = json->find("version")` and short-circuits on
+    // `vit != json->end()` failing before it ever looks at "assets", so
+    // this must fall all the way through to the structural scan exactly
+    // like a literal "version": 3 file does.
+    const auto scene = WriteFile(dir, "no_version.arcscene", R"({
+        "id": "7e5a0004-0001-4001-8001-000000000001",
+        "entities": [
+            {
+                "components": {
+                    "Arcane::PostProcess": {
+                        "material": { "hi": 123456789012345678, "lo": 876543210987654321 }
+                    }
+                },
+                "parent": -1
+            }
+        ]
+    })");
+
+    const Arcane::Guid materialGuid{ 123456789012345678ull, 876543210987654321ull };
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value().ToString() == "7e5a0004-0001-4001-8001-000000000001") return scene;
+        if (id.Value() == materialGuid) return fs::path("material-marker");   // scan's resolvability filter
+        return std::nullopt;
+    });
+
+    const auto sceneId = Arcane::Guid::FromString("7e5a0004-0001-4001-8001-000000000001");
+    REQUIRE(sceneId.has_value());
+
+    const auto refs = assets->ListAssetReferences(*sceneId);
+    REQUIRE(refs.has_value());
+    REQUIRE(refs->size() == 1);
+    CHECK((*refs)[0].target == materialGuid);
+    CHECK((*refs)[0].kind == Arcane::AssetRefKind::References);
+
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("Manifest entries that are malformed or nil are skipped without hanging", "[assets]")
 {
     const fs::path dir = fs::temp_directory_path() / "arc_listrefs_v4_malformed_test";
@@ -664,13 +712,21 @@ TEST_CASE("Manifest entries that are malformed or nil are skipped without hangin
     fs::remove_all(dir, ec);
     fs::create_directories(dir);
 
-    // "not-a-guid" (wrong shape -- must be rejected by the shape gate BEFORE
-    // it ever reaches Guid::FromString, per the known invalid-hex parse-hang
-    // class), "" (too short), 42 (not a string at all), the nil guid string
-    // (well-formed shape, but IsValid() rejects it), and one genuinely valid
-    // entry. Only the valid one may survive.
+    // "not-a-guid" (wrong shape/length), "" (too short), 42 (not a string at
+    // all), the nil guid string (well-formed SHAPE, but IsValid() rejects
+    // it), "...00000000zzzz" (36 chars, correct dash positions at
+    // 8/13/18/23, but a non-hex tail -- the exact hazard the shape gate
+    // exists to defend: a CORRECTLY-SHAPED-BUT-INVALID-HEX string must be
+    // caught by IsCanonicalGuidString's own hex-validation loop, not merely
+    // by its length check, before it can ever reach Guid::FromString, per
+    // the known invalid-hex parse-hang class), and the one genuinely valid
+    // entry listed TWICE (the fast path's `seen` dedup, Assets.cpp, must
+    // collapse the repeat to a single edge). Exactly one entry may survive
+    // all of that.
     const auto scene = WriteFile(dir, "v4_malformed.arcscene", R"({
         "assets": ["not-a-guid", "", 42, "00000000-0000-0000-0000-000000000000",
+                   "7e5a0003-0001-4001-8001-00000000zzzz",
+                   "7e5a0003-0001-4001-8001-000000000001",
                    "7e5a0003-0001-4001-8001-000000000001"],
         "entities": [], "id": "7e5a0003-0001-4001-8001-0000000000ff", "version": 4})");
 
@@ -688,7 +744,7 @@ TEST_CASE("Manifest entries that are malformed or nil are skipped without hangin
 
     const auto refs = assets->ListAssetReferences(*sceneId);
     REQUIRE(refs.has_value());
-    REQUIRE(refs->size() == 1);
+    REQUIRE(refs->size() == 1);   // every malformed entry skipped; the duplicated valid entry deduped to one
     CHECK((*refs)[0].target == *validId);
     CHECK((*refs)[0].kind == Arcane::AssetRefKind::References);
 
