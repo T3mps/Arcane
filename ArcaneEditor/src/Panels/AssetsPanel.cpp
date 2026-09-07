@@ -872,10 +872,18 @@ namespace Arcane::Editor
             // 2026-09-07 nested folder groups: the row's own group-nesting
             // indent (20px/depth, spec s6/s11.2) stacks UNDER the existing
             // expander gutter -- the whole row (expander included, see below)
-            // shifts right by groupIndent first, then reserves its own
-            // kChildIndent for the expander exactly as before. Depth 0 ->
-            // groupIndent 0 -> pixel-identical to before this pass.
-            const float groupIndentPx = static_cast<float>(groupDepth) * kGroupIndent;
+            // shifts right by groupIndentPx first, then reserves its own
+            // kChildIndent for the expander exactly as before.
+            //
+            // 2026-09-07 user-directed follow-up ("for the rows to be
+            // indented starting at their icons, so the row is farther
+            // indented than it already is"): asset rows now indent ONE FULL
+            // LEVEL beneath their own group's band, not flush with it -- the
+            // `+ 1` is the entire change. A row under a band at the band's
+            // own indent X (still `groupDepth * kGroupIndent`, DrawGroupRow
+            // above -- UNCHANGED) now starts at X+20; this is draw-side
+            // geometry only, `groupDepth` itself (the DATA) is untouched.
+            const float groupIndentPx = static_cast<float>(groupDepth + 1) * kGroupIndent;
             // The expander gutter is reserved only for textures with a
             // folded child -- refused now wears its OWN corner badge on the
             // thumb below (fix round 1, Important 5), so it never competes
@@ -1013,9 +1021,14 @@ namespace Arcane::Editor
             // 2026-09-07 nested folder groups: the fold-child's own +20px
             // indent (kChildIndent, unchanged) stacks ON TOP of its group's
             // 20px/depth indent -- the compound case spec s6/s11.2 calls out
-            // explicitly (a fold child inside a depth-1 group sits at
-            // base + 20 + 20). Depth 0 -> pixel-identical to before this pass.
-            const float indent = static_cast<float>(groupDepth) * kGroupIndent + kChildIndent;
+            // explicitly.
+            //
+            // 2026-09-07 user-directed follow-up: "Child rows follow" the
+            // same one-level-beneath-the-band shift DrawAssetRow's own
+            // `groupIndentPx` just got -- the `+ 1` is the entire change. A
+            // fold child under a band at indent X now sits at X+40 (X+20 for
+            // the level shift, +20 more for its own existing fold indent).
+            const float indent = static_cast<float>(groupDepth + 1) * kGroupIndent + kChildIndent;
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
                                                     e.fileName.c_str(), selected, indent, kTableRowHeight);

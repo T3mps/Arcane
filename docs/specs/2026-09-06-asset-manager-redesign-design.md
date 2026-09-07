@@ -229,8 +229,9 @@ width**) is session-only in v1.
   roots are peers, never ancestors of each other, so closing one never touches
   another's rows. Each descendant group otherwise keeps its own open flag, so
   reopening a parent (its own mount root included) restores whatever sub-state
-  its children had. Asset rows indent to their group's depth plus their existing
-  base offset, so they read as belonging to that group.
+  its children had. Asset rows indent **one level beneath their own group's
+  band** (2026-09-07, user-directed) plus their existing base offset, so they
+  read as clearly nested inside that group rather than flush with its header.
   **Search reveals matches uniformly** (2026-09-07 review fix round 1, Important
   4 — this is the corrected wording; an earlier draft of this paragraph
   attributed the rule to an existing fold-child precedent that, on inspection,
@@ -416,7 +417,7 @@ comparison — web AA vs ImGui AA makes automated pixel diffs false-fail).
 |---|---|
 | dock tab strip / toolbar wells / bottom bar | 30px (accepted at the editor-wide ImGui tab-bar chrome's actual ~23px -- ruling 2026-09-07, §17; 30px was the web mock's own value, not a value the panel itself sets) / 24px / 24px |
 | table rows / rail rows / group rows | 24px / 26px / 24px (chrome bg) |
-| group nesting indent per depth / fold-child indent | 20px per level, leaf-segment group labels (§6, 2026-09-07) / +20px beyond the row's own group-depth indent — the same 20px unit, applied once more |
+| group nesting indent per depth / asset-row indent beneath its band / fold-child indent | 20px per level, leaf-segment group labels (§6, 2026-09-07) / one level (20px) beneath the row's own group's band (§6, 2026-09-07 follow-up) / +20px beyond that — the same 20px unit, applied once more |
 | rail / preview pane widths | 180px (fixed) / 165px default, resizable [120px, 480px] (§17, 2026-09-07) |
 | row thumb / tooltip thumb / preview thumb | 18px / 64px / 140px |
 | tooltip width | 210px |
