@@ -1,6 +1,6 @@
 #include "Documents/MeshDocument.hpp"
 
-#include "Panels/AssetBrowser.hpp"
+#include "Panels/AssetPanelModel.hpp"
 #include "Widgets/EditorWidgets.hpp"   // RangedDragFloat/RangedDragInt
 
 // The preview vehicle. Include-order note for anything moved above it: this

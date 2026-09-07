@@ -1,7 +1,6 @@
 #include "Panels/InspectorView.hpp"
 
-#include "Panels/AssetBrowser.hpp"
-#include "Panels/AssetPanelModel.hpp"    // AssetPanelEntry::surface (Task 14 pill + filter)
+#include "Panels/AssetPanelModel.hpp"    // AssetKind/AssetKindFilterForFieldName/MaterialSurfaceFilterForComponent + AssetPanelEntry::surface (Task 14 pill + filter)
 #include "Panels/CreateAssetDialog.hpp"  // MaterialSurfacePillText (SAME pill text as the Create dialog)
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Scene/EditGesture.hpp"
@@ -877,7 +876,7 @@ namespace Arcane::Editor
                         const Arcane::Guid v = f.Get<Arcane::Guid>(instance);
                         // rawName, NOT the display label: this heuristic reads the
                         // C++ identifier, which is what its documented contract
-                        // (AssetBrowser.hpp) is written against.
+                        // (Panels/AssetPanelModel.hpp) is written against.
                         const int kindFilter = Arcane::Editor::AssetKindFilterForFieldName(rawName);
                         const bool materialField =
                             kindFilter == static_cast<int>(Arcane::Editor::AssetKind::Material);

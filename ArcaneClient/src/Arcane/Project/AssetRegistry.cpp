@@ -400,7 +400,7 @@ namespace Arcane
         // differently. All() publishes a CONTRACT -- a total order that is a
         // function of content alone -- so a future consumer inherits
         // determinism instead of having to remember it. Today's two
-        // consumers (AssetBrowser's BuildAssetEntries, which re-sorts by
+        // consumers (AssetPanelModel.hpp's BuildAssetEntries, which re-sorts by
         // (name, mountPath) itself; EditorAppProject's
         // MintOrReuseSpriteForTexture, which only acts at matches == 1) are
         // both order-insensitive, so this is not a fix to a live rendering

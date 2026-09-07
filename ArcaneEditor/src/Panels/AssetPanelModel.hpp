@@ -10,18 +10,25 @@
 // ZERO Arcane::Assets/Arcane::Project dependency -- the [editor] test drives
 // it against a REAL scanned AssetRegistry with fake provider lambdas.
 //
-// AssetKind/AssetKindOf/MatchesFilter/AssetEntry currently live in
-// Panels/AssetBrowser.hpp and are reused here as-is (included below); Task 15
-// migrates them into this header once AssetBrowser.* is retired -- do not
-// move them ahead of that task.
+// Task 15: AssetKind/AssetKindOf/MatchesFilter/AssetEntry/BuildAssetEntries
+// and the rest of the asset-classification family (Slice 6's Asset Browser)
+// live directly in this header now -- Panels/AssetBrowser.hpp/.cpp is
+// retired. KindIcon/KindLabel just below are promoted from AssetBrowser.cpp's
+// file-local (internal-linkage) duplicates -- AssetsPanel.cpp's own copy and
+// this file's own RailKindLabel both used to shadow them independently; both
+// collapse onto these, the one shared definition from here on.
 
-#include "Panels/AssetBrowser.hpp"   // AssetKind, AssetKindOf, MatchesFilter, AssetEntry
+#include "Widgets/IconsLucide.h"   // KindIcon glyphs
 
 #include <Arcane/Assets/Assets.hpp>             // AssetRef, AssetRefKind
 #include <Arcane/Guid.hpp>
-#include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface
+#include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface (surfaceFor, MaterialSurfaceFilterForComponent)
+#include <Arcane/Project/AssetRegistry.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
@@ -30,10 +37,254 @@
 #include <unordered_set>
 #include <vector>
 
-namespace Arcane { class AssetRegistry; }
-
 namespace Arcane::Editor
 {
+    enum class AssetKind : int
+    {
+        Material = 0,
+        Texture,
+        Audio,
+        Font,
+        Data,
+        Scene,
+        Sprite,
+        // GPU crash diagnostics arc, Task 10: .arcdiag crash/hang/gpu-crash/
+        // gpu-stall reports (Diag::Envelope). Kept right before Other, the
+        // same "newest kind slots in ahead of the catch-all" placement
+        // Sprite used when it was added (docs/specs/2026-07-28-sprite-
+        // asset-design.md:116).
+        Diagnostic,
+        // F2a, Task 9: .arcmesh procedural mesh assets (MeshDocument). Same
+        // placement rule as Diagnostic above -- ahead of the catch-all.
+        Mesh,
+        Other,
+    };
+    inline constexpr int kAssetKindCount = 10;
+
+    // The ImGui drag-drop payload type for browser rows (the params panel's
+    // texture slots accept it). Payload bytes = AssetDragPayload (POD).
+    inline constexpr const char* kAssetDragType = "ARCANE_ASSET";
+    struct AssetDragPayload
+    {
+        Arcane::Guid guid;
+        AssetKind kind;
+    };
+
+    // Classify by extension (matches the registry's own scan rules: .arcmat and
+    // .json are native; the binary list mirrors AssetRegistry's IsImportedBinary).
+    inline AssetKind AssetKindOf(std::string_view mountPath)
+    {
+        const std::size_t dot = mountPath.rfind('.');
+        if (dot == std::string_view::npos)
+            return AssetKind::Other;
+        std::string ext(mountPath.substr(dot));
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (ext == ".arcmat")
+            return AssetKind::Material;
+        if (ext == ".arcscene")
+            return AssetKind::Scene;
+        if (ext == ".arcsprite")
+            return AssetKind::Sprite;
+        if (ext == ".arcdiag")
+            return AssetKind::Diagnostic;
+        if (ext == ".arcmesh")
+            return AssetKind::Mesh;
+        for (const char* e : { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr" })
+            if (ext == e) return AssetKind::Texture;
+        for (const char* e : { ".wav", ".ogg", ".mp3", ".flac" })
+            if (ext == e) return AssetKind::Audio;
+        if (ext == ".ttf" || ext == ".otf")
+            return AssetKind::Font;
+        if (ext == ".json")
+            return AssetKind::Data;
+        return AssetKind::Other;
+    }
+
+    struct AssetEntry
+    {
+        Arcane::Guid guid;
+        std::string  mountPath;   // "game://materials/glow.arcmat"
+        std::string  name;        // "glow" (stem)
+        AssetKind    kind = AssetKind::Other;
+    };
+
+    // Registry snapshot -> classified entries, sorted by name (path breaks ties)
+    // for a stable listing.
+    inline std::vector<AssetEntry> BuildAssetEntries(const Arcane::AssetRegistry& registry)
+    {
+        std::vector<AssetEntry> entries;
+        for (auto& [guid, mountPath] : registry.All())
+        {
+            AssetEntry e;
+            e.guid = guid;
+            e.kind = AssetKindOf(mountPath);
+            const std::size_t slash = mountPath.rfind('/');
+            std::string_view file = slash == std::string::npos
+                                        ? std::string_view(mountPath)
+                                        : std::string_view(mountPath).substr(slash + 1);
+            const std::size_t dot = file.rfind('.');
+            e.name = std::string(dot == std::string_view::npos ? file : file.substr(0, dot));
+            e.mountPath = std::move(mountPath);
+            entries.push_back(std::move(e));
+        }
+        std::sort(entries.begin(), entries.end(),
+                  [](const AssetEntry& a, const AssetEntry& b)
+                  { return a.name != b.name ? a.name < b.name : a.mountPath < b.mountPath; });
+        return entries;
+    }
+
+    // Inspector asset-ref (Guid) fields: infer the expected asset kind from the
+    // FIELD NAME -- reflection carries no per-field attributes yet, so this
+    // heuristic is the seam until it does. Case-insensitive substring match:
+    // "material" -> Material, "texture" -> Texture, "sprite" -> Sprite,
+    // "mesh" -> Mesh; anything else -> -1 (all kinds, same convention as
+    // MatchesFilter's kindFilter). Sprite is checked AFTER material/texture
+    // ON PURPOSE: a field named e.g. "spriteMaterial" contains both
+    // substrings and must still resolve Material (the material IS what such
+    // a field means), so the material/texture branches have to win the
+    // race. `mesh` is checked LAST, after sprite, for the identical reason:
+    // `MeshRenderer::materialOverride` faces the same race a hypothetical
+    // "meshMaterial" field would (it contains both "mesh" and "material"),
+    // and the material branch must win it exactly as spriteMaterial's does
+    // -- so `mesh` sits at the end, immediately before the -1 fallback,
+    // rather than being checked before material/texture/sprite.
+    inline int AssetKindFilterForFieldName(std::string_view fieldName)
+    {
+        std::string lower(fieldName);
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lower.find("material") != std::string::npos)
+            return static_cast<int>(AssetKind::Material);
+        if (lower.find("texture") != std::string::npos)
+            return static_cast<int>(AssetKind::Texture);
+        if (lower.find("sprite") != std::string::npos)
+            return static_cast<int>(AssetKind::Sprite);
+        if (lower.find("mesh") != std::string::npos)
+            return static_cast<int>(AssetKind::Mesh);
+        return -1;
+    }
+
+    // Owning-component context for a material-ref field: which MaterialSurface
+    // must candidates have? -1 = unfiltered. Extends the field-name-heuristic
+    // seam just above until reflection carries per-field attributes of its
+    // own -- "material" alone (AssetKindFilterForFieldName's answer) never
+    // says whether the field feeds a 2D sprite or a 3D mesh; the COMPONENT
+    // that owns the field is what answers that, so this reads the owning
+    // component's type name instead of the field's.
+    //
+    // Substring match, not exact equality: the call site hands this
+    // Astra::TypeMeta::typeName verbatim (InspectorView.cpp), which is the
+    // compiler-derived, NAMESPACE-QUALIFIED name ("Arcane::SpriteRenderer"),
+    // not the bare identifier the interface doc quotes -- a substring test
+    // matches either shape without asking the caller to strip anything
+    // first. No ordering race like AssetKindFilterForFieldName's
+    // material/mesh split: "SpriteRenderer" and "MeshRenderer" share no
+    // substring, so the two checks below can never both fire for one name.
+    // This DOES assume no future component's name embeds either literal as
+    // a substring of its OWN name (e.g. a hypothetical "MySpriteRendererFX")
+    // -- exactly the same assumption AssetKindFilterForFieldName already
+    // makes about field names, just one level up at the component. Revisit
+    // this function if that ever stops holding.
+    [[nodiscard]] inline int MaterialSurfaceFilterForComponent(std::string_view componentName)
+    {
+        if (componentName.find("SpriteRenderer") != std::string_view::npos)
+            return static_cast<int>(Arcane::MaterialSurface::Sprite);
+        if (componentName.find("MeshRenderer") != std::string_view::npos)
+            return static_cast<int>(Arcane::MaterialSurface::Mesh);
+        return -1;
+    }
+
+    // A Guid field whose NAME says it is an IDENTITY, not an asset reference:
+    // exactly "id" or "guid", case-insensitive. Same name-heuristic seam as
+    // AssetKindFilterForFieldName above (reflection carries no per-field
+    // attributes yet). Arcane::Identity.id is the live case -- every entity
+    // carries one, the asset registry can never resolve it, and running it
+    // through the dangling-reference styling painted "(missing)" on healthy
+    // entities. Exact match on purpose: substring would eat "textureId",
+    // which the kind heuristic correctly claims as a texture reference.
+    inline bool IsIdentityGuidFieldName(std::string_view fieldName)
+    {
+        std::string lower(fieldName);
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return lower == "id" || lower == "guid";
+    }
+
+    // kindFilter: -1 = all kinds. `search`: case-insensitive substring over
+    // name AND mount path; empty matches everything.
+    inline bool MatchesFilter(const AssetEntry& entry, int kindFilter, std::string_view search)
+    {
+        if (kindFilter >= 0 && static_cast<int>(entry.kind) != kindFilter)
+            return false;
+        if (search.empty())
+            return true;
+
+        auto containsCI = [](std::string_view hay, std::string_view needle)
+        {
+            if (needle.size() > hay.size())
+                return false;
+            auto lower = [](unsigned char c) { return static_cast<char>(std::tolower(c)); };
+            for (std::size_t i = 0; i + needle.size() <= hay.size(); ++i)
+            {
+                std::size_t j = 0;
+                while (j < needle.size() && lower(hay[i + j]) == lower(needle[j]))
+                    ++j;
+                if (j == needle.size())
+                    return true;
+            }
+            return false;
+        };
+        return containsCI(entry.name, search) || containsCI(entry.mountPath, search);
+    }
+
+    // KindIcon/KindLabel (Task 15 consolidation): the Lucide glyph / display
+    // string for a kind, shared by every representation (rail, table rows,
+    // peek tooltip, preview pane, drag-source label).
+    inline const char* KindIcon(AssetKind kind)
+    {
+        switch (kind)
+        {
+            case AssetKind::Material: return ICON_LC_PALETTE;
+            case AssetKind::Texture:  return ICON_LC_IMAGE;
+            case AssetKind::Audio:    return ICON_LC_MUSIC;
+            case AssetKind::Font:     return ICON_LC_TYPE;
+            case AssetKind::Data:     return ICON_LC_FILE_JSON;
+            case AssetKind::Scene:    return ICON_LC_CLAPPERBOARD;
+            // ICON_LC_STICKER exists in IconsLucide.h (grepped; ICON_LC_GHOST is
+            // also present but STICKER reads as "sprite" and is preferred by the
+            // brief's fallback order).
+            case AssetKind::Sprite:   return ICON_LC_STICKER;
+            // ICON_LC_BUG exists in IconsLucide.h (grepped: IconsLucide.h:307) --
+            // no nearest-match fallback needed.
+            case AssetKind::Diagnostic: return ICON_LC_BUG;
+            // A 3D box, for a procedural mesh -- ICON_LC_BOX exists in
+            // IconsLucide.h (grepped: IconsLucide.h:287).
+            case AssetKind::Mesh:     return ICON_LC_BOX;
+            case AssetKind::Other:    return ICON_LC_FILE;
+        }
+        return ICON_LC_FILE;
+    }
+
+    inline const char* KindLabel(AssetKind kind)
+    {
+        switch (kind)
+        {
+            case AssetKind::Material: return "Material";
+            case AssetKind::Texture:  return "Texture";
+            case AssetKind::Audio:    return "Audio";
+            case AssetKind::Font:     return "Font";
+            case AssetKind::Data:     return "Data";
+            case AssetKind::Scene:    return "Scene";
+            case AssetKind::Sprite:   return "Sprite";
+            case AssetKind::Diagnostic: return "Diagnostic";
+            case AssetKind::Mesh:     return "Mesh";
+            case AssetKind::Other:    return "Other";
+        }
+        return "Other";
+    }
+
     // An asset's cook-pipeline status, as the panel shows it (row markers +
     // the digest bar). Textures/sprites are the only kinds with a real cook
     // pipeline today; everything else defaults to Cooked (CookStateOf, Task 5)

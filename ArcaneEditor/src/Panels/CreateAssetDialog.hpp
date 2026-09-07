@@ -15,8 +15,8 @@
 //     [editor] test can drive the validation rules headlessly -- the test exe
 //     compiles NO ImGui TU (premake5.lua's ArcaneTests file list, which
 //     source-compiles only the pure editor units), so the validation MUST be
-//     reachable without one. Same header-inline pattern AssetBrowser.hpp's own
-//     pure helpers already use.
+//     reachable without one. Same header-inline pattern AssetPanelModel.hpp's
+//     own pure helpers already use.
 //   * the .cpp is the ImGui modal, and is compiled into ArcaneEditor ONLY.
 //
 // Task 12 shipped Material + MaterialInstance end-to-end; Task 13 completes
@@ -24,7 +24,7 @@
 // texture picker + its mint-or-reuse notice), Scene (a "set as boot"
 // checkbox) -- and their dispatch (see DrawCreateAssetDialog's own comment).
 
-#include "Panels/AssetBrowser.hpp"   // AssetKind (the producer-side reconciliation below)
+#include "Panels/AssetPanelModel.hpp"   // AssetKind (the producer-side reconciliation below)
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface (the Material kind combo)
@@ -42,7 +42,7 @@ namespace Arcane::Editor
 {
     class AssetPanelModel;
 
-    // WHAT can be created. NOT AssetKind (Panels/AssetBrowser.hpp): that enum
+    // WHAT can be created. NOT AssetKind (Panels/AssetPanelModel.hpp): that enum
     // classifies what a registry entry IS (ten values, including kinds nothing
     // can mint -- Texture, Audio, Font, Data, Diagnostic, Other), while this
     // one enumerates the five things the Create menu OFFERS, and splits

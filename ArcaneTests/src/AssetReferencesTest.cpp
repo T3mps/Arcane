@@ -467,7 +467,7 @@ TEST_CASE("ListAssetReferences never returns nullopt for any AssetKindOf-recogni
     fs::remove_all(dir, ec);
     fs::create_directories(dir);
 
-    // Every extension ArcaneEditor's AssetKindOf (Panels/AssetBrowser.hpp:59)
+    // Every extension ArcaneEditor's AssetKindOf (Panels/AssetPanelModel.hpp:75)
     // explicitly classifies -- hardcoded here, WITH this comment pointing
     // back at the real switch, per the brief's documented fallback (AssetKindOf
     // switches on a runtime string_view; there is no case list to introspect

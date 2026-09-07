@@ -53,7 +53,7 @@ namespace Arcane::Editor
     // Whether a vec4 field is a COLOR (swatch + 0..1 alpha editing) rather
     // than a plain 4-float. Decided from the C++ identifier -- "tint",
     // "color", "baseColor" -- the same documented-name-heuristic pattern as
-    // AssetKindFilterForFieldName (AssetBrowser.hpp): the engine has no
+    // AssetKindFilterForFieldName (Panels/AssetPanelModel.hpp): the engine has no
     // dedicated color type, and until one exists the field NAME is the only
     // author intent on record.
     [[nodiscard]] bool IsColorFieldName(std::string_view rawFieldName) noexcept;

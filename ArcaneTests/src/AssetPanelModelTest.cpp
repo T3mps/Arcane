@@ -662,9 +662,9 @@ TEST_CASE("AssetPanelModel un-folds a sprite when its fold target is removed via
 
 // ---------------------------------------------------------------------------
 // Task 14: MaterialSurfaceFilterForComponent -- the owning-component-context
-// sibling of AssetKindFilterForFieldName (both live in AssetBrowser.hpp,
-// included transitively above; this unit still never touches ImGui or the
-// engine facade, matching this file's own header comment).
+// sibling of AssetKindFilterForFieldName (both live in Panels/
+// AssetPanelModel.hpp as of Task 15; this unit still never touches ImGui or
+// the engine facade, matching this file's own header comment).
 // ---------------------------------------------------------------------------
 
 TEST_CASE("MaterialSurfaceFilterForComponent maps the owning component to its required MaterialSurface",

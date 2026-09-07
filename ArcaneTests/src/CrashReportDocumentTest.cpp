@@ -11,7 +11,7 @@
 
 #include "Documents/CrashReportDocument.hpp"
 #include "Documents/DocumentHost.hpp"
-#include "Panels/AssetBrowser.hpp"
+#include "Panels/AssetPanelModel.hpp"
 
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Guid.hpp>

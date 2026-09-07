@@ -26,7 +26,6 @@
 #include <Arcane/Host/ReferenceImages.hpp>    // --compare/--bless (Task 9): ReferenceResolution
 #include <Arcane/Host/VerifyReport.hpp>       // --report (Task 9): VerifyReport
 #include <Arcane/Assets/ImageCompare.hpp>     // --compare (Task 9): PixelData/ImageCompareResult
-#include "Panels/AssetBrowser.hpp"
 #include "Panels/AssetPanelModel.hpp"
 #include "Panels/AssetsPanel.hpp"
 #include "Panels/ConsoleBuffer.hpp"
@@ -287,10 +286,10 @@ namespace Arcane::Editor
         void DrawEditorUi(LoopState& ls, const FrameState& fs);
         void ConsumeMenuRequests(Arcane::Editor::MenuRequests& menuReq,
                                  const FrameState& fs, LoopState& ls);
-        // Asset-manager redesign, Plan 1 Task 9: takes AssetsPanelActions now
-        // (the new panel's contract, a superset of the old AssetBrowserActions
-        // -- see that struct's own comment); the old AssetBrowserActions
-        // overload is gone with the call site that produced it.
+        // Asset-manager redesign, Plan 1 Task 9: takes AssetsPanelActions
+        // (the panel's own action-report contract); the old AssetBrowserActions
+        // overload (superseded when AssetBrowser.* was retired, Task 15) is
+        // gone with the call site that produced it.
         void ConsumeBrowserActions(const Arcane::Editor::AssetsPanelActions& browserActions,
                                    LoopState& ls);
         // ---- Unified create (asset-manager redesign, Plan 1 Task 12) -------
@@ -1179,12 +1178,8 @@ namespace Arcane::Editor
         // fine only because the dtor never drains -- it just un-publishes.
         std::unique_ptr<Arcane::SceneRenderResolver> m_resolver;
         Arcane::Editor::DocumentHost            m_documents;
-        Arcane::Editor::AssetBrowserState       m_assetBrowser;
-        // Asset-manager redesign, Plan 1 Task 9: the new panel's session UI
-        // state (lens/search/rail selection). AssetBrowserState above stays
-        // declared (AssetBrowser.* is not deleted until Task 15) but is no
-        // longer fed by any draw call -- see DrawAssetsPanel's call site in
-        // DrawEditorUi.
+        // Asset-manager redesign, Plan 1 Task 9: the panel's session UI state
+        // (lens/search/rail selection).
         Arcane::Editor::AssetsPanelState        m_assetsPanel;
         // Asset-manager redesign, Plan 1 Task 12: the unified create dialog's
         // cross-frame state (a modal outlives the draw that opened it). Set up
@@ -1194,12 +1189,9 @@ namespace Arcane::Editor
         // that nothing else in this class opens a create flow.
         Arcane::Editor::CreateDialogState       m_createDialog;
         // Asset-manager redesign, Plan 1 Task 5: the pure, cached model behind
-        // the (future) Browse lens -- kept current every frame ahead of ANY
-        // panel draw (DrawEditorUi's RebuildIfDirty call, immediately before
-        // the Assets panel), so a later consumer can read it without its own
-        // rebuild dance. Nothing draws from it yet: the OLD AssetBrowser panel
-        // above is still what's on screen (m_assetBrowser/DrawAssetBrowserPanel);
-        // this is wiring only, no behavior change.
+        // the Assets panel's Browse lens -- kept current every frame ahead of
+        // ANY panel draw (DrawEditorUi's RebuildIfDirty call, immediately
+        // before the Assets panel).
         Arcane::Editor::AssetPanelModel         m_assetModel;
         // Asset-manager redesign, Plan 1 Task 8: LIVE 64px material
         // thumbnails, harvested from a lazily-created offscreen vehicle and

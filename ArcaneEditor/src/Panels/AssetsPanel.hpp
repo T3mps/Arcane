@@ -12,9 +12,11 @@
 // title (PanelRegistry.hpp:37, imgui.ini keys untouched), same PanelId::Assets
 // visibility flags -- no dock churn.
 //
-// AssetBrowser.hpp's AssetKind/AssetEntry/MatchesFilter etc. stay the
-// classification vocabulary underneath AssetPanelModel (see that header's own
-// comment) -- this file adds no new classification, only the panel shell.
+// AssetKind/AssetEntry/MatchesFilter etc. (originally AssetBrowser.hpp's
+// classification vocabulary; migrated into AssetPanelModel.hpp in Task 15,
+// see that header's own comment) stay the classification vocabulary
+// underneath AssetPanelModel -- this file adds no new classification, only
+// the panel shell.
 
 #include "Panels/AssetPanelModel.hpp"   // AssetPanelModel (current before every panel draw)
 
@@ -67,16 +69,15 @@ namespace Arcane::Editor
     };
 
     // Row/menu actions the APP resolves after the draw -- same "panel
-    // reports, app performs" split as the old AssetBrowserActions (dialogs
-    // and file IO never happen inside the panel draw; see AssetBrowser.hpp's
-    // own comment on AssetBrowserActions). Superset of today's
-    // AssetBrowserActions: adds `copyGuid` (spec s6's new context-menu entry)
+    // reports, app performs" split the old (retired) AssetBrowserActions used
+    // (dialogs and file IO never happen inside the panel draw). A superset of
+    // that retired struct: adds `copyGuid` (spec s6's new context-menu entry)
     // and the unified-create pair (`requestCreateKind`/`createPrefillParent`,
-    // Task 12). Task 9's placeholder body never raises the row-action fields
-    // (no rows exist yet -- Task 10 draws them), but the struct carries the
-    // full shape now so later tasks extend this exact contract rather than a
-    // new one.
-    struct AssetsPanelActions   // superset of today's AssetBrowserActions
+    // Task 12). Task 9's placeholder body never raised the row-action fields
+    // (no rows existed yet -- Task 10 draws them), but the struct carried the
+    // full shape from the start so later tasks could extend this exact
+    // contract rather than a new one.
+    struct AssetsPanelActions   // superset of the old (retired) AssetBrowserActions
     {
         Arcane::Guid createInstanceOf, createSpriteFrom, setBootScene,
                      showInExplorer, copyPath, copyGuid;

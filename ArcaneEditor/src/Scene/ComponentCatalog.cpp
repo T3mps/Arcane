@@ -13,7 +13,7 @@ namespace Arcane::Editor
 {
     namespace
     {
-        // Case-insensitive substring. Local twin of AssetBrowser.hpp's
+        // Case-insensitive substring. Local twin of AssetPanelModel.hpp's
         // MatchesFilter helper and EntityList.cpp's ContainsCI; each is an
         // anonymous-namespace local in its own TU, kept that way so no panel
         // header has to export a string utility.

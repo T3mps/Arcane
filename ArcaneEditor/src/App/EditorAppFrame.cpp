@@ -146,8 +146,8 @@ namespace Arcane::Editor
         }
 
         // Assets -> Show in Explorer / Copy Path, on a resolved asset Guid.
-        // Extracted so the menu-bar route (the browser's tracked row) and the
-        // Asset Browser's own row context menu (AssetBrowser.cpp) resolve the
+        // Extracted so the menu-bar route (the panel's tracked row) and the
+        // Assets panel's own row context menu (AssetsPanel.cpp) resolve the
         // SAME way -- one implementation, two entry points.
         void AssetPathAction(const Arcane::Project* proj, const Arcane::Guid& guid,
                              bool showInExplorer, bool copyPath)
@@ -2035,9 +2035,8 @@ namespace Arcane::Editor
         // comment): no registry walk, no provider calls, unless something
         // actually marked it dirty since the last frame.
         //
-        // Task 9: DrawAssetsPanel replaces DrawAssetBrowserPanel as what this
-        // draws (AssetBrowser.* stays on disk, unreferenced here, until
-        // Task 15 deletes it).
+        // Task 9: DrawAssetsPanel replaced DrawAssetBrowserPanel as what this
+        // draws (AssetBrowser.* was retired in Task 15).
         Arcane::Editor::AssetsPanelActions browserActions;
         const Arcane::Project* proj = m_runtime->CurrentProject();
         m_assetModel.RebuildIfDirty(proj ? &proj->Registry() : nullptr, m_assetPanelProviders);

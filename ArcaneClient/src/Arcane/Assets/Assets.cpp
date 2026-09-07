@@ -79,9 +79,9 @@ namespace Arcane
         // Asset-manager arc (ABI v22, Task 2): the resolved path's extension,
         // lowercased -- the format-classification key ListAssetReferences
         // switches on. Kept local: Assets.cpp has no existing extension-
-        // classification helper to reuse (AssetBrowser.hpp's AssetKindOf is
-        // an EDITOR-side classifier in a different translation unit; this
-        // facade must not reach for it).
+        // classification helper to reuse (Panels/AssetPanelModel.hpp's
+        // AssetKindOf is an EDITOR-side classifier in a different translation
+        // unit; this facade must not reach for it).
         std::string LowerExt(const std::filesystem::path& path)
         {
             std::string ext = path.extension().string();
@@ -109,8 +109,8 @@ namespace Arcane
 
         // Task 3 (asset-manager arc): a Guid field whose NAME says it is an
         // IDENTITY, not an asset reference -- exactly "id"/"guid", case-
-        // insensitive. THIS IS A MIRROR of ArcaneEditor's
-        // AssetBrowser.hpp::IsIdentityGuidFieldName (AssetBrowser.hpp:161):
+        // insensitive. THIS IS A MIRROR of ArcaneEditor's Panels/
+        // AssetPanelModel.hpp::IsIdentityGuidFieldName (AssetPanelModel.hpp:207):
         // this engine-side facade cannot include an editor header (the
         // directional rule in CLAUDE.md -- engine never depends on editor),
         // so the rule is copied here rather than shared. Keep the two in

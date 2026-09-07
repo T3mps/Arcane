@@ -1,6 +1,6 @@
 #include "Documents/ShaderEditorDocument.hpp"
 
-#include "Panels/AssetBrowser.hpp"
+#include "Panels/AssetPanelModel.hpp"
 #include "Widgets/CanvasPopupScope.hpp"
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Widgets/EditorTheme.hpp"

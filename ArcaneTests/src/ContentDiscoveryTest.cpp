@@ -33,7 +33,7 @@
 #include <Arcane/Project/AssetId.hpp>
 #include <Arcane/Project/Project.hpp>
 
-#include <Panels/AssetBrowser.hpp>
+#include <Panels/AssetPanelModel.hpp>
 
 #include <Json.hpp>
 #include <stb_image_write.h>

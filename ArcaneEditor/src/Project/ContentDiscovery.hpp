@@ -6,10 +6,11 @@
 // project open (Project::Open, Project.cpp) -- nothing rescans Content/
 // mid-session. So a .png dropped into an already-open project's Content/
 // gets no sidecar, never enters the AssetRegistry, never appears in the
-// asset browser (which builds straight off the registry -- AssetBrowser.hpp's
-// BuildAssetEntries), and never reaches CookSession::EnumerateTextureSources
-// either (that function, ArcaneAssetPipeline/CookSession.cpp, private, skips
-// any .png with no EXISTING ".meta" sidecar -- "not a registered source yet").
+// Assets panel (which builds straight off the registry -- Panels/
+// AssetPanelModel.hpp's BuildAssetEntries), and never reaches CookSession::
+// EnumerateTextureSources either (that function, ArcaneAssetPipeline/
+// CookSession.cpp, private, skips any .png with no EXISTING ".meta" sidecar
+// -- "not a registered source yet").
 // The spec's headline ergonomic ("drop a .png -> appears immediately, cooks
 // in background") was dead for exactly this mid-session case.
 //

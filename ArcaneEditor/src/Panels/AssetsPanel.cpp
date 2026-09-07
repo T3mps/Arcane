@@ -64,47 +64,11 @@ namespace Arcane::Editor
         constexpr float kPreviewThumbSize      = 140.0f;
         constexpr float kActionButtonHeight    = 24.0f;
 
-        // Copied from AssetBrowser.cpp:16-39 (internal linkage there, so it
-        // cannot be reused across translation units -- same "copy the
-        // switch" convention AssetPanelModel.cpp's RailKindLabel already
-        // established for the same reason).
-        const char* KindIcon(AssetKind kind)
-        {
-            switch (kind)
-            {
-                case AssetKind::Material: return ICON_LC_PALETTE;
-                case AssetKind::Texture:  return ICON_LC_IMAGE;
-                case AssetKind::Audio:    return ICON_LC_MUSIC;
-                case AssetKind::Font:     return ICON_LC_TYPE;
-                case AssetKind::Data:     return ICON_LC_FILE_JSON;
-                case AssetKind::Scene:    return ICON_LC_CLAPPERBOARD;
-                case AssetKind::Sprite:   return ICON_LC_STICKER;
-                case AssetKind::Diagnostic: return ICON_LC_BUG;
-                case AssetKind::Mesh:     return ICON_LC_BOX;
-                case AssetKind::Other:    return ICON_LC_FILE;
-            }
-            return ICON_LC_FILE;
-        }
-
-        // For the peek tooltip's kind pill -- same labels AssetBrowser.cpp's
-        // own (internal-linkage) KindLabel uses.
-        const char* KindLabel(AssetKind kind)
-        {
-            switch (kind)
-            {
-                case AssetKind::Material: return "Material";
-                case AssetKind::Texture:  return "Texture";
-                case AssetKind::Audio:    return "Audio";
-                case AssetKind::Font:     return "Font";
-                case AssetKind::Data:     return "Data";
-                case AssetKind::Scene:    return "Scene";
-                case AssetKind::Sprite:   return "Sprite";
-                case AssetKind::Diagnostic: return "Diagnostic";
-                case AssetKind::Mesh:     return "Mesh";
-                case AssetKind::Other:    return "Other";
-            }
-            return "Other";
-        }
+        // KindIcon/KindLabel (the row icon glyph / the peek tooltip's kind
+        // pill text): Panels/AssetPanelModel.hpp's shared definitions, as of
+        // Task 15 -- this file's own copies (originally lifted from
+        // AssetBrowser.cpp's internal-linkage duplicates) are retired in
+        // favor of the one canonical source every representation now shares.
 
         const char* CookStateLabel(CookState cook)
         {

@@ -109,7 +109,7 @@ namespace Arcane::Editor
     // (Rename/Delete, and Cut/Copy/Duplicate -- Paste stays always-enabled,
     // see its MenuItem call).
     // `hasAssetSelection` gates the Assets menu's Show in Explorer / Copy
-    // Path (the Assets panel's last-clicked row -- AssetBrowserState::selected).
+    // Path (the Assets panel's last-clicked row -- AssetPanelModel::selected).
     // `sceneRecents` is the PER-PROJECT scene history (SceneRecents.hpp) that
     // drives File -> Open Recent Scene -- unlike `recents` above, which is the
     // Hub's shared, machine-wide project list.
@@ -156,8 +156,9 @@ namespace Arcane::Editor
                                           const Arcane::PluginVTable* plugin,
                                           PlayLaunchMode& mode, uint64_t logoTex = 0);
 
-    // (The Assets panel is the REAL browser now -- AssetBrowser.hpp's
-    // DrawAssetBrowserPanel; the placeholder stub retired in Slice 6.)
+    // (The Assets panel is the REAL browser now -- AssetsPanel.cpp's
+    // DrawAssetsPanel; the placeholder stub retired in Slice 6, and
+    // DrawAssetBrowserPanel itself retired in the asset-manager arc's Task 15.)
 
 
     // Console panel UI state. Owned by EditorApp so it survives the frame; the
@@ -315,19 +316,19 @@ namespace Arcane::Editor
                            bool* open = nullptr);
 
     // App-level effect the Inspector panel triggers but does not own. UNLIKE
-    // AssetBrowserActions -- which only RETURNS a request and defers every
-    // effect until AFTER DrawAssetBrowserPanel returns ("Row actions the APP
-    // resolves after the draw", AssetBrowser.hpp) -- this callback runs its
+    // AssetsPanelActions -- which only RETURNS a request and defers every
+    // effect until AFTER DrawAssetsPanel returns ("Row actions the APP
+    // resolves after the draw", AssetsPanel.hpp) -- this callback runs its
     // file IO + project-registry mutation SYNCHRONOUSLY, DURING
     // DrawInspectorPanel's own draw; there is no deferred step here. That is
-    // safe because the Inspector draws AFTER the Asset Browser every frame
-    // (EditorApp::MainLoop: DrawEditorUi, which owns DrawAssetBrowserPanel,
+    // safe because the Inspector draws AFTER the Assets panel every frame
+    // (EditorApp::MainLoop: DrawEditorUi, which owns DrawAssetsPanel,
     // runs before DrawSelectionPanels, which owns DrawInspectorPanel) -- the
-    // Browser has already built and fully consumed its own per-frame entry
-    // snapshot by the time this callback can run, so mutating the project's
-    // asset registry here cannot invalidate anything the Browser is still
-    // iterating this frame. The one rule that DOES carry over unchanged: no
-    // dialogs launch from inside a panel draw, on either path.
+    // Assets panel has already built and fully consumed its own per-frame
+    // entry snapshot by the time this callback can run, so mutating the
+    // project's asset registry here cannot invalidate anything the Assets
+    // panel is still iterating this frame. The one rule that DOES carry over
+    // unchanged: no dialogs launch from inside a panel draw, on either path.
     //
     // Sprite-asset arc, Task 4: dropping a TEXTURE onto a sprite-typed
     // AssetRef field mints (or reuses) the wrapping .arcsprite; EditorApp
@@ -454,8 +455,8 @@ namespace Arcane::Editor
         float labelColWidth = 0.0f;
     };
     // `open` is forwarded to ImGui::Begin (the tab's X button; null = no X).
-    // `selectedAsset` (F2b Task 13): the Asset Browser's last-clicked row
-    // (AssetBrowserState::selected). Consulted ONLY when there is no entity
+    // `selectedAsset` (F2b Task 13): the Assets panel's last-clicked row
+    // (AssetPanelModel::selected). Consulted ONLY when there is no entity
     // selection -- an entity selection always wins, matching every other
     // "two things could occupy this panel" tie-break in the editor (e.g. the
     // Material panel's own free function below routes the ACTIVE DOCUMENT,

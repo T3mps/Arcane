@@ -1,5 +1,5 @@
 #include "Panels/EditorPanels.hpp"
-#include "Panels/AssetBrowser.hpp"   // AssetKindOf (F2b Task 13: the texture-asset panel's kind gate)
+#include "Panels/AssetPanelModel.hpp"   // AssetKindOf (F2b Task 13: the texture-asset panel's kind gate)
 #include "Scene/ComponentCatalog.hpp"
 #include "Panels/ConsoleBuffer.hpp"
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind (Assets -> Create, Task 12)

@@ -23,7 +23,7 @@
 // create dialog is in-editor ImGui and returns its result synchronously.
 
 #include "App/EditorApp.hpp"
-#include "Panels/AssetBrowser.hpp"
+#include "Panels/AssetPanelModel.hpp"
 #include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
 
 #include <Arcane/AssetPipeline/ArtifactStore.hpp>   // SweepArtifactOrphans (F2b Task 12)
@@ -1093,9 +1093,6 @@ namespace Arcane::Editor
     // "plugin_load" stage, reused from EditorStages since Task 12) repopulates
     // it for whichever project ends up open -- including the project-less
     // fallback, which correctly leaves this empty.
-    // m_assetBrowser: selection, search, and kind filter all belong to the
-    // outgoing project's registry -- a Guid from it must not survive as the
-    // Assets menu's tracked row.
     // m_createDialog (asset-manager Task 12): an in-flight create dialog's
     // parent/texture Guids and folder index all name the OUTGOING project.
     // m_pendingReports / m_reportDiagnostics (GPU crash diagnostics arc,
@@ -1139,7 +1136,6 @@ namespace Arcane::Editor
         ClearSceneReferences();
         if (m_undo) m_scene.Reset(*m_undo);
         m_recents.scenes = {};
-        m_assetBrowser = {};
         // Asset-manager Task 12: an in-flight create dialog names the OUTGOING
         // project -- its parent/texture Guids belong to that registry and its
         // folder index points into a combo built from that project's folders.

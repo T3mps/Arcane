@@ -1,10 +1,14 @@
-// Asset Browser (Slice 6): the PURE parts -- extension classification, entry
+// Asset classification (originally Slice 6's Asset Browser; the helpers below
+// migrated into Panels/AssetPanelModel.hpp in Task 15 when AssetBrowser.*
+// was retired -- this file's name stayed, since it still tests exactly these
+// surviving helpers): the PURE parts -- extension classification, entry
 // building over a REAL scanned AssetRegistry, and filter/search -- headless.
-// (DrawAssetBrowserPanel is ImGui and desk-verified.)
+// (The old DrawAssetBrowserPanel was ImGui and desk-verified; AssetsPanel.cpp's
+// DrawAssetsPanel is what draws the Assets panel now.)
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "Panels/AssetBrowser.hpp"
+#include "Panels/AssetPanelModel.hpp"
 
 #include <Arcane/Project/AssetRegistry.hpp>
 #include <Arcane/Serialization/SceneSerializer.hpp>   // kSceneJsonVersion
@@ -156,8 +160,9 @@ TEST_CASE("AssetKindOf classifies meshes, heuristic keeps material/texture/sprit
     // resolve Material -- a heuristic that checked "mesh" before "material"
     // would return Mesh here instead and this CHECK would fail. No field is
     // actually named this; it probes the GENERAL ordering rule the same way
-    // the sprite case does, since AssetBrowser.hpp's own comment states the
-    // rule as "mesh" being checked LAST, immediately before the -1 fallback.
+    // the sprite case does, since AssetKindFilterForFieldName's own comment
+    // states the rule as "mesh" being checked LAST, immediately before the -1
+    // fallback.
     CHECK(AssetKindFilterForFieldName("meshMaterial") == static_cast<int>(AssetKind::Material));
 }
 

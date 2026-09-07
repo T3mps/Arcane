@@ -9,27 +9,6 @@ namespace Arcane::Editor
 {
     namespace
     {
-        // Same label strings as AssetBrowser.cpp's file-local KindLabel (that
-        // copy has internal linkage, so it cannot be reused directly from
-        // here); Task 15 unifies them once AssetBrowser.* is retired.
-        const char* RailKindLabel(AssetKind kind)
-        {
-            switch (kind)
-            {
-                case AssetKind::Material:   return "Material";
-                case AssetKind::Texture:    return "Texture";
-                case AssetKind::Audio:      return "Audio";
-                case AssetKind::Font:       return "Font";
-                case AssetKind::Data:       return "Data";
-                case AssetKind::Scene:      return "Scene";
-                case AssetKind::Sprite:     return "Sprite";
-                case AssetKind::Diagnostic: return "Diagnostic";
-                case AssetKind::Mesh:       return "Mesh";
-                case AssetKind::Other:      return "Other";
-            }
-            return "Other";
-        }
-
         // folder = the directory portion of the mount path after "scheme://";
         // root files fold into the synthetic "Content/" bucket (spec s5/s6).
         // name = stem, fileName = stem + extension (rows show this).
@@ -57,9 +36,9 @@ namespace Arcane::Editor
             return e;
         }
 
-        // Bridges an AssetPanelEntry into the AssetBrowser.hpp AssetEntry
-        // shape so MatchesFilter's case-insensitive name/mount-path search is
-        // reused verbatim rather than re-implemented here.
+        // Bridges an AssetPanelEntry into the AssetEntry shape so
+        // MatchesFilter's case-insensitive name/mount-path search is reused
+        // verbatim rather than re-implemented here.
         AssetEntry ToAssetEntry(const AssetPanelEntry& e)
         {
             AssetEntry a;
@@ -405,7 +384,7 @@ namespace Arcane::Editor
         {
             if (kindCounts[i] == 0)
                 continue;   // the rail hides zero-count kinds
-            m_rail.push_back({ i, RailKindLabel(static_cast<AssetKind>(i)), kindCounts[i] });
+            m_rail.push_back({ i, KindLabel(static_cast<AssetKind>(i)), kindCounts[i] });
         }
     }
 
