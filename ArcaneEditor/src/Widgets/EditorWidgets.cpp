@@ -843,24 +843,34 @@ namespace Arcane::Editor
         constexpr float kPad = 8.0f;
         const bool hasIcon = iconUtf8 != nullptr && iconUtf8[0] != '\0';
 
-        // Icon measured/drawn at the AMBIENT font (whatever is active when
-        // StatTile is called, typically the 16px UI default) -- only the
-        // 24px number below gets its own PushFont.
+        // Icon measured at the AMBIENT font (whatever is active when StatTile
+        // is called, typically the 16px UI default) -- BEFORE any PushFont,
+        // and drawn below only AFTER the number's 24px scope is popped, so
+        // measure and draw always share one font scope. (2026-09-07 review
+        // fix: the draw call used to run INSIDE the number's PushFont(24)
+        // below -- ImDrawList::AddText's 2-arg overload resolves font/size
+        // from whatever is active AT THE CALL, not at CalcTextSize time -- so
+        // the glyph actually rendered at 24px while `iconSize` and the
+        // vertical-centering math both used the smaller ambient measurement:
+        // mis-centered, and `iconAdvance` under-reserved room for it.)
         const ImVec2 iconSize = hasIcon ? ImGui::CalcTextSize(iconUtf8) : ImVec2(0.0f, 0.0f);
+        const float iconAdvance = hasIcon ? iconSize.x + ImGui::GetStyle().ItemInnerSpacing.x : 0.0f;
 
         ImGui::PushFont(GetEditorFonts().interRegular, 24.0f);
         const ImVec2 numberSize = ImGui::CalcTextSize(number);
         const float rowY = pos.y + kPad;
-        float x = pos.x + kPad;
+        dl->AddText(ImVec2(pos.x + kPad + iconAdvance, rowY), ImGui::GetColorU32(ImGuiCol_Text), number);
+        ImGui::PopFont();
+
         if (hasIcon)
         {
             const ImU32 iconColor = (variant == 1) ? ImGui::GetColorU32(Theme::kAmber)
                                                     : ImGui::GetColorU32(ImGuiCol_Text);
-            dl->AddText(ImVec2(x, rowY + (numberSize.y - iconSize.y) * 0.5f), iconColor, iconUtf8);
-            x += iconSize.x + ImGui::GetStyle().ItemInnerSpacing.x;
+            // Same ambient scope as the CalcTextSize above (font popped back
+            // by now), centered against the number's measured line height.
+            dl->AddText(ImVec2(pos.x + kPad, rowY + (numberSize.y - iconSize.y) * 0.5f),
+                       iconColor, iconUtf8);
         }
-        dl->AddText(ImVec2(x, rowY), ImGui::GetColorU32(ImGuiCol_Text), number);
-        ImGui::PopFont();
 
         ImGui::PushFont(GetEditorFonts().interRegular, 13.0f);
         dl->AddText(ImVec2(pos.x + kPad, rowY + numberSize.y + 2.0f),
