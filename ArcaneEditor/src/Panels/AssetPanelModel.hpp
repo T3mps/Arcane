@@ -352,9 +352,11 @@ namespace Arcane::Editor
                                    // "textures/patterns/"). Top-level dirs and the
                                    // "Content/" root are their own leaf, so this equals
                                    // groupName unchanged for depth 0.
-        int          groupDepth = 0;  // Nesting depth of this row's OWNING group -- top-
-                                   // level dirs and the "Content/" root are depth 0, each
-                                   // deeper directory +1 (spec s6, 2026-09-07). Set on
+        int          groupDepth = 0;  // Nesting depth of this row's OWNING group -- ROOT-
+                                   // ANCHORED (spec s6, 2026-09-07 2nd revision): only the
+                                   // "Content/" root itself is depth 0; every other
+                                   // directory is 1 + its nesting below Content/ (a top-
+                                   // level dir like "materials/" is depth 1). Set on
                                    // Group rows AND on Asset/Child rows (their owning
                                    // group's depth), so the panel can compute the 20px/
                                    // level indent without re-deriving it from the guid.
@@ -363,18 +365,23 @@ namespace Arcane::Editor
     };
 
     // Nesting depth of a content-directory string ("a/b/c/" style, "Content/" for the
-    // synthetic root -- AssetPanelEntry::folder's own doc comment). Top-level dirs and
-    // the Content/ root are depth 0; each deeper directory adds 1 (spec s6/s11.2,
-    // 2026-09-07). Every folder string here carries a trailing '/' (MakeBaseEntry's
-    // invariant), so depth is just "how many '/' separators, minus the trailing one".
+    // synthetic root -- AssetPanelEntry::folder's own doc comment). ROOT-ANCHORED
+    // (spec s6, 2026-09-07 second revision): "Content/" is the table's real depth-0
+    // root; EVERY other directory is now 1 + its nesting depth below Content/ -- a
+    // top-level directory like "materials/" is depth 1 (not 0), "textures/patterns/"
+    // is depth 2 (not 1). Every folder string here carries a trailing '/'
+    // (MakeBaseEntry's invariant), so for anything but the literal root, depth is
+    // just "how many '/' separators" (no longer minus one -- that subtraction was
+    // exactly what made a top-level dir depth 0; root-anchoring folds that dir in
+    // as Content/'s own child instead).
     inline int GroupDepthOf(std::string_view folder)
     {
-        if (folder.empty())
+        if (folder.empty() || folder == "Content/")
             return 0;
         int slashes = 0;
         for (char c : folder)
             if (c == '/') ++slashes;
-        return slashes > 0 ? slashes - 1 : 0;
+        return slashes;
     }
 
     // Display label for a group row: the LEAF segment only, trailing '/' kept
@@ -390,18 +397,21 @@ namespace Arcane::Editor
         return std::string(slash == std::string_view::npos ? trimmed : trimmed.substr(slash + 1)) + "/";
     }
 
-    // Immediate PARENT content directory of a group folder, or "" if `folder` is
-    // already top-level (or the "Content/" root) -- "textures/patterns/" ->
-    // "textures/"; "materials/" -> ""; "Content/" -> "". Walking this repeatedly
-    // yields the folder's full ancestor chain, root-most last.
+    // Immediate PARENT content directory of a group folder, or "" if `folder` IS
+    // the "Content/" root (the one group with no parent). ROOT-ANCHORED (spec s6,
+    // 2026-09-07 second revision): "textures/patterns/" -> "textures/" (unchanged);
+    // "materials/" -> **"Content/"** (was "" before root-anchoring -- every
+    // top-level directory is now Content/'s own child, not a sibling with no
+    // parent). Walking this repeatedly yields the folder's full ancestor chain,
+    // root-most last -- "Content/" itself always terminates the walk.
     inline std::string GroupParentOf(std::string_view folder)
     {
-        if (folder.empty())
-            return {};
+        if (folder.empty() || folder == "Content/")
+            return {};   // the literal root has no parent
         const std::string_view trimmed = folder.substr(0, folder.size() - 1);
         const std::size_t slash = trimmed.rfind('/');
         if (slash == std::string_view::npos)
-            return {};
+            return "Content/";   // a top-level dir's parent is the root group
         return std::string(trimmed.substr(0, slash + 1));
     }
 

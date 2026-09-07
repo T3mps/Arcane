@@ -139,13 +139,13 @@ TEST_CASE("AssetPanelModel groups by folder and sorts groups/rows lexicographica
     CHECK(rows[2].type == AssetPanelRow::Type::Group);
     CHECK(rows[2].groupName == "fx/");
     CHECK(rows[2].groupLabel == "fx/");
-    CHECK(rows[2].groupDepth == 0);
+    CHECK(rows[2].groupDepth == 1);   // root-anchored (2026-09-07, 2nd revision): "fx/" is Content/'s child now
     CHECK(rows[2].groupCount == 0);   // bridge row -- no file of its own
 
     CHECK(rows[3].type == AssetPanelRow::Type::Group);
     CHECK(rows[3].groupName == "fx/glow/");
     CHECK(rows[3].groupLabel == "glow/");
-    CHECK(rows[3].groupDepth == 1);
+    CHECK(rows[3].groupDepth == 2);   // root-anchored: 1 + nesting below Content/
     CHECK(rows[3].groupCount == 1);
     CHECK(rows[4].guid == particleId);
 
@@ -779,19 +779,20 @@ TEST_CASE("AssetPanelModel nested folder groups carry depth, leaf-segment labels
     const AssetPanelRow* textures = FindGroupRow(rows, "textures/");
     REQUIRE(textures);
     CHECK(textures->groupLabel == "textures/");     // top-level: leaf == full name, unchanged
-    CHECK(textures->groupDepth == 0);
+    CHECK(textures->groupDepth == 1);                // root-anchored (2026-09-07, 2nd revision): Content/'s child
     CHECK(textures->groupCount == 1);                // crate_albedo.png only -- own rows, not rolled up
 
     const AssetPanelRow* patterns = FindGroupRow(rows, "textures/patterns/");
     REQUIRE(patterns);
     CHECK(patterns->groupLabel == "patterns/");      // LEAF segment only, not "textures/patterns/"
-    CHECK(patterns->groupDepth == 1);
+    CHECK(patterns->groupDepth == 2);                // root-anchored: 1 + nesting below Content/
     CHECK(patterns->groupCount == 2);                // tiles_stone.png + noise_blue.png
 
-    // Root "Content/" and other top-level groups are untouched by this pass:
-    // depth 0, label == groupName, exactly as before nesting existed.
-    // (No root-level file in this fixture -- covered structurally by every
-    // pre-existing flat test in this file staying green, case (e).)
+    // Root-anchored (2026-09-07, 2nd revision): this fixture has NO root-level
+    // file, so "Content/" is bridged in as "textures/"'s ancestor (own count
+    // suppressed, depth 0 -- the one group that never shifts). Labels are
+    // untouched by root-anchoring either way (leaf == groupName still holds
+    // for every top-level dir); only DEPTH shifted, covered just above.
 
     // Preorder: "textures/" group precedes its own asset row, which precedes
     // the nested "patterns/" group, which precedes ITS asset rows -- the
@@ -956,7 +957,9 @@ TEST_CASE("AssetPanelModel fold child inside a nested group carries its group's 
 
     const AssetPanelRow* patterns = FindGroupRow(model.Rows(), "textures/patterns/");
     REQUIRE(patterns);
-    CHECK(patterns->groupDepth == 1);
+    // Root-anchored (2026-09-07, 2nd revision): Content/(0) -> textures/(1,
+    // bridged, no own file) -> patterns/(2). Was depth 1 before root-anchoring.
+    CHECK(patterns->groupDepth == 2);
 
     int swatchDepth = -1, fullDepth = -1;
     for (const auto& row : model.Rows())
@@ -964,9 +967,9 @@ TEST_CASE("AssetPanelModel fold child inside a nested group carries its group's 
         if (row.type == AssetPanelRow::Type::Asset && row.guid == swatchTexId) swatchDepth = row.groupDepth;
         if (row.type == AssetPanelRow::Type::Child && row.guid == swatchFullId) fullDepth = row.groupDepth;
     }
-    CHECK(swatchDepth == 1);     // base(=1) + 0 -- the panel adds no fold indent for a plain asset row
-    CHECK(fullDepth == 1);       // base(=1) too -- the panel stacks ITS OWN +20 fold indent on top of
-                                 // this same depth, giving the compound 20*1 + 20 = 40px total
+    CHECK(swatchDepth == 2);     // base(=2) + 0 -- the panel adds no fold indent for a plain asset row
+    CHECK(fullDepth == 2);       // base(=2) too -- the panel stacks ITS OWN +20 fold indent on top of
+                                 // this same depth, giving the compound 20*2 + 20 = 60px total
 
     fs::remove_all(dir, ec);
 }
@@ -1222,8 +1225,12 @@ TEST_CASE("AssetPanelModel cascading collapse reaches through a grandparent (dep
     REQUIRE(FindGroupRow(model.Rows(), "a/"));
     REQUIRE(FindGroupRow(model.Rows(), "a/b/"));
     REQUIRE(FindGroupRow(model.Rows(), "a/b/c/"));
-    CHECK(FindGroupRow(model.Rows(), "a/b/")->groupDepth == 1);
-    CHECK(FindGroupRow(model.Rows(), "a/b/c/")->groupDepth == 2);
+    // Root-anchored (2026-09-07, 2nd revision): Content/(0, bridged, no root
+    // file here) -> a/(1) -> a/b/(2) -> a/b/c/(3). Depths were 0/1/2 before
+    // root-anchoring; the GRANDPARENT-cascade shape this test exists to pin
+    // (closing "a/" hides two levels below it) is unaffected by the shift.
+    CHECK(FindGroupRow(model.Rows(), "a/b/")->groupDepth == 2);
+    CHECK(FindGroupRow(model.Rows(), "a/b/c/")->groupDepth == 3);
 
     // Close the GRANDPARENT "a/" only -- "a/b/" and "a/b/c/" are never
     // touched, so their own open flags stay at the default (open).
@@ -1286,8 +1293,9 @@ TEST_CASE("AssetPanelModel keeps sibling groups with the same leaf label distinc
     CHECK(aPatterns->groupLabel == "patterns/");
     CHECK(bPatterns->groupLabel == "patterns/");           // same LABEL...
     CHECK(aPatterns->groupName != bPatterns->groupName);   // ...but distinct KEYS
-    CHECK(aPatterns->groupDepth == 1);
-    CHECK(bPatterns->groupDepth == 1);
+    // Root-anchored (2026-09-07, 2nd revision): Content/(0)->a or b/(1)->patterns/(2).
+    CHECK(aPatterns->groupDepth == 2);
+    CHECK(bPatterns->groupDepth == 2);
 
     // Closing ONE does not affect the other -- proves the label collision
     // never aliases their open-state (both keyed by the FULL path).
@@ -1297,4 +1305,111 @@ TEST_CASE("AssetPanelModel keeps sibling groups with the same leaf label distinc
     CHECK(HasAssetRow(model.Rows(), bPatternId));          // untouched sibling
 
     fs::remove_all(dir, ec);
+}
+
+// ---------------------------------------------------------------------------
+// Root-anchored folder tree (2026-09-07, 2nd revision): "Content/" becomes the
+// table's real depth-0 root -- every content directory, top-level included,
+// nests as its indented child (dir depth = 1 + nesting below Content/), and
+// Content/ is every directory's ancestor for BOTH cascading collapse and the
+// unconditional bridge. See docs/specs/2026-09-06-asset-manager-redesign-
+// design.md s6/s17 (2nd revision entry) and followup-treeview-impl-report.md's
+// root-anchoring addendum for the ruling this enforces.
+// ---------------------------------------------------------------------------
+
+// (a) A top-level directory is now Content/'s CHILD, not its sibling:
+// collapsing Content/ empties the WHOLE table (every directory cascades
+// through it), and reopening Content/ restores each directory's own
+// independently-kept open state -- the same cascade/restore contract §6
+// already specified for any parent/child pair, now exercised at the root.
+TEST_CASE("AssetPanelModel root-anchored: collapsing Content/ empties the whole table; reopening restores each dir's own state", "[editor]")
+{
+    NestedFixture f = MakeNestedFixture("arcane_asset_panel_model_root_anchor_cascade_test");
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+
+    // Baseline: "textures/" is Content/'s own child (depth 1) -- GroupParentOf
+    // must resolve it to "Content/", not "" (top-level/no-parent), which is
+    // exactly what root-anchoring changes.
+    const AssetPanelRow* textures = FindGroupRow(model.Rows(), "textures/");
+    REQUIRE(textures);
+    CHECK(textures->groupDepth == 1);
+    REQUIRE(FindGroupRow(model.Rows(), "textures/patterns/"));
+    CHECK(HasAssetRow(model.Rows(), f.crateId));
+    CHECK(HasAssetRow(model.Rows(), f.tilesId));
+
+    // Independently collapse "textures/patterns/" (its own toggle) BEFORE
+    // touching Content/ -- this is the sub-state that must survive the
+    // Content/ round-trip below.
+    model.SetGroupOpen("textures/patterns/", false);
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.tilesId));
+
+    // Collapse Content/ ITSELF -- every directory (top-level "textures/"
+    // included) must vanish from Rows(), since Content/ is now their common
+    // ancestor. Content/'s own header stays (own-collapse rule, unchanged).
+    model.SetGroupOpen("Content/", false);
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+    REQUIRE(FindGroupRow(model.Rows(), "Content/"));       // Content/'s own header stays
+    CHECK_FALSE(FindGroupRow(model.Rows(), "textures/"));           // cascaded away
+    CHECK_FALSE(FindGroupRow(model.Rows(), "textures/patterns/"));  // cascaded away, 2 hops
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.crateId));
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.tilesId));
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.noiseId));
+
+    // Reopen Content/ -- "textures/" comes back (it was never individually
+    // touched, so still open), but "textures/patterns/" restores to its OWN
+    // previously-set CLOSED state -- proving Content/'s toggle never
+    // clobbers a descendant's independent flag, exactly like any other
+    // parent/child pair in this tree.
+    model.SetGroupOpen("Content/", true);
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+    REQUIRE(FindGroupRow(model.Rows(), "textures/"));
+    CHECK(HasAssetRow(model.Rows(), f.crateId));
+    REQUIRE(FindGroupRow(model.Rows(), "textures/patterns/"));   // subtree back
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.tilesId));           // ...but still collapsed, as left
+    CHECK_FALSE(HasAssetRow(model.Rows(), f.noiseId));
+
+    std::error_code cleanupEc;
+    fs::remove_all(f.dir, cleanupEc);
+}
+
+// (b) Content/ bridge-only case: a project with ZERO loose root files still
+// renders a Content/ group row -- the unconditional ancestor bridge's own
+// unconditional case (spec s6: "Content/ is this bridge's unconditional
+// case... because every other group now needs it as an ancestor row to hang
+// from"). Its count is suppressed (own entries are genuinely zero), and its
+// subtree is fully reachable underneath it.
+TEST_CASE("AssetPanelModel root-anchored: Content/ bridges in with zero root files, and its subtree is reachable", "[editor]")
+{
+    NestedFixture f = MakeNestedFixture("arcane_asset_panel_model_root_anchor_bridge_test");
+    // MakeNestedFixture writes no root-level file -- exactly the shape this
+    // case needs (see its own doc comment above).
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&f.registry, providers));
+
+    const AssetPanelRow* content = FindGroupRow(model.Rows(), "Content/");
+    REQUIRE(content);              // bridged in despite zero root files
+    CHECK(content->groupDepth == 0);
+    CHECK(content->groupCount == 0);   // no root file of its own -- rider 8 suppresses the "0" in the UI
+
+    // The whole subtree is reachable underneath the bridge, by default (open):
+    // "textures/" (depth 1) and its own nested "textures/patterns/" (depth 2),
+    // with their asset rows visible.
+    REQUIRE(FindGroupRow(model.Rows(), "textures/"));
+    REQUIRE(FindGroupRow(model.Rows(), "textures/patterns/"));
+    CHECK(HasAssetRow(model.Rows(), f.crateId));
+    CHECK(HasAssetRow(model.Rows(), f.tilesId));
+    CHECK(HasAssetRow(model.Rows(), f.noiseId));
+
+    std::error_code cleanupEc;
+    fs::remove_all(f.dir, cleanupEc);
 }
