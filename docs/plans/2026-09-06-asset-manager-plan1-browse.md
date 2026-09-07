@@ -60,7 +60,7 @@ this plan implements its §3–§8, §11 fidelity rules, Plan-1 column of §2.
   — instance-aware (walks `parent`, bounded depth 8, cycle-safe). Later tasks
   (4, 8, 14) call exactly this name.
 
-- [ ] **Step 1: Write the failing tests** in `AssetReferencesTest.cpp` (tag
+- [x] **Step 1: Write the failing tests** in `AssetReferencesTest.cpp` (tag
   `[assets]`, modeled on `AssetBrowserTest.cpp:57`'s temp-dir + real-files
   pattern — create facade via `Assets::Create()`, install a resolver lambda that
   maps test guids to the temp files):
@@ -115,12 +115,12 @@ TEST_CASE("MaterialSurfaceFor reads the kind string; instances resolve through p
   (`Guid::FromString` vs a ctor) in `Arcane/Guid.hpp` and match it; same for
   `AssetId`'s member name.
 
-- [ ] **Step 2: Add the test file to the ArcaneTests premake file list**, regenerate
+- [x] **Step 2: Add the test file to the ArcaneTests premake file list**, regenerate
   (`GenerateProjects.bat`), build Debug, run
   `ArcaneTests.exe "[assets]" --rng-seed time` from the exe dir. Expected: FAIL to
   compile (`MaterialSurfaceFor` undeclared).
 
-- [ ] **Step 3: Implement.** In `Assets.hpp`, append after `SetCookPendingProbe`
+- [x] **Step 3: Implement.** In `Assets.hpp`, append after `SetCookPendingProbe`
   (with a doc comment citing the v21 tail-append precedent):
 
 ```cpp
@@ -171,10 +171,10 @@ std::optional<MaterialSurface> MaterialSurfaceFor(const Guid& id) override
   the entry will be EXTENDED by `ListAssetReferences` (Task 2) under this same
   number.
 
-- [ ] **Step 4: Build + run** `ArcaneTests.exe "[assets]"` from the exe dir.
+- [x] **Step 4: Build + run** `ArcaneTests.exe "[assets]"` from the exe dir.
   Expected: PASS (including the pre-existing `[assets]` cases — none may regress).
 
-- [ ] **Step 5: Commit** — `feat(assets): MaterialSurfaceFor facade query (ABI v22)`
+- [x] **Step 5: Commit** — `feat(assets): MaterialSurfaceFor facade query (ABI v22)`
 
 ---
 
@@ -199,7 +199,7 @@ std::optional<MaterialSurface> MaterialSurfaceFor(const Guid& id) override
     virtual std::optional<std::vector<AssetRef>> ListAssetReferences(const Guid& id) = 0;
 ```
 
-- [ ] **Step 1: Write the failing tests** (same file/pattern as Task 1). Fixtures
+- [x] **Step 1: Write the failing tests** (same file/pattern as Task 1). Fixtures
   and expectations:
   - `plain.arcsprite` (`{"id":..., "texture":"<texGuid>", "ppu":64.0, ...}`, no
     slicing keys) → exactly one ref: `{texGuid, DerivesFrom}`.
@@ -216,10 +216,10 @@ std::optional<MaterialSurface> MaterialSurfaceFor(const Guid& id) override
   - a `.png` guid → empty list (leaf), NOT `nullopt`.
   - an unresolvable guid → `nullopt`.
 
-- [ ] **Step 2: Build + run.** Expected: FAIL to compile (`ListAssetReferences`
+- [x] **Step 2: Build + run.** Expected: FAIL to compile (`ListAssetReferences`
   undeclared).
 
-- [ ] **Step 3: Implement.** Extraction switch keyed by the resolved path's
+- [x] **Step 3: Implement.** Extraction switch keyed by the resolved path's
   lowercase extension (reuse the file's own classification helpers if present in
   `Assets.cpp`; else a local `LowerExt`):
 
@@ -278,9 +278,9 @@ std::optional<std::vector<AssetRef>> ListAssetReferences(const Guid& id) overrid
   Extend the v22 ledger entry (`AssetRef`/`AssetRefKind` are new BY-VALUE types in
   the header + one appended virtual; tail-append, no slot moves).
 
-- [ ] **Step 4: Build + run** `"[assets]"`. Expected: PASS.
+- [x] **Step 4: Build + run** `"[assets]"`. Expected: PASS.
 
-- [ ] **Step 5: Commit** — `feat(assets): ListAssetReferences (sprite/material/mesh extractors)`
+- [x] **Step 5: Commit** — `feat(assets): ListAssetReferences (sprite/material/mesh extractors)`
 
 ---
 
@@ -298,7 +298,7 @@ std::optional<std::vector<AssetRef>> ListAssetReferences(const Guid& id) overrid
 - Produces: scene refs from `ListAssetReferences`, `References` kind, deduplicated,
   filtered to guids the caller can resolve.
 
-- [ ] **Step 1: Write the failing tests.** Fixture: a minimal scene JSON with (a) a
+- [x] **Step 1: Write the failing tests.** Fixture: a minimal scene JSON with (a) a
   component guid field `"material": {"hi": H, "lo": L}` for a registered material,
   (b) an identity field `"id": {"hi":..., "lo":...}` that must NOT be reported,
   (c) a nil `{"hi":0,"lo":0}` that must NOT be reported, (d) a nonzero pair that
@@ -311,9 +311,9 @@ std::optional<std::vector<AssetRef>> ListAssetReferences(const Guid& id) overrid
   own encoding — find the serializer's guid write (SceneSerializer.hpp) and reuse
   its exact packing rather than guessing byte order.
 
-- [ ] **Step 2: Build + run.** Expected: scene case FAILS (stub returns `{}`).
+- [x] **Step 2: Build + run.** Expected: scene case FAILS (stub returns `{}`).
 
-- [ ] **Step 3: Implement** — recursive walk of the scene JSON:
+- [x] **Step 3: Implement** — recursive walk of the scene JSON:
 
 ```cpp
 static void ScanSceneJson(const nlohmann::json& node,
@@ -349,10 +349,10 @@ static void ScanSceneJson(const nlohmann::json& node,
   `resolvable` = "the installed AssetResolver answers for this guid". Deduplicate
   `out` by guid before returning.
 
-- [ ] **Step 4: Build + run** `"[assets]"`, then the FULL `~[gpu]` suite from the
+- [x] **Step 4: Build + run** `"[assets]"`, then the FULL `~[gpu]` suite from the
   exe dir. Expected: PASS, no regressions.
 
-- [ ] **Step 5: Commit** — `feat(assets): scene structural reference scan + format coverage test`
+- [x] **Step 5: Commit** — `feat(assets): scene structural reference scan + format coverage test`
 
 ---
 
@@ -450,7 +450,7 @@ namespace Arcane::Editor
   zero-count kinds; `Health().total` counts every registry entry (folded children
   included); rows honor group-open state.
 
-- [ ] **Step 1: Write the failing tests** — real temp dir + real files +
+- [x] **Step 1: Write the failing tests** — real temp dir + real files +
   `registry.ScanContent(dir, "game")` (the `AssetBrowserTest.cpp:57` pattern),
   with provider lambdas faked in-test (no engine facade). Cases: (a) grouping +
   ordering; (b) fold (a 1:1 sprite disappears as peer, appears under expanded
@@ -460,16 +460,16 @@ namespace Arcane::Editor
   (count provider invocations in the lambda); (g) `ResetForProjectSwitch` clears
   selection; (h) `Health` counts refused/queued from the provider.
 
-- [ ] **Step 2: Regenerate, build, run** `"[editor]"`. Expected: FAIL to compile.
+- [x] **Step 2: Regenerate, build, run** `"[editor]"`. Expected: FAIL to compile.
 
-- [ ] **Step 3: Implement** `AssetPanelModel.cpp`: entry cache
+- [x] **Step 3: Implement** `AssetPanelModel.cpp`: entry cache
   `std::unordered_map<Guid, AssetPanelEntry>` + `dirty` set + `allDirty` flag +
   cached rows/rail rebuilt when `rowsDirty`. Keep every function out of ImGui —
   this TU compiles in the test gate.
 
-- [ ] **Step 4: Build + run** `"[editor]"`. Expected: PASS.
+- [x] **Step 4: Build + run** `"[editor]"`. Expected: PASS.
 
-- [ ] **Step 5: Commit** — `feat(editor): AssetPanelModel — cached, foldable asset model`
+- [x] **Step 5: Commit** — `feat(editor): AssetPanelModel — cached, foldable asset model`
 
 ---
 
@@ -488,7 +488,7 @@ namespace Arcane::Editor
 - Produces: `AssetPanelProviders EditorApp::MakeAssetPanelProviders();` and the
   invariant later tasks rely on: **the model is current before any panel draw**.
 
-- [ ] **Step 1: Write the failing test** for the pure cook-state mapping (new free
+- [x] **Step 1: Write the failing test** for the pure cook-state mapping (new free
   function in `AssetPanelModel.hpp`):
 
 ```cpp
@@ -501,9 +501,9 @@ namespace Arcane::Editor
   Cases: refused wins over pending; texture pending → Queued; material never
   Queued; unknown-kind default Cooked.
 
-- [ ] **Step 2: Run** `"[editor]"` — FAIL (undeclared).
+- [x] **Step 2: Run** `"[editor]"` — FAIL (undeclared).
 
-- [ ] **Step 3: Implement + wire.**
+- [x] **Step 3: Implement + wire.**
   - `CookStateOf` in the model TU.
   - `MakeAssetPanelProviders()` in `EditorAppProject.cpp`: `surfaceFor`/`refsFor`
     call the facade; `cookStateFor` = `CookStateOf(kind, HasPermanentCookDiag(g), IsCookPending(g))`
@@ -520,10 +520,10 @@ namespace Arcane::Editor
     `m_assetModel.RebuildIfDirty(proj ? &proj->Registry() : nullptr, m_assetPanelProviders);`
     (cache the providers struct as a member, built once per project open).
 
-- [ ] **Step 4: Build editor + tests; run** `"[editor]"`. Expected: PASS; editor
+- [x] **Step 4: Build editor + tests; run** `"[editor]"`. Expected: PASS; editor
   boots ReferenceProject with no behavior change (old panel still drawing).
 
-- [ ] **Step 5: Commit** — `feat(editor): asset model wired to poll/cook/mint seams`
+- [x] **Step 5: Commit** — `feat(editor): asset model wired to poll/cook/mint seams`
 
 ---
 
@@ -558,7 +558,7 @@ namespace Arcane::Editor
   label-first params, doc comment with the spec citation, `[[nodiscard]]` on
   predicates.
 
-- [ ] **Step 1–4:** These are ImGui draw helpers — the test gate does not compile
+- [x] **Step 1–4:** These are ImGui draw helpers — the test gate does not compile
   them (`AssetBrowserTest.cpp:1-3` discipline); correctness is desk-verified in
   Task 16. Implement with drawlist primitives: `AssetPill` = `GetWindowDrawList()`
   rect + border (`ImGui::GetColorU32` of theme tokens) around a 12px
@@ -570,7 +570,7 @@ namespace Arcane::Editor
   of `ImGui::Image` (18×18) or the icon glyph, then the name. Build the editor;
   it must compile clean with zero warnings.
 
-- [ ] **Step 5: Commit** — `feat(editor): asset panel widget vocabulary (pill/strip/row)`
+- [x] **Step 5: Commit** — `feat(editor): asset panel widget vocabulary (pill/strip/row)`
 
 ---
 
@@ -590,7 +590,7 @@ namespace Arcane::Editor
   direct resolve. Sprites: resolve their referenced texture. Materials: Task 8's
   harvester (until then 0). Everything else: 0.
 
-- [ ] **Step 1: Implement the lambda** in `EditorApp.cpp` (no new cache — the
+- [x] **Step 1: Implement the lambda** in `EditorApp.cpp` (no new cache — the
   chrome `NriTextureCache` IS the cache, and `OnCookCompleted` already invalidates
   it at `EditorAppProject.cpp:443-444`):
 
@@ -613,10 +613,10 @@ m_assetServices.resolveAssetThumb = [this](const Arcane::Guid& guid) -> std::uin
 };
 ```
 
-- [ ] **Step 2: Build; boot ReferenceProject headless smoke** (the editor exe must
+- [x] **Step 2: Build; boot ReferenceProject headless smoke** (the editor exe must
   still open clean). Expected: no behavior change yet (nothing calls the seam).
 
-- [ ] **Step 3: Commit** — `feat(editor): asset thumbnail resolver seam (chrome texture cache)`
+- [x] **Step 3: Commit** — `feat(editor): asset thumbnail resolver seam (chrome texture cache)`
 
 ---
 
@@ -650,7 +650,7 @@ public:
 };
 ```
 
-- [ ] **Step 1: Implement.** Preview content: the same quad-on-checkerboard the
+- [x] **Step 1: Implement.** Preview content: the same quad-on-checkerboard the
   shader editor's preview renders (real shaded pixels of the actual material —
   sprite and fullscreen surfaces via the `Batcher2D` path, mesh-surface materials
   via the mesh-preview path if trivially reachable, else the same quad; note
@@ -659,14 +659,14 @@ public:
   the stored bytes; re-`Invalidate` replaces the bytes and invalidates the cache
   entry (`NriTextureCache::Invalidate` + `ImGuiNri::InvalidateUserTextureNow`
   obligations per `NriGraphContext.hpp:163-175`).
-- [ ] **Step 2: Wire invalidation:** material mtime change in `PollAssetWatch`
+- [x] **Step 2: Wire invalidation:** material mtime change in `PollAssetWatch`
   (`:280-323`), material save (the shader editor's save path — find
   `SaveMaterialAsset` call sites in `ShaderEditorDocument.cpp`), cook completion
   for the material's textures, and **parent-chain fan-out**: when material M
   changes, also `Invalidate` every registry material whose `MaterialSurfaceFor`
   chain passes through M (walk the model's refs: instances hold a `DerivesFrom`
   ref to M).
-- [ ] **Step 3: Persist harvests (the UE lesson — persisted thumbs beat re-renders;
+- [x] **Step 3: Persist harvests (the UE lesson — persisted thumbs beat re-renders;
   cf. UE's in-package `FObjectThumbnail` + `EThumbnailRenderFrequency::OnAssetSave`):**
   after a successful harvest, write the 64px RGBA to
   `<project>/Saved/Thumbnails/<guid>.png` via `Arcane::WriteThumbnailPngRgba`
@@ -676,16 +676,16 @@ public:
   whose `.arcmat` mtime is newer than the PNG's. Each `Invalidate` deletes the
   PNG's claim (re-harvest overwrites it). This turns N-device-idles-at-boot into
   zero for an unchanged project.
-- [ ] **Step 4: Pump site + ordering:** call `m_materialThumbs->Pump(...)` once per
+- [x] **Step 4: Pump site + ordering:** call `m_materialThumbs->Pump(...)` once per
   frame in `PumpEditorDocuments` (next to `PollAssetWatch`). The queue is a LIFO
   stack and the Browse draw pushes any *visible* un-thumbed material each frame —
   so the frame's one harvest is always something on screen (UE's pool is LIFO for
   exactly this reason, `AssetThumbnail.cpp:2104-2120`).
-- [ ] **Step 4: Build + boot ReferenceProject; watch the log** — three materials
+- [x] **Step 4: Build + boot ReferenceProject; watch the log** — three materials
   harvest within ~3 frames, no device-lost, no per-frame idle after that.
   `[gpu]`-adjacent risk: run `ArcaneTests.exe "[gpu]"` once to confirm no
   regression (offscreen contexts are test-covered).
-- [ ] **Step 5: Commit** — `feat(editor): live material preview thumbnails (64px harvest)`
+- [x] **Step 5: Commit** — `feat(editor): live material preview thumbnails (64px harvest)`
 
 ---
 
@@ -734,7 +734,7 @@ public:
                                        bool* open = nullptr);
 ```
 
-- [ ] **Step 1: Implement the shell** (Browse body is a placeholder child region
+- [x] **Step 1: Implement the shell** (Browse body is a placeholder child region
   until Task 10): `ImGui::Begin("Assets", open)`; toolbar row = `+ Create`
   button (`ICON_LC_PLUS " Create"`) which opens `BeginPopup("##createmenu")` — the
   unified menu per the CreateFlow mock (`Material…`, `Material Instance…`,
@@ -748,15 +748,15 @@ public:
   left `N assets · 1 selected` / `X of N shown` (model `Filtered()` /
   `ShownAssetCount()`), right digest = amber triangle glyph + `%d refused` in
   `kAmber` + dim `· %d cooking · — unused` from `model.Health()`.
-- [ ] **Step 2: Swap the call site** (`EditorAppFrame.cpp:2030-2035`): draw
+- [x] **Step 2: Swap the call site** (`EditorAppFrame.cpp:2030-2035`): draw
   `DrawAssetsPanel(m_assetsPanel, m_assetModel, ...)`; map the action fields the
   old consumer already handles onto `ConsumeBrowserActions` equivalents (extend
   `ConsumeBrowserActions`'s signature to take the new struct; `copyGuid` copies
   `guid.ToString()` to the clipboard beside `copyPath` at `:2352`). The old
   `DrawAssetBrowserPanel` is no longer called (files still present until Task 14).
-- [ ] **Step 3: Build + boot** — panel shows toolbar/empty body/bottom bar; counts
+- [x] **Step 3: Build + boot** — panel shows toolbar/empty body/bottom bar; counts
   live; lens strip present with two disabled buttons.
-- [ ] **Step 4: Commit** — `feat(editor): AssetsPanel shell with lens strip + digest bar`
+- [x] **Step 4: Commit** — `feat(editor): AssetsPanel shell with lens strip + digest bar`
 
 ---
 
@@ -771,13 +771,13 @@ public:
   payload — existing drop targets keep working).
 - Produces: the Browse body: left rail child (180px), center table child.
 
-- [ ] **Step 1: Implement the rail:** child window 180px, `kChrome`-style
+- [x] **Step 1: Implement the rail:** child window 180px, `kChrome`-style
   background band; rows 26px via `RowWithThumb` (icon = kind Lucide glyph, thumb
   0); trailing count right-aligned dim; hover shows the `+` mini-button for
   creatable kinds (Materials/Sprites/Meshes/Scenes) which sets
   `requestCreateKind` for that kind; click sets `state.railKind` +
   `model.SetKindFilter`.
-- [ ] **Step 2: Implement the table:** one `BeginTable("##assets", 1,
+- [x] **Step 2: Implement the table:** one `BeginTable("##assets", 1,
   RowBg | ScrollY | NoSavedSettings)`; iterate `model.Rows()` **through an
   `ImGuiListClipper`** (rows are fixed 24px, so the clipper is exact; group rows
   count as rows — the flat row vector makes this trivial). Per clipped row:
@@ -791,7 +791,7 @@ public:
   collapsed children; refused rows prepend `ICON_LC_TRIANGLE_ALERT` in `kAmber`);
   expander chevron on textures with children (toggles `SetChildrenOpen`);
   `Type::Child` → indented (`indent = 20.0f`) dim-name row with `"derived"` pill.
-- [ ] **Step 3: Interactions on every asset/child row:** click →
+- [x] **Step 3: Interactions on every asset/child row:** click →
   `model.Select(guid)`; double-click → resolve + `docs.OpenPath` / scene →
   `actions.openScene` (copy the routing from `AssetBrowser.cpp:162-179`
   verbatim); drag source (payload identical to `AssetBrowser.cpp:128-134`);
@@ -803,13 +803,13 @@ public:
   image/icon + name + kind/subkind pills + dim path + dim cook line + dim guid.
   Keyboard: after the loop, if the table is focused, Up/Down move `Select`
   through visible rows, Enter opens.
-- [ ] **Step 4: Scroll-to-selection:** when
+- [x] **Step 4: Scroll-to-selection:** when
   `state.seenSelectionStamp != model.selectionStamp`, `SetScrollHereY` on the
   selected row's draw and update the stamp.
-- [ ] **Step 5: Build + desk smoke** on ReferenceProject: fold visible (uv_marker
+- [x] **Step 5: Build + desk smoke** on ReferenceProject: fold visible (uv_marker
   single row + expandable child), groups collapse, search filters, drag onto an
   inspector texture slot still works. Run full `~[gpu]` tests (no regressions).
-- [ ] **Step 6: Commit** — `feat(editor): Browse lens — rail + folder-grouped table`
+- [x] **Step 6: Commit** — `feat(editor): Browse lens — rail + folder-grouped table`
 
 ---
 
@@ -818,7 +818,7 @@ public:
 **Files:**
 - Modify: `ArcaneEditor/src/Panels/AssetsPanel.cpp`
 
-- [ ] **Step 1: Implement:** right child 330px (hidden when panel width < 720px):
+- [x] **Step 1: Implement:** right child 330px (hidden when panel width < 720px):
   140px thumb (seam, icon fallback), name (stem) + kind pill + subkind/inst
   pills, `path` row (mount path, ellipsized via `EllipsisToWidth`), `guid` row
   (dim; click copies — `ImGui::SetClipboardText`), `cook` row (state string;
@@ -827,7 +827,7 @@ public:
   Open (same routing as double-click), Show in Explorer, Copy Path + the
   kind-specific action (materials: `New Instance…` → `createInstanceOf`; scenes:
   `Set as Boot Scene`; textures: `Create Sprite` → `createSpriteFrom`).
-- [ ] **Step 2: Build + desk smoke:** selection from table updates pane; empty
+- [x] **Step 2: Build + desk smoke:** selection from table updates pane; empty
   selection shows a dim "no selection" line. Commit —
   `feat(editor): Browse preview pane`
 
@@ -894,7 +894,7 @@ public:
         const Arcane::Project& project);
 ```
 
-- [ ] **Step 1: Failing tests** for `ValidateCreateName` (empty, illegal chars,
+- [x] **Step 1: Failing tests** for `ValidateCreateName` (empty, illegal chars,
   path separators, duplicate-in-dir via a temp dir, valid) — `[editor]`.
   Validation rules, in UE's deliberate cheap→expensive order
   (`AssetViewUtils.cpp:1420-1509` precedent): (1) character deny-set
@@ -903,14 +903,14 @@ public:
   the target directory — with a DISTINCT message ("a <kind> named X already
   exists here") from the illegal-char message, so the fix is obvious. Return
   `{ok, message}`; the dialog shows `message` dim under the Name well.
-- [ ] **Step 2: Run** — FAIL. **Step 3: Implement** validation + the ImGui modal
+- [x] **Step 2: Run** — FAIL. **Step 3: Implement** validation + the ImGui modal
   per the CreateFlow mock: Name well, Location combo (distinct registry folders +
   the kind default `materials/`|`meshes/`|`sprites/`|`scenes/`), kind fields:
   Material → surface combo (labels `sprite`/`mesh`/`post`); Instance → parent
   picker (materials only, subkind pills, `"materials only · kind-filtered"`
   caption); Create disabled until `ValidateCreateName` passes + required picks
   made. Cancel/× closes.
-- [ ] **Step 4: Rewire the mints.** In `EditorApp`: a single
+- [x] **Step 4: Rewire the mints.** In `EditorApp`: a single
   `void BeginCreateAsset(const CreateAssetRequest&);` opens the modal; the panel's
   action fields map to it in `ConsumeBrowserActions`:
   `if (actions.requestCreateKind >= 0) BeginCreateAsset({ (CreateAssetKind)actions.requestCreateKind, actions.createPrefillParent });`
@@ -928,7 +928,7 @@ public:
   reads them. Assets ▸ Create menu becomes: `Material…`, `Material Instance…`,
   separator, `Mesh…`, `Sprite…`, `Scene…` (last three functional after Task 13 —
   raise the request now; the dialog handles them then).
-- [ ] **Step 5: Build + run tests + desk smoke** (create a sprite-kind material
+- [x] **Step 5: Build + run tests + desk smoke** (create a sprite-kind material
   into `materials/`; it registers, opens, appears selected in Browse). Commit —
   `feat(editor): unified CreateAssetRequest + shared create dialog (material/instance)`
 
@@ -940,12 +940,12 @@ public:
 - Modify: `ArcaneEditor/src/Panels/CreateAssetDialog.cpp`, `AssetsPanel.cpp`,
   `EditorAppFrame.cpp`, `EditorAppProject.cpp`
 
-- [ ] **Step 1: Dialog fields:** Sprite → texture picker (textures only) + the
+- [x] **Step 1: Dialog fields:** Sprite → texture picker (textures only) + the
   visible mint-or-reuse notice: if the chosen texture already has a 1:1 derived
   sprite (`model` fold data), show `"a 1:1 sprite already exists"` + an `Open
   existing` button (closes dialog, selects+opens it). Scene → `set as boot`
   checkbox.
-- [ ] **Step 2: Dispatch:** Mesh → generalize `MintMeshAsset` to take a target
+- [x] **Step 2: Dispatch:** Mesh → generalize `MintMeshAsset` to take a target
   path (name/folder from the dialog) instead of the hardcoded
   `Content/New Mesh[-N]` (`EditorAppProject.cpp:671-698`); Sprite → mint via the
   `MintOrReuseSpriteForTexture` core but honoring the dialog's name/folder for
@@ -962,11 +962,11 @@ else { m_runtime->RegisterCreatedAsset(target); if (r.setAsBoot) /* existing set
   (Executor: confirm `Scene::CreateEmpty(Astra::Registry&)`'s exact signature
   from `EditorAppScene.cpp:176-186`'s call and that `SaveSceneFile` accepts a
   registry without a live session — it does, it takes `const Astra::Registry&`.)
-- [ ] **Step 3: Producers:** rail `+` (per-kind request), context `Create ▸`
+- [x] **Step 3: Producers:** rail `+` (per-kind request), context `Create ▸`
   submenu, Assets menu entries — all now functional. **Delete the `+ Mesh`
   toolbar button path**: `createMesh` flag removed from actions; its consumer
   block (`EditorAppFrame.cpp:2307-2321`) routes through the dialog instead.
-- [ ] **Step 4: Build + tests + desk smoke** (each of the five kinds creates,
+- [x] **Step 4: Build + tests + desk smoke** (each of the five kinds creates,
   registers, lands selected; created scene loads via double-click). Commit —
   `feat(editor): mesh/sprite/scene create flows; + Mesh button retired`
 
@@ -991,7 +991,7 @@ else { m_runtime->RegisterCreatedAsset(target); if (r.setAsBoot) /* existing set
     // "SpriteRenderer" -> Sprite, "MeshRenderer" -> Mesh, else -1.
 ```
 
-- [ ] **Step 1: Failing test** (the two mappings + unknown → -1). **Step 2:** run,
+- [x] **Step 1: Failing test** (the two mappings + unknown → -1). **Step 2:** run,
   FAIL. **Step 3:** implement; in `InspectorView.cpp`'s material-guid picker
   population, filter candidates by `surfaceFor` (thread the provider or model in
   through `InspectorServices` — follow how `resolveTexturePreview` reached it,
@@ -1018,34 +1018,34 @@ else { m_runtime->RegisterCreatedAsset(target); if (r.setAsBoot) /* existing set
 - Rename: `ArcaneTests/src/AssetBrowserTest.cpp` → keep the file name (it tests
   surviving helpers) but update its header comment to name the new home
 
-- [ ] **Step 1:** move + fix includes + regenerate + build ALL configs
+- [x] **Step 1:** move + fix includes + regenerate + build ALL configs
   (Debug/Release). Grep gate: `grep -riw "AssetBrowser" ArcaneEditor ArcaneTests`
   → zero hits outside comments/history (path-exclude sweep method).
-- [ ] **Step 2:** full `~[gpu]` suite green. **Step 3:** Commit —
+- [x] **Step 2:** full `~[gpu]` suite green. **Step 3:** Commit —
   `refactor(editor): retire AssetBrowser.* — helpers live in AssetPanelModel`
 
 ---
 
 ### Task 16: Gate, re-bless, baselines, desk checklist
 
-- [ ] **Step 1:** Build Debug + Release + Dist; run the FULL suite (`~[gpu]` for
+- [x] **Step 1:** Build Debug + Release + Dist; run the FULL suite (`~[gpu]` for
   baseline comparison AND one unfiltered run); record fresh assertion counts —
   derive, never recall (run the command, paste from its output).
-- [ ] **Step 2:** Golden gate: run `golden-gate.ps1`; the editor-ui lane will diff
+- [x] **Step 2:** Golden gate: run `golden-gate.ps1`; the editor-ui lane will diff
   against a panel that no longer exists → re-bless (`--bless` pointed at the
   SOURCE project, never the staged tree) and **restage to BOTH hosts**; re-run;
   assert on `gatePassed` + per-lane `verdict` in `golden-gate-summary.json`,
   never the exit code. Beware `golden-gate.ps1` stages `Content/` additively —
   check for stray accumulated files first.
-- [ ] **Step 3:** Baselines/addendum catch-up commit (spec addendum: LANDED note +
+- [x] **Step 3:** Baselines/addendum catch-up commit (spec addendum: LANDED note +
   any deviations), then the plan's ledger updated.
-- [ ] **Step 4: Desk checklist for the user** (present, don't self-certify):
+- [x] **Step 4: Desk checklist for the user** (present, don't self-certify):
   side-by-side at 960×620 vs the B+C board and CreateFlow board renders; fold
   behavior on uv_marker; create each of the five kinds; drag row → inspector
   slot; peek tooltip delay; refused-asset row marker + digest count (temporarily
   break a cook to see it); keyboard nav; narrow-dock preview collapse; material
   thumbs live-update on material edit.
-- [ ] **Step 5: Commit** — `chore(editor): plan-1 gate + baselines catch-up`
+- [x] **Step 5: Commit** — `chore(editor): plan-1 gate + baselines catch-up`
   (push only after the user's desk pass, per house convention).
 
 ---
@@ -1066,3 +1066,37 @@ else { m_runtime->RegisterCreatedAsset(target); if (r.setAsBoot) /* existing set
   copy the fullscreen starter-graph branch and adjust the kind string + template,
   checking `MaterialTemplateFile(MaterialSurface::Sprite)` exists
   (`MaterialSource.cpp:330-335` ensures loudly for Mesh only).
+
+---
+
+## COMPLETE — 2026-09-06
+
+All 16 tasks landed on Arcane `main` in place, **`59dd6414..2f5dc391`** (Tasks 1–15)
+plus this task's `chore(editor): plan-1 gate + baselines catch-up`. Every task was
+reviewed clean (six needed one fix round each, one needed two); the full execution
+ledger — dispatches, rulings, fix rounds and every deferred minor — is
+`.superpowers/sdd/2026-09-06-asset-manager-plan1/progress.md`.
+
+**Close figures, all DERIVED from their own run's final line** (never recalled):
+
+- Build: `Arcane.slnx` Debug / Release / Dist — **0 warnings, 0 errors** each.
+- `ArcaneTests.exe "~[gpu]"`, run FROM the exe dir: Debug **54270 assertions / 1462
+  cases** (seed 829257050), Release **54270 / 1462** (seed 1685340276), Dist
+  **54202 / 1456** (seed 3577943350). The constant 68/6 Dist gap holds.
+- Unfiltered Debug: **116544 / 1495** (seed 3082311851) — the `[gpu]` delta is
+  62274 assertions / 33 cases, unchanged by this plan.
+- `scripts/automation-baselines.json` re-derived: +288 assertions / +33 cases per
+  configuration, matching the raw `TEST_CASE` rise 1475 → 1508.
+- Golden gate (Debug, both hosts × both backends): **`gatePassed: true`**, 4 lanes,
+  0 red. The editor-ui re-bless was expected (the lane diffed against a panel that
+  no longer exists), was verified confined to the Assets panel band before blessing,
+  was made against the **source** tree, and was restaged to **both** hosts.
+
+Spec addendum: `docs/specs/2026-09-06-asset-manager-redesign-design.md` **§17
+LANDED (Plan 1)** — scope, measured close, the seven recorded deviations, and the
+new follow-ups.
+
+**Step 4's checkbox means the desk checklist was WRITTEN, not walked.** It is
+`.superpowers/sdd/2026-09-06-asset-manager-plan1/DESK-CHECKLIST.md`, and the desk
+pass is the user's. **Nothing is pushed** — the push follows the desk pass, per
+house convention.

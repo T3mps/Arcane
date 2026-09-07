@@ -1,7 +1,7 @@
 # Asset Manager Redesign — Design
 
 **Date:** 2026-09-06
-**Status:** Approved design, pre-plan
+**Status:** Approved design — **Plan 1 LANDED 2026-09-06** (see §17); Plans 2–3 pending
 **Design record:** https://claude.ai/code/artifact/de210519-110a-47a1-b5f8-9d82b4ec421b
 (working files: `.superpowers/design/asset-manager-mockups/` — the canvas carries its
 own decision record; boards titled FINAL are binding on visuals, the Live Demo board
@@ -438,3 +438,112 @@ never renders an unknown as a zero — unknown is `—`.
 | Create flows | refactor existing dialogs into the one shared unit; `CreateAssetRequest` bypass invariant (user: "as unified as possible") |
 | Material thumbnails | real sphere thumbs in Plan 1 via document-preview harvest (user: fidelity over plumbing cost) |
 | Visual fidelity | mocks are the redline; values pinned §11.2–11.3; desk side-by-side per plan (user: "as close to the web-mockup as possible") |
+
+---
+
+## 17. LANDED (Plan 1) — 2026-09-06
+
+Plan 1 landed on Arcane `main` in place, **`59dd6414..2f5dc391`** (Tasks 1–15), plus
+this task's gate + baselines catch-up commit. Plan file:
+`docs/plans/2026-09-06-asset-manager-plan1-browse.md`. **Not pushed** — held for the
+user's desk pass, per house convention.
+
+### Scope landed
+
+§3.1 `MaterialSurfaceFor`, §3.2 `ListAssetReferences`, §3.4 the scene structural
+scan, ABI **21 → 22** (one bump, one ledger entry; `ReferenceProject.arcproj`
+restamped in the same commit, per the unbroken v17–v21 precedent). §4
+`AssetPanelModel`. §5 shell and chrome, including the bottom-bar digest. §6 the
+Browse lens — rail, folder-grouped table, preview pane — and §6.1 thumbnails
+including live material sphere thumbs. §7 the unified Create flow. §8 the
+interaction contract. §11 fidelity values. The old `AssetBrowser.cpp/.hpp` are
+**deleted**; their pure helpers moved text-identically into `AssetPanelModel`.
+
+Deliberately absent, exactly as §2 phases them: §3.3 the scene reference manifest
+(schema v4), §9 the reference index and Status lens, §10 the Graph lens. The Graph
+and Status buttons ship **disabled**.
+
+### Measured close
+
+Three-config build of `Arcane.slnx`, **0 warnings / 0 errors** in Debug, Release and
+Dist. Suite counts DERIVED — each pasted from its own run's final line,
+`ArcaneTests.exe "~[gpu]"` run FROM the exe directory:
+
+| Configuration | `~[gpu]` | seed |
+|---|---|---|
+| Debug | 54270 assertions / 1462 cases | 829257050 |
+| Release | 54270 / 1462 | 1685340276 |
+| Dist | 54202 / 1456 | 3577943350 |
+
+The constant Dist gap (68 assertions / 6 cases, from pre-existing
+`#if !defined(ARCANE_DIST)` guards) holds. One **unfiltered** Debug run:
+**116544 assertions / 1495 cases**, seed 3082311851 — the difference from `~[gpu]`
+is exactly the 33 `[gpu]` cases / 62274 assertions, unchanged by this plan.
+`scripts/automation-baselines.json` re-derived to match: **+288 assertions / +33
+cases** in every configuration, and the raw `TEST_CASE` count in `ArcaneTests/src`
+rose 1475 → 1508 (+33), all inside `~[gpu]`.
+
+**Golden gate**, Debug, both hosts × both backends: `gatePassed: true`, four lanes,
+zero red — `ArcaneRuntime/dx12` PassedOnFallback (its documented steady state: there
+is no `dx12/runtime-scene.png`, only `vulkan/`), the other three Passed, all four at
+`diffCount=0`.
+
+**The editor-ui re-bless** — the first since 2026-08-30 (`97abd074`) — was expected
+and legitimate: the lane diffed against a panel that no longer exists. Before
+blessing, the diff artifact was read, and the differing pixels (57428, identically
+on **both** backends) fall **entirely inside the Assets panel band** — menu bar,
+Outliner, Viewport, Inspector and the Console/Problems tabs show none. `--bless` was
+pointed at the **source** tree (never the staged copy, which the next host build
+would silently overwrite), then restaged md5-identically to **both** hosts. The
+vulkan lane then passed `diffCount=0` against the dx12-blessed **shared** reference,
+which is what re-proves editor-ui is backend-invariant rather than assuming it.
+
+### Deviations and rulings recorded during execution
+
+1. **`RowWithThumb` gained a height parameter** (default 24, rail passes 26). §11.2
+   pins table rows at 24 *and* rail rows at 26, while §11.1 makes `RowWithThumb` the
+   widget behind both — one fixed-24 signature could not serve both.
+2. **The "sliced" datum lives on the model entry.** `AssetPanelEntry` gained a
+   rebuild-time flag (kind == Sprite, not folded, texture ref of kind `References`);
+   §4's entry struct omitted the datum the §6 pill needs.
+3. **Cook FAILURE and refusal seams dirty-mark too**, not only the cooked-success
+   loop. §5's digest, §6's amber row marker and §13's refusals-stay-loud all bind
+   refused state live in Plan 1, so a success-only dirty-mark list was a plan defect,
+   not a scope choice.
+4. **The visible-material thumb `Request` push lives inside the `resolveAssetThumb`
+   seam** (material branch, cache miss → `Request(guid)`), not a new panel-services
+   callback. "Visible" is defined as what the clipper resolved this frame; the panel
+   contract is unchanged.
+5. **Create producers bridge `AssetKind` → `CreateAssetKind`** through the one
+   `CreateAssetRequest`. The rail's `+` is gated by `RailKindCreatable`, so rails for
+   kinds with no create flow (e.g. Texture, Data) never offer one — the panel's
+   browse vocabulary and the create vocabulary are deliberately not the same enum.
+6. **A third, unlisted create consumer was retired** — `createInstanceOf` →
+   `ShowSaveFileDialog` → `instanceNew` — beyond the consumers §7 named. The
+   `CreateAssetRequest` bypass invariant required it: one surviving bypass would have
+   made "one request path" false.
+7. **The sprite mint-or-reuse notice gates on exactly one match** (`size() == 1`),
+   not merely a non-empty result. With 2+ derived sprites an "Open existing"
+   affordance would have to guess which, and the editor's never-guess principle
+   forbids it.
+
+### Recorded follow-ups (new, on top of §15's list)
+
+- **A pre-existing `DrawModals` re-arm defect**, found during Task 12 and
+  deliberately **not** fixed here: the error modal and the Unsaved-Scene modal each
+  re-arm every frame and close each other, so under `AlwaysAutoResize` both can end
+  up permanently invisible. It predates this plan; the create dialog is gated behind
+  an empty error queue to route around it.
+- Keyboard: **`KeypadEnter` is not bound** alongside `Enter`; **`Enter` does not
+  submit the create dialog**.
+- The rail `+` is painted outline-only (no filled body, no pressed state).
+- Context `Create ▸` does not prefill per row (the `Create Sprite` quick action is
+  the prefilled path).
+- `ConsumeBrowserActions` / `browserActions` keep "Browser" in their names now that
+  `AssetBrowser.*` is gone.
+
+### Owed, and deliberately held
+
+The ABI 21 → 22 bump stacks a second Game-module rebuild obligation onto Aphelyon's
+already-held ABI-21 debt (§14 recorded it as recorded-not-blocking). Gacha `main`
+stays at `5923da65`.
