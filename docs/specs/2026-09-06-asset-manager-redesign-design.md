@@ -352,7 +352,7 @@ comparison — web AA vs ImGui AA makes automated pixel diffs false-fail).
 
 | Element | Value |
 |---|---|
-| dock tab strip / toolbar wells / bottom bar | 30px / 24px / 24px |
+| dock tab strip / toolbar wells / bottom bar | 30px (accepted at the editor-wide ImGui tab-bar chrome's actual ~23px -- ruling 2026-09-07, §17; 30px was the web mock's own value, not a value the panel itself sets) / 24px / 24px |
 | table rows / rail rows / group rows | 24px / 26px / 24px (chrome bg) |
 | rail / preview pane widths | 180px (fixed) / 165px default, resizable [120px, 480px] (§17, 2026-09-07) |
 | row thumb / tooltip thumb / preview thumb | 18px / 64px / 140px |
@@ -613,9 +613,29 @@ The ABI 21 → 22 bump stacks a second Game-module rebuild obligation onto Aphel
 already-held ABI-21 debt (§14 recorded it as recorded-not-blocking). Gacha `main`
 stays at `5923da65`.
 
-### Post-landing user-directed change — 2026-09-07
+### Post-landing user-directed changes — 2026-09-07
 
 The preview pane changed from a pinned 330px to a **165px default, user-resizable
 via a drag splitter** (session-only state, clamped [120px, 480px]; the splitter
 itself yields to the existing <720px hide rule) — §5 and §11.2 above are the
 edited arbiter; the redline mocks still show 330px and were **not** re-rendered.
+
+The automated mock-vs-editor Browse comparison (`.superpowers/sdd/2026-09-06-
+asset-manager-plan1/compare/COMPARISON.md`) surfaced five small deviations; the
+desk pass ruled on each:
+
+- **Dock tab strip ~23px accepted as-is** against §11.2's pinned 30px (see the
+  parenthetical added there). It is not the panel's own metric — it is ImGui's
+  editor-wide dock tab-bar chrome, shared by every panel — so this is a ruling to
+  leave it, not a fix.
+- **A "Name" column header band was added**, chrome-toned like the folder-group
+  rows (`DrawGroupRow`'s own idiom, reused rather than ImGui's
+  `TableSetupColumn`/`TableHeadersRow` mechanism, whose row height is
+  font/CellPadding-driven rather than the pinned 24px this panel assumes
+  everywhere else), frozen at the table's top edge via
+  `TableSetupScrollFreeze(0, 1)`. The mock drew one; the shipped panel had none.
+- **Group-row counts moved inline**, immediately after the group name (dim,
+  small gap) — the mock's own placement — replacing the right-aligned reading of
+  §11.1's "right-aligned extras" that `DrawGroupRow` had followed literally.
+  `RowWithThumb`'s own trailing-pill convention (asset/child/rail rows) is
+  unchanged; this was `DrawGroupRow` only.

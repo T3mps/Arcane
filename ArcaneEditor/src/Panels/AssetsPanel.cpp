@@ -14,11 +14,13 @@
 #include <Arcane/Project/Project.hpp>
 
 #include <imgui.h>
+#include <imgui_internal.h>   // ImGuiSelectableFlags_NoPadWithHalfSpacing (ruling 4, 2026-09-07)
 
 #include <algorithm>
 #include <cfloat>
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Arcane::Editor
@@ -156,6 +158,24 @@ namespace Arcane::Editor
                 case Arcane::MaterialSurface::Fullscreen: return "post";
             }
             return nullptr;
+        }
+
+        // Ruling 5 (desk pass, 2026-09-07): "We can shorten it and have a
+        // hover tooltip for the full path?" -- mount paths carry a
+        // "scheme://" prefix (MountTable.hpp: "game", "engine",
+        // "plugin/<name>", "diag", ...; the preview pane's own mountPath
+        // field comment: `"game://materials/glow.arcmat"`), which at the
+        // pane's 165px default width ate most of the ellipsis budget
+        // (COMPARISON.md: `game://textures/uv...` vs the mock's clean
+        // `textures/uv_marker.png`). Strips whatever precedes "://" -- not
+        // just the literal "game" scheme -- so every mount stays readable.
+        // Falls back to the whole string unchanged if there is no "://" at
+        // all (should not happen for a real mount path, but this is display
+        // code, not a parser -- never assert on it).
+        std::string_view ContentRelativePath(std::string_view mountPath)
+        {
+            const std::size_t sep = mountPath.find("://");
+            return (sep == std::string_view::npos) ? mountPath : mountPath.substr(sep + 3);
         }
 
         // Rail "+" gate (spec s6): only kinds with a Create-menu entry get
@@ -664,10 +684,17 @@ namespace Arcane::Editor
 
             ImGui::PushID(row.groupName.c_str());
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-            const float rowWidth = ImGui::GetContentRegionAvail().x;
 
             const bool open = GroupIsOpen(state, row.groupName);
-            const bool clicked = ImGui::Selectable("##grouprow", false, ImGuiSelectableFlags_SpanAllColumns,
+            // Ruling 4 (desk pass, 2026-09-07): plain SpanAllColumns padded
+            // the Selectable's highlight bb by half of style.ItemSpacing.y on
+            // each side (imgui_widgets.cpp's Selectable(), the
+            // NoPadWithHalfSpacing-gated block) -- 28px paint on this 24px
+            // row. NoPadWithHalfSpacing turns that padding off, same fix as
+            // RowWithThumb below.
+            const bool clicked = ImGui::Selectable("##grouprow", false,
+                                                   ImGuiSelectableFlags_SpanAllColumns |
+                                                   ImGuiSelectableFlags_NoPadWithHalfSpacing,
                                                    ImVec2(0.0f, kTableRowHeight));
             if (clicked)
             {
@@ -684,16 +711,57 @@ namespace Arcane::Editor
             dl->AddText(ImVec2(rowMin.x + padX, textY), ImGui::GetColorU32(ImGuiCol_Text), chevron);
             const float chevronW = ImGui::CalcTextSize(chevron).x;
 
-            dl->AddText(ImVec2(rowMin.x + padX + chevronW + padX, textY),
-                       ImGui::GetColorU32(ImGuiCol_Text), row.groupName.c_str());
+            const float nameX = rowMin.x + padX + chevronW + padX;
+            dl->AddText(ImVec2(nameX, textY), ImGui::GetColorU32(ImGuiCol_Text), row.groupName.c_str());
+            const float nameW = ImGui::CalcTextSize(row.groupName.c_str()).x;
 
+            // Ruling 3 (desk pass, 2026-09-07: "I liked the mock") -- the
+            // count sits INLINE immediately after the group name, dim, a
+            // small gap, rather than right-aligned at the row's far edge
+            // (the §11.1 "RowWithThumb: ... right-aligned extras" reading
+            // this row no longer follows; RowWithThumb's own trailing-pill
+            // convention is untouched -- this is DrawGroupRow only).
+            constexpr float kGroupCountGap = 6.0f;
             char countBuf[16];
             std::snprintf(countBuf, sizeof(countBuf), "%d", row.groupCount);
-            const float countW = ImGui::CalcTextSize(countBuf).x;
-            dl->AddText(ImVec2(rowMin.x + rowWidth - padX - countW, textY),
+            dl->AddText(ImVec2(nameX + nameW + kGroupCountGap, textY),
                        ImGui::GetColorU32(ImGuiCol_TextDisabled), countBuf);
 
             ImGui::PopID();
+        }
+
+        // ---- 2026-09-07 desk-pass ruling 2: the "Name" column header band --
+        // The mock draws a chrome-toned band above the table with a dim
+        // "Name" label (COMPARISON.md: "absent -- BeginTable(\"##assets\", 1,
+        // ...), no TableSetupColumn/TableHeadersRow"). Painted with the SAME
+        // idiom DrawGroupRow above already uses -- TableSetBgColor(RowBg0,
+        // Theme::kChrome) + drawlist text -- rather than ImGui's own
+        // TableSetupColumn/TableHeadersRow mechanism, because that mechanism
+        // computes its row height from CellPadding/font metrics, not the
+        // pinned kTableRowHeight every other row (and the clipper, and the
+        // scroll-position arithmetic in DrawTable) assumes exactly; this way
+        // the header shares the identical 24px pitch with zero risk of it
+        // drifting from the body rows it sits above. Static and
+        // non-interactive (no Selectable) -- the mock shows a plain label,
+        // no sort affordance -- so it paints no hover/click highlight.
+        //
+        // Scroll-fixed via ImGui's native row-freeze (TableSetupScrollFreeze
+        // in DrawTable, called once, before this row is submitted -- its own
+        // IsLayoutLocked assert requires that ordering), NOT by hoisting this
+        // draw outside the table entirely: freezing keeps it column-aligned
+        // with the body for free (same TableSetColumnIndex(0) cell, same
+        // horizontal clip/scroll), where a separate sibling child window
+        // would have to re-derive that alignment by hand.
+        void DrawNameHeaderRow()
+        {
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(Theme::kChrome));
+
+            const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+            const float padX = ImGui::GetStyle().FramePadding.x;
+            const float textY = rowMin.y + (kTableRowHeight - ImGui::GetTextLineHeight()) * 0.5f;
+
+            ImGui::GetWindowDrawList()->AddText(ImVec2(rowMin.x + padX, textY),
+                                                ImGui::GetColorU32(ImGuiCol_TextDisabled), "Name");
         }
 
         // ---- Task 10: one top-level asset row (spec s6/s11.2) --------------
@@ -910,6 +978,18 @@ namespace Arcane::Editor
             if (ImGui::BeginTable("##assets", 1,
                                   ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoSavedSettings))
             {
+                // Ruling 2 (desk pass, 2026-09-07): the "Name" header band,
+                // frozen at the table's top edge. TableSetupScrollFreeze MUST
+                // be called before the first row is submitted (its own
+                // IsLayoutLocked assert) -- hence first, ahead of even the
+                // scroll-target bookkeeping below. Submitted directly, not
+                // through the clipper: `rows` (and the clipper over it) is
+                // exactly the data rows, unchanged by this header.
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableNextRow(ImGuiTableRowFlags_None, kTableRowHeight);
+                ImGui::TableSetColumnIndex(0);
+                DrawNameHeaderRow();
+
                 // Fix round 1 (Important 4): a row a MOUSE just selected
                 // (left-click, or the right-click that is about to open its
                 // context menu) is by definition already on-screen -- you
@@ -1203,11 +1283,19 @@ namespace Arcane::Editor
                 AssetPill("inst");
             }
 
-            // ---- path row (mount path, ellipsized to whatever's left on
-            // the line after the "path" label)
+            // ---- path row: the content-relative path (scheme prefix
+            // stripped -- ruling 5, 2026-09-07), ellipsized to whatever's
+            // left on the line after the "path" label (EllipsisToWidth
+            // stays the fallback for a still-long relative path at the
+            // pane's narrower widths). A plain text hover tooltip carries
+            // the FULL mount path -- this is NOT the §8 210px peek-tooltip
+            // contract (no thumb, no kind/cook rows), just a path reveal.
             ImGui::TextDisabled("path");
             ImGui::SameLine();
-            ImGui::TextUnformatted(EllipsisToWidth(e->mountPath, ImGui::GetContentRegionAvail().x).c_str());
+            const std::string_view relPath = ContentRelativePath(e->mountPath);
+            ImGui::TextUnformatted(EllipsisToWidth(relPath, ImGui::GetContentRegionAvail().x).c_str());
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", e->mountPath.c_str());
 
             // ---- guid row: dim, click copies (spec s6: "guid
             // (click-to-copy)"). Routed through `actions.copyGuid` -- the

@@ -700,10 +700,23 @@ namespace Arcane::Editor
         ImGui::PushID(id);
         const ImVec2 rowMin = ImGui::GetCursorScreenPos();
 
+        // Ruling 4 (desk pass, 2026-09-07: "Fix it since it's cheap") --
+        // plain SpanAllColumns pads the Selectable's highlight bb by half of
+        // style.ItemSpacing.y on EACH side (imgui_widgets.cpp's Selectable(),
+        // the NoPadWithHalfSpacing-gated block just past the bb computation)
+        // regardless of the explicit `rowHeight` passed in here: with the
+        // stock ItemSpacing.y=4, that is +2px top and +2px bottom, so this
+        // row's own 24px table pitch painted a 28px highlight (measured by
+        // the automated mock-vs-editor comparison), same bleed on the 26px
+        // rail. This is the ONE Selectable every asset/child/rail row in
+        // AssetsPanel.cpp goes through, so one flag here fixes all three;
+        // DrawGroupRow's own Selectable carries the identical fix
+        // separately, since group rows don't route through RowWithThumb.
         ImGui::SetNextItemAllowOverlap();
         result.clicked = ImGui::Selectable("##row", selected,
                                            ImGuiSelectableFlags_SpanAllColumns |
-                                           ImGuiSelectableFlags_AllowDoubleClick,
+                                           ImGuiSelectableFlags_AllowDoubleClick |
+                                           ImGuiSelectableFlags_NoPadWithHalfSpacing,
                                            ImVec2(0.0f, rowHeight));
         result.hovered = ImGui::IsItemHovered();
 
