@@ -8,6 +8,7 @@
 // drive them headless; DrawAssetBrowserPanel in the .cpp is the only ImGui.
 
 #include <Arcane/Guid.hpp>
+#include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface (MaterialSurfaceFilterForComponent)
 #include <Arcane/Project/AssetRegistry.hpp>
 
 #include <algorithm>
@@ -147,6 +148,36 @@ namespace Arcane::Editor
             return static_cast<int>(AssetKind::Sprite);
         if (lower.find("mesh") != std::string::npos)
             return static_cast<int>(AssetKind::Mesh);
+        return -1;
+    }
+
+    // Owning-component context for a material-ref field: which MaterialSurface
+    // must candidates have? -1 = unfiltered. Extends the field-name-heuristic
+    // seam just above until reflection carries per-field attributes of its
+    // own -- "material" alone (AssetKindFilterForFieldName's answer) never
+    // says whether the field feeds a 2D sprite or a 3D mesh; the COMPONENT
+    // that owns the field is what answers that, so this reads the owning
+    // component's type name instead of the field's.
+    //
+    // Controller ruling (asset-manager arc, Task 14): lives HERE, beside
+    // AssetKindFilterForFieldName, rather than in AssetPanelModel.hpp --
+    // Task 15 migrates the whole field-name-heuristic family together, and
+    // this one joins it then, not before.
+    //
+    // Substring match, not exact equality: the call site hands this
+    // Astra::TypeMeta::typeName verbatim (InspectorView.cpp), which is the
+    // compiler-derived, NAMESPACE-QUALIFIED name ("Arcane::SpriteRenderer"),
+    // not the bare identifier the interface doc quotes -- a substring test
+    // matches either shape without asking the caller to strip anything
+    // first. No ordering race like AssetKindFilterForFieldName's
+    // material/mesh split: "SpriteRenderer" and "MeshRenderer" share no
+    // substring, so the two checks below can never both fire for one name.
+    [[nodiscard]] inline int MaterialSurfaceFilterForComponent(std::string_view componentName)
+    {
+        if (componentName.find("SpriteRenderer") != std::string_view::npos)
+            return static_cast<int>(Arcane::MaterialSurface::Sprite);
+        if (componentName.find("MeshRenderer") != std::string_view::npos)
+            return static_cast<int>(Arcane::MaterialSurface::Mesh);
         return -1;
     }
 

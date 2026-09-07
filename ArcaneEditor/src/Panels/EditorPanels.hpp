@@ -29,6 +29,7 @@ namespace Arcane::Editor
     class PlaySession;
     enum class PlayLaunchMode;   // full definition in PlayMode.hpp
     struct SelectionContext;
+    class AssetPanelModel;   // full definition in AssetPanelModel.hpp (InspectorServices::assetModel)
 
     // Menu-bar requests the app resolves AFTER the frame's dockspace is drawn
     // (dialog launches happen at the call site, never inside the menu draw).
@@ -345,6 +346,21 @@ namespace Arcane::Editor
         // viewport. Null callback (every headless test) degrades to "no
         // preview", same shape as a null mintSpriteForTexture.
         std::function<std::uint64_t(const Arcane::Guid&)> resolveTexturePreview;
+
+        // Asset-manager arc, Task 14: the subkind-filtered material picker's
+        // surface lookup. Points at EditorApp's OWN AssetPanelModel -- the
+        // SAME cached, already-invalidation-correct surface answer the
+        // Assets panel's Browse lens shows (AssetPanelModel::Find(guid)->
+        // surface), not a fresh facade query -- so the Inspector's picker and
+        // the Browse lens can never disagree about a material's surface. A
+        // raw pointer, not a callable, because the model IS the answer (no
+        // adaptation needed) and it is a stable member for the app's whole
+        // lifetime -- set ONCE (EditorApp::StageSpriteTables, beside
+        // mintSpriteForTexture above). Null for every caller that does not
+        // wire InspectorServices at all (same convention as the other two
+        // members): the picker then degrades to unfiltered, exactly like an
+        // unrecognised owning component.
+        const Arcane::Editor::AssetPanelModel* assetModel = nullptr;
     };
 
     // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail

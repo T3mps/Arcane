@@ -825,6 +825,15 @@ namespace Arcane::Editor
             return tex ? (std::uint64_t)(std::intptr_t)tex : 0;
         };
 
+        // Asset-manager arc, Task 14: the subkind-filtered material picker's
+        // surface lookup. Just a pointer, not a lambda -- m_assetModel is a
+        // stable member for the app's whole lifetime (it survives project
+        // switches via ResetForProjectSwitch, it is never re-seated), so
+        // there is nothing to look up live the way ChromeGraph() above needs
+        // to be. Wired here, alongside mintSpriteForTexture/
+        // resolveTexturePreview, for the same "built once at boot" reason.
+        m_inspectorServices.assetModel = &m_assetModel;
+
         // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail
         // resolver, built here for the same "ChromeGraph() doesn't exist yet
         // at this stage" reason resolveTexturePreview just above is -- looked

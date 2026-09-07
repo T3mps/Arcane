@@ -659,3 +659,28 @@ TEST_CASE("AssetPanelModel un-folds a sprite when its fold target is removed via
 
     fs::remove_all(dir, ec);
 }
+
+// ---------------------------------------------------------------------------
+// Task 14: MaterialSurfaceFilterForComponent -- the owning-component-context
+// sibling of AssetKindFilterForFieldName (both live in AssetBrowser.hpp,
+// included transitively above; this unit still never touches ImGui or the
+// engine facade, matching this file's own header comment).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("MaterialSurfaceFilterForComponent maps the owning component to its required MaterialSurface",
+          "[editor]")
+{
+    CHECK(MaterialSurfaceFilterForComponent("SpriteRenderer")
+          == static_cast<int>(Arcane::MaterialSurface::Sprite));
+    CHECK(MaterialSurfaceFilterForComponent("MeshRenderer")
+          == static_cast<int>(Arcane::MaterialSurface::Mesh));
+    // A namespace-qualified type name (TypeMeta::typeName's actual shape, see
+    // InspectorView.cpp's visitor) still resolves -- the call site is never
+    // expected to strip the namespace first.
+    CHECK(MaterialSurfaceFilterForComponent("Arcane::SpriteRenderer")
+          == static_cast<int>(Arcane::MaterialSurface::Sprite));
+    // An unrecognised (or unrelated) component leaves the field unfiltered --
+    // this is the "do not break other material fields" half of the contract.
+    CHECK(MaterialSurfaceFilterForComponent("Transform") == -1);
+    CHECK(MaterialSurfaceFilterForComponent("") == -1);
+}

@@ -1,6 +1,8 @@
 #include "Panels/InspectorView.hpp"
 
 #include "Panels/AssetBrowser.hpp"
+#include "Panels/AssetPanelModel.hpp"    // AssetPanelEntry::surface (Task 14 pill + filter)
+#include "Panels/CreateAssetDialog.hpp"  // MaterialSurfacePillText (SAME pill text as the Create dialog)
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Scene/EditGesture.hpp"
 #include "Widgets/EditorWidgets.hpp"
@@ -877,6 +879,19 @@ namespace Arcane::Editor
                         // C++ identifier, which is what its documented contract
                         // (AssetBrowser.hpp) is written against.
                         const int kindFilter = Arcane::Editor::AssetKindFilterForFieldName(rawName);
+                        const bool materialField =
+                            kindFilter == static_cast<int>(Arcane::Editor::AssetKind::Material);
+                        // Task 14: the OWNING COMPONENT'S context narrows a
+                        // material field further -- SpriteRenderer::material
+                        // wants Sprite-surface candidates, MeshRenderer::
+                        // materialOverride wants Mesh-surface ones. `typeName`,
+                        // not rawName: this heuristic reads the component the
+                        // field lives ON, not the field itself. -1 (unfiltered)
+                        // for every non-material field and every unrecognised
+                        // component -- "do not break other material fields".
+                        const int surfaceFilter =
+                            materialField ? Arcane::Editor::MaterialSurfaceFilterForComponent(typeName)
+                                          : -1;
 
                         // Mixed asset refs render BLANK, same rule as the numeric
                         // kinds. This was the one kind the "mixed shows blank" work
@@ -1053,8 +1068,78 @@ namespace Arcane::Editor
                                 {
                                     if (!Arcane::Editor::MatchesFilter(e, kindFilter, s_pickSearch))
                                         continue;
-                                    if (ImGui::Selectable((e.name + "##" + e.mountPath).c_str(), e.guid == v))
+
+                                    // Task 14: a material candidate's subkind,
+                                    // read from the SAME cached model the
+                                    // Assets panel's Browse lens shows (never
+                                    // a fresh facade query) -- so the picker
+                                    // and the panel can never disagree about
+                                    // one material's surface. Looked up only
+                                    // for material fields; every other
+                                    // AssetRef kind never touches the model.
+                                    const bool modelReachable =
+                                        materialField && services && services->assetModel;
+                                    const Arcane::Editor::AssetPanelEntry* panelEntry =
+                                        modelReachable ? services->assetModel->Find(e.guid) : nullptr;
+
+                                    // The subkind filter: exclude a candidate
+                                    // the model CONFIRMS does not match
+                                    // (missing entry, no surface answer yet,
+                                    // or a different surface) -- an unproven
+                                    // match must not slip through a filter
+                                    // whose whole point is "ONLY this
+                                    // surface". Gated on `modelReachable`, NOT
+                                    // just `surfaceFilter >= 0`: a caller that
+                                    // never wires InspectorServices::
+                                    // assetModel at all (every headless test,
+                                    // same convention as mintSpriteForTexture/
+                                    // resolveTexturePreview) must degrade to
+                                    // unfiltered, exactly like an unrecognised
+                                    // owning component -- NOT to "hide every
+                                    // material", which is what an unconditional
+                                    // `surfaceFilter >= 0` gate would do here
+                                    // (panelEntry is always null without a
+                                    // model, and that must not read as "every
+                                    // candidate disproven").
+                                    if (surfaceFilter >= 0 && modelReachable
+                                        && (!panelEntry || !panelEntry->surface
+                                            || static_cast<int>(*panelEntry->surface) != surfaceFilter))
+                                        continue;
+
+                                    // Every material candidate gets its
+                                    // subkind pill -- NOT gated on
+                                    // surfaceFilter, so an unfiltered
+                                    // material field (e.g. the post stack's
+                                    // Fullscreen picker) still shows what
+                                    // each candidate IS, matching
+                                    // CreateAssetDialog.cpp's parent-material
+                                    // picker (same MaterialSurfacePillText).
+                                    const char* pillText = (panelEntry && panelEntry->surface)
+                                        ? Arcane::Editor::MaterialSurfacePillText(*panelEntry->surface)
+                                        : nullptr;
+                                    // Reserve the pill's width the same way
+                                    // the row button above reserves the clear
+                                    // button's -- an unsized Selectable fills
+                                    // the whole row (imgui_widgets.cpp's
+                                    // Selectable does not support size < 0),
+                                    // so the pill needs its own seat carved
+                                    // out BEFORE the row draws.
+                                    float rowW = ImGui::GetContentRegionAvail().x;
+                                    if (pillText)
+                                    {
+                                        const ImGuiStyle& pickSt = ImGui::GetStyle();
+                                        const float pillW = ImGui::CalcTextSize(pillText).x
+                                            + pickSt.FramePadding.x * 2.0f + pickSt.ItemSpacing.x;
+                                        rowW = std::max(rowW - pillW, 40.0f);
+                                    }
+                                    if (ImGui::Selectable((e.name + "##" + e.mountPath).c_str(), e.guid == v,
+                                                          ImGuiSelectableFlags_None, ImVec2(rowW, 0.0f)))
                                         ApplyGuidImmediate(rawName, f, instance, e.guid);
+                                    if (pillText)
+                                    {
+                                        ImGui::SameLine();
+                                        Arcane::Editor::AssetPill(pillText);
+                                    }
                                 }
                             }
                             ImGui::EndPopup();
