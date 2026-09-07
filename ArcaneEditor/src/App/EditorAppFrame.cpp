@@ -2042,13 +2042,34 @@ namespace Arcane::Editor
         m_assetModel.RebuildIfDirty(proj ? &proj->Registry() : nullptr, m_assetPanelProviders);
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets))
         {
-            // Task 7's AssetServices seam, re-shaped into Task 9's
+            // Plan 1 Task 7's AssetServices seam, re-shaped into Task 9's
             // AssetsPanelServices at this ONE call site -- two distinct
             // struct types (different consumers, per AssetServices's own
-            // header comment) that happen to carry the same single callable,
-            // so a same-shape temporary is the whole adapter needed.
-            const Arcane::Editor::AssetsPanelServices assetsPanelServices{
-                m_assetServices.resolveAssetThumb };
+            // header comment) that happen to share the thumbnail callable.
+            //
+            // Plan 2 Task 7 adds the Status lens's two seams here rather than
+            // to AssetServices: neither has any consumer outside this panel.
+            // `cookDetailFor` is what keeps the panel free of any knowledge of
+            // Arcane::Diagnostic or of this class's cook bookkeeping -- it
+            // answers ONLY for a PERMANENT row (a real refusal), so a
+            // transient ArtifactMissing row can never masquerade as a refusal
+            // reason on a card; nullopt sends the card to its own bare
+            // "cook refused" fallback.
+            Arcane::Editor::AssetsPanelServices assetsPanelServices;
+            assetsPanelServices.resolveAssetThumb = m_assetServices.resolveAssetThumb;
+            assetsPanelServices.cookDetailFor =
+                [this](const Arcane::Guid& g) -> std::optional<std::string>
+                {
+                    const auto it = m_cookDiagnostics.find(g);
+                    if (it == m_cookDiagnostics.end() || !it->second.permanent)
+                        return std::nullopt;
+                    return it->second.diagnostic.detail.empty() ? it->second.diagnostic.message
+                                                                : it->second.diagnostic.detail;
+                };
+            // Borrowed non-owning for the draw only (Task 8's feed reads it);
+            // this log outlives every frame and is Clear()ed, never destroyed,
+            // on a project switch.
+            assetsPanelServices.activity = &m_assetActivity;
             browserActions = Arcane::Editor::DrawAssetsPanel(
                 m_assetsPanel, m_assetModel, proj, m_documents, assetsPanelServices,
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::Assets));
@@ -2381,6 +2402,50 @@ namespace Arcane::Editor
         // showInExplorer, a guid needs no project lookup to be copyable).
         if (browserActions.copyGuid.IsValid())
             ImGui::SetClipboardText(browserActions.copyGuid.ToString().c_str());
+
+        // ---- Status lens attention cards (asset-manager Plan 2 Task 7) -----
+        // Recook, per the plan's Ruling 8: invalidate the artifact, ERASE this
+        // guid's cook-diagnostic row, republish, poke the cook queue, and mark
+        // the model dirty.
+        //
+        // Erasing the row is what makes the card flip Refused -> Queued
+        // HONESTLY rather than cosmetically: IsCookPending presumes pending on
+        // an ABSENT row (EditorAppProject.cpp's own IsCookPending), so the
+        // model's next rebuild reads Queued for this guid -- and a source that
+        // still cannot cook re-fails, OnCookCompleted/OnArtifactRefused writes
+        // the row back, and the card returns. Nothing here fakes a success.
+        //
+        // There is no per-guid cook API: CookQueue::NoteChanged() is
+        // whole-project, coalescing and hash-decided, which is exactly right
+        // here (the same call PollAssetWatch makes for a changed source).
+        if (browserActions.recook.IsValid())
+        {
+            if (m_runtime)
+                m_runtime->AssetsFacade().InvalidateArtifact(browserActions.recook);
+            m_cookDiagnostics.erase(browserActions.recook);
+            PublishCookDiagnostics();   // the Problems row clears with it
+            if (m_cookQueue)
+                m_cookQueue->NoteChanged();
+            m_assetModel.MarkDirty(browserActions.recook);
+            // Beside the dirty mark, never instead of it -- Task 5's rule for
+            // every activity push. SourceChanged is the honest kind: the user
+            // asked for the same thing a source edit asks for.
+            m_assetActivity.Push({ std::chrono::steady_clock::now(), browserActions.recook,
+                                   NameOfAsset(browserActions.recook),
+                                   Arcane::Editor::AssetActivityKind::SourceChanged,
+                                   "recook requested" });
+        }
+        // "Problems" SURFACES THE PANE and nothing more (Ruling 9 / spec s9.2
+        // verbatim: "jumps to the pane"). No pre-filtering -- none is
+        // specified, so none is invented. Un-hide then select the tab: the
+        // exact two-step Edit -> Rename uses to bring the Outliner forward
+        // (ConsumeMenuRequests above), for the same reason -- a panel that is
+        // merely visible but buried behind a sibling tab is not surfaced.
+        if (browserActions.showProblems)
+        {
+            m_panelVis.visible[static_cast<std::size_t>(Arcane::Editor::PanelId::Problems)] = true;
+            Arcane::Editor::SelectDockTab("Problems");
+        }
     }
 
     // ---- Unified create (asset-manager redesign, Plan 1 Task 12) ------------

@@ -53,9 +53,11 @@ namespace Arcane::Editor
         // SegmentedStrip's exact parameter type, no cast needed.
         constexpr const char* kLensLabels[] = { "Browse", "Graph", "Status" };
         constexpr int kLensCount = 3;
-        // Bit 0 (Browse) only -- Graph/Status stay disabled until Plan 2/3
-        // land (spec s5).
-        constexpr unsigned kLensEnabledMask = 0b001u;
+        // Bits 0 (Browse) and 2 (Status) -- Status went live with Plan 2
+        // Task 7; Graph (bit 1) stays disabled until Plan 3 lands (spec
+        // s5/s10). The strip's LAYOUT never changed for either: the three
+        // buttons have been drawn since Plan 1, only the mask moves.
+        constexpr unsigned kLensEnabledMask = 0b101u;
 
         // Task 10 (spec s6/s11.2) fixed geometry.
         constexpr float kRailWidth        = 180.0f;
@@ -116,6 +118,31 @@ namespace Arcane::Editor
         // figure from the same directive.
         constexpr float kPreviewCompactHeaderMinWidth = 250.0f;
         constexpr float kPreviewCompactTextColumnMin  = 110.0f;
+
+        // Plan 2 Task 7 (spec s9.2/s11.2, redline
+        // `renders/OptionE-Status-FINAL.png`) fixed geometry for the Status
+        // lens.
+        //
+        // kStatusTileHeight is measured off the board (the tile band spans
+        // y=84..148 at the render's native size) and is also exactly what the
+        // tile's own content needs: StatTile's 8px pad + the 24px number's
+        // line + its 2px gap + the 13px label's line + 8px pad lands just
+        // inside 64. kStatusTileMinWidth is a floor for a very narrow panel,
+        // so four tiles never collapse to nothing.
+        //
+        // kStatusSectionGap is an EXPLICIT gap, on top of ImGui's own
+        // ItemSpacing.y on each side of it (4px + 6px + 4px = 14px between
+        // one section's last item and the next section's label -- the board's
+        // ~13px). kStatusPillLineHeight restates spec s11.2's pinned 16px
+        // pill line: EditorWidgets.cpp's own kPillLineHeight is file-local
+        // there, and this file needs the number to vertically centre a pill
+        // that it positions by hand rather than by SameLine.
+        constexpr float kStatusTileHeight      = 64.0f;
+        constexpr float kStatusTileMinWidth    = 72.0f;
+        constexpr float kStatusSectionGap      = 6.0f;
+        constexpr float kStatusProgressHeight  = 4.0f;   // queued card's strip
+        constexpr float kStatusPillLineHeight  = 16.0f;  // spec s11.2
+        constexpr float kStatusSelectionBorder = 2.0f;   // spec s10's node rule, applied to cards
 
         // The absolute sane-range clamp ONLY -- [kPreviewPaneMinWidth,
         // kPreviewPaneMaxWidth] -- and nothing else. This is the ONLY clamp
@@ -1685,6 +1712,333 @@ namespace Arcane::Editor
                 DrawPreviewPane(model, project, docs, services, actions, drawnWidth);
             }
         }
+
+        // ---- Plan 2 Task 7: AssetPill's own width, WITHOUT drawing it ------
+        // 12px text plus the two FramePadding.x cheeks (EditorWidgets.cpp's
+        // AssetPill, verbatim). The attention card positions its trailing
+        // pill by hand and has to ellipsize the NAME against whatever room is
+        // left after it, so it needs the pill's width one item early.
+        float PillWidth(const char* text)
+        {
+            ImGui::PushFont(GetEditorFonts().interRegular, 12.0f);
+            const float w = ImGui::CalcTextSize(text).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::PopFont();
+            return w;
+        }
+
+        // ---- Plan 2 Task 7: one needs-attention card (spec s9.2) -----------
+        // Two shapes, ONE function, because everything except the trailing
+        // content, the frame variant and the second line is identical:
+        //
+        //   * REFUSED wears the muted-amber acting-on frame (BeginCardFrame
+        //     variant 1 -- the same `#7a5a20` spec s11.2 pins for the amber
+        //     pill), the amber warning glyph, its refusal detail line, and
+        //     the Recook/Problems pair.
+        //   * QUEUED is a neutral frame with a dim clock, the dim "arccook
+        //     running..." note the board puts on the NAME ROW beside the
+        //     name (spec s11: "the mocks are the redline"), and the derived
+        //     progress strip beneath.
+        //
+        // `queuedProgress` is Ruling 12's DERIVED fraction --
+        // cooked / (cooked + queued) from HealthCounts, the very numbers the
+        // meter above already shows. There is no per-asset cook progress to
+        // read anywhere in the engine, and this card refuses to fabricate one.
+        void DrawAttentionCard(AssetPanelModel& model, const AssetsPanelServices& services,
+                               AssetsPanelActions& actions, const AssetPanelEntry& e,
+                               bool refused, float queuedProgress)
+        {
+            const ImVec2 cardMin   = ImGui::GetCursorScreenPos();
+            const float  cardWidth = ImGui::GetContentRegionAvail().x;
+            // The guid string is the card's id scope, same convention every
+            // row in this file uses (DrawAssetRow/DrawChildRow's PushID).
+            const std::string cardId = e.guid.ToString();
+            if (!BeginCardFrame(cardId.c_str(), refused ? 1 : 0, cardWidth))
+                return;   // SkipItems: nothing was pushed, so nothing to End
+
+            const ImGuiStyle& style = ImGui::GetStyle();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+
+            // The card's inner padding, DERIVED rather than duplicated:
+            // BeginCardFrame seats the cursor exactly one padding in from the
+            // frame's top-left corner, so this difference IS
+            // EditorWidgets.cpp's kCardFramePadding without a second copy of
+            // that constant living here to drift from it.
+            const ImVec2 innerMin = ImGui::GetCursorScreenPos();
+            const float  pad      = innerMin.x - cardMin.x;
+            const float  innerW   = std::max(1.0f, cardWidth - pad * 2.0f);
+
+            // Line 1 stands as tall as the buttons it hosts (the refused
+            // card); the queued card keeps the same pitch so the two card
+            // shapes line up in a mixed list.
+            const float rowH  = ImGui::GetFrameHeight();
+            const float line2 = refused ? ImGui::GetTextLineHeight() : kStatusProgressHeight;
+            const float bodyH = rowH + style.ItemSpacing.y + line2;
+
+            // ONE body hit target, submitted FIRST and covering the whole card
+            // body, with SetNextItemAllowOverlap so the two buttons submitted
+            // AFTER it still take the hover and the click where they overlap
+            // -- imgui.h's own documented use of that flag ("covering an area
+            // where subsequent items may need to be added"), and the shape
+            // RowWithThumb + the rail's hover "+" already run on. Everything
+            // else this function draws is either pure drawlist paint or a
+            // non-interactive Dummy (AssetPill), so the rest of the card body
+            // stays clickable.
+            ImGui::SetNextItemAllowOverlap();
+            if (ImGui::InvisibleButton("##cardbody", ImVec2(innerW, bodyH)))
+                model.Select(e.guid);
+            // Immediately after the hit item, exactly like AttachRowInteractions
+            // does for a table row -- the peek tooltip keys off the LAST
+            // submitted item.
+            DrawAssetPeekTooltip(model, services, e.guid);
+
+            // ---- buttons: right-aligned on line 1, drawn BEFORE the name so
+            // the name's ellipsis budget can be measured against where they
+            // actually start.
+            float buttonsLeft = innerMin.x + innerW;
+            if (refused)
+            {
+                const float recookW   = ImGui::CalcTextSize("Recook").x + style.FramePadding.x * 2.0f;
+                const float problemsW = ImGui::CalcTextSize("Problems").x + style.FramePadding.x * 2.0f;
+                buttonsLeft = innerMin.x + innerW - recookW - problemsW - style.ItemSpacing.x;
+                ImGui::SetCursorScreenPos(ImVec2(buttonsLeft, innerMin.y));
+                // "Panel reports, app performs": neither button does any work
+                // here -- EditorApp::ConsumeBrowserActions owns both effects.
+                if (ImGui::Button("Recook"))
+                    actions.recook = e.guid;
+                ImGui::SameLine();
+                if (ImGui::Button("Problems"))
+                    actions.showProblems = true;
+            }
+
+            // ---- line 1: 18px thumb, state glyph, name, trailing content.
+            // Drawlist paint (plus one positioned AssetPill), the same
+            // technique RowWithThumb uses, so none of it competes with the hit
+            // target above for ImGui's "last item".
+            float x = innerMin.x;
+            const float thumbY = innerMin.y + (rowH - kAssetRowThumbSize) * 0.5f;
+            const std::uint64_t thumb = services.resolveAssetThumb ? services.resolveAssetThumb(e.guid) : 0;
+            if (thumb != 0)
+            {
+                dl->AddImage(static_cast<ImTextureID>(thumb), ImVec2(x, thumbY),
+                            ImVec2(x + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
+            }
+            else
+            {
+                // The same well-plus-centred-kind-icon fallback the preview
+                // pane's own thumb uses, at the row's 18px size.
+                dl->AddRectFilled(ImVec2(x, thumbY),
+                                  ImVec2(x + kAssetRowThumbSize, thumbY + kAssetRowThumbSize),
+                                  ImGui::GetColorU32(Theme::kWell));
+                const char* kindIcon = KindIcon(e.kind);
+                const ImVec2 ks = ImGui::CalcTextSize(kindIcon);
+                dl->AddText(ImVec2(x + (kAssetRowThumbSize - ks.x) * 0.5f,
+                                   thumbY + (kAssetRowThumbSize - ks.y) * 0.5f),
+                           ImGui::GetColorU32(ImGuiCol_Text), kindIcon);
+            }
+            x += kAssetRowThumbSize + style.ItemInnerSpacing.x;
+
+            // State glyph: amber triangle for refused, dim clock for queued.
+            // Amber never carries the meaning ALONE -- the glyph shape, the
+            // detail line and the card's own frame all say the same thing
+            // (spec s11.2's amber rule).
+            const char* stateIcon = refused ? ICON_LC_TRIANGLE_ALERT : ICON_LC_CLOCK;
+            const ImVec2 stateSize = ImGui::CalcTextSize(stateIcon);
+            dl->AddText(ImVec2(x, innerMin.y + (rowH - stateSize.y) * 0.5f),
+                       ImGui::GetColorU32(refused ? Theme::kAmber : Theme::kTextDim), stateIcon);
+            x += stateSize.x + style.ItemInnerSpacing.x;
+
+            // What follows the name on this line, measured BEFORE it so the
+            // name can be ellipsized against what is genuinely left.
+            constexpr const char* kRunningText = "arccook running...";
+            const char* kindText   = KindLabel(e.kind);
+            const float trailingW  = refused ? PillWidth(kindText)
+                                             : ImGui::CalcTextSize(kRunningText).x;
+            const float nameBudget = std::max(0.0f, buttonsLeft - style.ItemSpacing.x
+                                                     - trailingW - style.ItemInnerSpacing.x - x);
+
+            const std::string name = EllipsisToWidth(e.fileName, nameBudget);
+            const ImVec2 nameSize  = ImGui::CalcTextSize(name.c_str());
+            dl->AddText(ImVec2(x, innerMin.y + (rowH - nameSize.y) * 0.5f),
+                       ImGui::GetColorU32(ImGuiCol_Text), name.c_str());
+            x += nameSize.x + style.ItemInnerSpacing.x;
+
+            if (refused)
+            {
+                ImGui::SetCursorScreenPos(ImVec2(x, innerMin.y + (rowH - kStatusPillLineHeight) * 0.5f));
+                AssetPill(kindText);
+            }
+            else
+            {
+                dl->AddText(ImVec2(x, innerMin.y + (rowH - ImGui::GetTextLineHeight()) * 0.5f),
+                           ImGui::GetColorU32(Theme::kTextDim), kRunningText);
+            }
+
+            // ---- line 2
+            const float line2Y = innerMin.y + rowH + style.ItemSpacing.y;
+            if (refused)
+            {
+                // The refusal reason, from the HOST's own cook-diagnostic row
+                // (services.cookDetailFor) -- this panel never reads
+                // diagnostics itself. Composed as the board writes it,
+                // "cook refused - <detail>"; the bare "cook refused" is the
+                // fallback when the host has no permanent row for this guid
+                // (possible: CookStateOf can also reach Refused through a
+                // provider answer this session's map no longer backs).
+                std::string line = "cook refused";
+                if (services.cookDetailFor)
+                {
+                    if (const std::optional<std::string> detail = services.cookDetailFor(e.guid);
+                        detail && !detail->empty())
+                    {
+                        line += " \xE2\x80\x94 ";   // em dash, the board's own separator
+                        line += *detail;
+                    }
+                }
+                // BeginCardFrame does NOT constrain caller content width, so
+                // the wrap is this function's job -- one line, ellipsized to
+                // the card's inner width.
+                const std::string shown = EllipsisToWidth(line, innerW);
+                dl->AddText(ImVec2(innerMin.x, line2Y), ImGui::GetColorU32(Theme::kTextDim),
+                           shown.c_str());
+            }
+            else
+            {
+                // Ruling 12's derived strip: kGrab fill over a kWell track.
+                const float frac = std::clamp(queuedProgress, 0.0f, 1.0f);
+                dl->AddRectFilled(ImVec2(innerMin.x, line2Y),
+                                  ImVec2(innerMin.x + innerW, line2Y + kStatusProgressHeight),
+                                  ImGui::GetColorU32(Theme::kWell));
+                if (frac > 0.0f)
+                    dl->AddRectFilled(ImVec2(innerMin.x, line2Y),
+                                      ImVec2(innerMin.x + innerW * frac, line2Y + kStatusProgressHeight),
+                                      ImGui::GetColorU32(Theme::kGrab));
+            }
+
+            EndCardFrame();
+
+            // Selection: a 2px kSelection border over the frame EndCardFrame
+            // just painted (spec s8's interaction contract -- the Status lens
+            // highlights its CARDS, the way the table highlights its rows).
+            // Drawn after the fact against the full-card rect EndCardFrame
+            // reserves as its closing item, so it needs no separate measure.
+            if (model.selected == e.guid)
+            {
+                ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                                    ImGui::GetColorU32(Theme::kSelection),
+                                                    0.0f, 0, kStatusSelectionBorder);
+            }
+        }
+
+        // ---- Plan 2 Task 7: the Status lens body, part 1 (spec s9.2) -------
+        // Tiles row, cook-pipeline meter, needs-attention cards. The
+        // Unreferenced card, the activity feed and the Scenes rollup are Task
+        // 8's -- deliberately ABSENT rather than stubbed, so nothing here has
+        // to be un-drawn later. `state`/`docs` are unused by part 1 (nothing
+        // it draws switches lens or opens a document) but are carried on the
+        // signature Task 8's Reveal button and feed rows consume.
+        void DrawStatusLens(AssetsPanelState& /*state*/, AssetPanelModel& model,
+                            DocumentHost& /*docs*/, const AssetsPanelServices& services,
+                            AssetsPanelActions& actions)
+        {
+            // AlwaysUseWindowPadding: a bordered-less child gets NO padding by
+            // default, and the dashboard -- unlike the Browse lens's flush
+            // rail/table/pane chain -- is a padded page (the board insets its
+            // whole content from the panel edge).
+            if (!ImGui::BeginChild("##statusbody", ImVec2(0.0f, 0.0f),
+                                   ImGuiChildFlags_AlwaysUseWindowPadding))
+            {
+                ImGui::EndChild();
+                return;
+            }
+
+            const HealthCounts health = model.Health();
+            const ImGuiStyle& style = ImGui::GetStyle();
+
+            // ---- tiles row: four equal-width tiles carved out of the content
+            // region (spec s9.2's "assets / cook refused / awaiting cook /
+            // unreferenced"). Only the refused tile is amber, and only its
+            // ICON is -- StatTile's variant 1 keeps the number in text tokens
+            // (spec s11.2).
+            {
+                const float tileW = std::max(kStatusTileMinWidth,
+                    (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x * 3.0f) * 0.25f);
+                const ImVec2 tileSize(tileW, kStatusTileHeight);
+                char num[16];
+                // ImDrawList::AddText rasterizes at the call, so one scratch
+                // buffer serves all four tiles.
+                const auto tile = [&](const char* id, int value, const char* label,
+                                      const char* icon, int variant)
+                {
+                    std::snprintf(num, sizeof(num), "%d", value);
+                    StatTile(id, num, label, icon, variant, tileSize);
+                };
+                tile("##tileassets",  health.total,   "assets",        nullptr,                 0);
+                ImGui::SameLine();
+                tile("##tilerefused", health.refused, "cook refused",  ICON_LC_TRIANGLE_ALERT,  1);
+                ImGui::SameLine();
+                tile("##tilequeued",  health.queued,  "awaiting cook", ICON_LC_CLOCK,           0);
+                ImGui::SameLine();
+                tile("##tileunused",  health.unused,  "unreferenced",  ICON_LC_CIRCLE_SLASH,    0);
+            }
+
+            // ---- cook pipeline meter. Grays plus amber, and the icon/label
+            // pair carries the meaning in every case -- colour alone never
+            // does (MeterBar draws a swatch AND the label AND the count).
+            ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
+            ImGui::TextDisabled("Cook pipeline");
+            const MeterSegment segments[] = {
+                { "cooked",  health.cooked,  ImGui::GetColorU32(Theme::kGrab)    },
+                { "queued",  health.queued,  ImGui::GetColorU32(Theme::kTextDim) },
+                { "refused", health.refused, ImGui::GetColorU32(Theme::kAmber)   },
+            };
+            MeterBar("##cookmeter", segments, static_cast<int>(std::size(segments)),
+                     ImGui::GetContentRegionAvail().x);
+
+            // ---- needs attention.
+            ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
+            ImGui::TextDisabled("Needs attention");
+
+            // model.Entries() is an unordered_map -- its own doc comment
+            // requires a displaying consumer to sort. Name, then mount path as
+            // the tie-break: the exact ordering AssetPanelModel::UnusedGuids
+            // already pins for Task 8's card, so the two lists cannot read as
+            // sorted by different rules.
+            std::vector<const AssetPanelEntry*> refused, queued;
+            for (const auto& [guid, entry] : model.Entries())
+            {
+                if (entry.cook == CookState::Refused)     refused.push_back(&entry);
+                else if (entry.cook == CookState::Queued) queued.push_back(&entry);
+            }
+            const auto byName = [](const AssetPanelEntry* a, const AssetPanelEntry* b)
+            { return a->name != b->name ? a->name < b->name : a->mountPath < b->mountPath; };
+            std::sort(refused.begin(), refused.end(), byName);
+            std::sort(queued.begin(), queued.end(), byName);
+
+            if (refused.empty() && queued.empty())
+            {
+                // Empty state (a desk item -- the board only draws the
+                // populated form, so this one line is the whole design).
+                ImGui::TextDisabled("nothing needs attention");
+            }
+            else
+            {
+                // Ruling 12: ONE fraction for every queued card, derived from
+                // the same HealthCounts the meter shows. Zero-safe -- a
+                // non-empty `queued` list implies health.queued > 0, but the
+                // guard costs nothing and does not depend on that reasoning.
+                const int cookedAndQueued = health.cooked + health.queued;
+                const float queuedProgress = cookedAndQueued > 0
+                    ? static_cast<float>(health.cooked) / static_cast<float>(cookedAndQueued)
+                    : 0.0f;
+
+                for (const AssetPanelEntry* e : refused)
+                    DrawAttentionCard(model, services, actions, *e, /*refused=*/true, 0.0f);
+                for (const AssetPanelEntry* e : queued)
+                    DrawAttentionCard(model, services, actions, *e, /*refused=*/false, queuedProgress);
+            }
+
+            ImGui::EndChild();
+        }
     }
 
     AssetsPanelActions DrawAssetsPanel(AssetsPanelState& state, AssetPanelModel& model,
@@ -1727,8 +2081,14 @@ namespace Arcane::Editor
                 ImGui::TextDisabled("No project open (data/-next-to-exe)");
             else if (state.lens == AssetLens::Browse)
                 DrawBrowseLens(state, model, project, docs, services, actions);
+            else if (state.lens == AssetLens::Status)
+                DrawStatusLens(state, model, docs, services, actions);
             else
-                ImGui::TextDisabled("Lens not available in Plan 1.");
+                // Graph only, now that Status has landed (Plan 2 Task 7).
+                // Unreachable in practice -- kLensEnabledMask keeps the Graph
+                // button disabled, so `state.lens` can never BE Graph -- kept
+                // as the backstop for the one lens still to come.
+                ImGui::TextDisabled("Graph lens lands in Plan 3.");
         }
         ImGui::EndChild();
 

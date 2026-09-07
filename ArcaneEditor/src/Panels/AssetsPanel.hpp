@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -33,6 +34,11 @@ namespace Arcane { class Project; }
 namespace Arcane::Editor
 {
     class DocumentHost;
+    // Plan 2 Task 5's session activity ring. Forward-declared (same shape as
+    // DocumentHost above) rather than included: this header only needs to name
+    // a POINTER to one -- Task 8's feed, the first reader, includes the real
+    // header in the .cpp.
+    class AssetActivityLog;
 
     // Which lens the panel shows. Plan 1 ships Browse only -- Graph (Plan 3)
     // and Status (Plan 2) exist in the enum and in the toolbar's lens strip
@@ -119,17 +125,58 @@ namespace Arcane::Editor
         // carries a raw AssetKind.
         int  requestCreateKind = -1;
         Arcane::Guid createPrefillParent;   // instance parent / sprite texture prefill
+
+        // Plan 2 Task 7 (Status lens): the two needs-attention card buttons,
+        // reported under exactly the same split as every field above -- the
+        // panel never invalidates an artifact and never touches panel
+        // visibility itself.
+        //
+        // `recook` names the refused asset the user asked to re-cook. The
+        // host's consumer is pinned by the plan's Ruling 8:
+        // InvalidateArtifact + ERASE that guid's cook-diagnostic row +
+        // PublishCookDiagnostics + CookQueue::NoteChanged + MarkDirty --
+        // erasing the row is what flips the card Refused -> Queued honestly
+        // (IsCookPending presumes pending on an absent row), and a source
+        // that still cannot cook re-fails and puts the row back.
+        //
+        // `showProblems` asks the host to surface the Problems pane and
+        // NOTHING more (Ruling 9 / spec s9.2 verbatim: "jumps to the pane").
+        // Deliberately not a guid: no pre-filtering is specified, so none is
+        // invented.
+        Arcane::Guid recook;
+        bool         showProblems = false;
     };
 
-    // The Assets panel's thumbnail-resolver seam (Task 7's AssetServices,
+    // The Assets panel's read-only host seams. Originally just the
+    // thumbnail resolver (Plan 1 Task 7's AssetServices,
     // consumed here per its own header comment: "Task 9's AssetsPanelServices
     // consumes this exact callable"). Guid -> an ImGui texture id via the
     // chrome context's texture cache; 0 = unavailable, caller falls back to
     // the kind icon. Task 9's placeholder body never calls this; Task 10's
-    // rows are the first consumer.
+    // rows are the first consumer. Plan 2 Task 7 added the two Status-lens
+    // seams beside it (see each field); every one of them is a READ the host
+    // answers -- effects still travel the other way, through
+    // AssetsPanelActions.
     struct AssetsPanelServices
     {
         std::function<std::uint64_t(const Arcane::Guid&)> resolveAssetThumb;
+
+        // Plan 2 Task 7 (Status lens): the refusal DETAIL line for one guid,
+        // resolved by the HOST out of its own cook-diagnostic accumulator
+        // (EditorApp::m_cookDiagnostics -- detail, or message when the
+        // diagnostic carries no detail). `nullopt` when there is no PERMANENT
+        // row for the guid, in which case the card falls back to the bare
+        // "cook refused" line. A seam rather than a direct read for the same
+        // reason resolveAssetThumb is one: this panel compiles with zero
+        // knowledge of Arcane::Diagnostic or the host's bookkeeping.
+        std::function<std::optional<std::string>(const Arcane::Guid&)> cookDetailFor;
+
+        // Plan 2 Task 5's session activity ring, borrowed non-owning (the
+        // host owns it for the whole session; it is Clear()ed, never
+        // destroyed, on a project switch). Wired here in Task 7 so the
+        // services contract lands in one edit; Task 8's activity feed is its
+        // first reader. May be null -- a caller must guard.
+        const AssetActivityLog* activity = nullptr;
     };
 
     // Draw the "Assets" panel: toolbar (+ Create / search / lens strip) ·
