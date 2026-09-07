@@ -33,7 +33,11 @@ It replaces today's flat two-column table and retires four recorded pains:
 **Not chosen, per the canvas decision record — do not implement:** Option A entirely
 (folder tree, breadcrumbs, thumbnail tile grid, tile-size slider, grid/list toggle);
 Options B and C as standalone panels; kind filter chips; the Kind column; the old
-path+guid hover tooltip.
+path+guid hover tooltip. **Note (2026-09-07):** the table's folder groups did later
+grow indentation and cascading collapse (§6) — this is the "middle form" the user
+ruled for, entirely inside the existing single table, and is not a reversal of
+Option A's rejection. Option A's rejected shape specifically was a **separate tree
+panel** with breadcrumbs; no such panel exists or is planned.
 
 ## 2. Scope and phasing
 
@@ -189,12 +193,24 @@ width**) is session-only in v1.
   counts from the model. The hover `+` appears **only on kinds with a Create
   entry** (Materials, Sprites, Meshes, Scenes) and opens the unified Create menu
   pre-scoped to that kind. Textures/Data/Audio/Font get no `+`.
-- **Table:** groups = one per distinct content directory (nested dirs are their own
-  groups; root files under `Content/`), sorted lexicographically, collapsible
-  (session state). Rows are Name-only: 18px thumb, name, pills (subkind, `boot`,
-  `sliced`, `derived`). Derived 1:1 sprites render only as indented children under
-  their texture, **default collapsed** with a count pill. A **refused** asset gets a
-  small amber triangle on its row; queued gets no row marker.
+- **Table:** groups = one per distinct content directory (root files under
+  `Content/`), sorted lexicographically, collapsible (session state). **Nested
+  directories render as indented child groups inside this same table** (2026-09-07,
+  user-directed "middle form" — not a separate tree panel, no breadcrumbs): 20px
+  indent per nesting depth, and a nested group's label shows only its leaf segment
+  (a group under `fx/` reads `glow/`, not `fx/glow/`). Collapse cascades — collapsing
+  a parent hides its whole subtree — but each descendant group keeps its own open
+  flag, so reopening the parent restores whatever sub-state it had. Asset rows
+  indent to their group's depth plus their existing base offset, so they read as
+  belonging to that group; search overrides collapse the same way it already does
+  for fold children (§8): a matching row inside a collapsed ancestor still shows,
+  with its group chain visible. Rows are Name-only: 18px thumb, name, pills (subkind,
+  `boot`, `sliced`, `derived`). Derived 1:1 sprites render only as indented children
+  under their texture, **default collapsed** with a count pill, keeping their own
+  **extra +20px fold indent** on top of the group's own depth indent — two
+  indentation meanings, kept visually distinct as today (chrome group bands vs dim
+  child rows). A **refused** asset gets a small amber triangle on its row; queued
+  gets no row marker.
 - **Preview pane:** 140px thumb, name + kind/subkind pills, path, guid
   (click-to-copy), cook line, `Derived (N)` list (click selects the child), actions
   mirroring the context menu.
@@ -354,6 +370,7 @@ comparison — web AA vs ImGui AA makes automated pixel diffs false-fail).
 |---|---|
 | dock tab strip / toolbar wells / bottom bar | 30px (accepted at the editor-wide ImGui tab-bar chrome's actual ~23px -- ruling 2026-09-07, §17; 30px was the web mock's own value, not a value the panel itself sets) / 24px / 24px |
 | table rows / rail rows / group rows | 24px / 26px / 24px (chrome bg) |
+| group nesting indent per depth / fold-child indent | 20px per level, leaf-segment group labels (§6, 2026-09-07) / +20px beyond the row's own group-depth indent — the same 20px unit, applied once more |
 | rail / preview pane widths | 180px (fixed) / 165px default, resizable [120px, 480px] (§17, 2026-09-07) |
 | row thumb / tooltip thumb / preview thumb | 18px / 64px / 140px |
 | tooltip width | 210px |
@@ -639,3 +656,19 @@ desk pass ruled on each:
   §11.1's "right-aligned extras" that `DrawGroupRow` had followed literally.
   `RowWithThumb`'s own trailing-pill convention (asset/child/rail rows) is
   unchanged; this was `DrawGroupRow` only.
+
+### 2026-09-07 user-directed: in-table nested folder groups (design pass)
+
+**In-table nested folder groups** (middle form between the flat groups and Option
+A's rejected tree panel): the table's folder groups gained indentation and
+cascading collapse for nested directories, entirely inside the existing single
+table — no separate tree panel, no breadcrumbs (§1, §6, §11.2 amended above). The
+`OptionBC.dc.html` FINAL board (Browse lens) was amended to match — a
+`textures/patterns/` depth-1 example group (`tiles_stone.png`, `noise_blue.png`)
+was added by regrouping two existing texture rows rather than inventing net-new
+sample data, keeping the added-row footprint to one nested group header so the
+960×620 framing stays unclipped — and `renders/OptionBC-Browse-FINAL.png` was
+re-rendered against it; the README binding table records the amendment. This is a
+**design-only pass**: the live panel does not yet implement nested groups; a
+follow-up implementation task lands the behavior against this spec text and the
+amended mock.
