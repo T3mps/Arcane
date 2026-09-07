@@ -92,6 +92,38 @@ namespace Arcane
             return ext;
         }
 
+        // Asset-manager arc (ABI v22, Plan 2 Task 2): shape gate for a v4
+        // scene manifest entry, applied BEFORE it ever reaches
+        // Guid::FromString below. Canonical form only: 36 chars, hex in
+        // every position except the four dashes at 8/13/18/23 (braces are
+        // NOT accepted here, unlike FromString's own tolerance -- a save-time
+        // manifest entry is never brace-wrapped, so this stays the narrower,
+        // cheaper check). Load-bearing, not merely defensive: Plan-1 Task 4
+        // hit a blocked Debug-CRT assertion box (no piped-stdout evidence --
+        // indistinguishable from a true hang in an automated run) from an
+        // UNCHECKED `*Guid::FromString(garbage)` dereference elsewhere in
+        // this arc. FromString itself returns nullopt cleanly on garbage
+        // (Guid.cpp) and every call site below still checks the optional --
+        // but gating on shape first means a malformed manifest string is
+        // rejected on sight rather than round-tripped through the parser at
+        // all, so that failure class can never be reached from this loop.
+        bool IsCanonicalGuidString(const std::string& s)
+        {
+            if (s.size() != 36)
+                return false;
+            for (size_t i = 0; i < s.size(); ++i)
+            {
+                if (i == 8 || i == 13 || i == 18 || i == 23)
+                {
+                    if (s[i] != '-')
+                        return false;
+                }
+                else if (!std::isxdigit(static_cast<unsigned char>(s[i])))
+                    return false;
+            }
+            return true;
+        }
+
         // True when a sprite's JSON carries a non-default sub-rect --
         // SaveSpriteAsset (SpriteAsset.cpp) writes "sourceSize" only when it
         // differs from the (0,0) "whole texture" default, so its presence
@@ -933,9 +965,52 @@ namespace Arcane
                 }
                 if (ext == ".arcscene")
                 {
-                    // Task 3: "resolvable" IS "ResolveId succeeds" -- the
-                    // same resolution step every other accessor on this
-                    // facade takes, just probed here rather than opened.
+                    // v4 fast path (asset-manager arc, Plan 2 Task 2; spec
+                    // s3.3): a save-time "assets" manifest, when present, is
+                    // exact -- no shape heuristics, and deliberately NO
+                    // resolvability filter. A dangling target must surface
+                    // here so the editor's index can tombstone it (spec
+                    // s9.1; Task 3 of THIS plan depends on it). Task 3 of the
+                    // PRIOR plan's structural scan below keeps its own
+                    // filter -- for a shape heuristic walking arbitrary
+                    // JSON, that filter is the false-positive killer (spec
+                    // s3.4). The two therefore agree only when every
+                    // referenced target happens to be resolvable; the
+                    // manifest is a strict superset of the scan's answer
+                    // otherwise, by design.
+                    const auto vit = json->find("version");
+                    const auto ait = json->find("assets");
+                    if (vit != json->end() && vit->is_number_integer() && vit->get<int>() >= 4 &&
+                        ait != json->end() && ait->is_array())
+                    {
+                        std::unordered_set<Guid> seen;
+                        for (const auto& entry : *ait)
+                        {
+                            if (!entry.is_string())
+                                continue;
+                            const std::string s = entry.get<std::string>();
+                            if (!IsCanonicalGuidString(s))   // shape-gate BEFORE FromString
+                                continue;
+                            const auto g = Guid::FromString(s);
+                            // Always well-formed after the shape gate above,
+                            // so `g` is never nullopt here in practice -- the
+                            // check stays as the same defense-in-depth every
+                            // other FromString call site in this function
+                            // applies (see addGuid above). IsValid() drops a
+                            // literal nil-guid manifest entry; Task 1's
+                            // SaveJson never writes one, but a hand-edited
+                            // file could carry one.
+                            if (g && g->IsValid() && seen.insert(*g).second)
+                                out.push_back({ *g, AssetRefKind::References });
+                        }
+                        return out;
+                    }
+
+                    // Pre-v4, or a v4 file whose manifest was hand-stripped:
+                    // Task 3's structural scan. "resolvable" IS "ResolveId
+                    // succeeds" -- the same resolution step every other
+                    // accessor on this facade takes, just probed here rather
+                    // than opened.
                     auto resolvable = [this](const Guid& g)
                     { return ResolveId(AssetId::FromGuid(g)).has_value(); };
                     return ScanSceneReferences(*json, resolvable);

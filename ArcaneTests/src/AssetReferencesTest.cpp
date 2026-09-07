@@ -11,9 +11,16 @@
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
+#include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/SceneModule.hpp>
+#include <Arcane/Serialization/SceneAsset.hpp>
 
+#include <Astra/Registry/Registry.hpp>
+
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -40,6 +47,22 @@ namespace
             if (r.target == target && r.kind == kind)
                 return true;
         return false;
+    }
+
+    // Plan 2 Task 2: order-independent comparison for the manifest/scan
+    // equivalence test below -- same "no operator== on AssetRef" reasoning as
+    // ContainsRef above, but this case needs SET equality rather than
+    // membership, so it sorts (Guid has operator<; AssetRefKind is a plain
+    // scoped enum, so std::pair's default operator< works) instead.
+    std::vector<std::pair<Arcane::Guid, Arcane::AssetRefKind>> ToSortedPairs(
+        const std::vector<Arcane::AssetRef>& refs)
+    {
+        std::vector<std::pair<Arcane::Guid, Arcane::AssetRefKind>> pairs;
+        pairs.reserve(refs.size());
+        for (const auto& r : refs)
+            pairs.emplace_back(r.target, r.kind);
+        std::sort(pairs.begin(), pairs.end());
+        return pairs;
     }
 }
 
@@ -526,6 +549,235 @@ TEST_CASE("ListAssetReferences never returns nullopt for any AssetKindOf-recogni
         const auto refs = assets->ListAssetReferences(mapping[i].first);
         REQUIRE(refs.has_value());   // never nullopt for a readable file (spec s3.2)
     }
+
+    fs::remove_all(dir, ec);
+}
+
+// ---------------------------------------------------------------------------
+// Asset-manager arc, Plan 2 Task 2: v4 scene-manifest fast path.
+//
+// Task 1 made the scene serializer emit a top-level "assets" array (sorted,
+// deduped canonical guid strings) alongside "version": 4. These cases pin
+// ListAssetReferences's .arcscene branch reading that manifest directly for a
+// v4 scene instead of running the Task 3 structural scan -- and demote the
+// scan to the pre-v4 (or manifest-stripped) fallback, which the existing
+// "version": 3 case above already pins as still passing.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ListAssetReferences reads a v4 scene's manifest verbatim, including unresolvable targets", "[assets]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arc_listrefs_v4_manifest_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // Manifest names X and Y; NEITHER has a {"hi","lo"} body anywhere in the
+    // file, so the Task 3 structural scan would find nothing at all here --
+    // any hit proves the fast path was taken. X is ALSO given a resolver
+    // entry and Y is not, so both appearing proves the fast path applies no
+    // resolvability filter (Ruling 3): whether the resolver even knows about
+    // a manifest target has no bearing on whether it is reported.
+    const auto scene = WriteFile(dir, "v4.arcscene", R"({
+        "assets": ["7e5a0001-0001-4001-8001-00000000000a",
+                   "7e5a0001-0001-4001-8001-00000000000b"],
+        "entities": [], "id": "7e5a0001-0001-4001-8001-000000000001", "version": 4})");
+    const auto xMarker = WriteFile(dir, "x-marker.arcmat", "{}");
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        const std::string g = id.Value().ToString();
+        if (g == "7e5a0001-0001-4001-8001-000000000001") return scene;
+        if (g == "7e5a0001-0001-4001-8001-00000000000a") return xMarker;   // resolvable
+        return std::nullopt;   // "...b" deliberately absent from the resolver
+    });
+
+    const auto sceneId = Arcane::Guid::FromString("7e5a0001-0001-4001-8001-000000000001");
+    const auto xId      = Arcane::Guid::FromString("7e5a0001-0001-4001-8001-00000000000a");
+    const auto yId      = Arcane::Guid::FromString("7e5a0001-0001-4001-8001-00000000000b");
+    REQUIRE(sceneId.has_value());
+    REQUIRE(xId.has_value());
+    REQUIRE(yId.has_value());
+
+    const auto refs = assets->ListAssetReferences(*sceneId);
+    REQUIRE(refs.has_value());
+    REQUIRE(refs->size() == 2);
+    CHECK(ContainsRef(*refs, *xId, Arcane::AssetRefKind::References));
+    CHECK(ContainsRef(*refs, *yId, Arcane::AssetRefKind::References));
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("A v4 scene missing its manifest falls back to the structural scan", "[assets]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arc_listrefs_v4_nomanifest_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // "version": 4 but no "assets" key at all -- the fast path's gate
+    // requires BOTH to be present, so this falls all the way through to the
+    // structural scan, which finds the one {"hi","lo"} component field.
+    const auto scene = WriteFile(dir, "v4_nomanifest.arcscene", R"({
+        "version": 4,
+        "id": "7e5a0002-0001-4001-8001-000000000001",
+        "entities": [
+            {
+                "components": {
+                    "Arcane::PostProcess": {
+                        "material": { "hi": 777777777777777777, "lo": 888888888888888888 }
+                    }
+                },
+                "parent": -1
+            }
+        ]
+    })");
+
+    // Reconstructed the same way GuidFromHiLo does (direct field
+    // construction), matching the existing scan test's own convention above.
+    const Arcane::Guid materialGuid{ 777777777777777777ull, 888888888888888888ull };
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value().ToString() == "7e5a0002-0001-4001-8001-000000000001") return scene;
+        if (id.Value() == materialGuid) return fs::path("material-marker");   // scan's resolvability filter
+        return std::nullopt;
+    });
+
+    const auto sceneId = Arcane::Guid::FromString("7e5a0002-0001-4001-8001-000000000001");
+    REQUIRE(sceneId.has_value());
+
+    const auto refs = assets->ListAssetReferences(*sceneId);
+    REQUIRE(refs.has_value());
+    REQUIRE(refs->size() == 1);
+    CHECK((*refs)[0].target == materialGuid);
+    CHECK((*refs)[0].kind == Arcane::AssetRefKind::References);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Manifest entries that are malformed or nil are skipped without hanging", "[assets]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arc_listrefs_v4_malformed_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // "not-a-guid" (wrong shape -- must be rejected by the shape gate BEFORE
+    // it ever reaches Guid::FromString, per the known invalid-hex parse-hang
+    // class), "" (too short), 42 (not a string at all), the nil guid string
+    // (well-formed shape, but IsValid() rejects it), and one genuinely valid
+    // entry. Only the valid one may survive.
+    const auto scene = WriteFile(dir, "v4_malformed.arcscene", R"({
+        "assets": ["not-a-guid", "", 42, "00000000-0000-0000-0000-000000000000",
+                   "7e5a0003-0001-4001-8001-000000000001"],
+        "entities": [], "id": "7e5a0003-0001-4001-8001-0000000000ff", "version": 4})");
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value().ToString() == "7e5a0003-0001-4001-8001-0000000000ff") return scene;
+        return std::nullopt;
+    });
+
+    const auto sceneId = Arcane::Guid::FromString("7e5a0003-0001-4001-8001-0000000000ff");
+    const auto validId = Arcane::Guid::FromString("7e5a0003-0001-4001-8001-000000000001");
+    REQUIRE(sceneId.has_value());
+    REQUIRE(validId.has_value());
+
+    const auto refs = assets->ListAssetReferences(*sceneId);
+    REQUIRE(refs.has_value());
+    REQUIRE(refs->size() == 1);
+    CHECK((*refs)[0].target == *validId);
+    CHECK((*refs)[0].kind == Arcane::AssetRefKind::References);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Manifest and structural scan agree on the same scene (equivalence, spec s12)", "[assets]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arc_listrefs_v4_equivalence_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // A real registry, saved through the real SaveSceneFile path (mirrors
+    // SceneAssetTest.cpp's Fixture) -- proves the two paths agree on what an
+    // ACTUAL save produces, not just on hand-authored JSON. Per Task 1's
+    // review note, the manifest is a strict SUPERSET of the scan's answer in
+    // general (the scan applies a resolvability filter the manifest does
+    // not), so the sets are equal here only because every referenced target
+    // below is deliberately made resolvable.
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Astra::Entity root = reg.CreateEntity();
+    reg.AddComponent<Arcane::Identity>(root, Arcane::Identity{Arcane::Guid::Generate(), "Root"});
+    reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+
+    const Astra::Entity child = reg.CreateEntity();
+    reg.AddComponent<Arcane::Identity>(child, Arcane::Identity{Arcane::Guid::Generate(), "Child"});
+    reg.SetParent(child, root);
+
+    const Arcane::Guid matGuid  = Arcane::Guid::Generate();
+    const Arcane::Guid meshGuid = Arcane::Guid::Generate();
+    Arcane::SpriteRenderer sr;
+    sr.material = matGuid;
+    reg.AddComponent<Arcane::SpriteRenderer>(root, sr);
+    Arcane::MeshRenderer mr;
+    mr.mesh = meshGuid;
+    reg.AddComponent<Arcane::MeshRenderer>(child, mr);
+
+    const fs::path sceneFile  = dir / ("scene" + std::string(Arcane::Scene::kSceneExt));
+    const Arcane::Guid sceneId = Arcane::Guid::Generate();
+    std::string err;
+    REQUIRE(Arcane::Scene::SaveSceneFile(sceneFile, reg, sceneId, &err));
+    CHECK(err.empty());
+
+    const auto matMarker  = WriteFile(dir, "mat-marker.arcmat", "{}");
+    const auto meshMarker = WriteFile(dir, "mesh-marker.arcmesh", "{}");
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == sceneId)  return sceneFile;
+        if (id.Value() == matGuid)  return matMarker;    // both targets resolvable --
+        if (id.Value() == meshGuid) return meshMarker;   // required for set equality
+        return std::nullopt;
+    });
+
+    const auto refsA = assets->ListAssetReferences(sceneId);   // v4 fast path
+    REQUIRE(refsA.has_value());
+    REQUIRE(refsA->size() == 2);
+
+    // Copy the saved file's content, strip "assets", rewrite "version" to 3
+    // -- forces the SAME entity data through the structural-scan fallback.
+    nlohmann::json doc;
+    {
+        std::ifstream in(sceneFile, std::ios::binary);
+        doc = nlohmann::json::parse(in);
+    }
+    REQUIRE(doc.contains("assets"));
+    doc.erase("assets");
+    doc["version"] = 3;
+    const fs::path v3File = dir / "scene_v3.arcscene";
+    std::ofstream(v3File, std::ios::binary) << doc.dump();
+
+    const Arcane::Guid sceneIdV3 = Arcane::Guid::Generate();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == sceneIdV3) return v3File;
+        if (id.Value() == matGuid)   return matMarker;
+        if (id.Value() == meshGuid)  return meshMarker;
+        return std::nullopt;
+    });
+
+    const auto refsB = assets->ListAssetReferences(sceneIdV3);   // structural-scan fallback
+    REQUIRE(refsB.has_value());
+
+    CHECK(ToSortedPairs(*refsA) == ToSortedPairs(*refsB));
 
     fs::remove_all(dir, ec);
 }

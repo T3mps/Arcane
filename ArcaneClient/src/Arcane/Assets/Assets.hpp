@@ -333,8 +333,21 @@ namespace Arcane
         //   .arcmesh -- "material": References; the nil guid (unassigned)
         //     contributes nothing, so a mesh with no material yields an
         //     empty list rather than a phantom nil-guid entry.
-        //   .arcscene -- delegates to Task 3's scene structural scan (empty
-        //     until that task lands).
+        //   .arcscene -- version >= 4 WITH a top-level "assets" manifest
+        //     array (the save-time manifest, asset-manager Plan 2 Task 1):
+        //     the manifest's guids, verbatim, as References -- INCLUDING an
+        //     unresolvable/dangling target, since the editor's index needs
+        //     those to tombstone a removed asset (spec s9.1). No
+        //     resolvability filter on this path; the manifest was already
+        //     exact at save time. Anything else (no manifest key, or
+        //     version < 4) falls back to the structural scan: every
+        //     {"hi","lo"} guid-shaped field except an identity field
+        //     (Arcane::IsIdentityGuidFieldName), filtered through the
+        //     installed resolver -- for a shape heuristic over arbitrary
+        //     JSON, that filter is the false-positive killer (spec s3.4).
+        //     The two paths therefore agree only when every referenced
+        //     target happens to be resolvable; the manifest is a strict
+        //     superset of the scan's answer otherwise, by design.
         //   leaf/opaque formats (images, audio, fonts, generic .json) --
         //     empty, NEVER nullopt: a leaf asset genuinely has no outgoing
         //     edges, a different fact than "could not even read this asset"
