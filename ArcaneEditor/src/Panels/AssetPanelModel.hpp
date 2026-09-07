@@ -322,7 +322,15 @@ namespace Arcane::Editor
         std::string  name;        // stem
         std::string  fileName;    // stem + extension (rows show this)
         std::string  mountPath;
-        std::string  folder;      // "materials/", nested "fx/glow/", root = "Content/"
+        std::string  folder;      // the group KEY -- MOUNT-ROOTED (spec s5/s6, 2026-09-07
+                                   // third revision): UNQUALIFIED for the "game" scheme
+                                   // ("materials/", nested "fx/glow/", root = "Content/",
+                                   // unchanged since root-anchoring); QUALIFIED for any
+                                   // other scheme, "<scheme>://" (that mount's own root,
+                                   // rootless) or "<scheme>://<relpath>/" (nested), e.g.
+                                   // "diag://" or "diag://crashes/". See GroupDepthOf's
+                                   // own header comment for why the two shapes can never
+                                   // collide.
         AssetKind    kind = AssetKind::Other;
         std::optional<Arcane::MaterialSurface> surface;  // materials only
         bool         isInstance = false;
@@ -342,11 +350,18 @@ namespace Arcane::Editor
     {
         enum class Type : std::uint8_t { Group, Asset, Child };
         Type type = Type::Asset;
-        std::string  groupName;   // Type::Group ONLY: the FULL content-directory path
-                                   // ("textures/patterns/", "materials/", "Content/") --
-                                   // this is the open-state KEY (m_groupOpen, PushID),
-                                   // unchanged in meaning by the 2026-09-07 nested-group
-                                   // pass. NOT what renders as the label any more.
+        std::string  groupName;   // Type::Group ONLY: the FULL group KEY -- this is the
+                                   // open-state identity (m_groupOpen, PushID), NOT what
+                                   // renders as the label. MOUNT-ROOTED (spec s5/s6,
+                                   // 2026-09-07 third revision): two shapes, matching
+                                   // AssetPanelEntry::folder's own doc comment exactly
+                                   // (this field is just that same string, carried onto
+                                   // the row) -- UNQUALIFIED for "game" ("textures/
+                                   // patterns/", "materials/", "Content/", unchanged since
+                                   // root-anchoring), QUALIFIED for any other scheme
+                                   // ("diag://", "diag://crashes/", ...). The qualification
+                                   // is what keeps a real "game://diagnostics/" directory's
+                                   // key from ever colliding with "diag://"'s own root key.
         std::string  groupLabel;  // Type::Group ONLY: the DISPLAY label -- leaf segment
                                    // only, plus trailing '/' ("patterns/" for
                                    // "textures/patterns/"). Top-level dirs and the
