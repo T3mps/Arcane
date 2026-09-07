@@ -1084,6 +1084,13 @@ namespace Arcane::Editor
         const float lineHeight = ImGui::GetTextLineHeight();
         const float width = ImGui::GetContentRegionAvail().x;
         const float rowHeight = lineHeight * 2.0f + kLineGap;   // age/title line + detail line
+        // Review fix (Important 3): a caller can genuinely hit exactly-zero
+        // avail (a crushed dock column) -- InvisibleButton's own
+        // IM_ASSERT(size_arg.x != 0.0f) would fire on `width` unfloored.
+        // Floored ONLY for the button call; the closing Dummy below still
+        // reserves the real (unfloored) `width` so the feed's measured
+        // footprint is unaffected by this floor.
+        const float buttonWidth = std::max(1.0f, width);
 
         float y = pos.y;
         ImVec2 prevDotCenter{};
@@ -1093,8 +1100,16 @@ namespace Arcane::Editor
             // comment on why paint order doesn't care).
             ImGui::SetCursorScreenPos(ImVec2(pos.x, y));
             ImGui::PushID(i);
-            const bool clicked = ImGui::InvisibleButton("##row", ImVec2(width, rowHeight));
-            if (ImGui::IsItemHovered())
+            const bool clicked = ImGui::InvisibleButton("##row", ImVec2(buttonWidth, rowHeight));
+            // Optional rider (Task 8 review): ForTooltip, not a bare hover
+            // check -- the panel's caller cannot re-run DrawAssetPeekTooltip's
+            // own IsItemHovered(ForTooltip) after this function returns (see
+            // this function's own header comment on why), so THIS is the
+            // one place that delay gate can still run. Gating hoveredIndex
+            // on it here, rather than downstream, is what keeps the feed's
+            // tooltip on the same ~0.5s delay the panel's other three peek
+            // sites get, instead of popping instantly.
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
                 result.hoveredIndex = i;
             if (clicked)
                 result.clickedIndex = i;

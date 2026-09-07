@@ -1980,11 +1980,19 @@ namespace Arcane::Editor
                 // above. Already in TextDisabled tone: the whole line below
                 // draws in Theme::kTextDim, tail included, so no separate
                 // color segment is needed for "in TextDisabled tone".
-                line += " \xC2\xB7 details in Problems";
-                // BeginCardFrame does NOT constrain caller content width, so
-                // the wrap is this function's job -- one line, ellipsized to
-                // the card's inner width.
-                const std::string shown = EllipsisToWidth(line, innerW);
+                //
+                // Review fix (Important 2): the tail must be MEASURED
+                // before the clamp, not appended before it -- a long
+                // refusal detail is exactly the case EllipsisToWidth's own
+                // "..." would otherwise cut the tail from first (it sits at
+                // the string's end), silently dropping the ONE thing this
+                // line exists to point the user at. Same "measure trailing
+                // content, then budget the rest" order PillWidth's callers
+                // already use elsewhere in this file.
+                constexpr const char* kProblemsTail = " \xC2\xB7 details in Problems";
+                const float tailWidth = ImGui::CalcTextSize(kProblemsTail).x;
+                const std::string shown = EllipsisToWidth(line, std::max(0.0f, innerW - tailWidth))
+                                        + kProblemsTail;
                 dl->AddText(ImVec2(innerMin.x, line2Y), ImGui::GetColorU32(Theme::kTextDim),
                            shown.c_str());
             }
@@ -2086,7 +2094,8 @@ namespace Arcane::Editor
         void DrawUnreferencedCard(AssetsPanelState& state, AssetPanelModel& model,
                                   const AssetsPanelServices& services)
         {
-            const float cardWidth = ImGui::GetContentRegionAvail().x;
+            const ImVec2 cardMin   = ImGui::GetCursorScreenPos();
+            const float  cardWidth = ImGui::GetContentRegionAvail().x;
             if (!BeginCardFrame("##unreferenced", 0, cardWidth))
                 return;
 
@@ -2099,8 +2108,19 @@ namespace Arcane::Editor
             {
                 const ImGuiStyle& style = ImGui::GetStyle();
                 ImDrawList* dl = ImGui::GetWindowDrawList();
-                const ImVec2 wellMin   = ImGui::GetCursorScreenPos();
-                const float  wellWidth = ImGui::GetContentRegionAvail().x;
+                const ImVec2 wellMin = ImGui::GetCursorScreenPos();
+                // Review fix (Important 1): GetContentRegionAvail() at the
+                // INNER cursor measures to the ambient window's right edge,
+                // not the card's own right border -- BeginCardFrame doesn't
+                // constrain caller content width (its own doc comment), so
+                // that avail is `cardWidth - pad`, one pad short of what a
+                // caller actually wants. `pad`, DERIVED the same way
+                // DrawAttentionCard's own `innerW` is (cardMin vs the seated
+                // cursor), then subtracted TWICE -- once for each side --
+                // is what actually stops the well/Reveal button at the
+                // card's inner content edge instead of its outer border.
+                const float  pad       = wellMin.x - cardMin.x;
+                const float  wellWidth = std::max(1.0f, cardWidth - pad * 2.0f);
                 const float  rowH      = kTableRowHeight;
                 dl->AddRectFilled(wellMin,
                                   ImVec2(wellMin.x + wellWidth, wellMin.y + rowH * static_cast<float>(unused.size())),
@@ -2160,6 +2180,29 @@ namespace Arcane::Editor
                         state.search[0] = '\0';
                         model.SetKindFilter(-1);
                         state.railKind = -1;   // -1 = All, the rail's own spelling
+
+                        // Controller ruling (Task 8 review, Ruling 10's gap):
+                        // clearing filters alone does not guarantee the row
+                        // is VISIBLE -- a collapsed ancestor group (or a
+                        // collapsed mount root, e.g. diag://'s own default-
+                        // closed state, GroupDefaultOpen) still hides it.
+                        // Walk `e->folder` up through every ancestor
+                        // (GroupParentOf -- the same chain DrawGroupRow's own
+                        // nesting walks, terminating at "" for a mount's own
+                        // root) and force each one open, through BOTH
+                        // writers DrawGroupRow's own toggle uses: state's
+                        // mirror (GroupIsOpen's source of truth for the
+                        // chevron glyph) and the model (SetGroupOpen -- the
+                        // actual Rows() rebuild trigger). The mount root
+                        // itself is included: it is simply the LAST non-empty
+                        // value this loop visits before GroupParentOf finally
+                        // returns "".
+                        for (std::string folder = e->folder; !folder.empty(); folder = GroupParentOf(folder))
+                        {
+                            state.groupOpen[folder] = true;
+                            model.SetGroupOpen(folder, true);
+                        }
+
                         state.lens = AssetLens::Browse;
                         model.Select(guid);
                     }
@@ -2309,10 +2352,21 @@ namespace Arcane::Editor
             // placement (OptionE-Status-FINAL.png: "Needs attention" and
             // "Activity" sit at the same Y).
             ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
+            // Review fix (Important 3): kStatusRightColumnWidth is an
+            // implementer tuning value, not a floor -- unclamped, a narrow
+            // dock could let the fixed column crush (or exceed) the whole
+            // available width, starving the stretch column and leaving
+            // TimelineFeed's per-row hit target with a zero/negative avail
+            // (ImGui::InvisibleButton asserts on exactly zero). Same
+            // "sane-range clamp" discipline ClampPreviewForLayout already
+            // uses for the preview pane -- capped to a fraction of what is
+            // actually available THIS frame, floored so it is never <= 0.
+            const float rightColumnWidth = std::max(1.0f,
+                std::min(kStatusRightColumnWidth, ImGui::GetContentRegionAvail().x * 0.45f));
             if (ImGui::BeginTable("##statuscolumns", 2, ImGuiTableFlags_NoSavedSettings))
             {
                 ImGui::TableSetupColumn("##left",  ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableSetupColumn("##right", ImGuiTableColumnFlags_WidthFixed, kStatusRightColumnWidth);
+                ImGui::TableSetupColumn("##right", ImGuiTableColumnFlags_WidthFixed, rightColumnWidth);
                 ImGui::TableNextRow();
 
                 // ---- LEFT: needs attention, then Unreferenced.
