@@ -985,8 +985,16 @@ namespace Arcane::Editor
                 // scroll-target bookkeeping below. Submitted directly, not
                 // through the clipper: `rows` (and the clipper over it) is
                 // exactly the data rows, unchanged by this header.
+                // Review fix (2026-09-07): ImGuiTableRowFlags_Headers here --
+                // NOT for height (that's TableHeadersRow()'s job, deliberately
+                // avoided, see DrawNameHeaderRow's own comment) but because
+                // imgui_tables.cpp's TableEndRow only advances
+                // table->RowBgColorCounter for rows WITHOUT this flag. Passing
+                // None left this header consuming a zebra-parity slot, so
+                // every asset/child row's alternating RowBg1 tint landed one
+                // row off from where it did before the header existed.
                 ImGui::TableSetupScrollFreeze(0, 1);
-                ImGui::TableNextRow(ImGuiTableRowFlags_None, kTableRowHeight);
+                ImGui::TableNextRow(ImGuiTableRowFlags_Headers, kTableRowHeight);
                 ImGui::TableSetColumnIndex(0);
                 DrawNameHeaderRow();
 
