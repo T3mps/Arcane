@@ -48,14 +48,16 @@ namespace Arcane::Editor
         // frame would re-read a file and stat every project for a menu almost
         // nobody has open.
         bool fileMenuOpen = false;
-        bool newMaterial = false;    // Assets -> Create -> Material... (save dialog; graph-owned)
-        // Assets -> Create -> Mesh Material... (save dialog; F2b Task 13).
-        // A separate flag rather than a second bool on newMaterial's request:
-        // the two mint DIFFERENT .arcmat shapes (graph-owned fullscreen vs.
-        // snippet/graph-less mesh) through the SAME dialog mechanics, and a
-        // distinct request keeps that a one-branch `if` at the consumer
-        // rather than a second parameter threading through MenuRequests.
-        bool newMeshMaterial = false;
+        // Assets -> Create -> <kind>...  A CreateAssetKind value
+        // (Panels/CreateAssetDialog.hpp); -1 = nothing picked this frame.
+        //
+        // ASSET-MANAGER REDESIGN, PLAN 1 TASK 12: this ONE int replaces the
+        // old `newMaterial`/`newMeshMaterial` bool pair, and with them the two
+        // ShowSaveFileDialog launches they drove. Spec s7's invariant is why:
+        // "no creation path may bypass CreateAssetRequest" -- so the menu, like
+        // every other producer, raises a kind and nothing else, and
+        // EditorApp::BeginCreateAsset is the one place a create dialog opens.
+        int requestCreateKind = -1;
         // NO MENU RAISES THIS TODAY (the restructure dropped File -> Open
         // Material...; the Assets panel double-click is the open path). The
         // request + its dialog handler stay wired for the wiring pass.

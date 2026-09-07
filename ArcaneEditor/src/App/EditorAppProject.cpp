@@ -4,13 +4,23 @@
 // also texture sources + their .meta sidecars, feeding the background cook
 // queue). Split out of EditorApp.cpp as a pure move.
 //
-// SwitchProject and the CreateXAt effects are called ONLY from the frame loop's
-// top-of-frame phases or its deferred sceneAction (EditorAppFrame.cpp) -- never
-// mid-render, because they tear down plugin/document GPU resources that this
-// frame's already-built ImGui draw lists may still reference. The project/
-// material/instance dialogs launch through the shared PathPickedThunk /
-// InstancePickedThunk trampolines (EditorAppFrame.cpp), which Stash() into
-// m_dialogs -- the background-thread half of that contract.
+// SwitchProject is called ONLY from the frame loop's top-of-frame phases or its
+// deferred sceneAction (EditorAppFrame.cpp) -- never mid-render, because it
+// tears down plugin/document GPU resources that this frame's already-built
+// ImGui draw lists may still reference.
+//
+// The CreateXAt effects are NOT in that class and no longer share its rule:
+// since Task 12 they run from ConsumeCreateResult, inside the ImGui pass
+// (DrawModals) -- they create a file, register it and OPEN a document, which is
+// exactly what ConsumeBrowserActions' sprite mint and the Problems panel's
+// locator routing already do mid-pass. Only project/scene TEARDOWN needs the
+// frame-boundary deferral.
+//
+// The project and material-OPEN dialogs launch through the shared
+// PathPickedThunk trampoline (EditorAppFrame.cpp), which Stash()es into
+// m_dialogs -- the background-thread half of that contract. The material/
+// instance CREATE dialogs that used to do the same are gone: the unified
+// create dialog is in-editor ImGui and returns its result synchronously.
 
 #include "App/EditorApp.hpp"
 #include "Panels/AssetBrowser.hpp"
@@ -788,10 +798,10 @@ namespace Arcane::Editor
             ARC_INFO("Assets: swept {} orphaned artifact(s) at project open", removed);
     }
 
-    void EditorApp::CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent)
+    Arcane::Guid EditorApp::CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent)
     {
         if (!parent.IsValid())
-            return;
+            return {};
         if (path.extension() != ".arcmat")
             path += ".arcmat";
 
@@ -802,12 +812,22 @@ namespace Arcane::Editor
         if (!Arcane::SaveMaterialAsset(path, data))
         {
             ARC_WARN("Arcane Editor: could not create instance at '{}'", path.generic_string());
-            return;
+            return {};
         }
         // Register immediately -- ResolveParentChain on the new document needs the
         // registry to know BOTH this instance and its parent right now.
-        m_runtime->RegisterCreatedAsset(path);
+        const auto registered = m_runtime->RegisterCreatedAsset(path);
+        if (!registered)
+            return {};
+        // TASK 5 CARRY-FORWARD, PAID HERE: the four other mint sites already
+        // dirtied the panel model on a successful register, and this one did
+        // not -- so a created instance stayed invisible in the Browse lens
+        // until some unrelated event happened to dirty the model. A new
+        // registry entry changes folder grouping (PollAssetWatch's own
+        // drop-discovery comment), so it is MarkAllDirty, not MarkDirty.
+        m_assetModel.MarkAllDirty();
         m_documents.OpenPath(path);
+        return *registered;
     }
 
     // Reuse-or-mint policy (sprite-asset spec, Section 3): exactly one existing
@@ -923,7 +943,7 @@ namespace Arcane::Editor
         return data.id;
     }
 
-    void EditorApp::CreateMaterialAt(std::filesystem::path path, Arcane::MaterialSurface surface)
+    Arcane::Guid EditorApp::CreateMaterialAt(std::filesystem::path path, Arcane::MaterialSurface surface)
     {
         if (path.extension() != ".arcmat")
             path += ".arcmat";
@@ -953,14 +973,35 @@ namespace Arcane::Editor
         }
         else
         {
-            // UE-model: every new (fullscreen) material is GRAPH-owned
-            // (freeform HLSL lives in Custom nodes; legacy text-owned
-            // .arcmat files still open fine). Starter = a Color wired to the
-            // Output -- never an empty canvas. Sprite is not offered here
-            // (see this function's own header comment); a caller passing it
-            // would still route to this starter, since it is the only other
-            // surface CreateMaterialAt knows how to author from scratch.
-            data.kind = "fullscreen";
+            // UE-model: every new material is GRAPH-owned (freeform HLSL
+            // lives in Custom nodes; legacy text-owned .arcmat files still
+            // open fine). Starter = a Color wired to the Output -- never an
+            // empty canvas.
+            //
+            // ASSET-MANAGER PLAN 1 TASK 12: Sprite shares this branch with
+            // Fullscreen rather than getting a third one, because the two
+            // differ in EXACTLY two places and nothing else -- the `kind`
+            // string written to the .arcmat, and the surface the starter
+            // graph is generated against. Everything else (the two-node
+            // Color -> Output graph, its positions, its link) is identical, so
+            // a copied branch would be two bodies that must be kept in step by
+            // hand for no gain.
+            //
+            // BOTH SURFACES HAVE A REAL TEMPLATE, verified rather than
+            // assumed: MaterialTemplateFile (MaterialSource.cpp:313-336)
+            // returns "materials/sprite_material.hlsl" for Sprite and
+            // "materials/fullscreen_material.hlsl" for Fullscreen, and it
+            // ARC_ENSUREs loudly ONLY for Mesh -- the one surface with no
+            // template yet, which is why Mesh takes the snippet-less branch
+            // above and never reaches here. GenerateGraphSnippet's own
+            // surface guard is likewise Mesh-only (MaterialGraph.cpp:397),
+            // and its two sprite-gated node types (VertexColor,
+            // SpriteTexture) are ADDITIONAL capabilities on the sprite
+            // surface -- a plain ConstColor -> Output graph is legal on
+            // either. So this call is a real sprite compile, not a fullscreen
+            // one wearing a sprite label.
+            const bool sprite = (surface == Arcane::MaterialSurface::Sprite);
+            data.kind = sprite ? "sprite" : "fullscreen";
             Arcane::MaterialGraph g;
             Arcane::GraphNode out;
             out.id = 1;
@@ -980,7 +1021,20 @@ namespace Arcane::Editor
             l.toNode = 1;
             g.links.push_back(l);
             g.nextId = 3;
-            auto gen = Arcane::GenerateGraphSnippet(g, Arcane::MaterialSurface::Fullscreen);
+            auto gen = Arcane::GenerateGraphSnippet(
+                g, sprite ? Arcane::MaterialSurface::Sprite : Arcane::MaterialSurface::Fullscreen);
+            if (!gen.errors.empty())
+            {
+                // A starter graph this function AUTHORED failing to compile is
+                // a bug in this function, not in user content -- so it is said
+                // out loud instead of writing a silently snippet-less .arcmat
+                // that would open as an empty-looking material. The asset is
+                // still written (the graph is intact and re-generates on open);
+                // only the cached snippet is missing.
+                ARC_WARN("Arcane Editor: the {} starter graph produced {} codegen error(s) "
+                         "for '{}' -- the material is saved with its graph but no snippet",
+                         data.kind, gen.errors.size(), path.generic_string());
+            }
             data.snippet = std::move(gen.snippet);
             data.graph = std::move(g);
         }
@@ -988,13 +1042,16 @@ namespace Arcane::Editor
         if (!Arcane::SaveMaterialAsset(path, data))
         {
             ARC_WARN("Arcane Editor: could not create material at '{}'", path.generic_string());
-            return;
+            return {};
         }
         // Register with the open project's registry so the new asset appears in
         // the browser and resolves by GUID IMMEDIATELY (not on next project open).
-        if (m_runtime->RegisterCreatedAsset(path))
-            m_assetModel.MarkAllDirty();
+        const auto registered = m_runtime->RegisterCreatedAsset(path);
+        if (!registered)
+            return {};
+        m_assetModel.MarkAllDirty();
         m_documents.OpenPath(path);
+        return *registered;
     }
 
     // EVERY mutable EditorApp member whose value refers to the current project
@@ -1030,6 +1087,8 @@ namespace Arcane::Editor
     // m_assetBrowser: selection, search, and kind filter all belong to the
     // outgoing project's registry -- a Guid from it must not survive as the
     // Assets menu's tracked row.
+    // m_createDialog (asset-manager Task 12): an in-flight create dialog's
+    // parent/texture Guids and folder index all name the OUTGOING project.
     // m_pendingReports / m_reportDiagnostics (GPU crash diagnostics arc,
     // Task 9): m_pendingReports is a report path already queued against the
     // outgoing project by OnReportWritten -- draining it post-switch would
@@ -1072,6 +1131,13 @@ namespace Arcane::Editor
         if (m_undo) m_scene.Reset(*m_undo);
         m_recents.scenes = {};
         m_assetBrowser = {};
+        // Asset-manager Task 12: an in-flight create dialog names the OUTGOING
+        // project -- its parent/texture Guids belong to that registry and its
+        // folder index points into a combo built from that project's folders.
+        // Cleared, not carried: the popup is closed by the switch's own frame
+        // discontinuity, and a stale `open` would re-raise it against the new
+        // project with the old project's fields.
+        m_createDialog = {};
         m_dialogs.ClearAll();
         m_modalErrors.Clear();
         m_materialMtimes.clear();

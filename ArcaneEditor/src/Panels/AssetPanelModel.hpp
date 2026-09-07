@@ -125,6 +125,17 @@ namespace Arcane::Editor
         [[nodiscard]] const std::vector<RailEntry>&     Rail() const { return m_rail; }
         [[nodiscard]] HealthCounts                       Health() const;
         [[nodiscard]] const AssetPanelEntry*             Find(const Arcane::Guid& id) const;
+        // EVERY entry, UNFILTERED -- deliberately distinct from Rows(), which
+        // is what the search box and the rail's kind filter left visible.
+        // Task 12's create dialog is the first consumer and needs exactly
+        // this: its Location combo enumerates the folders that EXIST (not the
+        // ones a search happens to be showing) and its parent picker offers
+        // every material in the project (a parent reference is a Guid, so a
+        // material the Browse lens is currently filtering out is still a
+        // perfectly valid parent). Iteration order is unspecified (an
+        // unordered_map) -- a consumer that displays these MUST sort.
+        [[nodiscard]] const std::unordered_map<Arcane::Guid, AssetPanelEntry>& Entries() const
+        { return m_entries; }
         [[nodiscard]] int  ShownAssetCount() const { return m_shownAssetCount; }  // "X of N shown"
         [[nodiscard]] bool Filtered() const;             // search or kind filter active
 

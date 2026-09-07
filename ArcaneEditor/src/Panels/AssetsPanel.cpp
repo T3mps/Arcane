@@ -1,6 +1,7 @@
 #include "Panels/AssetsPanel.hpp"
 
 #include "Documents/DocumentHost.hpp"
+#include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind + the AssetKind bridge (Task 12)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
@@ -188,37 +189,51 @@ namespace Arcane::Editor
                 ARC_WARN("Assets: '{}' did not resolve to a file", e.mountPath);
         }
 
-        // The unified Create menu's entries (spec s7): every entry DISABLED --
-        // CreateAssetRequest/requestCreateKind wiring is Task 12's. Shared by
-        // the toolbar's popup and every row's context-menu "Create" submenu so
-        // the list is spelled once.
-        void DrawCreateMenuEntries()
+        // The unified Create menu's entries (spec s7), spelled ONCE and shared
+        // by the toolbar's `+ Create` popup and every row's context-menu
+        // "Create" submenu -- the invariant ("no creation path may bypass
+        // CreateAssetRequest") is only cheap to hold if there is one list.
+        //
+        // `enabled` is the ONLY difference between the two call sites: the
+        // toolbar's entries are live from Task 12, the row context menu's stay
+        // disabled until Task 13 gives them their prefill (a row's Create ▸
+        // Sprite... means "from THIS texture", which is a Task 13 field).
+        // A parameter rather than a second copy of the list, so the two can
+        // never drift in spelling, order, icon or separator placement.
+        void DrawCreateMenuEntries(AssetsPanelActions& actions, bool enabled)
         {
-            ImGui::BeginDisabled();
-            ImGui::MenuItem(ICON_LC_PALETTE " Material...");
-            ImGui::MenuItem(ICON_LC_LAYERS  " Material Instance...");
+            ImGui::BeginDisabled(!enabled);
+            const auto entry = [&](const char* label, CreateAssetKind kind)
+            {
+                if (ImGui::MenuItem(label))
+                    actions.requestCreateKind = static_cast<int>(kind);
+            };
+            entry(ICON_LC_PALETTE " Material...",         CreateAssetKind::Material);
+            entry(ICON_LC_LAYERS  " Material Instance...", CreateAssetKind::MaterialInstance);
             ImGui::Separator();
-            ImGui::MenuItem(ICON_LC_BOX          " Mesh...");
-            ImGui::MenuItem(ICON_LC_STICKER      " Sprite...");
-            ImGui::MenuItem(ICON_LC_CLAPPERBOARD " Scene...");
+            // Raise the request NOW; the dialog grows their fields in Task 13
+            // (DrawCreateAssetDialog's own scope comment).
+            entry(ICON_LC_BOX          " Mesh...",   CreateAssetKind::Mesh);
+            entry(ICON_LC_STICKER      " Sprite...", CreateAssetKind::Sprite);
+            entry(ICON_LC_CLAPPERBOARD " Scene...",  CreateAssetKind::Scene);
             ImGui::EndDisabled();
         }
 
-        void DrawCreateMenu()
+        void DrawCreateMenu(AssetsPanelActions& actions)
         {
             if (!ImGui::BeginPopup("##createmenu"))
                 return;
-            DrawCreateMenuEntries();
+            DrawCreateMenuEntries(actions, /*enabled=*/true);
             ImGui::EndPopup();
         }
 
         // Toolbar band: + Create -> search (flex) -> [per-lens slot, EMPTY in
         // Plan 1 -- only Graph's focus combo uses it, Plan 3] -> lens strip
         // anchored right-most (spec s5). Mutates `state` in place; the
-        // create popup's disabled entries mean nothing populates `actions`
-        // this task, but the call is wired here so Task 12 has one site to
-        // extend rather than a new one.
-        void DrawToolbar(AssetsPanelState& state, AssetPanelModel& model, AssetsPanelActions& /*actions*/)
+        // create popup's entries are LIVE from Task 12 -- they set
+        // `actions.requestCreateKind`, which EditorApp routes to the one
+        // BeginCreateAsset entry.
+        void DrawToolbar(AssetsPanelState& state, AssetPanelModel& model, AssetsPanelActions& actions)
         {
             ImGuiStyle& style = ImGui::GetStyle();
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
@@ -226,7 +241,7 @@ namespace Arcane::Editor
 
             if (ImGui::Button(ICON_LC_PLUS " Create " ICON_LC_CHEVRON_DOWN))
                 ImGui::OpenPopup("##createmenu");
-            DrawCreateMenu();
+            DrawCreateMenu(actions);
 
             ImGui::SameLine();
 
@@ -421,7 +436,9 @@ namespace Arcane::Editor
 
             if (ImGui::BeginMenu("Create"))
             {
-                DrawCreateMenuEntries();
+                // Disabled until Task 13 -- see DrawCreateMenuEntries's own
+                // comment on the `enabled` parameter.
+                DrawCreateMenuEntries(actions, /*enabled=*/false);
                 ImGui::EndMenu();
             }
             ImGui::Separator();
@@ -556,8 +573,27 @@ namespace Arcane::Editor
                         ImGui::SetCursorScreenPos(btnMin);
                         const bool plusClicked = ImGui::InvisibleButton("##plus", ImVec2(plusBtnW, btnH));
                         const bool plusHovered = ImGui::IsItemHovered();
+                        // TASK 12 FIX: this used to write `re.kind` -- an
+                        // ASSETKIND int -- straight into a field whose
+                        // contract is a CREATEASSETKIND value. The two enums
+                        // do not share a numbering (AssetKind::Sprite is 6,
+                        // CreateAssetKind::Sprite is 3), so the rail's Sprite
+                        // "+" would have asked for a kind that does not exist
+                        // and its Mesh/Scene "+" for the wrong one. Reconciled
+                        // at the PRODUCER through the one sanctioned bridge
+                        // (CreateAssetDialog.hpp's CreateKindForAssetKind), so
+                        // the field's contract stays clean and the consumer
+                        // needs no tagged-source branch. nullopt cannot
+                        // happen here -- RailKindCreatable above gates this
+                        // block to exactly the four kinds the bridge maps --
+                        // but it is checked rather than asserted, because a
+                        // future kind added to one list and not the other
+                        // should silently do nothing, not raise a bogus
+                        // request.
                         if (plusClicked)
-                            actions.requestCreateKind = re.kind;
+                            if (const auto createKind =
+                                    CreateKindForAssetKind(static_cast<AssetKind>(re.kind)))
+                                actions.requestCreateKind = static_cast<int>(*createKind);
 
                         if (res.hovered || plusHovered)
                         {

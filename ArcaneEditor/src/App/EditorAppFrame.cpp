@@ -172,25 +172,22 @@ namespace Arcane::Editor
         }
     }
 
-    // Two shared file-dialog completion trampolines (declared in EditorApp.hpp),
+    // The shared file-dialog completion trampoline (declared in EditorApp.hpp),
     // replacing the six per-dialog thunks the old pending-string scheme used.
     // SDL's dialog backend fires the callback exactly once per ShowXFileDialog
     // (null path on cancel -- see the early return below), so the heap-allocated
     // request is single-owner and freed here. If a future backend ever skipped
     // the callback the request would leak (bounded, one small struct per
     // un-fired dialog) -- acceptable, noted.
+    //
+    // Task 12 retired its twin, InstancePickedThunk: the instance save dialog
+    // it served is gone with every other OS-picker creation path (spec s7's
+    // invariant -- see DialogInbox in EditorApp.hpp).
     void EditorApp::PathPickedThunk(const char* path, void* user)
     {
         std::unique_ptr<PathDialogRequest> req(static_cast<PathDialogRequest*>(user));
         if (path)
             req->slot->Stash(req->epoch, path);
-    }
-
-    void EditorApp::InstancePickedThunk(const char* path, void* user)
-    {
-        std::unique_ptr<InstanceDialogRequest> req(static_cast<InstanceDialogRequest*>(user));
-        if (path)
-            req->slot->Stash(req->epoch, InstanceNewResult{ path, req->parent });
     }
 
     // The frame. Every line here is a phase call, and the ORDER IS THE
@@ -583,28 +580,20 @@ namespace Arcane::Editor
         }
     }
 
-    // Phase 5: material/instance file-dialog results. Same epoch-guarded slot
-    // pattern; consumed here so document creation never lands mid-render.
+    // Phase 5: material file-dialog results. Same epoch-guarded slot pattern;
+    // consumed here so document creation never lands mid-render.
+    //
+    // TASK 12: the three CREATION slots this used to drain (materialNew,
+    // meshMaterialNew, instanceNew) are gone -- every material/instance
+    // creation now routes through BeginCreateAsset -> DrawCreateAssetDialog ->
+    // ConsumeCreateResult, which is synchronous ImGui and needs no async slot.
+    // What is left is the material OPEN path, which is not a creation path and
+    // is still a real OS file picker.
     void EditorApp::ConsumeMaterialDialogResults()
     {
-        if (const auto materialNew = m_dialogs.materialNew.Take())
-        {
-            CreateMaterialAt(*materialNew);
-        }
-        // F2b Task 13: the mesh-surface twin, its own slot (DialogInbox's own
-        // comment) so this consumer can pass the right surface without a new
-        // request/thunk shape.
-        if (const auto meshMaterialNew = m_dialogs.meshMaterialNew.Take())
-        {
-            CreateMaterialAt(*meshMaterialNew, Arcane::MaterialSurface::Mesh);
-        }
         if (const auto materialOpen = m_dialogs.materialOpen.Take())
         {
             m_documents.OpenPath(*materialOpen);
-        }
-        if (const auto instance = m_dialogs.instanceNew.Take())
-        {
-            CreateInstanceAt(instance->path, instance->parent);
         }
     }
 
@@ -2242,29 +2231,29 @@ namespace Arcane::Editor
                             menuReq.showInExplorer, menuReq.copyAssetPath);
         }
 
-        if (menuReq.newMaterial || menuReq.newMeshMaterial || menuReq.openMaterial)
+        // Assets -> Create -> <kind>...  TASK 12: the two ShowSaveFileDialog
+        // launches that used to live here (newMaterial / newMeshMaterial) are
+        // RETIRED -- the menu is now a thin producer of a CreateAssetRequest
+        // like every other entry point, and BeginCreateAsset is the one place
+        // a create dialog opens (spec s7's invariant).
+        if (menuReq.requestCreateKind >= 0 &&
+            menuReq.requestCreateKind < Arcane::Editor::kCreateAssetKindCount)
         {
-            // Material dialogs start in the project's Content/ (the only place
-            // a saved asset can register + resolve by GUID); no project = OS default.
+            BeginCreateAsset({ static_cast<Arcane::Editor::CreateAssetKind>(
+                                   menuReq.requestCreateKind) });
+        }
+        if (menuReq.openMaterial)
+        {
+            // The material OPEN path is NOT a creation path -- it stays a real
+            // OS file picker, starting in the project's Content/ (no project =
+            // OS default).
             const Arcane::Project* proj = m_runtime->CurrentProject();
             const std::string contentDir =
                 proj ? (proj->Root() / "Content").string() : std::string();
-            const char* defaultPath = contentDir.empty() ? nullptr : contentDir.c_str();
-            if (menuReq.newMaterial)
-                m_gpu->Win().ShowSaveFileDialog(&EditorApp::PathPickedThunk,
-                    new PathDialogRequest{ &m_dialogs.materialNew, m_dialogs.materialNew.Arm() },
-                    "Arcane Material", "arcmat", defaultPath);
-            // F2b Task 13: its OWN slot (see DialogInbox's own comment) so
-            // ConsumeMaterialDialogResults can tell which surface to mint
-            // without a new request/thunk shape.
-            if (menuReq.newMeshMaterial)
-                m_gpu->Win().ShowSaveFileDialog(&EditorApp::PathPickedThunk,
-                    new PathDialogRequest{ &m_dialogs.meshMaterialNew, m_dialogs.meshMaterialNew.Arm() },
-                    "Arcane Mesh Material", "arcmat", defaultPath);
-            if (menuReq.openMaterial)
-                m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
-                    new PathDialogRequest{ &m_dialogs.materialOpen, m_dialogs.materialOpen.Arm() },
-                    "Arcane Material", "arcmat", defaultPath);
+            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.materialOpen, m_dialogs.materialOpen.Arm() },
+                "Arcane Material", "arcmat",
+                contentDir.empty() ? nullptr : contentDir.c_str());
         }
 
         // Scene menu items + their Ctrl+N/O/S shortcuts (raised in the input
@@ -2312,17 +2301,27 @@ namespace Arcane::Editor
     void EditorApp::ConsumeBrowserActions(const Arcane::Editor::AssetsPanelActions& browserActions,
                                           LoopState& ls)
     {
+        // Unified create (Task 12). Both of these used to be their own flows;
+        // both are now the SAME request into the SAME entry, which is what
+        // spec s7's invariant ("no creation path may bypass
+        // CreateAssetRequest") actually asserts.
+        if (browserActions.requestCreateKind >= 0 &&
+            browserActions.requestCreateKind < Arcane::Editor::kCreateAssetKindCount)
+        {
+            BeginCreateAsset({ static_cast<Arcane::Editor::CreateAssetKind>(
+                                   browserActions.requestCreateKind),
+                               browserActions.createPrefillParent });
+        }
+        // "New Instance..." (a material row's context menu, and the preview
+        // pane's kind-specific button): the same request with the clicked
+        // material PRE-FILLED as the parent. This replaces its own
+        // ShowSaveFileDialog launch -- an instance mint that bypassed
+        // CreateAssetRequest was exactly the second half of what the invariant
+        // forbids.
         if (browserActions.createInstanceOf.IsValid())
         {
-            const Arcane::Project* proj = m_runtime->CurrentProject();
-            const std::string contentDir =
-                proj ? (proj->Root() / "Content").string() : std::string();
-            m_gpu->Win().ShowSaveFileDialog(&EditorApp::InstancePickedThunk,
-                new InstanceDialogRequest{ &m_dialogs.instanceNew,
-                                           m_dialogs.instanceNew.Arm(),
-                                           browserActions.createInstanceOf },
-                "Arcane Material", "arcmat",
-                contentDir.empty() ? nullptr : contentDir.c_str());
+            BeginCreateAsset({ Arcane::Editor::CreateAssetKind::MaterialInstance,
+                               browserActions.createInstanceOf });
         }
         if (browserActions.createSpriteFrom.IsValid())
         {
@@ -2383,6 +2382,127 @@ namespace Arcane::Editor
             ImGui::SetClipboardText(browserActions.copyGuid.ToString().c_str());
     }
 
+    // ---- Unified create (asset-manager redesign, Plan 1 Task 12) ------------
+    // THE ONE ENTRY. Every producer's request lands here and nowhere else;
+    // this function opens the dialog and does not create anything.
+    void EditorApp::BeginCreateAsset(const Arcane::Editor::CreateAssetRequest& request)
+    {
+        if (!m_runtime->CurrentProject())
+        {
+            // A created asset can only register + resolve by GUID inside a
+            // project (Project.cpp:334-338). Refused LOUDLY rather than
+            // opening a dialog whose Create could only ever fail.
+            m_modalErrors.Push("Create Failed",
+                               "Open a project first -- a new asset can only be created inside one.");
+            return;
+        }
+
+        // Fresh state per request: a cancelled dialog must not leave a
+        // half-typed name or a stale parent for the next one to inherit.
+        m_createDialog = Arcane::Editor::CreateDialogState{};
+        m_createDialog.request = request;
+        m_createDialog.open    = true;
+
+        // The Material surface combo's starting index. `prefillSurface` is a
+        // MaterialSurface VALUE (-1 = none), and the combo's own order is a
+        // different one -- converted through the single mapping in
+        // CreateAssetDialog.hpp rather than cast.
+        m_createDialog.surface =
+            (request.prefillSurface >= 0 &&
+             request.prefillSurface <= static_cast<int>(Arcane::MaterialSurface::Mesh))
+                ? Arcane::Editor::MaterialSurfaceComboIndex(
+                      static_cast<Arcane::MaterialSurface>(request.prefillSurface))
+                : Arcane::Editor::kMaterialSurfaceDefaultIndex;
+
+        // `prefillParent` is the kind's ONE asset-valued field (the field's own
+        // doc comment): an instance's parent, or -- Task 13 -- a sprite's
+        // source texture. Routed to whichever the requested kind actually has,
+        // so a prefill can never land in a field the dialog will not show.
+        switch (request.kind)
+        {
+            case Arcane::Editor::CreateAssetKind::MaterialInstance:
+                m_createDialog.parent = request.prefillParent;
+                // The picker starts EXPANDED when there is nothing to show for
+                // it yet -- the CreateFlow mock's own state, and the useful
+                // one: a request with no prefilled parent cannot be completed
+                // without picking one.
+                m_createDialog.pickerOpen = !request.prefillParent.IsValid();
+                break;
+            case Arcane::Editor::CreateAssetKind::Sprite:
+                m_createDialog.texture = request.prefillParent;
+                break;
+            default:
+                break;
+        }
+    }
+
+    // THE ONE DISPATCHER. A completed dialog result -> the matching mint.
+    void EditorApp::ConsumeCreateResult(const Arcane::Editor::CreateAssetResult& r)
+    {
+        const Arcane::Project* proj = m_runtime->CurrentProject();
+        if (!proj)
+        {
+            m_modalErrors.Push("Create Failed", "The project closed before the asset was created.");
+            return;
+        }
+
+        // The Location combo always offers the kind's DEFAULT folder, whether
+        // or not the project has one yet (BuildFolderChoices' own comment), so
+        // the directory is made on demand here rather than the create failing
+        // on a project that simply has no "materials/" yet.
+        std::filesystem::path dir = proj->Root() / "Content";
+        if (!r.folder.empty())
+            dir /= r.folder;
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        if (ec)
+        {
+            m_modalErrors.Push("Create Failed",
+                               "Could not create the folder '" + dir.generic_string() +
+                               "' (see Console).");
+            ARC_WARN("Arcane Editor: could not create '{}': {}", dir.generic_string(), ec.message());
+            return;
+        }
+
+        const std::filesystem::path target =
+            dir / (r.name + Arcane::Editor::CreateKindExtension(r.kind));
+
+        Arcane::Guid created;
+        switch (r.kind)
+        {
+            case Arcane::Editor::CreateAssetKind::Material:
+                created = CreateMaterialAt(target, static_cast<Arcane::MaterialSurface>(r.surface));
+                break;
+            case Arcane::Editor::CreateAssetKind::MaterialInstance:
+                created = CreateInstanceAt(target, r.parent);
+                break;
+            case Arcane::Editor::CreateAssetKind::Mesh:
+            case Arcane::Editor::CreateAssetKind::Sprite:
+            case Arcane::Editor::CreateAssetKind::Scene:
+                // UNREACHABLE today: the dialog disables Create for these three
+                // until Task 13 gives them their fields and this switch its
+                // remaining arms. Reported rather than silently dropped, so if
+                // it ever DOES arrive the reason is on screen (spec s13).
+                m_modalErrors.Push("Create Failed",
+                                   "That asset kind cannot be created yet.");
+                return;
+        }
+
+        if (!created.IsValid())
+        {
+            m_modalErrors.Push("Create Failed",
+                               "Could not create '" + target.generic_string() + "' (see Console).");
+            return;
+        }
+        // Land SELECTED in the Browse lens. Both mints already registered the
+        // asset and marked the model dirty, so the next frame's RebuildIfDirty
+        // (DrawEditorUi's, ahead of every panel draw) has an entry for this
+        // guid -- and the panel's scroll-to-selection stamp brings it into
+        // view on that same frame. Select() only records the guid + bumps the
+        // stamp, so calling it before the rebuild is correct, not early.
+        m_assetModel.Select(created);
+    }
+
     Arcane::Editor::ShaderEditorDocument* EditorApp::ResolveActiveMaterialDoc()
     {
         // Resolved from the guid every frame (documents are destroyed
@@ -2431,6 +2551,42 @@ namespace Arcane::Editor
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();
+            }
+        }
+
+        // The unified create dialog (asset-manager Plan 1 Task 12). A
+        // dockspace-level modal like the two around it -- opened by the ONE
+        // entry (BeginCreateAsset), dispatched by the ONE dispatcher
+        // (ConsumeCreateResult), which is the whole of spec s7's "no creation
+        // path may bypass CreateAssetRequest".
+        //
+        // GATED ON AN EMPTY ERROR QUEUE, and that is load-bearing rather than
+        // taste. Every modal in this function re-arms itself the same way
+        // ("if (!IsPopupOpen(title)) OpenPopup(title)"), and ImGui allows
+        // exactly ONE popup at a given stack level: two such modals up at once
+        // close each other every frame (OpenPopupEx -> ClosePopupToLevel(0)),
+        // which makes both permanently `Appearing` and therefore -- under
+        // AlwaysAutoResize, which hides an appearing window for one frame while
+        // it fits itself -- permanently INVISIBLE. Observed live: a queued
+        // "Open Project Failed" and this dialog starved each other to a blank
+        // screen. The error is the more urgent of the two and must be
+        // acknowledged first, so it wins and the create dialog waits its turn
+        // (its state is untouched, so it draws the frame after OK is clicked).
+        if (m_createDialog.open && !m_modalErrors.Front())
+        {
+            if (const Arcane::Project* createProj = m_runtime->CurrentProject())
+            {
+                if (const auto created = Arcane::Editor::DrawCreateAssetDialog(
+                        m_createDialog, m_assetModel, *createProj))
+                    ConsumeCreateResult(*created);
+            }
+            else
+            {
+                // The project closed under an open dialog (a switch, or a
+                // failed open): there is no content root left to create into,
+                // so the dialog goes with it rather than drawing against
+                // nothing.
+                m_createDialog.open = false;
             }
         }
 

@@ -2,6 +2,7 @@
 #include "Panels/AssetBrowser.hpp"   // AssetKindOf (F2b Task 13: the texture-asset panel's kind gate)
 #include "Scene/ComponentCatalog.hpp"
 #include "Panels/ConsoleBuffer.hpp"
+#include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind (Assets -> Create, Task 12)
 #include "Panels/DiagnosticStore.hpp"   // MatchesDiagnosticFilter, reused for the console's own text search
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorWidgets.hpp"
@@ -226,15 +227,35 @@ namespace Arcane::Editor
             {
                 if (ImGui::BeginMenu("Create"))
                 {
-                    // Moved from File -> New Material... -- same request, so
-                    // the dialog flow behind it is unchanged. Further asset
-                    // types land here as they exist.
-                    if (ImGui::MenuItem("Material...")) requests.newMaterial = true;
-                    // F2b Task 13: the surface picker's other creatable kind.
-                    // Sprite is still not offered here (see CreateMaterialAt's
-                    // own header comment) -- it is reached by re-kinding a
-                    // fullscreen document, never minted fresh.
-                    if (ImGui::MenuItem("Mesh Material...")) requests.newMeshMaterial = true;
+                    // Spec s7's FINAL menu: Material... / Material Instance...
+                    // / -- / Mesh... / Sprite... / Scene...  Today's
+                    // Material.../Mesh Material... pair collapsed into one
+                    // Material... whose dialog carries the surface field, so
+                    // "post" and "sprite" materials get a real creation route
+                    // for the first time (sprite used to be reachable only by
+                    // re-kinding an already-created fullscreen document).
+                    //
+                    // The SAME list the Assets panel's `+ Create` popup and a
+                    // row's Create submenu draw (AssetsPanel.cpp's
+                    // DrawCreateMenuEntries) -- spelled twice only because
+                    // this menu bar lives in a different TU with a different
+                    // request struct; both raise the identical
+                    // CreateAssetKind value into the identical
+                    // BeginCreateAsset entry, which is what the invariant
+                    // actually requires.
+                    const auto entry = [&](const char* label, Arcane::Editor::CreateAssetKind kind)
+                    {
+                        if (ImGui::MenuItem(label))
+                            requests.requestCreateKind = static_cast<int>(kind);
+                    };
+                    entry("Material...",          Arcane::Editor::CreateAssetKind::Material);
+                    entry("Material Instance...", Arcane::Editor::CreateAssetKind::MaterialInstance);
+                    ImGui::Separator();
+                    // Raise the request now; the dialog grows their fields in
+                    // Task 13 (DrawCreateAssetDialog's own scope comment).
+                    entry("Mesh...",   Arcane::Editor::CreateAssetKind::Mesh);
+                    entry("Sprite...", Arcane::Editor::CreateAssetKind::Sprite);
+                    entry("Scene...",  Arcane::Editor::CreateAssetKind::Scene);
                     ImGui::EndMenu();
                 }
                 // Act on the Assets panel's last-clicked row; greyed until one

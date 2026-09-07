@@ -82,7 +82,11 @@ namespace Arcane::Editor
                      showInExplorer, copyPath, copyGuid;
         std::filesystem::path openScene;
         // Unified create (Task 12): request the create dialog for a kind.
-        // -1 = none. Values = CreateAssetKind (Task 12).
+        // -1 = none. Values are **CreateAssetKind** (Panels/CreateAssetDialog.hpp)
+        // -- NOT AssetKind, which numbers differently. A producer starting
+        // from an AssetKind (the rail's per-kind "+") converts through
+        // CreateKindForAssetKind before writing here; this field never
+        // carries a raw AssetKind.
         int  requestCreateKind = -1;
         Arcane::Guid createPrefillParent;   // instance parent / sprite texture prefill
     };

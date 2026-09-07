@@ -30,6 +30,7 @@
 #include "Panels/AssetPanelModel.hpp"
 #include "Panels/AssetsPanel.hpp"
 #include "Panels/ConsoleBuffer.hpp"
+#include "Panels/CreateAssetDialog.hpp"
 #include "Panels/DiagnosticStore.hpp"
 #include "App/DialogSlot.hpp"
 #include "App/InputEdges.hpp"
@@ -292,6 +293,17 @@ namespace Arcane::Editor
         // overload is gone with the call site that produced it.
         void ConsumeBrowserActions(const Arcane::Editor::AssetsPanelActions& browserActions,
                                    LoopState& ls);
+        // ---- Unified create (asset-manager redesign, Plan 1 Task 12) -------
+        // THE INVARIANT (spec s7): no creation path may bypass
+        // CreateAssetRequest. These two functions are the whole of it --
+        // BeginCreateAsset is the ONE place a create dialog opens, and
+        // ConsumeCreateResult the ONE place a create dispatches to a mint.
+        // Every producer (the Assets menu, the panel's + Create popup, the
+        // rail's per-kind +, a row's Create submenu, the preview pane's New
+        // Instance..., and Plan 3's graph pin-drag) raises a request and stops
+        // there; none of them opens a dialog or writes a file.
+        void BeginCreateAsset(const Arcane::Editor::CreateAssetRequest& request);
+        void ConsumeCreateResult(const Arcane::Editor::CreateAssetResult& result);
         Arcane::Editor::ShaderEditorDocument* ResolveActiveMaterialDoc();
         void DrawModals(LoopState& ls);
         void DrawViewportPanelPhase(FrameState& fs);
@@ -1174,6 +1186,13 @@ namespace Arcane::Editor
         // longer fed by any draw call -- see DrawAssetsPanel's call site in
         // DrawEditorUi.
         Arcane::Editor::AssetsPanelState        m_assetsPanel;
+        // Asset-manager redesign, Plan 1 Task 12: the unified create dialog's
+        // cross-frame state (a modal outlives the draw that opened it). Set up
+        // by the ONE entry (BeginCreateAsset) and drained by the ONE
+        // dispatcher (ConsumeCreateResult) -- spec s7's invariant, "no
+        // creation path may bypass CreateAssetRequest", is exactly the claim
+        // that nothing else in this class opens a create flow.
+        Arcane::Editor::CreateDialogState       m_createDialog;
         // Asset-manager redesign, Plan 1 Task 5: the pure, cached model behind
         // the (future) Browse lens -- kept current every frame ahead of ANY
         // panel draw (DrawEditorUi's RebuildIfDirty call, immediately before
@@ -1412,73 +1431,71 @@ namespace Arcane::Editor
 
         // ---- Async file-dialog inbox (architecture pass sec 2) --------------
         // One DialogSlot per dialog kind. The old six pending strings + three
-        // mutexes + the unguarded m_pendingInstanceParent sidecar live here now;
-        // the instance parent rides INSIDE its payload so it is stashed under the
-        // lock, taken atomically with the path, and cleared with the slot.
-        struct InstanceNewResult
-        {
-            std::string  path;
-            Arcane::Guid parent;
-        };
+        // mutexes + the unguarded m_pendingInstanceParent sidecar live here now.
+        //
+        // TASK 12 RETIRED THREE OF THESE. `materialNew`, `meshMaterialNew` and
+        // `instanceNew` each existed to carry an OS save-dialog's picked path
+        // back to a mint. All three creation flows now go through the in-editor
+        // CreateAssetDialog instead (spec s7's invariant), which needs no
+        // async slot at all: it returns its result synchronously, in the same
+        // frame, from ImGui. `instanceNew`'s payload struct, its
+        // InstanceDialogRequest, and the InstancePickedThunk trampoline that
+        // filled it went with it -- PathPickedThunk is the only trampoline
+        // left, serving the three dialogs that still ARE OS file pickers
+        // (scene open/save, project open, and the material OPEN path, which is
+        // not a creation path).
         struct DialogInbox
         {
             DialogSlot<std::string>       sceneOpen;
             DialogSlot<std::string>       sceneSave;
             DialogSlot<std::string>       projectOpen;
-            DialogSlot<std::string>       materialNew;
-            // Assets -> Create -> Mesh Material... (F2b Task 13). A SEPARATE
-            // slot rather than a surface flag riding PathDialogRequest: every
-            // other dialog kind here already gets its own slot, and SDL's
-            // save dialog fires the SAME PathPickedThunk trampoline for both
-            // -- the slot pointer baked into the PathDialogRequest at launch
-            // is what tells ConsumeMaterialDialogResults which surface to
-            // mint, with no new request/thunk shape to keep in lockstep.
-            DialogSlot<std::string>       meshMaterialNew;
             DialogSlot<std::string>       materialOpen;
-            DialogSlot<InstanceNewResult> instanceNew;
             void ClearAll()
             {
                 sceneOpen.Clear(); sceneSave.Clear(); projectOpen.Clear();
-                materialNew.Clear(); meshMaterialNew.Clear();
-                materialOpen.Clear(); instanceNew.Clear();
+                materialOpen.Clear();
             }
         };
         DialogInbox m_dialogs;
 
-        // Two shared trampolines replace the six per-dialog thunks the old
-        // pending-string scheme used. SDL's dialog backend fires the callback
-        // exactly once per ShowXFileDialog (null path on cancel), so the
-        // heap-allocated request is single-owner and freed inside the
-        // trampoline. Defined in EditorAppFrame.cpp beside the launch sites
-        // they serve.
+        // ONE shared trampoline replaces the six per-dialog thunks the old
+        // pending-string scheme used (Task 12 retired the second one along
+        // with the instance save dialog -- see DialogInbox above). SDL's
+        // dialog backend fires the callback exactly once per ShowXFileDialog
+        // (null path on cancel), so the heap-allocated request is single-owner
+        // and freed inside the trampoline. Defined in EditorAppFrame.cpp
+        // beside the launch sites it serves.
         struct PathDialogRequest
         {
             DialogSlot<std::string>* slot;
             std::uint64_t            epoch;
         };
-        struct InstanceDialogRequest
-        {
-            DialogSlot<InstanceNewResult>* slot;
-            std::uint64_t                  epoch;
-            Arcane::Guid                   parent;
-        };
         static void PathPickedThunk(const char* path, void* user);
-        static void InstancePickedThunk(const char* path, void* user);
 
         // Mint a GRAPH-owned .arcmat (UE-model: nodes are the authoring tier)
         // + open its doc. Legacy text-owned files still open via OpenPath.
-        // `surface` selects the .arcmat kind: Fullscreen (default) mints the
-        // graph-owned starter (Color -> Output) this comment already
-        // described; Mesh (F2b Task 13) mints kind="mesh" with NO snippet
-        // and NO graph -- mesh materials stitch no shader source at all
-        // (MaterialSurface's own comment, Material/MaterialSource.hpp) -- and
-        // instead saves the F2a-declared `baseColor`/`albedo` params
-        // MeshMaterialCache reads directly. Sprite is not offered here: it is
-        // reached by re-kinding a fullscreen document via the shader
-        // editor's surface picker, never minted fresh.
-        void CreateMaterialAt(std::filesystem::path path,
-                              Arcane::MaterialSurface surface = Arcane::MaterialSurface::Fullscreen);
-        void CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent);
+        // `surface` selects the .arcmat kind: Fullscreen (default) mints
+        // kind="fullscreen" with the graph-owned starter (Color -> Output);
+        // Sprite (asset-manager Plan 1 Task 12) mints kind="sprite" with the
+        // SAME starter graph generated against the sprite surface; Mesh (F2b
+        // Task 13) mints kind="mesh" with NO snippet and NO graph -- mesh
+        // materials stitch no shader source at all (MaterialSurface's own
+        // comment, Material/MaterialSource.hpp) -- and instead saves the
+        // F2a-declared `baseColor`/`albedo` params MeshMaterialCache reads
+        // directly. ALL THREE SURFACES ARE NOW MINTABLE: sprite used to be
+        // reachable only by re-kinding an already-created fullscreen document
+        // through the shader editor's surface picker.
+        //
+        // Both return the REGISTERED guid (the one Project::RegisterAsset
+        // assigned, which is what the panel model and every Guid reference
+        // key off), or Nil on any failure -- the same "Nil on failure" shape
+        // MintOrReuseSpriteForTexture/MintMeshAsset below already use, so the
+        // one dispatcher (ConsumeCreateResult) can report a failed create
+        // through ModalErrorQueue and select a successful one, without a
+        // second lookup.
+        Arcane::Guid CreateMaterialAt(std::filesystem::path path,
+                                      Arcane::MaterialSurface surface = Arcane::MaterialSurface::Fullscreen);
+        Arcane::Guid CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent);
         // Reuse-or-mint policy (sprite-asset spec, Section 3): exactly one
         // registered .arcsprite referencing `textureGuid` -> reuse its id;
         // zero or several -> mint a fresh sibling .arcsprite next to the
