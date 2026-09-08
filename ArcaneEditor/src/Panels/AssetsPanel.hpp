@@ -18,7 +18,9 @@
 // underneath AssetPanelModel -- this file adds no new classification, only
 // the panel shell.
 
+#include "Panels/AssetGraphViewModel.hpp"   // the Graph lens's built projection (state caches one)
 #include "Panels/AssetPanelModel.hpp"   // AssetPanelModel (current before every panel draw)
+#include "Widgets/GraphGridPhase.hpp"   // GraphGridPhase -- ImGui-only, no node-editor coupling
 
 #include <Arcane/Guid.hpp>
 
@@ -101,6 +103,49 @@ namespace Arcane::Editor
         // construction rather than by convention.
         std::unordered_map<std::string, bool>  groupOpen;
         std::unordered_map<Arcane::Guid, bool> childrenOpen;
+
+        // ---- Plan 3 (Graph lens) session state -------------------------
+        // The ax::NodeEditor canvas context, held as an OPAQUE pointer ON
+        // PURPOSE: plan ruling 1 keeps every `ed::` call lens-local to
+        // AssetsPanel.cpp, so this header must never include
+        // imgui_node_editor.h (the same refusal CanvasPopupScope.hpp:16-19
+        // already makes for the shared widget layer). Created lazily by the
+        // first Graph-lens draw; destroyed through
+        // DestroyAssetsPanelCanvas below -- NEVER by a caller that reaches
+        // in and casts, which would need the header this field exists to
+        // avoid.
+        void* graphCanvas = nullptr;
+        // Per-canvas grid phase (one instance per canvas, exactly as the
+        // shader editor keeps one per document canvas).
+        GraphGridPhase graphGrid;
+        // The graph's scope root. NIL = "everything" (ruling 6: there is no
+        // root to measure from). Task 5 seeds it from the boot scene and
+        // adds the toolbar combo that edits it.
+        Arcane::Guid graphFocus;
+        // Ruling 4: the Graph lens gets its OWN selection stamp -- sharing
+        // Browse's `seenSelectionStamp` would let one consumer swallow the
+        // other's pending scroll/center. Task 4 is the consumer.
+        std::uint32_t seenSelectionStampGraph = 0;
+
+        // The built projection plus the two inputs it was built from. The
+        // dirty trigger is a stamp comparison, never a per-frame rebuild:
+        // `graph` is re-Built only when AssetPanelModel::entriesStamp moved
+        // (its entries/index changed) or the focus changed. See
+        // AssetPanelModel::entriesStamp's own declaration for why that
+        // counter -- and not RebuildIfDirty's return value -- is the honest
+        // trigger.
+        AssetGraphViewModel graph;
+        std::uint32_t graphBuiltStamp = 0;
+        Arcane::Guid  graphBuiltFocus;
+        bool          graphBuilt = false;
+        // Set whenever `graph` was rebuilt (or the canvas context was just
+        // created) and consumed by the next canvas frame's
+        // ed::SetNodePosition pass. Ruling 2: computed layout is written on
+        // every REBUILD, not every frame -- which is what leaves the
+        // library's own node dragging usable in between, with the explicit
+        // contract that a reposition is TRANSIENT (the next rebuild snaps it
+        // back). That is intended behavior, not a bug.
+        bool          graphLayoutDirty = false;
     };
 
     // Row/menu actions the APP resolves after the draw -- same "panel
@@ -191,4 +236,22 @@ namespace Arcane::Editor
                                        const Arcane::Project* project, DocumentHost& docs,
                                        const AssetsPanelServices& services,
                                        bool* open = nullptr);
+
+    // Tear the Graph lens's canvas context down and drop the built
+    // projection with it (Plan 3 Task 3). The HOST calls this at exactly two
+    // seams -- a project switch (beside AssetPanelModel::ResetForProjectSwitch:
+    // a new project shares no reference topology, no node ids and no view with
+    // the old one) and shutdown (before the ImGui context dies).
+    //
+    // Why a function here rather than an `ed::DestroyEditor` at those call
+    // sites: plan ruling 1 pins every `ed::` call to AssetsPanel.cpp, and
+    // `graphCanvas` is deliberately a `void*` for the same reason -- a caller
+    // able to destroy it directly would need the node-editor header this
+    // header exists to keep out. Idempotent, and safe when the lens was never
+    // opened (the context is created lazily, so it is usually null).
+    //
+    // MUST run while an ImGui context is current: ~EditorContext touches only
+    // ImGui/CPU state (the shader editor's own dtor comment,
+    // ShaderEditorDocument.cpp), but it does touch it.
+    void DestroyAssetsPanelCanvas(AssetsPanelState& state);
 }

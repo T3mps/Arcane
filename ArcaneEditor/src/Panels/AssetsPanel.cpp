@@ -16,10 +16,16 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiSelectableFlags_NoPadWithHalfSpacing (ruling 4, 2026-09-07)
+// Plan 3 ruling 1: THE ONE TU that may name ax::NodeEditor for this panel.
+// AssetsPanel.hpp holds the context as a void* and EditorWidgets stays
+// node-editor-free precisely so this include never has to leave this file.
+#include <imgui_node_editor.h>
 
 #include <algorithm>
 #include <cfloat>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <string_view>
@@ -2527,6 +2533,1062 @@ namespace Arcane::Editor
 
             ImGui::EndChild();
         }
+
+        // ===================================================================
+        // Plan 3 (spec §10): the Graph lens's ax::NodeEditor canvas
+        // ===================================================================
+        // Ruling 1: spec §10's "reuses the shader editor's canvas vocabulary"
+        // IS the vendored ax::NodeEditor -- the shader editor has no
+        // hand-rolled canvas -- and every `ed::` call for this lens lives
+        // HERE, in this one TU. Nothing about the node editor reaches
+        // AssetsPanel.hpp (the context is a `void*` there) or the shared
+        // widget layer (CanvasPopupScope.hpp:16-19 makes the same refusal).
+        // The graph-framework extraction stays deferred: no schema, no undo,
+        // no serialization layer is invented for this canvas.
+        //
+        // The shader editor is the IDIOM SOURCE, cited per helper below --
+        // copied in SHAPE, never by including its header.
+        namespace ed = ax::NodeEditor;
+
+        // ---- Fixed geometry: spec §11.2's "graph nodes" row, VERBATIM -----
+        // "graph nodes | w 180-220, header 24px, accent bar 3px, pins 9px"
+        constexpr float kGraphNodeMinWidth   = 180.0f;
+        constexpr float kGraphNodeMaxWidth   = 220.0f;
+        constexpr float kGraphHeaderHeight   = 24.0f;
+        constexpr float kGraphAccentBarWidth = 3.0f;
+        // 9px ACROSS: the radius is half the spec's diameter, exactly as the
+        // plan spells out ("DrawPinDot -- radius becomes 4.5f for §11.2's
+        // 9px").
+        constexpr float kGraphPinRadius      = 4.5f;
+        constexpr int   kGraphPinSegments    = 12;
+        constexpr float kGraphPinRingWidth   = 1.6f;
+
+        // ---- Layout pitch (tuning values; Task 5's render comparison against
+        // OptionD-Graph-FINAL.png arbitrates the final numbers).
+        //
+        // COLUMN PITCH is measured off the board rather than guessed: its
+        // three columns sit at x = 40 / 330 / 660, i.e. pitches of 290 and
+        // 330. 300 sits between them and -- unlike the plan's ~260 starting
+        // suggestion -- leaves a real gutter at the §11.2 CEILING too (a
+        // 220px node in a 260px column leaves 40px, which is not enough air
+        // for the wire's own bulge, let alone the mid-edge label that has to
+        // sit in it: at that gap the eased control points still reach ~30px
+        // each way).
+        //
+        // ROW PITCH is the plan's 90 unchanged: a node stands 54px
+        // (GraphNodeHeight), so that is 36px of air between stacked rows.
+        // Tighter than the board's ~70, deliberately -- the board shows three
+        // nodes in a column and a real project's "everything" mode shows
+        // dozens.
+        constexpr float kGraphColumnPitch = 300.0f;
+        constexpr float kGraphRowPitch    = 90.0f;
+
+        // ---- Node internals, read off the board (OptionD.dc.html) ---------
+        // `.nhead { height: 24px; padding: 0 8px 0 11px; gap: 6px }` -- the
+        // 11px left inset is the 3px accent bar plus 8px of air, which is why
+        // it is spelled as those two terms rather than as a bare literal.
+        constexpr float kGraphNodePadLeft  = kGraphAccentBarWidth + 8.0f;
+        constexpr float kGraphNodePadRight = 8.0f;
+        constexpr float kGraphNodeBodyPadY = 6.0f;
+        constexpr float kGraphNodeIconGap  = 6.0f;
+        constexpr float kGraphHeaderFontPx = 14.0f;   // §11.3: "13-14px secondary via PushFont"
+        constexpr float kGraphMetaFontPx   = 13.0f;
+
+        // ---- Canvas palette ----------------------------------------------
+        // The canvas surface IS the editor's panel tone (the kCanvasColor
+        // precedent, ShaderEditorDocument.cpp:233-238, and the plan's own
+        // constraint) -- a graph body is the same flat dark surface every
+        // other panel body is. The node body/title/border tones are the
+        // shader editor's canvas constants, unchanged, so both canvases in
+        // this editor read as the same material.
+        //
+        // NOTE for the render comparison: the board draws its canvas at
+        // #121212 (kWell) with #1e1e1e nodes. The plan pins kPanel for the
+        // canvas instead, so every tone here sits one step up from the
+        // board's -- the RELATIONSHIPS (canvas darkest, body one step above
+        // it, band one step below the body) are identical.
+        constexpr ImVec4 kGraphCanvasColor    = Theme::kPanel;                         // #1e1e1e
+        constexpr ImVec4 kGraphGridMinorColor = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
+        constexpr ImVec4 kGraphGridMajorColor = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
+        constexpr ImVec4 kGraphNodeBodyColor  = ImVec4(0.176f, 0.176f, 0.188f, 1.0f);  // #2d2d30
+        constexpr ImVec4 kGraphNodeTitleColor = ImVec4(0.137f, 0.137f, 0.149f, 1.0f);  // #232326
+        constexpr ImVec4 kGraphNodeBorder     = ImVec4(0.243f, 0.243f, 0.267f, 1.0f);
+        // Selection amber / hover cyan: the editor-wide outline language
+        // (ShaderEditorDocument.cpp:246-250, itself the viewport outline
+        // composite's kSelectColor/kHoverColor).
+        constexpr ImVec4 kGraphNodeSelBorder  = ImVec4(1.0f,  0.65f, 0.10f, 1.0f);
+        constexpr ImVec4 kGraphNodeHovBorder  = ImVec4(0.25f, 0.70f, 1.0f,  1.0f);
+        constexpr float  kGraphNodeRounding      = 4.0f;   // the canvas's own language -- kept
+        constexpr float  kGraphNodeBorderWidth   = 1.0f;
+        constexpr float  kGraphNodeHovBorderW    = 1.5f;
+        constexpr float  kGraphNodeSelBorderW    = 2.0f;   // spec §10: "selection = 2px"
+
+        constexpr float kGraphWireThickness = 2.0f;
+        // The subtle anchor -> "+N more" connector: thinner than a data edge
+        // on purpose (it is NOT one -- see DrawGraphLens's own comment).
+        constexpr float kGraphOverflowWireThickness = 1.5f;
+        // How far a wire's colour is pulled toward the canvas when the edge
+        // is NOT emphasized. The board's edges read as a mid-gray against the
+        // backdrop; dimming the source kind's accent this far lands in the
+        // same tonal band while still saying which kind the edge leaves.
+        constexpr float kGraphWireDim         = 0.62f;
+        constexpr float kGraphOverflowWireDim = 0.78f;
+        // The ghost/overflow body wash: the canvas tone laid back over the
+        // node body at partial alpha, which pulls a tombstone or a "+N more"
+        // chip toward the backdrop without inventing a second body colour.
+        constexpr float kGraphGhostWash = 0.55f;
+
+        // Mid-edge labels (ruling 9) stop being legible long before the nodes
+        // do, so they are the first thing the canvas drops on zoom-out. The
+        // threshold is the shader editor's own LOD table, ported: its
+        // kLodLowMax = 0.250 is the last stop of the LowDetail tier
+        // (FFixedZoomLevelsContainer, SNodePanel.cpp:56-75, via
+        // ShaderEditorDocument.cpp's NodeLODForScale). At or below that,
+        // labels are skipped; MediumDetail and up draw them.
+        constexpr float kGraphLabelMinScale = 0.250f;
+        constexpr float kGraphLabelFontPx   = 12.0f;   // §11.2's pill/label text size
+
+        // c_LinkChannel_Links, reproduced. It is a file-static in the
+        // vendored TU (imgui_node_editor.cpp:130-131) so it cannot be named
+        // from here; the derivation and the WHOLE two-layer rationale (why a
+        // transparent ed::Link costs nothing, why hover/selection halos
+        // survive, and why channel 7 is the only layer that puts a
+        // hand-drawn wire where the flat one was) are written out once at
+        // ShaderEditorDocument.cpp:311-357. Read that block before touching
+        // anything here.
+        constexpr int kGraphLinkChannel = 7;
+
+        // Spec §11.3's kind-color table, VERBATIM, as a panel-local function
+        // in PinColorForWidth's shape (ShaderEditorDocument.cpp:491) --
+        // ruling 5: EditorTheme.hpp:27-32 rules domain colour-coding out of
+        // the theme, and the kPillAmberBorder precedent (EditorWidgets.cpp:305)
+        // covers a spec-pinned hex with no token.
+        //
+        // The five rows §11.3 pins are the only five it pins. Every OTHER
+        // kind -- Audio/Font/Data/Diagnostic/Other -- gets the theme's
+        // neutral grab gray rather than an invented hue. That fallback is
+        // also what a SYNTHETIC OVERFLOW node lands on: it carries
+        // AssetKind::Other ALWAYS, never its anchor's kind, precisely so this
+        // table cannot paint it as one more instance of whatever it
+        // overflowed from (AssetGraphViewModel.hpp's own field comment).
+        ImVec4 KindAccentColor(AssetKind kind) noexcept
+        {
+            switch (kind)
+            {
+                case AssetKind::Texture:  return ImVec4(0.6902f, 0.4157f, 0.3569f, 1.0f); // #b06a5b
+                case AssetKind::Material: return ImVec4(0.4157f, 0.6078f, 0.3569f, 1.0f); // #6a9b5b
+                case AssetKind::Mesh:     return ImVec4(0.3569f, 0.6078f, 0.6902f, 1.0f); // #5b9bb0
+                case AssetKind::Sprite:   return ImVec4(0.6078f, 0.3569f, 0.6902f, 1.0f); // #9b5bb0
+                case AssetKind::Scene:    return ImVec4(0.6902f, 0.6078f, 0.3569f, 1.0f); // #b09b5b
+                default: break;
+            }
+            return Theme::kGrab;   // #9a9a9a -- no §11.3 row, so no invented hue
+        }
+
+        ImVec4 GraphLerpColor(const ImVec4& a, const ImVec4& b, float t) noexcept
+        {
+            return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
+                          a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
+        }
+
+        // Toward the canvas: "the same hue, further back".
+        ImVec4 GraphDimColor(const ImVec4& c, float t) noexcept
+        {
+            return GraphLerpColor(c, ImVec4(kGraphCanvasColor.x, kGraphCanvasColor.y,
+                                            kGraphCanvasColor.z, c.w), t);
+        }
+
+        // BrightenColor's idiom (ShaderEditorDocument.cpp:387): a quarter of
+        // the way to white, alpha untouched.
+        ImVec4 GraphBrightenColor(const ImVec4& c) noexcept
+        {
+            return GraphLerpColor(c, ImVec4(1.0f, 1.0f, 1.0f, c.w), 0.25f);
+        }
+
+        // ---- Id encoding --------------------------------------------------
+        // Node ids are the view model's own node INDEX + 1, never the guid: a
+        // synthetic overflow node REUSES its anchor's guid by construction
+        // (AssetGraphViewModel.hpp), so a guid is not a unique node key here,
+        // and hashing one would swap a collision-free scheme for a merely
+        // improbable one. Ids therefore shuffle when the projection is
+        // rebuilt -- which costs nothing: a rebuild also re-writes every node
+        // position (ruling 2), and the MODEL, not the canvas, is the
+        // selection authority (Task 4).
+        std::uint64_t GraphNodeIdOf(std::size_t index) noexcept
+        {
+            return static_cast<std::uint64_t>(index) + 1ull;
+        }
+        // Two pins per node. LEFT is the node's OUTBOUND (refs / "what I
+        // use") side and RIGHT is its INBOUND (referencers / "who uses me")
+        // side -- that way round, and not the other, because the layout puts
+        // sources on the LEFT (spec §10: "layered left-to-right by dependency
+        // depth, sources left, scenes right", and the view model's layer() is
+        // the longest OUTBOUND path to a leaf, so a target always sits in a
+        // lower column than its referencer). The board agrees: uv_marker.png
+        // -- a pure target -- carries a right-hand pin only, and main.arcscene
+        // -- a pure referencer -- carries a left-hand pin only.
+        //
+        // It also falls straight out of the library's curve convention: a
+        // link leaves its START pin along SourceDirection (+1,0) and arrives
+        // at its END pin along TargetDirection (-1,0), so a wire has to start
+        // at the LEFT node's right-hand pin and end at the RIGHT node's
+        // left-hand pin. Hence RIGHT pins are ed::PinKind::Output and LEFT
+        // pins are ed::PinKind::Input.
+        std::uint64_t GraphLeftPinId(std::uint64_t nodeId) noexcept  { return nodeId * 4ull + 1ull; }
+        std::uint64_t GraphRightPinId(std::uint64_t nodeId) noexcept { return nodeId * 4ull + 2ull; }
+
+        // One-time style for this lens's node-editor context, in
+        // ApplyGraphCanvasStyle's shape (ShaderEditorDocument.cpp:576).
+        // Written to the PERSISTENT style (ed::GetStyle returns a mutable
+        // reference) rather than pushed per frame, because every value here
+        // is latched into the object at BeginNode/BeginPin time -- one
+        // assignment covers every node for the context's life.
+        void ApplyAssetGraphCanvasStyle()
+        {
+            ed::Style& s = ed::GetStyle();
+            // The vendored grid AND background fill are switched off; our own
+            // lattice is drawn underneath instead (DrawGraphGridFallback).
+            // Wholesale replacement is the only option: the built-in grid is
+            // a hardcoded 32px line pair with no StyleVar and no LOD fade.
+            s.Colors[ed::StyleColor_Grid] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+            s.Colors[ed::StyleColor_Bg]   = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+            s.Colors[ed::StyleColor_NodeBg]        = kGraphNodeBodyColor;
+            s.Colors[ed::StyleColor_NodeBorder]    = kGraphNodeBorder;
+            s.Colors[ed::StyleColor_HovNodeBorder] = kGraphNodeHovBorder;
+            s.Colors[ed::StyleColor_SelNodeBorder] = kGraphNodeSelBorder;
+            // A pin draws nothing of its own except a hover rect -- that
+            // rectangle would fight the dot, so its alpha goes to zero and
+            // the dot IS the pin visual.
+            s.Colors[ed::StyleColor_PinRect]       = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+            s.Colors[ed::StyleColor_PinRectBorder] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+            s.NodeRounding            = kGraphNodeRounding;
+            s.NodeBorderWidth         = kGraphNodeBorderWidth;
+            s.HoveredNodeBorderWidth  = kGraphNodeHovBorderW;
+            s.SelectedNodeBorderWidth = kGraphNodeSelBorderW;
+            // ZERO node padding, unlike the shader editor's: this lens lays
+            // its own rows out by hand (SetCursorScreenPos + explicit
+            // Dummies) so the 24px header band and the node's total height
+            // are EXACT rather than whatever the ambient font metrics plus a
+            // padding pair happen to add up to. With no padding the node's
+            // content origin IS ed::GetNodePosition, which is also what lets
+            // the pin geometry be computed without a frame of readback lag.
+            s.NodePadding = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+
+        // The canvas's view scale, in the same units as a zoom stop. THE
+        // TRAP (ViewScale, ShaderEditorDocument.cpp:441): ed::GetCurrentZoom
+        // returns InvScale -- canvas units per screen pixel -- the RECIPROCAL
+        // of the scale everything else means by "zoom".
+        float GraphViewScale() noexcept
+        {
+            const float invScale = ed::GetCurrentZoom();
+            return invScale > 0.0001f ? 1.0f / invScale : 1.0f;
+        }
+
+        // Cubic bezier at t -- the same evaluation the library tessellates.
+        ImVec2 GraphCubicBezierAt(const ImVec2& p0, const ImVec2& p1,
+                                  const ImVec2& p2, const ImVec2& p3, float t) noexcept
+        {
+            const float u = 1.0f - t;
+            const float w0 = u * u * u;
+            const float w1 = 3.0f * u * u * t;
+            const float w2 = 3.0f * u * t * t;
+            const float w3 = t * t * t;
+            return ImVec2(p0.x * w0 + p1.x * w1 + p2.x * w2 + p3.x * w3,
+                          p0.y * w0 + p1.y * w1 + p2.y * w2 + p3.y * w3);
+        }
+
+        // The two control points for a wire between `p0` (a left-hand
+        // endpoint, leaving rightward) and `p3` (a right-hand endpoint,
+        // arriving leftward). Reproduces Link::GetCurve exactly, reading the
+        // style rather than assuming it, so a later LinkStrength or direction
+        // change moves our curve and the library's together
+        // (DrawGradientWire's convention, ShaderEditorDocument.cpp:5427-5446).
+        void GraphWireControlPoints(const ImVec2& p0, const ImVec2& p3,
+                                    ImVec2& p1, ImVec2& p2) noexcept
+        {
+            const ed::Style& st = ed::GetStyle();
+            const float dx = p3.x - p0.x;
+            const float dy = p3.y - p0.y;
+            const float halfDistance = std::sqrt(dx * dx + dy * dy) * 0.5f;
+            const auto ease = [halfDistance](float strength)
+            {
+                // Guarded against a zero strength the library never divides
+                // by (its own branch is only entered when halfDistance <
+                // strength, which a zero strength cannot satisfy).
+                constexpr float kPi = 3.14159265358979323846f;
+                if (strength > 0.0f && halfDistance < strength)
+                    return strength * std::sin(kPi * 0.5f * halfDistance / strength);
+                return strength;
+            };
+            const float s = ease(st.LinkStrength);
+            p1 = ImVec2(p0.x + st.SourceDirection.x * s, p0.y + st.SourceDirection.y * s);
+            p2 = ImVec2(p3.x + st.TargetDirection.x * s, p3.y + st.TargetDirection.y * s);
+        }
+
+        // Hand-drawn wire in the LINKS channel. Returns the curve's midpoint
+        // (canvas space) so a caller can hang a label off it.
+        //
+        // Retargeting the channel is not optional -- between ed::Begin and
+        // ed::End but outside a node the current channel is the BOTTOM of the
+        // merge, under the grid's own background fill, so a wire drawn there
+        // would simply be painted over. See kGraphLinkChannel.
+        ImVec2 DrawGraphWire(const ImVec2& p0, const ImVec2& p3,
+                             const ImVec4& color, float thickness)
+        {
+            ImVec2 p1, p2;
+            GraphWireControlPoints(p0, p3, p1, p2);
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            // Defensive: the link channels exist from Begin, but never index
+            // past a splitter that has not been grown.
+            if (dl->_Splitter._Count > kGraphLinkChannel)
+            {
+                const int prevChannel = dl->_Splitter._Current;
+                dl->ChannelsSetCurrent(kGraphLinkChannel);
+                dl->AddBezierCubic(p0, p1, p2, p3, ImGui::GetColorU32(color), thickness);
+                dl->ChannelsSetCurrent(prevChannel);
+            }
+            return GraphCubicBezierAt(p0, p1, p2, p3, 0.5f);
+        }
+
+        // One port dot, DrawPinDot's reading (ShaderEditorDocument.cpp:507):
+        // FILLED when something is attached, a hollow ring when not. Unlike
+        // that one this does NOT advance the cursor -- this lens positions
+        // its pins on the node's own edge by hand, so the dot is pure
+        // drawlist paint and the pin's layout contribution is nil.
+        void DrawGraphPinDot(ImDrawList* dl, const ImVec2& centre,
+                             const ImVec4& color, bool connected)
+        {
+            const ImU32 col = ImGui::GetColorU32(color);
+            if (connected)
+            {
+                dl->AddCircleFilled(centre, kGraphPinRadius, col, kGraphPinSegments);
+            }
+            else
+            {
+                dl->AddCircleFilled(centre, kGraphPinRadius,
+                                    ImGui::GetColorU32(kGraphNodeBodyColor), kGraphPinSegments);
+                dl->AddCircle(centre, kGraphPinRadius, col, kGraphPinSegments, kGraphPinRingWidth);
+            }
+        }
+
+        // Trim `text` to fit `maxWidth` under the CURRENT font, appending a
+        // real ellipsis when it had to cut. Never cuts inside a UTF-8
+        // sequence. A graph node label is a file stem, so the linear walk is
+        // cheap; the point is that the node's WIDTH is pinned by §11.2 and
+        // the label has to yield to it, not the other way round.
+        std::string GraphEllipsize(const std::string& text, float maxWidth)
+        {
+            if (maxWidth <= 0.0f)
+                return std::string();
+            if (ImGui::CalcTextSize(text.c_str()).x <= maxWidth)
+                return text;
+            const char* kEllipsis = "\xE2\x80\xA6";   // U+2026
+            const float ellipsisW = ImGui::CalcTextSize(kEllipsis).x;
+            std::size_t cut = text.size();
+            while (cut > 0)
+            {
+                --cut;
+                while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
+                    --cut;
+                if (ImGui::CalcTextSize(text.c_str(), text.c_str() + cut).x + ellipsisW <= maxWidth)
+                    break;
+            }
+            return text.substr(0, cut) + kEllipsis;
+        }
+
+        // Everything one node needs, computed BEFORE submission so the pin
+        // geometry (and therefore every wire endpoint) is exact from frame
+        // one -- no waiting on ed::GetNodeSize to report a measurement.
+        // Honest only because this lens lays the node out by hand and pins
+        // its bottom-right corner with an explicit Dummy; see DrawGraphNode.
+        struct GraphNodeVisual
+        {
+            ImVec2 pos;                 // canvas space, top-left
+            float  width  = 0.0f;
+            float  height = 0.0f;
+            bool   hasLeftPin  = false;  // outbound / refs side
+            bool   hasRightPin = false;  // inbound / referencers side
+            bool   leftConnected  = false;
+            bool   rightConnected = false;
+        };
+
+        // The node body's one content row: an 18px thumb (or the kind icon
+        // in the same cell) plus whatever pills fit, else a dim meta line.
+        struct GraphNodeBody
+        {
+            std::uint64_t thumb = 0;
+            const char*   icon  = nullptr;
+            std::vector<std::pair<const char*, int>> pills;   // text, AssetPill variant
+            std::string   meta;                                // used when there are no pills
+        };
+
+        // Node body row height: the 18px thumb cell is the tallest thing in
+        // it, so it sets the row.
+        float GraphBodyRowHeight()
+        {
+            return kAssetRowThumbSize;
+        }
+
+        float GraphNodeHeight()
+        {
+            return kGraphHeaderHeight + kGraphNodeBodyPadY + GraphBodyRowHeight() + kGraphNodeBodyPadY;
+        }
+
+        // Chrome drawn AFTER ed::EndNode, in the node's own user-background
+        // channel -- above the library's body fill, below its content and pin
+        // chrome -- which is exactly where a header band and an accent bar
+        // belong (DrawNodeTitleBand's rationale, ShaderEditorDocument.cpp:555).
+        // Coordinates are canvas space, the space both ed::GetNodePosition
+        // and plain ImGui use inside ed::Begin/End.
+        //
+        // `wash` > 0 lays the canvas tone back over the whole body at that
+        // alpha, which is how a tombstone and a "+N more" chip read as ghosts
+        // without a second body colour existing; `borderAccent` non-null
+        // paints a 1px inset border INSIDE the library's own, so the
+        // library's hover/selection border still shows through around it.
+        void DrawGraphNodeChrome(std::uint64_t nodeId, const GraphNodeVisual& v,
+                                 bool drawBand, const ImVec4* accent,
+                                 float wash, const ImVec4* borderAccent)
+        {
+            ImDrawList* bg = ed::GetNodeBackgroundDrawList(ed::NodeId(nodeId));
+            if (!bg)
+                return;
+
+            const float b = kGraphNodeBorderWidth;
+            const ImVec2 innerMin(v.pos.x + b, v.pos.y + b);
+            const ImVec2 innerMax(v.pos.x + v.width - b, v.pos.y + v.height - b);
+
+            if (drawBand)
+                bg->AddRectFilled(innerMin, ImVec2(innerMax.x, v.pos.y + kGraphHeaderHeight),
+                                  ImGui::GetColorU32(kGraphNodeTitleColor),
+                                  kGraphNodeRounding, ImDrawFlags_RoundCornersTop);
+
+            if (accent)
+                // Drawn AFTER the band so it runs the node's FULL height, the
+                // way the board's `.accent { top: 0; bottom: 0 }` does -- the
+                // header is not a separate region the bar stops at.
+                bg->AddRectFilled(innerMin, ImVec2(innerMin.x + kGraphAccentBarWidth, innerMax.y),
+                                  ImGui::GetColorU32(*accent),
+                                  kGraphNodeRounding, ImDrawFlags_RoundCornersLeft);
+
+            if (wash > 0.0f)
+                bg->AddRectFilled(innerMin, innerMax,
+                                  ImGui::GetColorU32(Theme::WithAlpha(kGraphCanvasColor, wash)),
+                                  kGraphNodeRounding);
+
+            if (borderAccent)
+                bg->AddRect(innerMin, innerMax, ImGui::GetColorU32(*borderAccent),
+                            kGraphNodeRounding, ImDrawFlags_RoundCornersAll,
+                            kGraphNodeBorderWidth);
+        }
+
+        // Submit one node: the §10 anatomy (header row + 3px kind accent bar
+        // + body row + the two edge pins), laid out by hand against the
+        // zero-padding node style so the header band is EXACTLY 24px and the
+        // node's measured size is exactly `v.width` x `v.height`.
+        //
+        // Every text run is pure ImDrawList overdraw rather than a real ImGui
+        // item -- the RowWithThumb fix's reasoning (EditorWidgets.cpp),
+        // applied for a second reason here: a text item's own extent would
+        // feed the node's group rect and let a long label push the node past
+        // §11.2's 220px ceiling. The only real items submitted are the two
+        // width/height Dummies and the pills, all of which are sized against
+        // a budget this function computed.
+        void DrawGraphNode(std::uint64_t nodeId, const GraphNodeVisual& v,
+                           const GraphNodeBody& body, const char* headerIcon,
+                           const std::string& headerLabel, const char* headerPill,
+                           const ImVec4& accent, bool ghost)
+        {
+            ed::BeginNode(ed::NodeId(nodeId));
+
+            // With NodePadding zeroed, the cursor at this point IS the node's
+            // top-left in canvas space.
+            const ImVec2 origin = ImGui::GetCursorScreenPos();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+
+            // Pins the node's WIDTH. A zero-height item so it costs no rows.
+            ImGui::Dummy(ImVec2(v.width, 0.0f));
+
+            // ---- pins, submitted FIRST -----------------------------------
+            // Order is load-bearing, not taste: ed::BeginPin opens an ImGui
+            // group, and EndGroup contributes a group rect measured from the
+            // cursor AT BeginGroup. Submitted after the node's last row that
+            // cursor sits one ItemSpacing.y BELOW the node's bottom edge, and
+            // the node silently grows by 4px. Submitted here -- with the
+            // cursor explicitly parked back at `origin` -- the group is
+            // degenerate and contributes exactly nothing, which is what keeps
+            // the measured node size equal to `v.height` and therefore keeps
+            // the pin centres (and every wire endpoint derived from them)
+            // exact from frame one.
+            //
+            // Each pin's HIT rect straddles the node's border (the board's
+            // `left: -5px` / `right: -5px`), which ed::PinRect lets us state
+            // outright instead of inferring it from an item rect that would
+            // drag the node's own bounds out with it. ed::PinPivotRect then
+            // makes the dot's centre the wire anchor, so the curve we
+            // hand-draw and the curve the library hit-tests cannot drift
+            // apart (SetPinPivot's rationale, ShaderEditorDocument.cpp:5387).
+            {
+                const float pinY = origin.y + v.height * 0.5f;
+                const auto submitPin = [&](std::uint64_t pinId, ed::PinKind kind,
+                                           const ImVec2& centre, bool connected)
+                {
+                    ImGui::SetCursorScreenPos(origin);
+                    ed::BeginPin(ed::PinId(pinId), kind);
+                    ed::PinRect(ImVec2(centre.x - kGraphPinRadius, centre.y - kGraphPinRadius),
+                                ImVec2(centre.x + kGraphPinRadius, centre.y + kGraphPinRadius));
+                    ed::PinPivotRect(centre, centre);
+                    // BeginPin's group needs one item to close over. Zero
+                    // size, at the node's own origin, so it can add nothing
+                    // to either rect -- PinRect already pinned the hit rect
+                    // explicitly. It also clears ImGui's IsSetPos flag, which
+                    // is what keeps EndGroup's
+                    // "SetCursorPos to extend boundaries" check quiet.
+                    ImGui::Dummy(ImVec2(0.0f, 0.0f));
+                    DrawGraphPinDot(ImGui::GetWindowDrawList(), centre, accent, connected);
+                    ed::EndPin();
+                };
+                if (v.hasLeftPin)
+                    submitPin(GraphLeftPinId(nodeId), ed::PinKind::Input,
+                              ImVec2(origin.x, pinY), v.leftConnected);
+                if (v.hasRightPin)
+                    submitPin(GraphRightPinId(nodeId), ed::PinKind::Output,
+                              ImVec2(origin.x + v.width, pinY), v.rightConnected);
+            }
+
+            const ImU32 textCol = ImGui::GetColorU32(ghost ? Theme::kTextDim : Theme::kText);
+            const ImU32 dimCol  = ImGui::GetColorU32(Theme::kTextDim);
+
+            // ---- header row ----
+            {
+                ImGui::PushFont(GetEditorFonts().interRegular, kGraphHeaderFontPx);
+                const float lineH  = ImGui::GetTextLineHeight();
+                const float rowY   = origin.y + (kGraphHeaderHeight - lineH) * 0.5f;
+                float x = origin.x + kGraphNodePadLeft;
+
+                float rightEdge = origin.x + v.width - kGraphNodePadRight;
+                if (headerPill)
+                    rightEdge -= PillWidth(headerPill) + kGraphNodeIconGap;
+
+                if (headerIcon)
+                {
+                    dl->AddText(ImVec2(x, rowY), dimCol, headerIcon);
+                    x += ImGui::CalcTextSize(headerIcon).x + kGraphNodeIconGap;
+                }
+                const std::string shown = GraphEllipsize(headerLabel, rightEdge - x);
+                dl->AddText(ImVec2(x, rowY), textCol, shown.c_str());
+                ImGui::PopFont();
+
+                if (headerPill)
+                {
+                    // The one real item in the header. Placed by cursor, so
+                    // AssetPill's own Dummy lands inside the node's width --
+                    // `rightEdge` above already reserved its slot.
+                    ImGui::SetCursorScreenPos(
+                        ImVec2(origin.x + v.width - kGraphNodePadRight - PillWidth(headerPill),
+                               origin.y + (kGraphHeaderHeight - kPillLineHeight) * 0.5f));
+                    AssetPill(headerPill, 1);
+                }
+            }
+
+            // ---- body row ----
+            {
+                const float rowTop = origin.y + kGraphHeaderHeight + kGraphNodeBodyPadY;
+                const float rowH   = GraphBodyRowHeight();
+                float x = origin.x + kGraphNodePadLeft;
+
+                if (body.thumb != 0)
+                {
+                    dl->AddImage(static_cast<ImTextureID>(body.thumb), ImVec2(x, rowTop),
+                                 ImVec2(x + kAssetRowThumbSize, rowTop + kAssetRowThumbSize));
+                }
+                else if (body.icon)
+                {
+                    const ImVec2 iconSize = ImGui::CalcTextSize(body.icon);
+                    dl->AddText(ImVec2(x + (kAssetRowThumbSize - iconSize.x) * 0.5f,
+                                       rowTop + (rowH - iconSize.y) * 0.5f),
+                                dimCol, body.icon);
+                }
+                if (body.thumb != 0 || body.icon)
+                    x += kAssetRowThumbSize + ImGui::GetStyle().ItemInnerSpacing.x;
+
+                const float budgetEnd = origin.x + v.width - kGraphNodePadRight;
+                if (!body.pills.empty())
+                {
+                    bool first = true;
+                    for (const auto& [text, variant] : body.pills)
+                    {
+                        const float w = PillWidth(text);
+                        const float gap = first ? 0.0f : ImGui::GetStyle().ItemSpacing.x;
+                        if (x + gap + w > budgetEnd)
+                            break;   // never let a pill push the node past §11.2's width
+                        x += gap;
+                        ImGui::SetCursorScreenPos(ImVec2(x, rowTop + (rowH - kPillLineHeight) * 0.5f));
+                        AssetPill(text, variant);
+                        x += w;
+                        first = false;
+                    }
+                }
+                else if (!body.meta.empty())
+                {
+                    ImGui::PushFont(GetEditorFonts().interRegular, kGraphMetaFontPx);
+                    const std::string shown = GraphEllipsize(body.meta, budgetEnd - x);
+                    dl->AddText(ImVec2(x, rowTop + (rowH - ImGui::GetTextLineHeight()) * 0.5f),
+                                dimCol, shown.c_str());
+                    ImGui::PopFont();
+                }
+            }
+
+            // Pins the node's HEIGHT (and re-asserts its width), which is
+            // what makes `v.height` the measured height rather than a guess.
+            // LAST, so nothing after it can push the group's bottom edge
+            // further down.
+            ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + v.height));
+            ImGui::Dummy(ImVec2(v.width, 0.0f));
+
+            ed::EndNode();
+        }
+
+        // ---- Task 3: the Graph lens body (spec §10) ------------------------
+        // Canvas foundation + layered nodes + two-layer kind-coloured edges.
+        // Interactions (selection bridge, peek tooltip, context menu,
+        // double-click) are Task 4's; the focus combo and the lens-strip mask
+        // are Task 5's; pin-drag create is Task 6's. In particular this body
+        // deliberately opens NO ed::BeginCreate bracket: an armed
+        // CreateItemAction whose EndCreate never runs asserts on the NEXT
+        // frame's BeginCreate (ShaderEditorDocument.cpp:5559-5561 -- the desk
+        // crash that was fine on frame 1 and aborted on frame 2). The lens
+        // will grow one, with its unconditional EndCreate, in Task 6.
+        void DrawGraphLens(AssetsPanelState& state, AssetPanelModel& model,
+                           const Arcane::Project* project, DocumentHost& /*docs*/,
+                           const AssetsPanelServices& services,
+                           AssetsPanelActions& /*actions*/)
+        {
+            // ---- 1. Rebuild the projection, and ONLY when it moved --------
+            // The trigger is AssetPanelModel::entriesStamp (bumped exactly
+            // when the entries map or the reference index changed content)
+            // plus the focus guid. Deliberately NOT RebuildIfDirty's return
+            // value, which is also true for a rows-only rebuild -- a search
+            // keystroke -- that the graph does not read. A per-frame rebuild
+            // is not acceptable (it is a whole BFS + layering pass).
+            if (!state.graphBuilt ||
+                state.graphBuiltStamp != model.entriesStamp ||
+                state.graphBuiltFocus != state.graphFocus)
+            {
+                GraphBuildInput in;
+                in.entries = &model.Entries();
+                in.index   = &model.RefIndex();
+                in.focus   = state.graphFocus;
+                state.graph.Build(in);
+                state.graphBuilt      = true;
+                state.graphBuiltStamp = model.entriesStamp;
+                state.graphBuiltFocus = state.graphFocus;
+                state.graphLayoutDirty = true;
+            }
+
+            // ---- 2. The canvas context, created lazily -------------------
+            if (!state.graphCanvas)
+            {
+                ed::Config cfg;
+                // Ruling 2: NO canvas persistence. The library would
+                // otherwise write node positions to an ini of its own, and
+                // spec §10 pins the layout as computed each build, never
+                // persisted.
+                cfg.SettingsFile = nullptr;
+                state.graphCanvas = ed::CreateEditor(&cfg);
+                // The style is per-context state, so a freshly created
+                // context applies it -- including the switch that kills the
+                // vendored grid.
+                ed::SetCurrentEditor(static_cast<ed::EditorContext*>(state.graphCanvas));
+                ApplyAssetGraphCanvasStyle();
+                ed::SetCurrentEditor(nullptr);
+                state.graphLayoutDirty = true;
+            }
+            ed::SetCurrentEditor(static_cast<ed::EditorContext*>(state.graphCanvas));
+
+            // ---- 3. The backdrop, before ed::Begin ------------------------
+            // Exactly DrawCanvasBackdrop's shape
+            // (ShaderEditorDocument.cpp:5281): the canvas rect is measured
+            // HERE because this is the one place per frame that holds it
+            // BEFORE ed::Begin, which is where ScreenToCanvas still means
+            // what it says -- inside Begin/End the editor moves ImGui itself
+            // into canvas space.
+            const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
+            const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+            if (canvasSize.x <= 0.0f || canvasSize.y <= 0.0f)
+            {
+                ed::SetCurrentEditor(nullptr);
+                return;
+            }
+
+            {
+                GraphGridView view;
+                view.width  = static_cast<std::uint32_t>(canvasSize.x);
+                view.height = static_cast<std::uint32_t>(canvasSize.y);
+                view.scale  = GraphViewScale();   // owns the reciprocal flip
+                const ImVec2 originCanvas = ed::ScreenToCanvas(canvasMin);
+                view.originX = originCanvas.x;
+                view.originY = originCanvas.y;
+
+                GraphGridColors colors;
+                const auto fill = [](float (&dst)[4], const ImVec4& c)
+                { dst[0] = c.x; dst[1] = c.y; dst[2] = c.z; dst[3] = c.w; };
+                fill(colors.canvas, kGraphCanvasColor);
+                fill(colors.minor,  kGraphGridMinorColor);
+                fill(colors.major,  kGraphGridMajorColor);
+
+                DrawGraphGridFallback(ImGui::GetWindowDrawList(), canvasMin, canvasSize,
+                                      view, colors, state.graphGrid);
+            }
+
+            if (state.graph.nodes.empty())
+            {
+                // Still a live canvas (it pans and zooms) -- just an empty
+                // one. Drawn into the window's own draw list, on top of the
+                // backdrop and before ed::Begin, so it stays in SCREEN space
+                // and does not scale away with the view.
+                const char* msg = state.graphFocus.IsValid()
+                                      ? "nothing references, and nothing is referenced by, the focused asset"
+                                      : "no assets to graph";
+                const ImVec2 size = ImGui::CalcTextSize(msg);
+                ImGui::GetWindowDrawList()->AddText(
+                    ImVec2(canvasMin.x + (canvasSize.x - size.x) * 0.5f,
+                           canvasMin.y + (canvasSize.y - size.y) * 0.5f),
+                    ImGui::GetColorU32(Theme::kTextDim), msg);
+            }
+
+            ed::Begin("##assetgraphcanvas", ImVec2(0.0f, canvasSize.y));
+
+            const std::vector<GraphNode>& nodes = state.graph.nodes;
+            const std::vector<GraphEdge>& edges = state.graph.edges;
+
+            // Real (non-overflow) guid -> node index. A tombstone counts as
+            // real here: ruling 11 wants a dangling reference's edge to have
+            // pixels, and `edges` references tombstones exactly like any
+            // other node (AssetGraphViewModel.hpp's own `edges` comment).
+            std::unordered_map<Arcane::Guid, std::size_t> indexOfGuid;
+            indexOfGuid.reserve(nodes.size());
+            for (std::size_t i = 0; i < nodes.size(); ++i)
+                if (!nodes[i].isOverflow)
+                    indexOfGuid.emplace(nodes[i].guid, i);
+
+            // Which sides actually carry a drawn edge -- what decides both
+            // whether a pin exists at all and whether its dot is filled.
+            std::vector<GraphNodeVisual> visuals(nodes.size());
+            for (const GraphEdge& e : edges)
+            {
+                const auto from = indexOfGuid.find(e.from);
+                const auto to   = indexOfGuid.find(e.to);
+                if (from == indexOfGuid.end() || to == indexOfGuid.end())
+                    continue;
+                // `from` is the referencer: the edge leaves its OUTBOUND
+                // (left) side. `to` is the target: it arrives on that node's
+                // INBOUND (right) side.
+                visuals[from->second].hasLeftPin   = true;
+                visuals[from->second].leftConnected = true;
+                visuals[to->second].hasRightPin    = true;
+                visuals[to->second].rightConnected = true;
+            }
+            // A "+N more" companion means the anchor has undrawn connections
+            // on that side, so the anchor keeps the pin even when no drawn
+            // edge uses it -- hollow, because nothing is attached to it.
+            for (const GraphNode& n : nodes)
+            {
+                if (!n.isOverflow)
+                    continue;
+                const auto anchor = indexOfGuid.find(n.guid);
+                if (anchor == indexOfGuid.end())
+                    continue;
+                if (n.overflowInbound) visuals[anchor->second].hasRightPin = true;
+                else                   visuals[anchor->second].hasLeftPin  = true;
+            }
+
+            const Arcane::Guid bootGuid = BootSceneGuid(project);
+            const float nodeHeight = GraphNodeHeight();
+
+            // ---- 4. Positions -- written on REBUILD, never per frame ------
+            // Ruling 2: the computed layout is authoritative at every
+            // rebuild, and the library's own node dragging stays enabled in
+            // between. A reposition is therefore TRANSIENT BY DESIGN -- the
+            // next rebuild snaps it back. That is intended behavior, not a
+            // bug: spec §10 pins the layout as computed each build and not
+            // persisted, so there is nowhere for a drag to live.
+            const bool applyLayout = state.graphLayoutDirty;
+
+            // ---- 5. Nodes -------------------------------------------------
+            for (std::size_t i = 0; i < nodes.size(); ++i)
+            {
+                const GraphNode& n = nodes[i];
+                const std::uint64_t nodeId = GraphNodeIdOf(i);
+                GraphNodeVisual& v = visuals[i];
+
+                const AssetPanelEntry* entry = n.isOverflow ? nullptr : model.Find(n.guid);
+
+                // Body content + the width it wants.
+                GraphNodeBody body;
+                const char* headerIcon = nullptr;
+                const char* headerPill = nullptr;
+                std::string headerLabel = n.label;
+
+                if (n.isOverflow)
+                {
+                    // Ruling 6's "+N more": no pins, no accent, no thumb --
+                    // it is not an asset, it is a count of connections this
+                    // node's own breadth cap did not draw.
+                    headerIcon = ICON_LC_ELLIPSIS;
+                    body.meta  = n.overflowInbound ? "referencers not shown" : "references not shown";
+                }
+                else if (n.isTombstone)
+                {
+                    // Ruling 11: a dangling target finally has pixels -- a
+                    // ghost node whose name is the short guid the view model
+                    // already chose for it, wearing the amber attention pill.
+                    headerIcon = ICON_LC_FILE_QUESTION;
+                    body.pills.push_back({ "missing", 1 });
+                }
+                else if (entry)
+                {
+                    headerIcon = KindIcon(entry->kind);
+                    headerLabel = entry->fileName;
+                    body.thumb = services.resolveAssetThumb ? services.resolveAssetThumb(n.guid) : 0;
+                    body.icon  = KindIcon(entry->kind);
+                    // The same pill vocabulary the Browse rows use, in the
+                    // same spec order -- subkind, inst, sliced -- so one
+                    // asset reads identically in both lenses. "boot" moves to
+                    // the header, where the board puts it.
+                    if (const char* sub = SubkindPillText(*entry))
+                        body.pills.push_back({ sub, 0 });
+                    if (entry->isInstance)
+                        body.pills.push_back({ "inst", 0 });
+                    if (entry->kind == AssetKind::Sprite && entry->sliced)
+                        body.pills.push_back({ "sliced", 0 });
+                    if (body.pills.empty())
+                        body.meta = KindLabel(entry->kind);
+                    if (entry->kind == AssetKind::Scene && bootGuid.IsValid() && n.guid == bootGuid)
+                        headerPill = "boot";
+                }
+                else
+                {
+                    headerIcon = KindIcon(n.kind);
+                    body.icon  = KindIcon(n.kind);
+                }
+
+                // Width: what the content wants, clamped into §11.2's band.
+                float wantHeader = kGraphNodePadLeft + kGraphNodePadRight;
+                {
+                    ImGui::PushFont(GetEditorFonts().interRegular, kGraphHeaderFontPx);
+                    if (headerIcon)
+                        wantHeader += ImGui::CalcTextSize(headerIcon).x + kGraphNodeIconGap;
+                    wantHeader += ImGui::CalcTextSize(headerLabel.c_str()).x;
+                    ImGui::PopFont();
+                    if (headerPill)
+                        wantHeader += kGraphNodeIconGap + PillWidth(headerPill);
+                }
+                float wantBody = kGraphNodePadLeft + kGraphNodePadRight;
+                if (body.thumb != 0 || body.icon)
+                    wantBody += kAssetRowThumbSize + ImGui::GetStyle().ItemInnerSpacing.x;
+                if (!body.pills.empty())
+                {
+                    bool first = true;
+                    for (const auto& [text, variant] : body.pills)
+                    {
+                        (void)variant;
+                        wantBody += (first ? 0.0f : ImGui::GetStyle().ItemSpacing.x) + PillWidth(text);
+                        first = false;
+                    }
+                }
+                else if (!body.meta.empty())
+                {
+                    ImGui::PushFont(GetEditorFonts().interRegular, kGraphMetaFontPx);
+                    wantBody += ImGui::CalcTextSize(body.meta.c_str()).x;
+                    ImGui::PopFont();
+                }
+
+                v.width  = std::clamp((std::max)(wantHeader, wantBody),
+                                      kGraphNodeMinWidth, kGraphNodeMaxWidth);
+                v.height = nodeHeight;
+                v.pos    = ImVec2(static_cast<float>(n.layer) * kGraphColumnPitch,
+                                  static_cast<float>(n.row)   * kGraphRowPitch);
+                if (n.isOverflow)
+                {
+                    v.hasLeftPin = v.hasRightPin = false;
+                    v.leftConnected = v.rightConnected = false;
+                }
+
+                if (applyLayout)
+                {
+                    ed::SetNodePosition(ed::NodeId(nodeId), v.pos);
+                }
+                else
+                {
+                    // The node may have been dragged since the last rebuild
+                    // (transient, but it has to draw where it IS). An id the
+                    // editor has never seen answers (FLT_MAX, FLT_MAX), which
+                    // would fling the node off the canvas -- fall back to the
+                    // computed layout for it instead.
+                    const ImVec2 live = ed::GetNodePosition(ed::NodeId(nodeId));
+                    if (live.x < FLT_MAX * 0.5f && live.y < FLT_MAX * 0.5f)
+                        v.pos = live;
+                    else
+                        ed::SetNodePosition(ed::NodeId(nodeId), v.pos);
+                }
+
+                // A tombstone wears the editor's amber attention language
+                // rather than a kind accent it does not have -- ruling 11's
+                // "kAmber border accent", applied to the bar and the border
+                // alike (its AssetKind is Other by construction, so the §11.3
+                // table has nothing to say about it either way).
+                const ImVec4 amber  = Theme::kAmber;
+                const ImVec4 accent = n.isTombstone ? amber : KindAccentColor(n.kind);
+                const bool ghost = n.isOverflow || n.isTombstone;
+                DrawGraphNode(nodeId, v, body, headerIcon, headerLabel, headerPill,
+                              accent, ghost);
+
+                // Chrome, after EndNode -- see DrawGraphNodeChrome.
+                DrawGraphNodeChrome(nodeId, v,
+                                    /*drawBand=*/!n.isOverflow,
+                                    /*accent=*/n.isOverflow ? nullptr : &accent,
+                                    /*wash=*/ghost ? kGraphGhostWash : 0.0f,
+                                    /*borderAccent=*/n.isTombstone ? &amber : nullptr);
+            }
+            state.graphLayoutDirty = false;
+
+            // ---- 6. Edges -------------------------------------------------
+            // The two-layer trick (ruling 7): a FULLY TRANSPARENT ed::Link
+            // carries hit-testing, selection, rect-select and the delete flow
+            // (alpha 0 costs nothing -- the library's draw helper returns
+            // immediately on it, and registration ignores colour entirely),
+            // while the visible curve is drawn by hand into the links
+            // channel. That is what per-kind colour, mid-edge labels and
+            // selection brightening need; the library's flat uniform links
+            // can do none of them. ShaderEditorDocument.cpp:311-357 is the
+            // long form of every clause in this paragraph.
+            const float viewScale = GraphViewScale();
+            const bool  drawLabels = viewScale > kGraphLabelMinScale;
+            // Read-only: `selected` is a plain public member of the model, so
+            // brightening needs no interaction plumbing at all. The rest of
+            // the selection story -- clicking a node, centering on an
+            // external change -- is Task 4's.
+            const Arcane::Guid& selectedGuid = model.selected;
+
+            for (std::size_t ei = 0; ei < edges.size(); ++ei)
+            {
+                const GraphEdge& e = edges[ei];
+                const auto from = indexOfGuid.find(e.from);
+                const auto to   = indexOfGuid.find(e.to);
+                if (from == indexOfGuid.end() || to == indexOfGuid.end())
+                    continue;
+
+                const GraphNodeVisual& fv = visuals[from->second];
+                const GraphNodeVisual& tv = visuals[to->second];
+
+                // The TARGET sits in the lower column, so its right-hand
+                // (inbound) pin starts the wire and the REFERENCER's
+                // left-hand (outbound) pin ends it -- see GraphLeftPinId.
+                const std::uint64_t startPin = GraphRightPinId(GraphNodeIdOf(to->second));
+                const std::uint64_t endPin   = GraphLeftPinId(GraphNodeIdOf(from->second));
+                ed::Link(ed::LinkId(ei + 1), ed::PinId(startPin), ed::PinId(endPin),
+                         ImVec4(0.0f, 0.0f, 0.0f, 0.0f), kGraphWireThickness);
+
+                const ImVec2 p0(tv.pos.x + tv.width, tv.pos.y + tv.height * 0.5f);
+                const ImVec2 p3(fv.pos.x,            fv.pos.y + fv.height * 0.5f);
+
+                // Colour = the SOURCE kind's accent, dimmed; brightened when
+                // either endpoint is the selected asset (spec §10: "selected
+                // node's edges brighten").
+                const bool emphasize = selectedGuid.IsValid() &&
+                                       (e.from == selectedGuid || e.to == selectedGuid);
+                const ImVec4 base = KindAccentColor(nodes[from->second].kind);
+                const ImVec4 col  = emphasize ? GraphBrightenColor(base)
+                                              : GraphDimColor(base, kGraphWireDim);
+                const ImVec2 mid = DrawGraphWire(p0, p3, col, kGraphWireThickness);
+
+                if (drawLabels && e.label)
+                {
+                    // Ruling 9's mid-edge label, 12px and dim, on the small
+                    // plate the board gives it so the wire does not run
+                    // through the glyphs.
+                    ImGui::PushFont(GetEditorFonts().interRegular, kGraphLabelFontPx);
+                    const ImVec2 size = ImGui::CalcTextSize(e.label);
+                    const ImVec2 tl(mid.x - size.x * 0.5f, mid.y - size.y * 0.5f);
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    if (dl->_Splitter._Count > kGraphLinkChannel)
+                    {
+                        const int prevChannel = dl->_Splitter._Current;
+                        dl->ChannelsSetCurrent(kGraphLinkChannel);
+                        dl->AddRectFilled(ImVec2(tl.x - 3.0f, tl.y), ImVec2(tl.x + size.x + 3.0f, tl.y + size.y),
+                                          ImGui::GetColorU32(kGraphCanvasColor));
+                        dl->AddText(tl, ImGui::GetColorU32(Theme::kTextDim), e.label);
+                        dl->ChannelsSetCurrent(prevChannel);
+                    }
+                    ImGui::PopFont();
+                }
+            }
+
+            // ---- 7. Anchor -> "+N more" connectors ------------------------
+            // NOT a GraphEdge, and inexpressible as one: an overflow node
+            // reuses its anchor's guid, and GraphEdge is guid-keyed, so
+            // anchor -> companion would be a self-edge. The connector is
+            // therefore synthesized here from `isOverflow` /
+            // `overflowInbound` / the shared guid, drawn dim and thin so it
+            // reads as "and more that way" rather than as a reference the
+            // index actually holds. No ed::Link either -- there is nothing to
+            // select, hover or delete.
+            for (std::size_t i = 0; i < nodes.size(); ++i)
+            {
+                const GraphNode& n = nodes[i];
+                if (!n.isOverflow)
+                    continue;
+                const auto anchor = indexOfGuid.find(n.guid);
+                if (anchor == indexOfGuid.end())
+                    continue;
+                const GraphNodeVisual& av = visuals[anchor->second];
+                const GraphNodeVisual& ov = visuals[i];
+                const ImVec4 col = GraphDimColor(Theme::kGrab, kGraphOverflowWireDim);
+                if (n.overflowInbound)
+                    // Truncated on the anchor's INBOUND side: the companion
+                    // stacks one column to the RIGHT.
+                    DrawGraphWire(ImVec2(av.pos.x + av.width, av.pos.y + av.height * 0.5f),
+                                  ImVec2(ov.pos.x,            ov.pos.y + ov.height * 0.5f),
+                                  col, kGraphOverflowWireThickness);
+                else
+                    // Truncated on the anchor's OUTBOUND side: one column to
+                    // the LEFT. (When the anchor is already in column 0 the
+                    // view model clamps the companion into the SAME column,
+                    // and this connector doubles back on itself -- a layout
+                    // fact of the projection, drawn honestly rather than
+                    // hidden.)
+                    DrawGraphWire(ImVec2(ov.pos.x + ov.width, ov.pos.y + ov.height * 0.5f),
+                                  ImVec2(av.pos.x,            av.pos.y + av.height * 0.5f),
+                                  col, kGraphOverflowWireThickness);
+            }
+
+            ed::End();
+            ed::SetCurrentEditor(nullptr);
+        }
+    }
+
+    void DestroyAssetsPanelCanvas(AssetsPanelState& state)
+    {
+        if (state.graphCanvas)
+        {
+            ed::DestroyEditor(static_cast<ed::EditorContext*>(state.graphCanvas));
+            state.graphCanvas = nullptr;
+        }
+        // Everything derived from the context or the outgoing project goes
+        // with it: a stale projection would otherwise be re-drawn (against
+        // brand-new node ids) on the first frame after a project switch,
+        // before the model has rebuilt.
+        state.graph.Clear();
+        state.graphBuilt = false;
+        state.graphBuiltStamp = 0;
+        state.graphBuiltFocus = Arcane::Guid{};
+        state.graphLayoutDirty = false;
+        state.graphFocus = Arcane::Guid{};
+        state.graphGrid = GraphGridPhase{};
+        state.seenSelectionStampGraph = 0;
     }
 
     AssetsPanelActions DrawAssetsPanel(AssetsPanelState& state, AssetPanelModel& model,
@@ -2569,14 +3631,16 @@ namespace Arcane::Editor
                 ImGui::TextDisabled("No project open (data/-next-to-exe)");
             else if (state.lens == AssetLens::Browse)
                 DrawBrowseLens(state, model, project, docs, services, actions);
+            else if (state.lens == AssetLens::Graph)
+                // Plan 3 Task 3. Reachable PROGRAMMATICALLY only until Task 5
+                // flips kLensEnabledMask to 0b111 -- the toolbar's Graph
+                // button is still disabled, so nothing a user can click sets
+                // `state.lens` to Graph. The device-less canvas test
+                // (AssetsGraphCanvasTest.cpp) sets it directly, which is
+                // exactly the reachability this branch has today.
+                DrawGraphLens(state, model, project, docs, services, actions);
             else if (state.lens == AssetLens::Status)
                 DrawStatusLens(state, model, project, docs, services, actions);
-            else
-                // Graph only, now that Status has landed (Plan 2 Task 7).
-                // Unreachable in practice -- kLensEnabledMask keeps the Graph
-                // button disabled, so `state.lens` can never BE Graph -- kept
-                // as the backstop for the one lens still to come.
-                ImGui::TextDisabled("Graph lens lands in Plan 3.");
         }
         ImGui::EndChild();
 

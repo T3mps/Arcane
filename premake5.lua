@@ -857,6 +857,20 @@ project "ArcaneTests"
         -- already via ArcaneTests/src/**.cpp above) is
         -- AssetGraphViewModelTest.cpp.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetGraphViewModel.cpp",
+        -- Asset-manager arc (Plan 3, Task 3): AssetsPanel -- the Assets panel
+        -- itself. NOT a pure-logic unit like every entry above it: this one
+        -- is here so AssetsGraphCanvasTest.cpp can drive the REAL
+        -- DrawAssetsPanel through device-less ImGui frames with the Graph
+        -- lens forced on, which is the harness that caught the shader
+        -- editor's frame-2 EndCreate abort (GraphCanvasHeadlessTest.cpp) --
+        -- the imgui-node-editor canvas only runs inside a live ImGui frame,
+        -- so no headless unit can stand in for it. Precedent for compiling a
+        -- DRAW TU into the tests for exactly this reason is
+        -- ShaderEditorDocument.cpp above; the link closed with nothing else
+        -- added (DocumentHost/EditorWidgets/EditorFonts/AssetPanelModel/
+        -- AssetReferenceIndex/AssetActivityLog are all already here, and
+        -- CreateAssetDialog's half of the panel's surface is header-only).
+        "%{wks.location}/ArcaneEditor/src/Panels/AssetsPanel.cpp",
     }
 
     includedirs {

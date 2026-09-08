@@ -1237,6 +1237,16 @@ namespace Arcane::Editor
         m_assetModel.ResetForProjectSwitch();
         m_assetPanelProviders = MakeAssetPanelProviders();
         m_assetModel.MarkAllDirty();
+        // Asset-manager Plan 3 Task 3: the Graph lens's canvas context dies
+        // WITH the project it was showing. It holds per-node-id view state
+        // (positions, selection, pan/zoom) for a reference topology the new
+        // project shares nothing with, and the panel's node ids are per-build
+        // indices -- carrying it across would resurrect the old project's
+        // layout under the new one's nodes. Same seam, same frame and the
+        // same reason as the model reset immediately above; the panel owns
+        // the actual teardown so no `ed::` call has to leave AssetsPanel.cpp
+        // (plan ruling 1).
+        Arcane::Editor::DestroyAssetsPanelCanvas(m_assetsPanel);
         // Asset-manager Plan 2 Task 5: session-only, same as the model
         // itself -- a switched-to project starts with an empty feed, not
         // the outgoing project's history.
@@ -2928,6 +2938,16 @@ namespace Arcane::Editor
                 Arcane::EditorLock::Clear(proj->Root());
             }
         }
+
+        // Asset-manager Plan 3 Task 3: the Assets panel's Graph-lens canvas
+        // context, released while an ImGui context is still current -- the
+        // ImGui context lives in m_gpu, which destructs only after Run()
+        // returns, so here is inside its lifetime. Ahead of the render
+        // teardown for the same "borrower first, GPU last" reason
+        // ShutdownGraphPath states: this is pure ImGui/CPU state, and it
+        // should be gone before anything below starts dismantling the
+        // device. Idempotent and a no-op when the lens was never opened.
+        Arcane::Editor::DestroyAssetsPanelCanvas(m_assetsPanel);
 
         // The whole render teardown -- the view-before-texture invalidate,
         // both contexts, and the latch read-back -- in the one order that is

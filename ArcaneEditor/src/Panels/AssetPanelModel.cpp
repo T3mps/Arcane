@@ -133,6 +133,11 @@ namespace Arcane::Editor
             m_rail.clear();
             m_shownAssetCount = 0;
             m_rowsDirty = false;
+            // Plan 3 Task 3: the entries + index the Graph lens projects from
+            // just went away, which is exactly the change entriesStamp exists
+            // to announce.
+            if (hadAnything)
+                ++entriesStamp;
             return hadAnything;
         }
 
@@ -318,7 +323,15 @@ namespace Arcane::Editor
         m_allDirty = false;
 
         if (entriesChanged)
+        {
             m_rowsDirty = true;
+            // Plan 3 Task 3: `entriesChanged` is set on exactly the passes
+            // that touched m_entries and/or m_refIndex -- the Graph lens's two
+            // inputs -- so this is the one honest place to bump the stamp. A
+            // pass that only rebuilt ROWS (a search keystroke) deliberately
+            // does NOT bump it: the graph does not read Rows().
+            ++entriesStamp;
+        }
 
         if (m_rowsDirty)
         {
@@ -682,5 +695,9 @@ namespace Arcane::Editor
         m_childrenOpen.clear();
         selected = Arcane::Guid{};
         selectionStamp = 0;
+        // entriesStamp is deliberately NOT reset here -- see its declaration:
+        // a monotonic counter can never compare equal to a stale "built at"
+        // value a consumer is still holding from the outgoing project.
+        ++entriesStamp;
     }
 }

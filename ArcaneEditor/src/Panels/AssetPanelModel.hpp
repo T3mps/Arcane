@@ -597,6 +597,21 @@ namespace Arcane::Editor
 
         Arcane::Guid   selected;                          // THE shared selection
         std::uint32_t  selectionStamp = 0;                // bump on every change
+
+        // Plan 3 Task 3: bumped every time the ENTRIES map or the reference
+        // index behind it actually changed content -- never for a mere
+        // row/filter rebuild (a search keystroke rebuilds Rows() and nothing
+        // else, and the Graph lens does not read Rows()). This is the cheap
+        // dirty trigger the Graph lens compares against so it rebuilds its
+        // own projection (AssetGraphViewModel::Build over Entries() +
+        // RefIndex()) exactly when its inputs moved, rather than per frame.
+        //
+        // MONOTONIC, and deliberately NOT reset by ResetForProjectSwitch (in
+        // contrast to selectionStamp, whose only consumer re-seeds itself the
+        // same frame): a counter that never goes backwards can never compare
+        // equal to a stale "already built at" value a consumer is still
+        // holding from the previous project.
+        std::uint32_t  entriesStamp = 0;
         void Select(const Arcane::Guid& g) { if (g != selected) { selected = g; ++selectionStamp; } }
         void ResetForProjectSwitch();                     // clears everything incl. selected
 
