@@ -953,3 +953,214 @@ This is a **design-only pass**: the live panel's preview pane still stacks
 thumb-above-metadata at every pane width as of `c0ca6edc`; a follow-up
 implementation task is owed to add the side-by-side header and its
 narrow-width fallback.
+
+---
+
+## 18. LANDED (Plan 2) — 2026-09-07
+
+Plan 2 landed on Arcane `main` in place, **`d12a9722..66344350`** (Tasks 1–8), plus
+this task's re-bless (`860ab115`) and gate + baselines catch-up commit. Plan file:
+`docs/plans/2026-09-07-asset-manager-plan2-status.md`. **Not pushed** — held for the
+user's desk pass, per house convention.
+
+### Scope landed
+
+§2's Plan-2 line in full. §3.3 the **scene reference manifest**: the save-time
+top-level `"assets"` block, identity fields excluded through the shared
+`IsIdentityGuidFieldName` rule (promoted to one header so the emitter and the scan
+cannot drift), nils dropped, distinct and sorted — emitted as a byproduct of the
+writer's existing visit via a writer sink, not a second pass, and **always** emitted
+even when empty. The scene *loader* never reads it. The version gates widen to accept
+`{3, 4}` at exactly two sites; v2 is still refused. ABI **22 → 23**, with
+`ReferenceProject.arcproj` restamped in the same Task-1 commit.
+
+§3.4 the **structural scan demoted to the pre-v4 fallback**: `ListAssetReferences`
+takes the manifest fast path for a v4 scene that has one, and falls back to the scan
+for pre-v4 scenes *and* for a v4 scene whose manifest is absent.
+
+§9.1 the **`AssetReferenceIndex`**: forward and inverted maps, inbound counts, UE's
+remove-before-re-add incremental discipline (the removal pass iterates the OLD
+outbound before the overwrite), tombstones for deleted and unresolvable targets with
+GC on both letting-go paths, last-known-good on `nullopt` per §3.2. **Unused = zero
+inbound**, over eligible kinds exactly `{Texture, Material, Sprite, Mesh}`. The index
+lives inside `AssetPanelModel`, fed by the model's own `refsFor` asks — one ask per
+rebuilt guid, held in a local and handed to both the entry build and `Update`, so
+Plan 1's call-count pins stay green unmodified.
+
+§9.2 the **Status lens, complete and ENABLED**: stat tiles (assets / cook refused /
+awaiting cook / unreferenced), the stacked cook-pipeline meter, Needs-attention cards
+(refused in the muted-amber acting-on frame with **Recook** and **Problems**; queued
+with its progress strip), the Unreferenced card with inset-well chips and **Reveal**,
+the Activity feed, and the Scenes rollup. **Focus in Graph** ships disabled, as §9.2
+binds. §11.1's Plan-2 widget rows — `StatTile`, `MeterSegment`/`MeterBar`,
+`BeginCardFrame`/`EndCardFrame`, `TimelineEntry`/`TimelineFeed` — live in the shared
+`EditorWidgets` layer, not panel-local. The **`AssetActivityLog`** is the session-only
+~100-entry ring §9.2 specifies, pushed by ten event seams, every push riding *beside*
+an unchanged dirty mark rather than replacing one. §13's "the digest never renders an
+unknown as a zero" is now satisfied by the count being **real** rather than suppressed.
+
+Deliberately absent, exactly as §2 phases it: **§10 the Graph lens** (Plan 3). The
+Graph button still ships **disabled**.
+
+### Measured close
+
+Three-config **rebuild** of `Arcane.slnx`, **0 warnings / 0 errors** in Debug, Release
+and Dist. Suite counts DERIVED — each pasted from its own run's final line,
+`ArcaneTests.exe "~[gpu]"` run FROM the exe directory:
+
+| Configuration | `~[gpu]` | seed |
+|---|---|---|
+| Debug | 54908 assertions / 1510 cases | 4183101686 |
+| Release | 54908 / 1510 | 2841737635 |
+| Dist | 54840 / 1504 | 354211894 |
+
+The constant Dist gap (68 assertions / 6 cases, from the pre-existing
+`#if !defined(ARCANE_DIST)` guards) still measures exactly 68/6. One **unfiltered**
+Debug run: **117182 assertions / 1543 cases**, seed 2374230885, all passing — the
+difference from `~[gpu]` is 62274 assertions / **33** `[gpu]` cases, and that 33 is
+stated from measurement (1543 − 1510), unchanged by this plan.
+
+`scripts/automation-baselines.json` re-derived. Its figures were stale **twice** over —
+measured at Plan 1's close (`2f5dc391`) and never re-derived when the 2026-09-07
+follow-up waves landed — so the note now attributes the +638 assertions / +48 cases in
+two separately-booked waves: **(a)** the 09-07 follow-ups, pre-Plan-2 (`+274`/`+20`:
+`AssetPanelModelTest` 14 → 30, `AssetReferencesTest` 13 → 17), and **(b)** Plan 2
+(`+364`/`+28`: the new `AssetReferenceIndexTest` (9) and `AssetActivityLogTest` (3),
+plus `AssetReferencesTest` +5, `AssetPanelModelTest` +6, `SceneAssetTest` +4,
+`SceneJsonTest` +1). The raw `TEST_CASE` count in `ArcaneTests/src` rose 1495 → 1515 →
+1543, and `~[gpu]` cases rose by exactly that same +48, so all 48 fall inside the
+filter and neither wave added GPU coverage. The identity `raw TEST_CASE − 33 = ~[gpu]
+cases` holds at all three points, which is what lets both waves' case halves be
+attributed from git alone. Verified against the file's real consumer:
+`check-baselines.ps1` reports `+0` on both metrics, exit 0.
+
+**Golden gate**, Debug, both hosts × both backends: `gatePassed: true`, four lanes,
+zero red — `ArcaneRuntime/dx12` PassedOnFallback (its documented steady state), the
+other three Passed, all four at `diffCount=0`.
+
+**Gate self-test**, `golden-gate.ps1 -SelfTest`, Debug: **PASSED** — `selfTest: true`,
+`gatePassed: false`, all four lanes caught the deliberately broken scene by
+`exitReason=compare-failed`, and the tree restored clean afterwards (`git status
+--porcelain -- ReferenceProject` empty). So the green above comes from a gate observed
+*failing* on this tree.
+
+**The editor-ui re-bless** was expected and legitimate: the lane diffed against a
+Browse-only toolbar, from a golden blessed *this same morning* at `d12a9722`. Before
+blessing, the diff artifact was read. The differing pixels (2411, and the two
+backends' diff PNGs are **byte-identical**, md5 `dd5e03a3…`) fall in exactly two
+clusters, both **inside the Assets panel band**: the lens strip's Status button
+(`x[763..809] y[570..593]`, now enabled rather than disabled-dim) and the bottom-bar
+digest (`x[586..808] y[697..711]`, now `0 unused` rather than `— unused`). **Zero**
+marked pixels fall outside `x[240..810] y[543..720]` — verified programmatically, not
+only by eye. `--bless` was pointed at the **source** tree, `exitReason=compare-blessed`,
+then restaged to **both** hosts with all 13 `Verify/` files md5-verified identical
+across source and both staged copies. The vulkan lane then passed `diffCount=0` against
+the dx12-blessed **shared** reference, which re-proves editor-ui backend-invariant.
+
+### Deviations and rulings recorded during execution
+
+1. **ABI 22 → 23 — a SECOND bump, deviating from §14.** §14 says "One ABI bump
+   (21 → 22) in Plan 1". Plan 2's scene-format move takes a second. The bump is
+   *documentary* (no vtable change; the writer's sink member is a layout change, but
+   the header-only argument carries it), and it is mandatory under the v16
+   scene-format-move precedent plus the standing cheap-bumps rule. §14's wording is
+   left as written; this is the correction. Cost: one more Game-DLL rebuild
+   obligation on Aphelyon's held pile — recorded, not blocking.
+2. **The manifest is a strict SUPERSET of the structural scan, not its equal.** The
+   scan applies §3.4's resolvability filter; the manifest path deliberately does
+   **not**, so it reports references to targets that no longer resolve. That
+   asymmetry is load-bearing, not an oversight: §9.1's tombstones exist precisely to
+   answer "who referenced the missing asset", and a resolvability filter on the fast
+   path would starve them. The equivalence test (§12) therefore pins the two against
+   a scene whose targets all resolve; a `ReflectionJson.hpp` comment claiming the two
+   simply "agree" overstates it and is corrected by this paragraph.
+3. **The queued card gained an "N of M cooked" caption** (dim, 13px, beneath the
+   progress strip — there was no room beside it). `arccook` is ONE whole-project
+   coalescing run, so the global fraction genuinely *is* every queued asset's honest
+   pipeline position; the defect the reviewer found was unlabeled semantics, not a
+   fabricated per-asset number. The board draws the strip without the caption, so the
+   caption is board-over-brief and recorded here as such.
+4. **The refused card keeps the board's whole line.** Authority is the BOARD WHOLE
+   (§11's mocks-are-redline): the card keeps `cook refused — <detail>` **and** adds
+   the dim `· details in Problems` tail, rather than trading one for the other.
+5. **Reveal expands more than it selects.** §9.2 says Reveal "switches to Browse,
+   selects". As shipped it also clears the search and kind filter, flips the lens,
+   **expands every ancestor group of the revealed guid including its mount root**,
+   and **opens the revealed row's own fold** if it is a derived child. Without those
+   two expansions a collapsed group or a collapsed texture fold hides the row after
+   the clears — an explicit Reveal click that visibly does nothing. Accepted cost:
+   groups the user had deliberately closed pop open on that click.
+6. **The index piggybacks the model's ACTUAL invalidation granularity.** §9.1 says
+   the index "re-walks single guids on save/watcher/create/delete events", but most
+   of those seams were deliberately widened to `MarkAllDirty` during Plan 1's final
+   fix wave (parent-chain correctness). The index therefore does a full re-feed on
+   `MarkAllDirty` and a per-guid walk on `MarkDirty`. Ruled **spec-spirit-compliant**
+   rather than a deviation: the full re-feed costs exactly what Plan 1's full rebuild
+   already cost, and narrowing the seams back would reintroduce the staleness bug
+   that widened them.
+7. **`TimelineFeed` gained a return value.** Task 6 shipped it `void`, which could not
+   serve §8's per-row tooltip and click contract. Task 8 extended it to return
+   `TimelineFeedResult { hoveredIndex, clickedIndex }`; drawing is unchanged and Task 8
+   is the sole caller.
+8. **Dangling references stay data-only — no UI was invented.** The index exposes
+   `DanglingTargets()` and §9.1 calls the tombstone list "exactly the 'dangling
+   reference' list the Status lens can report", but §9.2's card inventory does not
+   name a dangling card. None was added. The data is there for Plan 3 or a later
+   Status revision to surface deliberately, rather than a card designed at the desk
+   during implementation.
+
+### Degradation and known blind spots
+
+**§13 degradation, recorded and parked.** If the model's `refsFor` provider is absent,
+every asset reads as zero-inbound and the unused count would *over*-report. That state
+is **unreachable in production**: `MakeAssetPanelProviders`
+(`EditorAppProject.cpp:753-778`) always assigns the lambda. A per-guid facade
+`nullopt` is a different and accepted case — §3.2's one-rebuild-flicker class, covered
+by last-known-good.
+
+**Known desk-only branches.** The refused attention card and the cards' empty states
+are **never rendered by any automated run**: `ReferenceProject` has zero refused
+artifacts, so no headless capture and no golden exercises those paths — they are
+inspection-verified only. Breaking a texture cook at the desk is the checklist item
+that closes this. This is the same accepted risk Plan 1 recorded for its refused
+thumb-corner badge, and the same reason Tasks 7/8 shipped with no headless tests:
+`AssetsPanel.cpp` is not compiled into `ArcaneTests`, so the lens's logic is covered
+through the Task 3/4/5 pure units and the render/desk comparisons instead.
+
+### A consequence of the ABI bump, found at close
+
+The ABI 22 → 23 restamp made `ReferenceProject/Binaries/ReferenceGame.dll` — built at
+14:08, before the bump at 14:37 — a stale **ABI-22** module. The engine's plugin gate
+refused it (`Plugin.cpp`'s `AbiMismatch`), which sank `plugin_load`. Two consequences,
+both found and fixed here rather than at the desk:
+
+- The two `[witness][gpu]` host scenarios (W1 bounds-spent, W3 missing-reference) went
+  red in the unfiltered run — the *only* suite that launches a real host, and so the
+  only one that could see this. Rebuilding `ReferenceProject.slnx` for Debug turned
+  both green (40 assertions / 2 cases). `Binaries/` is untracked, so the repair is a
+  local build-artifact fix with no commit.
+- **The "Open Project Failed" modal that Tasks 7 and 8 recorded in their headless
+  captures as "pre-existing, environment-level" was this, and is now resolved.**
+  `EditorApp.cpp:986-993` pushes exactly that modal, with a banner naming the required
+  ABI, when `plugin_load` fails (the stage is Optional for the editor, so it boots on
+  and surfaces the failure as a modal instead of aborting). It does not appear in this
+  task's captures. `golden-gate.ps1` never saw it because the script's own step one is
+  a `ReferenceProject.slnx` rebuild for the target configuration — the single-slot
+  `Binaries/` precondition its header documents.
+
+### Dated corrections to §17 — 2026-09-07
+
+Recorded here rather than by editing §17, so its record still shows what was true when
+written:
+
+- §17's **"Owed, and deliberately held"** says the ABI 21 → 22 bump "stacks a *second*
+  Game-module rebuild obligation" onto Aphelyon. With ABI 23 it is now a **third**.
+  Gacha `main` still stays at `5923da65`; still recorded, still not blocking, still not
+  to be nagged about.
+- §17's **"Measured close"** figures (54270/1462, 54202/1456, unfiltered 116544/1495)
+  are superseded by this section's table. They were correct at `2f5dc391` and are left
+  as the Plan-1 record.
+- §17's fourth-revision **compact preview header** is still genuinely owed — Plan 2 did
+  not touch the preview pane, and the "follow-up implementation task is owed" line
+  there remains accurate, unlike the second and third revisions' own owed-lines which
+  their corrections already retired.
