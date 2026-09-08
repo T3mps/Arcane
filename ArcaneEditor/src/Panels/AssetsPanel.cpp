@@ -1933,7 +1933,13 @@ namespace Arcane::Editor
             const char* kindText   = KindLabel(e.kind);
             const float trailingW  = refused ? PillWidth(kindText)
                                              : ImGui::CalcTextSize(kRunningText).x;
-            const float nameBudget = std::max(0.0f, buttonsLeft - style.ItemSpacing.x
+            // buttonsLeft is only the LEFT EDGE OF THE BUTTONS on the refused
+            // shape (Recook/Problems); the queued shape has no buttons, so
+            // buttonsLeft there is already the card's plain right edge and
+            // needs no extra gap subtracted before it. Applying the
+            // button-row's ItemSpacing unconditionally would over-ellipsize
+            // the queued name by that many px for a gap that doesn't exist.
+            const float nameBudget = std::max(0.0f, buttonsLeft - (refused ? style.ItemSpacing.x : 0.0f)
                                                      - trailingW - style.ItemInnerSpacing.x - x);
 
             const std::string name = EllipsisToWidth(e.fileName, nameBudget);

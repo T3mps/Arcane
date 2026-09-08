@@ -15,10 +15,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace Arcane::Editor
 {
@@ -334,7 +334,21 @@ namespace Arcane::Editor
         // caller-held state relies on, just inverted (their state lives on the
         // CALLER's stack via an RAII type; Begin/EndCardFrame are plain
         // functions, so the stack has to live somewhere between the two calls).
-        std::vector<CardFrameState> g_cardFrameStack;
+        //
+        // std::deque, not std::vector: CardFrameState holds a live
+        // ImDrawListSplitter, whose ImDrawChannel entries own ImVector
+        // buffers (_CmdBuffer/_IdxBuffer). A vector's growth reallocation
+        // copies existing elements into new storage and destroys the old
+        // ones -- CardFrameState's (implicit) copy shallow-copies those
+        // ImVector buffer pointers, so the destroyed source's
+        // ~ImDrawListSplitter would free memory the "moved" copy still
+        // points at. deque never relocates existing elements when it grows,
+        // so a splitter's buffers are never copied or moved by container
+        // growth, only by BeginCardFrame/EndCardFrame's own push/pop. This
+        // matters once nesting is exercised (Plan 3): a nested
+        // BeginCardFrame pushes a second element while the outer one is
+        // still live on this stack.
+        std::deque<CardFrameState> g_cardFrameStack;
 
         // Inner padding shared by BeginCardFrame/EndCardFrame (spec: 8px).
         constexpr float kCardFramePadding = 8.0f;

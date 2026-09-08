@@ -978,6 +978,13 @@ namespace Arcane
                     // referenced target happens to be resolvable; the
                     // manifest is a strict superset of the scan's answer
                     // otherwise, by design.
+                    //
+                    // `>= 4`, not `== 4`, and deliberately open-ended
+                    // upward: this function only lists references for the
+                    // asset panel/index, so a future v5+ file's manifest is
+                    // still read here even on a build whose scene LOADER
+                    // refuses that version -- the panel can describe an
+                    // asset's references before the engine can load it.
                     const auto vit = json->find("version");
                     const auto ait = json->find("assets");
                     if (vit != json->end() && vit->is_number_integer() && vit->get<int>() >= 4 &&

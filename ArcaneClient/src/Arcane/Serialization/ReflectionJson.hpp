@@ -428,7 +428,10 @@ namespace Arcane
         // fields are its own `hi`/`lo` u64s and WriteScalar copies a u64
         // verbatim. Testing the SHAPE rather than the field's type hash keeps
         // the writer's collector and the fallback scan provably the same rule,
-        // which is what lets a v4 manifest and a pre-v4 scan agree.
+        // which is what lets a v4 manifest and a pre-v4 scan agree on WHICH
+        // GUIDS COUNT as references (the scan additionally drops unresolvable
+        // targets; the manifest deliberately does not -- spec s9.1's
+        // dangling-ref tombstones need them).
         //
         // Two guids never reach the sink: an IDENTITY field (the shared
         // Arcane::IsIdentityGuidFieldName rule -- the entity's own id, which no
