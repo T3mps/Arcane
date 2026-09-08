@@ -59,11 +59,28 @@ namespace Arcane::Editor
     {
         Arcane::Guid guid;                 // real asset, or overflow anchor
         std::string  label;                // name, or "+N more"
+        // AssetKind::Other for an overflow node, ALWAYS -- never the anchor's
+        // own kind (review round 1, finding 2/additional ruling). A "+N
+        // more" node has no accent color of its own to wear; Task 3's kind-
+        // color table must not paint it as if it were one more instance of
+        // whatever it overflowed from.
         AssetKind    kind = AssetKind::Other;
         int          layer = 0;            // column, 0 = left (sources)
         int          row = 0;              // stacking index within the column
         bool         isOverflow = false;
         bool         overflowInbound = false; // which side it truncates
+        // PINNED SEMANTIC (review round 1, finding 3 -- controller ruling):
+        // "N undrawn connections on THIS node's (guid's) side, in the
+        // `overflowInbound` direction." Every candidate edge that did not
+        // get drawn counts here, for EITHER reason a candidate can fail to
+        // become a GraphEdge -- this node's own per-direction breadth cap,
+        // OR the OTHER endpoint's own cap vetoing an edge this node's cap
+        // would otherwise have kept. This is NOT a claim that N *nodes* are
+        // hidden: in everything-mode every entry is unconditionally a node
+        // regardless of the cap, so the guid(s) on the other end of those N
+        // undrawn edges may be perfectly visible elsewhere in the graph --
+        // the count is scoped to CONNECTIONS on this node's side, never to
+        // the visibility of whatever is on the other end of them.
         int          overflowCount = 0;
         bool         isTombstone = false;  // dangling target (exists=false)
     };
@@ -90,8 +107,19 @@ namespace Arcane::Editor
     struct AssetGraphViewModel
     {
         std::vector<GraphNode> nodes;      // real + overflow, layer/row assigned
-        std::vector<GraphEdge> edges;      // between real nodes only
-        int realNodeCount = 0;             // "N of M"'s N (ruling 12)
+        // Between REAL nodes only -- "real" here means non-overflow (never
+        // touches a synthetic "+N more" node). A tombstone DOES count as
+        // real for this purpose: ruling 11 wants a dangling reference's edge
+        // to have pixels, so an edge into/out of a tombstone renders like
+        // any other. Do not confuse this "real" with realNodeCount's below
+        // -- the two words exclude DIFFERENT sets.
+        std::vector<GraphEdge> edges;
+        // "N of M"'s N (ruling 12) -- real ASSET nodes: excludes BOTH
+        // synthetic overflow nodes AND tombstones (a tombstone is not an
+        // asset -- that is the entire point of one). See `edges`' own
+        // comment just above for why this is a narrower "real" than that
+        // one.
+        int realNodeCount = 0;
 
         void Build(const GraphBuildInput& in);
         void Clear();

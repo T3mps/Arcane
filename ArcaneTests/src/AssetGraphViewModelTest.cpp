@@ -225,12 +225,19 @@ TEST_CASE("AssetGraphViewModel scopes to focus: BFS depth 2 both directions", "[
 TEST_CASE("AssetGraphViewModel caps breadth with a synthetic overflow node, most-important edges first", "[editor]")
 {
     // One texture, focused, with breadthCap(20)+5 = 25 inbound referencers:
-    // 3 via DerivesFrom, 22 via References. DerivesFrom-first sorting means
-    // all 3 DerivesFrom referencers survive before a single References one
-    // does; 17 of the 22 References referencers (name-sorted: ref00..ref16)
-    // fill the remaining budget, leaving ref17..ref21 as the "+5 more"
-    // overflow -- genuinely absent from the graph (UE Reference Viewer
-    // precedent: never silent truncation, but never a phantom node either).
+    // 3 via DerivesFrom, 22 via References. The 3 DerivesFrom referencers
+    // are named zzz00..zzz02 -- deliberately sorting AFTER every ref* name
+    // (review round 1, finding 1: der00-02 sorted before ref00-21 by NAME
+    // ALONE, so that construction could not actually discriminate the
+    // DerivesFrom-first rule from a plain name sort -- deleting the kind
+    // clause in SortByImportance would have passed it unnoticed). With
+    // zzz-naming, a plain name sort would keep ref00..ref19 and drop EVERY
+    // zzz* entry; DerivesFrom-first sorting keeps all 3 zzz* survivors
+    // before a single ref* one, so only 17 of the 22 References referencers
+    // (name-sorted: ref00..ref16) fill the remaining budget, leaving
+    // ref17..ref21 as the "+5 more" overflow -- genuinely absent from the
+    // graph (UE Reference Viewer precedent: never silent truncation, but
+    // never a phantom node either).
     const auto texture = GuidN(3, 0);
     std::vector<Arcane::Guid> derives, refs;
     for (int i = 0; i < 3; ++i) derives.push_back(GuidN(3, 100 + i));
@@ -241,7 +248,7 @@ TEST_CASE("AssetGraphViewModel caps breadth with a synthetic overflow node, most
     char name[16];
     for (int i = 0; i < 3; ++i)
     {
-        std::snprintf(name, sizeof(name), "der%02d", i);
+        std::snprintf(name, sizeof(name), "zzz%02d", i);
         entries[derives[i]] = MakeEntry(derives[i], name, AssetKind::Sprite);
     }
     for (int i = 0; i < 22; ++i)
@@ -286,6 +293,75 @@ TEST_CASE("AssetGraphViewModel caps breadth with a synthetic overflow node, most
     for (const GraphEdge& e : vm.edges)
         if (e.to == texture) ++edgesIntoTexture;
     CHECK(edgesIntoTexture == 20);
+}
+
+TEST_CASE("AssetGraphViewModel caps breadth on the OUTBOUND direction with its own overflow node", "[editor]")
+{
+    // Review round 1, finding 2: the test above only ever exercised the
+    // INBOUND side of the per-node-per-direction cap (a hub too many things
+    // point AT). This case exercises the OTHER side -- one node, X, that
+    // itself points at breadthCap(20)+5 = 25 distinct leaf targets. 20
+    // survive by name (t00..t19); the other 5 (t20..t24) collapse into an
+    // outboundOverflow (overflowInbound=false) "+5 more" node.
+    const auto X = GuidN(8, 0);
+    std::vector<Arcane::Guid> targets;
+    for (int i = 0; i < 25; ++i)
+        targets.push_back(GuidN(8, 100 + i));
+
+    std::unordered_map<Arcane::Guid, AssetPanelEntry> entries;
+    entries[X] = MakeEntry(X, "X", AssetKind::Material);
+    char name[16];
+    for (int i = 0; i < 25; ++i)
+    {
+        std::snprintf(name, sizeof(name), "t%02d", i);
+        entries[targets[static_cast<std::size_t>(i)]] = MakeEntry(targets[static_cast<std::size_t>(i)], name, AssetKind::Texture);
+    }
+
+    AssetReferenceIndex index;
+    for (const auto& t : targets)
+        index.Update(t, true, Refs({}));
+    std::vector<Arcane::AssetRef> refs;
+    refs.reserve(targets.size());
+    for (const auto& t : targets)
+        refs.push_back({ t, Arcane::AssetRefKind::References });
+    index.Update(X, true, Refs(refs));
+
+    GraphBuildInput in;
+    in.entries = &entries;
+    in.index = &index;
+    in.focus = X;   // default depthLimit=2, default breadthCap=20
+
+    AssetGraphViewModel vm;
+    vm.Build(in);
+
+    for (int i = 0; i < 20; ++i)
+        CHECK(FindReal(vm.nodes, targets[static_cast<std::size_t>(i)]) != nullptr);
+    for (int i = 20; i < 25; ++i)
+        CHECK(FindReal(vm.nodes, targets[static_cast<std::size_t>(i)]) == nullptr);   // collapsed into overflow
+
+    const GraphNode* overflow = FindOverflow(vm.nodes, X, /*inbound*/ false);
+    REQUIRE(overflow);
+    CHECK(overflow->overflowCount == 5);
+    CHECK(overflow->label == "+5 more");
+    CHECK_FALSE(overflow->overflowInbound);
+    CHECK(overflow->kind == AssetKind::Other);   // never the anchor's own kind (additional ruling)
+    CHECK_FALSE(overflow->isTombstone);
+
+    int overflowNodesInResult = 0;
+    for (const GraphNode& n : vm.nodes)
+        if (n.isOverflow) ++overflowNodesInResult;
+    CHECK(overflowNodesInResult == 1);
+    CHECK(vm.realNodeCount == 21);   // X + 20 surviving targets, the overflow node excluded
+
+    // Placement: X's own longest-outbound-to-leaf chain is 1 hop (every
+    // surviving target is itself a leaf), so X sits at layer 1; its
+    // outbound overflow node sits one column TOWARD THE SOURCES (layer 0)
+    // -- the opposite direction from an inbound overflow node (test above),
+    // which sits one column AWAY from the sources.
+    const GraphNode* xNode = FindReal(vm.nodes, X);
+    REQUIRE(xNode);
+    CHECK(xNode->layer == 1);
+    CHECK(overflow->layer == 0);
 }
 
 TEST_CASE("AssetGraphViewModel renders tombstones", "[editor]")
@@ -342,6 +418,13 @@ TEST_CASE("AssetGraphViewModel everything-mode applies no depth cut but keeps br
     // the breadth cap still runs: unlike focus mode, the 3 excess
     // referencers are NOT evicted (every entry is unconditionally in scope
     // here), only the EDGE into H and the overflow accounting are capped.
+    //
+    // Review round 1, finding 3 (controller ruling): each of the 3 excess
+    // referencers (h20..h22, name-sorted last) ALSO gets its own outbound
+    // "+1 more" overflow node -- the "+N more" node's pinned semantic is "N
+    // undrawn connections on THIS node's side", so h2x's one dropped edge
+    // counts on h2x's own side too, even though h2x itself remains a
+    // perfectly visible node here (everything-mode never evicts an entry).
     std::unordered_map<Arcane::Guid, AssetPanelEntry> entries;
 
     std::vector<Arcane::Guid> chain;
@@ -390,11 +473,29 @@ TEST_CASE("AssetGraphViewModel everything-mode applies no depth cut but keeps br
     REQUIRE(overflow);
     CHECK(overflow->overflowCount == 3);
     CHECK(overflow->label == "+3 more");
+    CHECK(overflow->kind == AssetKind::Other);   // never the anchor's own kind (additional ruling)
 
     int edgesIntoHub = 0;
     for (const GraphEdge& e : vm.edges)
         if (e.to == hub) ++edgesIntoHub;
     CHECK(edgesIntoHub == 20);   // capped even though every referencer is still a node
+
+    // h00..h19 (the 20 survivors, name-sorted) drew their edge -- no
+    // outbound overflow node of their own.
+    for (int i = 0; i < 20; ++i)
+    {
+        const GraphNode* o = FindOverflow(vm.nodes, referencers[static_cast<std::size_t>(i)], /*inbound*/ false);
+        CHECK(o == nullptr);
+    }
+    // h20..h22 (name-sorted last) lost their sole edge to hub's inbound cap
+    // -- each gets its OWN "+1 more" outbound overflow node.
+    for (int i = 20; i < 23; ++i)
+    {
+        const GraphNode* o = FindOverflow(vm.nodes, referencers[static_cast<std::size_t>(i)], /*inbound*/ false);
+        REQUIRE(o);
+        CHECK(o->overflowCount == 1);
+        CHECK(o->label == "+1 more");
+    }
 }
 
 TEST_CASE("AssetGraphViewModel guards a reference cycle without hanging, layer = max of non-cycle continuations", "[editor]")
@@ -436,6 +537,44 @@ TEST_CASE("AssetGraphViewModel guards a reference cycle without hanging, layer =
     CHECK(leaf->layer == 0);
     CHECK(c2->layer == 1);
     CHECK(c1->layer == 2);
+}
+
+TEST_CASE("AssetGraphViewModel yields an empty result for a focus guid absent from both entries and the index", "[editor]")
+{
+    // Review round 1, finding 4: a stale focus (e.g. the survivor of a
+    // delete+GC that removed the asset's entry AND, once nothing
+    // referenced it any more, its tombstone too) names nothing the index
+    // can explain at all -- Build() must yield the empty graph, never a
+    // FALSE tombstone rendered for a guid nobody can vouch for. The entries
+    // map and index below are populated (proving the guard checks the
+    // FOCUS specifically, not "is the whole input empty"), but the focus
+    // guid itself appears in neither.
+    const auto A = ParseGuid("7e5e0009-0001-4001-8001-00000000000a");
+    const auto B = ParseGuid("7e5e0009-0001-4001-8001-00000000000b");
+    const auto ghost = ParseGuid("7e5e0009-0001-4001-8001-0000000000ff");
+
+    std::unordered_map<Arcane::Guid, AssetPanelEntry> entries;
+    entries[A] = MakeEntry(A, "A", AssetKind::Data);
+    entries[B] = MakeEntry(B, "B", AssetKind::Data);
+
+    AssetReferenceIndex index;
+    index.Update(B, true, Refs({}));
+    index.Update(A, true, Refs({ { B, Arcane::AssetRefKind::References } }));
+
+    REQUIRE_FALSE(entries.count(ghost));
+    REQUIRE(index.Find(ghost) == nullptr);
+
+    GraphBuildInput in;
+    in.entries = &entries;
+    in.index = &index;
+    in.focus = ghost;
+
+    AssetGraphViewModel vm;
+    vm.Build(in);
+
+    CHECK(vm.nodes.empty());
+    CHECK(vm.edges.empty());
+    CHECK(vm.realNodeCount == 0);
 }
 
 TEST_CASE("AssetGraphViewModel Clear() empties nodes, edges and realNodeCount", "[editor]")

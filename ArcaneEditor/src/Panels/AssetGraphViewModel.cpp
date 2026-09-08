@@ -257,6 +257,19 @@ namespace Arcane::Editor
         }
         else
         {
+            // A focus guid that names NOTHING at all -- never a real entry,
+            // and no AssetReferenceIndex node either (e.g. stale after the
+            // asset it named was deleted and its tombstone itself later
+            // garbage-collected once nothing referenced it any more) -- has
+            // nothing to show. Without this guard the guid below would be
+            // seeded into scope unconditionally and rendered as a FALSE
+            // tombstone by Step 4's classification, which only holds for a
+            // guid the index actually explains (review round 1, finding 4).
+            // A genuine tombstone always has an index Node; this guid does
+            // not.
+            if (!entries.count(in.focus) && !index.Find(in.focus))
+                return;
+
             scope.insert(in.focus);
             std::vector<Arcane::Guid> frontier{ in.focus };
 
@@ -283,17 +296,36 @@ namespace Arcane::Editor
         // survivor lists can name the same logical edge twice. Dropped if
         // either endpoint fell outside scope (depth-cut, never overflow-
         // accounted -- only a BREADTH cut gets a synthetic node). ----
+        // Overflow accounting (review round 1, finding 3 -- controller
+        // ruling): a candidate that survived THIS node's own per-direction
+        // cap can still be vetoed below by the OTHER endpoint's cap (the
+        // two-sided-conflict case -- e.g. a low-degree node's one outbound
+        // edge, trivially under ITS OWN cap, pointed at a hub whose inbound
+        // cap already dropped it). That is one more undrawn connection on
+        // THIS node's side too, on top of whatever its own raw-count-minus-
+        // cap already tallied at ProcessNode time -- the two can never
+        // double-count the SAME candidate, since a candidate is either
+        // excluded by this node's own cap (never reaches the loop below at
+        // all) or survives it and is only ever evaluated for veto here,
+        // never both. The vetoing side needs no matching increment: by
+        // AssetReferenceIndex's own forward/inverse consistency, a rejected
+        // candidate is ALWAYS one the vetoing side's own raw-cap overflow
+        // already counted (that is precisely why it is not in the vetoing
+        // side's own survivor list) -- see ProcessNode's own cap.
         std::set<std::pair<Arcane::Guid, Arcane::Guid>> seen;
-        for (const auto& [g, w] : work)
+        for (auto& [g, w] : work)
         {
             if (!w.processed || !scope.count(g))
                 continue;
             for (const CandidateEdge& c : w.outboundSurvivors)
             {
                 if (!scope.count(c.guid))
-                    continue;
+                    continue;   // depth-cut, not a breadth cut -- never overflow-accounted
                 if (!TargetAcceptsInbound(c.guid, g, work))
-                    continue;   // the target's OWN inbound cap dropped this one
+                {
+                    ++w.outboundOverflow;   // the target's OWN inbound cap dropped this one
+                    continue;
+                }
                 if (!seen.insert({ g, c.guid }).second)
                     continue;
                 GraphEdge e;
@@ -306,9 +338,12 @@ namespace Arcane::Editor
             for (const CandidateEdge& c : w.inboundSurvivors)
             {
                 if (!scope.count(c.guid))
-                    continue;
+                    continue;   // depth-cut, not a breadth cut -- never overflow-accounted
                 if (!SourceAcceptsOutbound(c.guid, g, work))
-                    continue;   // the source's OWN outbound cap dropped this one
+                {
+                    ++w.inboundOverflow;   // the source's OWN outbound cap dropped this one
+                    continue;
+                }
                 if (!seen.insert({ c.guid, g }).second)
                     continue;
                 GraphEdge e;
@@ -397,10 +432,19 @@ namespace Arcane::Editor
                 }
                 else
                 {
-                    // A scope member with no entry can only be a tombstone
+                    // A scope member with no entry is a tombstone
                     // (AssetReferenceIndex::Update never creates a node for
                     // a guid nothing pointed at -- see its own header
-                    // comment) -- exists == false, inbound nonempty.
+                    // comment) -- exists == false, inbound nonempty. This
+                    // invariant depends on the focus-mode guard above
+                    // (Step 1's `else` branch): without it, a stale focus
+                    // guid absent from both entries and the index would be
+                    // seeded into scope unconditionally and land here as a
+                    // FALSE tombstone even though it names nothing the
+                    // index can explain (review round 1, finding 4). Every
+                    // OTHER way a guid enters scope is via a real edge the
+                    // index itself produced, so this branch is always a
+                    // genuine dangling target for them.
                     n.label = ShortGuid(g);
                     n.kind = AssetKind::Other;
                     n.isTombstone = true;
@@ -424,16 +468,13 @@ namespace Arcane::Editor
                 continue;
             const NodeWork& w = it->second;
             const int anchorLayer = layerOf[g];
-            AssetKind anchorKind = AssetKind::Other;
-            if (auto e = entries.find(g); e != entries.end())
-                anchorKind = e->second.kind;
 
             if (w.outboundOverflow > 0)
             {
                 GraphNode n;
                 n.guid = g;
                 n.label = "+" + std::to_string(w.outboundOverflow) + " more";
-                n.kind = anchorKind;
+                n.kind = AssetKind::Other;   // never the anchor's kind (review round 1, finding 2/additional ruling)
                 n.layer = std::max(0, anchorLayer - 1);
                 n.row = nextRowInLayer[n.layer]++;
                 n.isOverflow = true;
@@ -446,7 +487,7 @@ namespace Arcane::Editor
                 GraphNode n;
                 n.guid = g;
                 n.label = "+" + std::to_string(w.inboundOverflow) + " more";
-                n.kind = anchorKind;
+                n.kind = AssetKind::Other;   // never the anchor's kind (review round 1, finding 2/additional ruling)
                 n.layer = anchorLayer + 1;
                 n.row = nextRowInLayer[n.layer]++;
                 n.isOverflow = true;
