@@ -1616,6 +1616,9 @@ reference, which re-proves editor-ui backend-invariant rather than assuming it.
     the model's `ResetForProjectSwitch` seam, and both destroy seams were confirmed to be
     the only two. Task 6's gesture stash (`graphWireGuid` / `graphWireDerivable`) is
     cleared there for the same reason: it names an asset of the outgoing project.
+    **Mechanism deviation:** the plan said the `ed::DestroyEditor` calls "live app-side";
+    what shipped is a panel-owned `DestroyAssetsPanelCanvas(state)`, called app-side at
+    both seams. Ruling-1-conformant — all `ed::` usage stays inside `AssetsPanel.cpp`.
 22. **The Graph lens gets its OWN selection stamp** (`seenSelectionStampGraph`, plan
     ruling 4). The existing shared field has Browse as its only consumer; a second
     consumer on it would swallow the other's pending scroll/center. Browse's field and
@@ -1819,6 +1822,11 @@ misleads the next reader in a specific way)
   consumer appears).
 - `ProjectTest.cpp` launches `cmd.exe` through a PATH search rather than an absolute
   `%COMSPEC%`.
+- `AssetGraphViewModel.cpp`'s sort comparators **allocate**: `SortKey` (`:35`) returns
+  a `std::string` by value, called twice per comparison; `SortByImportance` (`:85`),
+  the edge comparator, calls `Guid::ToString()` up to four times per comparison (twice
+  inside `SortKey`'s tombstone fallback, twice more in the guid tie-break) —
+  decorate-sort-undecorate removes it if everything-mode ever profiles hot.
 
 One item that used to sit in this list has been **promoted out of it**: the tombstone
 ghost's wash dims the accent bar but not the border, leaving two amber strengths in one

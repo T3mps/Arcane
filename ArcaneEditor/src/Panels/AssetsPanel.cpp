@@ -4447,8 +4447,10 @@ namespace Arcane::Editor
             // THE SELECTION AUTHORITY IS THE MODEL. The canvas keeps its own
             // selection set (it has to -- it draws the 2px selected border and
             // owns rect-select), but that set is never the truth: it is a
-            // MIRROR the steps below re-establish every frame, in a fixed
-            // order chosen so neither direction can read back its own write.
+            // MIRROR the steps below keep in sync with the model, each ONLY on
+            // the frame its own guard fires -- never unconditionally every
+            // frame -- in a fixed order chosen so neither direction can read
+            // back its own write.
             //
             //   8a rebuild guard  : node ids are index+1 into the CURRENT
             //                       build, so a rebuild renumbers everything
@@ -4464,12 +4466,19 @@ namespace Arcane::Editor
             //                       way, or the stamp re-arms forever.
             //   8c canvas -> model: only now, with the mirror known to agree
             //                       with the model, is a DISAGREEMENT
-            //                       necessarily the user's own click. Push it
-            //                       into the model and acknowledge the stamp
+            //                       necessarily the user's own click. A pick
+            //                       that resolves to a real entry pushes it
+            //                       into the model and acknowledges the stamp
             //                       it raises in the same statement -- the
             //                       node is under the cursor already and must
             //                       not then be yanked to the middle of the
-            //                       view by 8b on the next frame.
+            //                       view by 8b on the next frame. A pick that
+            //                       resolves INERT instead (a tombstone or an
+            //                       overflow companion -- entryForNodeId
+            //                       returns null) CLEARS the mirror, so a
+            //                       ghost the model will never agree points
+            //                       at anything stops wearing the 2px
+            //                       selected border.
             //
             // The order is load-bearing and was caught by the device-less test
             // rather than reasoned out: with 8c first, a model selection that
@@ -4544,12 +4553,32 @@ namespace Arcane::Editor
                 // as clicking below the last Browse row does not.
                 ed::NodeId picked;
                 if (ed::GetSelectedNodes(&picked, 1) == 1)
+                {
                     if (const AssetPanelEntry* e = entryForNodeId(picked.Get()))
+                    {
                         if (e->guid != model.selected)
                         {
                             model.Select(e->guid);
                             state.seenSelectionStampGraph = model.selectionStamp;
                         }
+                    }
+                    else
+                    {
+                        // Resolved INERT -- a tombstone (no AssetPanelEntry by
+                        // construction) or an overflow companion (guid aliases
+                        // its anchor's, ruled inert). Not applyLayout here (the
+                        // outer guard above already excludes it), so this is a
+                        // genuine resolution, not the rebuild guard's blanket
+                        // refusal -- nodeIndexOf ran its real bounds check and
+                        // the pick landed on a node that just has nothing to
+                        // select. Clear the CANVAS's own mirror so the ghost
+                        // stops wearing the 2px selected border while the
+                        // model's selection (elsewhere, or nothing) is left
+                        // untouched -- same "canvas-local, not the authority"
+                        // posture as the empty-canvas click above.
+                        ed::ClearSelection();
+                    }
+                }
             }
 
             // 8d. Double-click opens, routed EXACTLY as a Browse row's is

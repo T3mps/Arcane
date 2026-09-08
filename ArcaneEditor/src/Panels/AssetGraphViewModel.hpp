@@ -25,7 +25,12 @@
 //      NEIGHBOR remains visible anyway (it is independently a root/entry),
 //      so the cap trims which EDGES draw, not which entries appear. Tasks
 //      3-6 render both modes off the same fields; this asymmetry is
-//      intentional and covered by its own test case.
+//      intentional and covered by its own test case. Boundary case: two
+//      nodes BOTH admitted at exactly depthLimit hops are visible, but an
+//      edge between them draws no wire and gets no overflow accounting --
+//      neither endpoint is ever processed, since the BFS stops admitting
+//      before processing the last hop's frontier. Matches the UE Reference
+//      Viewer; intentional.
 //   2. Layer (the column): layer(n) = longest outbound-path length to a
 //      leaf, a memoized DFS over the FINAL surviving edge set (post-scope,
 //      post-cap) with an on-stack cycle guard -- a cycle member's layer is
