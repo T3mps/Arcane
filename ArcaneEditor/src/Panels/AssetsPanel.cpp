@@ -384,12 +384,20 @@ namespace Arcane::Editor
         // returned pointer is either a literal or borrowed from the model's
         // entry (stable for the frame -- Find()'s own doc comment; nothing
         // between here and the draw mutates the model).
+        //
+        // fileName, not name: the render comparison against
+        // `OptionD-Graph-FINAL.png` caught the stem spelling naming the SAME
+        // scene two ways one band apart -- the graph's own node header says
+        // "main.arcscene" (DrawGraphNode) and the Status lens's scene cards
+        // say "main.arcscene" (DrawSceneCard), so a toolbar reading "main"
+        // was the panel's only dissenting voice. The board agrees
+        // (`focus: main.arcscene`).
         const char* GraphFocusLabel(const AssetPanelModel& model, const Arcane::Guid& focus)
         {
             if (!focus.IsValid())
                 return kGraphFocusEverything;
             const AssetPanelEntry* e = model.Find(focus);
-            return e ? e->name.c_str() : kGraphFocusMissing;
+            return e ? e->fileName.c_str() : kGraphFocusMissing;
         }
 
         // Resolve + route a double-click / Enter-open. Copied VERBATIM from
@@ -521,7 +529,10 @@ namespace Arcane::Editor
                     for (const AssetPanelEntry* s : ScenesByName(model))
                     {
                         ImGui::PushID(s->guid.ToString().c_str());
-                        if (ImGui::Selectable(s->name.c_str(), s->guid == state.graphFocus))
+                        // fileName for the same reason GraphFocusLabel uses
+                        // it: this list and the Status lens's scene cards are
+                        // the same scenes, and they read identically there.
+                        if (ImGui::Selectable(s->fileName.c_str(), s->guid == state.graphFocus))
                             state.graphFocus = s->guid;
                         ImGui::PopID();
                     }
