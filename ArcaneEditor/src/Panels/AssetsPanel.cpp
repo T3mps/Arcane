@@ -3,6 +3,7 @@
 #include "Documents/DocumentHost.hpp"
 #include "Panels/AssetActivityLog.hpp"    // AssetActivityEntry/Kind (Task 8's feed, the first reader)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind + the AssetKind bridge (Task 12)
+#include "Widgets/CanvasPopupScope.hpp"   // ed::Suspend/Resume around the Graph lens's node menu
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
@@ -530,6 +531,67 @@ namespace Arcane::Editor
             ImGui::EndChild();
         }
 
+        // ---- Plan 3 Task 4: the Graph tooltip's edge-summary lines ---------
+        // Read off the SAME AssetReferenceIndex the graph itself is projected
+        // from, so the numbers can never disagree with the wires on screen.
+        // Two dim lines: the counts, then up to three of the outbound targets
+        // BY NAME (Interactions-FINAL's "one extra line" carries both a count
+        // clause and named neighbours; splitting them is what keeps a
+        // three-filename list inside the 210px tooltip).
+        //
+        // "M out" counts DISTINCT targets, not raw refs: one source may name
+        // one target twice (two material slots pointing at one material), and
+        // "2 out" beside a single listed name reads as a bug in the panel
+        // rather than as a fact about the asset. `inbound` needs no such care
+        // -- AssetReferenceIndex keeps it sorted-unique by contract.
+        void DrawGraphEdgeSummary(const AssetPanelModel& model, const Arcane::Guid& guid)
+        {
+            const AssetReferenceIndex::Node* node = model.RefIndex().Find(guid);
+            if (!node)
+                return;   // never walked and never named as a target
+
+            std::vector<Arcane::Guid> targets;
+            targets.reserve(node->outbound.size());
+            for (const Arcane::AssetRef& r : node->outbound)
+                if (std::find(targets.begin(), targets.end(), r.target) == targets.end())
+                    targets.push_back(r.target);
+
+            ImGui::TextDisabled("%d in \xC2\xB7 %d out",
+                                static_cast<int>(node->inbound.size()),
+                                static_cast<int>(targets.size()));
+            if (targets.empty())
+                return;
+
+            constexpr std::size_t kNamedTargets = 3;
+            std::string line;
+            for (std::size_t i = 0; i < targets.size() && i < kNamedTargets; ++i)
+            {
+                if (i != 0)
+                    line += ", ";
+                // A target with no entry is a tombstone (or an asset this
+                // walk has not reached yet): the short-guid form is the same
+                // name the graph's own ghost node wears for it.
+                const AssetPanelEntry* t = model.Find(targets[i]);
+                line += t ? t->fileName : targets[i].ToString().substr(0, 8);
+            }
+            if (targets.size() > kNamedTargets)
+            {
+                char more[24];
+                std::snprintf(more, sizeof(more), " +%d more",
+                              static_cast<int>(targets.size() - kNamedTargets));
+                line += more;
+            }
+            // Wrapped, unlike the fixed-width lines above it: three file names
+            // routinely overrun 210px, and the tooltip's SetNextWindowSize
+            // pins the WIDTH only (height is auto), so wrapping grows the box
+            // instead of clipping the text.
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(line.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::PopStyleColor();
+        }
+
         // ---- Task 10: the peek tooltip (spec s8) ---------------------------
         // File-local per the brief: rows, child rows and (later, Task 11) the
         // preview pane's Derived list all hover the same asset. Text-and-
@@ -546,8 +608,15 @@ namespace Arcane::Editor
         // BeginTooltip() itself positions near the mouse regardless of
         // "last item", so this is safe. Every existing call site keeps the
         // default and is unaffected.
+        //
+        // `withEdgeSummary` (Plan 3 Task 4): the Graph lens's one extra line
+        // (Interactions-FINAL's Graph column -- "same tooltip + one extra
+        // line"). Off for every other caller, which is why it is a defaulted
+        // parameter rather than a second helper: the anatomy above is spec
+        // s8's and must stay ONE list, not two that drift.
         void DrawAssetPeekTooltip(const AssetPanelModel& model, const AssetsPanelServices& services,
-                                  const Arcane::Guid& guid, bool forceShow = false)
+                                  const Arcane::Guid& guid, bool forceShow = false,
+                                  bool withEdgeSummary = false)
         {
             if (!forceShow && !ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
                 return;
@@ -592,25 +661,34 @@ namespace Arcane::Editor
             ImGui::TextDisabled("%s", e->mountPath.c_str());
             ImGui::TextDisabled("%s", CookStateLabel(e->cook));
             ImGui::TextDisabled("%s", e->guid.ToString().c_str());
+            if (withEdgeSummary)
+                DrawGraphEdgeSummary(model, guid);
 
             ImGui::EndTooltip();
         }
 
-        // ---- Task 10: shared row context menu (spec s6) --------------------
+        // ---- Task 10: the unified asset context menu's ITEMS (spec s6) -----
+        // The menu BODY, with no popup bracket of its own, so that every
+        // representation of an asset raises the SAME menu from the SAME code:
+        // a Browse row opens it through BeginPopupContextItem
+        // (DrawRowContextMenu just below), a Graph node opens it through
+        // ed::ShowNodeContextMenu + BeginPopup inside a CanvasPopupScope
+        // (DrawGraphLens, Plan 3 Task 4). Extracted in Task 4 for exactly that
+        // second caller -- spec s6 says "the unified context menu, every
+        // lens", and two copies of a list is how "unified" quietly stops being
+        // true.
+        //
         // `kindSpecific` gates the Material/Scene/Texture leading entries --
         // Type::Child rows are always folded 1:1 sprites, so none of those
         // three ever apply to one and the caller passes false to skip them.
-        void DrawRowContextMenu(AssetPanelModel& model, AssetsPanelActions& actions,
-                                const AssetPanelEntry& e, bool kindSpecific)
+        //
+        // Deliberately does NOT touch the selection: "right-click selects" is
+        // the OPENING gesture's business (it must happen once, when the menu
+        // opens, not on every frame the popup is drawn), so each caller does
+        // it at its own open site.
+        void DrawAssetMenuItems(AssetsPanelActions& actions, const AssetPanelEntry& e,
+                                bool kindSpecific)
         {
-            if (!ImGui::BeginPopupContextItem())
-                return;
-
-            // Right-click acts on this row: make it the tracked selection so
-            // the highlight + the Inspector/Assets-menu follow (matches
-            // AssetBrowser.cpp's own old behavior).
-            model.Select(e.guid);
-
             if (kindSpecific)
             {
                 bool any = false;
@@ -650,6 +728,24 @@ namespace Arcane::Editor
                 actions.copyPath = e.guid;
             if (ImGui::MenuItem("Copy Guid"))
                 actions.copyGuid = e.guid;
+        }
+
+        // ---- Task 10: shared row context menu (spec s6) --------------------
+        // The Browse-side bracket around DrawAssetMenuItems above.
+        void DrawRowContextMenu(AssetPanelModel& model, AssetsPanelActions& actions,
+                                const AssetPanelEntry& e, bool kindSpecific)
+        {
+            if (!ImGui::BeginPopupContextItem())
+                return;
+
+            // Right-click acts on this row: make it the tracked selection so
+            // the highlight + the Inspector/Assets-menu follow (matches
+            // AssetBrowser.cpp's own old behavior). Idempotent per
+            // AssetPanelModel::Select (no stamp bump when the guid is already
+            // the selection), so re-running it every open frame is free.
+            model.Select(e.guid);
+
+            DrawAssetMenuItems(actions, e, kindSpecific);
 
             ImGui::EndPopup();
         }
@@ -3151,20 +3247,27 @@ namespace Arcane::Editor
             ed::EndNode();
         }
 
+        // The Graph lens's node context menu. A distinct id from the shader
+        // editor's "##graphnodemenu" even though ImGui scopes popup ids to the
+        // current window's id stack (they could never collide): a metrics
+        // window listing both by name should say which is which.
+        constexpr const char* kGraphNodeMenuId = "##assetgraphnodemenu";
+
         // ---- Task 3: the Graph lens body (spec §10) ------------------------
-        // Canvas foundation + layered nodes + two-layer kind-coloured edges.
-        // Interactions (selection bridge, peek tooltip, context menu,
-        // double-click) are Task 4's; the focus combo and the lens-strip mask
-        // are Task 5's; pin-drag create is Task 6's. In particular this body
+        // Canvas foundation + layered nodes + two-layer kind-coloured edges,
+        // plus (Task 4) the interaction surface: the selection bridge, the
+        // peek tooltip with its edge summary, double-click open and the
+        // unified context menu. The focus combo and the lens-strip mask are
+        // Task 5's; pin-drag create is Task 6's. In particular this body
         // deliberately opens NO ed::BeginCreate bracket: an armed
         // CreateItemAction whose EndCreate never runs asserts on the NEXT
         // frame's BeginCreate (ShaderEditorDocument.cpp:5559-5561 -- the desk
         // crash that was fine on frame 1 and aborted on frame 2). The lens
         // will grow one, with its unconditional EndCreate, in Task 6.
         void DrawGraphLens(AssetsPanelState& state, AssetPanelModel& model,
-                           const Arcane::Project* project, DocumentHost& /*docs*/,
+                           const Arcane::Project* project, DocumentHost& docs,
                            const AssetsPanelServices& services,
-                           AssetsPanelActions& /*actions*/)
+                           AssetsPanelActions& actions)
         {
             // ---- 1. Rebuild the projection, and ONLY when it moved --------
             // The trigger is AssetPanelModel::entriesStamp (bumped exactly
@@ -3263,6 +3366,63 @@ namespace Arcane::Editor
 
             const std::vector<GraphNode>& nodes = state.graph.nodes;
             const std::vector<GraphEdge>& edges = state.graph.edges;
+
+            // ---- Task 4: the node under the cursor ------------------------
+            // Latched by the PREVIOUS frame's ed::End
+            // (imgui_node_editor.cpp:1278) -- and zeroed there whenever a
+            // canvas action is running (`m_CurrentAction == nullptr`), so
+            // neither the highlight below nor the tooltip after ed::End
+            // flickers while the view is being panned or a node dragged. One
+            // frame of lag on a hover is imperceptible; reading it HERE (and
+            // once) is what lets the edge pass below act on the same answer
+            // the tooltip does.
+            const std::uint64_t hoveredNodeId = ed::GetHoveredNode().Get();
+
+            // A node id -> the projection index it names, or `nodes.size()`
+            // for "none" (id 0) and for a stale id left over from an earlier
+            // build (ids are index+1 into the CURRENT build's node vector).
+            const auto nodeIndexOf = [&nodes](std::uint64_t id) -> std::size_t
+            {
+                return (id >= 1ull && id <= nodes.size())
+                           ? static_cast<std::size_t>(id - 1ull)
+                           : nodes.size();
+            };
+            // The guid a node id names for VISUAL purposes -- any non-overflow
+            // node, tombstones included (a ghost's wires are exactly the "who
+            // still points at this dead guid" answer a highlight is for).
+            // Overflow companions are excluded because their guid ALIASES
+            // their anchor's by construction (AssetGraphViewModel.hpp), so
+            // lighting up "their" edges would light the ANCHOR's -- a lie
+            // about what is under the cursor.
+            const auto visualGuidOf = [&](std::uint64_t id) -> Arcane::Guid
+            {
+                const std::size_t i = nodeIndexOf(id);
+                if (i == nodes.size() || nodes[i].isOverflow)
+                    return Arcane::Guid{};
+                return nodes[i].guid;
+            };
+            // ...and the entry a node id names for ACTING purposes: select,
+            // peek, open, context menu. Stricter than visualGuidOf on both
+            // synthetic node kinds, and this is the single place that
+            // decision is spelled:
+            //   * OVERFLOW ("+N more") nodes are INERT in v1 (controller
+            //     ruling). Their guid aliases the anchor's, so a bridge off
+            //     one would silently select/open/menu the ANCHOR -- and
+            //     "expand this +N more" is deliberately unspecified design
+            //     territory, not something to invent from a draw path.
+            //   * TOMBSTONES have no AssetPanelEntry by definition, so there
+            //     is nothing for the entry-keyed menu or the open routing to
+            //     act on, and nothing the peek tooltip's spec-s8 anatomy
+            //     (thumb, kind pill, mount path, cook state) could honestly
+            //     render. They stay interaction-inert too, selection
+            //     included: `model.selected` is the ONE guid every lens and
+            //     the Inspector point at, and aiming it at a guid no file
+            //     backs would leave all of them pointing at nothing.
+            const auto entryForNodeId = [&](std::uint64_t id) -> const AssetPanelEntry*
+            {
+                const Arcane::Guid g = visualGuidOf(id);
+                return g.IsValid() ? model.Find(g) : nullptr;
+            };
 
             // Real (non-overflow) guid -> node index. A tombstone counts as
             // real here: ruling 11 wants a dangling reference's edge to have
@@ -3470,8 +3630,11 @@ namespace Arcane::Editor
             // Read-only: `selected` is a plain public member of the model, so
             // brightening needs no interaction plumbing at all. The rest of
             // the selection story -- clicking a node, centering on an
-            // external change -- is Task 4's.
+            // external change -- is section 8 below.
             const Arcane::Guid& selectedGuid = model.selected;
+            // Task 4 / Interactions-FINAL: "the node's own edges brighten, the
+            // rest stay dim" on HOVER as well, through this same one mechanism.
+            const Arcane::Guid hoveredGuid = visualGuidOf(hoveredNodeId);
 
             for (std::size_t ei = 0; ei < edges.size(); ++ei)
             {
@@ -3497,9 +3660,11 @@ namespace Arcane::Editor
 
                 // Colour = the SOURCE kind's accent, dimmed; brightened when
                 // either endpoint is the selected asset (spec §10: "selected
-                // node's edges brighten").
-                const bool emphasize = selectedGuid.IsValid() &&
-                                       (e.from == selectedGuid || e.to == selectedGuid);
+                // node's edges brighten") or the hovered one (Task 4).
+                const bool emphasize = (selectedGuid.IsValid() &&
+                                        (e.from == selectedGuid || e.to == selectedGuid)) ||
+                                       (hoveredGuid.IsValid() &&
+                                        (e.from == hoveredGuid || e.to == hoveredGuid));
                 const ImVec4 base = KindAccentColor(nodes[from->second].kind);
                 const ImVec4 col  = emphasize ? GraphBrightenColor(base)
                                               : GraphDimColor(base, kGraphWireDim);
@@ -3565,8 +3730,223 @@ namespace Arcane::Editor
                                   col, kGraphOverflowWireThickness);
             }
 
+            // ---- 8. Interactions (Task 4) ---------------------------------
+            // THE SELECTION AUTHORITY IS THE MODEL. The canvas keeps its own
+            // selection set (it has to -- it draws the 2px selected border and
+            // owns rect-select), but that set is never the truth: it is a
+            // MIRROR the steps below re-establish every frame, in a fixed
+            // order chosen so neither direction can read back its own write.
+            //
+            //   8a rebuild guard  : node ids are index+1 into the CURRENT
+            //                       build, so a rebuild renumbers everything
+            //                       and the mirror now names strangers. Drop
+            //                       it and re-derive it from the model.
+            //   8b model -> canvas: a stamp nobody here acknowledged came from
+            //                       somewhere else (a Browse row, the
+            //                       Inspector, another lens). Point the mirror
+            //                       at it and center ONCE -- and when the guid
+            //                       has no node in this scope, CLEAR the
+            //                       mirror rather than leave it pointing at
+            //                       the previous asset. Acknowledge either
+            //                       way, or the stamp re-arms forever.
+            //   8c canvas -> model: only now, with the mirror known to agree
+            //                       with the model, is a DISAGREEMENT
+            //                       necessarily the user's own click. Push it
+            //                       into the model and acknowledge the stamp
+            //                       it raises in the same statement -- the
+            //                       node is under the cursor already and must
+            //                       not then be yanked to the middle of the
+            //                       view by 8b on the next frame.
+            //
+            // The order is load-bearing and was caught by the device-less test
+            // rather than reasoned out: with 8c first, a model selection that
+            // is OUT of this scope leaves the mirror holding the previous
+            // in-scope node, and 8c reads that stale mirror back over the
+            // model -- the canvas silently out-voting the authority.
+            //
+            // Everything read here (the selection set, double-click, the
+            // context-menu gesture) was decided by the PREVIOUS frame's
+            // ed::End, which is where the library processes its actions. Same
+            // position, same one-frame lag, as the shader editor's own read of
+            // GetDoubleClickedNode (ShaderEditorDocument.cpp:3125-3129); the
+            // alternative, reading after ed::End, cannot then call back INTO
+            // the canvas at all.
+
+            // 8a. Rebuild renumber guard.
+            if (applyLayout)
+            {
+                ed::ClearSelection();
+                if (model.selected.IsValid())
+                {
+                    const auto it = indexOfGuid.find(model.selected);
+                    if (it != indexOfGuid.end())
+                        ed::SelectNode(ed::NodeId(GraphNodeIdOf(it->second)));
+                }
+                // No navigation: the view did not RECEIVE a new selection, it
+                // is the same one wearing a new id.
+            }
+
+            // 8b. Model -> canvas: center once on an externally-changed
+            // selection (Browse's own idiom, `wantsScroll` at DrawTable).
+            if (state.seenSelectionStampGraph != model.selectionStamp)
+            {
+                const auto it = model.selected.IsValid() ? indexOfGuid.find(model.selected)
+                                                         : indexOfGuid.end();
+                if (it != indexOfGuid.end())
+                {
+                    ed::SelectNode(ed::NodeId(GraphNodeIdOf(it->second)));
+                    // Default zoomIn=false: NavigateTo's ZoomMode::None
+                    // centers at the CURRENT scale
+                    // (imgui_node_editor.cpp:3524-3532). Interactions-FINAL
+                    // says "the graph centers it" -- fitting one ~110x66 node
+                    // to the whole canvas instead would be a zoom nobody asked
+                    // for.
+                    ed::NavigateToSelection();
+                }
+                else
+                {
+                    // Selected out of this scope (filtered by the focus, a
+                    // tombstone, never an asset at all): nothing to center on,
+                    // and the mirror must stop claiming the PREVIOUS node is
+                    // the selection -- see the ordering note above.
+                    ed::ClearSelection();
+                }
+                state.seenSelectionStampGraph = model.selectionStamp;
+            }
+
+            // 8c. Canvas -> model. Skipped on a rebuild frame: 8a just wrote
+            // that mirror itself, so there is nothing of the user's in it.
+            if (!applyLayout && ed::GetSelectedObjectCount() == 1)
+            {
+                // Exactly one object, and it has to be a NODE (a selected link
+                // makes GetSelectedNodes return 0). A rect-select of several
+                // nodes leaves the model alone on purpose: `model.selected` is
+                // one guid, and silently picking one of N would be a guess.
+                // Clicking empty canvas clears the CANVAS selection only --
+                // deselecting inside one lens does not clear the selection
+                // every other lens and the Inspector are pointing at, exactly
+                // as clicking below the last Browse row does not.
+                ed::NodeId picked;
+                if (ed::GetSelectedNodes(&picked, 1) == 1)
+                    if (const AssetPanelEntry* e = entryForNodeId(picked.Get()))
+                        if (e->guid != model.selected)
+                        {
+                            model.Select(e->guid);
+                            state.seenSelectionStampGraph = model.selectionStamp;
+                        }
+            }
+
+            // 8d. Double-click opens, routed EXACTLY as a Browse row's is
+            // (spec §6's verbatim-behavior clause): a scene comes back through
+            // actions.openScene for the host's unsaved-changes guard, every
+            // other kind opens through the DocumentHost. Overflow companions
+            // and tombstones are filtered by entryForNodeId.
+            if (const AssetPanelEntry* e = entryForNodeId(ed::GetDoubleClickedNode().Get()))
+                OpenAssetRow(*e, project, docs, actions);
+
+            // 8e. Right-click -> the unified asset context menu, the SAME
+            // items a Browse row raises (DrawAssetMenuItems is the one copy).
+            // `menuOpen` is read by the tooltip after ed::End -- see there.
+            bool menuOpen = false;
+            {
+                const CanvasPopupScope canvasPopup;   // ed::Suspend/Resume, see the header
+                ed::NodeId ctxNode;
+                if (ed::ShowNodeContextMenu(&ctxNode))
+                {
+                    if (const AssetPanelEntry* e = entryForNodeId(ctxNode.Get()))
+                    {
+                        state.graphMenuGuid = e->guid;
+                        // Right-click acts on this node -- DrawRowContextMenu's
+                        // own first statement, for the same reason. The MIRROR
+                        // moves with it: the context-menu action does not touch
+                        // the canvas selection itself, so without this the next
+                        // frame's 8c would read the old node back over the
+                        // model and revert the right-click's selection.
+                        // Acknowledged like 8c's click -- the node is under the
+                        // cursor already, nothing to center.
+                        ed::ClearSelection();
+                        ed::SelectNode(ctxNode);
+                        model.Select(e->guid);
+                        state.seenSelectionStampGraph = model.selectionStamp;
+                        ImGui::OpenPopup(kGraphNodeMenuId);
+                    }
+                    // No `else`: an overflow companion or a tombstone raises no
+                    // menu at all rather than an empty one.
+                }
+                if (ImGui::BeginPopup(kGraphNodeMenuId))
+                {
+                    menuOpen = true;
+                    if (const AssetPanelEntry* e = model.Find(state.graphMenuGuid))
+                        DrawAssetMenuItems(actions, *e, /*kindSpecific=*/true);
+                    else
+                        // The asset went away underneath an open menu (deleted
+                        // on disk, or a rebuild dropped it): close rather than
+                        // draw a menu about nothing.
+                        ImGui::CloseCurrentPopup();
+                    ImGui::EndPopup();
+                }
+            }
+
             ed::End();
             ed::SetCurrentEditor(nullptr);
+
+            // ---- 9. The peek tooltip (Task 4, plan ruling 14) -------------
+            // WHERE it landed, and why HERE:
+            //
+            //  * AFTER ed::End, and outside the editor entirely. Inside
+            //    ed::Begin/End the editor has moved ImGui into the canvas's
+            //    transformed (pan+zoom) space, and a tooltip positions itself
+            //    in SCREEN space -- CanvasPopupScope.hpp states the rule. Out
+            //    here ImGui is already back in screen space (Canvas::End ->
+            //    LeaveLocalSpace, imgui_canvas.cpp), so no Suspend bracket is
+            //    needed at all; that the editor is not even current any more
+            //    is the proof. This is "do not fight the canvas": the one
+            //    thing the tooltip needs from the canvas -- WHICH node is
+            //    hovered -- was captured up top, so the drawing needs nothing
+            //    else from it.
+            //
+            //  * `forceShow=true`. ImGui's "last submitted item" at this point
+            //    is the canvas's own full-rect Dummy (imgui_canvas.cpp:182),
+            //    never the hovered node, so IsItemHovered() would answer a
+            //    question about the CANVAS. That is precisely the situation
+            //    the parameter was added for in Plan 2 Task 8 (TimelineFeed);
+            //    the node editor's own hit test is the honest authority here.
+            //
+            //  * ...which costs the ForTooltip delay, so the dwell below
+            //    replaces it: the same node must stay hovered for
+            //    style.HoverStationaryDelay before the peek appears. Without
+            //    it a tooltip would flash on every node the pointer crosses on
+            //    its way somewhere -- a peek, not a commit. The node editor
+            //    already suppresses hover outright while an action is running,
+            //    which covers the drag/pan half of spec §8's tooltip rules.
+            //
+            // Overflow companions and tombstones get no peek (entryForNodeId),
+            // and neither does a node whose own context menu is up: the peek
+            // and the menu are two answers to one hover, and ImGui would stack
+            // them at the same mouse position. Tracked through `menuOpen`
+            // rather than IsPopupOpen because the popup's id was hashed
+            // against the ID stack ed::Begin pushes, which is gone by here.
+            const AssetPanelEntry* hovered = menuOpen ? nullptr : entryForNodeId(hoveredNodeId);
+            if (hovered)
+            {
+                if (state.graphHoverNode != hoveredNodeId)
+                {
+                    state.graphHoverNode    = hoveredNodeId;
+                    state.graphHoverSeconds = 0.0f;
+                }
+                else
+                {
+                    state.graphHoverSeconds += ImGui::GetIO().DeltaTime;
+                }
+                if (state.graphHoverSeconds >= ImGui::GetStyle().HoverStationaryDelay)
+                    DrawAssetPeekTooltip(model, services, hovered->guid,
+                                         /*forceShow=*/true, /*withEdgeSummary=*/true);
+            }
+            else
+            {
+                state.graphHoverNode    = 0;
+                state.graphHoverSeconds = 0.0f;
+            }
         }
     }
 
@@ -3589,6 +3969,14 @@ namespace Arcane::Editor
         state.graphFocus = Arcane::Guid{};
         state.graphGrid = GraphGridPhase{};
         state.seenSelectionStampGraph = 0;
+        // Task 4's interaction state is derived from the context and the
+        // projection too: a node id (the hover dwell) means nothing once the
+        // ids are gone, and a menu guid names an asset of the OUTGOING
+        // project. Leaving either behind would let the first frame of the
+        // next project answer with the last one's.
+        state.graphMenuGuid = Arcane::Guid{};
+        state.graphHoverNode = 0;
+        state.graphHoverSeconds = 0.0f;
     }
 
     AssetsPanelActions DrawAssetsPanel(AssetsPanelState& state, AssetPanelModel& model,

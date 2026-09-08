@@ -291,11 +291,64 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     // state field.
     CHECK(state.graph.nodes.size() < everythingNodeCount);
 
+    // ---- Task 4: the selection bridge's stamp handshake -------------------
+    // The MODEL is the selection authority and the lens acknowledges its own
+    // stamp EXACTLY ONCE per external change -- whether or not the selected
+    // guid is even in the current scope. Both legs are device-less testable;
+    // the centering itself is not (ed:: state is lens-local by ruling 1, so
+    // the test cannot see a node's canvas selection), and neither are hover,
+    // tooltip or menu, which need real mouse input over real node rects.
+    const auto graphHasNode = [&state](const Guid& g)
+    {
+        return std::any_of(state.graph.nodes.begin(), state.graph.nodes.end(),
+                           [&g](const GraphNode& n) { return !n.isOverflow && n.guid == g; });
+    };
+
+    // Leg 1: an external selection that IS in the graph. Resetting the seen
+    // stamp to 0 is also the "lens never visited since the change" case --
+    // the first Graph frame after N Browse clicks has exactly this shape.
+    REQUIRE(graphHasNode(materialId));
+    state.seenSelectionStampGraph = 0;
+    model.Select(materialId);
+    REQUIRE(state.seenSelectionStampGraph != model.selectionStamp);
+    drawFrame();
+    CHECK(state.seenSelectionStampGraph == model.selectionStamp);
+    CHECK(model.selected == materialId);
+    const std::uint32_t buildsBeforeSelect = state.graph.buildEpoch;
+
+    // Leg 2: an external selection FILTERED OUT of the scope -- one of the
+    // hub's leaves, which the scene-focused build does not contain. It must
+    // still be acknowledged, silently: an un-acknowledged stamp re-arms the
+    // centering every frame, forever.
+    REQUIRE_FALSE(graphHasNode(leaves.front()));
+    model.Select(leaves.front());
+    REQUIRE(state.seenSelectionStampGraph != model.selectionStamp);
+    drawFrame();
+    CHECK(state.seenSelectionStampGraph == model.selectionStamp);
+    // ...and the sync stayed ONE-WAY. Nothing is selected on the canvas here
+    // (no mouse input has ever reached it), so a naive per-frame
+    // "model.Select(whatever the canvas holds)" would have cleared or
+    // corrupted the model's selection by now. It did not.
+    CHECK(model.selected == leaves.front());
+    // Selecting is not a projection input: no rebuild was triggered by either
+    // leg (two frames drawn, zero builds).
+    CHECK(state.graph.buildEpoch == buildsBeforeSelect);
+
+    // Idempotence: with the stamp already acknowledged, further frames neither
+    // re-arm it nor write the model.
+    drawFrame();
+    CHECK(state.seenSelectionStampGraph == model.selectionStamp);
+    CHECK(model.selected == leaves.front());
+
     // The canvas context is released through the panel's own seam, inside the
     // live ImGui context -- the same ordering EditorApp::Shutdown uses.
     DestroyAssetsPanelCanvas(state);
     CHECK(state.graphCanvas == nullptr);
     CHECK_FALSE(state.graphBuilt);
+    // Task 4's interaction state is context-derived too, so it goes with it.
+    CHECK(state.seenSelectionStampGraph == 0u);
+    CHECK(state.graphHoverNode == 0u);
+    CHECK_FALSE(state.graphMenuGuid.IsValid());
 
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);

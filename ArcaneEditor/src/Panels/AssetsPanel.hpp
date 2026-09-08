@@ -127,6 +127,26 @@ namespace Arcane::Editor
         // other's pending scroll/center. Task 4 is the consumer.
         std::uint32_t seenSelectionStampGraph = 0;
 
+        // ---- Task 4 interaction state ----------------------------------
+        // The asset a node context menu is OPEN about. A popup outlives the
+        // one frame `ed::ShowNodeContextMenu` reports the gesture on
+        // (imgui_node_editor.cpp: ContextMenuAction::Process clears the flag
+        // every frame), so the guid has to survive between them -- the same
+        // reason the shader editor's pass canvas keeps `m_passCtxNode`. The
+        // guid rather than the node id on purpose: node ids are index+1 into
+        // the CURRENT build and renumber on every rebuild, so an id stored
+        // here would silently come to mean a different asset.
+        Arcane::Guid graphMenuGuid;
+        // Peek-tooltip dwell, standing in for the `ImGuiHoveredFlags_ForTooltip`
+        // delay that the Graph lens cannot use (see DrawGraphLens's tooltip
+        // block: ImGui's "last item" out there is the canvas, never the node,
+        // so the hover authority is the node editor's own hit test and the
+        // helper is called with `forceShow`). `graphHoverNode` is the node id
+        // the timer is running for -- a change resets the clock, exactly as
+        // ImGui resets its own delay when the hovered item changes.
+        std::uint64_t graphHoverNode = 0;
+        float         graphHoverSeconds = 0.0f;
+
         // The built projection plus the two inputs it was built from. The
         // dirty trigger is a stamp comparison, never a per-frame rebuild:
         // `graph` is re-Built only when AssetPanelModel::entriesStamp moved
