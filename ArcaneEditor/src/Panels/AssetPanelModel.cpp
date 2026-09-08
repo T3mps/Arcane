@@ -81,12 +81,14 @@ namespace Arcane::Editor
 
         // Only Texture/Sprite have a real cook pipeline of their own (see
         // this function's own header comment) -- everything else (materials,
-        // scenes, meshes, data, ...) has nothing to be "pending" about. The
-        // host's `pending` answer is meaningless for them (its oracle asks
-        // the artifact store, which knows only texture sources; and its
-        // no-project fallback is still a bare "presume pending"), so this
-        // gate is what keeps that answer from leaking through as a permanent
-        // Queued state for a kind that never cooks.
+        // scenes, meshes, data, ...) has nothing to be "pending" about, so
+        // this gate keeps a `pending` answer from leaking through as a
+        // permanent Queued state for a kind that never cooks. This function
+        // stays PURE and self-sufficient: it does not assume the host gated
+        // on kind too. (EditorApp's oracle now does -- review round 1, so
+        // the expensive artifact-store ask is never paid for a kind whose
+        // answer this line discards -- but that is the host's performance
+        // concern, not this function's correctness contract.)
         const bool cooks = (kind == AssetKind::Texture) || (kind == AssetKind::Sprite);
         if (!cooks)
             return CookState::Cooked;
@@ -238,10 +240,17 @@ namespace Arcane::Editor
             e.cook = p.cookStateFor ? p.cookStateFor(guid) : CookState::Unknown;
 
             // Plan 2 Task 4: feed the reference index THE SAME `refs` optional
-            // the entry build above just consumed -- there is exactly ONE
-            // p.refsFor ask per rebuilt guid and this must never become two
-            // (the per-guid invalidation contract, pinned by the call-count
-            // case in AssetPanelModelTest.cpp). The nullopt shape is carried
+            // the entry build above just consumed -- THIS MODEL makes exactly
+            // ONE p.refsFor ask per rebuilt guid and that must never become
+            // two (the per-guid invalidation contract, pinned by the
+            // call-count case in AssetPanelModelTest.cpp). The invariant is
+            // scoped to the model's OWN asks: a host's COMPOSED provider may
+            // legitimately add one of its own for the same guid in the same
+            // rebuild -- EditorApp's cookStateFor does exactly that for a
+            // SPRITE, whose cook state is derived through its texture ref
+            // (FirstTextureRefOf; see IsCookPending's own cost note). That is
+            // the host's cost to account for, not a break of this rule.
+            // The nullopt shape is carried
             // through verbatim on purpose: it is what tells the index "could
             // not read/parse this walk", which keeps its last-known-good
             // edges instead of retracting them (spec s3.2).

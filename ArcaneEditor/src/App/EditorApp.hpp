@@ -1442,7 +1442,16 @@ namespace Arcane::Editor
         // this function's artifact-store ask off the facade's own refusal
         // path, where it would be asking the cook-pending seam to answer
         // itself.
-        [[nodiscard]] bool IsCookPending(const Arcane::Guid& id) const;
+        //
+        // `kind` IS REQUIRED, and gates the store ask (review round 1): only
+        // Texture/Sprite cook, the store ask walks Content/, and every caller
+        // already knows the kind -- so a non-cooking kind is answered false
+        // for free rather than after an O(content-tree) walk whose answer
+        // CookStateOf would then discard anyway. Callers pass the guid's REAL
+        // kind: cookStateFor resolves it through the registry, and the render
+        // oracle passes Texture, the only kind NriTextureCache resolves.
+        [[nodiscard]] bool IsCookPending(const Arcane::Guid& id,
+                                          Arcane::Editor::AssetKind kind) const;
         // Removes Artifacts/** files this project's registry no longer names
         // any live guid for (ArtifactStore::SweepOrphans) -- called once, at
         // project open (OnProjectOpened), NOT on every cook pass: this is

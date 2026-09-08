@@ -664,7 +664,12 @@ namespace Arcane::Editor
                     diagnosticsChanged = true;
                 // The panel model's cook-state answer for this guid may have
                 // just changed (Queued -> Cooked, or a stale Refused just
-                // erased above) -- ask again next rebuild.
+                // erased above) -- ask again next rebuild. (Subsumed by the
+                // MarkAllDirty below whenever this batch is non-empty, which
+                // it is inside this loop; kept because it states the per-guid
+                // fact this loop is responsible for, and because a MarkDirty
+                // after a MarkAllDirty is a no-op by the model's own contract
+                // -- not the other way round.)
                 m_assetModel.MarkDirty(guid);
                 // Asset-manager Plan 2 Task 5: only a guid is in hand here
                 // (no AssetEntry with a name already resolved), so this
@@ -679,6 +684,26 @@ namespace Arcane::Editor
             // BATCH: each call is a registry walk, and a first-cook pass over
             // a fresh clone reports every texture in the project at once.
             InvalidateMaterialThumbsForTextures(result.cookedGuids);
+
+            // REVIEW FIX (round 1, IMPORTANT 2): the per-guid marks above name
+            // only the TEXTURES that cooked -- but a SPRITE's cook state is
+            // derived from its texture's artifact (IsCookPending's own Sprite
+            // branch), and nothing dirties a dependent sprite when its texture
+            // lands (the model's cascade fires for REMOVED guids only). Left
+            // per-guid, a sprite stuck in Queued on an uncooked tree, or after
+            // a Recook, would stay Queued until some unrelated MarkAllDirty
+            // happened by -- the exact symptom this arc's desk fix removed,
+            // displaced one hop down the dependency edge.
+            //
+            // MarkAllDirty on a non-empty batch, the SAME subsumption trade
+            // the material-save seam already makes and justifies (onAssetSaved,
+            // this file: a derived answer invalidates more than its own guid,
+            // and at current scale the whole-model rebuild is cheaper than the
+            // dependency walk that would narrow it). Bounded by the batch: a
+            // pass that cooked nothing marks nothing, so the steady state --
+            // PollAssetWatch's periodic trivial passes -- costs no rebuilds.
+            if (!result.cookedGuids.empty())
+                m_assetModel.MarkAllDirty();
         }
 
         // Cook FAILURES -- CookSession's own vocabulary (corrupt source /
@@ -817,36 +842,67 @@ namespace Arcane::Editor
     // texture ref cannot resolve keeps the old presume-pending default,
     // since nothing here can prove otherwise.
     //
-    // COST: one Content/ enumeration + a hash of the matching source's bytes
-    // per ask, and asks happen once per cooking-kind entry per model REBUILD
+    // `kind` IS A REQUIRED ARGUMENT, not a lookup this does for itself
+    // (review round 1, IMPORTANT 1): the caller already knows the kind, and
+    // the store ask below is the expensive half of this function -- one
+    // Content/ walk that stats a .meta per .png and JSON-parses each one
+    // hunting a guid. Before the gate, cookStateFor evaluated this EAGERLY
+    // for EVERY asset and CookStateOf discarded the answer for non-cooking
+    // kinds AFTER the work was done, which made a MarkAllDirty rebuild
+    // O(assets x content-tree-walk) file I/O -- invisible on ReferenceProject,
+    // a multi-second hitch on a real project. Taking the kind also drops the
+    // duplicate registry Resolve this used to do for the sprite test.
+    //
+    // COST, now that the gate is real: one Content/ enumeration + a hash of
+    // the matching source's bytes per ask, and asks happen once per
+    // COOKING-KIND entry (Texture/Sprite only) per model REBUILD
     // (AssetPanelModel is invalidation-driven -- MarkDirty/MarkAllDirty --
     // not per-frame), plus the render oracle's own already-throttled
     // PendingCook re-poll. Fine at current project scale; if a cold rebuild
     // over a large Content/ ever shows up in a frame trace, memoize per
     // (guid, source mtime) rather than making this answer any less honest.
-    bool EditorApp::IsCookPending(const Arcane::Guid& id) const
+    bool EditorApp::IsCookPending(const Arcane::Guid& id, Arcane::Editor::AssetKind kind) const
     {
-        // Row present: UNCHANGED. A permanent row (HashMismatch/
-        // VersionNewerThanEngine/a cook failure) is not pending -- it is
-        // refused, and CookStateOf checks HasPermanentCookDiag first anyway;
-        // a transient ArtifactMissing row is still-cooking by definition.
+        // Row present: UNCHANGED, and kind-independent. A permanent row
+        // (HashMismatch/VersionNewerThanEngine/a cook failure) is not
+        // pending -- it is refused, and CookStateOf checks
+        // HasPermanentCookDiag first anyway; a transient ArtifactMissing row
+        // is still-cooking by definition.
         const auto it = m_cookDiagnostics.find(id);
         if (it != m_cookDiagnostics.end())
             return !it->second.permanent;
+
+        // THE GATE: only Texture/Sprite have a cook pipeline at all
+        // (CookStateOf's own kind list, and CookSession's enumeration is the
+        // authority behind it), so for every other kind there is nothing to
+        // be pending about and nothing worth walking Content/ to discover.
+        // CookStateOf discards this answer for those kinds regardless; false
+        // is simply the honest value to discard.
+        const bool cooks = (kind == Arcane::Editor::AssetKind::Texture)
+                        || (kind == Arcane::Editor::AssetKind::Sprite);
+        if (!cooks)
+            return false;
 
         const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
         if (!project)
             return true;   // no project in hand -- the old presume-pending default
 
         Arcane::Guid cookGuid = id;
-        if (const auto mountPath = project->Registry().Resolve(id))
+        if (kind == Arcane::Editor::AssetKind::Sprite)
         {
-            if (Arcane::Editor::AssetKindOf(*mountPath) == Arcane::Editor::AssetKind::Sprite)
-            {
-                cookGuid = FirstTextureRefOf(id);
-                if (!cookGuid.IsValid())
-                    return true;   // no resolvable texture -- presume pending
-            }
+            // HONEST COST NOTE (review round 1, IMPORTANT 3): refsFor is
+            // PARSE-ON-CALL (Assets.hpp's own contract), so a sprite costs a
+            // SECOND read+parse of its .arcsprite here, beside the one
+            // AssetPanelModel::RebuildIfDirty already did for the same guid
+            // in the same rebuild. Accepted rather than memoized: post-gate
+            // this is sprites only, a small population, and one parse of a
+            // tiny JSON file. Trigger for revisiting: if sprite counts reach
+            // the hundreds, memoize per (guid, source mtime) -- the same
+            // trigger the store ask above carries -- or thread the model's
+            // already-fetched refs through the provider seam.
+            cookGuid = FirstTextureRefOf(id);
+            if (!cookGuid.IsValid())
+                return true;   // no resolvable texture -- presume pending
         }
 
         Arcane::AssetPipeline::CookSession oracle;
@@ -912,7 +968,12 @@ namespace Arcane::Editor
             if (project)
                 if (const auto mountPath = project->Registry().Resolve(g))
                     kind = Arcane::Editor::AssetKindOf(*mountPath);
-            return Arcane::Editor::CookStateOf(kind, HasPermanentCookDiag(g), IsCookPending(g));
+            // `kind` is handed to IsCookPending as well as CookStateOf
+            // (review round 1, IMPORTANT 1): CookStateOf's kind gate discards
+            // the pending answer for a non-cooking kind, but only AFTER it is
+            // computed -- and computing it walks Content/. The oracle needs
+            // the same gate on its own side, not a filter downstream of it.
+            return Arcane::Editor::CookStateOf(kind, HasPermanentCookDiag(g), IsCookPending(g, kind));
         };
         return p;
     }

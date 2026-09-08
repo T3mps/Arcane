@@ -2122,8 +2122,18 @@ namespace Arcane::Editor
         // closes. Captures `this`, safe for the same reason every other
         // lambda captured into this vehicle is: the vehicle is destroyed
         // (ShutdownGraphPath / TeardownGraphForSwitch) well before ~EditorApp.
+        //
+        // AssetKind::Texture, always (review round 1's kind gate needs a kind
+        // here): NriTextureCache only ever resolves TEXTURE guids -- a sprite
+        // is re-targeted to its texture ref before it can reach this cache
+        // (resolveAssetThumb's own Sprite branch, and scene resolution's
+        // sprite -> texture path). If some future caller did hand the cache a
+        // non-texture guid, the oracle would find no .png carrying it and
+        // answer "pending", which is exactly the pre-fix default this seam
+        // already tolerated.
         m_viewportTargets.graph->SetCookPendingOracle(
-            [this](const Arcane::Guid& id) { return IsCookPending(id); });
+            [this](const Arcane::Guid& id)
+            { return IsCookPending(id, Arcane::Editor::AssetKind::Texture); });
         return true;
     }
 

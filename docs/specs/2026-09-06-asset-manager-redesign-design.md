@@ -1234,10 +1234,12 @@ through its texture's — so a sprite's cook state is resolved through
 texture ref cannot resolve keeps the presume-pending default.
 
 **Cost, recorded in §15's trigger style.** The oracle enumerates `Content/` and hashes
-the matching source's bytes per ask; asks happen once per cooking-kind entry per model
-**rebuild** (invalidation-driven, not per-frame). Fine at current scale. Trigger: if a
-cold rebuild over a large `Content/` ever shows in a frame trace, memoize per
-`(guid, source mtime)` — never by making the answer less honest.
+the matching source's bytes per ask. `IsCookPending` **takes the asset's `kind` and gates
+on it**, so an ask is paid only for a **cooking kind** (`Texture`/`Sprite`) — once per such
+entry per model **rebuild** (invalidation-driven, not per-frame), plus the render oracle's
+already-throttled `PendingCook` re-poll. Every other kind is answered `false` for free.
+Trigger: if a cold rebuild over a large `Content/` ever shows in a frame trace, memoize
+per `(guid, source mtime)` — never by making the answer less honest.
 
 **Testing, honestly.** `CookStateOf` is pure and **unchanged**; its Plan-1 pins stay
 green untouched. `IsCookPending` lives on `EditorApp`, which is not compiled into
@@ -1255,3 +1257,42 @@ gate, the `SetCookPendingProbe` install site, and both Recook sites
 (`EditorAppFrame.cpp`, `AssetsPanel.hpp`) whose "erasing the row flips the card to
 Queued" rationale now names the artifact-store re-derivation instead of the
 presumption.
+
+#### Review round 1 — three fixes before the bless
+
+The ruled design was implemented faithfully, but the review found three things the first
+cut got wrong. All three landed in a second commit; the design is unchanged.
+
+1. **The oracle ran for EVERY kind.** `cookStateFor` evaluated `IsCookPending(g)` eagerly
+   and `CookStateOf`'s kind gate discarded the answer for a non-cooking guid *after* the
+   work was done — and for a guid no `.png` carries, that work is the worst case: walk all
+   of `Content/`, stat a `.meta` per `.png`, JSON-parse each one hunting a guid that can
+   never match. A `MarkAllDirty` rebuild was therefore O(assets × content-tree-walk) file
+   I/O: invisible on `ReferenceProject`, a multi-second hitch on a real project. **Fixed**
+   by making `kind` a required argument of `IsCookPending`, gated before the store ask
+   (`Texture`/`Sprite` only; everything else answers `false` for free). The caller already
+   had the kind, so this also removed the duplicate registry `Resolve` the first cut did
+   for its sprite test. The render oracle passes `AssetKind::Texture` — the only kind
+   `NriTextureCache` resolves, since a sprite is re-targeted to its texture before it can
+   reach that cache. The cost paragraph above is written against the gated behaviour; the
+   ungated version of that sentence was false when written.
+2. **A sprite stayed Queued after its own texture cooked.** `OnCookCompleted` marks
+   `result.cookedGuids` dirty — those are **textures** — and nothing dirtied the dependent
+   sprite (the model's cascade fires for *removed* guids only). On an uncooked tree, or
+   after a Recook, the texture flipped to Cooked while its sprite stuck in Queued until
+   some unrelated `MarkAllDirty` happened by: the original symptom, displaced one hop down
+   the dependency edge. **Fixed** by `m_assetModel.MarkAllDirty()` on a non-empty
+   `cookedGuids` batch — the same subsumption trade the material-save seam already makes
+   and justifies (a derived answer invalidates more than its own guid, and at this scale a
+   whole-model rebuild is cheaper than the dependency walk that would narrow it). Bounded
+   by the batch: a pass that cooked nothing marks nothing, so the steady state of trivial
+   watcher passes costs no rebuilds. The per-guid diagnostic-row erasure loop is untouched.
+3. **A sprite now costs two `refsFor` parses per rebuild** — the model's own ask, plus
+   `cookStateFor` → `FirstTextureRefOf` — and `refsFor` is parse-on-call. With the kind
+   gate this affects **sprites only**, so it is accepted rather than memoized, and recorded
+   honestly at the sprite branch with the same memoize-per-`(guid, mtime)` trigger. The
+   model's "exactly ONE `p.refsFor` ask per rebuilt guid" comment was corrected to scope
+   that invariant to **the model's own** asks: a host's composed provider may legitimately
+   add one, and that is the host's cost to account for, not a break of the rule. The
+   call-count test is unchanged and still green — it pins the model, which is what the
+   invariant is about.
