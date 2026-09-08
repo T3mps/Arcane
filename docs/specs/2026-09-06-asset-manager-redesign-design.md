@@ -1359,8 +1359,16 @@ premake test-TU line, and the `kStatusPillLineHeight` duplicate.
 
 ### Measured close
 
-Three-config **rebuild** of `Arcane.slnx`, **0 warnings / 0 errors** in Debug,
-Release and Dist. Suite counts DERIVED — each pasted from its own run's final line,
+Three-config **rebuild** of `Arcane.slnx` (`/t:Rebuild`, exit 0 in each), **0
+warnings / 0 errors** in Debug, Release and Dist. **What that claim rests on, said
+plainly because it is weaker than the phrase sounds:** the builds ran at `/v:m`,
+which suppresses MSBuild's `N Warning(s) / N Error(s)` summary block, so "0 warnings"
+comes from a case-insensitive scan of all three complete logs finding zero `warning`
+lines. That is sound — minimal verbosity still emits every warning and error line —
+but it is a log scan, not a summary block, and earlier records in this document that
+state the same phrase should not be read as having meant more than this either.
+
+Suite counts DERIVED — each pasted from its own run's final line,
 `ArcaneTests.exe "~[gpu]"` run FROM the exe directory:
 
 | Configuration | `~[gpu]` | seed |
@@ -1379,6 +1387,22 @@ that launches a real host, and its two `[witness][gpu]` scenarios were green
 first time — the independent confirmation that `ReferenceProject/Binaries/` is not
 stale, which is the failure Plan 2's ABI restamp produced at its own close and
 which no bump this plan could reproduce.
+
+**One anomalous run at this close, recorded rather than discarded.** The *first*
+attempt at the Debug `~[gpu]` figure came back **55293 / 1522 with one case failed**
+(seed 3877650429). It is not the measurement in the table above, and the reason is
+procedural rather than a product finding: two `ArcaneTests.exe` invocations had been
+chained in one shell command, the first piped into a head-style filter that closed
+the pipe and killed it mid-suite, leaving shared `%TEMP%` fixture state behind
+(`arcane_material_asset_test`, `arcane-diag-test`, …) for the second — which was
+itself running while the Release/Dist rebuild saturated the machine. **The failing
+case's name was lost with the truncated output, so that mechanism is *attributed*,
+not demonstrated.** Against it: five clean serial runs afterwards — three `~[gpu]`
+configurations, one unfiltered, one `-r json` — all green, each under a different
+Catch2 random-order seed, so the greens are not one lucky ordering. This is recorded
+here for the same reason §18 recorded its own close-time surprise: a close that hides
+its one red run is not a close anyone can audit. If it recurs outside that abuse it is
+a real flake and should be hunted; nothing here claims it cannot.
 
 `scripts/automation-baselines.json` re-derived: **+383 assertions / +12 cases** in
 every configuration, booked in **two separate components** so the riders' coverage
@@ -1530,7 +1554,11 @@ reference, which re-proves editor-ui backend-invariant rather than assuming it.
     holds; otherwise the bar prints an **em dash**, per §13's "the digest never renders
     an unknown as a zero". Self-corrects on the following frame. The predicate is
     exported from the header rather than spelled inline at the call site, so the canvas
-    test asks the panel's own question instead of a mirror of it.
+    test asks the panel's own question instead of a mirror of it. **Coverage limit,
+    disclosed rather than glossed:** the gate is a three-conjunct predicate, and only
+    two of the three were negative-controlled. The third — the `graphBuilt` conjunct —
+    is **defensive-only and unwitnessed**: no test drives a state that falsifies it
+    while the other two hold, so nothing proves it is load-bearing rather than dead.
 11. **`CreateKindForAssetKind` was the wrong bridge for the pin-drag entry — a brief
     defect, correctly deviated from.** The brief said to map the source asset's kind
     through `CreateKindForAssetKind`; that maps `Material` → `CreateAssetKind::Material`,
@@ -1631,6 +1659,13 @@ lens default and a temporary *staged* `verify-layout.ini` edit, both reverted an
 re-proven clean — no committed Graph-capture layout seed was added, because that is a
 tracked-file decision the user owns.
 
+And **one conjunct of the honest-N gate is unwitnessed**: `AssetsGraphProjectionIsCurrent`
+tests three conditions, two of which were negative-controlled by disabling them and
+observing the failure. The `graphBuilt` conjunct was not — no test reaches a state that
+falsifies it while the other two hold — so it ships as defence in depth with nothing
+proving it is load-bearing rather than dead code. Disclosed at the time and repeated here
+rather than left in a review thread (deviation 10).
+
 ### A repo-wide discovery, recorded where it will be found
 
 **Catch2 assertion `file:line` is unreliable in `ArcaneTests` TUs that include
@@ -1650,12 +1685,17 @@ next person looks.
 Recorded here rather than by editing §15, so its record still shows what was true when
 written:
 
-- §15's out-of-scope list still stands entirely, with two items now settled *by* Plan 3
-  rather than deferred by it: **"Assign to selection" from graph pin-drag** remains out
-  (§10's "pin-drag v1 offers `Derive Instance…` only" is what shipped, and the entity-slot
-  targeting rules still do not exist); **panel-state persistence across restarts** and
-  **new drag-drop targets** are both re-confirmed by rulings 15 and 14 above — the canvas
-  persists nothing and graph nodes are not drag sources.
+- §15's out-of-scope list still stands entirely. **Three** of its items are the ones
+  Plan 3 could plausibly have moved, and all three stay out — but they stay out for a
+  new reason, which is the correction worth recording. They are no longer merely
+  *unscheduled*: the lens that would have carried them shipped, and each was
+  re-confirmed against it. **"Assign to selection" from graph pin-drag** remains out
+  because the entity-slot targeting rules still do not exist, and §10's "pin-drag v1
+  offers `Derive Instance…` only" is exactly what shipped. **Panel-state persistence
+  across restarts** and **new drag-drop targets** are re-confirmed by rulings 15 and 14
+  above — the canvas deliberately persists nothing (`SettingsFile = nullptr`), and graph
+  nodes are deliberately not drag sources. None of the three is "settled"; they are
+  confirmed-out with a live implementation now standing behind the confirmation.
 - **§9.1's dangling-reference story now has UI.** §18's deviation 8 recorded that
   dangling references stayed data-only because §9.2's card inventory did not name a
   dangling card and none was invented. Plan 3's ruling 11 gives them their natural home:
@@ -1670,11 +1710,11 @@ written:
 ### Dated corrections to §17 and §18 — 2026-09-08
 
 - §18's **"Known desk-only branches"** says "`AssetsPanel.cpp` is not compiled into
-  `ArcaneTests`, so the lens's logic is covered through the pure units and the
-  render/desk comparisons instead". **That is no longer true**: it is compiled in as of
-  `33640bb9` (deviation 24). The *rest* of that paragraph still holds — the refused
-  attention card and the cards' empty states remain inspection-only, because
-  `ReferenceProject` has zero refused artifacts.
+  `ArcaneTests`, so the lens's logic is covered through the Task 3/4/5 pure units and
+  the render/desk comparisons instead". **The first clause is no longer true**: it is
+  compiled in as of `33640bb9` (deviation 24). The *rest* of that paragraph still holds
+  — the refused attention card and the cards' empty states remain inspection-only,
+  because `ReferenceProject` has zero refused artifacts.
 - §18's **measurement asymmetry** paragraph (the `diag://` mount is absent under a
   headless compare/report run, so the golden reads `8 assets` while an interactive
   session shows more) is unchanged and applies to this plan's captures for the same
@@ -1696,6 +1736,10 @@ Deliberately not decided at the desk during implementation; the checklist carrie
   `#9a9a9a` on `#333333`). Both were held rather than retinted: pills are a Plan-1
   shared widget already desk-passed across all lenses, and the grid is shared canvas
   language with no §11.2 pin that the shader editor draws from the same phase.
+- **The tombstone ghost's two amber strengths.** The ghost wash dims the node's accent
+  bar but not its border, so one node carries amber at two intensities. Raised at Task 3
+  and explicitly held for the Task 5/7 render comparison rather than tuned in place —
+  which of the two is meant to read as "missing" is a design call, not a defect report.
 - **The node body's detail line.** The board shows a real detail line for non-material
   kinds where this lens draws a kind pill. The content is unspecified, and inventing it
   would be desk-designing.
@@ -1707,17 +1751,75 @@ Deliberately not decided at the desk during implementation; the checklist carrie
 
 ### Minors deferred with citations
 
-Each has a ledger citation and none blocks: the negative-`breadthCap` clamp at `Build`
-entry; unbounded `ComputeLayer` recursion (deepest tested chain 7); the header's two
-different "real"s wanting a wording pass; duplicate refs to one target with differing
-kinds (nondeterministic edge kind/label plus a doubled cap budget); allocating sort
-comparators if everything-mode ever profiles hot; missing empty/null/absent-focus/
-degree-at-cap boundary cases; `graphCanvas` as an owning raw `void*` on a copyable state
-struct; the tombstone ghost wash dimming the accent bar but not the border;
-`graphMenuGuid`/`graphWireGuid` surviving popup close; `model.Find()` per node per frame
-in the pin loop; the in-flight curve's ≤64 chords at long-drag/low-zoom; the legend's
-missing fit guard; `DrawCreateMenuEntries`' now-unused `enabled` parameter;
-`HoverStationaryDelay` being the semantically wrong knob; `Project.cpp`'s
-`lpExitTime`-for-a-running-process hardening; `IdentityFieldRule.hpp` now pulling
-`<Json.hpp>` for name-rule-only consumers; and `ProjectTest.cpp` launching `cmd.exe`
-through a PATH search rather than `%COMSPEC%`.
+Each was raised in review, ruled non-blocking, and carried here **complete** — this
+list is the whole carry-forward, because the arc's working ledger lives in a
+gitignored SDD workspace and does not survive the push. None blocks.
+
+**Correctness / robustness**
+
+- Negative `breadthCap` → `resize(~2^64)`, UB-adjacent; a `std::max(0, ·)` clamp at
+  `Build` entry closes it.
+- `ComputeLayer` recursion is unbounded (deepest chain actually tested: 7).
+- Duplicate refs to one target with **differing kinds** give a nondeterministic edge
+  kind/label and consume the cap budget twice; dedup candidates in `ProcessNode`.
+- `ScenesByName` sorts by **stem** while displaying **fileName** — the two orders
+  coincide only while every scene shares one extension. A latent ordering defect, not
+  a cosmetic one; either switch the key or comment the assumption.
+- Mid-codepoint **UTF-8 truncation** is possible at the 128-byte `snprintf` boundary
+  in the bottom bar (theoretical at present name lengths).
+- `DrawGraphEdgeSummary` **silently emits nothing** when its `Find` is null. Harmless
+  for today's only caller, which always supplies one; latent for any future non-graph
+  caller, which would inherit a silent drop rather than a diagnosable failure.
+- `graphCanvas` is an owning raw `void*` on a **copyable** state struct with no RAII
+  or copy guard — a latent leak/alias class. Both live seams are covered today.
+- `Project.cpp`'s `lpExitTime` is documented-undefined for a still-running process;
+  a one-line `GetExitCodeProcess(STILL_ACTIVE)` hardening would close it (the kernel
+  zeroes it in practice, and the live-lock direction is pinned by tests).
+
+**Comments that overstate what the code does** (each is a wording fix, but each one
+misleads the next reader in a specific way)
+
+- The dirty trigger **over-fires**: it fires on invalidations with identical content,
+  while the header comment says "changed content".
+- The `BeginCreate`-deferral comment does **not** cross-reference the pin-direction
+  block that Task 6 had to read first (that dependency travelled by dispatch note
+  instead of by comment — exactly the fragility deviation 1 exists to prevent).
+- The `ResetForProjectSwitch` comment says a field is "NOT reset" on a line that
+  precedes `++entriesStamp`.
+- The dash-cell comment over-claims "the board's reading at **every** zoom stop": the
+  dash cells are screen-constant while the stroke and end-dot zoom-scale.
+- The header carries two different senses of "real" (see deviation 4) and says so, but
+  the wording still wants a pass.
+
+**Test gaps**
+
+- No cases for empty/null input, an absent focus, or a degree exactly **at** the cap
+  boundary.
+- The `"(missing)"` focus label is untested — no case supplies a focus guid whose
+  scene was deleted.
+
+**Cosmetic / hygiene**
+
+- The focus combo appears **one frame after** a toolbar lens click (a pre-mutation
+  read; the ImGui-conventional lag, and the same one-frame class deviation 10's gate
+  handles for N).
+- `graphMenuGuid` / `graphWireGuid` survive popup close (stale guids in session state,
+  harmless); fix both or neither.
+- `model.Find()` runs per node per frame in the new pin loop.
+- The in-flight curve is capped at ≤64 chords, so it reads coarse at long-drag /
+  low-zoom, where the solid wires are adaptive.
+- The legend has no fit guard and can overlap the toolbar on a short panel; only the
+  clip rect saves its width.
+- `DrawCreateMenuEntries`' `enabled` parameter now has no `false` caller — restate its
+  justification comment or delete the parameter.
+- `HoverStationaryDelay` is the semantically wrong knob (the stationary half is not
+  implemented); `HoverDelayShort` is closer, and the two are value-identical today.
+- `IdentityFieldRule.hpp` now pulls `<Json.hpp>` for name-rule-only consumers (all
+  three current includers already carry nlohmann; act only if an nlohmann-free
+  consumer appears).
+- `ProjectTest.cpp` launches `cmd.exe` through a PATH search rather than an absolute
+  `%COMSPEC%`.
+
+One item that used to sit in this list has been **promoted out of it**: the tombstone
+ghost's wash dims the accent bar but not the border, leaving two amber strengths in one
+node. That is a visual arbitration, not a minor — it is in the desk-pass section above.
