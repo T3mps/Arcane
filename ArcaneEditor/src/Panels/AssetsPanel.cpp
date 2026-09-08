@@ -60,12 +60,11 @@ namespace Arcane::Editor
         // A fixed width, not a content-derived one: the search well's flex
         // math subtracts it BEFORE the combo is drawn, and a label-derived
         // width would make the search box jump every time the user picked a
-        // differently-named scene. Wide enough for a realistic scene stem
-        // plus the arrow; longer names ellipsize inside the combo rather
-        // than stealing the search well's room. An implementer tuning value
-        // -- s11.2 pins no toolbar-slot width -- same footing as
-        // kStatusRightColumnWidth's own comment below.
-        constexpr float kGraphFocusComboWidth = 170.0f;
+        // differently-named scene. 230px is the BOARD's own value, read off
+        // `OptionD.dc.html`'s focus well (`width: 230px`) rather than
+        // guessed -- longer names ellipsize inside the combo rather than
+        // stealing the search well's room.
+        constexpr float kGraphFocusComboWidth = 230.0f;
 
         // The Graph lens's "no scope root" label -- spelled ONCE, because
         // the combo's preview, the combo's own first entry and the bottom
@@ -518,7 +517,18 @@ namespace Arcane::Editor
             {
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(kGraphFocusComboWidth);
-                if (ImGui::BeginCombo("##graphfocus", GraphFocusLabel(model, state.graphFocus)))
+                // "focus: <name>" -- the BOARD's exact preview string
+                // (`OptionD.dc.html`: `<span>focus:</span> main.arcscene`),
+                // per the controller's board-strings-win ruling. The board
+                // paints its "focus:" half in kTextDim and the name in kText;
+                // BeginCombo's preview is a single string in a single colour,
+                // so the two-tone half of that is not expressible here without
+                // replacing the combo with a hand-drawn widget -- not invented,
+                // see the Task 5 fix report.
+                char focusPreview[160];
+                std::snprintf(focusPreview, sizeof(focusPreview), "focus: %s",
+                              GraphFocusLabel(model, state.graphFocus));
+                if (ImGui::BeginCombo("##graphfocus", focusPreview))
                 {
                     if (ImGui::Selectable(kGraphFocusEverything, !state.graphFocus.IsValid()))
                         state.graphFocus = Arcane::Guid{};
@@ -605,14 +615,42 @@ namespace Arcane::Editor
             // whole project, plus the scope root itself -- N is
             // realNodeCount, which counts real ASSET nodes only (ruling 12:
             // neither the synthetic "+N more" companions nor tombstones are
-            // assets). Status keeps ONE fixed form regardless of filter state
-            // (the lens has no search box of its own to filter against);
-            // every other lens keeps Browse's existing forms VERBATIM (plan
-            // doc Step 4).
+            // assets). The wording is the BOARD's, verbatim (`OptionD.dc.html`:
+            // `6 of 15 assets &middot; focus: main.arcscene`) per the
+            // controller's board-strings-win ruling -- the word "assets" was
+            // missing from the brief's format string.
+            //
+            // THE GATE (review finding I1). N is printed ONLY when the
+            // projection on screen was built for the focus and the entries
+            // this bar is about to name. It is not always: the Status lens's
+            // "Focus in Graph" button flips `state.lens` from INSIDE the
+            // already-dispatched Status body, so DrawGraphLens does not run
+            // that frame at all -- yet this bar, which runs after the body,
+            // already reads the NEW lens and would otherwise pair the PREVIOUS
+            // build's realNodeCount (often 0 -- the lens may never have been
+            // opened) with the new focus name. Spec §13: the bar never renders
+            // an unknown as a zero; unknown is an em dash. Self-corrects on
+            // the following frame, when the Graph body has actually run.
+            //
+            // The predicate itself is AssetsGraphProjectionIsCurrent (declared
+            // in the header, defined at the bottom of this file) rather than a
+            // conjunction spelled here, so the canvas test can ask the panel's
+            // own question instead of restating it.
+            const bool graphCurrent = AssetsGraphProjectionIsCurrent(state, model);
+            // Status keeps ONE fixed form regardless of filter state (the lens
+            // has no search box of its own to filter against); every other
+            // lens keeps Browse's existing forms VERBATIM (plan doc Step 4).
             if (state.lens == AssetLens::Graph)
-                std::snprintf(left, sizeof(left), "%d of %d \xC2\xB7 focus: %s",
-                              state.graph.realNodeCount, health.total,
+            {
+                char shown[16];
+                if (graphCurrent)
+                    std::snprintf(shown, sizeof(shown), "%d", state.graph.realNodeCount);
+                else
+                    std::snprintf(shown, sizeof(shown), "\xE2\x80\x94");   // U+2014 EM DASH
+                std::snprintf(left, sizeof(left), "%s of %d assets \xC2\xB7 focus: %s",
+                              shown, health.total,
                               GraphFocusLabel(model, state.graphFocus));
+            }
             else if (state.lens == AssetLens::Status)
                 std::snprintf(left, sizeof(left), "%d assets \xC2\xB7 %d need attention",
                               health.total, health.refused + health.queued);
@@ -2844,19 +2882,31 @@ namespace Arcane::Editor
         constexpr float kGraphMetaFontPx   = 13.0f;
 
         // ---- Canvas palette ----------------------------------------------
-        // The canvas surface IS the editor's panel tone (the kCanvasColor
-        // precedent, ShaderEditorDocument.cpp:233-238, and the plan's own
-        // constraint) -- a graph body is the same flat dark surface every
-        // other panel body is. The node body/title/border tones are the
-        // shader editor's canvas constants, unchanged, so both canvases in
-        // this editor read as the same material.
+        // CONTROLLER RULING (Task 5 render comparison, 2026-09-08): the BOARD
+        // WINS over the plan's Theme::kPanel pin. `OptionD.dc.html`'s graph
+        // canvas is `background: #121212` -- which is EXACTLY Theme::kWell
+        // (EditorTheme.hpp: kWell = 0.071f = #121212), so the board's value
+        // and the theme's field-well token are the same colour, not merely
+        // close. The plan's kPanel pin was derived from the shader editor's
+        // own kCanvasColor precedent (ShaderEditorDocument.cpp:233-238), not
+        // from the board; spec §11 makes the mocks the redline and the plan
+        // itself appointed the render comparison as the arbiter. Measured
+        // before the switch: board canvas (18,18,18) vs its chrome (30,30,30)
+        // -- a recessed well; the editor's canvas was (30,30,30), identical
+        // to its own toolbar and bottom bar, so the graph field had no edge
+        // at all.
         //
-        // NOTE for the render comparison: the board draws its canvas at
-        // #121212 (kWell) with #1e1e1e nodes. The plan pins kPanel for the
-        // canvas instead, so every tone here sits one step up from the
-        // board's -- the RELATIONSHIPS (canvas darkest, body one step above
-        // it, band one step below the body) are identical.
-        constexpr ImVec4 kGraphCanvasColor    = Theme::kPanel;                         // #1e1e1e
+        // One constant drives the whole surface family: the grid wash, the
+        // ghost/overflow body wash and the un-emphasized wire dim all pull
+        // TOWARD this colour, so moving it moves them coherently.
+        //
+        // Node body/title/border stay the shader editor's canvas constants,
+        // so both canvases in this editor keep reading as the same material.
+        // The ruling covered the canvas surface only -- see the Task 5 fix
+        // report for the measured consequence (the editor's body/band now sit
+        // further above the canvas than the board's do) and why extending the
+        // change to them was left as a separate decision.
+        constexpr ImVec4 kGraphCanvasColor    = Theme::kWell;                          // #121212
         constexpr ImVec4 kGraphGridMinorColor = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
         constexpr ImVec4 kGraphGridMajorColor = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
         constexpr ImVec4 kGraphNodeBodyColor  = ImVec4(0.176f, 0.176f, 0.188f, 1.0f);  // #2d2d30
@@ -4152,6 +4202,28 @@ namespace Arcane::Editor
                 state.graphHoverSeconds = 0.0f;
             }
         }
+    }
+
+    bool AssetsGraphProjectionIsCurrent(const AssetsPanelState& state, const AssetPanelModel& model)
+    {
+        // All three conjuncts earn their place, and each closes a gate the
+        // other two leave open:
+        //   * graphBuilt      -- the lens was never opened at all, so there is
+        //                        no projection behind the numbers.
+        //   * graphBuiltFocus -- the focus moved without a Graph body running
+        //                        since (Focus in Graph; also the toolbar combo
+        //                        on a frame where the lens body early-returns
+        //                        on a non-positive canvas region).
+        //   * graphBuiltStamp -- the model's entries moved under a frame whose
+        //                        body was NOT the Graph lens, so the build is
+        //                        about a different set of assets than the
+        //                        totals beside it.
+        // Exactly the same three inputs DrawGraphLens's own rebuild trigger
+        // uses -- by construction this is "would the lens rebuild if it ran
+        // right now", asked from outside it.
+        return state.graphBuilt
+            && state.graphBuiltFocus == state.graphFocus
+            && state.graphBuiltStamp == model.entriesStamp;
     }
 
     void DestroyAssetsPanelCanvas(AssetsPanelState& state)

@@ -382,6 +382,64 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     CHECK(state.graphHoverGuid == materialId);                  // ...and the dwell survived
     CHECK(state.graphHoverSeconds == 5.0f);
 
+    // ---- Task 5 fix round (review I1): the bottom bar's N gate -----------
+    // DrawBottomBar prints the Graph line's N only when the projection on
+    // screen was built for the CURRENT focus and the CURRENT entries; on any
+    // other frame it prints an em dash instead of a stale or fabricated count
+    // (spec §13 -- never render an unknown as a zero).
+    //
+    // WHAT IS AND IS NOT COVERED HERE, precisely. The transition itself is
+    // NOT device-less assertable: it is produced by a MOUSE CLICK on the
+    // Status lens's "Focus in Graph" button, nested inside an
+    // already-dispatched draw body with no seam to reach, and the string the
+    // bar prints is draw-body output with no return value to read. What IS
+    // cheaply assertable -- and is what the gate actually keys on -- is the
+    // gate CONDITION, in exactly the state that transition frame leaves
+    // behind: a lens that is Graph, a focus that changed, and a build that
+    // did not run this frame because the body drawn was another lens's.
+    //
+    // The predicate below is THE PANEL'S OWN
+    // (AssetsGraphProjectionIsCurrent, which DrawBottomBar calls to decide
+    // between the count and the em dash) -- not a restatement of it here. A
+    // mirrored conjunction would keep passing if the panel dropped a conjunct,
+    // which is the regression these legs exist to catch.
+    const auto graphCurrent = [&] { return AssetsGraphProjectionIsCurrent(state, model); };
+
+    // Baseline: a steady-state Graph frame IS current, so the real N prints.
+    state.lens       = AssetLens::Graph;
+    state.graphFocus = sceneId;
+    drawFrame();
+    CHECK(graphCurrent());
+
+    // The Focus-in-Graph shape: this frame's BODY was Status (so no rebuild
+    // happened) while the focus moved. That is the state the bar sees on the
+    // transition frame, and the gate must refuse it.
+    state.lens = AssetLens::Status;
+    const std::uint32_t epochBeforeStatus = state.graph.buildEpoch;
+    state.graphFocus = materialId;               // "focus" a different asset
+    drawFrame();                                 // Status body -- DrawGraphLens never runs
+    CHECK(state.graph.buildEpoch == epochBeforeStatus);   // ...proven: no rebuild
+    CHECK_FALSE(graphCurrent());                 // ...so N is unknown -> em dash
+
+    // And it re-arms: the next Graph frame rebuilds for the new focus, after
+    // which the real N is honest again.
+    state.lens = AssetLens::Graph;
+    drawFrame();
+    CHECK(state.graph.buildEpoch == epochBeforeStatus + 1u);
+    CHECK(graphCurrent());
+
+    // The third conjunct on its own: entries moved under a frame whose body
+    // was not the Graph lens. The focus is untouched here, so ONLY the stamp
+    // can close the gate -- which is what makes this leg evidence about the
+    // stamp rather than about the focus a second time.
+    state.lens = AssetLens::Status;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&project->Registry(), fake.Make()));
+    drawFrame();
+    CHECK(state.graphBuiltFocus == state.graphFocus);   // focus leg still satisfied...
+    CHECK_FALSE(graphCurrent());                        // ...and the gate still closed
+    state.lens = AssetLens::Graph;
+
     // The canvas context is released through the panel's own seam, inside the
     // live ImGui context -- the same ordering EditorApp::Shutdown uses.
     DestroyAssetsPanelCanvas(state);

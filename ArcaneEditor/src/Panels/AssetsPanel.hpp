@@ -273,6 +273,28 @@ namespace Arcane::Editor
                                        const AssetsPanelServices& services,
                                        bool* open = nullptr);
 
+    // Is the Graph lens's cached projection CURRENT -- built for the focus
+    // and the entries the panel would name this frame (Plan 3 Task 5, review
+    // finding I1)?
+    //
+    // It is not always, and the gap is one frame wide. The Status lens's
+    // "Focus in Graph" button flips `state.lens` to Graph from INSIDE the
+    // already-dispatched Status body, so DrawGraphLens does not run that frame
+    // at all -- while DrawBottomBar, which runs after the body, already reads
+    // the NEW lens. Without this gate the bar would pair the PREVIOUS build's
+    // node count (often 0: the lens may never have been opened) with the new
+    // focus's name and print a confident lie that self-corrects one frame
+    // later. Spec §13: never render an unknown as a zero -- unknown is an em
+    // dash.
+    //
+    // Exported rather than left file-local to AssetsPanel.cpp for exactly one
+    // reason: the panel's bottom bar and the device-less canvas test must ask
+    // the SAME question. A test that restated the conjunction would keep
+    // passing if the panel later dropped a conjunct -- precisely the
+    // regression this predicate exists to prevent.
+    [[nodiscard]] bool AssetsGraphProjectionIsCurrent(const AssetsPanelState& state,
+                                                      const AssetPanelModel& model);
+
     // Tear the Graph lens's canvas context down and drop the built
     // projection with it (Plan 3 Task 3). The HOST calls this at exactly two
     // seams -- a project switch (beside AssetPanelModel::ResetForProjectSwitch:
