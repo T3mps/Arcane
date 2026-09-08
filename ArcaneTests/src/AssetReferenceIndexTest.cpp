@@ -200,6 +200,31 @@ TEST_CASE("AssetReferenceIndex tombstones a deleted asset that is still referenc
     CHECK(idx.Find(B) == nullptr);
 }
 
+// Plan 2 Task 3 deferred minor, paid in Plan 3 Task 1: the SELF-REFERENCING
+// asset. It is the one input where Update's own bookkeeping aliases -- `id`
+// is simultaneously the source whose outbound set is being retracted and a
+// target whose inbound list is being edited, so RemoveOutboundEdges can erase
+// the very node the caller is updating (the case Update's step-2 comment and
+// the header's "never hold a reference across a mutating call" warning both
+// name). Nothing pinned that until now; this drives it through both exits.
+TEST_CASE("AssetReferenceIndex: a self-referencing asset neither corrupts nor leaks on re-walk and delete", "[editor]")
+{
+    const auto A = ParseGuid("7e5d000a-0001-4001-8001-00000000000a");
+
+    AssetReferenceIndex idx;
+    idx.Update(A, true, Refs({ { A, Arcane::AssetRefKind::References } }));
+    CHECK(idx.InboundCount(A) == 1);
+
+    idx.Update(A, true, Refs({}));       // re-walk away from itself
+    CHECK(idx.InboundCount(A) == 0);
+
+    idx.Update(A, true, Refs({ { A, Arcane::AssetRefKind::References } }));
+    idx.Update(A, false, std::nullopt);  // delete while self-referenced
+    CHECK(idx.Find(A) == nullptr);       // no tombstone survives a self-only ref
+    CHECK(idx.DanglingTargets().empty());
+    CHECK(idx.NodeCount() == 0);
+}
+
 TEST_CASE("AssetReferenceIndex: a never-parsed asset contributes nothing", "[editor]")
 {
     // Update(A, true, nullopt) on a fresh A -> A exists, zero outbound, and

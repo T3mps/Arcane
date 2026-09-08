@@ -167,7 +167,9 @@ namespace Arcane
         ARCANE_API void Clear(const std::filesystem::path& projectRoot);
 
         // Read + validate: Some(pid) only when the named process is STILL the
-        // process the lock described (pid alive AND creation time matches).
+        // process the lock described AND is still running (pid opens, creation
+        // time matches, and its exit time is zero -- a handle held elsewhere
+        // keeps a dead pid reserved, so "opens" alone proves nothing).
         ARCANE_API std::optional<uint32_t> ReadLive(const std::filesystem::path& projectRoot);
 
         // ReadLive minus ourselves: the pid of ANOTHER live editor holding this

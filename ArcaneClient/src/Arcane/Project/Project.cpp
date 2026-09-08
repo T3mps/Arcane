@@ -612,9 +612,13 @@ namespace Arcane
             if (!info)
                 return std::nullopt;
 #ifdef _WIN32
-            // The validation that defeats staleness: the pid must be a LIVE
-            // process whose creation time matches what the lock recorded. A
-            // recycled pid has a different birth; a crashed editor has none.
+            // The validation that defeats staleness, in THREE tells -- all of
+            // which must hold before the lock is believed:
+            //   1. the pid still OPENS (a pid nobody holds is simply gone),
+            //   2. its creation time MATCHES what the lock recorded (a
+            //      recycled pid has a different birth; a crashed editor has
+            //      none), and
+            //   3. it has NOT exited -- zero exit time.
             HANDLE h = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, info->pid);
             if (!h)
                 return std::nullopt;
@@ -626,6 +630,16 @@ namespace Arcane
             const uint64_t start = (static_cast<uint64_t>(created.dwHighDateTime) << 32) |
                                    created.dwLowDateTime;
             if (info->start != 0 && info->start != start)
+                return std::nullopt;
+            // Tell 3, and why tells 1+2 alone were not enough (2026-09-08 desk
+            // pass): a process OBJECT outlives its process for as long as any
+            // handle to it survives, and the pid is reserved that whole time.
+            // A parent holding a dead editor's handle -- the Hub does exactly
+            // this -- kept OpenProcess succeeding with the ORIGINAL creation
+            // time intact, so the project read as "already open" forever. Exit
+            // time is the tell that cannot be faked by a lingering handle:
+            // nonzero means it exited, however many handles remain.
+            if (exited.dwHighDateTime != 0 || exited.dwLowDateTime != 0)
                 return std::nullopt;
             return info->pid;
 #else

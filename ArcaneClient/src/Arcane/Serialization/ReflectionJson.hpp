@@ -420,18 +420,15 @@ namespace Arcane
 
         // Push `written` into the sink if it is an asset-reference guid.
         //
-        // The test is STRUCTURAL, on the JSON just written, and it is the exact
-        // one the scene structural scan applies to a parsed document
-        // (Assets.cpp's ScanSceneJson) -- an object of exactly two unsigned-
-        // number members `hi` and `lo`. That IS the wire shape Components.hpp's
-        // ASTRA_REFLECT_TYPE(Guid) produces, since Guid's only two reflected
-        // fields are its own `hi`/`lo` u64s and WriteScalar copies a u64
-        // verbatim. Testing the SHAPE rather than the field's type hash keeps
-        // the writer's collector and the fallback scan provably the same rule,
-        // which is what lets a v4 manifest and a pre-v4 scan agree on WHICH
-        // GUIDS COUNT as references (the scan additionally drops unresolvable
-        // targets; the manifest deliberately does not -- spec s9.1's
-        // dangling-ref tombstones need them).
+        // The test is STRUCTURAL, on the JSON just written, and it is the SAME
+        // FUNCTION the scene structural scan applies to a parsed document
+        // (Assets.cpp's ScanSceneJson): Arcane::IsGuidShapedJson, in
+        // Serialization/IdentityFieldRule.hpp, whose own doc comment carries
+        // the why. ONE function rather than two hand-synced copies is what lets
+        // a v4 manifest and a pre-v4 scan agree on WHICH GUIDS COUNT as
+        // references (the scan additionally drops unresolvable targets; the
+        // manifest deliberately does not -- spec s9.1's dangling-ref
+        // tombstones need them).
         //
         // Two guids never reach the sink: an IDENTITY field (the shared
         // Arcane::IsIdentityGuidFieldName rule -- the entity's own id, which no
@@ -441,9 +438,7 @@ namespace Arcane
         {
             if (!m_assetGuidSink || Arcane::IsIdentityGuidFieldName(field.name))
                 return;
-            if (!written.is_object() || written.size() != 2 ||
-                !written.contains("hi") || !written.contains("lo") ||
-                !written["hi"].is_number_unsigned() || !written["lo"].is_number_unsigned())
+            if (!Arcane::IsGuidShapedJson(written))
                 return;
             const Arcane::Guid g{ written["hi"].get<std::uint64_t>(),
                                   written["lo"].get<std::uint64_t>() };

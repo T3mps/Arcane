@@ -157,19 +157,21 @@ namespace Arcane
         }
 
         // Task 3 (asset-manager arc): recursive structural walk of a parsed
-        // .arcscene document, collecting every {"hi":u64,"lo":u64} guid-
-        // shaped field except an identity field (the shared
-        // Arcane::IsIdentityGuidFieldName rule, Serialization/
-        // IdentityFieldRule.hpp -- the same one the v4 save-time manifest
-        // collector applies, which is what makes this fallback scan and a v4
-        // manifest agree on which guids count). That two-field shape is
-        // exactly what Components.hpp's ASTRA_REFLECT_TYPE(Guid) writes for
-        // every Guid-typed component field (SpriteRenderer::material/sprite,
-        // MeshRenderer::mesh/materialOverride, PostProcess::material,
-        // Identity::id, ...) -- verified against the real ReferenceProject/
-        // Content/scenes/main.arcscene fixture. A nil guid ({"hi":0,"lo":0})
-        // and a guid the installed resolver cannot place are both dropped here
-        // via `resolvable` -- see ScanSceneReferences below for what that
+        // .arcscene document, collecting every guid-shaped field except an
+        // identity field. BOTH questions are answered by the shared engine
+        // rules in Serialization/IdentityFieldRule.hpp -- IsGuidShapedJson for
+        // the {"hi":u64,"lo":u64} value shape, IsIdentityGuidFieldName for the
+        // field name -- and the v4 save-time manifest collector
+        // (ReflectionJson.hpp) calls the SAME FUNCTIONS, which is what makes
+        // this fallback scan and a v4 manifest agree on which guids count.
+        // That two-field shape is exactly what Components.hpp's
+        // ASTRA_REFLECT_TYPE(Guid) writes for every Guid-typed component field
+        // (SpriteRenderer::material/sprite, MeshRenderer::mesh/
+        // materialOverride, PostProcess::material, Identity::id, ...) --
+        // verified against the real ReferenceProject/Content/scenes/
+        // main.arcscene fixture. A nil guid ({"hi":0,"lo":0}) and a guid the
+        // installed resolver cannot place are both dropped here via
+        // `resolvable` -- see ScanSceneReferences below for what that
         // predicate means.
         //
         // No visited-set / depth bound: a JSON document is a tree by
@@ -184,9 +186,7 @@ namespace Arcane
             {
                 for (const auto& [key, value] : node.items())
                 {
-                    if (value.is_object() && value.size() == 2 &&
-                        value.contains("hi") && value.contains("lo") &&
-                        value["hi"].is_number_unsigned() && value["lo"].is_number_unsigned())
+                    if (IsGuidShapedJson(value))
                     {
                         if (IsIdentityGuidFieldName(key))
                             continue;   // identity, not a reference

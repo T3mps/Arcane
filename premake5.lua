@@ -835,9 +835,10 @@ project "ArcaneTests"
         -- inbound counts, tombstones, dangling targets) source-compiles
         -- into the test exe so the [editor] units drive it directly with
         -- hand-built AssetRef lists, no ImGui and no engine facade in it at
-        -- all, same "pure logic" pattern as AssetPanelModel.cpp above.
+        -- all, same "pure logic" pattern as AssetPanelModel.cpp above. Its
+        -- test (AssetReferenceIndexTest.cpp) is globbed already via
+        -- ArcaneTests/src/**.cpp above, same as every other test file.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetReferenceIndex.cpp",
-        "%{wks.location}/ArcaneTests/src/AssetReferenceIndexTest.cpp",
         -- Asset-manager arc (Plan 2, Task 5): AssetActivityLog (the session-
         -- only ring behind the Assets panel's activity feed -- spec s9.2)
         -- source-compiles into the test exe so the [editor] units drive it

@@ -287,9 +287,11 @@ namespace Arcane::Editor
         // ---------------------------------------------------------------------
 
         // Pill geometry (spec §11.2: "12px text, 16px line, 1px #333333
-        // border"). The neutral border IS a theme token already -- kSeparator
-        // is EditorTheme.hpp's own #333333, used today for table borders --
-        // but the amber variant's #7a5a20 has no token of its own, so it is
+        // border"). The line height itself is the HEADER's kPillLineHeight --
+        // it has an out-of-file consumer (see its doc comment there). The
+        // neutral border IS a theme token already -- kSeparator is
+        // EditorTheme.hpp's own #333333, used today for table borders -- but
+        // the amber variant's #7a5a20 has no token of its own, so it is
         // hardcoded here for the same reason kAxisBarColors/kHeaderBandColor
         // above are: a spec-pinned hex with no chrome-ramp equivalent, not an
         // oversight.
@@ -300,7 +302,6 @@ namespace Arcane::Editor
         // therefore the two places in the codebase that draw the #7a5a20
         // acting-on frame; if a third ever needs it, promote it to
         // EditorTheme.hpp instead of a third hardcode.
-        constexpr float kPillLineHeight  = 16.0f;
         constexpr ImU32 kPillAmberBorder = IM_COL32(0x7a, 0x5a, 0x20, 255);
 
         // ---------------------------------------------------------------------

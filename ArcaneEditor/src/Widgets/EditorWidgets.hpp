@@ -159,9 +159,17 @@ namespace Arcane::Editor
     // §11.1/§11.2). `AssetPeekTooltip` is deliberately NOT here -- it composes
     // the model plus a thumbnail resolver, so it lives with the panel (Task 9).
 
+    // Pill line height (spec §11.2's pinned 16px). Exposed -- rather than kept
+    // file-local to EditorWidgets.cpp, as it was until Plan 3 -- for the same
+    // reason kAssetRowThumbSize below is: a caller that positions a pill BY
+    // HAND (AssetsPanel.cpp's status cards vertically centre one inside a row
+    // rect instead of chaining SameLine) needs the number, and re-declaring it
+    // there made two constants nothing kept in step.
+    inline constexpr float kPillLineHeight = 16.0f;
+
     // 12px bordered label (spec §11.2). variant: 0 = neutral (#333333 border,
     // TextDisabled-ish #9a9a9a text), 1 = amber (border #7a5a20, text
-    // Theme::kAmber). 16px line height; chain several with SameLine.
+    // Theme::kAmber). kPillLineHeight line height; chain several with SameLine.
     void AssetPill(const char* text, int variant = 0);
 
     // Right-most segmented switch (spec §11.1/§11.2, e.g. the Browse/Graph/

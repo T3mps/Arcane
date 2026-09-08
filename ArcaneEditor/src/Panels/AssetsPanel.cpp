@@ -135,15 +135,14 @@ namespace Arcane::Editor
         // kStatusSectionGap is an EXPLICIT gap, on top of ImGui's own
         // ItemSpacing.y on each side of it (4px + 6px + 4px = 14px between
         // one section's last item and the next section's label -- the board's
-        // ~13px). kStatusPillLineHeight restates spec s11.2's pinned 16px
-        // pill line: EditorWidgets.cpp's own kPillLineHeight is file-local
-        // there, and this file needs the number to vertically centre a pill
-        // that it positions by hand rather than by SameLine.
+        // ~13px). The pill line height this file needs, to vertically centre a
+        // pill it positions BY HAND rather than by SameLine, is the widget
+        // layer's own exported kPillLineHeight (EditorWidgets.hpp) -- it used
+        // to be restated here as a second 16px constant nothing kept in step.
         constexpr float kStatusTileHeight      = 64.0f;
         constexpr float kStatusTileMinWidth    = 72.0f;
         constexpr float kStatusSectionGap      = 6.0f;
         constexpr float kStatusProgressHeight  = 4.0f;   // queued card's strip
-        constexpr float kStatusPillLineHeight  = 16.0f;  // spec s11.2
         constexpr float kStatusSelectionBorder = 2.0f;   // spec s10's node rule, applied to cards
 
         // Plan 2 Task 8 additions to the same fixed-geometry block above.
@@ -300,6 +299,23 @@ namespace Arcane::Editor
         {
             const auto it = state.childrenOpen.find(texture);
             return it == state.childrenOpen.end() ? false : it->second;
+        }
+
+        // The project's recorded boot scene as a guid -- the ONE parse of
+        // `Manifest().bootScene` this file does, for every lens that marks the
+        // boot scene (the Browse lens's "boot" pill, the Status lens's scene
+        // cards, spec s6). No project, or an empty/unparseable bootScene,
+        // resolves to the NIL guid, which no real asset guid ever equals, so
+        // the marker simply never lights up rather than needing a second
+        // "is there one at all" flag at each call site.
+        //
+        // Cheap enough to call once per lens body per frame; deliberately NOT
+        // called per ROW (the lens bodies hoist it into a local first).
+        Arcane::Guid BootSceneGuid(const Arcane::Project* project)
+        {
+            return project
+                 ? Arcane::Guid::FromString(project->Manifest().bootScene).value_or(Arcane::Guid::Nil())
+                 : Arcane::Guid::Nil();
         }
 
         // Resolve + route a double-click / Enter-open. Copied VERBATIM from
@@ -1706,12 +1722,8 @@ namespace Arcane::Editor
                            DocumentHost& docs, const AssetsPanelServices& services, AssetsPanelActions& actions)
         {
             // The project's recorded boot scene, resolved once per draw
-            // (rather than per row) for the "boot" pill (spec s6). Empty/
-            // unparseable bootScene resolves to the nil guid, which no real
-            // asset can equal, so the pill simply never lights up.
-            const Arcane::Guid bootGuid = project
-                ? Arcane::Guid::FromString(project->Manifest().bootScene).value_or(Arcane::Guid::Nil())
-                : Arcane::Guid::Nil();
+            // (rather than per row) for the "boot" pill (spec s6).
+            const Arcane::Guid bootGuid = BootSceneGuid(project);
 
             // Spec s5: preview pane hidden below a 720px PANEL width so the
             // table never drops below readable width. Measured here, before
@@ -1950,7 +1962,7 @@ namespace Arcane::Editor
 
             if (refused)
             {
-                ImGui::SetCursorScreenPos(ImVec2(x, innerMin.y + (rowH - kStatusPillLineHeight) * 0.5f));
+                ImGui::SetCursorScreenPos(ImVec2(x, innerMin.y + (rowH - kPillLineHeight) * 0.5f));
                 AssetPill(kindText);
             }
             else
@@ -2169,9 +2181,9 @@ namespace Arcane::Editor
 
                     // Name, chip-style -- AssetPill, vertically centered the
                     // same way DrawAttentionCard positions its own trailing
-                    // pill (rowH - kStatusPillLineHeight, halved).
+                    // pill (rowH - kPillLineHeight, halved).
                     ImGui::SetCursorScreenPos(ImVec2(rowMin.x + kAssetRowThumbSize + style.ItemInnerSpacing.x,
-                                                     rowMin.y + (rowH - kStatusPillLineHeight) * 0.5f));
+                                                     rowMin.y + (rowH - kPillLineHeight) * 0.5f));
                     AssetPill(e->fileName.c_str());
 
                     ImGui::SetCursorScreenPos(ImVec2(revealX, rowMin.y + (rowH - ImGui::GetFrameHeight()) * 0.5f));
@@ -2494,13 +2506,9 @@ namespace Arcane::Editor
                 ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
                 ImGui::TextDisabled("Scenes");
 
-                // bootGuid: the SAME source DrawAssetRow's own "boot" pill
-                // reads (DrawBrowseLens's own parse of the manifest), never a
-                // second one -- an unparseable bootScene resolves to the nil
-                // guid, which no real scene guid ever equals.
-                const Arcane::Guid bootGuid = project
-                    ? Arcane::Guid::FromString(project->Manifest().bootScene).value_or(Arcane::Guid::Nil())
-                    : Arcane::Guid::Nil();
+                // bootGuid: the SAME helper DrawBrowseLens reads for
+                // DrawAssetRow's "boot" pill, never a second parse.
+                const Arcane::Guid bootGuid = BootSceneGuid(project);
 
                 std::vector<const AssetPanelEntry*> scenes;
                 for (const auto& [guid, entry] : model.Entries())

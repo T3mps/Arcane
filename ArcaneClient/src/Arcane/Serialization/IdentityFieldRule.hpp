@@ -1,6 +1,12 @@
 #pragma once
 
-// The ONE identity-field rule (asset-manager redesign, spec s3.3).
+// The shared guid-field rules (asset-manager redesign, spec s3.3): which
+// reflected Guid a walker should treat as an asset REFERENCE. Two questions,
+// one about the field's NAME (IsIdentityGuidFieldName) and one about the
+// value's JSON SHAPE (IsGuidShapedJson), both answered here so every walker
+// answers them identically.
+//
+// ---- 1. The identity-field rule --------------------------------------------
 //
 // A reflected Guid field whose NAME says it is an IDENTITY -- exactly "id" or
 // "guid", case-insensitive -- is the entity's own name badge, not a reference
@@ -27,6 +33,8 @@
 // future readers to keep them in step, which is exactly the maintenance debt
 // this promotion pays off.
 
+#include <Json.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <string>
@@ -40,5 +48,33 @@ namespace Arcane
         std::transform(lower.begin(), lower.end(), lower.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         return lower == "id" || lower == "guid";
+    }
+
+    // ---- 2. The guid-SHAPE rule --------------------------------------------
+    //
+    // True when this JSON value IS a serialized Guid: an object of EXACTLY two
+    // unsigned-number members, `hi` and `lo`. That is the wire shape
+    // Components.hpp's ASTRA_REFLECT_TYPE(Guid) produces -- Guid's only two
+    // reflected fields are its own hi/lo u64s, and ReflectionJson's WriteScalar
+    // copies a u64 verbatim -- so a {"hi":H,"lo":L} object literally IS
+    // Guid{H,L}.
+    //
+    // The test is STRUCTURAL rather than on the field's type hash because one
+    // of the two callers has no reflection to ask: the scene structural scan
+    // (Assets.cpp's ScanSceneJson) walks a PARSED document with no FieldInfo in
+    // sight. The other -- the v4 save-time manifest collector
+    // (ReflectionJson.hpp) -- could ask, but must agree with the scan on WHICH
+    // GUIDS COUNT as references or a v4 manifest and a pre-v4 fallback scan
+    // would disagree about the same scene. Calling one function is how they
+    // agree; the previous arrangement was two byte-identical copies with a
+    // comment claiming they were "provably the same rule".
+    //
+    // Says nothing about whether the guid is nil, resolvable, or an identity
+    // field -- those are each caller's own follow-up question.
+    [[nodiscard]] inline bool IsGuidShapedJson(const nlohmann::json& value)
+    {
+        return value.is_object() && value.size() == 2 &&
+               value.contains("hi") && value.contains("lo") &&
+               value["hi"].is_number_unsigned() && value["lo"].is_number_unsigned();
     }
 }

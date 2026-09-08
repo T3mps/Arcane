@@ -13,6 +13,16 @@
 #include <filesystem>
 #include <fstream>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>   // the zombie-lock case spawns a real short-lived child
+#endif
+
 namespace
 {
     // A unique temp dir for a test, cleaned before use. (Date/random are unavailable
@@ -454,6 +464,58 @@ TEST_CASE("EditorLock::RivalPid exempts this process and ignores stale locks", "
     WriteFile(Arcane::EditorLock::FileFor(dir), Arcane::EditorLock::ToJson(stale));
     CHECK_FALSE(Arcane::EditorLock::RivalPid(dir).has_value());
 }
+
+#ifdef _WIN32
+TEST_CASE("EditorLock: a lock held by an exited process is stale, even while a handle keeps the pid reserved", "[project]")
+{
+    // The 2026-09-08 desk-pass zombie. A Windows process OBJECT outlives the
+    // process itself for as long as ANY handle to it stays open, and the pid
+    // stays reserved with it -- so the parent that spawned an editor (the Hub)
+    // and kept `hProcess` around made OpenProcess keep succeeding, with the
+    // ORIGINAL creation time intact, long after the editor was gone. Both of
+    // ReadLive's old tells (pid opens, birth matches) therefore passed and the
+    // project read as "already open" forever.
+    //
+    // This spawns exactly that shape: a child that exits immediately, whose
+    // handle this test keeps open across the assertions.
+    const auto dir = TempDir("editor_lock_zombie");
+
+    wchar_t cmdline[] = L"cmd.exe /c exit 0";   // CreateProcessW may write to this buffer
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    REQUIRE(::CreateProcessW(nullptr, cmdline, nullptr, nullptr, FALSE,
+                             CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi) != 0);
+    ::CloseHandle(pi.hThread);
+
+    // The zombie's LAST handle, and the whole point of the fixture: it must
+    // outlive every assertion below (that is what keeps the pid reserved) and
+    // must be released however the test leaves -- a failing REQUIRE throws, so
+    // a trailing CloseHandle would be skipped exactly when the suite is
+    // already unhappy.
+    struct HandleGuard
+    {
+        HANDLE h;
+        ~HandleGuard() { ::CloseHandle(h); }
+    } zombieHandle{ pi.hProcess };
+
+    REQUIRE(::WaitForSingleObject(pi.hProcess, 30000) == WAIT_OBJECT_0);
+
+    // The lock body names the REAL pid and the REAL creation time -- nothing
+    // here is forged, which is what makes the exit time the only discriminator.
+    FILETIME created{}, exited{}, kernel{}, user{};
+    REQUIRE(::GetProcessTimes(pi.hProcess, &created, &exited, &kernel, &user) != 0);
+    REQUIRE((exited.dwHighDateTime != 0 || exited.dwLowDateTime != 0));   // it really did exit
+
+    Arcane::EditorLock::Info zombie;
+    zombie.pid   = static_cast<uint32_t>(pi.dwProcessId);
+    zombie.start = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+    WriteFile(Arcane::EditorLock::FileFor(dir), Arcane::EditorLock::ToJson(zombie));
+
+    CHECK_FALSE(Arcane::EditorLock::ReadLive(dir).has_value());
+    CHECK_FALSE(Arcane::EditorLock::RivalPid(dir).has_value());
+}
+#endif
 
 // The verify-capture determinism defect: the editor's Assets panel enumerates
 // <root>/Saved/Diagnostics -- a directory the editor ITSELF writes crash and
