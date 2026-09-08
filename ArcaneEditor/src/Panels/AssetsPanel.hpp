@@ -141,10 +141,16 @@ namespace Arcane::Editor
         // delay that the Graph lens cannot use (see DrawGraphLens's tooltip
         // block: ImGui's "last item" out there is the canvas, never the node,
         // so the hover authority is the node editor's own hit test and the
-        // helper is called with `forceShow`). `graphHoverNode` is the node id
+        // helper is called with `forceShow`). `graphHoverGuid` is the ASSET
         // the timer is running for -- a change resets the clock, exactly as
         // ImGui resets its own delay when the hovered item changes.
-        std::uint64_t graphHoverNode = 0;
+        //
+        // The guid rather than the hovered node id, for exactly the reason
+        // `graphMenuGuid` above is a guid: node ids renumber on every rebuild,
+        // so an id key compares numerically EQUAL across a rebuild while the
+        // asset behind it changes -- silently handing one asset's elapsed
+        // dwell to another.
+        Arcane::Guid  graphHoverGuid;
         float         graphHoverSeconds = 0.0f;
 
         // The built projection plus the two inputs it was built from. The

@@ -3367,6 +3367,12 @@ namespace Arcane::Editor
             const std::vector<GraphNode>& nodes = state.graph.nodes;
             const std::vector<GraphEdge>& edges = state.graph.edges;
 
+            // Read here rather than at its point of use in section 4 (below)
+            // because the id-resolution guard needs it: nothing between
+            // ed::Begin and there writes `graphLayoutDirty`, so this is the
+            // same value section 4 always saw. See section 4 for what it MEANS.
+            const bool applyLayout = state.graphLayoutDirty;
+
             // ---- Task 4: the node under the cursor ------------------------
             // Latched by the PREVIOUS frame's ed::End
             // (imgui_node_editor.cpp:1278) -- and zeroed there whenever a
@@ -3381,8 +3387,26 @@ namespace Arcane::Editor
             // A node id -> the projection index it names, or `nodes.size()`
             // for "none" (id 0) and for a stale id left over from an earlier
             // build (ids are index+1 into the CURRENT build's node vector).
-            const auto nodeIndexOf = [&nodes](std::uint64_t id) -> std::size_t
+            //
+            // THE STALENESS GUARD, AND WHY IT LIVES HERE (fix round 1). Every
+            // id fed to this function was latched by the PREVIOUS frame's
+            // ed::End -- the hovered node, the double-clicked node, the
+            // context-menu node. On a rebuild frame those name the OLD node
+            // vector, and an old id that happens to be in range for the new
+            // one resolves to whatever asset now occupies that index: a
+            // different document opened, the unified menu raised about (and
+            // selecting) the wrong asset, the wrong peek rendered. Bounds
+            // checking cannot catch that -- only knowing the ids are from a
+            // previous generation can. So a rebuild frame resolves NOTHING,
+            // once, at the single point where a latched id becomes an index,
+            // rather than at each of the four call sites where the next one
+            // added would forget. The cost is one frame of inert
+            // hover/open/menu, which is exactly the (safe) shape of the
+            // in-flight click 8c already drops for the same reason.
+            const auto nodeIndexOf = [&nodes, applyLayout](std::uint64_t id) -> std::size_t
             {
+                if (applyLayout)
+                    return nodes.size();
                 return (id >= 1ull && id <= nodes.size())
                            ? static_cast<std::size_t>(id - 1ull)
                            : nodes.size();
@@ -3475,7 +3499,11 @@ namespace Arcane::Editor
             // next rebuild snaps it back. That is intended behavior, not a
             // bug: spec §10 pins the layout as computed each build and not
             // persisted, so there is nowhere for a drag to live.
-            const bool applyLayout = state.graphLayoutDirty;
+            //
+            // `applyLayout` is read up at the id-resolution lambdas, which
+            // need the same answer -- a frame that re-writes every node
+            // position is exactly a frame whose incoming node ids are from
+            // the previous generation.
 
             // ---- 5. Nodes -------------------------------------------------
             for (std::size_t i = 0; i < nodes.size(); ++i)
@@ -3815,7 +3843,10 @@ namespace Arcane::Editor
             }
 
             // 8c. Canvas -> model. Skipped on a rebuild frame: 8a just wrote
-            // that mirror itself, so there is nothing of the user's in it.
+            // that mirror itself, so there is nothing of the user's in it --
+            // and the ids in it would be the previous build's anyway, which
+            // nodeIndexOf now refuses centrally. The explicit test stays
+            // because it also short-circuits the canvas query.
             if (!applyLayout && ed::GetSelectedObjectCount() == 1)
             {
                 // Exactly one object, and it has to be a NODE (a selected link
@@ -3839,8 +3870,11 @@ namespace Arcane::Editor
             // 8d. Double-click opens, routed EXACTLY as a Browse row's is
             // (spec §6's verbatim-behavior clause): a scene comes back through
             // actions.openScene for the host's unsaved-changes guard, every
-            // other kind opens through the DocumentHost. Overflow companions
-            // and tombstones are filtered by entryForNodeId.
+            // other kind opens through the DocumentHost. Overflow companions,
+            // tombstones AND a rebuild frame's previous-generation ids are all
+            // filtered by entryForNodeId -- the last of those matters most
+            // here, since acting on a renumbered id would open a document the
+            // user never double-clicked.
             if (const AssetPanelEntry* e = entryForNodeId(ed::GetDoubleClickedNode().Get()))
                 OpenAssetRow(*e, project, docs, actions);
 
@@ -3870,9 +3904,12 @@ namespace Arcane::Editor
                         state.seenSelectionStampGraph = model.selectionStamp;
                         ImGui::OpenPopup(kGraphNodeMenuId);
                     }
-                    // No `else`: an overflow companion or a tombstone raises no
-                    // menu at all rather than an empty one.
+                    // No `else`: an overflow companion, a tombstone, or a
+                    // rebuild frame's previous-generation id raises no menu at
+                    // all rather than one about the wrong asset.
                 }
+                // Once OPEN the popup is already generation-proof: it re-reads
+                // `state.graphMenuGuid`, a guid, never the id it came from.
                 if (ImGui::BeginPopup(kGraphNodeMenuId))
                 {
                     menuOpen = true;
@@ -3920,18 +3957,26 @@ namespace Arcane::Editor
             //    already suppresses hover outright while an action is running,
             //    which covers the drag/pan half of spec §8's tooltip rules.
             //
-            // Overflow companions and tombstones get no peek (entryForNodeId),
-            // and neither does a node whose own context menu is up: the peek
-            // and the menu are two answers to one hover, and ImGui would stack
+            // Overflow companions, tombstones and a rebuild frame's
+            // previous-generation ids get no peek (entryForNodeId), and
+            // neither does a node whose own context menu is up: the peek and
+            // the menu are two answers to one hover, and ImGui would stack
             // them at the same mouse position. Tracked through `menuOpen`
             // rather than IsPopupOpen because the popup's id was hashed
             // against the ID stack ed::Begin pushes, which is gone by here.
+            //
+            // The dwell is keyed on the resolved GUID, not on the node id it
+            // came from (fix round 1). A guid is generation-independent, so
+            // "is this still the same thing I was hovering?" stays a true
+            // question across a rebuild -- whereas an id compares numerically
+            // equal while the asset behind it changes, which would have
+            // silently carried an elapsed dwell onto a different asset.
             const AssetPanelEntry* hovered = menuOpen ? nullptr : entryForNodeId(hoveredNodeId);
             if (hovered)
             {
-                if (state.graphHoverNode != hoveredNodeId)
+                if (state.graphHoverGuid != hovered->guid)
                 {
-                    state.graphHoverNode    = hoveredNodeId;
+                    state.graphHoverGuid    = hovered->guid;
                     state.graphHoverSeconds = 0.0f;
                 }
                 else
@@ -3942,9 +3987,15 @@ namespace Arcane::Editor
                     DrawAssetPeekTooltip(model, services, hovered->guid,
                                          /*forceShow=*/true, /*withEdgeSummary=*/true);
             }
-            else
+            else if (!applyLayout)
             {
-                state.graphHoverNode    = 0;
+                // Nothing hovered -> drop the dwell. NOT on a rebuild frame
+                // though: there the ids are merely unreadable for one frame,
+                // which is not evidence the pointer left the node. Holding the
+                // dwell is what makes the guid key pay -- the peek pauses for
+                // that frame and resumes on the next one instead of making the
+                // user wait out the delay again for a node they never left.
+                state.graphHoverGuid    = Arcane::Guid{};
                 state.graphHoverSeconds = 0.0f;
             }
         }
@@ -3975,7 +4026,7 @@ namespace Arcane::Editor
         // project. Leaving either behind would let the first frame of the
         // next project answer with the last one's.
         state.graphMenuGuid = Arcane::Guid{};
-        state.graphHoverNode = 0;
+        state.graphHoverGuid = Arcane::Guid{};
         state.graphHoverSeconds = 0.0f;
     }
 

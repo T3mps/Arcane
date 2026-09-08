@@ -340,6 +340,37 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     CHECK(state.seenSelectionStampGraph == model.selectionStamp);
     CHECK(model.selected == leaves.front());
 
+    // ---- Task 4 fix round 1: the peek dwell is HELD across a rebuild ------
+    // Every node id the interaction block reads (hovered / double-clicked /
+    // context-menu) was latched by the PREVIOUS frame's ed::End, so on a
+    // rebuild frame they index the OLD node vector and the panel refuses to
+    // resolve any of them. The dwell then has to distinguish "the pointer left
+    // the node" (drop it) from "the ids were unreadable for one frame" (hold
+    // it) -- otherwise every rebuild under the cursor makes the user wait out
+    // the delay again for a node they never left. That is the branch measured
+    // here, and it is measurable without mouse input because it is the
+    // NOTHING-hovered path that differs.
+    //
+    // SCOPE, precisely: this covers the hold-vs-drop decision and the
+    // guid-keyed dwell. It does NOT cover the id-staleness guard itself --
+    // with no hovered node there is no stale id to mis-resolve. See the fix
+    // report for why the open/menu/hover legs of the guard are not reachable
+    // device-less.
+    state.graphHoverGuid    = materialId;
+    state.graphHoverSeconds = 5.0f;          // a long-elapsed dwell
+    drawFrame();                             // ordinary frame, nothing hovered
+    CHECK_FALSE(state.graphHoverGuid.IsValid());
+    CHECK(state.graphHoverSeconds == 0.0f);
+
+    state.graphHoverGuid    = materialId;
+    state.graphHoverSeconds = 5.0f;
+    state.graphFocus        = Guid{};        // everything-mode again == a REBUILD frame
+    const std::uint32_t epochBeforeRebuild = state.graph.buildEpoch;
+    drawFrame();
+    CHECK(state.graph.buildEpoch == epochBeforeRebuild + 1u);   // it really did rebuild
+    CHECK(state.graphHoverGuid == materialId);                  // ...and the dwell survived
+    CHECK(state.graphHoverSeconds == 5.0f);
+
     // The canvas context is released through the panel's own seam, inside the
     // live ImGui context -- the same ordering EditorApp::Shutdown uses.
     DestroyAssetsPanelCanvas(state);
@@ -347,7 +378,7 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     CHECK_FALSE(state.graphBuilt);
     // Task 4's interaction state is context-derived too, so it goes with it.
     CHECK(state.seenSelectionStampGraph == 0u);
-    CHECK(state.graphHoverNode == 0u);
+    CHECK_FALSE(state.graphHoverGuid.IsValid());
     CHECK_FALSE(state.graphMenuGuid.IsValid());
 
     ImGui::DestroyContext(ctx);
