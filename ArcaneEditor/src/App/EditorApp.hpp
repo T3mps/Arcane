@@ -1262,7 +1262,7 @@ namespace Arcane::Editor
         Arcane::Editor::AssetPanelProviders     m_assetPanelProviders;
         // Builds m_assetPanelProviders' three callables: surfaceFor/refsFor
         // forward straight to the Assets facade (Tasks 1-3); cookStateFor
-        // composes CookStateOf(kind, HasPermanentCookDiag(g), IsCookPending(g))
+        // composes CookStateOf(kind, HasPermanentCookDiag(g), IsCookPending(g, kind))
         // -- see CookStateOf's own header comment for why pending is gated on
         // kind (only Texture/Sprite have a cook pipeline; IsCookPending's
         // answer is meaningless for a kind the cook never enumerates, and
