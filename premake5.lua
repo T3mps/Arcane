@@ -847,6 +847,16 @@ project "ArcaneTests"
         -- AssetReferenceIndex.cpp above. Its test (globbed already via
         -- ArcaneTests/src/**.cpp above) is AssetActivityLogTest.cpp.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetActivityLog.cpp",
+        -- Asset-manager arc (Plan 3, Task 2): AssetGraphViewModel (the Graph
+        -- lens's pure projection -- scoped/layered/breadth-capped nodes and
+        -- edges over an injected entries map + AssetReferenceIndex) source-
+        -- compiles into the test exe so the [editor] units drive it directly
+        -- with a hand-built entries map and index, no ImGui and no engine
+        -- facade in it at all, same "pure logic" pattern as AssetPanelModel/
+        -- AssetReferenceIndex/AssetActivityLog above. Its test (globbed
+        -- already via ArcaneTests/src/**.cpp above) is
+        -- AssetGraphViewModelTest.cpp.
+        "%{wks.location}/ArcaneEditor/src/Panels/AssetGraphViewModel.cpp",
     }
 
     includedirs {
