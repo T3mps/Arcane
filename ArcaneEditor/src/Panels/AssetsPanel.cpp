@@ -3637,16 +3637,29 @@ namespace Arcane::Editor
         // so they are spelled as tokens; the two edge greys have no token and
         // are kept as board literals, the kPillAmberBorder precedent.
         //
-        // TWO HONEST MISMATCHES, FLAGGED RATHER THAN SILENTLY "FIXED" (the
-        // standing ruling: the board's strings win, and where the board
-        // contradicts a shipped contract, flag -- do not invent a third
-        // wording). Both are for the desk pass to arbitrate:
-        //   1. The two greys legend the board's TWO-TONE edge scheme
-        //      (asset->asset vs asset->scene). This lens replaced that with
-        //      per-kind accents dimmed toward the canvas (ruling 3/§11.3), so
-        //      no drawn edge is exactly either swatch.
-        //   2. "used by" is the board's canvas label for the same relation
-        //      this lens labels "uses" (ruling 9, shipped in Task 2).
+        // TWO DELIBERATE DEPARTURES FROM THE TRANSCRIPTION, both COPY only, by
+        // CONTROLLER RULING (Task 6 review): a legend must not contradict the
+        // lens it describes, so where the board's wording is untrue HERE the
+        // minimal truthful edit wins over the transcription. Recorded so the
+        // board and the shipped strings can be reconciled at a glance:
+        //   1. "used by" -> "uses". Spec §10 / ruling 9 pin References ->
+        //      "uses", and that is what the mid-edge labels on this very
+        //      canvas say; the legend saying otherwise about the same wire is
+        //      simply wrong.
+        //   2. "drag a pin = create" -> "drag a material pin = derive". The
+        //      board's phrasing promises something every NON-material pin
+        //      refuses (the ghost menu's one entry is disabled there), and
+        //      "derive" is the word the entry itself uses.
+        // The GEOMETRY, the TONES and entry 1's string stay exactly as
+        // transcribed.
+        //
+        // ONE KNOWN MISMATCH REMAINS, deliberately, for the user's desk pass:
+        // the two greys legend the board's TWO-TONE edge scheme (asset->asset
+        // vs asset->scene), while this lens colours edges by the SOURCE KIND's
+        // accent dimmed toward the canvas (ruling 3/§11.3) -- so no drawn edge
+        // is exactly either swatch. Left as transcribed by the same ruling:
+        // the swatches read as "a line", not as a colour code, and retinting
+        // them would be designing rather than transcribing.
         //
         // Chrome, NOT a node: drawn after ed::End in SCREEN space, so it does
         // not pan, zoom or sort against the graph.
@@ -3666,8 +3679,8 @@ namespace Arcane::Editor
             struct Entry { const char* text; ImVec4 color; bool dashed; };
             const Entry entries[] = {
                 { "derives / samples", kGraphLegendEdgeColor,   false },
-                { "used by",           kGraphLegendUsedByColor, false },
-                { "drag a pin = create", Theme::kAmber,         true  },
+                { "uses",              kGraphLegendUsedByColor, false },
+                { "drag a material pin = derive", Theme::kAmber, true },
             };
 
             ImGui::PushFont(GetEditorFonts().interRegular, kGraphLegendFontPx);
