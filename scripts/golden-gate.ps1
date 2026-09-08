@@ -117,7 +117,9 @@
 #              ArcaneEditor.exe  --project ReferenceProject --headless --backend dx12   --frames 60 --settle 30 --report <path> --compare editor-ui    --bless
 #            (--report or --screenshot is REQUIRED -- --settle refuses
 #            without one.) This is the key move: Verify/ is deliberately
-#            never restaged by the staging loop below (:304-308), so a
+#            never restaged by the staging loop below (the per-host
+#            foreach at ~:556-650; the asymmetry and its reasoning are
+#            spelled out at ~:581-585), so a
 #            bless made against the staged tree PERSISTS across the
 #            -SelfTest run in step 4 instead of being clobbered by it.
 #         4. Run `-SelfTest`. It mutates the SOURCE 0.4 -> 0.6 and restages

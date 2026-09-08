@@ -1108,15 +1108,35 @@ the dx12-blessed **shared** reference, which re-proves editor-ui backend-invaria
    name a dangling card. None was added. The data is there for Plan 3 or a later
    Status revision to surface deliberately, rather than a card designed at the desk
    during implementation.
+9. **`Recook` is a five-step sequence, not a cook call**
+   (`EditorAppFrame.cpp:2421-2437`): `InvalidateArtifact(guid)` → erase the guid's row
+   from `m_cookDiagnostics` → `PublishCookDiagnostics()` (which is *how* the Problems
+   row clears — the publication-group contract republishes the whole set, so an erased
+   row actually disappears) → `m_cookQueue->NoteChanged()` (non-blocking; it only
+   submits a background `CookProject` pass) → `m_assetModel.MarkDirty(guid)`. An
+   activity entry is pushed **beside** the dirty mark, never instead of it, with kind
+   `SourceChanged` and detail `"recook requested"` — the honest kind, since the user
+   asked for exactly what a source edit asks for.
+10. **`Problems` surfaces the pane and does nothing more**
+    (`EditorAppFrame.cpp:2438-2448`) — un-hide, then `SelectDockTab("Problems")`, the
+    same two-step Edit ▸ Rename uses for the Outliner (a panel merely visible but
+    buried behind a sibling tab is not surfaced). **No pre-filtering to the clicked
+    asset**: §9.2 says "jumps to the pane", so none was invented.
+11. **`AssetActivityKind::Deleted` has no live producer.** The kind exists and the feed
+    renders it (`AssetsPanel.cpp:2072`), but no seam pushes it — a repo-wide search
+    finds that label switch as its only use. Deliberate, and **user-visible**: nobody
+    should read the feed's silence on deletions as a bug. The desk checklist says to
+    expect it.
 
 ### Degradation and known blind spots
 
 **§13 degradation, recorded and parked.** If the model's `refsFor` provider is absent,
 every asset reads as zero-inbound and the unused count would *over*-report. That state
 is **unreachable in production**: `MakeAssetPanelProviders`
-(`EditorAppProject.cpp:753-778`) always assigns the lambda. A per-guid facade
-`nullopt` is a different and accepted case — §3.2's one-rebuild-flicker class, covered
-by last-known-good.
+(`EditorAppProject.cpp:818-843` as of this close, with the `p.refsFor` assignment at
+`:825` — unconditional, no branch that can leave it empty) always assigns the lambda.
+A per-guid facade `nullopt` is a different and accepted case — §3.2's
+one-rebuild-flicker class, covered by last-known-good.
 
 **Known desk-only branches.** The refused attention card and the cards' empty states
 are **never rendered by any automated run**: `ReferenceProject` has zero refused
@@ -1126,6 +1146,17 @@ that closes this. This is the same accepted risk Plan 1 recorded for its refused
 thumb-corner badge, and the same reason Tasks 7/8 shipped with no headless tests:
 `AssetsPanel.cpp` is not compiled into `ArcaneTests`, so the lens's logic is covered
 through the Task 3/4/5 pure units and the render/desk comparisons instead.
+
+**A measurement asymmetry, recorded so it is never mistaken for a defect.** The
+`diag://` mount is **not mounted under a headless compare/report run**:
+`OpenOptionsFor` sets `mountDiagnostics = !(headless && (compare || report))`
+(`ProjectBoot.hpp:361-367`). So a gate capture, a `--bless`, and the golden itself see
+`Content/` only — the blessed `editor-ui.png` reads `8 assets` — while an **interactive**
+session mounts `diag://` and shows the accumulated crash/hang reports as their own
+`diagnostics/` root, with correspondingly larger totals in the tiles and the digest.
+This is what makes the golden **stable as diagnostics accumulate**, and it is why the
+Status lens captures taken during Tasks 7/8 (`--screenshot`, no compare) show 38 assets
+against the golden's 8. Both numbers are right; they are different populations.
 
 ### A consequence of the ABI bump, found at close
 
