@@ -194,10 +194,19 @@ namespace Arcane::Editor
         nodes.clear();
         edges.clear();
         realNodeCount = 0;
+        // buildEpoch is deliberately NOT reset -- see its declaration. Clear()
+        // empties the projection; it does not un-count the work already done.
     }
 
     void AssetGraphViewModel::Build(const GraphBuildInput& in)
     {
+        // FIRST, ahead of every early return below: the epoch counts CALLS,
+        // not successful projections. A build that refuses its input still
+        // consumed the call, and the whole point of the counter is to let a
+        // caller's "I only rebuild when my inputs move" be MEASURED. See its
+        // declaration in the header.
+        ++buildEpoch;
+
         Clear();
         if (!in.entries || !in.index)
             return;

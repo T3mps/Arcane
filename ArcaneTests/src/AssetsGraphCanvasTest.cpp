@@ -67,6 +67,15 @@ namespace
         return Guid::FromString(buf).value();
     }
 
+    // The panel is auto-fit by default, which leaves it ~zero-height on frame 1
+    // and ~10px after -- and DrawGraphLens EARLY-RETURNS on a non-positive
+    // canvas region, so an auto-fit harness would silently exercise the rebuild
+    // and the context creation and NOTHING ELSE. Pinning a real size every
+    // frame is what makes the node/pin/link/chrome submission actually run,
+    // which is the entire reason this test drives the real panel. The
+    // grid-phase check at the bottom is the witness that it did.
+    const ImVec2 kPanelSize(1200.0f, 640.0f);
+
     // The panel's provider seam, faked: this test is about the DRAW path, so
     // the reference topology is stated outright rather than parsed out of the
     // fixture files.
@@ -178,18 +187,42 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     // leaves, the spine and the tombstone in ONE build.
     DocumentHost docs;
     AssetsPanelServices services{};
+    // A fake, never-dereferenced texture id for ONE guid, so the node body's
+    // thumb branch (ImDrawList::AddImage) runs for real on the sprite while
+    // every other node still exercises the kind-icon fallback beside it.
+    // Device-less this only records a draw command -- nothing samples it, and
+    // the draw data is discarded unrendered.
+    services.resolveAssetThumb = [spriteId](const Guid& g) -> std::uint64_t
+    { return g == spriteId ? 1ull : 0ull; };
+
+    // What the "Assets" window actually measured on the last frame drawn --
+    // the harness's own determinism witness, see the assertions below.
+    ImVec2 lastPanelSize(0.0f, 0.0f);
+
+    const auto drawFrame = [&]()
+    {
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        // Deterministic region -- see kPanelSize.
+        ImGui::SetNextWindowSize(kPanelSize, ImGuiCond_Always);
+        DrawAssetsPanel(state, model, &*project, docs, services);
+        // Re-Begin the same window to read back what it measured. A second
+        // Begin on an already-submitted window APPENDS to it (ImGui's
+        // documented multi-Begin behaviour) -- it draws nothing here, it only
+        // reads. No SetNextWindowSize this time, so it cannot influence what
+        // it is measuring.
+        ImGui::Begin("Assets");
+        lastPanelSize = ImGui::GetWindowSize();
+        ImGui::End();
+        ImGui::Render();   // draw data discarded -- no backend
+    };
 
     // Several frames: frame 1 creates the editor context, applies the style
     // and seeds node positions; frame 2+ runs every readback path (live node
     // positions, measured sizes, the link channel). Four is the count
     // GraphCanvasHeadlessTest settled on for exactly this reason.
     for (int frame = 0; frame < 4; ++frame)
-    {
-        io.DeltaTime = 1.0f / 60.0f;
-        ImGui::NewFrame();
-        DrawAssetsPanel(state, model, &*project, docs, services);
-        ImGui::Render();   // draw data discarded -- no backend
-    }
+        drawFrame();
 
     // The lens really drew a graph, and really drew every variety: a bare
     // "it did not crash" over an empty canvas would prove nothing.
@@ -201,24 +234,62 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
                       [](const GraphNode& n) { return n.isTombstone; }));
     CHECK(std::any_of(nodes.begin(), nodes.end(),
                       [](const GraphNode& n) { return n.isOverflow && n.overflowCount > 0; }));
-    // The graph is NOT rebuilt per frame: four frames over an unchanged model
-    // leave exactly the stamp the first build recorded.
-    CHECK(state.graphBuiltStamp == model.entriesStamp);
+    // Captured BY VALUE: `nodes` is a reference into the projection, which the
+    // rebuilds below replace under it.
+    const std::size_t everythingNodeCount = nodes.size();
+
+    // ...and the canvas region was REAL, which is what makes the checks above
+    // evidence about the DRAW rather than about the build alone. Two witnesses,
+    // because neither alone is sufficient:
+    //
+    //   * the window measured what we pinned. An auto-fit "Assets" window
+    //     collapses to its toolbar (~10px of body), and ed::Begin over a
+    //     region that small hands its child SkipItems -- at which point every
+    //     Dummy and every AssetPill inside a node returns immediately and the
+    //     node submission this test exists to exercise silently stops
+    //     happening. This is the assertion that goes red if the
+    //     SetNextWindowSize above is ever dropped.
+    //   * the lens reached the grid draw. DrawGraphGridFallback is only
+    //     reached past DrawGraphLens's non-positive-region early return, and
+    //     the first thing it does is advance the phase (havePrevView latches
+    //     there and nowhere else). This is what rules out the early return.
+    //
+    // Together: a full-size window AND a lens that ran past its region guard.
+    CHECK(lastPanelSize.x == kPanelSize.x);
+    CHECK(lastPanelSize.y == kPanelSize.y);
+    CHECK(state.graphGrid.havePrevView);
+
+    // THE NON-REBUILD GUARD, measured rather than asserted: AssetGraphViewModel
+    // counts its own Build() calls, so four frames over an unchanged model must
+    // leave EXACTLY ONE build behind. Deleting the panel's three-way dirty
+    // guard turns this into 4 and fails here -- which the previous
+    // "graphBuiltStamp == entriesStamp" spelling could not do, since every
+    // rebuild makes those two agree.
+    CHECK(state.graph.buildEpoch == 1u);
 
     // A model change re-arms the build; an unchanged one does not. Two more
-    // frames prove both halves against the live canvas.
+    // frames prove both halves against the live canvas: exactly one MORE build
+    // across the pair, not two, and not zero.
     const std::uint32_t stampBefore = state.graphBuiltStamp;
     model.MarkAllDirty();
     REQUIRE(model.RebuildIfDirty(&project->Registry(), fake.Make()));
     CHECK(model.entriesStamp != stampBefore);
     for (int frame = 0; frame < 2; ++frame)
-    {
-        io.DeltaTime = 1.0f / 60.0f;
-        ImGui::NewFrame();
-        DrawAssetsPanel(state, model, &*project, docs, services);
-        ImGui::Render();
-    }
+        drawFrame();
+    CHECK(state.graph.buildEpoch == 2u);
     CHECK(state.graphBuiltStamp == model.entriesStamp);
+
+    // The focus guid is the guard's other input: changing it rebuilds once,
+    // and the two frames after it do not rebuild again.
+    state.graphFocus = sceneId;
+    for (int frame = 0; frame < 2; ++frame)
+        drawFrame();
+    CHECK(state.graph.buildEpoch == 3u);
+    CHECK(state.graphBuiltFocus == sceneId);
+    // Focus-scoped now, so the graph is a strict subset of the everything-mode
+    // build -- proof the focus actually reached the projection, not just the
+    // state field.
+    CHECK(state.graph.nodes.size() < everythingNodeCount);
 
     // The canvas context is released through the panel's own seam, inside the
     // live ImGui context -- the same ordering EditorApp::Shutdown uses.

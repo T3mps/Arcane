@@ -46,6 +46,7 @@
 #include <Arcane/Assets/Assets.hpp>   // AssetRefKind
 #include <Arcane/Guid.hpp>
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -120,6 +121,25 @@ namespace Arcane::Editor
         // comment just above for why this is a narrower "real" than that
         // one.
         int realNodeCount = 0;
+
+        // How many times Build() has run on THIS object, ever. Not display
+        // data and not part of the projection -- it exists so a consumer's
+        // "I do not rebuild this per frame" claim is MEASURABLE rather than
+        // merely asserted. The Graph lens rebuilds only when its inputs move
+        // (AssetPanelModel::entriesStamp or the focus guid), and the
+        // device-less canvas test pins that by counting builds across a fixed
+        // number of frames -- an assertion that goes red the moment the
+        // panel's guard is removed, which a "the stamps agree afterwards"
+        // check cannot do (every rebuild makes them agree).
+        //
+        // MONOTONIC: bumped on EVERY entry to Build(), including the early
+        // returns (a refused build still consumed the call, and the caller
+        // still decided to make it), and deliberately NOT reset by Clear() --
+        // Clear() empties the projection, it does not un-count the work
+        // already done. Same reasoning as AssetPanelModel::entriesStamp:
+        // a counter that only ever increases cannot accidentally compare
+        // equal to a stale reading.
+        std::uint32_t buildEpoch = 0;
 
         void Build(const GraphBuildInput& in);
         void Clear();
