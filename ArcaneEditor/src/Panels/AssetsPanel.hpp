@@ -163,6 +163,40 @@ namespace Arcane::Editor
         Arcane::Guid  graphHoverGuid;
         float         graphHoverSeconds = 0.0f;
 
+        // ---- Task 6: the pin-drag "Derive Instance..." gesture ----------
+        // The asset a released pin-drag is ABOUT. Written on the ONE frame
+        // ed::AcceptNewItem() reports the drop and read for as long as the
+        // ghost menu stays open, so it has to outlive that frame -- and it is
+        // a GUID for the same reason `graphMenuGuid` above is: node and pin
+        // ids are derived from the node's INDEX in the current build and
+        // renumber on every rebuild, so an id stashed across frames would
+        // silently come to name a different asset (or none). A rebuild
+        // landing mid-drag therefore cancels the gesture instead of
+        // corrupting it -- the panel's id-resolution guard refuses the stale
+        // pin id and the query is rejected.
+        Arcane::Guid graphWireGuid;
+        // ...and whether that drag can actually derive an instance: it
+        // started from the DEPENDENTS (right) pin of a live MATERIAL. False
+        // leaves the ghost menu's one entry DISABLED rather than hidden --
+        // the gesture stays discoverable from any pin, it just cannot promise
+        // something the source kind does not support.
+        bool graphWireDerivable = false;
+        // The IN-FLIGHT half: the asset a drag is currently leaving, and which
+        // of its two pins it left by. Session state rather than a frame local
+        // because the create query reports a dragged pin only on frames where
+        // the pointer is over EMPTY canvas or over another pin -- crossing a
+        // node BODY reports nothing at all, and a wire that blinks out every
+        // time it passes behind a node is not a wire. Cleared on the first
+        // frame ed::BeginCreate reports no live action, which is the frame
+        // after the drag ends however it ended (released, cancelled, or
+        // consumed by the accept).
+        //
+        // A guid again, re-resolved through the CURRENT build's guid->index map
+        // every frame, so a rebuild landing mid-drag re-anchors the curve
+        // instead of aiming it at whatever now occupies an old index.
+        Arcane::Guid graphDragGuid;
+        bool         graphDragRight = false;
+
         // The built projection plus the two inputs it was built from. The
         // dirty trigger is a stamp comparison, never a per-frame rebuild:
         // `graph` is re-Built only when AssetPanelModel::entriesStamp moved

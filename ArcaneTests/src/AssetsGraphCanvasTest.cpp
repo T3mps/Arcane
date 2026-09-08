@@ -209,6 +209,11 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     // What the "Assets" window actually measured on the last frame drawn --
     // the harness's own determinism witness, see the assertions below.
     ImVec2 lastPanelSize(0.0f, 0.0f);
+    // ...and what the panel ASKED THE HOST FOR on that frame. The returned
+    // actions are the panel's only channel to the app, so an idle frame that
+    // raises one is a phantom request (Task 6's create bracket is checked
+    // against exactly that below).
+    AssetsPanelActions lastActions;
 
     const auto drawFrame = [&]()
     {
@@ -216,7 +221,7 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
         ImGui::NewFrame();
         // Deterministic region -- see kPanelSize.
         ImGui::SetNextWindowSize(kPanelSize, ImGuiCond_Always);
-        DrawAssetsPanel(state, model, &*project, docs, services);
+        lastActions = DrawAssetsPanel(state, model, &*project, docs, services);
         // Re-Begin the same window to read back what it measured. A second
         // Begin on an already-submitted window APPENDS to it (ImGui's
         // documented multi-Begin behaviour) -- it draws nothing here, it only
@@ -440,6 +445,61 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     CHECK_FALSE(graphCurrent());                        // ...and the gate still closed
     state.lens = AssetLens::Graph;
 
+    // ---- Task 6: the create bracket runs its no-query path every frame ----
+    // The Graph lens opens an `ed::BeginCreate` / `ed::EndCreate` bracket every
+    // frame for the pin-drag "Derive Instance..." gesture, and EndCreate is
+    // called UNCONDITIONALLY. That is not a style preference:
+    // CreateItemAction::Begin() arms `m_InActive` even on the frame it returns
+    // false, and its first statement is `IM_ASSERT(false == m_InActive)` -- so
+    // a bracket that only ends INSIDE the `if` is fine on frame 1 and ABORTS
+    // THE PROCESS on frame 2 (ShaderEditorDocument.cpp:5559-5561; the desk
+    // crash GraphCanvasHeadlessTest.cpp was written for, and the reason this
+    // harness exists at all).
+    //
+    // WHAT THESE FRAMES PROVE, precisely. Device-less there is no mouse, so no
+    // pin drag, so BeginCreate returns false and the bracket runs its NO-QUERY
+    // path -- which is exactly the path the folklore is about. The assertion
+    // is REACHING THE LINE AFTER THEM: under a conditional EndCreate the
+    // second consecutive Graph frame aborts under IM_ASSERT in this Debug
+    // build and the case never reports at all. (Every earlier block in this
+    // case already draws consecutive Graph frames, so the coverage is not new
+    // -- these frames and this comment make the witness explicit rather than
+    // incidental, and the two checks below turn "did not abort" into a
+    // positive statement about the bracket's side effects.)
+    //
+    // WHAT THEY DO NOT PROVE: the accept/stash/menu half. QueryNewNode only
+    // reports for a REAL pin drag released over the canvas, which needs mouse
+    // input at a pin's screen rect -- a position that lives inside the
+    // library's pan/zoom canvas and is not exported. That half is traced
+    // structurally in the task report and desk-verified on Task 7's checklist.
+    for (int frame = 0; frame < 3; ++frame)
+        drawFrame();
+    // Nothing was dragged, so nothing may be stashed: a bracket that stashed
+    // on an idle frame would arm a ghost menu about an arbitrary node every
+    // frame.
+    CHECK_FALSE(state.graphWireGuid.IsValid());
+    CHECK_FALSE(state.graphWireDerivable);
+    // Nor may the IN-FLIGHT source latch: `graphDragGuid` is what keeps the
+    // dashed curve alive while the pointer crosses a node body, and it is
+    // cleared on every frame BeginCreate reports no live action -- which,
+    // device-less, is every frame. A latch that survived an idle frame would
+    // paint a wire from a node to the cursor with no drag behind it.
+    CHECK_FALSE(state.graphDragGuid.IsValid());
+    CHECK_FALSE(state.graphDragRight);
+    // ...and the clear really is a per-frame WRITE, not just an untouched
+    // default: seed it by hand and one ordinary frame must retire it.
+    state.graphDragGuid  = materialId;
+    state.graphDragRight = true;
+    drawFrame();
+    CHECK_FALSE(state.graphDragGuid.IsValid());
+    CHECK_FALSE(state.graphDragRight);
+    // ...and no create request reached the host either. `requestCreateKind`
+    // and `createPrefillParent` are the pair the gesture's one menu entry
+    // writes (Task 6 is their first producer), so an idle frame raising either
+    // would open the Create dialog unbidden.
+    CHECK(lastActions.requestCreateKind == -1);
+    CHECK_FALSE(lastActions.createPrefillParent.IsValid());
+
     // The canvas context is released through the panel's own seam, inside the
     // live ImGui context -- the same ordering EditorApp::Shutdown uses.
     DestroyAssetsPanelCanvas(state);
@@ -449,6 +509,19 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     CHECK(state.seenSelectionStampGraph == 0u);
     CHECK_FALSE(state.graphHoverGuid.IsValid());
     CHECK_FALSE(state.graphMenuGuid.IsValid());
+    // Task 6's gesture stash likewise: it names an asset of the OUTGOING
+    // project, and this seam IS the project switch. Set by hand first, because
+    // no device-less frame can produce one -- the check is about the seam, not
+    // about the gesture.
+    state.graphWireGuid      = materialId;
+    state.graphWireDerivable = true;
+    state.graphDragGuid      = materialId;
+    state.graphDragRight     = true;
+    DestroyAssetsPanelCanvas(state);
+    CHECK_FALSE(state.graphWireGuid.IsValid());
+    CHECK_FALSE(state.graphWireDerivable);
+    CHECK_FALSE(state.graphDragGuid.IsValid());
+    CHECK_FALSE(state.graphDragRight);
 
     // ---- Task 5: the boot-scene focus seed, and its project-switch reset --
     // DestroyAssetsPanelCanvas IS the panel's project-switch seam (EditorApp

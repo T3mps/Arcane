@@ -2965,6 +2965,27 @@ namespace Arcane::Editor
         // chip toward the backdrop without inventing a second body colour.
         constexpr float kGraphGhostWash = 0.55f;
 
+        // ---- Task 6: the dashed in-flight wire ----------------------------
+        // `stroke-dasharray: 6 5` on the board's amber drag path
+        // (OptionD.dc.html / Demo.dc.html: the `M230,330 C320,330 390,402
+        // 462,402` path), in SCREEN pixels -- the walk below divides by the
+        // view scale so a dash keeps that reading at every zoom stop.
+        constexpr float kGraphDashOnPx  = 6.0f;
+        constexpr float kGraphDashOffPx = 5.0f;
+        // The board's `<circle cx="462" cy="402" r="4">` -- the cursor end of
+        // the drag wears a solid amber dot, which is what makes the free end
+        // read as "attached to the pointer" rather than as a wire that just
+        // stops.
+        constexpr float kGraphDashEndDotRadius = 4.0f;
+        // LOD floor. The dash walk splits the curve at every on/off boundary,
+        // so the CELL COUNT -- not the segment count -- is what bounds its
+        // work. Zoomed far in, 11 screen pixels is a vanishing distance in
+        // canvas units and the pattern is unresolvable anyway; the cap
+        // stretches the cell (ratio preserved) rather than letting the walk
+        // grind. Screen length is bounded by the viewport in practice, so this
+        // is a guard against a pathological view scale, not the common path.
+        constexpr int kGraphDashMaxCells = 256;
+
         // Mid-edge labels (ruling 9) stop being legible long before the nodes
         // do, so they are the first thing the canvas drops on zoom-out. The
         // threshold is the shader editor's own LOD table, ported: its
@@ -3177,6 +3198,119 @@ namespace Arcane::Editor
                 dl->ChannelsSetCurrent(prevChannel);
             }
             return GraphCubicBezierAt(p0, p1, p2, p3, 0.5f);
+        }
+
+        // The DASHED in-flight wire (Task 6; plan ruling 8 -- spec §11.1's
+        // "one new technique" for this plan). Same curve as DrawGraphWire, in
+        // the same channel and the same canvas space, walked with an on/off
+        // ARC-LENGTH PHASE ACCUMULATOR so the pattern is measured along the
+        // curve rather than along t (which would bunch the dashes wherever
+        // the bezier is dense).
+        //
+        // The per-segment loop skeleton is DrawGradientWire's
+        // (ShaderEditorDocument.cpp:5484-5496) -- and so is its cap
+        // reasoning, which :5480-5483 states: consecutive samples on a curve
+        // this smooth are near-collinear, so butt caps meet without visible
+        // notches. A dash is a separate stroke by definition here (a shared
+        // PathStroke cannot lift its pen), which is the same reason that one
+        // could not use one either.
+        //
+        // ed::Flow's marching dots are deliberately NOT used: they are an
+        // animation over an EXISTING link, and this curve has no link behind
+        // it -- nor is a travelling dot the board's language (ruling 8).
+        void DrawGraphDashedWire(const ImVec2& p0, const ImVec2& p3, const ImVec4& color,
+                                 float thickness, float viewScale)
+        {
+            ImVec2 p1, p2;
+            GraphWireControlPoints(p0, p3, p1, p2);
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            // Defensive, exactly as DrawGraphWire is: never index past a
+            // splitter that has not been grown.
+            if (dl->_Splitter._Count <= kGraphLinkChannel)
+                return;
+
+            const auto len = [](float ax, float ay) { return std::sqrt(ax * ax + ay * ay); };
+            // The control polygon is a cheap upper bound on arc length --
+            // DrawGradientWire's own approximation, kept so both wires spend
+            // vertices the same way.
+            const float polyLen = len(p1.x - p0.x, p1.y - p0.y) +
+                                  len(p2.x - p1.x, p2.y - p1.y) +
+                                  len(p3.x - p2.x, p3.y - p2.y);
+            const float scale     = viewScale > 0.0f ? viewScale : 1.0f;
+            const float screenLen = polyLen * scale;
+            const int segments = static_cast<int>(
+                (std::min)(64.0f, (std::max)(12.0f, screenLen / 6.0f)));
+
+            // Cell lengths in CANVAS units, so the dash reads 6-on/5-off on
+            // screen at any zoom -- then the LOD floor (kGraphDashMaxCells).
+            float on  = kGraphDashOnPx  / scale;
+            float off = kGraphDashOffPx / scale;
+            if (const float floorLen = polyLen / static_cast<float>(kGraphDashMaxCells);
+                on + off < floorLen && on + off > 0.0f)
+            {
+                const float k = floorLen / (on + off);
+                on  *= k;
+                off *= k;
+            }
+
+            const int prevChannel = dl->_Splitter._Current;
+            dl->ChannelsSetCurrent(kGraphLinkChannel);
+            const ImU32 col = ImGui::GetColorU32(color);
+
+            // `cellLeft` is the distance still owed to the current on/off
+            // cell; it carries ACROSS segment boundaries, which is the whole
+            // point of accumulating phase rather than dashing each segment.
+            bool  ink      = true;
+            float cellLeft = on;
+            ImVec2 prev = p0;
+            for (int i = 1; i <= segments; ++i)
+            {
+                const float t = static_cast<float>(i) / static_cast<float>(segments);
+                const ImVec2 cur = GraphCubicBezierAt(p0, p1, p2, p3, t);
+                float segLeft = len(cur.x - prev.x, cur.y - prev.y);
+                ImVec2 a = prev;
+                // A degenerate segment (both control points coincident, or a
+                // zero-length drag) has no length to spend and would divide by
+                // zero below.
+                while (segLeft > 0.0f && cellLeft > 0.0f)
+                {
+                    const float step = (std::min)(segLeft, cellLeft);
+                    // `a` lies ON the straight run a->cur, so advancing by
+                    // step/segLeft of what REMAINS of it is exact.
+                    const float u = step / segLeft;
+                    const ImVec2 b(a.x + (cur.x - a.x) * u, a.y + (cur.y - a.y) * u);
+                    if (ink)
+                        dl->AddLine(a, b, col, thickness);
+                    a = b;
+                    segLeft  -= step;
+                    cellLeft -= step;
+                    if (cellLeft <= 0.0f)
+                    {
+                        ink      = !ink;
+                        cellLeft = ink ? on : off;
+                    }
+                }
+                prev = cur;
+            }
+
+            dl->ChannelsSetCurrent(prevChannel);
+        }
+
+        // The free (pointer) end's solid dot, in the same channel as the wire.
+        // Separate from the walk above because only the CALLER knows which end
+        // the pointer holds -- it orients the curve, so the pin end is p0 for a
+        // right-pin drag and p3 for a left-pin one.
+        void DrawGraphWireEndDot(const ImVec2& centre, const ImVec4& color)
+        {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            if (dl->_Splitter._Count <= kGraphLinkChannel)
+                return;
+            const int prevChannel = dl->_Splitter._Current;
+            dl->ChannelsSetCurrent(kGraphLinkChannel);
+            dl->AddCircleFilled(centre, kGraphDashEndDotRadius,
+                                ImGui::GetColorU32(color), kGraphPinSegments);
+            dl->ChannelsSetCurrent(prevChannel);
         }
 
         // One port dot, DrawPinDot's reading (ShaderEditorDocument.cpp:507):
@@ -3484,17 +3618,142 @@ namespace Arcane::Editor
         // window listing both by name should say which is which.
         constexpr const char* kGraphNodeMenuId = "##assetgraphnodemenu";
 
+        // The pin-drag ghost menu (Task 6). Its own id for the same reason.
+        constexpr const char* kGraphCreateMenuId = "##assetgraphderivemenu";
+
+        // ---- The canvas legend (Task 6, controller rider) -----------------
+        // TRANSCRIBED from OptionD.dc.html's `<!-- legend -->` block, value for
+        // value -- not designed here:
+        //   position: absolute; left: 12px; bottom: 12px;
+        //   display: flex; align-items: center; gap: 14px;
+        //   background: #191919; border: 1px solid #0d0d0d;
+        //   padding: 5px 10px; font-size: 13px; color: #737373;
+        //   each entry: inline-flex; gap: 6px
+        //     [18x2 solid #5c5c5c]                "derives / samples"
+        //     [18x2 solid #4a4a4a]                "used by"
+        //     [18px, border-top: 2px dashed #ffa61a] "drag a pin = create"
+        // Three of the four tones are exact EditorTheme tokens (#191919 =
+        // kChrome, #0d0d0d = kBorder, #737373 = kTextDim, #ffa61a = kAmber),
+        // so they are spelled as tokens; the two edge greys have no token and
+        // are kept as board literals, the kPillAmberBorder precedent.
+        //
+        // TWO HONEST MISMATCHES, FLAGGED RATHER THAN SILENTLY "FIXED" (the
+        // standing ruling: the board's strings win, and where the board
+        // contradicts a shipped contract, flag -- do not invent a third
+        // wording). Both are for the desk pass to arbitrate:
+        //   1. The two greys legend the board's TWO-TONE edge scheme
+        //      (asset->asset vs asset->scene). This lens replaced that with
+        //      per-kind accents dimmed toward the canvas (ruling 3/§11.3), so
+        //      no drawn edge is exactly either swatch.
+        //   2. "used by" is the board's canvas label for the same relation
+        //      this lens labels "uses" (ruling 9, shipped in Task 2).
+        //
+        // Chrome, NOT a node: drawn after ed::End in SCREEN space, so it does
+        // not pan, zoom or sort against the graph.
+        constexpr float kGraphLegendInset      = 12.0f;
+        constexpr float kGraphLegendPadX       = 10.0f;
+        constexpr float kGraphLegendPadY       = 5.0f;
+        constexpr float kGraphLegendEntryGap   = 14.0f;
+        constexpr float kGraphLegendSwatchGap  = 6.0f;
+        constexpr float kGraphLegendSwatchW    = 18.0f;
+        constexpr float kGraphLegendSwatchH    = 2.0f;
+        constexpr float kGraphLegendFontPx     = 13.0f;
+        constexpr ImVec4 kGraphLegendEdgeColor   = ImVec4(0.361f, 0.361f, 0.361f, 1.0f); // #5c5c5c
+        constexpr ImVec4 kGraphLegendUsedByColor = ImVec4(0.290f, 0.290f, 0.290f, 1.0f); // #4a4a4a
+
+        void DrawGraphLegend(const ImVec2& canvasMin, const ImVec2& canvasSize)
+        {
+            struct Entry { const char* text; ImVec4 color; bool dashed; };
+            const Entry entries[] = {
+                { "derives / samples", kGraphLegendEdgeColor,   false },
+                { "used by",           kGraphLegendUsedByColor, false },
+                { "drag a pin = create", Theme::kAmber,         true  },
+            };
+
+            ImGui::PushFont(GetEditorFonts().interRegular, kGraphLegendFontPx);
+            const float lineH = ImGui::GetTextLineHeight();
+
+            float contentW = 0.0f;
+            for (int i = 0; i < IM_ARRAYSIZE(entries); ++i)
+            {
+                if (i > 0)
+                    contentW += kGraphLegendEntryGap;
+                contentW += kGraphLegendSwatchW + kGraphLegendSwatchGap +
+                            ImGui::CalcTextSize(entries[i].text).x;
+            }
+
+            // SNAPPED TO WHOLE PIXELS. A 2px rule and a 1px border are the two
+            // things here a half-pixel origin visibly softens (ImGui gives a
+            // fractional rect fractional coverage), and the board's are crisp.
+            // Safe to snap, unlike anything inside the canvas: the legend is
+            // chrome in SCREEN space, with no zoom to make the rounding lie.
+            const float boxW = std::floor(contentW) + kGraphLegendPadX * 2.0f;
+            const float boxH = std::floor(lineH) + kGraphLegendPadY * 2.0f;
+            const ImVec2 boxMin(std::floor(canvasMin.x + kGraphLegendInset),
+                                std::floor(canvasMin.y + canvasSize.y - kGraphLegendInset - boxH));
+            const ImVec2 boxMax(boxMin.x + boxW, boxMin.y + boxH);
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(boxMin, boxMax, ImGui::GetColorU32(Theme::kChrome));
+            dl->AddRect(boxMin, boxMax, ImGui::GetColorU32(Theme::kBorder));
+
+            const ImU32 textCol = ImGui::GetColorU32(Theme::kTextDim);
+            const float midY = boxMin.y + boxH * 0.5f;
+            float x = boxMin.x + kGraphLegendPadX;
+            for (int i = 0; i < IM_ARRAYSIZE(entries); ++i)
+            {
+                if (i > 0)
+                    x += kGraphLegendEntryGap;
+                const ImU32 swatch = ImGui::GetColorU32(entries[i].color);
+                x = std::floor(x);
+                const float y0 = std::floor(midY - kGraphLegendSwatchH * 0.5f);
+                if (entries[i].dashed)
+                {
+                    // The same 6-on/5-off cell the in-flight wire uses, walked
+                    // straight across the 18px rule -- the legend IS the key to
+                    // that wire, so it cannot pick its own pattern.
+                    float cx = x;
+                    bool ink = true;
+                    while (cx < x + kGraphLegendSwatchW)
+                    {
+                        const float step = (std::min)(ink ? kGraphDashOnPx : kGraphDashOffPx,
+                                                      x + kGraphLegendSwatchW - cx);
+                        if (ink)
+                            dl->AddRectFilled(ImVec2(cx, y0),
+                                              ImVec2(cx + step, y0 + kGraphLegendSwatchH), swatch);
+                        cx += step;
+                        ink = !ink;
+                    }
+                }
+                else
+                {
+                    dl->AddRectFilled(ImVec2(x, y0),
+                                      ImVec2(x + kGraphLegendSwatchW, y0 + kGraphLegendSwatchH),
+                                      swatch);
+                }
+                x += kGraphLegendSwatchW + kGraphLegendSwatchGap;
+                dl->AddText(ImVec2(x, midY - lineH * 0.5f), textCol, entries[i].text);
+                x += ImGui::CalcTextSize(entries[i].text).x;
+            }
+            ImGui::PopFont();
+        }
+
         // ---- Task 3: the Graph lens body (spec §10) ------------------------
         // Canvas foundation + layered nodes + two-layer kind-coloured edges,
         // plus (Task 4) the interaction surface: the selection bridge, the
         // peek tooltip with its edge summary, double-click open and the
         // unified context menu. The focus combo and the lens-strip mask are
-        // Task 5's; pin-drag create is Task 6's. In particular this body
-        // deliberately opens NO ed::BeginCreate bracket: an armed
-        // CreateItemAction whose EndCreate never runs asserts on the NEXT
-        // frame's BeginCreate (ShaderEditorDocument.cpp:5559-5561 -- the desk
-        // crash that was fine on frame 1 and aborted on frame 2). The lens
-        // will grow one, with its unconditional EndCreate, in Task 6.
+        // Task 5's; the pin-drag "Derive Instance..." gesture, its dashed
+        // in-flight wire and the canvas legend are Task 6's (section 7b and
+        // the ghost menu in 8e).
+        //
+        // THE ONE RULE THE CREATE BRACKET CARRIES: ed::EndCreate() is called
+        // UNCONDITIONALLY. CreateItemAction::Begin() arms m_InActive even when
+        // it returns false (the idle frame), so an EndCreate skipped inside
+        // the `if` asserts on the NEXT frame's BeginCreate
+        // (ShaderEditorDocument.cpp:5559-5561 -- the desk crash that was fine
+        // on frame 1 and aborted on frame 2). That is also the crash class the
+        // device-less test below the panel exists to keep closed.
         void DrawGraphLens(AssetsPanelState& state, AssetPanelModel& model,
                            const Arcane::Project* project, DocumentHost& docs,
                            const AssetsPanelServices& services,
@@ -3718,6 +3977,29 @@ namespace Arcane::Editor
                     continue;
                 if (n.overflowInbound) visuals[anchor->second].hasRightPin = true;
                 else                   visuals[anchor->second].hasLeftPin  = true;
+            }
+            // THE DERIVE AFFORDANCE (Task 6). A material's RIGHT (dependents)
+            // pin is the handle the pin-drag gesture starts from, so a
+            // material carries that pin even when nothing is attached to it --
+            // which is exactly the material you most want to derive a first
+            // instance from, and exactly what the board draws: OptionD's (and
+            // Demo's) `reference_mesh` is a MATERIAL with no wires at all and
+            // a single right-hand pin, wearing the drag's amber glow. Without
+            // this the arc's signature gesture would be unreachable on any
+            // material nothing references yet.
+            //
+            // The pin stays HOLLOW while nothing is attached (DrawGraphPinDot's
+            // filled-vs-ring rule, unchanged) -- the board paints it solid, but
+            // it paints it mid-drag; the ring/fill distinction is this lens's
+            // own shipped language and one unconnected pin is not a reason to
+            // drop it. Noted for the desk pass.
+            for (std::size_t i = 0; i < nodes.size(); ++i)
+            {
+                if (nodes[i].isOverflow || nodes[i].isTombstone)
+                    continue;
+                if (const AssetPanelEntry* e = model.Find(nodes[i].guid))
+                    if (e->kind == AssetKind::Material)
+                        visuals[i].hasRightPin = true;
             }
 
             const Arcane::Guid bootGuid = BootSceneGuid(project);
@@ -3989,6 +4271,165 @@ namespace Arcane::Editor
                                   col, kGraphOverflowWireThickness);
             }
 
+            // ---- 7b. The pin-drag create query (Task 6) -------------------
+            // THE ARC'S SIGNATURE GESTURE: drag off a material's DEPENDENTS
+            // pin, release over empty canvas, get a ghost menu whose one entry
+            // opens the Create dialog already parented to that material.
+            //
+            // WHICH PIN, geometrically (the vocabulary hazard, settled by the
+            // board): a node's RIGHT pin is its inbound/referencers side --
+            // wires EXIT right pins toward the assets that depend on this one
+            // (see GraphLeftPinId's block). Deriving an instance MAKES a new
+            // dependent, so the gesture is the material's RIGHT pin. Both
+            // boards agree outright: OptionD/Demo's `reference_mesh` material
+            // carries one pin at `right: -5px` with a
+            // `box-shadow: 0 0 0 3px rgba(255,166,26,0.35)` amber glow, and
+            // the dashed drag path leaves exactly that point.
+            //
+            // The gesture SPANS FRAMES (drag ... release ... popup open for as
+            // long as the user leaves it up), so the only thing stashed is a
+            // GUID -- never a pin or node id, which are index-derived and
+            // renumber on every rebuild. A rebuild landing mid-drag cancels
+            // the gesture: `nodeIndexOf` refuses every id on an applyLayout
+            // frame, the query is rejected, and nothing is stashed.
+            //
+            // Three hops, copied in SHAPE from the shader editor's own
+            // (ShaderEditorDocument.cpp:5510-5562 and :4019-4038): query and
+            // accept HERE, inside the canvas; stash; open the popup in a
+            // Suspend block (8e below), because a popup lives in screen space.
+            bool wireCreateRequest = false;
+
+            // A PIN id -> the projection index of the node that owns it, or
+            // `nodes.size()`. Routed through nodeIndexOf so it inherits the
+            // rebuild-staleness refusal in one place rather than re-deriving
+            // it. Pin ids are nodeId*4 + {1,2} and node ids start at 1, so the
+            // smallest legal pin id is 5.
+            const auto pinNodeIndex = [&](std::uint64_t pinId) -> std::size_t
+            {
+                if (pinId < GraphLeftPinId(1ull))
+                    return nodes.size();
+                return nodeIndexOf(pinId / 4ull);
+            };
+            const auto isRightPin = [](std::uint64_t pinId)
+            { return pinId >= GraphLeftPinId(1ull) && (pinId % 4ull) == 2ull; };
+            // Remember WHICH asset the live drag is leaving, by guid. Silent on
+            // a rebuild frame (nothing resolvable) and on a synthetic node --
+            // in both cases the previous answer stands, which is right: the
+            // drag did not change, only our ability to name it this frame.
+            const auto noteDragSource = [&](std::uint64_t pinId)
+            {
+                const std::size_t i = pinNodeIndex(pinId);
+                if (i == nodes.size() || nodes[i].isOverflow)
+                    return;
+                state.graphDragGuid  = nodes[i].guid;
+                state.graphDragRight = isRightPin(pinId);
+            };
+
+            // The colour handed to BeginCreate is the one the LIBRARY would
+            // paint its own candidate link with -- fully transparent here, the
+            // same two-layer trick section 6 uses for real edges, because the
+            // visible in-flight curve is the hand-drawn dashed one below.
+            //
+            // The return value is also the honest "is a drag live at all"
+            // answer: CreateItemAction reports true for every frame of a drag
+            // (stage Possible) and for the release frame (stage Create), and
+            // false once it is over -- which is what retires the curve.
+            if (ed::BeginCreate(ImVec4(0.0f, 0.0f, 0.0f, 0.0f), kGraphWireThickness))
+            {
+                ed::PinId aId, bId;
+                if (ed::QueryNewLink(&aId, &bId))
+                {
+                    // Dragged onto another PIN. This lens never AUTHORS a
+                    // reference -- the graph is a projection of the reference
+                    // index, and a reference is made by editing an asset, not
+                    // by dragging a wire -- so the link is refused outright.
+                    // `aId` is always the DRAGGED pin (DragStart fills
+                    // m_LinkStart; DropPin only ever fills m_LinkEnd).
+                    noteDragSource(aId.Get());
+                    ed::RejectNewItem();
+                }
+                else if (ed::QueryNewNode(&aId))
+                {
+                    // Dragged over EMPTY canvas. True on every frame of the
+                    // drag; AcceptNewItem returns true only on the RELEASE
+                    // frame (CreateItemAction::AcceptItem answers True only in
+                    // the Create stage), which is the one frame that stashes.
+                    noteDragSource(aId.Get());
+                    const std::size_t i = pinNodeIndex(aId.Get());
+                    if (i == nodes.size() || nodes[i].isOverflow)
+                    {
+                        // Nothing to derive FROM: an overflow companion's guid
+                        // aliases its anchor's, and an id nodeIndexOf refused
+                        // is either out of range or from a previous build. A
+                        // rebuild that lands exactly on the release frame
+                        // therefore CANCELS the gesture rather than deriving
+                        // from a stranger.
+                        ed::RejectNewItem();
+                    }
+                    else if (ed::AcceptNewItem())
+                    {
+                        const AssetPanelEntry* src = model.Find(nodes[i].guid);
+                        state.graphWireGuid = nodes[i].guid;
+                        // Derivable = a live MATERIAL, dragged off its
+                        // DEPENDENTS pin. A tombstone has no entry, so it
+                        // fails this by construction.
+                        state.graphWireDerivable = isRightPin(aId.Get()) && src &&
+                                                   src->kind == AssetKind::Material;
+                        wireCreateRequest = true;
+                    }
+                }
+                // NO `else`: the pointer is over a NODE BODY, where the library
+                // reports neither query. The drag is still live and
+                // `graphDragGuid` still names its source, which is exactly why
+                // that source is session state -- see its declaration.
+            }
+            else
+            {
+                // No create action at all: whatever drag there was is over
+                // (released, cancelled, or consumed by the accept above one
+                // frame ago). Retire the curve.
+                state.graphDragGuid  = Arcane::Guid{};
+                state.graphDragRight = false;
+            }
+            // UNCONDITIONAL -- see this function's header comment and
+            // ShaderEditorDocument.cpp:5559-5561. Nothing between BeginCreate
+            // and here returns, breaks or throws: the block above is a plain
+            // if/else-if chain over library calls.
+            ed::EndCreate();
+
+            // The in-flight curve, drawn AFTER EndCreate so it is back in
+            // CANVAS space: QueryNewLink/QueryNewNode suspend the editor into
+            // global (screen) space to answer, and CreateItemAction::End
+            // resumes it. Which also means ImGui's mouse position is the
+            // canvas-space one again out here -- the same space the pin pivots
+            // below are in.
+            //
+            // The SOURCE is re-resolved from its guid through THIS build's
+            // index map, so a rebuild mid-drag re-anchors the curve on the
+            // node's new position instead of aiming it at whatever now sits at
+            // an old index -- and a source that the rebuild dropped entirely
+            // simply stops drawing.
+            if (state.graphDragGuid.IsValid())
+            {
+                if (const auto it = indexOfGuid.find(state.graphDragGuid);
+                    it != indexOfGuid.end())
+                {
+                    const GraphNodeVisual& wv = visuals[it->second];
+                    const bool right = state.graphDragRight;
+                    const ImVec2 pivot(right ? wv.pos.x + wv.width : wv.pos.x,
+                                       wv.pos.y + wv.height * 0.5f);
+                    const ImVec2 tip = ImGui::GetMousePos();
+                    // Orientation matters: GraphWireControlPoints assumes p0
+                    // leaves rightward and p3 arrives leftward (the style's
+                    // SourceDirection/TargetDirection). A right-pin drag LEAVES
+                    // the pin; a left-pin drag ARRIVES at it. The board's path
+                    // (`M230,330 C320,330 390,402 462,402`) is the former.
+                    DrawGraphDashedWire(right ? pivot : tip, right ? tip : pivot,
+                                        Theme::kAmber, kGraphWireThickness, viewScale);
+                    DrawGraphWireEndDot(tip, Theme::kAmber);
+                }
+            }
+
             // ---- 8. Interactions (Task 4) ---------------------------------
             // THE SELECTION AUTHORITY IS THE MODEL. The canvas keeps its own
             // selection set (it has to -- it draws the 2px selected border and
@@ -4153,10 +4594,78 @@ namespace Arcane::Editor
                         ImGui::CloseCurrentPopup();
                     ImGui::EndPopup();
                 }
+
+                // 8f. Task 6's ghost menu, opened in this SAME Suspend
+                // bracket the shader editor opens its own wire-create popup
+                // in (ShaderEditorDocument.cpp:4019-4038 -- one bracket, both
+                // popups). ImGui records the popup's position from the mouse
+                // AT OpenPopup TIME, and out here that is the SCREEN mouse,
+                // which is why the menu lands at the drag's release point (the
+                // board's `left: 474px; top: 380px` beside the curve's
+                // `462,402` end) with no explicit placement call.
+                if (wireCreateRequest)
+                    ImGui::OpenPopup(kGraphCreateMenuId);
+                if (ImGui::BeginPopup(kGraphCreateMenuId))
+                {
+                    menuOpen = true;
+                    // Generation-proof for the same reason the node menu is:
+                    // it re-reads a stashed GUID, never the pin id it came
+                    // from. If the asset went away underneath an open menu
+                    // (deleted on disk, a rebuild dropped it) the entry simply
+                    // goes dead rather than promising a parent that is gone.
+                    //
+                    // DISABLED, not CLOSED -- deliberately unlike 8e's node
+                    // menu. That one draws a whole list of per-asset actions
+                    // that would all be meaningless, so closing is the honest
+                    // answer; this one has a single entry whose disabled state
+                    // already says exactly that. It is also the state a
+                    // TOMBSTONE source lands in (no entry, by definition), and
+                    // "cannot derive from this" reads better there than a menu
+                    // that flashes up and vanishes.
+                    const AssetPanelEntry* src = model.Find(state.graphWireGuid);
+                    ImGui::BeginDisabled(!src || !state.graphWireDerivable);
+                    // ONE entry, DISABLED rather than hidden when the drag did
+                    // not come off a material's dependents pin: the gesture
+                    // stays discoverable everywhere it is possible to make it,
+                    // and says plainly that this particular source cannot
+                    // answer it. (The board's second entry, "Assign to
+                    // selection", is a different feature and not in this
+                    // plan's scope -- deliberately not invented here.)
+                    if (ImGui::MenuItem(ICON_LC_LAYERS " Derive Instance\xE2\x80\xA6"))
+                    {
+                        // THE FIRST REAL PRODUCER of the createPrefillParent
+                        // limb. Routed through the ONE unified-create request
+                        // every other creation path uses (spec §7: "no
+                        // creation path may bypass CreateAssetRequest") --
+                        // EditorAppFrame.cpp:2328-2334 turns the pair into
+                        // BeginCreateAsset({MaterialInstance, parent}), whose
+                        // MaterialInstance arm (:2490-2499) lands the guid in
+                        // the dialog's `parent` field and leaves the picker
+                        // CLOSED because the parent is already known.
+                        //
+                        // The kind is a CreateAssetKind, per the field's own
+                        // contract -- and it is MaterialInstance outright, not
+                        // a bridged source kind: CreateKindForAssetKind maps a
+                        // material to CreateAssetKind::Material (the thing the
+                        // source IS), while this entry creates the thing that
+                        // DERIVES from it.
+                        actions.requestCreateKind =
+                            static_cast<int>(CreateAssetKind::MaterialInstance);
+                        actions.createPrefillParent = state.graphWireGuid;
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::EndPopup();
+                }
             }
 
             ed::End();
             ed::SetCurrentEditor(nullptr);
+
+            // ---- The canvas legend (Task 6, controller rider) -------------
+            // AFTER ed::End, so it is chrome in SCREEN space: it does not pan,
+            // zoom, or sort against the nodes. See DrawGraphLegend for the
+            // board transcription and the two flagged mismatches.
+            DrawGraphLegend(canvasMin, canvasSize);
 
             // ---- 9. The peek tooltip (Task 4, plan ruling 14) -------------
             // WHERE it landed, and why HERE:
@@ -4190,8 +4699,9 @@ namespace Arcane::Editor
             //
             // Overflow companions, tombstones and a rebuild frame's
             // previous-generation ids get no peek (entryForNodeId), and
-            // neither does a node whose own context menu is up: the peek and
-            // the menu are two answers to one hover, and ImGui would stack
+            // neither does a node while EITHER canvas popup is up -- its own
+            // context menu (8e) or Task 6's ghost create menu (8f): the peek
+            // and the menu are two answers to one hover, and ImGui would stack
             // them at the same mouse position. Tracked through `menuOpen`
             // rather than IsPopupOpen because the popup's id was hashed
             // against the ID stack ed::Begin pushes, which is gone by here.
@@ -4288,6 +4798,13 @@ namespace Arcane::Editor
         state.graphMenuGuid = Arcane::Guid{};
         state.graphHoverGuid = Arcane::Guid{};
         state.graphHoverSeconds = 0.0f;
+        // Task 6's gesture stash goes with them, and for the same reason: it
+        // names an asset of the OUTGOING project, and the popup it feeds is
+        // closed by the context's destruction anyway.
+        state.graphWireGuid = Arcane::Guid{};
+        state.graphWireDerivable = false;
+        state.graphDragGuid = Arcane::Guid{};
+        state.graphDragRight = false;
     }
 
     AssetsPanelActions DrawAssetsPanel(AssetsPanelState& state, AssetPanelModel& model,
