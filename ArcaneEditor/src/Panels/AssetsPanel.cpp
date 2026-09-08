@@ -2900,18 +2900,46 @@ namespace Arcane::Editor
         // ghost/overflow body wash and the un-emphasized wire dim all pull
         // TOWARD this colour, so moving it moves them coherently.
         //
-        // Node body/title/border stay the shader editor's canvas constants,
-        // so both canvases in this editor keep reading as the same material.
-        // The ruling covered the canvas surface only -- see the Task 5 fix
-        // report for the measured consequence (the editor's body/band now sit
-        // further above the canvas than the board's do) and why extending the
-        // change to them was left as a separate decision.
+        // FOLLOW-UP RULING (same session): the redline authority covers the
+        // node-over-canvas RELATIONSHIPS too, not the canvas alone. Moving the
+        // canvas by itself had left the nodes reading as more RAISED than the
+        // board's -- measured: board 18 -> band 25 (+7) -> body 30 (+12),
+        // against this lens's 18 -> 35 (+17) -> 45 (+27).
+        //
+        // So the three node surfaces below are the BOARD's, read out of
+        // `OptionD.dc.html`'s own CSS rather than sampled off the render:
+        //     .node  { background: #1e1e1e; border: 1px solid #0d0d0d; }
+        //     .nhead { background: #191919; }
+        // and every one has an EXACT EditorTheme token -- the same happy
+        // accident kWell was for the canvas -- so all three are spelled as
+        // TOKENS, never as literals that would drift off the ramp later:
+        //     #1e1e1e = Theme::kPanel  (0.118f)
+        //     #191919 = Theme::kChrome (0.098f)
+        //     #0d0d0d = Theme::kBorder (0.051f)
+        // kBorder landing DARKER than the canvas it outlines is not an
+        // oversight: that is the token's stated job ("kBorder is DARKER than
+        // every surface it outlines" -- EditorTheme.hpp), and the board draws
+        // exactly this (#0d0d0d hairline on a #121212 field).
+        //
+        // LENS-LOCAL, deliberately. These are this file's own constants
+        // feeding this lens's own ApplyAssetGraphCanvasStyle; the SHADER
+        // editor's shared canvas constants are UNTOUCHED, so the ruling moves
+        // the Graph lens onto its board without dragging a second canvas --
+        // which has its own board, its own review history and no such ruling
+        // -- along with it. The accepted cost is that the editor's two
+        // canvases no longer read as identically-toned material; recorded here
+        // so it reads as a decision rather than as drift.
+        //
+        // NOT covered by either ruling, so NOT changed: the grid colours below
+        // (the board's single dot grid is #242424; this lens keeps its
+        // minor/major two-tier grid) and the pill/label colours. See the fix
+        // report.
         constexpr ImVec4 kGraphCanvasColor    = Theme::kWell;                          // #121212
         constexpr ImVec4 kGraphGridMinorColor = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
         constexpr ImVec4 kGraphGridMajorColor = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
-        constexpr ImVec4 kGraphNodeBodyColor  = ImVec4(0.176f, 0.176f, 0.188f, 1.0f);  // #2d2d30
-        constexpr ImVec4 kGraphNodeTitleColor = ImVec4(0.137f, 0.137f, 0.149f, 1.0f);  // #232326
-        constexpr ImVec4 kGraphNodeBorder     = ImVec4(0.243f, 0.243f, 0.267f, 1.0f);
+        constexpr ImVec4 kGraphNodeBodyColor  = Theme::kPanel;                         // #1e1e1e
+        constexpr ImVec4 kGraphNodeTitleColor = Theme::kChrome;                        // #191919
+        constexpr ImVec4 kGraphNodeBorder     = Theme::kBorder;                        // #0d0d0d
         // Selection amber / hover cyan: the editor-wide outline language
         // (ShaderEditorDocument.cpp:246-250, itself the viewport outline
         // composite's kSelectColor/kHoverColor).
