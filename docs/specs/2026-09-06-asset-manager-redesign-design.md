@@ -1296,3 +1296,428 @@ cut got wrong. All three landed in a second commit; the design is unchanged.
    add one, and that is the host's cost to account for, not a break of the rule. The
    call-count test is unchanged and still green — it pins the model, which is what the
    invariant is about.
+
+## 19. LANDED (Plan 3) — 2026-09-08
+
+Plan 3 landed on Arcane `main` in place, **`0dabb8a9..d7a17aab`** (the plan commit
+plus Tasks 1–6), plus this task's re-bless (`27135ad0`) and the gate + baselines
+catch-up commit. Plan file:
+`docs/plans/2026-09-08-asset-manager-plan3-graph.md`. **Not pushed** — held for the
+user's desk pass, per house convention. **No ABI bump** (23 stands): Plan 3 is
+editor-side, and the riders touched engine code only as a behavior bugfix and a
+header-only predicate share.
+
+### Scope landed
+
+§10 the **Graph lens**, complete and ENABLED — the lens mask goes `0b111` and the
+one-panel/three-lens design of §2 is closed.
+
+**`AssetGraphViewModel`** (new, editor-pure, headless-testable) projects
+`AssetPanelModel::Entries()` + `RefIndex()` into nodes/edges/layers. Deliberately
+model-type-free: `GraphBuildInput` takes the entries map and the index **by
+pointer**, so its unit tests never construct an `AssetPanelModel`. Scoping is
+§10's revised UE-shaped model: default focus = boot scene, BFS depth ≤ 2 from the
+focus in **both** directions, per-node breadth cap ~20 with a synthetic "+N more"
+overflow node per truncated side, `DerivesFrom` sorted before `References` so the
+cut drops the least interesting links, and "everything" = no depth cut with the
+breadth caps still applied. Layout is layered left→right by dependency depth
+(layer = longest **outbound** path to a leaf, so sources sit left and scenes
+right), computed every build, never persisted, no physics.
+
+**The canvas is `ax::NodeEditor`** — spec §10's "reuses the shader editor's canvas
+vocabulary" IS that library, and pin-drag creation is its shipped, desk-debugged
+gesture. All `ed::` usage is lens-local in `AssetsPanel.cpp`; the graph-framework
+extraction stays deferred (standing user directive, 2026-07-24). The shader
+editor's idioms carried over: `GraphGridPhase` for the grid, the hand-drawn header
+band, `DrawPinDot`-style pins, and the two-layer transparent-`ed::Link` +
+hand-drawn-bezier trick that per-kind edge color, mid-edge labels, selected-node
+edge brightening and tombstone-edge styling all depend on. The **dashed in-flight
+bezier** is the arc's one new draw technique (`CubicBezierAt` + an on/off
+arc-length phase accumulator); `ed::Flow`'s marching dots were not used.
+
+**Interactions** (§8 on graph surfaces): a two-way selection bridge on the Graph
+lens's **own** selection stamp, the shared peek tooltip with a Graph-only
+edge-summary addition, edge brightening on the selected node's own edges,
+double-click opens, and a right-click context menu at parity with the row menus.
+**Focus UI**: a `focus:` combo in the toolbar and the bottom bar's "N of M assets ·
+focus: X". **Focus in Graph** on the Status lens's Scenes rollup — the only
+reserved digest→Graph deep-link — is now live rather than disabled.
+
+**Pin-drag `Derive Instance…`** ships as §10 binds and as the Demo board's vignette
+draws it: dragging off a **material's** dependents pin opens a ghost menu whose one
+entry produces a **pre-parented** `CreateAssetRequest` — the FIRST real producer of
+the `createPrefillParent` limb, routed through the one unified-create request §7
+requires. "Assign to selection" stays deferred (§15).
+
+A **riders** task (Task 1) paid recorded debt alongside: the EditorLock **zombie**
+fix (a desk-found, twice-blocking defect — a lock held by an exited process now
+reads stale, from the `exited` FILETIME `GetProcessTimes` already returned, even
+while an open handle keeps the pid reserved), the `{hi,lo}` guid-shape predicate
+share, the index self-reference characterization test, the boot-guid parse hoist
+(`BootSceneGuid(project)` — Plan 3 would have been its third copy), the redundant
+premake test-TU line, and the `kStatusPillLineHeight` duplicate.
+
+### Measured close
+
+Three-config **rebuild** of `Arcane.slnx`, **0 warnings / 0 errors** in Debug,
+Release and Dist. Suite counts DERIVED — each pasted from its own run's final line,
+`ArcaneTests.exe "~[gpu]"` run FROM the exe directory:
+
+| Configuration | `~[gpu]` | seed |
+|---|---|---|
+| Debug | 55294 assertions / 1522 cases | 455517866 |
+| Release | 55294 / 1522 | 1081318073 |
+| Dist | 55226 / 1516 | 1920384428 |
+
+The constant Dist gap (the pre-existing `#if !defined(ARCANE_DIST)` guards in
+`HostConfigTest.cpp` and `NriDiagnosticsTest.cpp`) still measures exactly **68
+assertions / 6 cases**: 55294 − 55226 = 68, 1522 − 1516 = 6. One **unfiltered**
+Debug run: **117568 assertions / 1555 cases**, seed 3158019304, all passing — so
+`[gpu]` contributes 117568 − 55294 = 62274 assertions and 1555 − 1522 = **33**
+cases, both stated from measurement. That unfiltered run is also the only suite
+that launches a real host, and its two `[witness][gpu]` scenarios were green
+first time — the independent confirmation that `ReferenceProject/Binaries/` is not
+stale, which is the failure Plan 2's ABI restamp produced at its own close and
+which no bump this plan could reproduce.
+
+`scripts/automation-baselines.json` re-derived: **+383 assertions / +12 cases** in
+every configuration, booked in **two separate components** so the riders' coverage
+is not credited to the lens.
+
+- **(a) The riders** (Task 1, `0dabb8a9..161bbad0`): **+12 / +2** — `ProjectTest`
+  21 → 22 (the EditorLock zombie case, 6 assertions) and `AssetReferenceIndexTest`
+  9 → 10 (the self-reference case, 6 assertions).
+- **(b) The Graph lens** (Tasks 2–6, `161bbad0..d7a17aab`): **+371 / +10** — two
+  NEW suites, `AssetGraphViewModelTest` (9 cases / 303 assertions) and
+  `AssetsGraphCanvasTest` (**1** case / 68 assertions — one `[graphcanvas]` case
+  that grew across Tasks 3/4/5/6 by SECTIONs rather than by cases).
+
+The split rests on two independent grounds, either sufficient alone: **(i)** this
+close's own per-case JSON — the 12 new cases sum to exactly 383, and
+54911 + 12 + 371 = 55294 reproduces the measured total to the assertion; **(ii)** a
+run taken AT the split point — Task 1's own `~[gpu]` Debug run at `161bbad0`
+measured 54923 / 1512 (seed 2641303502), and 54911 + 12 = 54923. Nothing was added
+to a pre-existing case: `git diff --stat 0a02c101..d7a17aab -- ArcaneTests/src`
+touches exactly four files for 1248 insertions and **zero** deletions, and the
+per-case sum accounts for the whole rise. Raw `TEST_CASE` count in `ArcaneTests/src`
+rose 1543 → 1555 (+12) and `~[gpu]` cases rose by exactly the same +12, so all 12
+fall inside the filter and Plan 3 added no GPU coverage; the identity
+`raw TEST_CASE − 33 = ~[gpu] cases` holds at both points. Verified against the
+file's real consumer: `check-baselines.ps1` reports **+0 on both metrics, exit 0**,
+for all three configurations — not Debug alone.
+
+**Golden gate**, Debug, both hosts × both backends, asserted from
+`golden-gate-summary.json` only: `gatePassed: true`, four lanes, zero red —
+`ArcaneRuntime/dx12` `PassedOnFallback` (its documented steady state), the other
+three `Passed`, all four at `diffCount=0`.
+
+**Gate self-test**, `golden-gate.ps1 -SelfTest`, Debug: **PASSED** — `selfTest:
+true`, `gatePassed: false`, all four lanes caught the deliberately broken scene by
+`exitReason=compare-failed` (runtime lanes 11799 differing pixels, editor lanes
+4080), and the tree restored clean afterwards (`git status --porcelain --
+ReferenceProject` empty). So the green above comes from a gate observed *failing*
+on this tree. An ordinary gate run *after* the self-test then came back
+`gatePassed: true` on all four lanes again — which is what proves the restore
+actually restored, rather than leaving the green resting on a run taken before the
+mutation.
+
+**The editor-ui re-bless** was expected and legitimate: the lane diffed against a
+Browse+Status toolbar in which the Graph button was still disabled-dim. Before
+blessing, the diff artifact was read — and copied into the SDD workspace first,
+since the gate deletes per-lane artifacts on its next run. The differing pixels
+(**1104**, and the two backends' diff PNGs are **byte-identical**, md5
+`e60393e9…`) form exactly **one solid rectangle**, `x[717..762] y[570..593]` — the
+lens strip's Graph button, immediately left of the Status button Plan 2 measured
+at `x[763..809] y[570..593]`, in the same y band. 46 × 24 = 1104 = the reported
+`diffCount` exactly, which is what proves the marked set **is** that button and
+that **zero** marked pixels fall anywhere else — verified programmatically over the
+diff PNG, not only by eye. Nothing from Tasks 5/6 leaks in, and that is the
+expected result rather than a lucky one: the canvas/node tone overrides, the focus
+combo, the legend and the pin-drag affordances all render only *under* the Graph
+lens, which the golden scene does not show. `--bless` was pointed at the **source**
+tree, dx12, `exitReason=compare-blessed`, then restaged to **both** hosts with all
+13 `Verify/` files md5-verified identical across source and both staged copies. The
+vulkan lane then passed `diffCount=0` against the dx12-blessed **shared**
+reference, which re-proves editor-ui backend-invariant rather than assuming it.
+
+### Deviations and rulings recorded during execution
+
+1. **Pin direction: the plan's parenthetical is corrected.** The plan wrote the
+   node's pins the other way round. As shipped, the **LEFT pin is the node's
+   OUTBOUND side** (its references / "what I use") and the **RIGHT pin is its
+   INBOUND side** (its referencers / "who uses me"). This is geometrically forced,
+   not a preference: `layer` is the longest *outbound* path to a leaf, so a target
+   always sits in a lower column than its referencer, and the library's curve
+   convention has a link leave its start pin along `(+1,0)` and arrive at its end
+   pin along `(−1,0)` — so a wire must start at the left node's **right** pin and
+   end at the right node's **left** pin. Hence right pins are `ed::PinKind::Output`
+   and left pins are `Input`. The board agrees: `uv_marker.png`, a pure target,
+   carries a right-hand pin only; `main.arcscene`, a pure referencer, a left-hand
+   pin only. **Vocabulary hazard, recorded so it is never re-litigated by words
+   alone:** "outbound pins right / inbound left" and "left pin = outbound refs"
+   describe the SAME geometry in different frames (wire-flow direction vs
+   node-reference direction). State it geometrically. The consequence that matters:
+   drag-to-derive off a material creates a new **dependent**, so it comes off the
+   material's **RIGHT** pin — confirmed on both boards before Task 6 wired it.
+2. **The overflow-node contract, pinned harder than the plan pinned it.** A review
+   found that edges dropped by the *veto* path (culled endpoint) had no overflow
+   accounting, which left orphan nodes and let "+N more" double-represent nodes that
+   were visible anyway. Ruled: **every undrawn candidate edge counts into BOTH
+   endpoints' per-direction overflow** (or into the present side only, when the
+   other endpoint is culled), for either reason a candidate can fail — the node's own
+   breadth cap or the veto. "+N more" therefore means **"N undrawn connections on
+   this node's side, in this direction"**, documented in the header
+   (`AssetGraphViewModel.hpp`), never "N hidden nodes". §10 forbids silent
+   truncation; suppressing the overflow node would reintroduce it, and one-sided
+   accounting would leave unexplained orphans. Accepted cost: overflow-node clutter
+   in dense graphs.
+3. **An overflow node carries `AssetKind::Other`, ALWAYS** — never the anchor's own
+   kind. Kind drives the accent color and icon, and a "+5 more" standing for sprites
+   must not wear the anchor's texture hue. Part of the same contract, not a minor.
+4. **`realNodeCount` (ruling 12's N) excludes overflow nodes AND tombstones.** The
+   plan's ruling named only the synthetic overflow nodes; the implementer extended
+   it and the extension was adopted — ruling 12's N is "real **asset** nodes", and a
+   tombstone is not an asset (nor is it inside M = `health.total`). Note the header
+   carries two different "real"s on purpose and says so: `edges` are between
+   non-overflow nodes and DO include tombstones (ruling 11 wants a dangling
+   reference's edge to have pixels), while `realNodeCount` excludes both.
+5. **Overflow nodes are INERT to per-node interactions in v1.** Their guid aliases
+   the anchor's, so a select/tooltip/open bridge would silently act on the anchor;
+   and expanding them is deliberately-unspecified canvas territory that was not
+   invented here. **Tombstones** are naturally excluded from the entry-based context
+   menu and double-click (there is no entry), and the peek tooltip is inert on them
+   too — the ruling's second option, taken because the helper cannot honestly render
+   a peek from index data alone. Both are affordance-shaped things that do nothing;
+   the desk checklist says to expect it.
+6. **§11.1's "shared `EditorWidgets` layer" yields for the Plan-3 widget row.** The
+   graph node / pin / dashed-bezier helpers live **lens-local in `AssetsPanel.cpp`**,
+   not in `EditorWidgets`. `CanvasPopupScope.hpp:16-19` is an explicit refusal to
+   couple shared widget headers to `imgui_node_editor.h`, and that no-coupling
+   precedent is the stronger authority; hoisting these helpers would drag the node
+   editor into every widget consumer's include graph for one caller. §11.1's table
+   row is left as written and this paragraph is the correction. Cost if wrong: a
+   later second graph consumer re-hoists them.
+7. **The canvas surface takes the BOARD's tone, not the plan's pin.** The plan
+   pinned `Theme::kPanel` from the shader editor's `kCanvasColor` precedent; the
+   board draws `#121212`. §11's mocks-are-redline is the higher authority — the plan
+   itself appointed the render comparison as arbiter — so the canvas is
+   **`Theme::kWell`** (`#121212`, an exact token match, no literal).
+8. **…and so do the node tones, lens-locally.** Darkening only the canvas broke the
+   board's node-over-canvas *relationships* (+17/+27 where the board steps +7/+12),
+   and redline authority covers relationships, not one surface. Measured from
+   `OptionD.dc.html`'s own CSS rather than sampled from an AA-contaminated render:
+   node body `#1e1e1e` → **`Theme::kPanel`**, title band `#191919` →
+   **`Theme::kChrome`**, border `#0d0d0d` → **`Theme::kBorder`**. Four board colours,
+   four exact tokens, zero literals; canvas → band → body now steps +7/+12 exactly as
+   the board does. **The shader editor's shared canvas constants are untouched** —
+   that canvas has its own board and its own review history and no such ruling.
+   Accepted and written into the code comment rather than left to be discovered: the
+   editor's two canvases no longer read as identically-toned material.
+9. **Where the brief's strings and the board's strings disagreed, the BOARD won.**
+   The toolbar combo previews `focus: <name>` (the brief had no prefix) and the
+   bottom bar reads `N of M assets · focus: X` (the brief's format string was missing
+   the word "assets"). Both transcribed from `OptionD.dc.html`, both checked against
+   the §5/§18 unified bottom-bar contract for contradiction — there is none. One
+   board detail is **not** expressible and was raised rather than faked: the board
+   renders the `focus:` prefix in a dimmer tone than the value, which `BeginCombo`'s
+   single-string preview cannot do; the combo ships single-tone.
+10. **The bottom bar never fabricates N.** Review finding: the Status lens's **Focus
+    in Graph** button flips `state.lens` from *inside* the already-dispatched Status
+    body, so `DrawGraphLens` does not run that frame at all — yet the bar, which runs
+    after the body, already reads the new lens and would have paired the previous
+    build's `realNodeCount` (often 0, if the lens was never opened) with the new focus
+    name. N is now printed only when `AssetsGraphProjectionIsCurrent(state, model)`
+    holds; otherwise the bar prints an **em dash**, per §13's "the digest never renders
+    an unknown as a zero". Self-corrects on the following frame. The predicate is
+    exported from the header rather than spelled inline at the call site, so the canvas
+    test asks the panel's own question instead of a mirror of it.
+11. **`CreateKindForAssetKind` was the wrong bridge for the pin-drag entry — a brief
+    defect, correctly deviated from.** The brief said to map the source asset's kind
+    through `CreateKindForAssetKind`; that maps `Material` → `CreateAssetKind::Material`,
+    which would have opened an unparented **Create Material** dialog instead of deriving
+    an instance. The entry creates the thing that DERIVES from the source, so it names
+    `CreateAssetKind::MaterialInstance` outright and sets `createPrefillParent` to the
+    source guid. (The bridge itself is correct and stays in use at the rail's `+`, where
+    the caller *does* want "the thing the source IS".)
+12. **A material's right pin is drawn always, not only when something depends on it.**
+    A pure-source material with zero dependents would otherwise have no pin to drag
+    from, and the gesture is the lens's headline behavior. Board-supported: the Demo
+    vignette shows exactly that lone right-hand pin with its amber glow.
+13. **The ghost menu's entry is DISABLED, never hidden**, when the drag did not come
+    off a material's dependents pin — a menu that flashes up and vanishes reads as a
+    bug; "cannot derive from this" reads as an answer. A tombstone source fails the
+    same test by construction (no entry).
+14. **Graph nodes are NOT `ARCANE_ASSET` drag sources in v1** (plan ruling 3, shipped
+    as ruled). The canvas owns four drag gestures already — pan, box-select, node
+    reposition, pin-drag-create — and an ImGui drag-drop source stacked on nodes fights
+    all four. §8's drag clause is satisfied by every other representation of an asset.
+    Right-click and double-click DO apply to nodes; they do not conflict.
+15. **Node repositioning is transient by design** (plan ruling 2). `ed::Config::SettingsFile`
+    is `nullptr` — the library would otherwise write a settings json beside the exe, a
+    silent new artifact — and positions are re-written from the computed layout on every
+    rebuild. Dragging a node therefore **snaps back** on the next model rebuild. Recorded
+    as intended behavior so nobody files it.
+16. **Tombstone nodes render** (plan ruling 11, shipped): a `RefIndex()` node with
+    `exists == false` and a non-empty inbound set draws as a ghost — dim body, amber
+    border accent, short-guid name, "missing" pill. This is what finally gives §9.1's
+    dangling-reference story pixels, in the Graph lens's own vocabulary rather than as a
+    Status card nobody designed.
+17. **The legend is a Task-6 rider, and its copy departs from the board twice.** The
+    board's bottom-left legend was transcribed board-exact in geometry (18×2 swatches,
+    6-on/5-off dash, `#5c5c5c`/`#4a4a4a`/`#ffa61a`, 12px inset) but two strings were
+    ruled to follow the lens instead: **"used by" → "uses"** (spec §10 and ruling 9 pin
+    `References` → "uses", and that is what this lens's own mid-edge labels say — a
+    legend contradicting its own graph is worse than no legend), and **"drag a pin =
+    create" → "drag a material pin = derive"** (every non-material pin refuses the
+    gesture, and "derive" is the word the entry itself uses). **Standing mismatch, left
+    for the desk pass:** the board's first two swatches are two GREYS, while the graph
+    draws edges in per-kind color. They were kept as transcribed on the reading that
+    they say "a line", not "this color means this" — but the user arbitrates.
+18. **Edge display labels** (plan ruling 9, shipped): `DerivesFrom` → "derives";
+    `References` → "uses", except a **material-kind source's** `References` edges →
+    "samples", which is a display label derived from the source asset's kind, not a
+    third `AssetRefKind`. Edge color keys off `e.from` (the graph-semantic source).
+19. **Column pitch 300, not the brief's ~260.** Board-measured actual pitches were
+    290 and 330; the brief's figure was a tuning start, and the render comparison —
+    which the plan appointed as the arbiter — accepted 300.
+20. **Ruling 14 resolved by verification, not by guess.** The in-canvas peek tooltip is
+    drawn **after `ed::End()` + `SetCurrentEditor(nullptr)`**, keyed off a
+    `GetHoveredNode()` captured post-`Begin`, with `forceShow` and a dwell. Verified
+    against the vendored library's own source rather than asserted.
+21. **The `ed::` context never leaks across a project switch.** It is destroyed beside
+    the model's `ResetForProjectSwitch` seam, and both destroy seams were confirmed to be
+    the only two. Task 6's gesture stash (`graphWireGuid` / `graphWireDerivable`) is
+    cleared there for the same reason: it names an asset of the outgoing project.
+22. **The Graph lens gets its OWN selection stamp** (`seenSelectionStampGraph`, plan
+    ruling 4). The existing shared field has Browse as its only consumer; a second
+    consumer on it would swallow the other's pending scroll/center. Browse's field and
+    idiom are untouched.
+23. **Kind colors are a panel-local table** (plan ruling 5), in `AssetsPanel.cpp`'s
+    anonymous namespace: `EditorTheme.hpp` rules domain color-coding out of the theme,
+    and the `kPillAmberBorder` precedent covers spec-pinned hexes with no token.
+24. **`AssetsPanel.cpp` is now compiled into `ArcaneTests`.** The link closed with that
+    one TU alone — the preflight's worry about dragging half the editor in did not
+    materialize, since `DocumentHost`/`EditorWidgets`/`EditorFonts`/`AssetPanelModel`/
+    `AssetReferenceIndex`/`AssetActivityLog` were already there and `CreateAssetDialog`'s
+    half of the surface is header-only. Precedent for compiling a DRAW TU into the tests
+    is `ShaderEditorDocument.cpp`, and the reason is the same: the node-editor canvas only
+    runs inside a live ImGui frame, so no pure unit can stand in for it. This retires
+    §18's "`AssetsPanel.cpp` is not compiled into `ArcaneTests`" — see the dated
+    corrections below.
+
+### Verification technique, and what it could not reach
+
+The lens is verified on three legs. **(1)** The pure view model, nine `[editor]` cases.
+**(2)** A device-less `[graphcanvas]` case that drives the REAL `DrawAssetsPanel` through
+four ImGui frames with the Graph lens forced on — the harness class that caught the shader
+editor's frame-2 `EndCreate` abort. **(3)** Headless `--screenshot` render comparisons
+against `OptionD-Graph-FINAL.png`, structural per §11.2, never a pixel diff.
+
+Two **negative controls** worth recording because they proved live folklore rather than
+repeating it: making `EndCreate` conditional **aborts** the suite on frame 2
+(`imgui_node_editor.cpp:4756`, exit 3) — the unconditional-`EndCreate` rule is now
+observed, not inherited; and disabling the rebuild guard reproduces the exact
+renumbering failure it exists to prevent. A separate lesson was captured when the FIRST
+determinism witness passed its own control: `SkipItems` guts submission without firing
+the region guard, so that harness now carries two witnesses.
+
+**What no machine run reached.** The pin-drag gesture was never executed end-to-end:
+there is no headless drag injection, so the consumer limb is traced structurally and the
+identical `BeginCreateAsset` arm is exercised by the shipped New Instance action, but the
+one hop from "menu entry clicked" to "dialog opens pre-parented and the new instance
+lands selected" is **desk-checklist territory** and is listed there. Likewise the
+**capture framing**: the Graph captures in the SDD workspace were taken with a temporary
+lens default and a temporary *staged* `verify-layout.ini` edit, both reverted and
+re-proven clean — no committed Graph-capture layout seed was added, because that is a
+tracked-file decision the user owns.
+
+### A repo-wide discovery, recorded where it will be found
+
+**Catch2 assertion `file:line` is unreliable in `ArcaneTests` TUs that include
+`<windows.h>`.** Task 1's first RED transcript reported assertion failures at lines 1141
+and 1142 of a 568-line file, which read as a fabricated or hand-edited transcript. It was
+neither: MSVC's **traditional preprocessor** mangles `__LINE__` in those TUs, and the
+effect is pre-existing and file-wide — `ProjectTest.cpp` and `DiagnosticsTest.cpp` are
+affected including cases nobody touched, while `AssetReferenceIndexTest.cpp` is clean. A
+regenerated RED and its GREEN print the **same** impossible numbers, failing then passing,
+which is what rules out different-file-state. `/Zc:preprocessor` is the usual remedy. This
+degrades every future failure transcript out of those files; it is a rider or engine-backlog
+candidate, **not** this plan's scope. Recorded here because a spec addendum is where the
+next person looks.
+
+### Dated corrections to §15 — 2026-09-08
+
+Recorded here rather than by editing §15, so its record still shows what was true when
+written:
+
+- §15's out-of-scope list still stands entirely, with two items now settled *by* Plan 3
+  rather than deferred by it: **"Assign to selection" from graph pin-drag** remains out
+  (§10's "pin-drag v1 offers `Derive Instance…` only" is what shipped, and the entity-slot
+  targeting rules still do not exist); **panel-state persistence across restarts** and
+  **new drag-drop targets** are both re-confirmed by rulings 15 and 14 above — the canvas
+  persists nothing and graph nodes are not drag sources.
+- **§9.1's dangling-reference story now has UI.** §18's deviation 8 recorded that
+  dangling references stayed data-only because §9.2's card inventory did not name a
+  dangling card and none was invented. Plan 3's ruling 11 gives them their natural home:
+  **tombstone ghost nodes in the Graph lens**. `DanglingTargets()` is no longer
+  data-with-no-pixels.
+- **§10's scoping model shipped as specified**, including the parts that were revised
+  after the UE Reference Viewer review: depth limit 2 both directions, per-node breadth
+  cap with "+N more" instead of silent truncation, `DerivesFrom`-first sorting before the
+  cut, and "everything" under the same breadth caps. The one thing §10 did not say, and
+  which this arc had to rule, is what "+N more" *counts* — see deviation 2.
+
+### Dated corrections to §17 and §18 — 2026-09-08
+
+- §18's **"Known desk-only branches"** says "`AssetsPanel.cpp` is not compiled into
+  `ArcaneTests`, so the lens's logic is covered through the pure units and the
+  render/desk comparisons instead". **That is no longer true**: it is compiled in as of
+  `33640bb9` (deviation 24). The *rest* of that paragraph still holds — the refused
+  attention card and the cards' empty states remain inspection-only, because
+  `ReferenceProject` has zero refused artifacts.
+- §18's **measurement asymmetry** paragraph (the `diag://` mount is absent under a
+  headless compare/report run, so the golden reads `8 assets` while an interactive
+  session shows more) is unchanged and applies to this plan's captures for the same
+  reason. It is also why the Graph lens's fixture graph is small: see the desk checklist's
+  note on depth/breadth caps.
+- §17's **"Owed, and deliberately held"** ABI line is unchanged by this plan — Plan 3
+  took **no** bump, so Aphelyon's obligation stays at the third one Plan 2 recorded, and
+  Gacha `main` still stays at `5923da65`. Still recorded, still not blocking, still not to
+  be nagged about.
+- §17's fourth-revision **compact preview header** is still genuinely owed — Plan 3 did
+  not touch the preview pane.
+
+### Deferred, and going to the desk pass
+
+Deliberately not decided at the desk during implementation; the checklist carries each:
+
+- **Grid tone and pill colours** are the last Graph surfaces off the board (board: a
+  single `#242424` dot grid where this lens keeps a minor/major grid; `.pill` is
+  `#9a9a9a` on `#333333`). Both were held rather than retinted: pills are a Plan-1
+  shared widget already desk-passed across all lenses, and the grid is shared canvas
+  language with no §11.2 pin that the shader editor draws from the same phase.
+- **The node body's detail line.** The board shows a real detail line for non-material
+  kinds where this lens draws a kind pill. The content is unspecified, and inventing it
+  would be desk-designing.
+- **The legend's two grey swatches** (deviation 17) and **"New Instance…" vs "Derive
+  Instance…"** — one action wearing two names, both brief-mandated.
+- **The edge summary is two lines**, where the brief said "line".
+- **Dwell survives a lens switch**, so returning to the Graph lens can show an instant
+  peek rather than a fresh dwell.
+
+### Minors deferred with citations
+
+Each has a ledger citation and none blocks: the negative-`breadthCap` clamp at `Build`
+entry; unbounded `ComputeLayer` recursion (deepest tested chain 7); the header's two
+different "real"s wanting a wording pass; duplicate refs to one target with differing
+kinds (nondeterministic edge kind/label plus a doubled cap budget); allocating sort
+comparators if everything-mode ever profiles hot; missing empty/null/absent-focus/
+degree-at-cap boundary cases; `graphCanvas` as an owning raw `void*` on a copyable state
+struct; the tombstone ghost wash dimming the accent bar but not the border;
+`graphMenuGuid`/`graphWireGuid` surviving popup close; `model.Find()` per node per frame
+in the pin loop; the in-flight curve's ≤64 chords at long-drag/low-zoom; the legend's
+missing fit guard; `DrawCreateMenuEntries`' now-unused `enabled` parameter;
+`HoverStationaryDelay` being the semantically wrong knob; `Project.cpp`'s
+`lpExitTime`-for-a-running-process hardening; `IdentityFieldRule.hpp` now pulling
+`<Json.hpp>` for name-rule-only consumers; and `ProjectTest.cpp` launching `cmd.exe`
+through a PATH search rather than `%COMSPEC%`.
