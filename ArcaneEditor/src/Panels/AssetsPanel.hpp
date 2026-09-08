@@ -42,10 +42,11 @@ namespace Arcane::Editor
     // header in the .cpp.
     class AssetActivityLog;
 
-    // Which lens the panel shows. Plan 1 ships Browse only -- Graph (Plan 3)
-    // and Status (Plan 2) exist in the enum and in the toolbar's lens strip
+    // Which lens the panel shows. Plan 1 shipped Browse only -- Graph (Plan 3)
+    // and Status (Plan 2) existed in the enum and in the toolbar's lens strip
     // from day one (layout pinned per spec s5: "later plans enable, nothing
-    // shifts"), but both stay disabled until their own plan lands.
+    // shifts"), each disabled until its own plan landed. All three are live
+    // as of Plan 3 Task 5, and the strip's layout never moved for any of them.
     enum class AssetLens : std::uint8_t { Browse, Graph, Status };
 
     // The preview pane's default width (2026-09-07 follow-up). Lives here,
@@ -122,6 +123,15 @@ namespace Arcane::Editor
         // root to measure from). Task 5 seeds it from the boot scene and
         // adds the toolbar combo that edits it.
         Arcane::Guid graphFocus;
+        // Task 5: has `graphFocus` been seeded from THIS project's boot scene
+        // yet? A separate flag rather than "is graphFocus nil": nil is a
+        // LEGITIMATE user choice (the combo's own "everything" entry), and
+        // re-seeding the boot scene over it on the next frame would make that
+        // entry unpickable. Cleared by DestroyAssetsPanelCanvas -- the panel's
+        // project-switch seam -- so the next project seeds its OWN boot scene.
+        // Only ever set with a project in hand, so a project-less boot does not
+        // burn the seed on a nil manifest.
+        bool graphFocusSeeded = false;
         // Ruling 4: the Graph lens gets its OWN selection stamp -- sharing
         // Browse's `seenSelectionStamp` would let one consumer swallow the
         // other's pending scroll/center. Task 4 is the consumer.

@@ -54,6 +54,33 @@ namespace Arcane::Editor
         // silently collapsed to 0px live.
         constexpr float kToolbarBodyGapPx = 7.0f;
 
+        // Plan 3 Task 5: the width of the toolbar's PER-LENS slot when the
+        // Graph lens fills it with its focus combo (spec s5 -- the slot is
+        // empty on every other lens, so this width leaves the layout too).
+        // A fixed width, not a content-derived one: the search well's flex
+        // math subtracts it BEFORE the combo is drawn, and a label-derived
+        // width would make the search box jump every time the user picked a
+        // differently-named scene. Wide enough for a realistic scene stem
+        // plus the arrow; longer names ellipsize inside the combo rather
+        // than stealing the search well's room. An implementer tuning value
+        // -- s11.2 pins no toolbar-slot width -- same footing as
+        // kStatusRightColumnWidth's own comment below.
+        constexpr float kGraphFocusComboWidth = 170.0f;
+
+        // The Graph lens's "no scope root" label -- spelled ONCE, because
+        // the combo's preview, the combo's own first entry and the bottom
+        // bar's "focus:" clause must all read identically (ruling 6's nil
+        // focus, in words).
+        constexpr const char* kGraphFocusEverything = "everything";
+        // ...and what the same three places say when `graphFocus` names an
+        // asset the model no longer has an entry for -- a scene deleted
+        // while it was the focus. NOT "everything": the projection does not
+        // fall back to everything-mode there (AssetGraphViewModel::Build
+        // either builds a tombstone-rooted view or, for a guid the reference
+        // index cannot explain either, nothing at all), so saying
+        // "everything" would describe a graph that is not on screen.
+        constexpr const char* kGraphFocusMissing = "(missing)";
+
         // The lens strip's three labels, fixed regardless of which plan has
         // landed (spec s5: "Plan 1 ships the full three-button strip ...
         // layout pinned from day one, later plans enable, nothing shifts").
@@ -62,11 +89,16 @@ namespace Arcane::Editor
         // SegmentedStrip's exact parameter type, no cast needed.
         constexpr const char* kLensLabels[] = { "Browse", "Graph", "Status" };
         constexpr int kLensCount = 3;
-        // Bits 0 (Browse) and 2 (Status) -- Status went live with Plan 2
-        // Task 7; Graph (bit 1) stays disabled until Plan 3 lands (spec
-        // s5/s10). The strip's LAYOUT never changed for either: the three
-        // buttons have been drawn since Plan 1, only the mask moves.
-        constexpr unsigned kLensEnabledMask = 0b101u;
+        // All three bits: Browse (0) since Plan 1, Status (2) since Plan 2
+        // Task 7, Graph (1) since Plan 3 Task 5 -- the mask is now saturated
+        // and there is no fourth lens to gate. The strip's LAYOUT never
+        // changed across any of the three: the same three buttons have been
+        // drawn since Plan 1 at the same widths in the same order (spec
+        // s5's "later plans enable, nothing shifts"), and only this mask ever
+        // moved. Kept as a named constant rather than folded away, because
+        // SegmentedStrip's own signature takes one and a future lens would
+        // otherwise have nowhere to say "not yet".
+        constexpr unsigned kLensEnabledMask = 0b111u;
 
         // Task 10 (spec s6/s11.2) fixed geometry.
         constexpr float kRailWidth        = 180.0f;
@@ -325,6 +357,41 @@ namespace Arcane::Editor
                  : Arcane::Guid::Nil();
         }
 
+        // Every Scene entry, name-sorted (ties broken on mount path, so the
+        // order is total even for two scenes with the same stem). Two
+        // consumers: the Status lens's Scenes rollup and the Graph lens's
+        // focus combo -- the same list in the same order in both, which is
+        // exactly what makes "the scene I just saw in Status" findable in the
+        // combo. The sort is over POINTERS into model.Entries(), whose
+        // iteration order is an unordered_map's and therefore not stable
+        // frame-to-frame; sorting is what makes the combo's contents
+        // deterministic at all, not merely tidy.
+        std::vector<const AssetPanelEntry*> ScenesByName(const AssetPanelModel& model)
+        {
+            std::vector<const AssetPanelEntry*> scenes;
+            for (const auto& [guid, entry] : model.Entries())
+                if (entry.kind == AssetKind::Scene)
+                    scenes.push_back(&entry);
+            std::sort(scenes.begin(), scenes.end(),
+                      [](const AssetPanelEntry* a, const AssetPanelEntry* b)
+                      { return a->name != b->name ? a->name < b->name : a->mountPath < b->mountPath; });
+            return scenes;
+        }
+
+        // What the Graph lens's current scope root is CALLED -- the combo's
+        // preview text and the bottom bar's "focus:" clause, one spelling so
+        // the two bands can never disagree about what is on screen. The
+        // returned pointer is either a literal or borrowed from the model's
+        // entry (stable for the frame -- Find()'s own doc comment; nothing
+        // between here and the draw mutates the model).
+        const char* GraphFocusLabel(const AssetPanelModel& model, const Arcane::Guid& focus)
+        {
+            if (!focus.IsValid())
+                return kGraphFocusEverything;
+            const AssetPanelEntry* e = model.Find(focus);
+            return e ? e->name.c_str() : kGraphFocusMissing;
+        }
+
         // Resolve + route a double-click / Enter-open. Copied VERBATIM from
         // AssetBrowser.cpp:162-179's routing: a scene is not a DocumentHost
         // document (it replaces the editing session), so its path comes back
@@ -389,9 +456,9 @@ namespace Arcane::Editor
             ImGui::EndPopup();
         }
 
-        // Toolbar band: + Create -> search (flex) -> [per-lens slot, EMPTY in
-        // Plan 1 -- only Graph's focus combo uses it, Plan 3] -> lens strip
-        // anchored right-most (spec s5). Mutates `state` in place; the
+        // Toolbar band: + Create -> search (flex) -> [per-lens slot: Graph's
+        // focus combo, Plan 3 Task 5; EMPTY on Browse and Status] -> lens
+        // strip anchored right-most (spec s5). Mutates `state` in place; the
         // create popup's entries are LIVE from Task 12 -- they set
         // `actions.requestCreateKind`, which EditorApp routes to the one
         // BeginCreateAsset entry.
@@ -408,18 +475,59 @@ namespace Arcane::Editor
             ImGui::SameLine();
 
             // Search well width = remaining minus the lens strip minus the
-            // per-lens slot (0 in Plan 1).
+            // per-lens slot (0 unless the Graph lens is showing its focus
+            // combo). Each subtracted widget also costs the ItemSpacing.x
+            // that its own SameLine inserts BEFORE it, so the slot's charge
+            // is its width PLUS one spacing -- the strip's is already
+            // spelled the same way on the line below.
             float stripWidth = 0.0f;
             for (const char* label : kLensLabels)
                 stripWidth += ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
+            const bool  showFocusCombo = (state.lens == AssetLens::Graph);
+            const float focusSlotWidth = showFocusCombo
+                                       ? kGraphFocusComboWidth + style.ItemSpacing.x
+                                       : 0.0f;
+            // The 80px floor is what keeps the search well usable (and its
+            // width non-negative) on a panel too narrow to pay for all three
+            // bands -- ImGui then simply lets the row overflow to the right
+            // rather than this code handing it a negative width.
             const float searchWidth = std::max(80.0f,
-                ImGui::GetContentRegionAvail().x - stripWidth - style.ItemSpacing.x);
+                ImGui::GetContentRegionAvail().x - stripWidth - style.ItemSpacing.x - focusSlotWidth);
 
             ImGui::SetNextItemWidth(searchWidth);
             ImGui::InputTextWithHint("##assetssearch", ICON_LC_SEARCH " search...",
                                      state.search, sizeof(state.search));
             model.SetSearch(state.search);
             model.SetKindFilter(state.railKind);
+
+            // ---- the per-lens slot: Graph's focus combo (spec s5/s10) -----
+            // Scope the graph to ONE scene, or to "everything" (ruling 6's
+            // nil focus). Writing state.graphFocus is all this takes: the
+            // lens's own dirty check compares graphBuiltFocus and rebuilds
+            // the projection on the next frame, so there is no rebuild call
+            // to make here.
+            if (showFocusCombo)
+            {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(kGraphFocusComboWidth);
+                if (ImGui::BeginCombo("##graphfocus", GraphFocusLabel(model, state.graphFocus)))
+                {
+                    if (ImGui::Selectable(kGraphFocusEverything, !state.graphFocus.IsValid()))
+                        state.graphFocus = Arcane::Guid{};
+                    // PushID per row, keyed by the guid: two scenes may share
+                    // a stem ("main.arcscene" in two folders), and ImGui would
+                    // otherwise give both Selectables the SAME id -- clicking
+                    // either would activate the first.
+                    for (const AssetPanelEntry* s : ScenesByName(model))
+                    {
+                        ImGui::PushID(s->guid.ToString().c_str());
+                        if (ImGui::Selectable(s->name.c_str(), s->guid == state.graphFocus))
+                            state.graphFocus = s->guid;
+                        ImGui::PopID();
+                    }
+                    ImGui::EndCombo();
+                }
+            }
 
             ImGui::SameLine();
             const int clickedLens = SegmentedStrip("##lens", kLensLabels, kLensCount,
@@ -478,12 +586,23 @@ namespace Arcane::Editor
             const bool filtered = model.Filtered();
 
             ImGui::SetCursorPosY(padY);
-            char left[64];
-            // Status keeps ONE fixed form regardless of filter state (the
-            // lens has no search box of its own to filter against); every
-            // other lens keeps Browse's existing forms VERBATIM (plan doc
-            // Step 4).
-            if (state.lens == AssetLens::Status)
+            // 128, not 64: Graph's form below embeds a SCENE NAME, and a real
+            // one ("prototype_courtyard_lighting") overflows 64 on its own --
+            // snprintf would then truncate mid-name with no other symptom.
+            char left[128];
+            // Graph reports what the SCOPED projection is showing out of the
+            // whole project, plus the scope root itself -- N is
+            // realNodeCount, which counts real ASSET nodes only (ruling 12:
+            // neither the synthetic "+N more" companions nor tombstones are
+            // assets). Status keeps ONE fixed form regardless of filter state
+            // (the lens has no search box of its own to filter against);
+            // every other lens keeps Browse's existing forms VERBATIM (plan
+            // doc Step 4).
+            if (state.lens == AssetLens::Graph)
+                std::snprintf(left, sizeof(left), "%d of %d \xC2\xB7 focus: %s",
+                              state.graph.realNodeCount, health.total,
+                              GraphFocusLabel(model, state.graphFocus));
+            else if (state.lens == AssetLens::Status)
                 std::snprintf(left, sizeof(left), "%d assets \xC2\xB7 %d need attention",
                               health.total, health.refused + health.queued);
             else if (filtered)
@@ -2368,10 +2487,20 @@ namespace Arcane::Editor
 
         // ---- Plan 2 Task 8: one Scenes-rollup card (spec s9.2, step 3) -----
         // name (+ boot pill, the SAME source DrawAssetRow's own pill uses) ·
-        // a count line derived from the reference index · a disabled "Focus
-        // in Graph" placeholder (Plan 3 wires it up -- BeginDisabled, not a
-        // stub that pretends to do something).
-        void DrawSceneCard(AssetPanelModel& model, const AssetPanelEntry& e, const Arcane::Guid& bootGuid)
+        // a count line derived from the reference index · a "Focus in Graph"
+        // button, LIVE as of Plan 3 Task 5 (it was a BeginDisabled
+        // placeholder for exactly as long as the Graph lens itself was
+        // unreachable -- never a stub that pretended to do something).
+        //
+        // `state` for that button alone: it is the only thing on this card
+        // that writes panel state, and it writes it DIRECTLY rather than
+        // through AssetsPanelActions -- the panel/app split those actions
+        // exist for is about effects the HOST must perform (file IO,
+        // dialogs, scene loads), and switching which lens this same panel
+        // draws is not one. The precedent is the digest chip's own
+        // click-through in DrawBottomBar.
+        void DrawSceneCard(AssetsPanelState& state, AssetPanelModel& model,
+                           const AssetPanelEntry& e, const Arcane::Guid& bootGuid)
         {
             if (!BeginCardFrame(e.guid.ToString().c_str(), 0, ImGui::GetContentRegionAvail().x))
                 return;
@@ -2413,9 +2542,24 @@ namespace Arcane::Editor
                              static_cast<int>(targets.size()));
             ImGui::TextDisabled("%s", line);
 
-            ImGui::BeginDisabled();
-            ImGui::Button("Focus in Graph");
-            ImGui::EndDisabled();
+            if (ImGui::Button("Focus in Graph"))
+            {
+                // Focus BEFORE the lens, deliberately: the very next frame is
+                // the Graph lens's first, and its projection is built from
+                // whatever `graphFocus` holds when that frame runs. Setting
+                // the lens first would still land the same focus in the same
+                // frame (both writes happen here, before any draw), but the
+                // ordering states the dependency the way it actually reads --
+                // scope, then show -- so a later edit that moves either line
+                // cannot quietly build one unscoped frame first.
+                state.graphFocus = e.guid;
+                state.lens       = AssetLens::Graph;
+                // ...and select it, which is what makes the graph CENTER on
+                // this scene rather than merely contain it: the lens's
+                // selection bridge (Task 4) centers the canvas on an EXTERNAL
+                // selection change, and this is one.
+                model.Select(e.guid);
+            }
 
             EndCardFrame();
         }
@@ -2612,17 +2756,15 @@ namespace Arcane::Editor
                 // DrawAssetRow's "boot" pill, never a second parse.
                 const Arcane::Guid bootGuid = BootSceneGuid(project);
 
-                std::vector<const AssetPanelEntry*> scenes;
-                for (const auto& [guid, entry] : model.Entries())
-                    if (entry.kind == AssetKind::Scene)
-                        scenes.push_back(&entry);
-                std::sort(scenes.begin(), scenes.end(), byName);
+                // The SAME list, in the same order, the Graph lens's focus
+                // combo offers (Task 5 hoisted it out of here).
+                const std::vector<const AssetPanelEntry*> scenes = ScenesByName(model);
 
                 if (scenes.empty())
                     ImGui::TextDisabled("no scenes");
                 else
                     for (const AssetPanelEntry* e : scenes)
-                        DrawSceneCard(model, *e, bootGuid);
+                        DrawSceneCard(state, model, *e, bootGuid);
 
                 ImGui::EndTable();
             }
@@ -4018,6 +4160,13 @@ namespace Arcane::Editor
         state.graphBuiltFocus = Arcane::Guid{};
         state.graphLayoutDirty = false;
         state.graphFocus = Arcane::Guid{};
+        // ...and re-arm the boot-scene seed with it (Task 5): the incoming
+        // project has its OWN boot scene, and this is the seam that tells the
+        // panel a new one is coming. Clearing the focus without clearing this
+        // flag would leave the next project permanently scoped to
+        // "everything"; clearing this flag without clearing the focus would
+        // leave the outgoing project's scene guid readable for one frame.
+        state.graphFocusSeeded = false;
         state.graphGrid = GraphGridPhase{};
         state.seenSelectionStampGraph = 0;
         // Task 4's interaction state is derived from the context and the
@@ -4037,6 +4186,22 @@ namespace Arcane::Editor
     {
         AssetsPanelActions actions;
         ImGui::Begin("Assets", open);
+
+        // Plan 3 Task 5: the Graph lens opens scoped to the project's BOOT
+        // SCENE, not to "everything" (spec s10 -- the boot scene is the one
+        // root every project has, and an everything-mode first view of a real
+        // project is a hairball). Seeded HERE, on the first panel frame of a
+        // project, rather than at the host's project-open seam, because the
+        // panel is the only place that has both the project and the state --
+        // and it is seeded ONCE (graphFocusSeeded), so the combo's own
+        // "everything" entry stays pickable afterwards. A project-less boot
+        // seeds nothing and leaves the flag armed for the first real project;
+        // DestroyAssetsPanelCanvas re-arms it on every switch after that.
+        if (project && !state.graphFocusSeeded)
+        {
+            state.graphFocus       = BootSceneGuid(project);
+            state.graphFocusSeeded = true;
+        }
 
         DrawToolbar(state, model, actions);
 
@@ -4071,12 +4236,12 @@ namespace Arcane::Editor
             else if (state.lens == AssetLens::Browse)
                 DrawBrowseLens(state, model, project, docs, services, actions);
             else if (state.lens == AssetLens::Graph)
-                // Plan 3 Task 3. Reachable PROGRAMMATICALLY only until Task 5
-                // flips kLensEnabledMask to 0b111 -- the toolbar's Graph
-                // button is still disabled, so nothing a user can click sets
-                // `state.lens` to Graph. The device-less canvas test
-                // (AssetsGraphCanvasTest.cpp) sets it directly, which is
-                // exactly the reachability this branch has today.
+                // Plan 3 Task 3, USER-REACHABLE as of Task 5: the toolbar's
+                // Graph button is enabled (kLensEnabledMask == 0b111) and the
+                // Status lens's scene cards jump straight here. The
+                // device-less canvas test (AssetsGraphCanvasTest.cpp) still
+                // sets `state.lens` directly, which is now one route among
+                // three rather than the branch's only reachability.
                 DrawGraphLens(state, model, project, docs, services, actions);
             else if (state.lens == AssetLens::Status)
                 DrawStatusLens(state, model, project, docs, services, actions);

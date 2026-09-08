@@ -11,10 +11,13 @@
 // index past the splitter -- plus the plain "does the whole node/pin/link
 // submission path survive at all".
 //
-// `state.lens = AssetLens::Graph` is set DIRECTLY: until Task 5 flips
-// kLensEnabledMask to 0b111 the toolbar's Graph button stays disabled, so this
-// programmatic route is the branch's only reachability, which is exactly what
-// the task's own step notes.
+// `state.lens = AssetLens::Graph` is set DIRECTLY. That was the branch's ONLY
+// reachability until Task 5 flipped kLensEnabledMask to 0b111; it is now one
+// route among three (toolbar button, Status's "Focus in Graph", this), and it
+// stays the one this harness uses because a device-less frame has no mouse to
+// click the other two with. The mask itself is a file-local constexpr in
+// AssetsPanel.cpp with no exported reader, so it is not assertable from here --
+// its witness is the render capture, not this test.
 //
 // The fixture is deliberately shaped to hit every node VARIETY the draw path
 // branches on, not just the happy one:
@@ -183,6 +186,14 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
 
     AssetsPanelState state;
     state.lens = AssetLens::Graph;
+    // Task 5: the panel seeds `graphFocus` from the project's BOOT SCENE on
+    // the first frame of a project, which would scope this harness to the
+    // scene and leave the hub, its leaves and the overflow companion out of
+    // the build. Pre-declaring the seed spent opts THIS state out of it and
+    // keeps everything-mode below; the seed itself is asserted at the bottom,
+    // from the post-DestroyAssetsPanelCanvas state -- which is exactly the
+    // shape a project switch hands the panel.
+    state.graphFocusSeeded = true;
     // Nil focus = "everything" (ruling 6), which is what puts the hub, its 22
     // leaves, the spine and the tombstone in ONE build.
     DocumentHost docs;
@@ -380,6 +391,30 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     CHECK(state.seenSelectionStampGraph == 0u);
     CHECK_FALSE(state.graphHoverGuid.IsValid());
     CHECK_FALSE(state.graphMenuGuid.IsValid());
+
+    // ---- Task 5: the boot-scene focus seed, and its project-switch reset --
+    // DestroyAssetsPanelCanvas IS the panel's project-switch seam (EditorApp
+    // calls it beside AssetPanelModel::ResetForProjectSwitch), so the state
+    // is now shaped exactly like a freshly-switched-to project's: no focus,
+    // and the seed re-armed. One frame later the panel must have scoped
+    // itself to THIS project's boot scene -- not to "everything", and not to
+    // the guid the scope happened to hold before the switch.
+    CHECK_FALSE(state.graphFocusSeeded);
+    CHECK_FALSE(state.graphFocus.IsValid());
+    drawFrame();
+    CHECK(state.graphFocusSeeded);
+    CHECK(state.graphFocus == sceneId);          // == project->Manifest().bootScene
+    // ...and it is a ONE-SHOT seed: a further frame must not re-assert the
+    // boot scene over a user's own "everything" pick (the combo's first
+    // entry), which is the whole reason the flag exists beside the guid.
+    state.graphFocus = Guid{};
+    drawFrame();
+    CHECK_FALSE(state.graphFocus.IsValid());
+
+    // The seed frames above created a fresh canvas context; release it the
+    // same way, inside the live ImGui context.
+    DestroyAssetsPanelCanvas(state);
+    CHECK(state.graphCanvas == nullptr);
 
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
