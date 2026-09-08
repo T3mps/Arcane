@@ -1195,3 +1195,63 @@ written:
   not touch the preview pane, and the "follow-up implementation task is owed" line
   there remains accurate, unlike the second and third revisions' own owed-lines which
   their corrections already retired.
+
+### Desk-pass fix — "2 awaiting cook", permanently — 2026-09-08
+
+Found by the user at the desk on the Plan-2 tree: the Status lens read **2 awaiting
+cook** on `ReferenceProject` and never moved. Not a lens defect — the number was the
+honest render of a wrong answer from the host.
+
+**Root cause.** `EditorApp::IsCookPending` (`EditorAppProject.cpp`) answered *pending*
+whenever `m_cookDiagnostics` held **no row** for the guid. That map records failures
+and refusals only, and a cook **success ERASES** a row — so a healthy asset never has
+one, and nothing could ever move a cooking-kind asset (`Texture`/`Sprite`, per
+`CookStateOf`) to `Cooked`. `ReferenceProject` has exactly two such assets
+(`uv_marker.png`, `uv_marker.arcsprite`), hence the constant 2. The same presumption
+also parked queued cards forever and put every asset **back** into `Queued` immediately
+after a successful re-cook.
+
+**The fix.** On an absent row, ask the artifact store instead of presuming:
+`CookSession::ResolveCurrentArtifactPath(projectDir, guid)` — the read-only helper that
+recomputes *today's* cook key from the source's current bytes + settings + importer
+version and answers only if a file already exists at that key. Artifact resolves →
+`Cooked`; does not → `Queued`; no project in hand → the old presume-pending default
+survives as the fallback. Row-present branches are unchanged (transient
+`ArtifactMissing` → pending, permanent → `Refused` via `HasPermanentCookDiag`, which
+`CookStateOf` checks first). Deliberately **not** routed through
+`AssetsFacade().ArtifactFor()`: the facade's Missing branch consults `QuietlyPending` →
+the installed `SetCookPendingProbe`, an editor closure in the same object — the
+cook-pending seam would be asking itself. The local `CookSession` is also **not**
+`CookQueue`'s own session, which is worker-thread-only by that class's contract.
+
+**Sprites derive through their texture.** Verified in the pipeline, not assumed:
+`CookSession::EnumerateTextureSources` takes `.png` **with a `.meta` sidecar** and
+nothing else, and `ReferenceProject/Intermediate/Artifacts` holds exactly **one**
+`.arcart` for its one `.png` (`arccook` on the same tree reports
+`cooked=0 upToDate=1 failed=0`). A `.arcsprite` has no artifact of its own — it renders
+through its texture's — so a sprite's cook state is resolved through
+`FirstTextureRefOf(guid)`, the editor's single guid → outgoing-refs path. A sprite whose
+texture ref cannot resolve keeps the presume-pending default.
+
+**Cost, recorded in §15's trigger style.** The oracle enumerates `Content/` and hashes
+the matching source's bytes per ask; asks happen once per cooking-kind entry per model
+**rebuild** (invalidation-driven, not per-frame). Fine at current scale. Trigger: if a
+cold rebuild over a large `Content/` ever shows in a frame trace, memoize per
+`(guid, source mtime)` — never by making the answer less honest.
+
+**Testing, honestly.** `CookStateOf` is pure and **unchanged**; its Plan-1 pins stay
+green untouched. `IsCookPending` lives on `EditorApp`, which is not compiled into
+`ArcaneTests` — **no headless pin is possible for it**, the same blind spot this section
+already records for `AssetsPanel.cpp`. What *was* strengthened is the oracle's own
+contract, in the existing `[pipeline]` source-edit test: between a source edit and its
+recook `ResolveCurrentArtifactPath` must answer `nullopt` (the pre-edit artifact is
+still on disk at that instant), and must resolve to the **new** key once the cook lands
+— the exact `Queued → Cooked` transition the badge now reads. No new infrastructure.
+
+Comments that documented the old default were corrected in the same commit rather than
+left to lie: `OnArtifactRefused`'s `permanent=false` note, `HasPermanentCookDiag`'s,
+`IsCookPending`'s and `MakeAssetPanelProviders`' declarations, `CookStateOf`'s kind
+gate, the `SetCookPendingProbe` install site, and both Recook sites
+(`EditorAppFrame.cpp`, `AssetsPanel.hpp`) whose "erasing the row flips the card to
+Queued" rationale now names the artifact-store re-derivation instead of the
+presumption.

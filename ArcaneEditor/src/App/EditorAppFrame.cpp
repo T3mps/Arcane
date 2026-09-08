@@ -2409,11 +2409,14 @@ namespace Arcane::Editor
         // the model dirty.
         //
         // Erasing the row is what makes the card flip Refused -> Queued
-        // HONESTLY rather than cosmetically: IsCookPending presumes pending on
-        // an ABSENT row (EditorAppProject.cpp's own IsCookPending), so the
-        // model's next rebuild reads Queued for this guid -- and a source that
-        // still cannot cook re-fails, OnCookCompleted/OnArtifactRefused writes
-        // the row back, and the card returns. Nothing here fakes a success.
+        // HONESTLY rather than cosmetically: with no row, IsCookPending
+        // (EditorAppProject.cpp) re-derives the answer from the ARTIFACT
+        // STORE on the source's CURRENT cook key -- so a source that has
+        // never produced an artifact for today's key reads Queued, and one
+        // that still cannot cook re-fails, OnCookCompleted/OnArtifactRefused
+        // writes the row back, and the card returns. Nothing here fakes a
+        // success: the only way this guid reaches Cooked is a real artifact
+        // on disk for its current key.
         //
         // There is no per-guid cook API: CookQueue::NoteChanged() is
         // whole-project, coalescing and hash-decided, which is exactly right

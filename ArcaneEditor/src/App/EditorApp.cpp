@@ -1115,12 +1115,12 @@ namespace Arcane::Editor
             //
             // POST-SETTLING, THIS IS A POSITIVE SIGNAL -- review finding
             // (critical, fixed here): the first cut fell through to
-            // IsCookPending(id) here, whose OWN default is "pending" whenever
-            // m_cookDiagnostics has NO ROW for the guid. That default is safe
-            // for NriTextureCache's oracle (a wrong guess there only costs a
-            // checkerboard-vs-refused VISUAL choice, and RefuseArtifact fires
-            // independently regardless), but it is NOT safe reused HERE,
-            // because RefuseArtifact is what CREATES a row in the first
+            // IsCookPending(id) here, which at the time answered "pending"
+            // whenever m_cookDiagnostics had NO ROW for the guid. That
+            // default was safe for NriTextureCache's oracle (a wrong guess
+            // there only costs a checkerboard-vs-refused VISUAL choice, and
+            // RefuseArtifact fires independently regardless), but it was NOT
+            // safe reused HERE, because RefuseArtifact is what CREATES a row in the first
             // place (via OnArtifactRefused) -- gating RefuseArtifact itself
             // on a "no row means pending" default is a closed loop with no
             // exit for any guid CookSession will NEVER attempt (its source
@@ -1144,10 +1144,14 @@ namespace Arcane::Editor
             // renamed source answers false here even while the queue is mid-
             // pass, which is exactly the fix: that guid refuses LOUDLY again,
             // matching pre-seam behavior. IsCookPending/SetCookPendingOracle
-            // (the RENDER-layer oracle) is UNCHANGED and untouched -- it
-            // keeps its own, independent, and now-safely-inconsequential
-            // "no row means pending" default, since RefuseArtifact no longer
-            // depends on it for anything.
+            // (the RENDER-layer oracle) stays INDEPENDENT of this closure --
+            // and, since the 2026-09-08 desk fix, answers a row-less guid by
+            // asking the ARTIFACT STORE rather than presuming anything (see
+            // its own definition). This probe must still never be routed
+            // through it: RefuseArtifact no longer depends on it for
+            // anything, and keeping it that way is what stops the facade's
+            // refusal path from asking the cook-pending seam to answer
+            // itself.
             m_runtime->AssetsFacade().SetCookPendingProbe(
                 [this](const Arcane::Guid& id)
                 {

@@ -1265,12 +1265,12 @@ namespace Arcane::Editor
         // composes CookStateOf(kind, HasPermanentCookDiag(g), IsCookPending(g))
         // -- see CookStateOf's own header comment for why pending is gated on
         // kind (only Texture/Sprite have a cook pipeline; IsCookPending's
-        // default-true answer for a guid with no diagnostic row would
-        // otherwise show every JSON asset as permanently Queued).
+        // answer is meaningless for a kind the cook never enumerates, and
+        // would otherwise show every JSON asset as permanently Queued).
         Arcane::Editor::AssetPanelProviders MakeAssetPanelProviders();
         // True when m_cookDiagnostics carries a PERMANENT row for `id` (a
-        // refusal) -- as opposed to IsCookPending's own "pending" reading of
-        // the SAME map, which treats an ABSENT row as pending too. See
+        // refusal) -- as opposed to IsCookPending's own reading of the SAME
+        // map, which answers an ABSENT row by asking the artifact store. See
         // CookDiagRow::permanent's own declaration for the permanent/
         // transient split.
         [[nodiscard]] bool HasPermanentCookDiag(const Arcane::Guid& id) const;
@@ -1400,8 +1400,9 @@ namespace Arcane::Editor
         // Resolve, both main-thread-only by THEIR OWN contracts (see
         // NriTextureCache.hpp's "CALL AT DECLARATION TIME ONLY"). IsCookPending
         // reads it from the SetCookPendingOracle callback, invoked from
-        // inside that same main-thread-only Resolve() path. No cross-thread
-        // access is ever reachable.
+        // inside that same main-thread-only Resolve() path, and from
+        // cookStateFor during an AssetPanelModel rebuild, which is likewise
+        // main-thread-only. No cross-thread access is ever reachable.
         std::unordered_map<Arcane::Guid, CookDiagRow> m_cookDiagnostics;
         // Republishes m_cookDiagnostics's CURRENT contents under
         // "diagnostics:cook" -- called after every mutation of the map
@@ -1414,27 +1415,33 @@ namespace Arcane::Editor
         // for why this fires EVERY refusal rather than just the process's
         // first. `user` is always `this`.
         static void OnArtifactRefused(const Arcane::Guid& id, const char* kind, void* user);
-        // The cook-pending oracle installed on the viewport graph's texture
-        // cache (NriTextureCache::SetCookPendingOracle, via NriGraphContext)
-        // -- "is a cook still plausibly in flight for this guid" as far as
-        // this session's own bookkeeping knows. See m_cookDiagnostics'
-        // `permanent` field: true (pending) unless a PERMANENT row already
-        // exists for `id`.
+        // "Is a cook still outstanding for this guid" -- TWO consumers: the
+        // viewport graph's texture cache (NriTextureCache::
+        // SetCookPendingOracle, via NriGraphContext) chooses checkerboard-vs-
+        // refused with it, and MakeAssetPanelProviders' cookStateFor turns it
+        // into the Assets panel's Queued/Cooked badge.
+        //
+        // A row in m_cookDiagnostics answers directly (see that map's
+        // `permanent` field). An ABSENT row is answered by the ARTIFACT
+        // STORE -- CookSession::ResolveCurrentArtifactPath on the current
+        // cook key -- NOT by a presumption: 2026-09-08 desk fix, since a
+        // HEALTHY asset never has a row at all (a cook success ERASES one),
+        // so the old "no row means pending" default left every healthy
+        // texture/sprite permanently Queued. See the definition
+        // (EditorAppProject.cpp) for the full account, the sprite-through-its-
+        // texture rule, and the cost note.
         //
         // NOT reused by the Assets facade's own SetCookPendingProbe closure
-        // (desk-fix 2, revised after a review finding) -- this function's
-        // OWN default, "pending" whenever m_cookDiagnostics has no row for
-        // `id` yet, is safe ONLY here, where a wrong guess costs nothing more
-        // than a checkerboard-vs-refused VISUAL choice and RefuseArtifact
-        // still fires independently regardless of what this returns. Reusing
-        // it as SetCookPendingProbe's own per-guid signal would have made
-        // THAT default load-bearing for whether RefuseArtifact fires AT ALL
-        // -- a closed loop for any guid CookSession will never attempt (see
-        // OnProjectOpened's own comment on the probe for the full account).
-        // The probe instead asks a POSITIVE question of its own: is the cook
-        // queue doing active work, and does this guid's registered source
-        // still exist on disk. This function's own callers (NriTextureCache's
-        // oracle) are unaffected and unchanged.
+        // (desk-fix 2, revised after a review finding): row-absence must
+        // never be what decides whether RefuseArtifact fires AT ALL -- that
+        // would be a closed loop for any guid CookSession will never attempt
+        // (see OnProjectOpened's own comment on the probe for the full
+        // account). The probe instead asks a POSITIVE question of its own: is
+        // the cook queue doing active work, and does this guid's registered
+        // source still exist on disk. Keeping the two separate ALSO keeps
+        // this function's artifact-store ask off the facade's own refusal
+        // path, where it would be asking the cook-pending seam to answer
+        // itself.
         [[nodiscard]] bool IsCookPending(const Arcane::Guid& id) const;
         // Removes Artifacts/** files this project's registry no longer names
         // any live guid for (ArtifactStore::SweepOrphans) -- called once, at

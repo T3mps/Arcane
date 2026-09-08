@@ -136,8 +136,9 @@ namespace Arcane::Editor
         // InvalidateArtifact + ERASE that guid's cook-diagnostic row +
         // PublishCookDiagnostics + CookQueue::NoteChanged + MarkDirty --
         // erasing the row is what flips the card Refused -> Queued honestly
-        // (IsCookPending presumes pending on an absent row), and a source
-        // that still cannot cook re-fails and puts the row back.
+        // (with no row, IsCookPending re-derives the state from the artifact
+        // store on the source's current cook key), and a source that still
+        // cannot cook re-fails and puts the row back.
         //
         // `showProblems` asks the host to surface the Problems pane and
         // NOTHING more (Ruling 9 / spec s9.2 verbatim: "jumps to the pane").

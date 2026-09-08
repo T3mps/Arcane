@@ -81,9 +81,12 @@ namespace Arcane::Editor
 
         // Only Texture/Sprite have a real cook pipeline of their own (see
         // this function's own header comment) -- everything else (materials,
-        // scenes, meshes, data, ...) has nothing to be "pending" about, so
-        // IsCookPending's own default-true answer for a guid with no row
-        // must never leak through as a permanent Queued state for them.
+        // scenes, meshes, data, ...) has nothing to be "pending" about. The
+        // host's `pending` answer is meaningless for them (its oracle asks
+        // the artifact store, which knows only texture sources; and its
+        // no-project fallback is still a bare "presume pending"), so this
+        // gate is what keeps that answer from leaking through as a permanent
+        // Queued state for a kind that never cooks.
         const bool cooks = (kind == AssetKind::Texture) || (kind == AssetKind::Sprite);
         if (!cooks)
             return CookState::Cooked;

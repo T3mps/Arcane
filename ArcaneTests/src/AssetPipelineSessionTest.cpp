@@ -421,9 +421,24 @@ TEST_CASE("pipeline: a source-content-edit recook removes the superseded old-key
     const fs::path newPath = ExpectedArtifactPath(project, png, TextureMetaSettings{});
     REQUIRE(newPath != oldPath);
 
+    // Asset-manager Plan 2 desk fix (2026-09-08): the editor's cook-pending
+    // oracle (EditorApp::IsCookPending) now answers a row-less guid with
+    // exactly this call, so the CURRENT-KEY discipline has to hold across the
+    // whole edit->cook cycle, not just after it. BETWEEN the source edit and
+    // the recook there is no artifact for today's key -- the pre-edit one is
+    // still on disk at this instant -- and the honest answer is nullopt
+    // ("queued"), never the stale file.
+    CHECK_FALSE(session.ResolveCurrentArtifactPath(project, guid).has_value());
+
     const CookResult result = session.CookProject(project);
     CHECK(result.cooked == 1u);
     REQUIRE(fs::exists(newPath));
+
+    // ...and once the cook lands, the SAME ask resolves -- the "Queued ->
+    // Cooked" transition the editor badge reads off this function.
+    const std::optional<fs::path> afterCook = session.ResolveCurrentArtifactPath(project, guid);
+    REQUIRE(afterCook.has_value());
+    CHECK(*afterCook == newPath);
 
     // THE pin: the pre-edit artifact is gone, same as the settings-only case above --
     // C1(a) does not distinguish WHY the key changed, only THAT it did.

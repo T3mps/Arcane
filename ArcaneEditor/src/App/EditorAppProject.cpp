@@ -27,6 +27,7 @@
 #include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
 
 #include <Arcane/AssetPipeline/ArtifactStore.hpp>   // SweepArtifactOrphans (F2b Task 12)
+#include <Arcane/AssetPipeline/CookSession.hpp>   // IsCookPending's artifact-store oracle (2026-09-08 desk fix)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MintMeshAsset)
@@ -746,10 +747,12 @@ namespace Arcane::Editor
         d.locator  = Arcane::DiagLocator::Asset(id);
 
         // ArtifactMissing is presumed still-cooking (a fresh drop, or a cook
-        // that just hasn't run yet) -- IsCookPending's own default for a
-        // guid with NO row at all is ALSO "presume pending", so this
-        // permanent=false row changes nothing about that answer; it exists
-        // purely so the Problems pane shows something for it. HashMismatch/
+        // that just hasn't run yet), which is why this row is permanent=false:
+        // it makes IsCookPending answer "pending" WITHOUT consulting the
+        // artifact store at all (the 2026-09-08 desk fix made row-ABSENCE the
+        // case that asks the store; a present transient row still short-
+        // circuits to pending, and a Missing resolution is exactly the
+        // condition the store would confirm anyway). HashMismatch/
         // VersionNewerThanEngine are permanent: neither resolves without a
         // user fixing the source, so the cook-pending oracle must say "no,
         // this is refused" the moment either fires -- see IsCookPending.
@@ -772,16 +775,88 @@ namespace Arcane::Editor
                                       Arcane::Editor::AssetActivityKind::CookRefused, kind });
     }
 
+    // DESK-PASS FIX (asset-manager Plan 2, 2026-09-08, user-found): the
+    // Assets panel showed "2 awaiting cook" FOREVER on ReferenceProject --
+    // its two cooking-kind assets (uv_marker.png, uv_marker.arcsprite).
+    // Root cause was this function's old no-row answer, "presume pending":
+    // m_cookDiagnostics records FAILURES and REFUSALS only (see
+    // CookDiagRow's own declaration) and a cook SUCCESS ERASES the row, so
+    // a HEALTHY asset never has one -- nothing could ever transition it to
+    // Cooked, and every successful re-cook dropped it straight back into
+    // Queued. The tile, the meter and the Status-lens cards were all wrong
+    // in the same direction, permanently.
+    //
+    // The honest answer for a guid with no row is a question for the
+    // ARTIFACT STORE, not a presumption: CookSession::
+    // ResolveCurrentArtifactPath recomputes TODAY's cook key from the
+    // source's CURRENT bytes + settings + importer version and answers only
+    // if a file already sits at that key's path -- the exact same staleness
+    // test CookProject/CheckProject use, so this function and the cook agree
+    // on "cooked" by construction. Resolves -> NOT pending (Cooked); does
+    // not resolve (uncooked, or stale after a source/.meta edit that moved
+    // the key) -> pending (Queued).
+    //
+    // NOT through m_runtime->AssetsFacade().ArtifactFor(): the facade's own
+    // Missing branch consults QuietlyPending -> the installed
+    // SetCookPendingProbe (EditorApp.cpp's OnProjectOpened), which is an
+    // editor closure in the same object -- routing a cook-pending answer
+    // back through the facade would ask the cook-pending seam to answer
+    // itself. A local CookSession is the read-only, side-effect-free oracle
+    // that owes nothing to either seam. It is also deliberately NOT
+    // m_cookQueue's own session: that one is touched ONLY from inside a
+    // worker job (CookQueue.hpp's threading contract), and this runs on the
+    // main thread.
+    //
+    // SPRITES DERIVE THEIR ANSWER FROM THEIR TEXTURE (pre-ruled, and
+    // verified against the pipeline: CookSession::EnumerateTextureSources
+    // takes ".png with a .meta sidecar" and nothing else, and
+    // ReferenceProject/Intermediate/Artifacts holds exactly ONE .arcart for
+    // its one .png -- a sprite has no artifact of its own, it renders
+    // through its texture's). FirstTextureRefOf is the editor's single
+    // guid -> outgoing-refs path (see its own declaration); a sprite whose
+    // texture ref cannot resolve keeps the old presume-pending default,
+    // since nothing here can prove otherwise.
+    //
+    // COST: one Content/ enumeration + a hash of the matching source's bytes
+    // per ask, and asks happen once per cooking-kind entry per model REBUILD
+    // (AssetPanelModel is invalidation-driven -- MarkDirty/MarkAllDirty --
+    // not per-frame), plus the render oracle's own already-throttled
+    // PendingCook re-poll. Fine at current project scale; if a cold rebuild
+    // over a large Content/ ever shows up in a frame trace, memoize per
+    // (guid, source mtime) rather than making this answer any less honest.
     bool EditorApp::IsCookPending(const Arcane::Guid& id) const
     {
+        // Row present: UNCHANGED. A permanent row (HashMismatch/
+        // VersionNewerThanEngine/a cook failure) is not pending -- it is
+        // refused, and CookStateOf checks HasPermanentCookDiag first anyway;
+        // a transient ArtifactMissing row is still-cooking by definition.
         const auto it = m_cookDiagnostics.find(id);
-        return it == m_cookDiagnostics.end() || !it->second.permanent;
+        if (it != m_cookDiagnostics.end())
+            return !it->second.permanent;
+
+        const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!project)
+            return true;   // no project in hand -- the old presume-pending default
+
+        Arcane::Guid cookGuid = id;
+        if (const auto mountPath = project->Registry().Resolve(id))
+        {
+            if (Arcane::Editor::AssetKindOf(*mountPath) == Arcane::Editor::AssetKind::Sprite)
+            {
+                cookGuid = FirstTextureRefOf(id);
+                if (!cookGuid.IsValid())
+                    return true;   // no resolvable texture -- presume pending
+            }
+        }
+
+        Arcane::AssetPipeline::CookSession oracle;
+        return !oracle.ResolveCurrentArtifactPath(project->Root(), cookGuid).has_value();
     }
 
     // Asset-manager redesign, Plan 1 Task 5: the OTHER reading of
-    // m_cookDiagnostics -- unlike IsCookPending above, an ABSENT row here
-    // means "no refusal", not "presume pending" (that default is safe only
-    // for the render-layer oracle IsCookPending serves; see its own comment).
+    // m_cookDiagnostics -- an ABSENT row here means "no refusal", full stop.
+    // (IsCookPending above no longer answers an absent row from this map at
+    // all: since the 2026-09-08 desk fix it asks the artifact store instead.)
     // CookStateOf's `permanentDiag` parameter is exactly this question.
     bool EditorApp::HasPermanentCookDiag(const Arcane::Guid& id) const
     {
