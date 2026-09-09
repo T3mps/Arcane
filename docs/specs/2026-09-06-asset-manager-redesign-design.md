@@ -1892,3 +1892,77 @@ TEX→SPR line predicts (72,47,70)) → rgb(70,46,77) at the far end (dimmed Spr
 (70,46,78)) → rgb(155,91,176) at the sprite pin (the full `#9b5bb0` accent). Test counts
 are **unchanged at baseline** (Debug `~[gpu]` 55294 assertions / 1522 cases): a pure
 draw-body change adds no assertions.
+
+### Post-landing user-directed change — 2026-09-09: zoom-table parity fix
+
+**Bug report** (user, verbatim): "For some reason, the text becomes blurry when zooming
+in on the graph. I don't think this happens with our other graph system."
+
+**Root cause.** `ImGuiEx::Canvas` (`ThirdParty/imgui-node-editor/imgui_canvas.cpp:
+513-536`) implements zoom as a pure post-hoc multiply of already-baked vertex
+positions — glyphs are rasterized once at their logical pixel size and the canvas
+then bilinearly magnifies the finished quad. The library has no font handling of
+any kind (no `PushFont`, no `SetFontRasterizerDensity`, no per-zoom re-bake) and
+compensates only geometry anti-aliasing (`imgui_canvas.cpp:491-493`), never glyph
+resolution. The Graph lens's `ed::Config` (`AssetsPanel.cpp:3877-3897`, pre-fix)
+never installed a custom zoom table, so it fell through to the vendored library's
+own default (`imgui_node_editor.cpp:3309-3312`), whose top entry is **8.0**. Wheel
+zoom could therefore drive the canvas to 8x, bilinearly magnifying the lens's
+12-14px baked text (`kGraphHeaderFontPx`/`kGraphMetaFontPx`/`kGraphLabelFontPx`,
+`AssetsPanel.cpp:2881-2882`, `:2997`) into unmistakable mush. The shader editor's
+two canvases (`ShaderEditorDocument.cpp`) never showed the symptom because both
+already called `ApplyZoomLevels(cfg)`, installing a 20-stop table ported from
+Unreal's graph editor whose top entry is **2.0** — so its worst case was a 2x
+magnification of 16px ambient text against the Graph lens's 8x magnification of
+12-14px text. Full investigation: `.superpowers/sdd/2026-09-08-asset-manager-
+plan3-graph/blur-investigation.md`.
+
+**Fix.** Apply the same zoom table to the Graph lens's `ed::Config`, at parity
+with the shader editor rather than inventing a third table. The table +
+`ApplyZoomLevels` helper — previously defined only inside
+`ShaderEditorDocument.cpp`'s anonymous namespace — were hoisted to a new shared
+header, `ArcaneEditor/src/Widgets/GraphZoomLevels.hpp`, sibling to
+`CanvasPopupScope.hpp` rather than folded into it (zoom is a second, unrelated
+concern from that header's one named rule, popup placement) and rather than into
+`EditorWidgets.hpp/.cpp` (that vocabulary stays `imgui_node_editor.h`-free by
+design, same reasoning `CanvasPopupScope.hpp` already documents). Both the shader
+editor's two `ed::Config` sites and the new one in `AssetsPanel.cpp:3877-3897`
+now consume this one definition — no hand-synced second copy, the exact smell
+this arc already paid down once for the guid predicate (§19 riders, Task 1).
+`EditorWidgets.hpp/.cpp` and `AssetsPanel.hpp` gained no node-editor coupling;
+the include lands only in `AssetsPanel.cpp`, the one TU plan ruling 1 already
+permits to name `ax::NodeEditor` for this panel.
+
+**Verified.** `AssetsGraphCanvasTest.cpp`'s `[graphcanvas]` case gained a
+regression check that queries the REAL `ed::Config` the panel's context ended up
+with, through the public `ed::GetConfig(ctx)` seam (`imgui_node_editor_api.cpp:
+68-84`) — an honest query, not a fake: the panel already exposes its canvas
+context as a `void*` for exactly this reason (AssetsPanel.hpp's own note), and
+the test reinterprets it the same way `AssetsPanel.cpp` does internally.
+RED (table missing, `ApplyZoomLevels` call reverted for the capture): `REQUIRE(
+cfg.CustomZoomLevels.Size > 0 )` failed, `0 > 0` (seed 1788947125). GREEN (fix
+restored): `20 > 0` and `CHECK( maxZoom == 2.0f )` → `2.0f == 2.0f` (seed
+1788947178); `[graphcanvas]` filter all green, 77 assertions / 2 cases (+3 over
+the prior 74, exactly the three new checks). `[editor]` filter green, 3595
+assertions / 303 cases (seed 1788947186) — the shader editor's own suites are
+inside this filter and unaffected by the hoist. Full Debug `~[gpu]`: 55297
+assertions / 1522 cases (seed 1788947199) — +3 over the 55294 baseline, exactly
+the new assertions, **+0 cases** (the new checks are inline in the existing
+`AssetsGraphCanvasTest` case, not a new `TEST_CASE`). Three-config rebuild not
+re-run for this one-file fix; Debug alone rebuilt clean, 0 warnings / 0 errors at
+`/v:m`, same log-scan basis §19's Measured close already disclosed.
+
+**What this changes for the user:** the Graph lens's wheel zoom now stops at 2x
+instead of 8x, matching the shader editor's ceiling exactly, and the zoom stops
+in between are the same finer-grained 20-entry table. **Honest limitation,
+unchanged from the investigation's own accounting:** this caps how bad the blur
+gets: it does not make text crisp. Both canvases still bilinearly magnify baked
+glyphs up to 2x, which remains visibly soft — parity with the system the user
+called good, not a claim of sharpness. **Recorded follow-up for BOTH canvases**
+(not attempted here): ImGui 1.92's rasterizer-density mechanism
+(`ImGui::SetFontRasterizerDensity`, `imgui.h:3726`) can re-bake glyphs at the
+view scale so the canvas's vertex multiply lands on an already-hi-res bitmap —
+genuinely sharp text at every zoom stop, not merely a lower ceiling. The
+investigation report's FIX B section traces feasibility (the flag Arcane's NRI
+backend needs is already set) and its costs (per-zoom-stop atlas bake churn;
+`SetCurrentWindow` silently resets the density on any nested `ImGui::Begin`).

@@ -39,6 +39,13 @@
 #include <Arcane/Project/Project.hpp>
 
 #include <imgui.h>
+// The panel exposes its canvas context as a `void*` on purpose
+// (AssetsPanel.hpp:340) so that production callers never need this header.
+// This test reaches through it anyway, the same way AssetsPanel.cpp itself
+// does internally (a reinterpret to ax::NodeEditor::EditorContext*), to query
+// the REAL ed::Config the panel's context ended up with -- see the zoom-table
+// regression check below.
+#include <imgui_node_editor.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -253,6 +260,32 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     // Captured BY VALUE: `nodes` is a reference into the projection, which the
     // rebuilds below replace under it.
     const std::size_t everythingNodeCount = nodes.size();
+
+    // ---- 2026-09-09 fix: zoom-table parity with the shader editor ---------
+    // The Graph lens's ed::Config used to fall through to the vendored
+    // library's own default zoom table (0.1-8.0, imgui_node_editor.cpp:
+    // 3309-3312) because AssetsPanel.cpp never called ApplyZoomLevels. Wheel
+    // zoom could then reach 8x, bilinearly magnifying the 12-14px canvas text
+    // into unmistakable blur -- the shader editor's canvases install
+    // GraphZoomLevels.hpp's kZoomLevels table instead and cap at 2.0x. This
+    // queries the REAL ed::Config the panel's context ended up with (through
+    // the public node-editor header, the same reinterpret AssetsPanel.cpp
+    // performs on the `void*` it hands back per AssetsPanel.hpp:340) and
+    // asserts the ceiling matches the shader editor's, not the library's.
+    {
+        auto* ctx = static_cast<ax::NodeEditor::EditorContext*>(state.graphCanvas);
+        REQUIRE(ctx != nullptr);
+        const ax::NodeEditor::Config& cfg = ax::NodeEditor::GetConfig(ctx);
+        // An empty CustomZoomLevels means the config never installed a custom
+        // table at all -- the exact state that let the library's 8.0 default
+        // through. A non-empty table is the fix's precondition as much as the
+        // max-value check below is its outcome.
+        REQUIRE(cfg.CustomZoomLevels.Size > 0);
+        float maxZoom = 0.0f;
+        for (int i = 0; i < cfg.CustomZoomLevels.Size; ++i)
+            maxZoom = std::max(maxZoom, cfg.CustomZoomLevels[i]);
+        CHECK(maxZoom == 2.0f);   // parity with the shader editor's kZoomLevels ceiling
+    }
 
     // ...and the canvas region was REAL, which is what makes the checks above
     // evidence about the DRAW rather than about the build alone. Two witnesses,

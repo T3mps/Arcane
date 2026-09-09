@@ -5,6 +5,7 @@
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"   // StableTextEdit: the stable-buffer text-commit helper
+#include "Widgets/GraphZoomLevels.hpp"   // kZoomLevels / ApplyZoomLevels -- shared with the Graph lens
 #include "Widgets/IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
 #include "Widgets/MaterialParamWidgets.hpp"
 
@@ -389,44 +390,15 @@ namespace Arcane::Editor
             return LerpColor(c, ImVec4(1.0f, 1.0f, 1.0f, c.w), 0.25f);
         }
 
-        // -------------------------------------------------------------------
-        // ZOOM STOPS -- Unreal's graph-editor table, ported exactly.
-        //
-        // These are FFixedZoomLevelsContainer's 20 entries, verbatim and in
-        // order (vendored UE at Arcane/.example/UnrealEngine-release/Engine/
-        // Source/Editor/GraphEditor/Private/SNodePanel.cpp:53-75). UE calls the
-        // number ZoomAmount and it is a VIEW SCALE: 1.000 is 1:1, 2.000 draws
-        // everything twice as large. The vendored node editor's
-        // ed::Config::CustomZoomLevels is the same quantity -- the table feeds
-        // NavigateAction::m_ZoomLevels (imgui_node_editor.cpp:3333) and m_Zoom
-        // is assigned view.Scale (:3639) -- so the numbers transfer with no
-        // conversion. (ed::GetCurrentZoom, by contrast, hands back the
-        // RECIPROCAL; see ViewScale() below.)
-        //
-        // Replacing the vendored default table (0.1 .. 8.0,
-        // imgui_node_editor.cpp:3309-3312) is the point of doing this: 8x
-        // magnification has no use on a node graph, UE's stops are much finer
-        // in the readable band, and the LOD tiers are defined against exactly
-        // these numbers.
-        constexpr float kZoomLevels[] = {
-            0.100f, 0.125f, 0.150f, 0.175f, 0.200f,
-            0.225f, 0.250f, 0.375f, 0.500f, 0.675f,
-            0.750f, 0.875f, 1.000f, 1.250f, 1.375f,
-            1.500f, 1.675f, 1.750f, 1.875f, 2.000f,
-        };
-
-        // CustomZoomLevels is an ImVector, so the table is pushed in rather
-        // than aggregate-initialized. The caller's `cfg` may die immediately
-        // after CreateEditor: the editor holds a Config BY VALUE
-        // (imgui_node_editor_internal.h:1486) and its ctor deep-copies through
-        // ImVector::operator= (imgui_node_editor.cpp:5785-5789), so the pointer
-        // NavigateAction caches at :3333 is into the editor's own copy.
-        void ApplyZoomLevels(ed::Config& cfg)
-        {
-            cfg.CustomZoomLevels.reserve(static_cast<int>(std::size(kZoomLevels)));
-            for (float z : kZoomLevels)
-                cfg.CustomZoomLevels.push_back(z);
-        }
+        // ZOOM STOPS + ApplyZoomLevels moved to Widgets/GraphZoomLevels.hpp
+        // (2026-09-09) so the Assets panel's Graph lens can install the same
+        // table instead of hand-copying it -- see that header for the full
+        // rationale (kZoomLevels, ApplyZoomLevels) and docs/specs/
+        // 2026-09-06-asset-manager-redesign-design.md §19 for the bug this
+        // fixed. `kZoomLevels` and `ApplyZoomLevels` below still name the
+        // header's definitions via using-directive-free lookup (both are in
+        // namespace Arcane::Editor, which this anonymous namespace nests
+        // inside).
 
         // The canvas's view scale, in the same units as kZoomLevels. THE TRAP:
         // ed::GetCurrentZoom returns InvScale -- canvas units per screen pixel

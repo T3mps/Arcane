@@ -70,7 +70,7 @@ namespace Arcane::Editor
         // screen period = kBaseSpacingPx * pow(zoom, k). At k = 1 the grid is
         // rigidly welded to canvas content; at k = 0 it ignores zoom entirely.
         // k = 0.7 makes the grid track zoom sublinearly, and over the editor's
-        // 0.1-2.0 zoom table (ShaderEditorDocument.cpp, kZoomLevels) yields
+        // 0.1-2.0 zoom table (GraphZoomLevels.hpp, kZoomLevels) yields
         // 0.7*log2(20) = 3.0 LOD crossings. MORE CROSSINGS IS NOT A RISK: lines
         // at 2*pm are exactly every other line of pm for any k, so a crossing
         // can only ever fade out lines that are already redundant -- never a

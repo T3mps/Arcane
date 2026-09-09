@@ -7,6 +7,7 @@
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
+#include "Widgets/GraphZoomLevels.hpp"   // ApplyZoomLevels -- same table the shader editor's canvases use
 #include "Widgets/IconsLucide.h"
 
 #include <Arcane/Base/Log.hpp>
@@ -3882,6 +3883,17 @@ namespace Arcane::Editor
                 // spec §10 pins the layout as computed each build, never
                 // persisted.
                 cfg.SettingsFile = nullptr;
+                // 2026-09-09 fix: without this the config falls through to
+                // the vendored library's own default zoom table (0.1-8.0,
+                // imgui_node_editor.cpp:3309-3312), and wheel-zooming this
+                // canvas to its ceiling bilinearly magnifies the 12-14px
+                // baked glyphs 8x -- unmistakable blur. ApplyZoomLevels
+                // installs the same 20-stop table (0.1-2.0) the shader
+                // editor's canvases use (Widgets/GraphZoomLevels.hpp), so
+                // this canvas gets the same navigation feel and the same
+                // 2.0x worst case. See docs/specs/
+                // 2026-09-06-asset-manager-redesign-design.md §19.
+                ApplyZoomLevels(cfg);
                 state.graphCanvas = ed::CreateEditor(&cfg);
                 // The style is per-context state, so a freshly created
                 // context applies it -- including the switch that kills the
