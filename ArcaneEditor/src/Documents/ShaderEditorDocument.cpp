@@ -5,6 +5,7 @@
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"   // StableTextEdit: the stable-buffer text-commit helper
+#include "Widgets/GraphCanvasBackdrop.hpp"   // DrawGraphCanvasBackdrop -- the pre-ed::Begin grid blit
 #include "Widgets/GraphCanvasStyle.hpp"   // node chrome metrics + grid palette + accents -- shared with the Graph lens
 #include "Widgets/GraphPinDot.hpp"       // DrawGraphPinDot -- the filled/ring port dot, paint only
 #include "Widgets/GraphWire.hpp"         // bezier/lerp/brighten/view-scale + the links channel -- ditto
@@ -344,14 +345,10 @@ namespace Arcane::Editor
         // table) moved to Widgets/GraphNodeLod.hpp alongside the NodeLOD enum,
         // so the Graph lens reads the table instead of copying 0.250 out of it.
 
-        // ImVec4 -> the plain float[4] the grid CB mirrors.
-        void FillRgba(float (&dst)[4], const ImVec4& c) noexcept
-        {
-            dst[0] = c.x;
-            dst[1] = c.y;
-            dst[2] = c.z;
-            dst[3] = c.w;
-        }
+        // FillRgba (ImVec4 -> the plain float[4] GraphGridColors holds) had one
+        // caller, the backdrop composition, and moved with it into
+        // Widgets/GraphCanvasBackdrop.hpp -- where it is the same four
+        // assignments the Graph lens had written as an inline lambda.
 
         ImVec4 PinColorForWidth(int width) noexcept
         {
@@ -5141,40 +5138,16 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::DrawCanvasBackdrop(GraphGridPhase& phase)
     {
-        // ---- ImGui-primitive backdrop, UNDER the canvas content ----
-        // The node editor offers no public way to draw beneath its own
-        // background/grid layer: everything it emits lands in channels the API
-        // does not expose, and the two it does expose (the per-node background
-        // draw list, the group-hint lists) sit ABOVE links. So the backdrop is
-        // blitted before ed::Begin, which puts it in the window draw list ahead
-        // of every channel the editor merges in afterwards. CALL THIS BEFORE
-        // ed::Begin -- both the layering and the ScreenToCanvas below depend on
-        // it.
+        // Two things happen here, and only the second one is shared.
+        //
+        // CALL THIS BEFORE ed::Begin. The layering argument, the ScreenToCanvas
+        // argument and the disclosed one-frame view lag are all written out once
+        // at DrawGraphCanvasBackdrop (Widgets/GraphCanvasBackdrop.hpp) -- read
+        // them there; every word of them applies unchanged to this canvas and to
+        // the Assets panel's Graph lens.
         //
         // The phase is a PARAMETER because it is per-canvas STATE (a pan/zoom
-        // history, GraphGridPhase::Update). Two canvases sharing one would
-        // hand each other the other's accumulated phase every time the view
-        // switched, so each canvas owns its own.
-        //
-        // DISCLOSED CONSEQUENCE: the transform read here is the one ed::Begin
-        // installed LAST frame. The editor computes the new view in End()
-        // (imgui_node_editor.cpp:1357) and installs it in the next Begin()
-        // (:1257), so a frame that is actively panning or zooming draws the
-        // backdrop one frame behind the nodes.
-        //
-        // What that costs is CONTINUITY, not correctness -- and continuity is
-        // the property that matters now that the grid's phase is STATE. The
-        // pass is fed the same sequence of views, just one frame late, so it
-        // accumulates the same phase; no error builds up over a gesture, and
-        // the final view of a gesture does arrive on the following frame, so
-        // the grid settles onto its exact position without a jump. Only the
-        // moving frames are offset.
-        //
-        // Reading it after ed::Begin would remove even that, but there is no
-        // channel under the content to put the blit in; the fix, if the lag
-        // ever reads badly, is to host the canvas in a child window and blit
-        // into the PARENT's draw list after ed::End (parent draw lists render
-        // first).
+        // history, GraphGridPhase::Update), and this document owns two canvases.
         const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
         const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
 
@@ -5210,39 +5183,11 @@ namespace Arcane::Editor
         if (canvasSize.x <= 0.0f || canvasSize.y <= 0.0f)
             return;
 
-        GraphGridView view;
-        view.width  = static_cast<std::uint32_t>(canvasSize.x);
-        view.height = static_cast<std::uint32_t>(canvasSize.y);
-        // RAW view state only -- the grid derives its own phase from the
-        // history of these, because a sublinearly-scaled lattice has no
-        // canvas-space anchor to be read off any single frame.
-        //
-        // GraphViewScale() owns the GetCurrentZoom-returns-the-reciprocal flip (see
-        // its comment). ScreenToCanvas is safe HERE and only here: inside
-        // ed::Begin/End the editor moves ImGui itself into canvas space
-        // (imgui_canvas.cpp:476-487), so this must stay ahead of it.
-        view.scale = GraphViewScale();
-        const ImVec2 originCanvas = ed::ScreenToCanvas(canvasMin);
-        view.originX = originCanvas.x;
-        view.originY = originCanvas.y;
-
-        GraphGridColors colors;
-        FillRgba(colors.canvas, kCanvasColor);
-        FillRgba(colors.minor,  kGraphGridMinorColor);
-        FillRgba(colors.major,  kGraphGridMajorColor);
-
-        // ===== THE ImGui-PRIMITIVE BACKDROP =================================
-        // The lattice is drawn with ImGui primitives through the shared
-        // GraphGridPhase state machine -- one snapped period, two octaves. That
-        // is a CHOICE rather than a stopgap: the grid is chrome, and an
-        // offscreen graph context per canvas would be a RenderGraph, a
-        // descriptor pool, a graveyard lane and a chrome-side user-texture entry
-        // to invalidate, to draw straight lines.
-        //
-        // The phase state rides on the DOCUMENT (one per canvas) so a canvas
-        // keeps its history across view switches.
-        DrawGraphGridFallback(ImGui::GetWindowDrawList(), canvasMin, canvasSize,
-                              view, colors, phase);
+        // The backdrop itself. The phase state rides on the DOCUMENT (one per
+        // canvas) so a canvas keeps its history across view switches.
+        DrawGraphCanvasBackdrop(canvasMin, canvasSize,
+                                kCanvasColor, kGraphGridMinorColor, kGraphGridMajorColor,
+                                phase);
     }
 
     void ShaderEditorDocument::SetPinPivot(std::uint64_t pinId, ImVec2 p)

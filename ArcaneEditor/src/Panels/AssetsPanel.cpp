@@ -7,6 +7,7 @@
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
+#include "Widgets/GraphCanvasBackdrop.hpp"  // DrawGraphCanvasBackdrop -- the pre-ed::Begin grid blit
 #include "Widgets/GraphCanvasStyle.hpp"  // node chrome metrics + grid palette + accents -- one definition, both canvases
 #include "Widgets/GraphNodeLod.hpp"      // NodeLOD / NodeLODForScale -- the zoom table's third column
 #include "Widgets/GraphPinDot.hpp"       // DrawGraphPinDot -- the filled/ring port dot, paint only
@@ -3845,12 +3846,12 @@ namespace Arcane::Editor
             ed::SetCurrentEditor(static_cast<ed::EditorContext*>(state.graphCanvas));
 
             // ---- 3. The backdrop, before ed::Begin ------------------------
-            // Exactly DrawCanvasBackdrop's shape
-            // (ShaderEditorDocument.cpp:5281): the canvas rect is measured
-            // HERE because this is the one place per frame that holds it
-            // BEFORE ed::Begin, which is where ScreenToCanvas still means
-            // what it says -- inside Begin/End the editor moves ImGui itself
-            // into canvas space.
+            // The canvas rect is measured HERE because this is the one place
+            // per frame that holds it BEFORE ed::Begin -- which is where
+            // ScreenToCanvas still means what it says, and where a blit lands
+            // under every channel the editor merges in. Both arguments, and the
+            // disclosed one-frame view lag they buy, are written out once at
+            // DrawGraphCanvasBackdrop (Widgets/GraphCanvasBackdrop.hpp).
             const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
             const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
             if (canvasSize.x <= 0.0f || canvasSize.y <= 0.0f)
@@ -3859,25 +3860,9 @@ namespace Arcane::Editor
                 return;
             }
 
-            {
-                GraphGridView view;
-                view.width  = static_cast<std::uint32_t>(canvasSize.x);
-                view.height = static_cast<std::uint32_t>(canvasSize.y);
-                view.scale  = GraphViewScale();   // owns the reciprocal flip
-                const ImVec2 originCanvas = ed::ScreenToCanvas(canvasMin);
-                view.originX = originCanvas.x;
-                view.originY = originCanvas.y;
-
-                GraphGridColors colors;
-                const auto fill = [](float (&dst)[4], const ImVec4& c)
-                { dst[0] = c.x; dst[1] = c.y; dst[2] = c.z; dst[3] = c.w; };
-                fill(colors.canvas, kGraphCanvasColor);
-                fill(colors.minor,  kGraphGridMinorColor);
-                fill(colors.major,  kGraphGridMajorColor);
-
-                DrawGraphGridFallback(ImGui::GetWindowDrawList(), canvasMin, canvasSize,
-                                      view, colors, state.graphGrid);
-            }
+            DrawGraphCanvasBackdrop(canvasMin, canvasSize,
+                                    kGraphCanvasColor, kGraphGridMinorColor, kGraphGridMajorColor,
+                                    state.graphGrid);
 
             if (state.graph.nodes.empty())
             {
