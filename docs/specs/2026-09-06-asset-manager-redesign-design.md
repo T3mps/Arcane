@@ -2114,3 +2114,66 @@ link, drag a node, open a context menu, look at a comment box.
    real gate, if one is wanted, is the audit's own suggestion: a device-less
    characterization test that calls the extracted wire function directly and asserts
    the returned midpoint and the emitted `ImDrawList` vertex count.
+
+### 2026-09-09 — desk-pass fix: the node/pin id-space collision (BOTH reported defects)
+
+**The desk pass reported two defects on the Graph lens.** They have **one** root cause.
+
+1. ImGui's ID-conflict tooltip — *"Programmer error: 2 visible items with conflicting
+   ID!"* — with the detector's red boxes over one node's **pin region** and a
+   **different node's body**.
+2. *"when trying to drag a pin off to derive, I cannot derive anything from any asset.
+   the drag works, it shows the button, but I can't click it."*
+
+**Root cause.** `imgui-node-editor` hit-tests every node and every pin with an ImGui
+item whose id is the hex of the object's **raw number and nothing else** —
+`snprintf(idString, 32, "%p", id.AsPointer())`, `imgui_node_editor.cpp:2408`.
+`ObjectId`'s Node/Pin/Link **type tag is a separate member**
+(`imgui_node_editor_internal.h:152-177`) and never reaches that string, so the
+library's own type safety does **not** extend to the ImGui id: a node and a pin that
+share a *number* share an *item id*. This lens handed it exactly that — node ids were
+`index + 1` (1..N) and pin ids were `nodeId*4 + {1,2}`, i.e. 5, 6, 9, 10, 13, 14, …,
+**inside the node range from five nodes up**. Node #6 and node #1's right pin were two
+visible items with one id.
+
+**Why that broke the pin-drag gesture too** — the second report, which read as an
+unrelated bug and is not. ImGui draws the conflict report through `BeginErrorTooltip`
+(`imgui.cpp:11921-11943`), the **one tooltip in the library that omits
+`ImGuiWindowFlags_NoInputs`** (compare `BeginTooltipEx:12799`, which sets it) — it
+cannot set it, because it hosts a clickable *Item Picker* button — and it forces itself
+to the display **and focus** front every frame, positioned at the cursor. An
+input-taking, always-topmost window sitting on the pointer owns `g.HoveredWindow`, so
+the click aimed at the ghost menu's `Derive Instance…` landed on the error tooltip
+instead. The gesture's own logic was never wrong; it was never reached.
+
+**Fix** (`AssetsPanel.cpp`): pin ids move into their own numeric range above every node
+id — `kGraphPinIdBase = 1ull << 32`, added in `GraphLeftPinId`/`GraphRightPinId` and
+subtracted back out in `pinNodeIndex`/`isRightPin`. The arithmetic is otherwise
+**unchanged** (still `*4 + {1,2}`, so `pinId/4` still names the node and `pinId%4` still
+names the side). A projection would need four billion nodes for the ranges to meet.
+**Link ids are deliberately untouched:** the library never gives a link an ImGui item at
+all — it hit-tests links by hand through `FindLinkAt`
+(`imgui_node_editor.cpp:2495-2503`) — so links cannot take part in this collision.
+
+**Tests** (`ArcaneTests/src/AssetsGraphCanvasTest.cpp`, both new). The existing
+device-less canvas case explicitly declined to drive mouse input; it is drivable after
+all, because `ed::GetNodePosition`/`GetNodeSize`/`CanvasToScreen` are public and
+`io.AddMousePosEvent`/`AddMouseButtonEvent` supply the input. That is the seam both new
+cases open.
+
+1. *"submits no conflicting ImGui item ids"* — seven material nodes (the count that
+   makes node #1's right pin collide with node #6), hover node #6, then read **ImGui's
+   own verdict**: `DebugDrawIdConflictsId`, `HoveredIdPreviousFrameItemCount`, and
+   whether the `##Tooltip_Error` window is up. **RED before the fix on all three**
+   (`1399686296 == 0` failed, `2 <= 1` failed, `errorTipUp` true); green after.
+2. *"pin-drag derives an instance"* — drives the whole gesture (hover the material's
+   right pin, press, drag past the threshold onto empty canvas, release, click the
+   entry) and asserts `requestCreateKind == MaterialInstance` and
+   `createPrefillParent == source`. This one **passed before the fix as well as
+   after**: it is coverage for the hop Task 6 shipped unverified, not a witness for
+   this fix. Its diagnostic value was decisive though — a green gesture on a canvas
+   with no conflict is what proved the second report was the tooltip stealing the
+   click, and not a fault in the gesture.
+
+**Suites:** `[graphcanvas]` 108 assertions / 4 cases (seed 3125215048), `[editor]` 3626
+/ 305 (seed 1336299481), full `~[gpu]` Debug 55328 / 1524 (seed 4244953531).

@@ -33,6 +33,7 @@
 
 #include "Documents/DocumentHost.hpp"
 #include "Panels/AssetsPanel.hpp"
+#include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind: what the ghost menu raises
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Guid.hpp>
@@ -46,6 +47,10 @@
 // the REAL ed::Config the panel's context ended up with -- see the zoom-table
 // regression check below.
 #include <imgui_node_editor.h>
+// The 2026-09-09 desk-pass cases at the bottom read ImGui's OWN id-conflict
+// verdict (ImGuiContext::DebugDrawIdConflictsId) and locate an open popup's
+// window -- both context internals, neither exposed by imgui.h.
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -584,4 +589,364 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     ImGui::SetCurrentContext(prev);
 
     fs::remove_all(root, ec);
+}
+
+// ===========================================================================
+// 2026-09-09 desk-pass defects (Plan 3): the two bugs the user raised at a
+// live editor on the Graph lens. Both need REAL MOUSE INPUT over REAL node
+// rects, which the case above explicitly declined to drive ("neither are
+// hover, tooltip or menu, which need real mouse input over real node rects").
+// They are drivable after all: ed::GetNodePosition/GetNodeSize/CanvasToScreen
+// are public, so a device-less frame CAN aim at a node or a pin, and
+// io.AddMousePosEvent/AddMouseButtonEvent supply the input. That is the seam
+// these two cases open.
+// ===========================================================================
+
+namespace
+{
+    // One panel frame with the window pinned at a KNOWN screen origin, which
+    // is what makes an absolute mouse coordinate mean something here.
+    struct GraphMouseHarness
+    {
+        ImVec2 origin{ 0.0f, 0.0f };
+        ImVec2 size{ 1200.0f, 640.0f };
+
+        AssetsPanelState*   state = nullptr;
+        AssetPanelModel*    model = nullptr;
+        const Project*      project = nullptr;
+        DocumentHost*       docs = nullptr;
+        AssetsPanelServices services{};
+        AssetsPanelActions  lastActions;
+
+        void Frame()
+        {
+            ImGuiIO& io = ImGui::GetIO();
+            io.DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos(origin, ImGuiCond_Always);
+            ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+            lastActions = DrawAssetsPanel(*state, *model, project, *docs, services);
+            ImGui::Render();
+        }
+
+        void MoveTo(const ImVec2& p) { ImGui::GetIO().AddMousePosEvent(p.x, p.y); }
+        void Button(bool down)       { ImGui::GetIO().AddMouseButtonEvent(0, down); }
+
+        // Node geometry, in SCREEN space, read back from the live canvas.
+        // The panel's node ids are index+1 (AssetsPanel.cpp's GraphNodeIdOf).
+        ImVec2 NodeScreenCentre(std::uint64_t nodeId)
+        {
+            auto* ed_ctx = static_cast<ax::NodeEditor::EditorContext*>(state->graphCanvas);
+            ax::NodeEditor::SetCurrentEditor(ed_ctx);
+            const ImVec2 pos = ax::NodeEditor::GetNodePosition(ax::NodeEditor::NodeId(nodeId));
+            const ImVec2 sz  = ax::NodeEditor::GetNodeSize(ax::NodeEditor::NodeId(nodeId));
+            const ImVec2 out = ax::NodeEditor::CanvasToScreen(
+                ImVec2(pos.x + sz.x * 0.5f, pos.y + sz.y * 0.5f));
+            ax::NodeEditor::SetCurrentEditor(nullptr);
+            return out;
+        }
+
+        ImVec2 NodeRightPinScreen(std::uint64_t nodeId)
+        {
+            auto* ed_ctx = static_cast<ax::NodeEditor::EditorContext*>(state->graphCanvas);
+            ax::NodeEditor::SetCurrentEditor(ed_ctx);
+            const ImVec2 pos = ax::NodeEditor::GetNodePosition(ax::NodeEditor::NodeId(nodeId));
+            const ImVec2 sz  = ax::NodeEditor::GetNodeSize(ax::NodeEditor::NodeId(nodeId));
+            const ImVec2 out = ax::NodeEditor::CanvasToScreen(
+                ImVec2(pos.x + sz.x, pos.y + sz.y * 0.5f));
+            ax::NodeEditor::SetCurrentEditor(nullptr);
+            return out;
+        }
+
+        ImVec2 CanvasPointScreen(const ImVec2& canvasPos)
+        {
+            auto* ed_ctx = static_cast<ax::NodeEditor::EditorContext*>(state->graphCanvas);
+            ax::NodeEditor::SetCurrentEditor(ed_ctx);
+            const ImVec2 out = ax::NodeEditor::CanvasToScreen(canvasPos);
+            ax::NodeEditor::SetCurrentEditor(nullptr);
+            return out;
+        }
+    };
+
+    // A material fixture whose node COUNT is chosen so the shipped id scheme
+    // is guaranteed to collide (see the case below for the arithmetic).
+    struct MaterialHubFixture
+    {
+        fs::path root;
+        std::optional<Project> project;
+        FakeProviders fake;
+        Guid hub;
+        std::vector<Guid> referencers;
+
+        void Build(const char* name, int referencerCount)
+        {
+            root = fs::temp_directory_path() / name;
+            std::error_code ec;
+            fs::remove_all(root, ec);
+            REQUIRE(Project::Create(root, "GraphMouse").has_value());
+            const fs::path content = root / "Content";
+
+            hub = FixtureGuid(1);
+            WriteFile(content / "materials" / "hub.arcmat",
+                      R"({"id":")" + hub.ToString() + R"(","type":"material","kind":"sprite"})");
+            for (int i = 0; i < referencerCount; ++i)
+            {
+                const Guid g = FixtureGuid(10 + i);
+                referencers.push_back(g);
+                WriteFile(content / "materials" / ("ref" + std::to_string(i) + ".arcmat"),
+                          R"({"id":")" + g.ToString() + R"(","type":"material","kind":"sprite"})");
+                fake.refsByGuid[g] = { { hub, AssetRefKind::References } };
+            }
+            project = Project::Open(root);
+            REQUIRE(project.has_value());
+        }
+    };
+}
+
+// ---------------------------------------------------------------------------
+// DESK-PASS DEFECT 1 -- "Programmer error: 2 visible items with conflicting
+// ID!" on the Graph lens, with the detector's red boxes over one node's PIN
+// region and a DIFFERENT node's body.
+//
+// WHY THAT PAIR, exactly. imgui-node-editor hit-tests every node and every pin
+// with an ImGui item whose id is the hex of the object's RAW numeric id and
+// NOTHING ELSE -- `snprintf(idString, 32, "%p", id.AsPointer())`
+// (imgui_node_editor.cpp:2408). ObjectId's Node/Pin/Link TYPE TAG is a
+// separate member (imgui_node_editor_internal.h:152-177) and never reaches
+// that string, so a node and a pin that happen to share a NUMBER share an
+// ImGui id -- two visible items, one id, which is precisely what ImGui 1.92's
+// detector reports (imgui.cpp:5076-5081, 11877).
+//
+// This lens hands it exactly that: node ids are index+1 (1..N) and pin ids are
+// nodeId*4+{1,2}, so pin ids land at 5,6,9,10,13,14,... -- INSIDE the node
+// range as soon as the graph has five or more nodes.
+//
+// The fixture below pins the arithmetic down: a hub material referenced by six
+// others is SEVEN nodes, so node #1's RIGHT pin (1*4+2 = 6) collides with node
+// #6's body. Every asset is a MATERIAL because the derive affordance gives
+// every material a right pin unconditionally (AssetsPanel.cpp:3944-3951), so
+// the colliding pin is guaranteed to be submitted rather than depending on
+// which node the projection happened to order first.
+//
+// The detector is read the way ImGui itself reads it: hover one of the two,
+// and on the frame after next `g.DebugDrawIdConflictsId` is non-zero
+// (imgui.cpp:5773-5776 -- the count accumulated while hovering is examined one
+// NewFrame later).
+TEST_CASE("Assets panel Graph lens submits no conflicting ImGui item ids",
+          "[editor][graphcanvas]")
+{
+    MaterialHubFixture fx;
+    fx.Build("arcane_assets_graph_idconflict_test", /*referencerCount=*/6);
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&fx.project->Registry(), fx.fake.Make()));
+
+    IMGUI_CHECKVERSION();
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1600.0f, 900.0f);
+    io.IniFilename = nullptr;
+    // The detector under test. On by default (imgui.cpp:1718); asserted rather
+    // than assumed, because a green run with it off would prove nothing.
+    REQUIRE(io.ConfigDebugHighlightIdConflicts);
+    unsigned char* pixels = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+
+    AssetsPanelState state;
+    state.lens = AssetLens::Graph;
+    state.graphFocusSeeded = true;   // nil focus == everything-mode
+    DocumentHost docs;
+
+    GraphMouseHarness hw;
+    hw.state = &state;
+    hw.model = &model;
+    hw.project = &*fx.project;
+    hw.docs = &docs;
+    hw.services.resolveAssetThumb = [](const Guid&) -> std::uint64_t { return 0ull; };
+
+    // Settle: context creation, layout seed, then live readback frames.
+    for (int i = 0; i < 4; ++i)
+        hw.Frame();
+
+    const std::size_t nodeCount = state.graph.nodes.size();
+    // Seven real nodes, no overflow companion, no tombstone -- the exact
+    // shape the collision arithmetic above is stated against.
+    REQUIRE(nodeCount == 7u);
+
+    // The two ids that MUST collide under the shipped scheme: node #6's body
+    // and node #1's right pin (1*4+2). Probing the NODE BODY rather than the
+    // 9px pin is deliberate -- the detector fires from hovering EITHER of the
+    // two items, and a node body is an unmissable target.
+    const ImVec2 probe = hw.NodeScreenCentre(6);
+    // The probe has to actually land on the canvas, or a green result would
+    // only mean "the mouse was nowhere".
+    REQUIRE(probe.x > hw.origin.x);
+    REQUIRE(probe.x < hw.origin.x + hw.size.x);
+    REQUIRE(probe.y > hw.origin.y);
+    REQUIRE(probe.y < hw.origin.y + hw.size.y);
+
+    hw.MoveTo(probe);
+    hw.Frame();                       // hover registers
+    hw.Frame();                       // duplicate ids counted against it
+    hw.Frame();                       // NewFrame publishes the verdict
+
+    // The witness that the probe worked at all: something under the cursor
+    // took an ImGui id. Without this a mis-aimed probe reads as "no conflict".
+    CHECK(ImGui::GetCurrentContext()->HoveredIdPreviousFrame != 0u);
+
+    // THE ASSERTION. Non-zero is ImGui saying "two visible items, one id" --
+    // the desk report's tooltip, reproduced.
+    CHECK(ImGui::GetCurrentContext()->DebugDrawIdConflictsId == 0u);
+    CHECK(ImGui::GetCurrentContext()->HoveredIdPreviousFrameItemCount <= 1);
+
+    // ...AND THE SECOND DESK DEFECT, which is this same fault's other face.
+    // ImGui's report is NOT passive chrome. It is drawn through
+    // BeginErrorTooltip (imgui.cpp:11921-11943), which -- alone among every
+    // tooltip in the library -- omits ImGuiWindowFlags_NoInputs (compare
+    // BeginTooltipEx, imgui.cpp:12799, which sets it): it cannot set it,
+    // because it hosts a clickable "Item Picker" SmallButton. It then forces
+    // itself to the display front AND the focus front on every frame it is
+    // up, positioned at the cursor like any other tooltip.
+    //
+    // So while a conflict is being reported there is an INPUT-TAKING,
+    // always-topmost window sitting on the pointer. It owns g.HoveredWindow,
+    // and a click near the cursor lands on IT rather than on whatever is
+    // underneath -- which is exactly the user's second report: "the drag
+    // works, it shows the button, but I can't click it". The ghost menu is
+    // what is underneath.
+    //
+    // Asserting the WINDOW's existence rather than the swallowed click keeps
+    // this a statement about the cause: no conflict, no error tooltip, nothing
+    // over the cursor to eat the click.
+    ImGuiWindow* errorTip = ImGui::FindWindowByName("##Tooltip_Error");
+    const bool errorTipUp = errorTip != nullptr && (errorTip->Active || errorTip->WasActive);
+    CHECK_FALSE(errorTipUp);
+
+    DestroyAssetsPanelCanvas(state);
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+
+    std::error_code ec;
+    fs::remove_all(fx.root, ec);
+}
+
+// ---------------------------------------------------------------------------
+// DESK-PASS DEFECT 2 -- "the drag works, it shows the button, but I can't
+// click it": the pin-drag ghost menu's `Derive Instance...` entry never
+// derives, from any asset.
+//
+// The gesture SPANS FRAMES, so this drives the whole thing: hover the source
+// material's RIGHT (dependents) pin, press, drag past ImGui's threshold onto
+// empty canvas, release, and let the library's Create stage land -- then click
+// the entry the ghost menu puts under the cursor.
+//
+// TWO nodes on purpose. The id-conflict case above needs five or more to make
+// the node/pin id ranges overlap; this one stays under that so the two defects
+// cannot be confused for each other -- whatever this case reports is about the
+// gesture, not about a stolen ImGui id.
+TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
+          "[editor][graphcanvas]")
+{
+    MaterialHubFixture fx;
+    fx.Build("arcane_assets_graph_pindrag_test", /*referencerCount=*/6);
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&fx.project->Registry(), fx.fake.Make()));
+
+    IMGUI_CHECKVERSION();
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1600.0f, 900.0f);
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+
+    AssetsPanelState state;
+    state.lens = AssetLens::Graph;
+    state.graphFocusSeeded = true;
+    DocumentHost docs;
+
+    GraphMouseHarness hw;
+    hw.state = &state;
+    hw.model = &model;
+    hw.project = &*fx.project;
+    hw.docs = &docs;
+    hw.services.resolveAssetThumb = [](const Guid&) -> std::uint64_t { return 0ull; };
+
+    for (int i = 0; i < 4; ++i)
+        hw.Frame();
+
+    REQUIRE(state.graph.nodes.size() == 7u);
+    // The hub is a MATERIAL and therefore carries a right pin unconditionally
+    // (AssetsPanel.cpp:3944-3951) -- the handle the gesture starts from.
+    std::size_t hubIndex = state.graph.nodes.size();
+    for (std::size_t i = 0; i < state.graph.nodes.size(); ++i)
+        if (state.graph.nodes[i].guid == fx.hub)
+            hubIndex = i;
+    REQUIRE(hubIndex < state.graph.nodes.size());
+    const std::uint64_t hubNodeId = static_cast<std::uint64_t>(hubIndex) + 1ull;
+
+    const ImVec2 pin   = hw.NodeRightPinScreen(hubNodeId);
+    const ImVec2 empty = hw.CanvasPointScreen(ImVec2(620.0f, 300.0f));
+    REQUIRE(pin.x > hw.origin.x);
+    REQUIRE(pin.x < hw.origin.x + hw.size.x);
+    REQUIRE(empty.x < hw.origin.x + hw.size.x);
+    REQUIRE(empty.y < hw.origin.y + hw.size.y);
+
+    // ---- the drag ---------------------------------------------------------
+    hw.MoveTo(pin);      hw.Frame(); hw.Frame();
+    hw.Button(true);     hw.Frame(); hw.Frame();
+    // Past ImGui's drag threshold, then out over open canvas. Several frames:
+    // the library needs one to DragStart, one to reach its Possible stage, and
+    // one more with the pointer over the background to DropNode.
+    hw.MoveTo(ImVec2(pin.x + 60.0f, pin.y + 20.0f)); hw.Frame(); hw.Frame();
+    hw.MoveTo(empty);    hw.Frame(); hw.Frame(); hw.Frame();
+    // The in-flight half must be live here, or the gesture never started and
+    // everything below would be measuring the wrong thing.
+    CHECK(state.graphDragGuid == fx.hub);
+    CHECK(state.graphDragRight);
+
+    hw.Button(false);    hw.Frame();   // release -> DragEnd arms the Create stage
+    hw.Frame();                        // Create stage -> stash + OpenPopup
+
+    // ---- what the release stashed ----------------------------------------
+    // These two ARE the ghost menu's enabled gate (AssetsPanel.cpp:4644-4645).
+    CHECK(state.graphWireGuid == fx.hub);
+    CHECK(state.graphWireDerivable);
+
+    // ---- the menu is really up, and the entry is really clickable ---------
+    ImGuiContext* g = ImGui::GetCurrentContext();
+    REQUIRE(g->OpenPopupStack.Size > 0);
+    ImGuiWindow* popup = g->OpenPopupStack[0].Window;
+    REQUIRE(popup != nullptr);
+    REQUIRE(popup->Size.x > 0.0f);
+
+    // Aim at the popup's single entry: one line in from its padding.
+    const ImVec2 entry(popup->Pos.x + popup->Size.x * 0.5f,
+                       popup->Pos.y + ImGui::GetStyle().WindowPadding.y +
+                           ImGui::GetTextLineHeight() * 0.5f);
+    hw.MoveTo(entry);  hw.Frame(); hw.Frame();
+    hw.Button(true);   hw.Frame();
+    hw.Button(false);  hw.Frame();
+
+    // THE ASSERTION. The entry's one job (AssetsPanel.cpp:4671-4673): raise the
+    // unified create request with the source material pre-filled as the parent.
+    CHECK(hw.lastActions.requestCreateKind ==
+          static_cast<int>(CreateAssetKind::MaterialInstance));
+    CHECK(hw.lastActions.createPrefillParent == fx.hub);
+
+    DestroyAssetsPanelCanvas(state);
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+
+    std::error_code ec;
+    fs::remove_all(fx.root, ec);
 }

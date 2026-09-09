@@ -3102,8 +3102,48 @@ namespace Arcane::Editor
         // at the LEFT node's right-hand pin and end at the RIGHT node's
         // left-hand pin. Hence RIGHT pins are ed::PinKind::Output and LEFT
         // pins are ed::PinKind::Input.
-        std::uint64_t GraphLeftPinId(std::uint64_t nodeId) noexcept  { return nodeId * 4ull + 1ull; }
-        std::uint64_t GraphRightPinId(std::uint64_t nodeId) noexcept { return nodeId * 4ull + 2ull; }
+        //
+        // PINS LIVE IN THEIR OWN NUMERIC RANGE, ABOVE EVERY NODE ID -- and
+        // that is a correctness requirement, not tidiness (2026-09-09 desk
+        // pass, both defects). imgui-node-editor hit-tests every node and
+        // every pin with an ImGui item whose id is the hex of the object's RAW
+        // NUMBER and nothing else -- `snprintf(idString, 32, "%p",
+        // id.AsPointer())`, imgui_node_editor.cpp:2408. ObjectId's Node/Pin/
+        // Link TYPE TAG is a separate member (imgui_node_editor_internal.h:
+        // 152-177) and never reaches that string, so the library's own
+        // type-safety does NOT extend to the ImGui id: a node and a pin that
+        // share a number share an item id.
+        //
+        // The original `nodeId * 4 + {1,2}` put pin ids at 5,6,9,10,13,14,...
+        // -- squarely INSIDE the node range (1..N) from five nodes up. Node #6
+        // and node #1's right pin were then two visible items with one id,
+        // which ImGui 1.92 reports outright ("Programmer error: 2 visible
+        // items with conflicting ID!", imgui.cpp:5076-5081 / 11877).
+        //
+        // That report is also why the pin-drag gesture read as broken. ImGui
+        // draws it through BeginErrorTooltip (imgui.cpp:11921-11943), the ONE
+        // tooltip in the library that omits ImGuiWindowFlags_NoInputs --
+        // compare BeginTooltipEx:12799, which sets it -- because it hosts a
+        // clickable "Item Picker" button; and it forces itself to the display
+        // AND focus front every frame, at the cursor. An input-taking,
+        // always-topmost window on the pointer owns g.HoveredWindow, so the
+        // click aimed at the ghost menu's "Derive Instance..." landed on the
+        // error tooltip instead: "the drag works, it shows the button, but I
+        // can't click it".
+        //
+        // 2^32 is chosen so the ranges cannot meet: a projection would need
+        // four billion nodes to reach it, and the node/pin arithmetic below is
+        // otherwise UNCHANGED (still *4 + {1,2}, so pinId/4 still names the
+        // node and pinId%4 still names the side -- the base simply subtracts
+        // out first). LINK ids are deliberately left alone: the library never
+        // gives a link an ImGui item at all (it hit-tests links by hand
+        // through FindLinkAt, imgui_node_editor.cpp:2495-2503), so they cannot
+        // take part in this collision.
+        inline constexpr std::uint64_t kGraphPinIdBase = 1ull << 32;
+        std::uint64_t GraphLeftPinId(std::uint64_t nodeId) noexcept
+        { return kGraphPinIdBase + nodeId * 4ull + 1ull; }
+        std::uint64_t GraphRightPinId(std::uint64_t nodeId) noexcept
+        { return kGraphPinIdBase + nodeId * 4ull + 2ull; }
 
         // THIS lens's answers to the shared style desc
         // (Widgets/GraphCanvasStyle.hpp). All 15 ed::Style writes -- 10 colours
@@ -4290,16 +4330,22 @@ namespace Arcane::Editor
             // A PIN id -> the projection index of the node that owns it, or
             // `nodes.size()`. Routed through nodeIndexOf so it inherits the
             // rebuild-staleness refusal in one place rather than re-deriving
-            // it. Pin ids are nodeId*4 + {1,2} and node ids start at 1, so the
-            // smallest legal pin id is 5.
+            // it. Pin ids are kGraphPinIdBase + nodeId*4 + {1,2} and node ids
+            // start at 1, so the smallest legal pin id is that base + 5 -- and
+            // the base is what keeps a pin id from ever reading as a node id
+            // (see GraphLeftPinId for why that matters). It subtracts out
+            // before the arithmetic, which is otherwise unchanged.
             const auto pinNodeIndex = [&](std::uint64_t pinId) -> std::size_t
             {
                 if (pinId < GraphLeftPinId(1ull))
                     return nodes.size();
-                return nodeIndexOf(pinId / 4ull);
+                return nodeIndexOf((pinId - kGraphPinIdBase) / 4ull);
             };
             const auto isRightPin = [](std::uint64_t pinId)
-            { return pinId >= GraphLeftPinId(1ull) && (pinId % 4ull) == 2ull; };
+            {
+                return pinId >= GraphLeftPinId(1ull) &&
+                       ((pinId - kGraphPinIdBase) % 4ull) == 2ull;
+            };
             // Remember WHICH asset the live drag is leaving, by guid. Silent on
             // a rebuild frame (nothing resolvable) and on a synthetic node --
             // in both cases the previous answer stands, which is right: the
