@@ -2177,3 +2177,47 @@ cases open.
 
 **Suites:** `[graphcanvas]` 108 assertions / 4 cases (seed 3125215048), `[editor]` 3626
 / 305 (seed 1336299481), full `~[gpu]` Debug 55328 / 1524 (seed 4244953531).
+
+### 2026-09-09 — user ruling: non-derivable pin-drag release is now a quiet no-op
+
+**Supersedes** the disabled-not-hidden decision recorded for Task 6's ghost menu
+(`docs/plans/2026-09-08-asset-manager-plan3-graph.md:504`, and the shipped code's own
+rationale comment in `AssetsPanel.cpp` — "DISABLED, not CLOSED … discoverable
+everywhere it is possible to make it").
+
+**User ruling, verbatim:** "very confusing to have the same button show up if or if
+not the asset is derivable."
+
+**What changed.** Releasing a pin-drag over empty canvas no longer opens the ghost
+menu unconditionally with its one entry, `Derive Instance…`, rendered disabled for a
+non-derivable source. It now opens the menu **only** when the release is derivable — a
+live **material**, dragged off its **dependents** (right) pin, the existing
+`graphWireDerivable` computation, unchanged. A release from any other pin, or off a
+non-material, is now a quiet no-op: no popup opens at all, the dashed in-flight wire
+(drawn for every drag, derivable or not — unchanged, still generic drag feedback)
+simply ends, and the gesture stash (`graphWireGuid`/`graphWireDerivable`) is cleared
+the same way it is on a project switch, rather than left to dangle until the next
+successful drag overwrites it. The popup's own `BeginDisabled` wrap is narrowed to its
+one remaining live reason — the stashed source asset disappearing (deleted on disk,
+tombstoned) while the popup is still open across frames — since derivability itself can
+no longer be false while the popup can be open at all: the two are now stashed
+together, on the same frame, by construction.
+
+**Tests.** `ArcaneTests/src/AssetsGraphCanvasTest.cpp` gains one case, *"Assets panel
+Graph lens pin-drag from a non-derivable source is a quiet no-op"*, driving the same
+`MaterialHubFixture` as the existing derivable case but off a referencer's LEFT
+(dependencies) pin instead of the hub's right one — `isRightPin` false by construction,
+independent of the source still being a material, which isolates "wrong pin side" from
+"wrong asset kind" as the failing conjunct. RED against the pre-change code (a popup
+would still have opened, its entry merely disabled); GREEN after — reasoned rather than
+desk-reverted, since the pre-change code's only gate on raising the popup was reaching
+the accept branch at all, which a left-pin release does exactly as readily as a
+right-pin one. The existing derivable case is untouched and still green, byte-identical
+behavior.
+
+**Suites** (Debug, before → after, same commit's binary both times): `[graphcanvas]`
+110 / 4 → 126 / 5 (seed 3575243901), `[editor]` 3628 / 305 → 3644 / 306 (seed
+1243731435), full `~[gpu]` 55330 / 1524 → 55346 / 1525 (seed 2770446487). Every suite's
+delta is **+16 assertions / +1 case**, identically — entirely the one new test case (14
+assertions in its own body plus 2 `REQUIRE`s in the shared `MaterialHubFixture::Build`
+it calls); no pre-existing test's count moved.

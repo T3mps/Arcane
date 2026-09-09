@@ -682,6 +682,21 @@ namespace
             return out;
         }
 
+        // The LEFT (dependencies/outbound) pin, mirroring NodeRightPinScreen
+        // above -- GraphLeftPinId's handle, used by the non-derivable leg
+        // (AssetsPanel.cpp's `isRightPin` gate) rather than the derive one.
+        ImVec2 NodeLeftPinScreen(std::uint64_t nodeId)
+        {
+            auto* ed_ctx = static_cast<ax::NodeEditor::EditorContext*>(state->graphCanvas);
+            ax::NodeEditor::SetCurrentEditor(ed_ctx);
+            const ImVec2 pos = ax::NodeEditor::GetNodePosition(ax::NodeEditor::NodeId(nodeId));
+            const ImVec2 sz  = ax::NodeEditor::GetNodeSize(ax::NodeEditor::NodeId(nodeId));
+            const ImVec2 out = ax::NodeEditor::CanvasToScreen(
+                ImVec2(pos.x, pos.y + sz.y * 0.5f));
+            ax::NodeEditor::SetCurrentEditor(nullptr);
+            return out;
+        }
+
         ImVec2 CanvasPointScreen(const ImVec2& canvasPos)
         {
             auto* ed_ctx = static_cast<ax::NodeEditor::EditorContext*>(state->graphCanvas);
@@ -989,11 +1004,139 @@ TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
     hw.Button(true);   hw.Frame();
     hw.Button(false);  hw.Frame();
 
-    // THE ASSERTION. The entry's one job (AssetsPanel.cpp:4717-4719): raise the
+    // THE ASSERTION. The entry's one job (AssetsPanel.cpp:4747-4749): raise the
     // unified create request with the source material pre-filled as the parent.
     CHECK(hw.lastActions.requestCreateKind ==
           static_cast<int>(CreateAssetKind::MaterialInstance));
     CHECK(hw.lastActions.createPrefillParent == fx.hub);
+
+    DestroyAssetsPanelCanvas(state);
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+
+    std::error_code ec;
+    fs::remove_all(fx.root, ec);
+}
+
+// ---------------------------------------------------------------------------
+// 2026-09-09 user ruling: "very confusing to have the same button show up if
+// or if not the asset is derivable." A release from a NON-derivable source is
+// now a quiet no-op -- no ghost menu at all -- rather than the same popup with
+// its one entry disabled. This case is the RED/GREEN witness for that change:
+// against the pre-change code (the `else if (ed::AcceptNewItem())` branch
+// above that unconditionally stashed and raised `wireCreateRequest`) the
+// `OpenPopupStack.Size == 0` assertion below FAILS, because a popup opens with
+// its entry merely disabled. Reasoned rather than desk-reverted (cheap to
+// re-derive: the old code's only gate on `wireCreateRequest` was reaching this
+// `else if` at all, which a LEFT-pin release does exactly as readily as a
+// RIGHT-pin one) -- see AssetsPanel.cpp's `derivable` local, ~:4421-4425.
+//
+// The gesture is driven off the SAME MaterialHubFixture and the SAME hub node
+// as the derivable case above (no new fixture needed): the hub's right pin is
+// the derivable leg; this drags from a REFERENCER's LEFT pin instead --
+// `isRightPin` false by construction, so `derivable` is false regardless of
+// the source being a material. (Every fixture asset is a material on purpose,
+// per the derivable case's own header comment; a left-pin release is the
+// cheapest way to isolate "not the DEPENDENTS pin" from "not a material" as
+// the failing conjunct, and AssetsPanel.cpp's ruling comment calls out the
+// left pin explicitly as the other way in.)
+TEST_CASE("Assets panel Graph lens pin-drag from a non-derivable source is a quiet no-op",
+          "[editor][graphcanvas]")
+{
+    MaterialHubFixture fx;
+    fx.Build("arcane_assets_graph_pindrag_nonderivable_test", /*referencerCount=*/6);
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&fx.project->Registry(), fx.fake.Make()));
+
+    IMGUI_CHECKVERSION();
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1600.0f, 900.0f);
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+
+    AssetsPanelState state;
+    state.lens = AssetLens::Graph;
+    state.graphFocusSeeded = true;
+    DocumentHost docs;
+
+    GraphMouseHarness hw;
+    hw.state = &state;
+    hw.model = &model;
+    hw.project = &*fx.project;
+    hw.docs = &docs;
+    hw.services.resolveAssetThumb = [](const Guid&) -> std::uint64_t { return 0ull; };
+
+    for (int i = 0; i < 4; ++i)
+        hw.Frame();
+
+    REQUIRE(state.graph.nodes.size() == 7u);
+    // referencers[0] references the hub, so it has a LEFT (outbound) pin --
+    // AssetsPanel.cpp:3961-3962 gives `hasLeftPin` only to the edge's `from`
+    // side, unlike the hub's right pin which every material gets
+    // unconditionally (:3994-4001).
+    std::size_t refIndex = state.graph.nodes.size();
+    for (std::size_t i = 0; i < state.graph.nodes.size(); ++i)
+        if (state.graph.nodes[i].guid == fx.referencers[0])
+            refIndex = i;
+    REQUIRE(refIndex < state.graph.nodes.size());
+    const std::uint64_t refNodeId = static_cast<std::uint64_t>(refIndex) + 1ull;
+
+    // Seed the gesture stash by hand from an EARLIER (imagined) derivable
+    // drag, the way DestroyAssetsPanelCanvas's own leg does above: a real
+    // non-derivable release must OVERWRITE a stale derivable stash, not leave
+    // it sitting there for a popup that (per this case) never opens to read
+    // back.
+    state.graphWireGuid      = fx.hub;
+    state.graphWireDerivable = true;
+
+    const ImVec2 pin   = hw.NodeLeftPinScreen(refNodeId);
+    const ImVec2 empty = hw.CanvasPointScreen(ImVec2(620.0f, 300.0f));
+    REQUIRE(pin.x > hw.origin.x);
+    REQUIRE(pin.x < hw.origin.x + hw.size.x);
+    REQUIRE(empty.x < hw.origin.x + hw.size.x);
+    REQUIRE(empty.y < hw.origin.y + hw.size.y);
+
+    // ---- the drag -- same choreography as the derivable case, off the
+    // LEFT pin instead of the right one ------------------------------------
+    hw.MoveTo(pin);      hw.Frame(); hw.Frame();
+    hw.Button(true);     hw.Frame(); hw.Frame();
+    hw.MoveTo(ImVec2(pin.x - 60.0f, pin.y + 20.0f)); hw.Frame(); hw.Frame();
+    hw.MoveTo(empty);    hw.Frame(); hw.Frame(); hw.Frame();
+    // The in-flight half is still live for EVERY drag, derivable or not --
+    // the dashed wire is generic drag feedback and this change does not
+    // touch it.
+    CHECK(state.graphDragGuid == fx.referencers[0]);
+    CHECK_FALSE(state.graphDragRight);
+
+    hw.Button(false);    hw.Frame();   // release -> DragEnd arms the Create stage
+    hw.Frame();                        // Create stage -> the non-derivable branch runs
+
+    // ---- THE ASSERTION: quiet no-op ----------------------------------------
+    // No ghost menu at all -- not a disabled one. Checked structurally
+    // (nothing on ImGui's popup stack) rather than via `menuOpen`, which is a
+    // local the panel does not expose.
+    ImGuiContext* g = ImGui::GetCurrentContext();
+    CHECK(g->OpenPopupStack.Size == 0);
+
+    // The gesture stash is cleared, not left holding the PRIOR (derivable)
+    // drag's guid -- the same "named asset of an outgoing gesture must not
+    // survive it" posture DestroyAssetsPanelCanvas's project-switch reset
+    // uses (AssetsPanel.cpp ~:4879-4880), applied here per-release instead of
+    // per-project-switch.
+    CHECK_FALSE(state.graphWireGuid.IsValid());
+    CHECK_FALSE(state.graphWireDerivable);
+
+    // ...and no create request reached the host: the one thing the (now
+    // unreachable) entry could have raised.
+    CHECK(hw.lastActions.requestCreateKind == -1);
+    CHECK_FALSE(hw.lastActions.createPrefillParent.IsValid());
 
     DestroyAssetsPanelCanvas(state);
     ImGui::DestroyContext(ctx);

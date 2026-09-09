@@ -4419,13 +4419,35 @@ namespace Arcane::Editor
                     else if (ed::AcceptNewItem())
                     {
                         const AssetPanelEntry* src = model.Find(nodes[i].guid);
-                        state.graphWireGuid = nodes[i].guid;
                         // Derivable = a live MATERIAL, dragged off its
                         // DEPENDENTS pin. A tombstone has no entry, so it
                         // fails this by construction.
-                        state.graphWireDerivable = isRightPin(aId.Get()) && src &&
-                                                   src->kind == AssetKind::Material;
-                        wireCreateRequest = true;
+                        const bool derivable = isRightPin(aId.Get()) && src &&
+                                               src->kind == AssetKind::Material;
+                        if (derivable)
+                        {
+                            // Stash AND raise the menu together -- the guid
+                            // named here is the one the popup (8f, below)
+                            // will read back by the SAME field, so the two
+                            // must agree on every frame the popup can open.
+                            state.graphWireGuid      = nodes[i].guid;
+                            state.graphWireDerivable = true;
+                            wireCreateRequest = true;
+                        }
+                        else
+                        {
+                            // 2026-09 user ruling: a non-derivable release is
+                            // a QUIET NO-OP, not a disabled menu -- "very
+                            // confusing to have the same button show up if or
+                            // if not the asset is derivable". No stash, no
+                            // OpenPopup below; the dashed wire (drawn for
+                            // every drag, derivable or not) simply ends here.
+                            // Cleared the same way the gesture stash retires
+                            // on a project switch, rather than left to dangle
+                            // until the next successful drag overwrites it.
+                            state.graphWireGuid      = Arcane::Guid{};
+                            state.graphWireDerivable = false;
+                        }
                     }
                 }
                 // NO `else`: the pointer is over a NODE BODY, where the library
@@ -4678,6 +4700,13 @@ namespace Arcane::Editor
                 // which is why the menu lands at the drag's release point (the
                 // board's `left: 474px; top: 380px` beside the curve's
                 // `462,402` end) with no explicit placement call.
+                //
+                // 2026-09 user ruling (supersedes dev 11's disabled-not-hidden
+                // call): `wireCreateRequest` is now raised ONLY on a derivable
+                // release (the branch above), so a non-derivable release opens
+                // NOTHING here -- the dashed wire (drawn for every drag,
+                // derivable or not, above) simply ends and the gesture reads
+                // as a quiet no-op rather than a button that shows up disabled.
                 if (wireCreateRequest)
                     ImGui::OpenPopup(kGraphCreateMenuId);
                 if (ImGui::BeginPopup(kGraphCreateMenuId))
@@ -4687,25 +4716,16 @@ namespace Arcane::Editor
                     // it re-reads a stashed GUID, never the pin id it came
                     // from. If the asset went away underneath an open menu
                     // (deleted on disk, a rebuild dropped it) the entry simply
-                    // goes dead rather than promising a parent that is gone.
-                    //
-                    // DISABLED, not CLOSED -- deliberately unlike 8e's node
-                    // menu. That one draws a whole list of per-asset actions
-                    // that would all be meaningless, so closing is the honest
-                    // answer; this one has a single entry whose disabled state
-                    // already says exactly that. It is also the state a
-                    // TOMBSTONE source lands in (no entry, by definition), and
-                    // "cannot derive from this" reads better there than a menu
-                    // that flashes up and vanishes.
+                    // goes dead rather than promising a parent that is gone --
+                    // the ONE reason left to disable rather than close, now
+                    // that non-derivable releases never reach this popup at
+                    // all. (`state.graphWireDerivable` is therefore always
+                    // true for as long as this popup can be open: it and
+                    // `graphWireGuid` are stashed together on the SAME frame,
+                    // above, and nothing else writes either while the popup
+                    // stands.)
                     const AssetPanelEntry* src = model.Find(state.graphWireGuid);
-                    ImGui::BeginDisabled(!src || !state.graphWireDerivable);
-                    // ONE entry, DISABLED rather than hidden when the drag did
-                    // not come off a material's dependents pin: the gesture
-                    // stays discoverable everywhere it is possible to make it,
-                    // and says plainly that this particular source cannot
-                    // answer it. (The board's second entry, "Assign to
-                    // selection", is a different feature and not in this
-                    // plan's scope -- deliberately not invented here.)
+                    ImGui::BeginDisabled(!src);
                     if (ImGui::MenuItem(ICON_LC_LAYERS " Derive Instance\xE2\x80\xA6"))
                     {
                         // THE FIRST REAL PRODUCER of the createPrefillParent
