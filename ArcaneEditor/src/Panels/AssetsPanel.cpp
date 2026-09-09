@@ -3033,6 +3033,20 @@ namespace Arcane::Editor
             return Theme::kGrab;   // #9a9a9a -- no §11.3 row, so no invented hue
         }
 
+        // The accent a node actually WEARS -- its kind hue, except that a
+        // tombstone carries the editor's amber attention language instead
+        // (ruling 11; its AssetKind is Other by construction, so the §11.3
+        // table has nothing to say about it either way). One definition
+        // because two things must agree by construction: the node's pin dot
+        // (DrawGraphPinDot's `accent`) and the END OF EVERY WIRE THAT LANDS ON
+        // THAT PIN (the gradient endpoints, 2026-09-09). If a tombstone's pin
+        // is amber, an edge arriving there has to end amber too, or the wire
+        // would visibly miss the colour of the dot it touches.
+        ImVec4 GraphNodeAccentColor(const GraphNode& n) noexcept
+        {
+            return n.isTombstone ? Theme::kAmber : KindAccentColor(n.kind);
+        }
+
         ImVec4 GraphLerpColor(const ImVec4& a, const ImVec4& b, float t) noexcept
         {
             return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
@@ -3177,12 +3191,33 @@ namespace Arcane::Editor
         // Hand-drawn wire in the LINKS channel. Returns the curve's midpoint
         // (canvas space) so a caller can hang a label off it.
         //
+        // The stroke is a GRADIENT, `colorA` at p0 running to `colorB` at p3
+        // (user directive, 2026-09-09: "like our node graph for the shader can
+        // we have our custom gradient lines"). The technique is
+        // DrawGradientWire's wholesale (ShaderEditorDocument.cpp:5459-5497),
+        // INCLUDING its two-path split, which is why this stayed one function
+        // rather than growing a second: equal colours take ImGui's own
+        // adaptive AddBezierCubic -- exactly what every wire in this lens used
+        // to get, and what the single-tone overflow connectors still get, so
+        // that path is unchanged paint -- and only a genuine two-hue wire pays
+        // for the per-segment walk. Segment budget, midpoint colour sampling
+        // and the butt-cap reasoning are COPIED rather than re-derived, so
+        // this lens's wires and the shader graph's spend vertices alike.
+        //
+        // Adaptation: the exemplar reads its own ViewScale() and folds the
+        // emphasis brighten in behind a bool. Here `viewScale` is a parameter
+        // (DrawGraphDashedWire's existing convention in this file -- the lens
+        // computes it once per frame) and the caller hands down two FINAL
+        // colours, so emphasis stays where it already lived and this function
+        // stays pure paint.
+        //
         // Retargeting the channel is not optional -- between ed::Begin and
         // ed::End but outside a node the current channel is the BOTTOM of the
         // merge, under the grid's own background fill, so a wire drawn there
         // would simply be painted over. See kGraphLinkChannel.
         ImVec2 DrawGraphWire(const ImVec2& p0, const ImVec2& p3,
-                             const ImVec4& color, float thickness)
+                             const ImVec4& colorA, const ImVec4& colorB,
+                             float thickness, float viewScale)
         {
             ImVec2 p1, p2;
             GraphWireControlPoints(p0, p3, p1, p2);
@@ -3194,7 +3229,51 @@ namespace Arcane::Editor
             {
                 const int prevChannel = dl->_Splitter._Current;
                 dl->ChannelsSetCurrent(kGraphLinkChannel);
-                dl->AddBezierCubic(p0, p1, p2, p3, ImGui::GetColorU32(color), thickness);
+
+                const ImU32 colA = ImGui::GetColorU32(colorA);
+                if (colA == ImGui::GetColorU32(colorB))
+                {
+                    // One tone end to end -- one call, and the library's own
+                    // adaptive tessellation.
+                    dl->AddBezierCubic(p0, p1, p2, p3, colA, thickness);
+                }
+                else
+                {
+                    // Segment count tracks the curve's length ON SCREEN, so a
+                    // wire stays smooth zoomed in without spending verts
+                    // zoomed out. The control polygon is a cheap upper bound
+                    // on arc length -- the same budget, from the same place,
+                    // as the dashed wire below.
+                    const auto len = [](float ax, float ay) { return std::sqrt(ax * ax + ay * ay); };
+                    const float polyLen = len(p1.x - p0.x, p1.y - p0.y) +
+                                          len(p2.x - p1.x, p2.y - p1.y) +
+                                          len(p3.x - p2.x, p3.y - p2.y);
+                    const float scale     = viewScale > 0.0f ? viewScale : 1.0f;
+                    const float screenLen = polyLen * scale;
+                    const int segments = static_cast<int>(
+                        (std::min)(64.0f, (std::max)(12.0f, screenLen / 6.0f)));
+
+                    // Per-segment colour means per-segment stroke. Consecutive
+                    // segments are near-collinear on a curve this smooth, so
+                    // butt caps meet without visible notches; a shared
+                    // PathStroke cannot be used because it takes ONE colour
+                    // for the whole path.
+                    ImVec2 prev = p0;
+                    for (int i = 1; i <= segments; ++i)
+                    {
+                        const float t = static_cast<float>(i) / static_cast<float>(segments);
+                        const ImVec2 cur = GraphCubicBezierAt(p0, p1, p2, p3, t);
+                        // Colour sampled at the segment's MIDPOINT so the two
+                        // ends of the run land on the pure endpoint colours.
+                        const float mid = (t + static_cast<float>(i - 1) /
+                                               static_cast<float>(segments)) * 0.5f;
+                        dl->AddLine(prev, cur,
+                                    ImGui::GetColorU32(GraphLerpColor(colorA, colorB, mid)),
+                                    thickness);
+                        prev = cur;
+                    }
+                }
+
                 dl->ChannelsSetCurrent(prevChannel);
             }
             return GraphCubicBezierAt(p0, p1, p2, p3, 0.5f);
@@ -4155,7 +4234,7 @@ namespace Arcane::Editor
                 // alike (its AssetKind is Other by construction, so the §11.3
                 // table has nothing to say about it either way).
                 const ImVec4 amber  = Theme::kAmber;
-                const ImVec4 accent = n.isTombstone ? amber : KindAccentColor(n.kind);
+                const ImVec4 accent = GraphNodeAccentColor(n);
                 const bool ghost = n.isOverflow || n.isTombstone;
                 DrawGraphNode(nodeId, v, body, headerIcon, headerLabel, headerPill,
                               accent, ghost);
@@ -4212,17 +4291,36 @@ namespace Arcane::Editor
                 const ImVec2 p0(tv.pos.x + tv.width, tv.pos.y + tv.height * 0.5f);
                 const ImVec2 p3(fv.pos.x,            fv.pos.y + fv.height * 0.5f);
 
-                // Colour = the SOURCE kind's accent, dimmed; brightened when
-                // either endpoint is the selected asset (spec §10: "selected
-                // node's edges brighten") or the hovered one (Task 4).
+                // Colour = a GRADIENT between the two endpoints' OWN accents
+                // (user directive, 2026-09-09), superseding the earlier
+                // single tone keyed off one end's kind. p0 is the TARGET's
+                // right pin and p3 the REFERENCER's left pin, and each end
+                // takes the very colour that pin already wears
+                // (GraphNodeAccentColor -- so a tombstone end reads amber,
+                // matching its dot), which is what makes a wire read
+                // pin-hue -> pin-hue the way the shader graph's do.
+                //
+                // Emphasis is UNCHANGED -- same trigger, same two functions,
+                // now simply applied to both ends instead of one: dimmed at
+                // rest, brightened together when either endpoint is the
+                // selected asset (spec §10: "selected node's edges brighten")
+                // or the hovered one (Task 4). A same-kind edge still ends up
+                // with two equal colours and takes the flat fast path, so this
+                // costs nothing where there is no hue to travel.
                 const bool emphasize = (selectedGuid.IsValid() &&
                                         (e.from == selectedGuid || e.to == selectedGuid)) ||
                                        (hoveredGuid.IsValid() &&
                                         (e.from == hoveredGuid || e.to == hoveredGuid));
-                const ImVec4 base = KindAccentColor(nodes[from->second].kind);
-                const ImVec4 col  = emphasize ? GraphBrightenColor(base)
-                                              : GraphDimColor(base, kGraphWireDim);
-                const ImVec2 mid = DrawGraphWire(p0, p3, col, kGraphWireThickness);
+                const auto endColor = [emphasize](const GraphNode& n)
+                {
+                    const ImVec4 base = GraphNodeAccentColor(n);
+                    return emphasize ? GraphBrightenColor(base)
+                                     : GraphDimColor(base, kGraphWireDim);
+                };
+                const ImVec2 mid = DrawGraphWire(p0, p3,
+                                                 endColor(nodes[to->second]),
+                                                 endColor(nodes[from->second]),
+                                                 kGraphWireThickness, viewScale);
 
                 if (drawLabels && e.label)
                 {
@@ -4265,13 +4363,20 @@ namespace Arcane::Editor
                     continue;
                 const GraphNodeVisual& av = visuals[anchor->second];
                 const GraphNodeVisual& ov = visuals[i];
+                // ONE tone at both ends, deliberately: this connector is
+                // synthetic scaffolding, not a reference the index holds, so
+                // it stays the subtle single grey it has always been and the
+                // gradient the DATA edges gained above would misrepresent it.
+                // Equal colours also mean it takes DrawGraphWire's flat
+                // AddBezierCubic path -- unchanged paint, not merely a
+                // gradient that happens to be constant.
                 const ImVec4 col = GraphDimColor(Theme::kGrab, kGraphOverflowWireDim);
                 if (n.overflowInbound)
                     // Truncated on the anchor's INBOUND side: the companion
                     // stacks one column to the RIGHT.
                     DrawGraphWire(ImVec2(av.pos.x + av.width, av.pos.y + av.height * 0.5f),
                                   ImVec2(ov.pos.x,            ov.pos.y + ov.height * 0.5f),
-                                  col, kGraphOverflowWireThickness);
+                                  col, col, kGraphOverflowWireThickness, viewScale);
                 else
                     // Truncated on the anchor's OUTBOUND side: one column to
                     // the LEFT. (When the anchor is already in column 0 the
@@ -4281,7 +4386,7 @@ namespace Arcane::Editor
                     // hidden.)
                     DrawGraphWire(ImVec2(ov.pos.x + ov.width, ov.pos.y + ov.height * 0.5f),
                                   ImVec2(av.pos.x,            av.pos.y + av.height * 0.5f),
-                                  col, kGraphOverflowWireThickness);
+                                  col, col, kGraphOverflowWireThickness, viewScale);
             }
 
             // ---- 7b. The pin-drag create query (Task 6) -------------------

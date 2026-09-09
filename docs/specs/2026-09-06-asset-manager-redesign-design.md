@@ -1831,3 +1831,64 @@ misleads the next reader in a specific way)
 One item that used to sit in this list has been **promoted out of it**: the tombstone
 ghost's wash dims the accent bar but not the border, leaving two amber strengths in one
 node. That is a visual arbitration, not a minor — it is in the desk-pass section above.
+
+### Post-landing user-directed change — 2026-09-09: gradient edge wires
+
+**Directive** (verbatim): "like our node graph for the shader can we have our custom
+gradient lines".
+
+Graph-lens **data edges no longer draw as one flat tone**. Each visible curve is a
+**gradient between the two accents its own endpoints wear**: the wire still starts at
+the target's right pin and ends at the referencer's left pin (§10's established
+geometry, ruling 7's two-layer trick, both unchanged), and each end now takes exactly
+the colour that pin already carries — so a wire reads pin-hue → pin-hue the way the
+shader graph's do. A **tombstone endpoint ends amber**, because amber is what ruling 11
+already gave its pin dot; pin colour and wire-end colour now come from one helper
+(`GraphNodeAccentColor`) precisely so they cannot drift apart.
+
+**This supersedes ruling 18's closing sentence** — "Edge color keys off `e.from` (the
+graph-semantic source)". That sentence described a single-tone stroke keyed off one
+endpoint; there is no longer a single tone to key. The rest of ruling 18 (the display
+labels, and "samples" as a material-source reading of `References`) is untouched.
+
+**Technique — copied, not invented.** The shader editor's `DrawGradientWire`
+(`ShaderEditorDocument.cpp:5459-5497`) is the source, including its **two-path split**:
+equal colours take ImGui's own adaptive `AddBezierCubic`, and only a genuine two-hue
+wire pays for the per-segment walk. Its screen-length segment budget
+(`clamp(polyLen × viewScale / 6, 12, 64)`, the control polygon as a cheap arc-length
+bound), its **midpoint colour sampling** (so both ends of the run land on the pure
+endpoint colours), and its butt-cap reasoning (consecutive samples on a curve this
+smooth are near-collinear; a shared `PathStroke` takes one colour and so cannot be
+used) are all reproduced rather than re-derived. Adapted only in plumbing: `viewScale`
+is a parameter (this file's existing `DrawGraphDashedWire` convention — the lens
+computes it once per frame) and the caller hands down two FINAL colours, so emphasis
+stays where it already lived and the draw helper stays pure paint.
+
+**Emphasis semantics are unchanged** — same trigger (either endpoint is the selected or
+the hovered asset), same two functions, now simply applied to both ends instead of one:
+`GraphDimColor` at rest, `GraphBrightenColor` on both ends together when emphasized.
+
+**Also unchanged**: the transparent-`ed::Link` hit-testing layer, the control-point
+convention, mid-edge labels and their LOD (the label's canvas-toned backing plate still
+masks the wire's midpoint and is unaffected by hue), and the dashed amber in-flight
+gesture wire — a gesture indicator, not a data edge, so it stays solid amber dashed.
+The **anchor → overflow-node connectors stay a subtle single grey**; because both their
+colours are equal they take the flat fast path, i.e. genuinely unchanged paint rather
+than a gradient that happens to be constant.
+
+**Board divergence — recorded and deliberate.** `OptionD-Graph-FINAL.png` draws
+solid-tone edges; the lens now does not. User-directed beats board, so this is a
+divergence to **cite, not a defect to fix**. It does not resolve ruling 17's standing
+legend mismatch (the legend's first two swatches are still two greys, kept on the
+reading that they say "a line", not "this colour means this") — that arbitration
+remains open.
+
+**Measured** (headless 1280×720 capture at the shipped code, ReferenceProject, Graph
+lens): every traced wire is a monotone per-channel ramp between two dimmed kind tones.
+The `uv_marker.png` → `uv_marker.arcsprite` "derives" edge scans, pin dot to pin dot, as
+rgb(176,106,91) at the texture pin (the full `#b06a5b` accent) → rgb(77,52,46) where the
+wire leaves it (dimmed Texture predicts (78,51,46)) → rgb(72,47,71) at t≈0.78 (the
+TEX→SPR line predicts (72,47,70)) → rgb(70,46,77) at the far end (dimmed Sprite predicts
+(70,46,78)) → rgb(155,91,176) at the sprite pin (the full `#9b5bb0` accent). Test counts
+are **unchanged at baseline** (Debug `~[gpu]` 55294 assertions / 1522 cases): a pure
+draw-body change adds no assertions.
