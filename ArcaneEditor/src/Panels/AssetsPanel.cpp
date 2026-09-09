@@ -2929,9 +2929,11 @@ namespace Arcane::Editor
         // every surface it outlines" -- EditorTheme.hpp), and the board draws
         // exactly this (#0d0d0d hairline on a #121212 field).
         //
-        // LENS-LOCAL, deliberately. These are this file's own constants
-        // feeding this lens's own ApplyAssetGraphCanvasStyle; the SHADER
-        // editor's shared canvas constants are UNTOUCHED, so the ruling moves
+        // LENS-LOCAL, deliberately. These are this file's own constants, fed
+        // to the shared style applier through this lens's own
+        // AssetGraphCanvasStyleDesc; the SHADER editor's canvas constants are
+        // UNTOUCHED -- the desc carries the divergence rather than dissolving
+        // it (Widgets/GraphCanvasStyle.hpp) -- so the ruling moves
         // the Graph lens onto its board without dragging a second canvas --
         // which has its own board, its own review history and no such ruling
         // -- along with it. The accepted cost is that the editor's two
@@ -3102,42 +3104,29 @@ namespace Arcane::Editor
         std::uint64_t GraphLeftPinId(std::uint64_t nodeId) noexcept  { return nodeId * 4ull + 1ull; }
         std::uint64_t GraphRightPinId(std::uint64_t nodeId) noexcept { return nodeId * 4ull + 2ull; }
 
-        // One-time style for this lens's node-editor context, in
-        // ApplyGraphCanvasStyle's shape (ShaderEditorDocument.cpp:576).
-        // Written to the PERSISTENT style (ed::GetStyle returns a mutable
-        // reference) rather than pushed per frame, because every value here
-        // is latched into the object at BeginNode/BeginPin time -- one
-        // assignment covers every node for the context's life.
-        void ApplyAssetGraphCanvasStyle()
+        // THIS lens's answers to the shared style desc
+        // (Widgets/GraphCanvasStyle.hpp). The 13 ed::Style writes and their
+        // reasoning are there; what is here is only what this canvas differs
+        // on -- everything else takes the shared default.
+        GraphCanvasStyleDesc AssetGraphCanvasStyleDesc()
         {
-            ed::Style& s = ed::GetStyle();
-            // The vendored grid AND background fill are switched off; our own
-            // lattice is drawn underneath instead (DrawGraphGridFallback).
-            // Wholesale replacement is the only option: the built-in grid is
-            // a hardcoded 32px line pair with no StyleVar and no LOD fade.
-            s.Colors[ed::StyleColor_Grid] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-            s.Colors[ed::StyleColor_Bg]   = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-            s.Colors[ed::StyleColor_NodeBg]        = kGraphNodeBodyColor;
-            s.Colors[ed::StyleColor_NodeBorder]    = kGraphNodeBorder;
-            s.Colors[ed::StyleColor_HovNodeBorder] = kGraphNodeHovBorderColor;
-            s.Colors[ed::StyleColor_SelNodeBorder] = kGraphNodeSelBorderColor;
-            // A pin draws nothing of its own except a hover rect -- that
-            // rectangle would fight the dot, so its alpha goes to zero and
-            // the dot IS the pin visual.
-            s.Colors[ed::StyleColor_PinRect]       = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-            s.Colors[ed::StyleColor_PinRectBorder] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-            s.NodeRounding            = kGraphNodeRounding;
-            s.NodeBorderWidth         = kGraphNodeBorderWidth;
-            s.HoveredNodeBorderWidth  = kGraphNodeHovBorderWidth;
-            s.SelectedNodeBorderWidth = kGraphNodeSelBorderWidth;
-            // ZERO node padding, unlike the shader editor's: this lens lays
-            // its own rows out by hand (SetCursorScreenPos + explicit
-            // Dummies) so the 24px header band and the node's total height
-            // are EXACT rather than whatever the ambient font metrics plus a
-            // padding pair happen to add up to. With no padding the node's
-            // content origin IS ed::GetNodePosition, which is also what lets
-            // the pin geometry be computed without a frame of readback lag.
-            s.NodePadding = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+            GraphCanvasStyleDesc d;
+            // The board's surfaces (controller ruling 2026-09-08, above).
+            d.nodeBody   = kGraphNodeBodyColor;   // #1e1e1e
+            d.nodeBorder = kGraphNodeBorder;      // #0d0d0d
+            // ZERO node padding, unlike the shader editor's -- and this is the
+            // desc's default, so it is spelled here only to say it is a choice:
+            // this lens lays its own rows out by hand (SetCursorScreenPos +
+            // explicit Dummies) so the 24px header band and the node's total
+            // height are EXACT rather than whatever the ambient font metrics
+            // plus a padding pair happen to add up to. With no padding the
+            // node's content origin IS ed::GetNodePosition, which is also what
+            // lets the pin geometry be computed without a frame of readback lag.
+            d.nodePadding = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+            // groupBg / groupBorder are left at Theme::kNone: this lens creates
+            // no group nodes (no ed::Group call anywhere in it), so those two
+            // style entries are never read.
+            return d;
         }
 
         // GraphViewScale (the ed::GetCurrentZoom reciprocal flip, "THE TRAP")
@@ -3839,7 +3828,7 @@ namespace Arcane::Editor
                 // context applies it -- including the switch that kills the
                 // vendored grid.
                 ed::SetCurrentEditor(static_cast<ed::EditorContext*>(state.graphCanvas));
-                ApplyAssetGraphCanvasStyle();
+                ApplyGraphCanvasStyle(AssetGraphCanvasStyleDesc());
                 ed::SetCurrentEditor(nullptr);
                 state.graphLayoutDirty = true;
             }

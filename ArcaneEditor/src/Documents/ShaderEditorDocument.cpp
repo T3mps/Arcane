@@ -426,38 +426,21 @@ namespace Arcane::Editor
             return nodeSize;
         }
 
-        // One-time style for a node-editor context. Written to the PERSISTENT
-        // style (ed::GetStyle returns a mutable reference, imgui_node_editor.h:295)
-        // instead of pushed per frame, because every value here is latched into
-        // the object at BeginNode/BeginPin time (imgui_node_editor.cpp:5270-5278,
-        // 5367-5377) -- one assignment covers every node for the context's life.
-        void ApplyGraphCanvasStyle()
+        // THIS canvas's answers to the shared style desc
+        // (Widgets/GraphCanvasStyle.hpp). The 13 ed::Style writes and their
+        // reasoning are there; what is here is only what this canvas differs
+        // on. Every other field takes the shared default -- the editor-wide
+        // canvas language -- which is the whole point of the desc.
+        GraphCanvasStyleDesc ShaderCanvasStyleDesc()
         {
-            ed::Style& s = ed::GetStyle();
-            // The vendored grid AND background fill are switched off; our own
-            // lattice is drawn underneath instead -- DrawGraphGridFallback
-            // (Widgets/GraphGridPhase.hpp), via ImDrawList.
-            // Wholesale replacement is the only option available: the built-in
-            // grid's 32 px spacing is a hardcoded local with no StyleVar and no
-            // LOD fade (imgui_node_editor.cpp:1506-1517).
-            s.Colors[ed::StyleColor_Grid] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-            s.Colors[ed::StyleColor_Bg]   = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-            s.Colors[ed::StyleColor_NodeBg]        = kNodeBodyColor;
-            s.Colors[ed::StyleColor_NodeBorder]    = kNodeBorderColor;
-            s.Colors[ed::StyleColor_HovNodeBorder] = kGraphNodeHovBorderColor;
-            s.Colors[ed::StyleColor_SelNodeBorder] = kGraphNodeSelBorderColor;
-            s.Colors[ed::StyleColor_GroupBg]       = kGroupBgColor;
-            s.Colors[ed::StyleColor_GroupBorder]   = kGroupBorderColor;
-            // A pin draws nothing of its own except a hover rect
-            // (imgui_node_editor.cpp:575-594) -- that rectangle would fight the
-            // dot, so its alpha goes to zero and the dot IS the pin visual.
-            s.Colors[ed::StyleColor_PinRect]       = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-            s.Colors[ed::StyleColor_PinRectBorder] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-            s.NodeRounding            = kGraphNodeRounding;
-            s.NodeBorderWidth         = kGraphNodeBorderWidth;
-            s.HoveredNodeBorderWidth  = kGraphNodeHovBorderWidth;
-            s.SelectedNodeBorderWidth = kGraphNodeSelBorderWidth;
-            s.NodePadding = ImVec4(kNodePadX, kNodePadY, kNodePadX, kNodePadY);
+            GraphCanvasStyleDesc d;
+            d.nodeBody    = kNodeBodyColor;     // #2d2d30, the Unity SG reference tone
+            d.nodeBorder  = kNodeBorderColor;
+            d.groupBg     = kGroupBgColor;      // this canvas HAS group (comment) nodes
+            d.groupBorder = kGroupBorderColor;
+            // Content-driven nodes: ImGui measures them, so they need padding.
+            d.nodePadding = ImVec4(kNodePadX, kNodePadY, kNodePadX, kNodePadY);
+            return d;
         }
 
         // Re-key a saved-params entry old -> new. Merge rule (assisted rename):
@@ -2471,7 +2454,7 @@ namespace Arcane::Editor
             // is the only one. Per-context state, so a rebuilt context
             // re-applies it.
             ed::SetCurrentEditor(m_passCanvasCtx);
-            ApplyGraphCanvasStyle();
+            ApplyGraphCanvasStyle(ShaderCanvasStyleDesc());
             ed::SetCurrentEditor(nullptr);
             m_passCanvasSeeded = false;
         }
@@ -3680,7 +3663,7 @@ namespace Arcane::Editor
             // The style is per-context state, so a rebuilt context re-applies
             // it -- including the switch that kills the vendored grid.
             ed::SetCurrentEditor(m_graphCtx);
-            ApplyGraphCanvasStyle();
+            ApplyGraphCanvasStyle(ShaderCanvasStyleDesc());
             ed::SetCurrentEditor(nullptr);
         }
         if (switchedPass)
