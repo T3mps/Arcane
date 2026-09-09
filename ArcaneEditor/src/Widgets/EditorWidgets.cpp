@@ -523,18 +523,20 @@ namespace Arcane::Editor
         return changed;
     }
 
-    std::string EllipsisToWidth(std::string_view text, float maxWidth)
+    std::string EllipsisToWidth(std::string_view text, float maxWidth,
+                                std::string_view ellipsis)
     {
         const std::string full(text);
         if (ImGui::CalcTextSize(full.c_str()).x <= maxWidth)
             return full;
 
-        // Longest prefix such that prefix + "..." fits, by binary search on the
-        // byte length -- text metrics are monotonic in the prefix.
+        // Longest prefix such that prefix + the marker fits, by binary search
+        // on the byte length -- text metrics are monotonic in the prefix.
+        const std::string tail(ellipsis);
         const auto fits = [&](size_t bytes)
         {
             std::string probe(text.substr(0, bytes));
-            probe += "...";
+            probe += tail;
             return ImGui::CalcTextSize(probe.c_str()).x <= maxWidth;
         };
         size_t lo = 0, hi = text.size();
@@ -548,7 +550,7 @@ namespace Arcane::Editor
         while (lo > 0 && (static_cast<unsigned char>(text[lo]) & 0xC0) == 0x80)
             --lo;
         std::string out(text.substr(0, lo));
-        out += "...";
+        out += tail;
         return out;
     }
 

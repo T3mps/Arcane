@@ -80,7 +80,16 @@ namespace Arcane::Editor
     // lands mid-codepoint. For value buttons whose label is data (a mount path,
     // a guid) -- an unsized button grows with its label and pushes its row
     // neighbours off the panel.
-    [[nodiscard]] std::string EllipsisToWidth(std::string_view text, float maxWidth);
+    //
+    // `ellipsis` is the marker appended to a cut string, and it DEFAULTS TO
+    // THREE ASCII DOTS on purpose: that is what every row this function already
+    // draws has shipped with, and the golden editor-ui lane renders one of them
+    // (the Assets panel's Browse lens). Changing the default would be a visual
+    // change to the Browse rows, the preview pane, the Status cards and the
+    // Inspector all at once -- so the Graph lens, which wants the real U+2026,
+    // passes it rather than moving everyone.
+    [[nodiscard]] std::string EllipsisToWidth(std::string_view text, float maxWidth,
+                                              std::string_view ellipsis = "...");
 
     // Two-column field region (UE's Details-panel shape: label left in one
     // column, value right, one draggable split shared by every section).

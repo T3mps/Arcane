@@ -3353,29 +3353,28 @@ namespace Arcane::Editor
         // dot contributes nothing to layout, while the shader editor's advances
         // the ImGui cursor and hands back the centre it measured.
 
-        // Trim `text` to fit `maxWidth` under the CURRENT font, appending a
-        // real ellipsis when it had to cut. Never cuts inside a UTF-8
-        // sequence. A graph node label is a file stem, so the linear walk is
-        // cheap; the point is that the node's WIDTH is pinned by §11.2 and
-        // the label has to yield to it, not the other way round.
+        // Trim a node label to fit `maxWidth` under the CURRENT font. The node's
+        // WIDTH is pinned by §11.2 and the label has to yield to it, not the
+        // other way round.
+        //
+        // The TRUNCATION ITSELF is EditorWidgets::EllipsisToWidth -- the shared
+        // widget layer's, which this same file already calls three times in the
+        // Browse lens. This lens had grown a second, hand-written copy of that
+        // algorithm (2026-09-09 audit, item B14): the most avoidable duplication
+        // in the arc, because there is no node-editor coupling to excuse it.
+        //
+        // What survives here is the two things that are genuinely this lens's:
+        // the marker is the REAL ellipsis U+2026 rather than three ASCII dots
+        // (a node label is chrome in a fixed-width chip, not a value button),
+        // and a budget of zero or less draws NOTHING rather than a lone marker
+        // -- a node whose header pill ate the whole row should show no label at
+        // all. Neither is shared, because changing either would move rows the
+        // golden editor-ui lane renders.
         std::string GraphEllipsize(const std::string& text, float maxWidth)
         {
             if (maxWidth <= 0.0f)
                 return std::string();
-            if (ImGui::CalcTextSize(text.c_str()).x <= maxWidth)
-                return text;
-            const char* kEllipsis = "\xE2\x80\xA6";   // U+2026
-            const float ellipsisW = ImGui::CalcTextSize(kEllipsis).x;
-            std::size_t cut = text.size();
-            while (cut > 0)
-            {
-                --cut;
-                while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
-                    --cut;
-                if (ImGui::CalcTextSize(text.c_str(), text.c_str() + cut).x + ellipsisW <= maxWidth)
-                    break;
-            }
-            return text.substr(0, cut) + kEllipsis;
+            return EllipsisToWidth(text, maxWidth, "\xE2\x80\xA6");   // U+2026
         }
 
         // Everything one node needs, computed BEFORE submission so the pin
