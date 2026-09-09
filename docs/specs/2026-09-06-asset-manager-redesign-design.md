@@ -1966,3 +1966,151 @@ genuinely sharp text at every zoom stop, not merely a lower ceiling. The
 investigation report's FIX B section traces feasibility (the flag Arcane's NRI
 backend needs is already set) and its costs (per-zoom-stop atlas bake churn;
 `SetCurrentWindow` silently resets the density on any nested `ImGui::Begin`).
+
+### Post-landing user-directed change — 2026-09-09: graph-canvas consolidation
+
+**Directive** (user, verbatim): *"I want to ENSURE we're not duplicating any unneeded
+logic from our existing graph system. One goal we have is to have everything be
+scalable and reusable if possible, like the existing graph system from our shader
+graph."*
+
+**The audit that answered it.** A read-only comparison of the Graph lens
+(`AssetsPanel.cpp`'s graph region, `AssetsPanel.hpp`, `AssetGraphViewModel.*`) against
+the exemplar (`ShaderEditorDocument.cpp/.hpp`) and the three headers they already
+share, classified every overlap:
+`.superpowers/sdd/2026-09-08-asset-manager-plan3-graph/duplication-audit.md`.
+
+| Class | Count | Meaning |
+|---|---:|---|
+| **A** already shared | 4 | consumed from a shared header by both; neither re-implements it |
+| **B** extract | **16** | verbatim or trivially parameterizable duplicate |
+| **C** keep separate | 10 | similar-shaped, divergence load-bearing |
+| **D** lens-specific | 11 | no counterpart on the shader side (≈ 900 lines, `AssetGraphViewModel` alone 661) |
+| **E** framework-deferred | 8 layers | **0 duplicated** |
+
+Class B stood at roughly **167 asset-side lines + 137 shader-side lines ≈ 304 lines in
+two places** — about **7 %** of the graph code this arc added. The other 93 % is class
+D: original, lens-specific work with nothing to consolidate against.
+
+**Executed in the audit's eight-wave risk order**, one commit per wave, each built and
+run against the focused suites before the next began:
+
+| Wave | Items | What moved |
+|---|---|---|
+| 1 | B1-B4, B10-B13 | pure values and pure functions: bezier eval, sRGB lerp, brighten, the view-scale reciprocal, seven chrome metrics, the grid palette, the selection/hover accents, the links-channel constant, the LOD table |
+| 2 | B5, B16 | `Link::GetCurve`'s control points; the wire segment budget (which stood twice inside `AssetsPanel.cpp` alone) |
+| 3 | B9 | the pin-dot paint core (placement deliberately not moved) |
+| 4 | B14 | ellipsize, against the shared widget layer |
+| 5 | B7 | the backdrop composition (view + palette + lattice draw) |
+| 6 | B8 | the canvas style application, behind a desc |
+| 7 | B6 | the gradient wire stroke — the largest single win, sequenced last so its dependencies had already landed |
+| 8 | B15 | the create/delete bracket rule, as RAII types |
+
+**Shared homes created**, all node-editor-coupled and all sibling to the existing
+`CanvasPopupScope.hpp` / `GraphZoomLevels.hpp` / `GraphGridPhase.hpp`, one named
+concern per file:
+
+- `ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp` — the node chrome metrics, the wire
+  thickness, the pin segment count and ring width, the grid palette, the
+  selection/hover accents, and `GraphCanvasStyleDesc` + `ApplyGraphCanvasStyle`.
+- `ArcaneEditor/src/Widgets/GraphWire.hpp` — `kGraphLinkChannel` (with the whole
+  two-layer transparent-`ed::Link` rationale, previously written out twice),
+  `GraphCubicBezierAt`, `GraphLerpColor`, `GraphBrightenColor`, `GraphViewScale`,
+  `GraphWireControlPoints`, the segment budget, and `DrawGraphWire`.
+- `ArcaneEditor/src/Widgets/GraphPinDot.hpp` — `DrawGraphPinDot`, the paint only.
+- `ArcaneEditor/src/Widgets/GraphCanvasBackdrop.hpp` — `DrawGraphCanvasBackdrop`, the
+  composition that needs `ed::` and therefore cannot live in `GraphGridPhase.hpp`
+  (whose whole point is having no device and no node-editor dependency).
+- `ArcaneEditor/src/Widgets/GraphNodeLod.hpp` — `NodeLOD` (moved out of
+  `ShaderEditorDocument.hpp`), the `kLod*` boundaries and `NodeLODForScale`: the zoom
+  table's third column, beside the table.
+- `ArcaneEditor/src/Widgets/CanvasEditScope.hpp` — `CanvasCreateScope` /
+  `CanvasDeleteScope`.
+
+One item landed in an **existing** home: B14 added a defaulted `ellipsis` parameter to
+`EditorWidgets::EllipsisToWidth`. That is the audit's one sanctioned exception to the
+boundary rule and not a breach of it — both sides of that duplication are
+`ImGui::CalcTextSize` only. **`EditorWidgets.hpp/.cpp` still names nothing from
+`imgui_node_editor.h`, and `AssetsPanel.hpp` still holds its canvas as an opaque
+`void*`** — both re-verified by grep after the final wave.
+
+**The recorded colour divergence survives by construction.** The 2026-09-08 controller
+ruling — the OptionD board is the redline for the Graph lens, and the shader canvas is
+deliberately *not* dragged onto it — is now expressed as named `GraphCanvasStyleDesc`
+fields with the ruling cited beside them, rather than as two structurally identical
+blocks that happened to hold different numbers. That is strictly stronger than before:
+the values stay apart on purpose, while a *structural* change (a new style field, a
+reordering) can no longer land on one canvas and silently miss the other.
+
+**Line accounting, honestly.** The audit projected ≈ 180 lines of shared surface and a
+net deletion of ≈ 124 code lines. Measured over `dd20ebc4..HEAD` (non-blank,
+non-comment lines): the two consumer files shed **−267** code lines, the shared headers
+gained **+273**, for a net of **+6**. The projection did not account for structure that
+existed in *neither* copy and had to be written: `GraphCanvasStyleDesc` and its two
+per-canvas factory functions (B8), and the two RAII types (B15 — which the audit itself
+scored as "0/0 code lines" because what was duplicated there was an invariant written
+out as prose in four places, not code). Total file lines grew by 358, because the
+consolidated rationale is written once and written properly, in this codebase's house
+style. **The duplication is what was removed, and it is gone: all 16 class-B items now
+have exactly one definition site, verified by grep** (see the report's sweep). The
+line count was never the goal.
+
+**Class E — the framework question, verified rather than assumed.** The 2026-07-24
+standing directive defers extraction of the graph *framework* (schema, node/pin/link
+model and id scheme, serialization shape, gesture undo, badges, create menu/searcher)
+until a second real consumer drives its design. The audit checked all eight of those
+layers against the Graph lens and found **zero duplicated**: no schema (every
+`QueryNewLink` is rejected outright — the graph is a read-only projection of the
+reference index), no undo (zero `Undo`/`CommandStack`/`EditGesture` hits in the graph
+region), no serialization (`cfg.SettingsFile = nullptr`), no editable node model, no
+clipboard, no palette, no badges, no backend. **The framework extraction therefore
+stays deferred, unchanged** — the consolidation trigger was pulled on duplication, and
+there is no framework duplication for it to reach. What class B moved is the *paint
+layer*, which is exactly the material the directive's own closing instruction ("keep
+`ShaderEditorDocument`'s canvas code cleanly separated") asks to separate now; giving
+it one home makes the eventual framework extraction cheaper rather than pre-empting it.
+
+**Verified.** Focused suites after every wave, from the exe directory with seed banners
+captured, counts unmoved from the pre-change baseline throughout: `[graphcanvas]` 77/2,
+`[editor]` 3595/303, `[material]` 1724/87, `[shadercompile]` 339/23. Full Debug
+`~[gpu]` after the final wave: **55297 assertions / 1522 cases (seed 1788952335)** —
+identical to the `dd20ebc4` baseline of 55297/1522, zero delta in either number.
+Debug rebuilt clean at every wave, 0 warnings / 0 errors at `/v:m`.
+
+**Capture comparison (the no-pixel-test gap's manual mitigation).** A before/after
+headless capture pair of the **Assets Graph lens** was taken through the arc's
+established temporary-lens-default + staged-`verify-layout.ini` flow (both reverted,
+the staged ini re-proven byte-identical to its source, tree clean bar the user's own
+untracked files). **The two frames are pixel-identical over the whole canvas and all
+editor chrome — 0 differing pixels for y 0..679.** The only differing pixels in the
+1280×720 frame are the Console panel's wall-clock timestamp in the bottom bar
+(`05:42:00` vs `06:16:28`), which differs between any two captures. The same holds
+against the workspace's pre-existing `graph-lens-live.png` reference: 0 differing
+pixels outside that band. Artifacts: `graph-lens-BEFORE-consolidation.png`,
+`graph-lens-AFTER-consolidation.png`.
+
+**Stated plainly, because it is the honest limit: the shader editor has no headless
+capture flow.** Nothing photographed it before and nothing photographs it now. Its
+protection is (1) byte-identical values — every constant it now reads from a shared
+header was the same literal it previously spelled locally, and every parameterized call
+was derived from the code it replaced, argument by argument; (2) its suites, including
+`GraphCanvasHeadlessTest`'s four device-less frames through the real `Draw()`; and (3)
+code review. A desk item was added to `DESK-CHECKLIST.md` B1 asking for the eyes it
+cannot get automatically: open a material, pan, zoom, drag a wire, hover and select a
+link, drag a node, open a context menu, look at a comment box.
+
+**Follow-ups filed, not taken:**
+
+1. **The exemplar hand-rolls its own shared type.** `ShaderEditorDocument.cpp` still
+   holds a raw `ed::Suspend()` … `ed::Resume()` pair spanning ~317 lines of
+   `DrawGraphPanel`, in the same file that uses `CanvasPopupScope` three times — the
+   longest such bracket in the codebase is the one outside the type. It is *not* a
+   duplication against the Graph lens (which uses the type correctly), it crosses
+   early-return paths, and converting it carries behaviour risk this consolidation
+   deliberately did not take. **Recorded, not fixed.**
+2. **No pixel test covers either canvas.** The golden `editor-ui` lane renders the
+   Assets panel's **Browse** lens; it does not open a Material document and does not
+   switch to the Graph lens, so neither canvas is in any golden image. The cheapest
+   real gate, if one is wanted, is the audit's own suggestion: a device-less
+   characterization test that calls the extracted wire function directly and asserts
+   the returned midpoint and the emitted `ImDrawList` vertex count.
