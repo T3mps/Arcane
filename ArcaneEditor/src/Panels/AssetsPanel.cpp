@@ -9,6 +9,7 @@
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/GraphCanvasStyle.hpp"  // node chrome metrics + grid palette + accents -- one definition, both canvases
 #include "Widgets/GraphNodeLod.hpp"      // NodeLOD / NodeLODForScale -- the zoom table's third column
+#include "Widgets/GraphPinDot.hpp"       // DrawGraphPinDot -- the filled/ring port dot, paint only
 #include "Widgets/GraphWire.hpp"         // bezier/lerp/brighten/view-scale + the links channel
 #include "Widgets/GraphZoomLevels.hpp"   // ApplyZoomLevels -- same table the shader editor's canvases use
 #include "Widgets/IconsLucide.h"
@@ -3345,26 +3346,12 @@ namespace Arcane::Editor
             dl->ChannelsSetCurrent(prevChannel);
         }
 
-        // One port dot, DrawPinDot's reading (ShaderEditorDocument.cpp:507):
-        // FILLED when something is attached, a hollow ring when not. Unlike
-        // that one this does NOT advance the cursor -- this lens positions
-        // its pins on the node's own edge by hand, so the dot is pure
-        // drawlist paint and the pin's layout contribution is nil.
-        void DrawGraphPinDot(ImDrawList* dl, const ImVec2& centre,
-                             const ImVec4& color, bool connected)
-        {
-            const ImU32 col = ImGui::GetColorU32(color);
-            if (connected)
-            {
-                dl->AddCircleFilled(centre, kGraphPinRadius, col, kGraphPinSegments);
-            }
-            else
-            {
-                dl->AddCircleFilled(centre, kGraphPinRadius,
-                                    ImGui::GetColorU32(kGraphNodeBodyColor), kGraphPinSegments);
-                dl->AddCircle(centre, kGraphPinRadius, col, kGraphPinSegments, kGraphPinRingWidth);
-            }
-        }
+        // The port dot's PAINT moved to Widgets/GraphPinDot.hpp, 2026-09-09
+        // (DrawGraphPinDot): the three draw calls were the same three inside
+        // the shader editor's own DrawPinDot. What did NOT move is placement --
+        // this lens positions its pins on the node's own edge by hand, so its
+        // dot contributes nothing to layout, while the shader editor's advances
+        // the ImGui cursor and hands back the centre it measured.
 
         // Trim `text` to fit `maxWidth` under the CURRENT font, appending a
         // real ellipsis when it had to cut. Never cuts inside a UTF-8
@@ -3540,7 +3527,8 @@ namespace Arcane::Editor
                     // is what keeps EndGroup's
                     // "SetCursorPos to extend boundaries" check quiet.
                     ImGui::Dummy(ImVec2(0.0f, 0.0f));
-                    DrawGraphPinDot(ImGui::GetWindowDrawList(), centre, accent, connected);
+                    DrawGraphPinDot(ImGui::GetWindowDrawList(), centre, accent,
+                                    kGraphNodeBodyColor, kGraphPinRadius, connected);
                     ed::EndPin();
                 };
                 if (v.hasLeftPin)

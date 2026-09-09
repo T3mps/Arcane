@@ -6,6 +6,7 @@
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"   // StableTextEdit: the stable-buffer text-commit helper
 #include "Widgets/GraphCanvasStyle.hpp"   // node chrome metrics + grid palette + accents -- shared with the Graph lens
+#include "Widgets/GraphPinDot.hpp"       // DrawGraphPinDot -- the filled/ring port dot, paint only
 #include "Widgets/GraphWire.hpp"         // bezier/lerp/brighten/view-scale + the links channel -- ditto
 #include "Widgets/GraphZoomLevels.hpp"   // kZoomLevels / ApplyZoomLevels -- shared with the Graph lens
 #include "Widgets/IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
@@ -374,16 +375,12 @@ namespace Arcane::Editor
             const ImVec2 p = ImGui::GetCursorScreenPos();
             ImGui::Dummy(ImVec2(kPinDotRadius * 2.0f, lineH));
             const ImVec2 c(p.x + kPinDotRadius, p.y + lineH * 0.5f);
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            const ImU32 col = ImGui::GetColorU32(color);
-            if (connected)
-                dl->AddCircleFilled(c, kPinDotRadius, col, kGraphPinSegments);
-            else
-            {
-                dl->AddCircleFilled(c, kPinDotRadius,
-                                    ImGui::GetColorU32(kNodeBodyColor), kGraphPinSegments);
-                dl->AddCircle(c, kPinDotRadius, col, kGraphPinSegments, kGraphPinRingWidth);
-            }
+            // The three draw calls are Widgets/GraphPinDot.hpp's (2026-09-09);
+            // what stays here is the LAYOUT -- the cursor advance and the centre
+            // this function exists to hand back. The Graph lens shares the
+            // paint and none of that.
+            DrawGraphPinDot(ImGui::GetWindowDrawList(), c, color,
+                            kNodeBodyColor, kPinDotRadius, connected);
             return c;
         }
 
