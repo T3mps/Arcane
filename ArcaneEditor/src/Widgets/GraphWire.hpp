@@ -195,4 +195,77 @@ namespace Arcane::Editor
         return static_cast<int>(
             (std::min)(64.0f, (std::max)(12.0f, screenLen / 6.0f)));
     }
+
+    // ---- The stroke -------------------------------------------------------
+
+    // THE hand-drawn wire, in the links channel. Returns the curve's midpoint
+    // (in the caller's space) so a caller can hang a label off it; a caller
+    // with nothing to hang there ignores it.
+    //
+    // The stroke is a GRADIENT, `colorA` at p0 running to `colorB` at p3, and
+    // the TWO-PATH SPLIT is the whole design: equal colours -- the
+    // overwhelmingly common case on both canvases -- take ImGui's own adaptive
+    // AddBezierCubic, exactly what a flat library link used to get
+    // (imgui_node_editor.cpp:501), and only a genuine two-hue wire pays for the
+    // per-segment walk.
+    //
+    // PURE PAINT. The two FINAL colours are the caller's: emphasis (hover /
+    // selection brightening) and dimming are applied before the call, because
+    // what counts as emphasis is a canvas's own business. The endpoints are the
+    // caller's too -- the shader editor looks its pin pivots up in a member map
+    // first, the Graph lens computes them off its own node geometry.
+    //
+    // `viewScale` is a parameter rather than a GraphViewScale() call inside,
+    // because a canvas that draws many wires per frame reads it once.
+    inline ImVec2 DrawGraphWire(const ImVec2& p0, const ImVec2& p3,
+                                const ImVec4& colorA, const ImVec4& colorB,
+                                float thickness, float viewScale)
+    {
+        ImVec2 p1, p2;
+        GraphWireControlPoints(p0, p3, p1, p2);
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        // Defensive: the link channels exist from Begin, but never index past a
+        // splitter that has not been grown.
+        if (dl->_Splitter._Count > kGraphLinkChannel)
+        {
+            const int prevChannel = dl->_Splitter._Current;
+            dl->ChannelsSetCurrent(kGraphLinkChannel);
+
+            const ImU32 colA = ImGui::GetColorU32(colorA);
+            if (colA == ImGui::GetColorU32(colorB))
+            {
+                // One tone end to end -- one call, and the library's own
+                // adaptive tessellation.
+                dl->AddBezierCubic(p0, p1, p2, p3, colA, thickness);
+            }
+            else
+            {
+                const int segments = GraphWireSegments(
+                    GraphWirePolyLength(p0, p1, p2, p3), viewScale);
+
+                // Per-segment colour means per-segment stroke. Consecutive
+                // segments are near-collinear on a curve this smooth, so butt
+                // caps meet without visible notches; a shared PathStroke cannot
+                // be used because it takes ONE colour for the whole path.
+                ImVec2 prev = p0;
+                for (int i = 1; i <= segments; ++i)
+                {
+                    const float t = static_cast<float>(i) / static_cast<float>(segments);
+                    const ImVec2 cur = GraphCubicBezierAt(p0, p1, p2, p3, t);
+                    // Colour sampled at the segment's MIDPOINT so the two ends
+                    // of the run land on the pure endpoint colours.
+                    const float mid = (t + static_cast<float>(i - 1) /
+                                           static_cast<float>(segments)) * 0.5f;
+                    dl->AddLine(prev, cur,
+                                ImGui::GetColorU32(GraphLerpColor(colorA, colorB, mid)),
+                                thickness);
+                    prev = cur;
+                }
+            }
+
+            dl->ChannelsSetCurrent(prevChannel);
+        }
+        return GraphCubicBezierAt(p0, p1, p2, p3, 0.5f);
+    }
 }

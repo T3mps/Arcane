@@ -5210,66 +5210,18 @@ namespace Arcane::Editor
         const ImVec2 p0 = itA->second;
         const ImVec2 p3 = itB->second;
 
-        // Link::GetCurve, reproduced once for both canvases
-        // (Widgets/GraphWire.hpp). The block that stood here computed the same
-        // ease() twice, into a startStrength and an endStrength that are always
-        // equal; the shared form calls it once, which is the same number by the
-        // same pure function.
-        ImVec2 p1, p2;
-        GraphWireControlPoints(p0, p3, p1, p2);
-
+        // EMPHASIS STAYS HERE. What counts as emphasis is a canvas's own
+        // business -- this one brightens both ends when the link is hovered or
+        // selected, the Graph lens dims at rest and brightens on either
+        // endpoint's selection -- so the shared stroke takes two FINAL colours.
         const ImVec4 a = emphasize ? GraphBrightenColor(fromColor) : fromColor;
         const ImVec4 b = emphasize ? GraphBrightenColor(toColor)   : toColor;
 
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        // Defensive: the link channels exist from Begin, but never index past
-        // a splitter that has not been grown.
-        if (dl->_Splitter._Count <= kGraphLinkChannel)
-            return;
-        const int prevChannel = dl->_Splitter._Current;
-        dl->ChannelsSetCurrent(kGraphLinkChannel);
-
-        const ImU32 colA = ImGui::GetColorU32(a);
-        if (colA == ImGui::GetColorU32(b))
-        {
-            // Same type both ends -- the overwhelmingly common case. One call,
-            // and ImGui's own adaptive tessellation, which is what the flat
-            // wire used to get (imgui_node_editor.cpp:501).
-            dl->AddBezierCubic(p0, p1, p2, p3, colA, kGraphWireThickness);
-        }
-        else
-        {
-            // Segment count tracks the curve's length ON SCREEN, so a wire
-            // stays smooth zoomed in without spending verts zoomed out. The
-            // control polygon is a cheap upper bound on arc length.
-            auto len = [](float ax, float ay) { return std::sqrt(ax * ax + ay * ay); };
-            const float polyLen = len(p1.x - p0.x, p1.y - p0.y) +
-                                  len(p2.x - p1.x, p2.y - p1.y) +
-                                  len(p3.x - p2.x, p3.y - p2.y);
-            const float screenLen = polyLen * GraphViewScale();
-            const int segments = static_cast<int>(
-                (std::min)(64.0f, (std::max)(12.0f, screenLen / 6.0f)));
-
-            // Per-segment colour means per-segment stroke. Consecutive segments
-            // are near-collinear on a curve this smooth, so butt caps meet
-            // without visible notches; a shared PathStroke cannot be used
-            // because it takes ONE colour for the whole path.
-            ImVec2 prev = p0;
-            for (int i = 1; i <= segments; ++i)
-            {
-                const float t = static_cast<float>(i) / static_cast<float>(segments);
-                const ImVec2 cur = GraphCubicBezierAt(p0, p1, p2, p3, t);
-                // Colour sampled at the segment's MIDPOINT so the two ends of
-                // the run land on the pure endpoint colours.
-                const float mid = (t + static_cast<float>(i - 1) /
-                                       static_cast<float>(segments)) * 0.5f;
-                dl->AddLine(prev, cur, ImGui::GetColorU32(GraphLerpColor(a, b, mid)),
-                            kGraphWireThickness);
-                prev = cur;
-            }
-        }
-
-        dl->ChannelsSetCurrent(prevChannel);
+        // The curve, the channel retarget, the equal-colour fast path, the
+        // segment budget and the midpoint-sampled walk are all
+        // Widgets/GraphWire.hpp's now. The returned midpoint is for callers that
+        // hang a label off it (the Graph lens does); this canvas has none.
+        DrawGraphWire(p0, p3, a, b, kGraphWireThickness, GraphViewScale());
     }
 
     void ShaderEditorDocument::HandleGraphEdits()

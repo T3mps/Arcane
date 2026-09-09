@@ -3139,90 +3139,15 @@ namespace Arcane::Editor
         // both wire walks below used to spell out separately
         // (GraphWirePolyLength / GraphWireSegments / GraphWireScreenScale).
 
-        // Hand-drawn wire in the LINKS channel. Returns the curve's midpoint
-        // (canvas space) so a caller can hang a label off it.
-        //
-        // The stroke is a GRADIENT, `colorA` at p0 running to `colorB` at p3
-        // (user directive, 2026-09-09: "like our node graph for the shader can
-        // we have our custom gradient lines"). The technique is
-        // DrawGradientWire's wholesale (ShaderEditorDocument.cpp:5459-5497),
-        // INCLUDING its two-path split, which is why this stayed one function
-        // rather than growing a second: equal colours take ImGui's own
-        // adaptive AddBezierCubic -- exactly what every wire in this lens used
-        // to get, and what the single-tone overflow connectors still get, so
-        // that path is unchanged paint -- and only a genuine two-hue wire pays
-        // for the per-segment walk. Segment budget, midpoint colour sampling
-        // and the butt-cap reasoning are COPIED rather than re-derived, so
-        // this lens's wires and the shader graph's spend vertices alike.
-        //
-        // Adaptation: the exemplar reads its own ViewScale() and folds the
-        // emphasis brighten in behind a bool. Here `viewScale` is a parameter
-        // (DrawGraphDashedWire's existing convention in this file -- the lens
-        // computes it once per frame) and the caller hands down two FINAL
-        // colours, so emphasis stays where it already lived and this function
-        // stays pure paint.
-        //
-        // Retargeting the channel is not optional -- between ed::Begin and
-        // ed::End but outside a node the current channel is the BOTTOM of the
-        // merge, under the grid's own background fill, so a wire drawn there
-        // would simply be painted over. See kGraphLinkChannel.
-        ImVec2 DrawGraphWire(const ImVec2& p0, const ImVec2& p3,
-                             const ImVec4& colorA, const ImVec4& colorB,
-                             float thickness, float viewScale)
-        {
-            ImVec2 p1, p2;
-            GraphWireControlPoints(p0, p3, p1, p2);
-
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            // Defensive: the link channels exist from Begin, but never index
-            // past a splitter that has not been grown.
-            if (dl->_Splitter._Count > kGraphLinkChannel)
-            {
-                const int prevChannel = dl->_Splitter._Current;
-                dl->ChannelsSetCurrent(kGraphLinkChannel);
-
-                const ImU32 colA = ImGui::GetColorU32(colorA);
-                if (colA == ImGui::GetColorU32(colorB))
-                {
-                    // One tone end to end -- one call, and the library's own
-                    // adaptive tessellation.
-                    dl->AddBezierCubic(p0, p1, p2, p3, colA, thickness);
-                }
-                else
-                {
-                    // The shared segment budget (Widgets/GraphWire.hpp): the
-                    // count tracks the curve's length ON SCREEN, measured off
-                    // the control polygon. Literally the same call the dashed
-                    // wire below makes, and the same one the shader graph's
-                    // gradient wire makes.
-                    const int segments = GraphWireSegments(
-                        GraphWirePolyLength(p0, p1, p2, p3), viewScale);
-
-                    // Per-segment colour means per-segment stroke. Consecutive
-                    // segments are near-collinear on a curve this smooth, so
-                    // butt caps meet without visible notches; a shared
-                    // PathStroke cannot be used because it takes ONE colour
-                    // for the whole path.
-                    ImVec2 prev = p0;
-                    for (int i = 1; i <= segments; ++i)
-                    {
-                        const float t = static_cast<float>(i) / static_cast<float>(segments);
-                        const ImVec2 cur = GraphCubicBezierAt(p0, p1, p2, p3, t);
-                        // Colour sampled at the segment's MIDPOINT so the two
-                        // ends of the run land on the pure endpoint colours.
-                        const float mid = (t + static_cast<float>(i - 1) /
-                                               static_cast<float>(segments)) * 0.5f;
-                        dl->AddLine(prev, cur,
-                                    ImGui::GetColorU32(GraphLerpColor(colorA, colorB, mid)),
-                                    thickness);
-                        prev = cur;
-                    }
-                }
-
-                dl->ChannelsSetCurrent(prevChannel);
-            }
-            return GraphCubicBezierAt(p0, p1, p2, p3, 0.5f);
-        }
+        // DrawGraphWire -- the gradient stroke this lens introduced from
+        // DrawGradientWire's technique (user directive, 2026-09-09: "like our
+        // node graph for the shader can we have our custom gradient lines") --
+        // moved to Widgets/GraphWire.hpp, where the shader editor's own copy
+        // now calls it too. Its call shape here is unchanged: two FINAL colours
+        // (emphasis and dimming stay at the call sites below), an explicit
+        // thickness so the overflow connectors can be thinner than a data edge,
+        // an explicit viewScale the lens reads once per frame, and the midpoint
+        // back for the mid-edge label.
 
         // The DASHED in-flight wire (Task 6; plan ruling 8 -- spec §11.1's
         // "one new technique" for this plan). Same curve as DrawGraphWire, in
