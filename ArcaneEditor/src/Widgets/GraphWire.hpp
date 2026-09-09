@@ -19,6 +19,9 @@
 #include <imgui.h>
 #include <imgui_node_editor.h>
 
+#include <algorithm>
+#include <cmath>
+
 namespace Arcane::Editor
 {
     namespace ed = ax::NodeEditor;
@@ -119,5 +122,77 @@ namespace Arcane::Editor
     {
         const float invScale = ed::GetCurrentZoom();
         return invScale > 0.0001f ? 1.0f / invScale : 1.0f;
+    }
+
+    // ---- Curve geometry ---------------------------------------------------
+
+    // The two control points for a wire between `p0` (a left-hand endpoint,
+    // leaving rightward) and `p3` (a right-hand endpoint, arriving leftward).
+    //
+    // Reproduces Link::GetCurve (imgui_node_editor.cpp:955-982) exactly. The
+    // STYLE IS READ rather than assumed, so a later LinkStrength or direction
+    // change moves a hand-drawn curve and the library's hit-tested one
+    // together -- which is the whole reason a wire may be drawn by hand at all.
+    inline void GraphWireControlPoints(const ImVec2& p0, const ImVec2& p3,
+                                       ImVec2& p1, ImVec2& p2) noexcept
+    {
+        const ed::Style& st = ed::GetStyle();
+        const float dx = p3.x - p0.x;
+        const float dy = p3.y - p0.y;
+        const float halfDistance = std::sqrt(dx * dx + dy * dy) * 0.5f;
+        const auto ease = [halfDistance](float strength)
+        {
+            // Guarded against a zero strength the library never divides by
+            // (its own branch is only entered when halfDistance < strength,
+            // which a zero strength cannot satisfy).
+            constexpr float kPi = 3.14159265358979323846f;
+            if (strength > 0.0f && halfDistance < strength)
+                return strength * std::sin(kPi * 0.5f * halfDistance / strength);
+            return strength;
+        };
+        // ONE ease call. The library computes a start and an end strength from
+        // the same input and they are therefore always equal; the shader
+        // editor's copy spelled the call out twice, the Graph lens's port
+        // noticed and collapsed it. The collapsed form is the one kept -- same
+        // pure function, same argument, same result.
+        const float s = ease(st.LinkStrength);
+        p1 = ImVec2(p0.x + st.SourceDirection.x * s, p0.y + st.SourceDirection.y * s);
+        p2 = ImVec2(p3.x + st.TargetDirection.x * s, p3.y + st.TargetDirection.y * s);
+    }
+
+    // The view scale a wire's on-screen length is measured in, guarded. A view
+    // scale from GraphViewScale is always positive, so the guard is a no-op on
+    // every live call; it is here so a caller that computes one some other way
+    // cannot divide a dash cell by zero.
+    inline float GraphWireScreenScale(float viewScale) noexcept
+    {
+        return viewScale > 0.0f ? viewScale : 1.0f;
+    }
+
+    // The control polygon's length -- a cheap upper bound on the curve's arc
+    // length, and the only length measurement any wire here takes.
+    inline float GraphWirePolyLength(const ImVec2& p0, const ImVec2& p1,
+                                     const ImVec2& p2, const ImVec2& p3) noexcept
+    {
+        const auto len = [](float ax, float ay) { return std::sqrt(ax * ax + ay * ay); };
+        return len(p1.x - p0.x, p1.y - p0.y) +
+               len(p2.x - p1.x, p2.y - p1.y) +
+               len(p3.x - p2.x, p3.y - p2.y);
+    }
+
+    // How many straight segments a hand-drawn wire is walked in. The count
+    // tracks the curve's length ON SCREEN, so a wire stays smooth zoomed in
+    // without spending vertices zoomed out.
+    //
+    // Every wire in the editor spends vertices on this one budget: the shader
+    // graph's gradient wire, the Graph lens's gradient wire, and the Graph
+    // lens's dashed in-flight wire (whose own comment recorded the expression
+    // as "DrawGradientWire's own approximation, kept so both wires spend
+    // vertices the same way" -- now they do so by construction).
+    inline int GraphWireSegments(float polyLen, float viewScale) noexcept
+    {
+        const float screenLen = polyLen * GraphWireScreenScale(viewScale);
+        return static_cast<int>(
+            (std::min)(64.0f, (std::max)(12.0f, screenLen / 6.0f)));
     }
 }

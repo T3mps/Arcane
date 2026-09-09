@@ -5285,29 +5285,13 @@ namespace Arcane::Editor
         const ImVec2 p0 = itA->second;
         const ImVec2 p3 = itB->second;
 
-        // Reproduce Link::GetCurve (imgui_node_editor.cpp:955-982) exactly.
-        // Style is READ rather than assumed, so a later LinkStrength or
-        // direction change moves our curve and the library's together.
-        const ed::Style& st = ed::GetStyle();
-        const float dx = p3.x - p0.x;
-        const float dy = p3.y - p0.y;
-        const float halfDistance = std::sqrt(dx * dx + dy * dy) * 0.5f;
-        auto ease = [halfDistance](float strength)
-        {
-            // Guarded against a zero strength the library never divides by
-            // (its own branch is only entered when halfDistance < strength,
-            // which a zero strength cannot satisfy).
-            constexpr float kPi = 3.14159265358979323846f;
-            if (strength > 0.0f && halfDistance < strength)
-                return strength * std::sin(kPi * 0.5f * halfDistance / strength);
-            return strength;
-        };
-        const float startStrength = ease(st.LinkStrength);
-        const float endStrength   = ease(st.LinkStrength);
-        const ImVec2 p1(p0.x + st.SourceDirection.x * startStrength,
-                        p0.y + st.SourceDirection.y * startStrength);
-        const ImVec2 p2(p3.x + st.TargetDirection.x * endStrength,
-                        p3.y + st.TargetDirection.y * endStrength);
+        // Link::GetCurve, reproduced once for both canvases
+        // (Widgets/GraphWire.hpp). The block that stood here computed the same
+        // ease() twice, into a startStrength and an endStrength that are always
+        // equal; the shared form calls it once, which is the same number by the
+        // same pure function.
+        ImVec2 p1, p2;
+        GraphWireControlPoints(p0, p3, p1, p2);
 
         const ImVec4 a = emphasize ? GraphBrightenColor(fromColor) : fromColor;
         const ImVec4 b = emphasize ? GraphBrightenColor(toColor)   : toColor;

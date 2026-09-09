@@ -3143,33 +3143,10 @@ namespace Arcane::Editor
         // both were byte-identical to the shader editor's ViewScale /
         // CubicBezierAt, guard constant and all.
 
-        // The two control points for a wire between `p0` (a left-hand
-        // endpoint, leaving rightward) and `p3` (a right-hand endpoint,
-        // arriving leftward). Reproduces Link::GetCurve exactly, reading the
-        // style rather than assuming it, so a later LinkStrength or direction
-        // change moves our curve and the library's together
-        // (DrawGradientWire's convention, ShaderEditorDocument.cpp:5427-5446).
-        void GraphWireControlPoints(const ImVec2& p0, const ImVec2& p3,
-                                    ImVec2& p1, ImVec2& p2) noexcept
-        {
-            const ed::Style& st = ed::GetStyle();
-            const float dx = p3.x - p0.x;
-            const float dy = p3.y - p0.y;
-            const float halfDistance = std::sqrt(dx * dx + dy * dy) * 0.5f;
-            const auto ease = [halfDistance](float strength)
-            {
-                // Guarded against a zero strength the library never divides
-                // by (its own branch is only entered when halfDistance <
-                // strength, which a zero strength cannot satisfy).
-                constexpr float kPi = 3.14159265358979323846f;
-                if (strength > 0.0f && halfDistance < strength)
-                    return strength * std::sin(kPi * 0.5f * halfDistance / strength);
-                return strength;
-            };
-            const float s = ease(st.LinkStrength);
-            p1 = ImVec2(p0.x + st.SourceDirection.x * s, p0.y + st.SourceDirection.y * s);
-            p2 = ImVec2(p3.x + st.TargetDirection.x * s, p3.y + st.TargetDirection.y * s);
-        }
+        // GraphWireControlPoints (the Link::GetCurve reproduction) moved to
+        // Widgets/GraphWire.hpp, 2026-09-09, along with the segment budget
+        // both wire walks below used to spell out separately
+        // (GraphWirePolyLength / GraphWireSegments / GraphWireScreenScale).
 
         // Hand-drawn wire in the LINKS channel. Returns the curve's midpoint
         // (canvas space) so a caller can hang a label off it.
@@ -3222,19 +3199,13 @@ namespace Arcane::Editor
                 }
                 else
                 {
-                    // Segment count tracks the curve's length ON SCREEN, so a
-                    // wire stays smooth zoomed in without spending verts
-                    // zoomed out. The control polygon is a cheap upper bound
-                    // on arc length -- the same budget, from the same place,
-                    // as the dashed wire below.
-                    const auto len = [](float ax, float ay) { return std::sqrt(ax * ax + ay * ay); };
-                    const float polyLen = len(p1.x - p0.x, p1.y - p0.y) +
-                                          len(p2.x - p1.x, p2.y - p1.y) +
-                                          len(p3.x - p2.x, p3.y - p2.y);
-                    const float scale     = viewScale > 0.0f ? viewScale : 1.0f;
-                    const float screenLen = polyLen * scale;
-                    const int segments = static_cast<int>(
-                        (std::min)(64.0f, (std::max)(12.0f, screenLen / 6.0f)));
+                    // The shared segment budget (Widgets/GraphWire.hpp): the
+                    // count tracks the curve's length ON SCREEN, measured off
+                    // the control polygon. Literally the same call the dashed
+                    // wire below makes, and the same one the shader graph's
+                    // gradient wire makes.
+                    const int segments = GraphWireSegments(
+                        GraphWirePolyLength(p0, p1, p2, p3), viewScale);
 
                     // Per-segment colour means per-segment stroke. Consecutive
                     // segments are near-collinear on a curve this smooth, so
@@ -3292,17 +3263,16 @@ namespace Arcane::Editor
             if (dl->_Splitter._Count <= kGraphLinkChannel)
                 return;
 
+            // The shared segment budget (Widgets/GraphWire.hpp) -- the same
+            // call DrawGraphWire above makes, so both wires spend vertices the
+            // same way BY CONSTRUCTION rather than by a copied expression.
+            // `polyLen` and `scale` are kept because the dash walk needs them
+            // for its own cell arithmetic below.
+            const float polyLen = GraphWirePolyLength(p0, p1, p2, p3);
+            const float scale   = GraphWireScreenScale(viewScale);
+            const int segments  = GraphWireSegments(polyLen, viewScale);
+
             const auto len = [](float ax, float ay) { return std::sqrt(ax * ax + ay * ay); };
-            // The control polygon is a cheap upper bound on arc length --
-            // DrawGradientWire's own approximation, kept so both wires spend
-            // vertices the same way.
-            const float polyLen = len(p1.x - p0.x, p1.y - p0.y) +
-                                  len(p2.x - p1.x, p2.y - p1.y) +
-                                  len(p3.x - p2.x, p3.y - p2.y);
-            const float scale     = viewScale > 0.0f ? viewScale : 1.0f;
-            const float screenLen = polyLen * scale;
-            const int segments = static_cast<int>(
-                (std::min)(64.0f, (std::max)(12.0f, screenLen / 6.0f)));
 
             // Cell lengths in CANVAS units, so the dash reads 6-on/5-off on
             // screen at any zoom -- then the LOD floor (kGraphDashMaxCells).
