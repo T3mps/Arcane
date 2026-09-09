@@ -3106,9 +3106,13 @@ namespace Arcane::Editor
         std::uint64_t GraphRightPinId(std::uint64_t nodeId) noexcept { return nodeId * 4ull + 2ull; }
 
         // THIS lens's answers to the shared style desc
-        // (Widgets/GraphCanvasStyle.hpp). The 13 ed::Style writes and their
-        // reasoning are there; what is here is only what this canvas differs
-        // on -- everything else takes the shared default.
+        // (Widgets/GraphCanvasStyle.hpp). All 15 ed::Style writes -- 10 colours
+        // and 5 scalars -- and their reasoning are there; what is here is only
+        // what this canvas differs on, everything else taking the shared
+        // default. This lens's old block wrote 13 of the 15: it omitted
+        // GroupBg/GroupBorder, which the shared applier now writes as
+        // Theme::kNone -- two entries this lens never reads, since it creates no
+        // group nodes. See the header for that one disclosed asymmetry.
         GraphCanvasStyleDesc AssetGraphCanvasStyleDesc()
         {
             GraphCanvasStyleDesc d;
@@ -4114,9 +4118,17 @@ namespace Arcane::Editor
             // Ruling 9's mid-edge labels are dropped at LowDetail and below.
             // Written against the shared tier vocabulary rather than against a
             // copy of that tier's boundary number (Widgets/GraphNodeLod.hpp).
+            //
             // The lookup carries a 1e-4 epsilon the bare `> 0.250f` compare did
-            // not, which moves the cut by 0.0001: no entry in kZoomLevels lies
-            // in (0.250, 0.2501], so no reachable zoom STOP changes sides.
+            // not, which moves the cut by 0.0001. At every reachable zoom STOP
+            // that is a no-op -- no entry in kZoomLevels lies in
+            // (0.250, 0.2501]. But a stop is not the only scale this canvas can
+            // sit at: ed::NavigateToSelection (section 8b) fits a rectangle and
+            // lands on an arbitrary scale, and such a fit CAN land inside that
+            // 1e-4 window, where labels now drop a hair earlier than they did
+            // before the 2026-09-09 consolidation. Disclosed rather than
+            // engineered around: the band is 0.04% of one zoom stop's width and
+            // the labels in question are already at the edge of legibility.
             const bool  drawLabels = NodeLODForScale(viewScale) > NodeLOD::LowDetail;
             // Read-only: `selected` is a plain public member of the model, so
             // brightening needs no interaction plumbing at all. The rest of

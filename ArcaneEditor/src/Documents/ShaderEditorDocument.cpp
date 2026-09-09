@@ -428,10 +428,12 @@ namespace Arcane::Editor
         }
 
         // THIS canvas's answers to the shared style desc
-        // (Widgets/GraphCanvasStyle.hpp). The 13 ed::Style writes and their
-        // reasoning are there; what is here is only what this canvas differs
-        // on. Every other field takes the shared default -- the editor-wide
-        // canvas language -- which is the whole point of the desc.
+        // (Widgets/GraphCanvasStyle.hpp). All 15 ed::Style writes -- 10 colours
+        // and 5 scalars -- and their reasoning are there; what is here is only
+        // what this canvas differs on. Every other field takes the shared
+        // default -- the editor-wide canvas language -- which is the whole point
+        // of the desc. This canvas's old block wrote the same 15; the Graph
+        // lens's wrote 13, omitting the group pair (see the header).
         GraphCanvasStyleDesc ShaderCanvasStyleDesc()
         {
             GraphCanvasStyleDesc d;

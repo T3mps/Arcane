@@ -60,10 +60,20 @@ namespace Arcane::Editor
     //
     // A boundary value belongs to the LOWER tier (0.200 is LowestDetail, not
     // LowDetail), matching the table; the epsilon only protects that from float
-    // round-trips through the editor's zoom state. It also means a scale in the
-    // open band (kLodLowMax, kLodLowMax + kEps] answers LowDetail -- no entry in
+    // round-trips through the editor's zoom state.
+    //
+    // THE EPSILON'S REACH, stated exactly, because a consumer converting from a
+    // bare float compare inherits it. A scale in the half-open band
+    // (kLodBoundary, kLodBoundary + kEps] answers the LOWER tier. No entry in
     // kZoomLevels sits inside any such band, so no reachable zoom STOP changes
-    // tier because of it.
+    // tier because of it -- but a STOP is not the only scale a canvas can sit
+    // at: ed::NavigateToContent / NavigateToSelection fit a rectangle and land
+    // on an arbitrary scale (imgui_node_editor.cpp:3516-3548), and such a fit
+    // CAN land inside a band. There, this answers one tier lower than a bare
+    // `scale > kLodBoundary` would -- i.e. a consumer degrades a hair earlier,
+    // over a window 1e-4 wide. Recorded rather than engineered around: the
+    // consequence is imperceptible and the epsilon is doing its real job at the
+    // stops.
     inline NodeLOD NodeLODForScale(float scale) noexcept
     {
         constexpr float kEps = 1e-4f;

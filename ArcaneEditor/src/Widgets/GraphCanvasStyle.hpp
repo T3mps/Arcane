@@ -23,9 +23,10 @@
 // GraphGridPhase.hpp rather than folded into EditorWidgets.hpp: that
 // vocabulary is imgui.h plus Astra::Range only, and the canvas family is kept
 // out of it so no editor widget acquires a node-editor dependency
-// (CanvasPopupScope.hpp:16-19 states the rule; this header holds nothing that
-// needs imgui_node_editor.h today, but it is the canvas family's home and the
-// style applier that will join it does).
+// (CanvasPopupScope.hpp:16-19 states the rule). This header IS node-editor
+// coupled -- it includes imgui_node_editor.h below, because ApplyGraphCanvasStyle
+// writes ed::GetStyle() -- which is exactly why it lives in that family and not
+// in EditorWidgets.
 
 #include "Widgets/EditorTheme.hpp"
 
@@ -84,13 +85,25 @@ namespace Arcane::Editor
 
     // ---- The style application, and what a canvas may differ on -----------
     //
-    // THE POINT OF THIS STRUCT is that the two canvases' style blocks were
-    // STRUCTURALLY identical -- the same 13 ed::Style fields written in the
-    // same order -- and differed ONLY in values, with nothing tying the
-    // structure together. A desc preserves the divergence BY CONSTRUCTION,
-    // which is strictly better than the old arrangement where a structural
-    // change (a new style field, a reordering) could land on one canvas and
-    // silently not the other.
+    // THE POINT OF THIS STRUCT is that the two canvases' style blocks wrote the
+    // same ed::Style fields in the same order and differed almost entirely in
+    // VALUES, with nothing tying the structure together. This applier writes 15
+    // of them: 10 colours (Grid, Bg, NodeBg, NodeBorder, HovNodeBorder,
+    // SelNodeBorder, GroupBg, GroupBorder, PinRect, PinRectBorder) and 5 scalars
+    // (NodeRounding, NodeBorderWidth, HoveredNodeBorderWidth,
+    // SelectedNodeBorderWidth, NodePadding).
+    //
+    // "Almost" is exact, not hedging: the shader canvas's old block wrote all 15,
+    // the Graph lens's wrote 13 -- it omitted the GroupBg/GroupBorder pair. The
+    // shared applier writes them for both, which for the Graph lens means
+    // Theme::kNone into two entries it never reads (it creates no group nodes),
+    // and is therefore a state change with no drawing consequence. That one
+    // asymmetry is the whole of the structural difference; everything else was
+    // field-for-field the same.
+    //
+    // A desc preserves the value divergence BY CONSTRUCTION, which is strictly
+    // better than the old arrangement where a structural change (a new style
+    // field, a reordering) could land on one canvas and silently not the other.
     //
     // The two divergences are RULINGS, not accidents, and are named fields
     // rather than defaults so a caller has to state its side:
