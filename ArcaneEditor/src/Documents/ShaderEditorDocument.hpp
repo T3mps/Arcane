@@ -27,6 +27,10 @@
 // what the canvas grid IS. Held BY VALUE because a canvas keeps its pan/zoom
 // history across view switches.
 #include "Widgets/GraphGridPhase.hpp"
+// NodeLOD + its zoom boundaries. Moved out of this header (2026-09-09) so the
+// Assets panel's Graph lens reads the same table instead of copying one of its
+// numbers into a bare float compare -- see that header.
+#include "Widgets/GraphNodeLod.hpp"
 
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
@@ -74,25 +78,10 @@ namespace ax::NodeEditor
 
 namespace Arcane::Editor
 {
-    // Graph-canvas rendering level of detail -- Unreal's EGraphRenderingLOD,
-    // ported including its ORDERING, which every gate depends on: the enum runs
-    // from "zoomed all the way out" to "zoomed in past 1:1", so GREATER MEANS
-    // MORE DETAIL and a degradation is always written as `lod <= Tier` (or
-    // `lod < Tier`), exactly as UE writes them. Vendored source:
-    // Arcane/.example/UnrealEngine-release/Engine/Source/Editor/GraphEditor/
-    // Public/SNodePanel.h:70-90; the per-tier comments below are UE's own.
-    //
-    // The zoom boundaries and the per-tier degradation both live in
-    // ShaderEditorDocument.cpp (kLod* constants, NodeLODForScale, and the
-    // branches in DrawGraphNode).
-    enum class NodeLOD
-    {
-        LowestDetail = 0,   // zoomed all the way out (all optimizations on)
-        LowDetail,          // text is unreadable, so it starts being dropped
-        MediumDetail,       // text is hard to read but is still drawn
-        DefaultDetail,      // zoomed in at 1:1
-        FullyZoomedIn,      // zoomed in past 1:1
-    };
+    // NodeLOD, the kLod* boundaries and NodeLODForScale now live in
+    // Widgets/GraphNodeLod.hpp (included above) so both node canvases read one
+    // table; only the per-tier DEGRADATION -- which branches in DrawGraphNode
+    // drop what -- is still this document's own.
 
     // Everything a document borrows from the app (all outlive the host's
     // document list -- see EditorApp member ordering).

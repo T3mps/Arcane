@@ -7,6 +7,9 @@
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
+#include "Widgets/GraphCanvasStyle.hpp"  // node chrome metrics + grid palette + accents -- one definition, both canvases
+#include "Widgets/GraphNodeLod.hpp"      // NodeLOD / NodeLODForScale -- the zoom table's third column
+#include "Widgets/GraphWire.hpp"         // bezier/lerp/brighten/view-scale + the links channel
 #include "Widgets/GraphZoomLevels.hpp"   // ApplyZoomLevels -- same table the shader editor's canvases use
 #include "Widgets/IconsLucide.h"
 
@@ -2848,8 +2851,10 @@ namespace Arcane::Editor
         // plan spells out ("DrawPinDot -- radius becomes 4.5f for §11.2's
         // 9px").
         constexpr float kGraphPinRadius      = 4.5f;
-        constexpr int   kGraphPinSegments    = 12;
-        constexpr float kGraphPinRingWidth   = 1.6f;
+        // The dot's segment count and ring width are the canvas's own language,
+        // identical on both canvases, so they live once in
+        // Widgets/GraphCanvasStyle.hpp (kGraphPinSegments / kGraphPinRingWidth).
+        // Only the RADIUS above is this lens's -- §11.2's 9px across.
 
         // ---- Layout pitch (tuning values; Task 5's render comparison against
         // OptionD-Graph-FINAL.png arbitrates the final numbers).
@@ -2931,27 +2936,30 @@ namespace Arcane::Editor
         // canvases no longer read as identically-toned material; recorded here
         // so it reads as a decision rather than as drift.
         //
-        // NOT covered by either ruling, so NOT changed: the grid colours below
-        // (the board's single dot grid is #242424; this lens keeps its
-        // minor/major two-tier grid) and the pill/label colours. See the fix
-        // report.
+        // NOT covered by either ruling, so NOT changed: the grid colours (the
+        // board's single dot grid is #242424; this lens keeps its minor/major
+        // two-tier grid) and the pill/label colours. See the fix report. The
+        // grid pair has since moved to Widgets/GraphCanvasStyle.hpp
+        // (kGraphGridMinorColor / kGraphGridMajorColor, 2026-09-09) -- the
+        // VALUES are unchanged; what changed is that the pair it was
+        // byte-identical to on the shader canvas is now the same pair, so the
+        // "inherited, not chosen" state has one home instead of two copies with
+        // nothing between them.
         constexpr ImVec4 kGraphCanvasColor    = Theme::kWell;                          // #121212
-        constexpr ImVec4 kGraphGridMinorColor = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
-        constexpr ImVec4 kGraphGridMajorColor = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
         constexpr ImVec4 kGraphNodeBodyColor  = Theme::kPanel;                         // #1e1e1e
         constexpr ImVec4 kGraphNodeTitleColor = Theme::kChrome;                        // #191919
         constexpr ImVec4 kGraphNodeBorder     = Theme::kBorder;                        // #0d0d0d
-        // Selection amber / hover cyan: the editor-wide outline language
-        // (ShaderEditorDocument.cpp:246-250, itself the viewport outline
-        // composite's kSelectColor/kHoverColor).
-        constexpr ImVec4 kGraphNodeSelBorder  = ImVec4(1.0f,  0.65f, 0.10f, 1.0f);
-        constexpr ImVec4 kGraphNodeHovBorder  = ImVec4(0.25f, 0.70f, 1.0f,  1.0f);
-        constexpr float  kGraphNodeRounding      = 4.0f;   // the canvas's own language -- kept
-        constexpr float  kGraphNodeBorderWidth   = 1.0f;
-        constexpr float  kGraphNodeHovBorderW    = 1.5f;
-        constexpr float  kGraphNodeSelBorderW    = 2.0f;   // spec §10: "selection = 2px"
+        // Selection amber / hover cyan and the four node chrome metrics
+        // (rounding + the three border widths) are the editor-wide canvas
+        // language, not this lens's taste -- they were the same literals on both
+        // canvases and now live once in Widgets/GraphCanvasStyle.hpp
+        // (kGraphNodeSelBorderColor / kGraphNodeHovBorderColor,
+        // kGraphNodeRounding, kGraphNodeBorderWidth, kGraphNodeHovBorderWidth,
+        // kGraphNodeSelBorderWidth). So is the wire thickness
+        // (kGraphWireThickness). Only the four SURFACE tones above stay here:
+        // those are the board ruling's, and the ruling declines to drag the
+        // shader canvas onto them.
 
-        constexpr float kGraphWireThickness = 2.0f;
         // The subtle anchor -> "+N more" connector: thinner than a data edge
         // on purpose (it is NOT one -- see DrawGraphLens's own comment).
         constexpr float kGraphOverflowWireThickness = 1.5f;
@@ -2989,23 +2997,20 @@ namespace Arcane::Editor
 
         // Mid-edge labels (ruling 9) stop being legible long before the nodes
         // do, so they are the first thing the canvas drops on zoom-out. The
-        // threshold is the shader editor's own LOD table, ported: its
-        // kLodLowMax = 0.250 is the last stop of the LowDetail tier
-        // (FFixedZoomLevelsContainer, SNodePanel.cpp:56-75, via
-        // ShaderEditorDocument.cpp's NodeLODForScale). At or below that,
+        // threshold is the LOD table's LowDetail ceiling -- this lens used to
+        // copy that ONE NUMBER (0.250f) into a bare float compare and say so in
+        // a comment; it now reads the table itself
+        // (Widgets/GraphNodeLod.hpp, NodeLODForScale). At LowDetail and below,
         // labels are skipped; MediumDetail and up draw them.
-        constexpr float kGraphLabelMinScale = 0.250f;
         constexpr float kGraphLabelFontPx   = 12.0f;   // §11.2's pill/label text size
 
-        // c_LinkChannel_Links, reproduced. It is a file-static in the
-        // vendored TU (imgui_node_editor.cpp:130-131) so it cannot be named
-        // from here; the derivation and the WHOLE two-layer rationale (why a
-        // transparent ed::Link costs nothing, why hover/selection halos
-        // survive, and why channel 7 is the only layer that puts a
-        // hand-drawn wire where the flat one was) are written out once at
-        // ShaderEditorDocument.cpp:311-357. Read that block before touching
-        // anything here.
-        constexpr int kGraphLinkChannel = 7;
+        // c_LinkChannel_Links (= 7) and the WHOLE two-layer rationale behind it
+        // -- why a transparent ed::Link costs nothing, why hover/selection halos
+        // survive, and why channel 7 is the only layer that puts a hand-drawn
+        // wire where the flat one was -- now live once in Widgets/GraphWire.hpp
+        // (kGraphLinkChannel). This lens already deferred to the shader
+        // editor's copy of that prose rather than restating it; both now read
+        // the header.
 
         // Spec §11.3's kind-color table, VERBATIM, as a panel-local function
         // in PinColorForWidth's shape (ShaderEditorDocument.cpp:491) --
@@ -3048,24 +3053,19 @@ namespace Arcane::Editor
             return n.isTombstone ? Theme::kAmber : KindAccentColor(n.kind);
         }
 
-        ImVec4 GraphLerpColor(const ImVec4& a, const ImVec4& b, float t) noexcept
-        {
-            return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
-                          a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
-        }
+        // GraphLerpColor (the sRGB lerp) and GraphBrightenColor (a quarter of
+        // the way to white) moved to Widgets/GraphWire.hpp, 2026-09-09: both
+        // were byte-identical to the shader editor's LerpColor/BrightenColor,
+        // as this file's own comment on the latter already said. GraphDimColor
+        // below has NO shader counterpart -- that canvas never dims a wire, it
+        // only brightens -- so it stays here, lens-local, reading the shared
+        // lerp.
 
         // Toward the canvas: "the same hue, further back".
         ImVec4 GraphDimColor(const ImVec4& c, float t) noexcept
         {
             return GraphLerpColor(c, ImVec4(kGraphCanvasColor.x, kGraphCanvasColor.y,
                                             kGraphCanvasColor.z, c.w), t);
-        }
-
-        // BrightenColor's idiom (ShaderEditorDocument.cpp:387): a quarter of
-        // the way to white, alpha untouched.
-        ImVec4 GraphBrightenColor(const ImVec4& c) noexcept
-        {
-            return GraphLerpColor(c, ImVec4(1.0f, 1.0f, 1.0f, c.w), 0.25f);
         }
 
         // ---- Id encoding --------------------------------------------------
@@ -3117,8 +3117,8 @@ namespace Arcane::Editor
             s.Colors[ed::StyleColor_Bg]   = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
             s.Colors[ed::StyleColor_NodeBg]        = kGraphNodeBodyColor;
             s.Colors[ed::StyleColor_NodeBorder]    = kGraphNodeBorder;
-            s.Colors[ed::StyleColor_HovNodeBorder] = kGraphNodeHovBorder;
-            s.Colors[ed::StyleColor_SelNodeBorder] = kGraphNodeSelBorder;
+            s.Colors[ed::StyleColor_HovNodeBorder] = kGraphNodeHovBorderColor;
+            s.Colors[ed::StyleColor_SelNodeBorder] = kGraphNodeSelBorderColor;
             // A pin draws nothing of its own except a hover rect -- that
             // rectangle would fight the dot, so its alpha goes to zero and
             // the dot IS the pin visual.
@@ -3126,8 +3126,8 @@ namespace Arcane::Editor
             s.Colors[ed::StyleColor_PinRectBorder] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
             s.NodeRounding            = kGraphNodeRounding;
             s.NodeBorderWidth         = kGraphNodeBorderWidth;
-            s.HoveredNodeBorderWidth  = kGraphNodeHovBorderW;
-            s.SelectedNodeBorderWidth = kGraphNodeSelBorderW;
+            s.HoveredNodeBorderWidth  = kGraphNodeHovBorderWidth;
+            s.SelectedNodeBorderWidth = kGraphNodeSelBorderWidth;
             // ZERO node padding, unlike the shader editor's: this lens lays
             // its own rows out by hand (SetCursorScreenPos + explicit
             // Dummies) so the 24px header band and the node's total height
@@ -3138,28 +3138,10 @@ namespace Arcane::Editor
             s.NodePadding = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
         }
 
-        // The canvas's view scale, in the same units as a zoom stop. THE
-        // TRAP (ViewScale, ShaderEditorDocument.cpp:441): ed::GetCurrentZoom
-        // returns InvScale -- canvas units per screen pixel -- the RECIPROCAL
-        // of the scale everything else means by "zoom".
-        float GraphViewScale() noexcept
-        {
-            const float invScale = ed::GetCurrentZoom();
-            return invScale > 0.0001f ? 1.0f / invScale : 1.0f;
-        }
-
-        // Cubic bezier at t -- the same evaluation the library tessellates.
-        ImVec2 GraphCubicBezierAt(const ImVec2& p0, const ImVec2& p1,
-                                  const ImVec2& p2, const ImVec2& p3, float t) noexcept
-        {
-            const float u = 1.0f - t;
-            const float w0 = u * u * u;
-            const float w1 = 3.0f * u * u * t;
-            const float w2 = 3.0f * u * t * t;
-            const float w3 = t * t * t;
-            return ImVec2(p0.x * w0 + p1.x * w1 + p2.x * w2 + p3.x * w3,
-                          p0.y * w0 + p1.y * w1 + p2.y * w2 + p3.y * w3);
-        }
+        // GraphViewScale (the ed::GetCurrentZoom reciprocal flip, "THE TRAP")
+        // and GraphCubicBezierAt moved to Widgets/GraphWire.hpp, 2026-09-09:
+        // both were byte-identical to the shader editor's ViewScale /
+        // CubicBezierAt, guard constant and all.
 
         // The two control points for a wire between `p0` (a left-hand
         // endpoint, leaving rightward) and `p3` (a right-hand endpoint,
@@ -4268,10 +4250,16 @@ namespace Arcane::Editor
             // while the visible curve is drawn by hand into the links
             // channel. That is what per-kind colour, mid-edge labels and
             // selection brightening need; the library's flat uniform links
-            // can do none of them. ShaderEditorDocument.cpp:311-357 is the
-            // long form of every clause in this paragraph.
+            // can do none of them. Widgets/GraphWire.hpp's kGraphLinkChannel
+            // note is the long form of every clause in this paragraph.
             const float viewScale = GraphViewScale();
-            const bool  drawLabels = viewScale > kGraphLabelMinScale;
+            // Ruling 9's mid-edge labels are dropped at LowDetail and below.
+            // Written against the shared tier vocabulary rather than against a
+            // copy of that tier's boundary number (Widgets/GraphNodeLod.hpp).
+            // The lookup carries a 1e-4 epsilon the bare `> 0.250f` compare did
+            // not, which moves the cut by 0.0001: no entry in kZoomLevels lies
+            // in (0.250, 0.2501], so no reachable zoom STOP changes sides.
+            const bool  drawLabels = NodeLODForScale(viewScale) > NodeLOD::LowDetail;
             // Read-only: `selected` is a plain public member of the model, so
             // brightening needs no interaction plumbing at all. The rest of
             // the selection story -- clicking a node, centering on an

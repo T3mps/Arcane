@@ -5,6 +5,8 @@
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"   // StableTextEdit: the stable-buffer text-commit helper
+#include "Widgets/GraphCanvasStyle.hpp"   // node chrome metrics + grid palette + accents -- shared with the Graph lens
+#include "Widgets/GraphWire.hpp"         // bezier/lerp/brighten/view-scale + the links channel -- ditto
 #include "Widgets/GraphZoomLevels.hpp"   // kZoomLevels / ApplyZoomLevels -- shared with the Graph lens
 #include "Widgets/IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
 #include "Widgets/MaterialParamWidgets.hpp"
@@ -237,18 +239,19 @@ namespace Arcane::Editor
         // drifting apart; the value is unchanged (#1e1e1e), so the approved
         // canvas look is untouched.
         constexpr ImVec4 kCanvasColor      = Theme::kPanel;                        // #1e1e1e
-        constexpr ImVec4 kGridMinorColor   = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
-        constexpr ImVec4 kGridMajorColor   = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
+        // The grid palette moved to Widgets/GraphCanvasStyle.hpp
+        // (kGraphGridMinorColor / kGraphGridMajorColor, 2026-09-09): the pair
+        // was byte-identical to the Graph lens's, which had inherited it rather
+        // than chosen it, with nothing policing the drift.
         constexpr ImVec4 kNodeBodyColor    = ImVec4(0.176f, 0.176f, 0.188f, 1.0f); // #2d2d30
         constexpr ImVec4 kNodeTitleColor   = ImVec4(0.137f, 0.137f, 0.149f, 1.0f); // #232326
         constexpr ImVec4 kNodeBorderColor  = ImVec4(0.243f, 0.243f, 0.267f, 1.0f);
         constexpr ImVec4 kNodeTitleText    = ImVec4(0.808f, 0.808f, 0.831f, 1.0f);
         constexpr ImVec4 kNodeBadgeText    = ImVec4(1.0f,   0.4f,   0.3f,   1.0f);
-        // Selection/hover reuse the viewport's outline language so one accent
-        // means "selected" everywhere in the editor (kSelectColor / kHoverColor,
-        // ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.cpp:101).
-        constexpr ImVec4 kNodeSelBorder    = ImVec4(1.0f,  0.65f, 0.10f, 1.0f);   // amber
-        constexpr ImVec4 kNodeHovBorder    = ImVec4(0.25f, 0.70f, 1.0f,  1.0f);   // cyan
+        // Selection/hover accents moved to Widgets/GraphCanvasStyle.hpp
+        // (kGraphNodeSelBorderColor / kGraphNodeHovBorderColor, 2026-09-09).
+        // The amber IS Theme::kAmber to the last digit, and that token's own
+        // comment already cites this border as one of its reasons to exist.
         constexpr ImVec4 kGroupBgColor     = ImVec4(0.220f, 0.220f, 0.235f, 0.25f);
         constexpr ImVec4 kGroupBorderColor = ImVec4(0.290f, 0.290f, 0.310f, 0.60f);
 
@@ -276,11 +279,15 @@ namespace Arcane::Editor
         // the two canvases sit one breadcrumb click apart.
         constexpr ImVec4 kPinTextureColor = ImVec4(0.949f, 0.549f, 0.251f, 1.0f); // red-orange
 
-        // Node geometry (canvas units at zoom 1).
-        constexpr float kNodeRounding    = 4.0f;
-        constexpr float kNodeBorderWidth = 1.0f;
-        constexpr float kNodeHovBorderWidth = 1.5f;
-        constexpr float kNodeSelBorderWidth = 2.0f;
+        // Node geometry (canvas units at zoom 1). The four chrome metrics --
+        // rounding and the three border widths -- moved to
+        // Widgets/GraphCanvasStyle.hpp (kGraphNodeRounding,
+        // kGraphNodeBorderWidth, kGraphNodeHovBorderWidth,
+        // kGraphNodeSelBorderWidth, 2026-09-09): they are the canvas's own
+        // language, not this canvas's taste, and were the same four literals in
+        // the Graph lens. The padding pair below is NOT shared -- it is exactly
+        // what the two canvases disagree about (the Graph lens lays its rows out
+        // by hand with zero NodePadding).
         constexpr float kNodePadX = 10.0f;
         constexpr float kNodePadY = 6.0f;
         // Breathing room between the BOTTOM EDGE OF THE TITLE BAND and the first
@@ -304,91 +311,20 @@ namespace Arcane::Editor
         // between full content and stand-in as the view drifts, and it means a
         // node is already fully built by the time it scrolls in.
         constexpr float kCullGuardBand = 0.25f;
+        // The pin dot's RADIUS is this canvas's own (the Graph lens draws 4.5f
+        // for spec §11.2's 9px); its segment count and ring width are shared
+        // (kGraphPinSegments / kGraphPinRingWidth, Widgets/GraphCanvasStyle.hpp).
         constexpr float kPinDotRadius   = 4.0f;
-        constexpr float kPinRingWidth   = 1.6f;
-        constexpr int   kPinDotSegments = 12;
-        constexpr float kWireThickness  = 2.0f;
 
         // ---- Gradient wires -------------------------------------------------
-        // ed::Link paints one flat colour, so a wire cannot say "this end is a
-        // float, that end is a float2" the way its two dots do. We therefore
-        // submit the link with a FULLY TRANSPARENT colour and draw the curve
-        // ourselves in the library's own link layer.
-        //
-        // Alpha 0 costs nothing and breaks nothing. The draw helper returns
-        // immediately on `if ((color >> 24) == 0)`
-        // (imgui_node_editor.cpp:494-495), so the flat wire is never
-        // tessellated. Registration ignores the colour entirely -- DoLink
-        // stores it and calls UpdateEndpoints unconditionally
-        // (imgui_node_editor.cpp:1648-1653) -- and every hit path
-        // (Link::TestHit :984-1032, FindLinkAt :2240-2247) reads only the
-        // geometry and m_Thickness. So hover, selection, rect-select and the
-        // delete flow are untouched, and the thickness we pass still has to be
-        // the REAL one or the wire would be hard to grab.
-        //
-        // Hover/selection feedback also survives on its own: those passes use
-        // StyleColor_HovLinkBorder / StyleColor_SelLinkBorder, not the link's
-        // colour (imgui_node_editor.cpp:899-929), and land in
-        // c_LinkChannel_Selection, one channel BELOW the links -- so they stay
-        // a halo behind our gradient exactly as they were behind the flat wire.
-        //
-        // c_LinkChannel_Links is a file-static in the vendored translation unit
-        // (imgui_node_editor.cpp:130-131), so it cannot be named from here; it
-        // is reproduced from the constants it is built out of
-        // (imgui_node_editor.cpp:113-121). Reproduced rather than guessed:
-        // c_UserLayerChannelStart(0) + c_UserLayersCount(5) =
-        // c_BackgroundChannelStart(5), + c_BackgroundChannelCount(1) =
-        // c_LinkStartChannel(6), + 1 = 7.
-        //
-        // Retargeting the channel is not optional. Between ed::Begin and
-        // ed::End but outside a node, the current channel is m_ExternalChannel
-        // (imgui_node_editor.cpp:1191-1194), which is 0 -- the BOTTOM of the
-        // merge, under the grid's own opaque background fill
-        // (imgui_node_editor.cpp:1512). Wires drawn there would simply be
-        // painted over. The other reachable layer, GetNodeBackgroundDrawList,
-        // is a per-node channel and sits ABOVE the links, so wires would cross
-        // in front of node bodies. Channel 7 is the only one that puts them
-        // where the flat wires were: above group nodes, below regular nodes
-        // (the End reshuffle keeps the four link channels contiguous and in
-        // order, imgui_node_editor.cpp:1488-1492).
-        //
-        // The index is only meaningful DURING submission -- End swaps the
-        // channels into their final z-order -- so this must run inside
-        // ed::Begin/End, which it does (the link loop is in DrawGraphPanel).
-        constexpr int kLinkChannelLinks = 7;
-
-        // Cubic bezier at t. Same evaluation the library tessellates
-        // (ImCubicBezier* in imgui_bezier_math.inl); we need per-segment points
-        // because the colour changes along the curve.
-        ImVec2 CubicBezierAt(const ImVec2& p0, const ImVec2& p1,
-                             const ImVec2& p2, const ImVec2& p3, float t) noexcept
-        {
-            const float u = 1.0f - t;
-            const float w0 = u * u * u;
-            const float w1 = 3.0f * u * u * t;
-            const float w2 = 3.0f * u * t * t;
-            const float w3 = t * t * t;
-            return ImVec2(p0.x * w0 + p1.x * w1 + p2.x * w2 + p3.x * w3,
-                          p0.y * w0 + p1.y * w1 + p2.y * w2 + p3.y * w3);
-        }
-
-        // Straight sRGB lerp. The pin palette is four light, low-saturation
-        // tones, so the midpoints stay clean without an OkLab detour; the one
-        // pairing that could band (azure -> magenta) crosses through a plausible
-        // lavender rather than through grey.
-        ImVec4 LerpColor(const ImVec4& a, const ImVec4& b, float t) noexcept
-        {
-            return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
-                          a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
-        }
-
-        // Hover/selection already reads through the library's halo (see
-        // DrawGradientWire); this lifts the wire itself the same way a
-        // highlighted dot lifts, so the emphasis lands on the whole run.
-        ImVec4 BrightenColor(const ImVec4& c) noexcept
-        {
-            return LerpColor(c, ImVec4(1.0f, 1.0f, 1.0f, c.w), 0.25f);
-        }
+        // The two-layer technique -- transparent ed::Link for interaction, a
+        // hand-drawn curve in the links channel for the paint -- and the whole
+        // derivation of that channel index now live once in
+        // Widgets/GraphWire.hpp (kGraphLinkChannel, 2026-09-09). The Graph lens
+        // used to defer to the copy that stood here; both now read the header.
+        // The bezier evaluation, the sRGB lerp and the brighten moved there too
+        // (GraphCubicBezierAt / GraphLerpColor / GraphBrightenColor) -- each was
+        // byte-identical to the Graph lens's copy.
 
         // ZOOM STOPS + ApplyZoomLevels moved to Widgets/GraphZoomLevels.hpp
         // (2026-09-09) so the Assets panel's Graph lens can install the same
@@ -400,56 +336,12 @@ namespace Arcane::Editor
         // namespace Arcane::Editor, which this anonymous namespace nests
         // inside).
 
-        // The canvas's view scale, in the same units as kZoomLevels. THE TRAP:
-        // ed::GetCurrentZoom returns InvScale -- canvas units per screen pixel
-        // (imgui_node_editor_api.cpp:665-668) -- which is the reciprocal of the
-        // scale everything else in this file means by "zoom". One helper, so
-        // the flip is written once.
-        //
-        // Valid on either side of ed::Begin within a frame: Begin installs the
-        // view the previous End computed (imgui_node_editor.cpp:1258) and the
-        // navigate action only re-derives it during End, so both reads return
-        // the scale this frame's nodes are actually drawn at.
-        float ViewScale() noexcept
-        {
-            const float invScale = ed::GetCurrentZoom();
-            return invScale > 0.0001f ? 1.0f / invScale : 1.0f;
-        }
-
-        // -------------------------------------------------------------------
-        // RENDERING LOD BOUNDARIES -- the third column of UE's zoom table.
-        //
-        // Each constant is the LAST kZoomLevels entry belonging to that tier,
-        // read straight off FFixedZoomLevelsContainer (SNodePanel.cpp:56-75):
-        //   0.100 .. 0.200          LowestDetail
-        //   0.225 .. 0.250          LowDetail
-        //   0.375 .. 0.675          MediumDetail
-        //   0.750 .. 1.375          DefaultDetail
-        //   1.500 .. 2.000          FullyZoomedIn
-        // UE indexes its table and looks the tier up by INDEX
-        // (SNodePanel.cpp:1921); we compare the scale instead, because the
-        // canvas can also sit BETWEEN stops -- ed::NavigateToContent /
-        // NavigateToSelection fit a rectangle and land on an arbitrary scale
-        // (imgui_node_editor.cpp:3516-3548), which an index lookup has no
-        // answer for. Comparing covers both.
-        constexpr float kLodLowestMax  = 0.200f;
-        constexpr float kLodLowMax     = 0.250f;
-        constexpr float kLodMediumMax  = 0.675f;
-        constexpr float kLodDefaultMax = 1.375f;
-
-        // The canvas's tier at a given view scale. A boundary value belongs to
-        // the LOWER tier (0.200 is LowestDetail, not LowDetail), matching the
-        // table; the epsilon only protects that from float round-trips through
-        // the editor's zoom state.
-        NodeLOD NodeLODForScale(float scale) noexcept
-        {
-            constexpr float kEps = 1e-4f;
-            if (scale <= kLodLowestMax  + kEps) return NodeLOD::LowestDetail;
-            if (scale <= kLodLowMax     + kEps) return NodeLOD::LowDetail;
-            if (scale <= kLodMediumMax  + kEps) return NodeLOD::MediumDetail;
-            if (scale <= kLodDefaultMax + kEps) return NodeLOD::DefaultDetail;
-            return NodeLOD::FullyZoomedIn;
-        }
+        // The view-scale helper moved to Widgets/GraphWire.hpp as
+        // GraphViewScale (2026-09-09) -- the reciprocal flip and its "THE TRAP"
+        // note were byte-identical in the Graph lens. RENDERING LOD BOUNDARIES (the
+        // kLod* constants and NodeLODForScale, the third column of UE's zoom
+        // table) moved to Widgets/GraphNodeLod.hpp alongside the NodeLOD enum,
+        // so the Graph lens reads the table instead of copying 0.250 out of it.
 
         // ImVec4 -> the plain float[4] the grid CB mirrors.
         void FillRgba(float (&dst)[4], const ImVec4& c) noexcept
@@ -485,12 +377,12 @@ namespace Arcane::Editor
             ImDrawList* dl = ImGui::GetWindowDrawList();
             const ImU32 col = ImGui::GetColorU32(color);
             if (connected)
-                dl->AddCircleFilled(c, kPinDotRadius, col, kPinDotSegments);
+                dl->AddCircleFilled(c, kPinDotRadius, col, kGraphPinSegments);
             else
             {
                 dl->AddCircleFilled(c, kPinDotRadius,
-                                    ImGui::GetColorU32(kNodeBodyColor), kPinDotSegments);
-                dl->AddCircle(c, kPinDotRadius, col, kPinDotSegments, kPinRingWidth);
+                                    ImGui::GetColorU32(kNodeBodyColor), kGraphPinSegments);
+                dl->AddCircle(c, kPinDotRadius, col, kGraphPinSegments, kGraphPinRingWidth);
             }
             return c;
         }
@@ -532,11 +424,11 @@ namespace Arcane::Editor
                 return nodeSize;
             if (ImDrawList* bg = ed::GetNodeBackgroundDrawList(ed::NodeId(nodeId)))
                 bg->AddRectFilled(
-                    ImVec2(nodePos.x + kNodeBorderWidth, nodePos.y + kNodeBorderWidth),
-                    ImVec2(nodePos.x + nodeSize.x - kNodeBorderWidth,
+                    ImVec2(nodePos.x + kGraphNodeBorderWidth, nodePos.y + kGraphNodeBorderWidth),
+                    ImVec2(nodePos.x + nodeSize.x - kGraphNodeBorderWidth,
                            headerMaxY + kNodePadY),
                     ImGui::GetColorU32(kNodeTitleColor),
-                    kNodeRounding, ImDrawFlags_RoundCornersTop);
+                    kGraphNodeRounding, ImDrawFlags_RoundCornersTop);
             return nodeSize;
         }
 
@@ -558,8 +450,8 @@ namespace Arcane::Editor
             s.Colors[ed::StyleColor_Bg]   = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
             s.Colors[ed::StyleColor_NodeBg]        = kNodeBodyColor;
             s.Colors[ed::StyleColor_NodeBorder]    = kNodeBorderColor;
-            s.Colors[ed::StyleColor_HovNodeBorder] = kNodeHovBorder;
-            s.Colors[ed::StyleColor_SelNodeBorder] = kNodeSelBorder;
+            s.Colors[ed::StyleColor_HovNodeBorder] = kGraphNodeHovBorderColor;
+            s.Colors[ed::StyleColor_SelNodeBorder] = kGraphNodeSelBorderColor;
             s.Colors[ed::StyleColor_GroupBg]       = kGroupBgColor;
             s.Colors[ed::StyleColor_GroupBorder]   = kGroupBorderColor;
             // A pin draws nothing of its own except a hover rect
@@ -567,10 +459,10 @@ namespace Arcane::Editor
             // dot, so its alpha goes to zero and the dot IS the pin visual.
             s.Colors[ed::StyleColor_PinRect]       = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
             s.Colors[ed::StyleColor_PinRectBorder] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-            s.NodeRounding            = kNodeRounding;
-            s.NodeBorderWidth         = kNodeBorderWidth;
-            s.HoveredNodeBorderWidth  = kNodeHovBorderWidth;
-            s.SelectedNodeBorderWidth = kNodeSelBorderWidth;
+            s.NodeRounding            = kGraphNodeRounding;
+            s.NodeBorderWidth         = kGraphNodeBorderWidth;
+            s.HoveredNodeBorderWidth  = kGraphNodeHovBorderWidth;
+            s.SelectedNodeBorderWidth = kGraphNodeSelBorderWidth;
             s.NodePadding = ImVec4(kNodePadX, kNodePadY, kNodePadX, kNodePadY);
         }
 
@@ -3834,7 +3726,7 @@ namespace Arcane::Editor
         // read above is the same number -- the navigate action only re-derives
         // the view during End -- but it is taken before Begin because
         // ScreenToCanvas has to be, so the two calls stay separate.
-        const NodeLOD lod = NodeLODForScale(ViewScale());
+        const NodeLOD lod = NodeLODForScale(GraphViewScale());
         // Culled-node set for THIS submission: refilled below. Currently
         // WRITE-ONLY -- nothing reads it (see its declaration in the header).
         m_culledGraphNodes.clear();
@@ -3881,10 +3773,10 @@ namespace Arcane::Editor
             const ed::PinId toPin   = InPin(l.toNode, l.toPin);
 
             // Interaction only -- transparent, so the library tessellates
-            // nothing (see kLinkChannelLinks). The thickness is the real one:
+            // nothing (see kGraphLinkChannel). The thickness is the real one:
             // it is still the hit radius.
             ed::Link(linkId, fromPin, toPin, ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
-                     kWireThickness);
+                     kGraphWireThickness);
 
             // GetHoveredLink reports 0 while any action is running (the
             // m_CurrentAction guard, imgui_node_editor.cpp:1280), so a wire
@@ -5244,7 +5136,7 @@ namespace Arcane::Editor
         // the exact curve match, not for a colour transition it has no types
         // to make.
         ed::Link(id, fromPin, toPin, ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
-                 kWireThickness);
+                 kGraphWireThickness);
         const bool emphasize = ed::IsLinkSelected(id) || ed::GetHoveredLink() == id;
         DrawGradientWire(fromPin.Get(), toPin.Get(), kPinTextureColor,
                          kPinTextureColor, emphasize);
@@ -5328,19 +5220,19 @@ namespace Arcane::Editor
         // history of these, because a sublinearly-scaled lattice has no
         // canvas-space anchor to be read off any single frame.
         //
-        // ViewScale() owns the GetCurrentZoom-returns-the-reciprocal flip (see
+        // GraphViewScale() owns the GetCurrentZoom-returns-the-reciprocal flip (see
         // its comment). ScreenToCanvas is safe HERE and only here: inside
         // ed::Begin/End the editor moves ImGui itself into canvas space
         // (imgui_canvas.cpp:476-487), so this must stay ahead of it.
-        view.scale = ViewScale();
+        view.scale = GraphViewScale();
         const ImVec2 originCanvas = ed::ScreenToCanvas(canvasMin);
         view.originX = originCanvas.x;
         view.originY = originCanvas.y;
 
         GraphGridColors colors;
         FillRgba(colors.canvas, kCanvasColor);
-        FillRgba(colors.minor,  kGridMinorColor);
-        FillRgba(colors.major,  kGridMajorColor);
+        FillRgba(colors.minor,  kGraphGridMinorColor);
+        FillRgba(colors.major,  kGraphGridMajorColor);
 
         // ===== THE ImGui-PRIMITIVE BACKDROP =================================
         // The lattice is drawn with ImGui primitives through the shared
@@ -5417,16 +5309,16 @@ namespace Arcane::Editor
         const ImVec2 p2(p3.x + st.TargetDirection.x * endStrength,
                         p3.y + st.TargetDirection.y * endStrength);
 
-        const ImVec4 a = emphasize ? BrightenColor(fromColor) : fromColor;
-        const ImVec4 b = emphasize ? BrightenColor(toColor)   : toColor;
+        const ImVec4 a = emphasize ? GraphBrightenColor(fromColor) : fromColor;
+        const ImVec4 b = emphasize ? GraphBrightenColor(toColor)   : toColor;
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
         // Defensive: the link channels exist from Begin, but never index past
         // a splitter that has not been grown.
-        if (dl->_Splitter._Count <= kLinkChannelLinks)
+        if (dl->_Splitter._Count <= kGraphLinkChannel)
             return;
         const int prevChannel = dl->_Splitter._Current;
-        dl->ChannelsSetCurrent(kLinkChannelLinks);
+        dl->ChannelsSetCurrent(kGraphLinkChannel);
 
         const ImU32 colA = ImGui::GetColorU32(a);
         if (colA == ImGui::GetColorU32(b))
@@ -5434,7 +5326,7 @@ namespace Arcane::Editor
             // Same type both ends -- the overwhelmingly common case. One call,
             // and ImGui's own adaptive tessellation, which is what the flat
             // wire used to get (imgui_node_editor.cpp:501).
-            dl->AddBezierCubic(p0, p1, p2, p3, colA, kWireThickness);
+            dl->AddBezierCubic(p0, p1, p2, p3, colA, kGraphWireThickness);
         }
         else
         {
@@ -5445,7 +5337,7 @@ namespace Arcane::Editor
             const float polyLen = len(p1.x - p0.x, p1.y - p0.y) +
                                   len(p2.x - p1.x, p2.y - p1.y) +
                                   len(p3.x - p2.x, p3.y - p2.y);
-            const float screenLen = polyLen * ViewScale();
+            const float screenLen = polyLen * GraphViewScale();
             const int segments = static_cast<int>(
                 (std::min)(64.0f, (std::max)(12.0f, screenLen / 6.0f)));
 
@@ -5457,13 +5349,13 @@ namespace Arcane::Editor
             for (int i = 1; i <= segments; ++i)
             {
                 const float t = static_cast<float>(i) / static_cast<float>(segments);
-                const ImVec2 cur = CubicBezierAt(p0, p1, p2, p3, t);
+                const ImVec2 cur = GraphCubicBezierAt(p0, p1, p2, p3, t);
                 // Colour sampled at the segment's MIDPOINT so the two ends of
                 // the run land on the pure endpoint colours.
                 const float mid = (t + static_cast<float>(i - 1) /
                                        static_cast<float>(segments)) * 0.5f;
-                dl->AddLine(prev, cur, ImGui::GetColorU32(LerpColor(a, b, mid)),
-                            kWireThickness);
+                dl->AddLine(prev, cur, ImGui::GetColorU32(GraphLerpColor(a, b, mid)),
+                            kGraphWireThickness);
                 prev = cur;
             }
         }
