@@ -646,6 +646,30 @@ namespace
             return out;
         }
 
+        // The node's canvas rect, in screen space. Used to prove a node is
+        // really on the canvas rather than clipped out of it.
+        ImVec2 NodeScreenMin(std::uint64_t nodeId)
+        {
+            auto* ed_ctx = static_cast<ax::NodeEditor::EditorContext*>(state->graphCanvas);
+            ax::NodeEditor::SetCurrentEditor(ed_ctx);
+            const ImVec2 out = ax::NodeEditor::CanvasToScreen(
+                ax::NodeEditor::GetNodePosition(ax::NodeEditor::NodeId(nodeId)));
+            ax::NodeEditor::SetCurrentEditor(nullptr);
+            return out;
+        }
+
+        ImVec2 NodeScreenMax(std::uint64_t nodeId)
+        {
+            auto* ed_ctx = static_cast<ax::NodeEditor::EditorContext*>(state->graphCanvas);
+            ax::NodeEditor::SetCurrentEditor(ed_ctx);
+            const ImVec2 pos = ax::NodeEditor::GetNodePosition(ax::NodeEditor::NodeId(nodeId));
+            const ImVec2 sz  = ax::NodeEditor::GetNodeSize(ax::NodeEditor::NodeId(nodeId));
+            const ImVec2 out = ax::NodeEditor::CanvasToScreen(
+                ImVec2(pos.x + sz.x, pos.y + sz.y));
+            ax::NodeEditor::SetCurrentEditor(nullptr);
+            return out;
+        }
+
         ImVec2 NodeRightPinScreen(std::uint64_t nodeId)
         {
             auto* ed_ctx = static_cast<ax::NodeEditor::EditorContext*>(state->graphCanvas);
@@ -789,6 +813,20 @@ TEST_CASE("Assets panel Graph lens submits no conflicting ImGui item ids",
     REQUIRE(probe.y > hw.origin.y);
     REQUIRE(probe.y < hw.origin.y + hw.size.y);
 
+    // ...and so must the COLLISION PARTNER. Node #6's body and node #1's RIGHT
+    // PIN are the duplicated pair, and a conflict needs BOTH items submitted.
+    // If a future layout change pushed node #1 out of the canvas clip rect, the
+    // library's own hit-test button would bail on the clipped ItemAdd
+    // (imgui_node_editor.cpp:2393-2394), the second of the two items would never
+    // be submitted, and this case would go VACUOUSLY green. Pinning node #1's
+    // whole rect inside the panel is what keeps a pass here meaning "no
+    // conflict" rather than "only one of the two items existed".
+    const ImVec2 partnerMin = hw.NodeScreenMin(1);
+    const ImVec2 partnerMax = hw.NodeScreenMax(1);
+    REQUIRE((partnerMin.x > hw.origin.x && partnerMin.y > hw.origin.y));
+    REQUIRE((partnerMax.x < hw.origin.x + hw.size.x &&
+             partnerMax.y < hw.origin.y + hw.size.y));
+
     hw.MoveTo(probe);
     hw.Frame();                       // hover registers
     hw.Frame();                       // duplicate ids counted against it
@@ -844,10 +882,24 @@ TEST_CASE("Assets panel Graph lens submits no conflicting ImGui item ids",
 // empty canvas, release, and let the library's Create stage land -- then click
 // the entry the ghost menu puts under the cursor.
 //
-// TWO nodes on purpose. The id-conflict case above needs five or more to make
-// the node/pin id ranges overlap; this one stays under that so the two defects
-// cannot be confused for each other -- whatever this case reports is about the
-// gesture, not about a stolen ImGui id.
+// READ THIS BEFORE "SIMPLIFYING" THE FIXTURE. SEVEN nodes on purpose -- squarely
+// INSIDE the colliding regime under the OLD id scheme (node #1's right pin was
+// 1*4+2 = 6, and node #6 exists at seven nodes). Shrinking the fixture below five
+// would take this case OUT of that regime and destroy what it is for.
+//
+// WHAT THIS CASE IS AND IS NOT, stated here because the distinction is easy to
+// lose. It PASSED BEFORE the id-space fix as well as after, so it is NOT a
+// RED->GREEN witness for that fix -- the case above is. It is two other things:
+//
+//   * COVERAGE for the one hop Task 6 shipped with no live verification (the
+//     accept/stash/menu half of the gesture; the original case in this file says
+//     outright that it does not cover it), and
+//   * the DIAGNOSTIC that told the two desk reports apart. The second report read
+//     like a broken gesture. This case driving that same gesture GREEN -- on a
+//     canvas whose id space collides, but with no error tooltip up over the
+//     cursor at the moment of the click -- is what proved the gesture logic was
+//     correct and something was sitting ON TOP of the menu eating the click. The
+//     case above names what.
 TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
           "[editor][graphcanvas]")
 {
@@ -886,7 +938,7 @@ TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
 
     REQUIRE(state.graph.nodes.size() == 7u);
     // The hub is a MATERIAL and therefore carries a right pin unconditionally
-    // (AssetsPanel.cpp:3944-3951) -- the handle the gesture starts from.
+    // (AssetsPanel.cpp:3984-3991) -- the handle the gesture starts from.
     std::size_t hubIndex = state.graph.nodes.size();
     for (std::size_t i = 0; i < state.graph.nodes.size(); ++i)
         if (state.graph.nodes[i].guid == fx.hub)
@@ -918,7 +970,7 @@ TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
     hw.Frame();                        // Create stage -> stash + OpenPopup
 
     // ---- what the release stashed ----------------------------------------
-    // These two ARE the ghost menu's enabled gate (AssetsPanel.cpp:4644-4645).
+    // These two ARE the ghost menu's enabled gate (AssetsPanel.cpp:4690-4691).
     CHECK(state.graphWireGuid == fx.hub);
     CHECK(state.graphWireDerivable);
 
@@ -937,7 +989,7 @@ TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
     hw.Button(true);   hw.Frame();
     hw.Button(false);  hw.Frame();
 
-    // THE ASSERTION. The entry's one job (AssetsPanel.cpp:4671-4673): raise the
+    // THE ASSERTION. The entry's one job (AssetsPanel.cpp:4717-4719): raise the
     // unified create request with the source material pre-filled as the parent.
     CHECK(hw.lastActions.requestCreateKind ==
           static_cast<int>(CreateAssetKind::MaterialInstance));

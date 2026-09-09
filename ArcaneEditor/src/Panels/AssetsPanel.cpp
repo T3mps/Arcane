@@ -3140,6 +3140,16 @@ namespace Arcane::Editor
         // through FindLinkAt, imgui_node_editor.cpp:2495-2503), so they cannot
         // take part in this collision.
         inline constexpr std::uint64_t kGraphPinIdBase = 1ull << 32;
+        // ...and the base has to SURVIVE the trip through the library, which
+        // carries every id as a uintptr_t (ed::PinId is Details::SafePointerType
+        // over one). On a 32-bit target 1<<32 truncates to 0, the two ranges
+        // silently become one again, and the collision above returns with no
+        // symptom until someone hovers the wrong node. Arcane is x64-only today
+        // (bin/*-windows-x86_64), so this asserts a fact rather than adding a
+        // constraint -- it just makes the fact refuse to be broken quietly.
+        static_assert(sizeof(std::uintptr_t) >= 8,
+                      "kGraphPinIdBase (1<<32) must survive ed::PinId's uintptr_t; "
+                      "on a 32-bit build it truncates to 0 and node/pin ids collide again");
         std::uint64_t GraphLeftPinId(std::uint64_t nodeId) noexcept
         { return kGraphPinIdBase + nodeId * 4ull + 1ull; }
         std::uint64_t GraphRightPinId(std::uint64_t nodeId) noexcept
