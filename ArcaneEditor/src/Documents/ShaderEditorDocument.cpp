@@ -1,6 +1,7 @@
 #include "Documents/ShaderEditorDocument.hpp"
 
 #include "Panels/AssetPanelModel.hpp"
+#include "Widgets/CanvasEditScope.hpp"   // CanvasCreateScope/CanvasDeleteScope: the unconditional-End rule
 #include "Widgets/CanvasPopupScope.hpp"
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Widgets/EditorTheme.hpp"
@@ -2777,7 +2778,12 @@ namespace Arcane::Editor
                 passBefore = CapturePassListState();
             passEditLabel = label;
         };
-        if (ed::BeginCreate())
+        {
+        // The bracket is a scope object: ed::EndCreate() runs at the closing
+        // brace whatever this block does. See Widgets/CanvasEditScope.hpp for
+        // the rule and the crash it prevents.
+        const CanvasCreateScope create;
+        if (create)
         {
             ed::PinId aId, bId;
             if (ed::QueryNewLink(&aId, &bId))
@@ -2866,12 +2872,14 @@ namespace Arcane::Editor
                 }
             }
         }
-        ed::EndCreate();   // UNCONDITIONAL (the material-canvas lesson)
+        }   // ~CanvasCreateScope -> ed::EndCreate()
 
         // ---- deletions: links = unwire a slot; nodes = remove the pass
         std::vector<std::pair<std::uint32_t, std::uint32_t>> unwire;
         std::vector<std::uint32_t> removePasses;   // chain indices
-        if (ed::BeginDelete())
+        {
+        const CanvasDeleteScope del;   // ed::EndDelete() at the closing brace
+        if (del)
         {
             ed::LinkId lid;
             while (ed::QueryDeletedLink(&lid))
@@ -2895,7 +2903,7 @@ namespace Arcane::Editor
                     removePasses.push_back(id - 1);
             }
         }
-        ed::EndDelete();   // UNCONDITIONAL
+        }   // ~CanvasDeleteScope -> ed::EndDelete()
 
         if (!unwire.empty() || !removePasses.empty())
         {
@@ -5232,7 +5240,11 @@ namespace Arcane::Editor
         // cycles refused silently at connect time (all SG rules). Every numeric
         // pin connects to every numeric pin -- the adaptation table absorbs
         // width differences, so validity is purely structural.
-        if (ed::BeginCreate())
+        {
+        // ed::EndCreate() rides the scope object's destructor -- see
+        // Widgets/CanvasEditScope.hpp for why it must be unconditional.
+        const CanvasCreateScope create;
+        if (create)
         {
             ed::PinId aId, bId;
             if (ed::QueryNewLink(&aId, &bId))
@@ -5281,17 +5293,16 @@ namespace Arcane::Editor
                 }
             }
         }
-        // UNCONDITIONAL: CreateItemAction::Begin() arms m_InActive even when it
-        // returns false (idle frame); a skipped EndCreate() asserts on the NEXT
-        // frame's BeginCreate() (the desk crash -- frame 1 fine, frame 2 abort).
-        ed::EndCreate();
+        }   // ~CanvasCreateScope -> ed::EndCreate()
 
         // Deletion (multi-select = one undo step). Link ids are this frame's
         // indices -- collect first, erase in descending order after the
         // queries. The Output node refuses deletion (SG: blocks are fixed).
         std::vector<std::size_t> linkIdxs;
         std::vector<std::uint32_t> nodeIds;
-        if (ed::BeginDelete())
+        {
+        const CanvasDeleteScope del;   // ed::EndDelete() at the closing brace
+        if (del)
         {
             ed::LinkId lid;
             while (ed::QueryDeletedLink(&lid))
@@ -5316,8 +5327,7 @@ namespace Arcane::Editor
                     nodeIds.push_back(id);
             }
         }
-        // UNCONDITIONAL for the same reason as EndCreate() above.
-        ed::EndDelete();
+        }   // ~CanvasDeleteScope -> ed::EndDelete()
 
         if (!linkIdxs.empty() || !nodeIds.empty())
         {

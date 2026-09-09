@@ -3,6 +3,7 @@
 #include "Documents/DocumentHost.hpp"
 #include "Panels/AssetActivityLog.hpp"    // AssetActivityEntry/Kind (Task 8's feed, the first reader)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind + the AssetKind bridge (Task 12)
+#include "Widgets/CanvasEditScope.hpp"   // CanvasCreateScope: the unconditional-EndCreate rule
 #include "Widgets/CanvasPopupScope.hpp"   // ed::Suspend/Resume around the Graph lens's node menu
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
@@ -3694,13 +3695,14 @@ namespace Arcane::Editor
         // in-flight wire and the canvas legend are Task 6's (section 7b and
         // the ghost menu in 8e).
         //
-        // THE ONE RULE THE CREATE BRACKET CARRIES: ed::EndCreate() is called
-        // UNCONDITIONALLY. CreateItemAction::Begin() arms m_InActive even when
-        // it returns false (the idle frame), so an EndCreate skipped inside
-        // the `if` asserts on the NEXT frame's BeginCreate
-        // (ShaderEditorDocument.cpp:5559-5561 -- the desk crash that was fine
-        // on frame 1 and aborted on frame 2). That is also the crash class the
-        // device-less test below the panel exists to keep closed.
+        // THE ONE RULE THE CREATE BRACKET CARRIES -- ed::EndCreate() is called
+        // UNCONDITIONALLY -- is now a TYPE rather than a comment:
+        // CanvasCreateScope (Widgets/CanvasEditScope.hpp), which also carries
+        // the reason (CreateItemAction::Begin arms m_InActive even on the idle
+        // frame, so a skipped End asserts on the NEXT frame's Begin -- the desk
+        // crash that was fine on frame 1 and aborted on frame 2). That is also
+        // the crash class the device-less test below the panel exists to keep
+        // closed.
         void DrawGraphLens(AssetsPanelState& state, AssetPanelModel& model,
                            const Arcane::Project* project, DocumentHost& docs,
                            const AssetsPanelServices& services,
@@ -4308,7 +4310,13 @@ namespace Arcane::Editor
             // answer: CreateItemAction reports true for every frame of a drag
             // (stage Possible) and for the release frame (stage Create), and
             // false once it is over -- which is what retires the curve.
-            if (ed::BeginCreate(ImVec4(0.0f, 0.0f, 0.0f, 0.0f), kGraphWireThickness))
+            {
+            // The bracket is a scope object now: ed::EndCreate() rides its
+            // destructor, so it cannot be skipped on any path out of this block
+            // (Widgets/CanvasEditScope.hpp holds the rule and the crash).
+            const CanvasCreateScope create(ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
+                                           kGraphWireThickness);
+            if (create)
             {
                 ed::PinId aId, bId;
                 if (ed::QueryNewLink(&aId, &bId))
@@ -4365,11 +4373,7 @@ namespace Arcane::Editor
                 state.graphDragGuid  = Arcane::Guid{};
                 state.graphDragRight = false;
             }
-            // UNCONDITIONAL -- see this function's header comment and
-            // ShaderEditorDocument.cpp:5559-5561. Nothing between BeginCreate
-            // and here returns, breaks or throws: the block above is a plain
-            // if/else-if chain over library calls.
-            ed::EndCreate();
+            }   // ~CanvasCreateScope -> ed::EndCreate()
 
             // The in-flight curve, drawn AFTER EndCreate so it is back in
             // CANVAS space: QueryNewLink/QueryNewNode suspend the editor into
