@@ -5,6 +5,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+
 // ---------------------------------------------------------------- glm
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -121,5 +123,75 @@ TEST_CASE("FreeType: library init/done and version", "[vendor][freetype]")
     REQUIRE(min >= 13);
 
     REQUIRE(FT_Done_FreeType(lib) == 0);
+}
+
+// ---------------------------------------------------------------- cgltf
+// F2c Task 1: cgltf's IMPLEMENTATION TU lives at ArcaneAssetPipeline/src/Arcane/
+// AssetPipeline/CgltfImpl.cpp (MeshImporter.cpp needs cgltf_parse/cgltf_validate),
+// and that static lib is linked into this exe -- defining CGLTF_IMPLEMENTATION here
+// too would merge a SECOND copy of every cgltf symbol and fail to link (LNK2005).
+// Declarations only, same rule as the stb block above.
+#include <cgltf.h>
+
+TEST_CASE("cgltf: a minimal glTF parses, validates, and reports its meshes",
+          "[vendor][cgltf]")
+{
+    // The smallest legal glTF 2.0 document: asset block + one empty scene.
+    static constexpr char kJson[] =
+        R"({"asset":{"version":"2.0"},"scenes":[{"nodes":[]}],"scene":0})";
+
+    cgltf_options options{};
+    cgltf_data* data = nullptr;
+    REQUIRE(cgltf_parse(&options, kJson, sizeof(kJson) - 1, &data) == cgltf_result_success);
+    REQUIRE(data != nullptr);
+    // MANDATORY on every import (spec s4.5, and the CVE the pin exists for) --
+    // proven callable here so a vendoring slip that drops it is caught at arrival.
+    CHECK(cgltf_validate(data) == cgltf_result_success);
+    CHECK(data->meshes_count == 0);
+    CHECK(data->scenes_count == 1);
+    cgltf_free(data);
+}
+
+TEST_CASE("cgltf: a truncated document is refused, not crashed", "[vendor][cgltf]")
+{
+    static constexpr char kTruncated[] = R"({"asset":{"vers)";
+    cgltf_options options{};
+    cgltf_data* data = nullptr;
+    CHECK(cgltf_parse(&options, kTruncated, sizeof(kTruncated) - 1, &data)
+          != cgltf_result_success);
+    if (data) cgltf_free(data);
+}
+
+// -------------------------------------------------------- meshoptimizer
+#include <meshoptimizer.h>
+
+TEST_CASE("meshoptimizer: remap deduplicates identical vertices", "[vendor][meshopt]")
+{
+    struct V { float x, y, z; };
+    // Six positions, two of them exact duplicates of earlier ones.
+    const V vertices[6] = {
+        {0,0,0}, {1,0,0}, {0,1,0},
+        {0,0,0}, {1,0,0}, {1,1,0},
+    };
+    const unsigned int indices[6] = { 0, 1, 2, 3, 4, 5 };
+
+    std::vector<unsigned int> remap(6);
+    const size_t unique = meshopt_generateVertexRemap(
+        remap.data(), indices, 6, vertices, 6, sizeof(V));
+    CHECK(unique == 4);   // {0,0,0}, {1,0,0}, {0,1,0}, {1,1,0}
+}
+
+TEST_CASE("meshoptimizer: vertex-cache optimization preserves the triangle set",
+          "[vendor][meshopt]")
+{
+    unsigned int indices[6] = { 0, 1, 2, 2, 1, 3 };
+    unsigned int optimized[6] = {};
+    meshopt_optimizeVertexCache(optimized, indices, 6, 4);
+    // Same triangles, possibly reordered -- the multiset of index values is invariant.
+    std::vector<unsigned int> before(std::begin(indices), std::end(indices));
+    std::vector<unsigned int> after(std::begin(optimized), std::end(optimized));
+    std::sort(before.begin(), before.end());
+    std::sort(after.begin(), after.end());
+    CHECK(before == after);
 }
 

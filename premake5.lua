@@ -88,6 +88,8 @@ workspace "Arcane"
     IncludeDir["Manifold2D"]       = "%{wks.location}/ThirdParty/Manifold2D/include"
     IncludeDir["Mosaic"]           = "%{wks.location}/ThirdParty/Mosaic/include"
     IncludeDir["bc7enc_rdo"]       = "%{wks.location}/ThirdParty/bc7enc_rdo"
+    IncludeDir["cgltf"]            = "%{wks.location}/ThirdParty/cgltf"
+    IncludeDir["meshoptimizer"]    = "%{wks.location}/ThirdParty/meshoptimizer/src"
 
 group "Dependencies"
     include "ThirdParty/Catch2"
@@ -101,6 +103,7 @@ group "Dependencies"
     include "ThirdParty/imgui-node-editor"
     include "ThirdParty/Manifold2D"
     include "ThirdParty/bc7enc_rdo"
+    include "ThirdParty/meshoptimizer"
 group ""
 
 
@@ -199,6 +202,8 @@ project "ArcaneAssetPipeline"
         "%{IncludeDir.stb}",        -- Task 3: TextureImporter decode (stb_image) + StbImpl.cpp
         "%{IncludeDir.bc7enc_rdo}", -- Task 4: TextureImporter BC7 encode (bc7enc.h)
         "%{IncludeDir.spdlog}",     -- I1 fix (final-review wave): TextureMetaSettings' WARN
+        "%{IncludeDir.cgltf}",          -- F2c Task 1: MeshImporter cgltf_parse/cgltf_validate + CgltfImpl.cpp
+        "%{IncludeDir.meshoptimizer}",  -- F2c Task 1: MeshImporter remap/optimize/simplify (meshoptimizer.h)
     }
 
     defines {
@@ -268,7 +273,11 @@ project "arccook"
     -- path -- a static lib doesn't transitively pull its own links, so any consumer
     -- linking ArcaneAssetPipeline links bc7enc_rdo alongside it, same reasoning as
     -- ArcaneEditor's/ArcaneTests' own links line.
-    links { "ArcaneCore", "ArcaneAssetPipeline", "bc7enc_rdo" }
+    -- meshoptimizer (F2c Task 1): ArcaneAssetPipeline's MeshImporter calls into it --
+    -- same transitive-link reasoning as bc7enc_rdo above. cgltf is header-only (its
+    -- one implementation TU, CgltfImpl.cpp, source-compiles into ArcaneAssetPipeline
+    -- itself), so it needs no links entry of its own.
+    links { "ArcaneCore", "ArcaneAssetPipeline", "bc7enc_rdo", "meshoptimizer" }
     dependson { "ArcaneAssetPipeline" }
 
     defines {
@@ -567,7 +576,9 @@ project "ArcaneEditor"
     -- BC7 encode path -- a static lib doesn't transitively pull its own links, so any consumer
     -- linking ArcaneAssetPipeline links bc7enc_rdo alongside it, same reasoning as every other
     -- ThirdParty static lib in this list.
-    links { "ArcaneCore", "ArcaneClient", "imgui-node-editor", "ArcaneAssetPipeline", "bc7enc_rdo" }
+    -- meshoptimizer (F2c Task 1): ArcaneAssetPipeline's MeshImporter calls into it, same
+    -- transitive-link reasoning as bc7enc_rdo above.
+    links { "ArcaneCore", "ArcaneClient", "imgui-node-editor", "ArcaneAssetPipeline", "bc7enc_rdo", "meshoptimizer" }
     -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
     dependson { "arccook" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
@@ -912,6 +923,8 @@ project "ArcaneTests"
         "%{IncludeDir.Mosaic}",
         "%{IncludeDir.ArcaneAssetPipeline}",   -- Task 1: AssetPipelineFormatTest.cpp drives ArtifactFormat.hpp directly
         "%{IncludeDir.bc7enc_rdo}",   -- Task 4: AssetPipelineImporterTest.cpp drives bc7decomp.h directly for the decode-block sanity test
+        "%{IncludeDir.cgltf}",          -- F2c Task 1: VendorSmokeTest.cpp drives cgltf_parse/cgltf_validate directly
+        "%{IncludeDir.meshoptimizer}",  -- F2c Task 1: VendorSmokeTest.cpp drives meshopt_generateVertexRemap/optimizeVertexCache directly
     }
 
     -- msdfgen, freetype, and NRI are static libs compiled separately; the smoke
@@ -929,7 +942,10 @@ project "ArcaneTests"
     -- bc7enc_rdo (Task 4): ArcaneAssetPipeline links it transitively (see ArcaneEditor's
     -- comment above), and AssetPipelineImporterTest.cpp also calls bc7decomp::unpack_bc7
     -- directly for the decode-block sanity test.
-    links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "NRI", "Manifold2D", "imgui-node-editor", "ArcaneAssetPipeline", "bc7enc_rdo" }
+    -- meshoptimizer (F2c Task 1): ArcaneAssetPipeline links it transitively (same
+    -- reasoning), and VendorSmokeTest.cpp's own arrival-gate cases call
+    -- meshopt_generateVertexRemap/optimizeVertexCache directly.
+    links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "NRI", "Manifold2D", "imgui-node-editor", "ArcaneAssetPipeline", "bc7enc_rdo", "meshoptimizer" }
 
     -- MOSAIC_ENSURE/MOSAIC_ENSURE_ALWAYS (most of AssertRoutingTest.cpp) are
     -- defined UNCONDITIONALLY, outside the MOSAIC_ASSERTS_ACTIVE gate this

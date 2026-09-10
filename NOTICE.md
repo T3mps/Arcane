@@ -10,6 +10,7 @@ file is authoritative. Summary:
 | Astra (ECS) | `ThirdParty/Astra` | see `ThirdParty/Astra/LICENSE` |
 | bc7enc_rdo | `ThirdParty/bc7enc_rdo` | MIT or public domain, dual-licensed (`LICENSE`) |
 | Catch2 | `ThirdParty/Catch2` | Boost Software License 1.0 (`LICENSE.txt`) |
+| cgltf | `ThirdParty/cgltf` | MIT (`LICENSE`) |
 | D3D12MemoryAllocator (D3D12MA) | `ThirdParty/D3D12MA` | MIT (`LICENSE`) |
 | DirectX-Headers | `ThirdParty/DirectX-Headers` | MIT (`LICENSE`) |
 | enkiTS | `ThirdParty/enkiTS` | zlib (`LICENSE`) |
@@ -18,6 +19,7 @@ file is authoritative. Summary:
 | Dear ImGui | `ThirdParty/imgui` | MIT |
 | imgui-node-editor | `ThirdParty/imgui-node-editor` | MIT |
 | Manifold2D (2D physics) | `ThirdParty/Manifold2D` | see `ThirdParty/Manifold2D/LICENSE` |
+| meshoptimizer | `ThirdParty/meshoptimizer` | MIT (`LICENSE.md`) |
 | miniaudio | `ThirdParty/miniaudio` | MIT-0 / public domain (`LICENSE`) |
 | Mosaic | `ThirdParty/Mosaic` | see `ThirdParty/Mosaic/LICENSE` |
 | msdfgen | `ThirdParty/msdfgen` | MIT (`LICENSE.txt`) |
