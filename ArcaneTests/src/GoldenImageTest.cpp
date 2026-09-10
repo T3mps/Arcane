@@ -55,6 +55,12 @@ TEST_CASE("golden: the committed layout seed names windows this editor actually 
     // actual intent: no window SECTION is named this, said nothing about what
     // any comment elsewhere in the file is allowed to mention.
     CHECK(text.find("\n[Window][DockSpaceViewport]") == std::string::npos);
+
+    // Panel-split spec s13: the three asset panels replaced [Window][Assets].
+    CHECK(text.find("\n[Window][Asset Browser]") != std::string::npos);
+    CHECK(text.find("\n[Window][Asset Graph]")   != std::string::npos);
+    CHECK(text.find("\n[Window][Asset Status]")  != std::string::npos);
+    CHECK(text.find("\n[Window][Assets]")        == std::string::npos);
 }
 
 // =============================================================================
