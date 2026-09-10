@@ -629,6 +629,16 @@ namespace Arcane::AssetPipeline
         if (static_cast<std::uint32_t>(desc.sections.size()) != desc.sectionCount)
             return std::nullopt;
 
+        // The header's declared vertexCount/indexCount must likewise agree with what was
+        // actually DECODED -- a file that declares nonzero counts but omits the VertexData
+        // and/or IndexData section entirely would otherwise pass every check above and come
+        // back as a LoadedMeshArtifact with nonzero declared counts paired with empty arrays:
+        // silently inconsistent output. An absent body disagrees with its declared count
+        // maximally, the same class of corruption the per-section size checks above already
+        // refuse for a body that is merely the WRONG size.
+        if (loaded.vertices.size() != desc.vertexCount) return std::nullopt;
+        if (loaded.indices.size() != desc.indexCount) return std::nullopt;
+
         return loaded;
     }
 

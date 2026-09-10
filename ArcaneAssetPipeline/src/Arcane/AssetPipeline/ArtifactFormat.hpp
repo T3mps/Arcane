@@ -213,7 +213,11 @@ namespace Arcane::AssetPipeline
     // Reads and validates a mesh .arcart. nullopt on bad magic, an unrecognised
     // artifactVersion, a contentKind that is not Mesh, indexWidth != 4, a truncated section, or
     // a section whose declared counts disagree with its body's size. An unrecognised
-    // SectionTag is SKIPPED, not an error.
+    // SectionTag is SKIPPED, not an error. The header's declared vertexCount/indexCount must
+    // also agree with what was actually DECODED: a file that declares nonzero counts but
+    // omits the VertexData and/or IndexData section entirely is refused rather than returned
+    // with nonzero declared counts paired with empty arrays -- an absent body disagrees with
+    // its declared count maximally, the same class of corruption a truncated section is.
     [[nodiscard]] std::optional<LoadedMeshArtifact> ReadMeshArtifact(
         const std::filesystem::path& path);
 

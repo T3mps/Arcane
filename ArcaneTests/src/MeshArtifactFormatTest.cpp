@@ -3,15 +3,18 @@
 // pins the texture pair's: every MeshArtifactDesc field round-trips byte-exactly, an empty
 // section NAME round-trips as empty (not as an absent slot), the kind gate refuses a mesh
 // file through the texture reader and vice versa, a declared indexWidth other than 4 is
-// refused in v1, an unrecognised SectionTag is skipped (forward-compat -- the SAME tag space
-// the texture kind uses, so a reader of one kind must tolerate the other's tags), and
-// SlotNamesFromSections derives one name per slot from the section table.
+// refused in v1, a header declaring nonzero vertexCount/indexCount with the VertexData
+// section omitted outright is refused (the decoded arrays must agree with the DECLARED
+// counts, not just each present section's own internal consistency), an unrecognised
+// SectionTag is skipped (forward-compat -- the SAME tag space the texture kind uses, so a
+// reader of one kind must tolerate the other's tags), and SlotNamesFromSections derives one
+// name per slot from the section table.
 //
-// The unrecognised-section-tag case hand-rolls its OWN encoder against the DOCUMENTED layout
-// (header fields in MeshArtifactDesc's declaration order, then the container's own 4-entry
-// section table, then the four bodies) rather than reusing WriteMeshArtifact, matching the
-// texture test's own discipline: a bug that made the writer and reader agree with each other
-// but disagree with the spec would still be caught.
+// The unrecognised-section-tag and missing-VertexData cases hand-roll their OWN encoder
+// against the DOCUMENTED layout (header fields in MeshArtifactDesc's declaration order, then
+// the container's own section table, then the section bodies) rather than reusing
+// WriteMeshArtifact, matching the texture test's own discipline: a bug that made the writer
+// and reader agree with each other but disagree with the spec would still be caught.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -234,6 +237,63 @@ TEST_CASE("mesh artifact: a declared indexWidth other than 4 is refused in v1",
                               std::vector<MeshArtifactVertex>(3),
                               std::vector<std::uint32_t>{ 0, 1, 2 }));
     CHECK_FALSE(ReadMeshArtifact(dir / "m.arcart").has_value());
+}
+
+TEST_CASE("mesh artifact: a header declaring nonzero counts with the VertexData section "
+          "omitted is refused", "[pipeline]")
+{
+    // Hand-rolled against the DOCUMENTED layout, NOT through the writer: a header that
+    // declares vertexCount=3/indexCount=3, but whose container-level section table only
+    // carries IndexData and SectionTable (VertexData is entirely absent). Every per-section
+    // check passes -- the present sections are internally consistent -- so without the
+    // decoded-count-vs-declared-count check this would silently return a LoadedMeshArtifact
+    // with vertexCount=3 paired with an EMPTY vertices array. An absent body disagrees with
+    // its declared count maximally, the same class of corruption a truncated section is.
+    const fs::path dir = TempDir("mesh_missing_vertexdata");
+    const fs::path path = dir / "missing_vertexdata.arcart";
+
+    constexpr std::uint32_t kVertexCount = 3;
+    constexpr std::uint32_t kIndexCount = 3;
+    constexpr std::uint32_t kSectionCount = 1;
+
+    // IndexData body: {0, 1, 2} -- internally consistent with kIndexCount.
+    std::vector<std::byte> indexDataBody;
+    PutU32(indexDataBody, 0); PutU32(indexDataBody, 1); PutU32(indexDataBody, 2);
+
+    // SectionTable body: 1 record, internally consistent with kSectionCount and covering all
+    // 3 declared indices.
+    std::vector<std::byte> sectionTableBody;
+    PutU32(sectionTableBody, 1);   // 1 section record
+    PutU16(sectionTableBody, 0);   // name length 0
+    PutU32(sectionTableBody, 0);   // indexOffset
+    PutU32(sectionTableBody, 3);   // indexCount
+    PutU32(sectionTableBody, 0);   // slotIndex
+
+    std::vector<std::byte> file = EncodeMeshHeader(/*artifactVersion*/ 1, kVertexCount, kIndexCount, kSectionCount);
+
+    // Only 2 container-level sections -- VertexData is omitted outright, not merely resized.
+    constexpr std::uint32_t kContainerSectionCount = 2;
+    const std::uint64_t headerSize = file.size();
+    const std::uint64_t tableSize = 4 + kContainerSectionCount * 20ULL;
+    std::uint64_t offset = headerSize + tableSize;
+
+    const std::uint64_t indexOffset = offset; offset += indexDataBody.size();
+    const std::uint64_t sectionTableOffset = offset; offset += sectionTableBody.size();
+
+    PutU32(file, kContainerSectionCount);
+    PutU32(file, static_cast<std::uint32_t>(SectionTag::IndexData));    PutU64(file, indexOffset);        PutU64(file, indexDataBody.size());
+    PutU32(file, static_cast<std::uint32_t>(SectionTag::SectionTable)); PutU64(file, sectionTableOffset); PutU64(file, sectionTableBody.size());
+
+    REQUIRE(file.size() == headerSize + tableSize);
+
+    PutBytes(file, indexDataBody);
+    PutBytes(file, sectionTableBody);
+
+    WriteFile(path, file);
+
+    // Baseline sanity: the file is well-formed EXCEPT for the missing VertexData section, so
+    // this pins the refusal to that specific omission rather than some other malformed byte.
+    CHECK_FALSE(ReadMeshArtifact(path).has_value());
 }
 
 // ---- forward-compat ------------------------------------------------------------------------
