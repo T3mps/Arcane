@@ -1,4 +1,4 @@
-# Mesh IMPORT in Unreal and Source 2 — what F2c should copy — **DRAFT**
+# Mesh IMPORT in Unreal and Source 2 — what F2c should copy
 
 **2026-09-10.** Reference-engine comparison pass against
 `docs/specs/2026-09-10-f2c-mesh-import-design.md`, run before that spec's
