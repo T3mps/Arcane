@@ -32,6 +32,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Documents/DocumentHost.hpp"
+#include "Panels/AssetGraphPanel.hpp"     // AssetsGraphProjectionIsCurrent, DestroyAssetGraphPanelCanvas (Task 5, panel-split)
 #include "Panels/AssetsPanel.hpp"
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind: what the ghost menu raises
 
@@ -203,7 +204,7 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     // scene and leave the hub, its leaves and the overflow companion out of
     // the build. Pre-declaring the seed spent opts THIS state out of it and
     // keeps everything-mode below; the seed itself is asserted at the bottom,
-    // from the post-DestroyAssetsPanelCanvas state -- which is exactly the
+    // from the post-DestroyAssetGraphPanelCanvas state -- which is exactly the
     // shape a project switch hands the panel.
     state.graphFocusSeeded = true;
     // Nil focus = "everything" (ruling 6), which is what puts the hub, its 22
@@ -540,7 +541,7 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
 
     // The canvas context is released through the panel's own seam, inside the
     // live ImGui context -- the same ordering EditorApp::Shutdown uses.
-    DestroyAssetsPanelCanvas(state);
+    DestroyAssetGraphPanelCanvas(state);
     CHECK(state.graphCanvas == nullptr);
     CHECK_FALSE(state.graphBuilt);
     // Task 4's interaction state is context-derived too, so it goes with it.
@@ -555,14 +556,14 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     state.graphWireDerivable = true;
     state.graphDragGuid      = materialId;
     state.graphDragRight     = true;
-    DestroyAssetsPanelCanvas(state);
+    DestroyAssetGraphPanelCanvas(state);
     CHECK_FALSE(state.graphWireGuid.IsValid());
     CHECK_FALSE(state.graphWireDerivable);
     CHECK_FALSE(state.graphDragGuid.IsValid());
     CHECK_FALSE(state.graphDragRight);
 
     // ---- Task 5: the boot-scene focus seed, and its project-switch reset --
-    // DestroyAssetsPanelCanvas IS the panel's project-switch seam (EditorApp
+    // DestroyAssetGraphPanelCanvas IS the panel's project-switch seam (EditorApp
     // calls it beside AssetPanelModel::ResetForProjectSwitch), so the state
     // is now shaped exactly like a freshly-switched-to project's: no focus,
     // and the seed re-armed. One frame later the panel must have scoped
@@ -582,7 +583,7 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
 
     // The seed frames above created a fresh canvas context; release it the
     // same way, inside the live ImGui context.
-    DestroyAssetsPanelCanvas(state);
+    DestroyAssetGraphPanelCanvas(state);
     CHECK(state.graphCanvas == nullptr);
 
     ImGui::DestroyContext(ctx);
@@ -879,7 +880,7 @@ TEST_CASE("Assets panel Graph lens submits no conflicting ImGui item ids",
     const bool errorTipUp = errorTip != nullptr && (errorTip->Active || errorTip->WasActive);
     CHECK_FALSE(errorTipUp);
 
-    DestroyAssetsPanelCanvas(state);
+    DestroyAssetGraphPanelCanvas(state);
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
 
@@ -1010,7 +1011,7 @@ TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
           static_cast<int>(CreateAssetKind::MaterialInstance));
     CHECK(hw.lastActions.createPrefillParent == fx.hub);
 
-    DestroyAssetsPanelCanvas(state);
+    DestroyAssetGraphPanelCanvas(state);
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
 
@@ -1089,7 +1090,7 @@ TEST_CASE("Assets panel Graph lens pin-drag from a non-derivable source is a qui
     const std::uint64_t refNodeId = static_cast<std::uint64_t>(refIndex) + 1ull;
 
     // Seed the gesture stash by hand from an EARLIER (imagined) derivable
-    // drag, the way DestroyAssetsPanelCanvas's own leg does above: a real
+    // drag, the way DestroyAssetGraphPanelCanvas's own leg does above: a real
     // non-derivable release must OVERWRITE a stale derivable stash, not leave
     // it sitting there for a popup that (per this case) never opens to read
     // back.
@@ -1127,7 +1128,7 @@ TEST_CASE("Assets panel Graph lens pin-drag from a non-derivable source is a qui
 
     // The gesture stash is cleared, not left holding the PRIOR (derivable)
     // drag's guid -- the same "named asset of an outgoing gesture must not
-    // survive it" posture DestroyAssetsPanelCanvas's project-switch reset
+    // survive it" posture DestroyAssetGraphPanelCanvas's project-switch reset
     // uses (AssetsPanel.cpp ~:4879-4880), applied here per-release instead of
     // per-project-switch.
     CHECK_FALSE(state.graphWireGuid.IsValid());
@@ -1138,7 +1139,7 @@ TEST_CASE("Assets panel Graph lens pin-drag from a non-derivable source is a qui
     CHECK(hw.lastActions.requestCreateKind == -1);
     CHECK_FALSE(hw.lastActions.createPrefillParent.IsValid());
 
-    DestroyAssetsPanelCanvas(state);
+    DestroyAssetGraphPanelCanvas(state);
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
 
@@ -1201,7 +1202,7 @@ TEST_CASE("digest chip raises showStatus only while the Status target is open",
     hw.MoveTo(chip); hw.Frame(); hw.Button(true); hw.Frame(); hw.Button(false); hw.Frame();
     CHECK_FALSE(hw.lastActions.showStatus);
 
-    DestroyAssetsPanelCanvas(state);
+    DestroyAssetGraphPanelCanvas(state);
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
 

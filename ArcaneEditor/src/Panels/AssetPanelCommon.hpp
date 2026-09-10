@@ -29,6 +29,10 @@ namespace Arcane::Editor
     // pointer type is needed below (ScenesByName's return), and pulling the
     // full header in here is not required for that.
     struct AssetPanelEntry;
+    // Documents/DocumentHost.hpp -- forward-declared for OpenAssetRow below,
+    // which only needs a reference to the type; the definition it calls into
+    // (AssetsPanel.cpp) already includes the real header.
+    class DocumentHost;
 
     // Row/menu actions the APP resolves after the draw -- same "panel
     // reports, app performs" split the old (retired) AssetBrowserActions used
@@ -199,6 +203,36 @@ namespace Arcane::Editor
     void DrawAssetPeekTooltip(const AssetPanelModel& model, const AssetPanelServices& services,
                               const Arcane::Guid& guid, bool forceShow = false,
                               bool withEdgeSummary = false);
+
+    // Panel-split Task 5: three MORE lens-shared helpers, found when the
+    // Graph lens's body moved out to its own TU (AssetGraphPanel.cpp) --
+    // Task 4's four above were the ones the Status split already needed;
+    // these three are calls the Graph body makes that Browse's code in
+    // AssetsPanel.cpp still needs too. Same promotion, same reason: each
+    // keeps its body exactly where it was (AssetsPanel.cpp) and only the
+    // enclosing namespace brace moved, from an anonymous namespace out to
+    // here.
+
+    // Resolve + route a double-click / Enter-open -- see the definition's
+    // own comment (AssetsPanel.cpp) for the exact routing (a scene goes
+    // through `actions.openScene`, everything else through `docs`). A
+    // Browse row's double-click and the Graph lens's node double-click both
+    // call this, one copy.
+    void OpenAssetRow(const AssetPanelEntry& e, const Arcane::Project* project,
+                      DocumentHost& docs, AssetPanelActions& actions);
+
+    // The unified asset context menu's ITEMS (spec s6) -- see the
+    // definition's own comment (AssetsPanel.cpp) for why this carries no
+    // popup bracket of its own. A Browse row's context menu and the Graph
+    // lens's node context menu both call this, one copy.
+    void DrawAssetMenuItems(AssetPanelActions& actions, const AssetPanelEntry& e,
+                            bool kindSpecific);
+
+    // Materials-only subkind pill text (spec s3.1/s6) -- see the
+    // definition's own comment (AssetsPanel.cpp). A Browse row's pill, the
+    // preview pane's pill and the Graph lens's node body pill all read this
+    // same text.
+    const char* SubkindPillText(const AssetPanelEntry& e);
 
     // AssetPill's own width, WITHOUT drawing it (EditorWidgets.cpp's
     // AssetPill, 12px text plus its two FramePadding.x cheeks) -- a caller

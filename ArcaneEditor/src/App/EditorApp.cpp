@@ -24,6 +24,7 @@
 #include "App/EditorApp.hpp"
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
+#include "Panels/AssetGraphPanel.hpp"   // DestroyAssetGraphPanelCanvas (Task 5, panel-split)
 #include "Panels/PanelRegistry.hpp"
 #include "Documents/CrashReportDocument.hpp"
 #include "Documents/MeshDocument.hpp"
@@ -1244,9 +1245,9 @@ namespace Arcane::Editor
         // indices -- carrying it across would resurrect the old project's
         // layout under the new one's nodes. Same seam, same frame and the
         // same reason as the model reset immediately above; the panel owns
-        // the actual teardown so no `ed::` call has to leave AssetsPanel.cpp
-        // (plan ruling 1).
-        Arcane::Editor::DestroyAssetsPanelCanvas(m_assetsPanel);
+        // the actual teardown so no `ed::` call has to leave AssetGraphPanel.cpp
+        // (plan ruling 1; that file since Task 5, panel-split).
+        Arcane::Editor::DestroyAssetGraphPanelCanvas(m_assetsPanel);
         // Asset-manager Plan 2 Task 5: session-only, same as the model
         // itself -- a switched-to project starts with an empty feed, not
         // the outgoing project's history.
@@ -2947,7 +2948,7 @@ namespace Arcane::Editor
         // ShutdownGraphPath states: this is pure ImGui/CPU state, and it
         // should be gone before anything below starts dismantling the
         // device. Idempotent and a no-op when the lens was never opened.
-        Arcane::Editor::DestroyAssetsPanelCanvas(m_assetsPanel);
+        Arcane::Editor::DestroyAssetGraphPanelCanvas(m_assetsPanel);
 
         // The whole render teardown -- the view-before-texture invalidate,
         // both contexts, and the latch read-back -- in the one order that is

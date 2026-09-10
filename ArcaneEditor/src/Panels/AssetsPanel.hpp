@@ -101,13 +101,13 @@ namespace Arcane::Editor
         // ---- Plan 3 (Graph lens) session state -------------------------
         // The ax::NodeEditor canvas context, held as an OPAQUE pointer ON
         // PURPOSE: plan ruling 1 keeps every `ed::` call lens-local to
-        // AssetsPanel.cpp, so this header must never include
-        // imgui_node_editor.h (the same refusal CanvasPopupScope.hpp:16-19
-        // already makes for the shared widget layer). Created lazily by the
-        // first Graph-lens draw; destroyed through
-        // DestroyAssetsPanelCanvas below -- NEVER by a caller that reaches
-        // in and casts, which would need the header this field exists to
-        // avoid.
+        // AssetGraphPanel.cpp (panel-split Task 5 moved that file), so this
+        // header must never include imgui_node_editor.h (the same refusal
+        // CanvasPopupScope.hpp:16-19 already makes for the shared widget
+        // layer). Created lazily by the first Graph-lens draw; destroyed
+        // through DestroyAssetGraphPanelCanvas (AssetGraphPanel.hpp) --
+        // NEVER by a caller that reaches in and casts, which would need the
+        // header this field exists to avoid.
         void* graphCanvas = nullptr;
         // Per-canvas grid phase (one instance per canvas, exactly as the
         // shader editor keeps one per document canvas).
@@ -120,8 +120,8 @@ namespace Arcane::Editor
         // yet? A separate flag rather than "is graphFocus nil": nil is a
         // LEGITIMATE user choice (the combo's own "everything" entry), and
         // re-seeding the boot scene over it on the next frame would make that
-        // entry unpickable. Cleared by DestroyAssetsPanelCanvas -- the panel's
-        // project-switch seam -- so the next project seeds its OWN boot scene.
+        // entry unpickable. Cleared by DestroyAssetGraphPanelCanvas -- the
+        // panel's project-switch seam -- so the next project seeds its OWN boot scene.
         // Only ever set with a project in hand, so a project-less boot does not
         // burn the seed on a nil manifest.
         bool graphFocusSeeded = false;
@@ -218,48 +218,12 @@ namespace Arcane::Editor
     // reads it, plus feeds this frame's toolbar edits back in
     // (SetSearch/SetKindFilter). `open` is forwarded to ImGui::Begin (the
     // tab's X button; null = no X).
+    // Panel-split Task 5: AssetsGraphProjectionIsCurrent and
+    // DestroyAssetGraphPanelCanvas (renamed from DestroyAssetsPanelCanvas)
+    // moved to AssetGraphPanel.hpp, beside the Graph lens body they now sit
+    // next to -- see that header for both declarations.
     AssetPanelActions DrawAssetsPanel(AssetsPanelState& state, AssetPanelModel& model,
                                       const Arcane::Project* project, DocumentHost& docs,
                                       const AssetPanelServices& services,
                                       bool* open = nullptr);
-
-    // Is the Graph lens's cached projection CURRENT -- built for the focus
-    // and the entries the panel would name this frame (Plan 3 Task 5, review
-    // finding I1)?
-    //
-    // It is not always, and the gap is one frame wide. The Status lens's
-    // "Focus in Graph" button flips `state.lens` to Graph from INSIDE the
-    // already-dispatched Status body, so DrawGraphLens does not run that frame
-    // at all -- while DrawBottomBar, which runs after the body, already reads
-    // the NEW lens. Without this gate the bar would pair the PREVIOUS build's
-    // node count (often 0: the lens may never have been opened) with the new
-    // focus's name and print a confident lie that self-corrects one frame
-    // later. Spec §13: never render an unknown as a zero -- unknown is an em
-    // dash.
-    //
-    // Exported rather than left file-local to AssetsPanel.cpp for exactly one
-    // reason: the panel's bottom bar and the device-less canvas test must ask
-    // the SAME question. A test that restated the conjunction would keep
-    // passing if the panel later dropped a conjunct -- precisely the
-    // regression this predicate exists to prevent.
-    [[nodiscard]] bool AssetsGraphProjectionIsCurrent(const AssetsPanelState& state,
-                                                      const AssetPanelModel& model);
-
-    // Tear the Graph lens's canvas context down and drop the built
-    // projection with it (Plan 3 Task 3). The HOST calls this at exactly two
-    // seams -- a project switch (beside AssetPanelModel::ResetForProjectSwitch:
-    // a new project shares no reference topology, no node ids and no view with
-    // the old one) and shutdown (before the ImGui context dies).
-    //
-    // Why a function here rather than an `ed::DestroyEditor` at those call
-    // sites: plan ruling 1 pins every `ed::` call to AssetsPanel.cpp, and
-    // `graphCanvas` is deliberately a `void*` for the same reason -- a caller
-    // able to destroy it directly would need the node-editor header this
-    // header exists to keep out. Idempotent, and safe when the lens was never
-    // opened (the context is created lazily, so it is usually null).
-    //
-    // MUST run while an ImGui context is current: ~EditorContext touches only
-    // ImGui/CPU state (the shader editor's own dtor comment,
-    // ShaderEditorDocument.cpp), but it does touch it.
-    void DestroyAssetsPanelCanvas(AssetsPanelState& state);
 }

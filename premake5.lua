@@ -888,6 +888,16 @@ project "ArcaneTests"
         -- reason (and same "not globbed, explicit list" caveat) as
         -- AssetPanelCommon.cpp immediately above.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetStatusPanel.cpp",
+        -- Panel-split arc (Task 5): AssetGraphPanel -- the Graph lens's
+        -- canvas body (DrawAssetGraphBody) and its lifecycle
+        -- (AssetsGraphProjectionIsCurrent, DestroyAssetGraphPanelCanvas),
+        -- moved as pure motion out of AssetsPanel.cpp's DrawGraphLens /
+        -- DestroyAssetsPanelCanvas. AssetsGraphCanvasTest.cpp drives this TU
+        -- directly (the same device-less-ImGui-frame reason AssetsPanel.cpp
+        -- itself is here), so it has to source-compile alongside it here
+        -- too, same reason (and same "not globbed, explicit list" caveat)
+        -- as AssetPanelCommon.cpp/AssetStatusPanel.cpp above.
+        "%{wks.location}/ArcaneEditor/src/Panels/AssetGraphPanel.cpp",
     }
 
     includedirs {
