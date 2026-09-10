@@ -11,6 +11,9 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
+
+namespace Arcane { class Project; }
 
 namespace Arcane::Editor
 {
@@ -22,6 +25,10 @@ namespace Arcane::Editor
     // below only needs a reference to the type; AssetPanelCommon.cpp, which
     // has the real definition to call into, includes AssetsPanel.hpp itself.
     struct AssetsPanelState;
+    // AssetPanelModel.hpp -- forward-declared for the same reason: only a
+    // pointer type is needed below (ScenesByName's return), and pulling the
+    // full header in here is not required for that.
+    struct AssetPanelEntry;
 
     // Row/menu actions the APP resolves after the draw -- same "panel
     // reports, app performs" split the old (retired) AssetBrowserActions used
@@ -163,6 +170,44 @@ namespace Arcane::Editor
     void RevealAssetInBrowser(AssetsPanelState& state, AssetPanelModel& model,
                               const Arcane::Guid& guid);
 
+    // Panel-split Task 4: four more lens-shared helpers, promoted here for
+    // exactly the reason RevealAssetInBrowser above already was -- Browse
+    // and/or Graph call each of these from AssetsPanel.cpp, and the Status
+    // lens's body (AssetStatusPanel.cpp, its own TU as of Task 4) needs to
+    // reach the SAME four, not a second copy that could drift. Every one of
+    // the four keeps its body exactly where it was (AssetsPanel.cpp, still
+    // the one place any `ed::`/anonymous-namespace-sibling call it makes
+    // can resolve) -- only the enclosing namespace brace moved, from
+    // AssetsPanel.cpp's anonymous namespace (internal linkage, one TU only)
+    // out to here (external linkage, every TU that includes this header).
+
+    // The project's recorded boot scene as a guid -- see the definition's
+    // own comment (AssetsPanel.cpp) for the full rationale. Nil for a null
+    // project or an empty/unparseable bootScene.
+    Arcane::Guid BootSceneGuid(const Arcane::Project* project);
+
+    // Every Scene entry, name-sorted (ties broken on mount path) -- see the
+    // definition's own comment (AssetsPanel.cpp): the Status lens's Scenes
+    // rollup and the Graph lens's focus combo share this ONE list, in this
+    // ONE order.
+    std::vector<const AssetPanelEntry*> ScenesByName(const AssetPanelModel& model);
+
+    // The unified asset peek tooltip (spec s8) -- thumb, name, kind/subkind/
+    // instance pills, mount path, cook state, guid, and (Graph lens only)
+    // an edge-summary line. See the definition's own comment
+    // (AssetsPanel.cpp) for `forceShow`/`withEdgeSummary`.
+    void DrawAssetPeekTooltip(const AssetPanelModel& model, const AssetPanelServices& services,
+                              const Arcane::Guid& guid, bool forceShow = false,
+                              bool withEdgeSummary = false);
+
+    // AssetPill's own width, WITHOUT drawing it (EditorWidgets.cpp's
+    // AssetPill, 12px text plus its two FramePadding.x cheeks) -- a caller
+    // that positions a pill by hand needs the width one item early to
+    // budget an ellipsis against it. Cross-lens for the same reason as the
+    // three above: the Graph lens's node chrome and (before Task 4) the
+    // Status lens's attention card both call it.
+    float PillWidth(const char* text);
+
     // Toolbar / bottom bar band heights (spec s11.2's values table:
     // "toolbar wells / bottom bar | 24px / 24px"). The default ImGui
     // frame (Inter 16px body over the theme's untouched FramePadding.y=3,
@@ -180,4 +225,13 @@ namespace Arcane::Editor
     // this seam -- see DrawAssetsPanel's own comment for why it had
     // silently collapsed to 0px live.
     inline constexpr float kAssetPanelToolbarBodyGapPx = 7.0f;
+
+    // Task 10 (spec s6/s11.2) row pitch, promoted here in Task 4 alongside
+    // BootSceneGuid/ScenesByName/DrawAssetPeekTooltip above: the Status
+    // lens's Unreferenced card (Plan 2 Task 8) draws its rows at this exact
+    // pitch, matching every Browse table row (AssetsPanel.cpp's own Task 10
+    // fixed-geometry block, unchanged) -- an `inline constexpr` rather than
+    // a second copy of the literal, the same avoid-drift reasoning every
+    // other constant on this header already follows.
+    inline constexpr float kTableRowHeight = 24.0f;
 }

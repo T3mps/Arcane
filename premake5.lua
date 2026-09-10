@@ -881,6 +881,13 @@ project "ArcaneTests"
         -- explicit, not globbed, so a new Panels/*.cpp never gets picked up
         -- on its own.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetPanelCommon.cpp",
+        -- Panel-split arc (Task 4): AssetStatusPanel -- the Status lens's
+        -- dashboard body (DrawAssetStatusBody), moved as pure motion out of
+        -- AssetsPanel.cpp's DrawStatusLens. AssetsPanel.cpp above calls it,
+        -- so this TU has to source-compile alongside it here too, same
+        -- reason (and same "not globbed, explicit list" caveat) as
+        -- AssetPanelCommon.cpp immediately above.
+        "%{wks.location}/ArcaneEditor/src/Panels/AssetStatusPanel.cpp",
     }
 
     includedirs {
