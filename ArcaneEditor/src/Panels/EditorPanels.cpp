@@ -269,25 +269,24 @@ namespace Arcane::Editor
             }
             if (ImGui::BeginMenu("Window"))
             {
-                // One loop over the registry -- the menu can never drift from
-                // the panels that exist (PanelRegistry.hpp). Permanent entries
-                // (the Viewport) are an always-checked focus action, the UE
-                // shape; the rest are checkmark toggles bound to the same
-                // bools the tabs' X buttons write.
-                for (const PanelInfo& p : kPanels)
+                // Grouped sections over the registry (panel-split spec s4.2):
+                // dim section label, that section's panels, separator. The
+                // Viewport (permanent) is deliberately NOT listed -- its tab is
+                // always physically present in the central tab bar, so a menu
+                // row would duplicate it (spec s4.3; do not re-add "for
+                // completeness").
+                for (PanelSection section : kSectionMenuOrder)
                 {
-                    if (p.permanent)
+                    ImGui::TextDisabled("%s", kSectionLabels[static_cast<std::size_t>(section)]);
+                    for (const PanelInfo& p : kPanels)
                     {
-                        if (ImGui::MenuItem(p.name, nullptr, true))
-                            SelectDockTab(p.name);
-                    }
-                    else
-                    {
+                        if (p.section != section || p.permanent)
+                            continue;
                         ImGui::MenuItem(p.name, nullptr,
                                         &panels.visible[static_cast<std::size_t>(p.id)]);
                     }
+                    ImGui::Separator();
                 }
-                ImGui::Separator();
                 // Rebuild the stock dock layout (the first-run path, on
                 // demand) and re-show everything -- also the standing cure for
                 // an old imgui.ini hiding newly shipped panels.

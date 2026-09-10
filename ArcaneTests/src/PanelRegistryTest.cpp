@@ -74,3 +74,22 @@ TEST_CASE("ParsePanelVisibilityLine: valid lines, junk, and the viewport ban",
     // Permanent panels are never persisted and never parsed back.
     CHECK(!ParsePanelVisibilityLine("Viewport=0").has_value());
 }
+
+TEST_CASE("panel table: every row carries a valid section; section labels exist",
+          "[editor]")
+{
+    for (const PanelInfo& p : kPanels)
+        CHECK(static_cast<std::size_t>(p.section) <
+              static_cast<std::size_t>(PanelSection::Count));
+    // One label per section, and the menu order names each section once.
+    CHECK(std::size(kSectionLabels) == static_cast<std::size_t>(PanelSection::Count));
+    std::set<PanelSection> seen;
+    for (PanelSection s : kSectionMenuOrder)
+        CHECK(seen.insert(s).second);
+    CHECK(seen.size() == static_cast<std::size_t>(PanelSection::Count));
+    // The assets row sits in the ASSETS section (Task 7 adds two siblings).
+    CHECK(kPanels[static_cast<std::size_t>(PanelId::Assets)].section == PanelSection::Assets);
+    // DIAGNOSTICS order is Problems then Console (board order, spec s4.2).
+    CHECK(static_cast<std::size_t>(PanelId::Problems) <
+          static_cast<std::size_t>(PanelId::Console));
+}

@@ -17,26 +17,38 @@ namespace Arcane::Editor
 {
     enum class PanelId : std::uint8_t
     {
-        Viewport, Outliner, Inspector, Assets, Console, Problems,
+        Viewport, Outliner, Inspector, Assets, Problems, Console,
         Count
+    };
+
+    // Window-menu grouping (panel-split spec s4.2). Menu order is
+    // kSectionMenuOrder below, NOT enum order.
+    enum class PanelSection : std::uint8_t { Assets, Diagnostics, Scene, Count };
+
+    inline constexpr const char* kSectionLabels[] = { "ASSETS", "DIAGNOSTICS", "SCENE" };
+    static_assert(std::size(kSectionLabels) == static_cast<std::size_t>(PanelSection::Count));
+
+    inline constexpr PanelSection kSectionMenuOrder[] = {
+        PanelSection::Assets, PanelSection::Diagnostics, PanelSection::Scene,
     };
 
     struct PanelInfo
     {
-        PanelId     id;
-        const char* name;       // ImGui::Begin title AND menu label AND ini key
-        bool        permanent;  // true = no X, cannot hide (Viewport only today)
+        PanelId      id;
+        const char*  name;       // ImGui::Begin title AND menu label AND ini key
+        bool         permanent;  // true = no X, cannot hide (Viewport only today)
+        PanelSection section;    // Window-menu group (permanent rows are never listed)
     };
 
-    // Window-menu order. Names must match each panel's ImGui::Begin title
-    // exactly (PanelRegistryTest pins the invariants).
+    // Names must match each panel's ImGui::Begin title exactly
+    // (PanelRegistryTest pins the invariants).
     inline constexpr PanelInfo kPanels[] = {
-        { PanelId::Viewport,  "Viewport",  true  },
-        { PanelId::Outliner,  "Outliner",  false },
-        { PanelId::Inspector, "Inspector", false },
-        { PanelId::Assets,    "Assets",    false },
-        { PanelId::Console,   "Console",   false },
-        { PanelId::Problems,  "Problems",  false },
+        { PanelId::Viewport,  "Viewport",  true,  PanelSection::Scene       },
+        { PanelId::Outliner,  "Outliner",  false, PanelSection::Scene       },
+        { PanelId::Inspector, "Inspector", false, PanelSection::Scene       },
+        { PanelId::Assets,    "Assets",    false, PanelSection::Assets      },
+        { PanelId::Problems,  "Problems",  false, PanelSection::Diagnostics },
+        { PanelId::Console,   "Console",   false, PanelSection::Diagnostics },
     };
     static_assert(std::size(kPanels) == static_cast<std::size_t>(PanelId::Count));
 
