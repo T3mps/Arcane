@@ -305,3 +305,46 @@ go through the existing `.png`+`.meta` cook path, not a new one.
 12. **Vendoring pins**: cgltf 1.15+CVE-fix by commit; meshoptimizer v1.x
     exact tag; curated-subset file lists per the bc7enc_rdo pattern, both
     into ArcaneAssetPipeline.
+
+---
+
+## 7. Addendum (same day): cook-spine shape — UE / Unity / Source 2 comparison
+
+Run at the brainstorm's request, before ruling on §6 Q7. Provenance per house
+rule (read the tree, never recall): UE from the local dump
+(`.example/UnrealEngine-release/`); Source 2 from ValveResourceFormat (MIT,
+clean-room — no leaked code); Unity has no readable source, so its OFFICIAL
+documentation is the ceiling and is labeled as such.
+
+**The verdict is unanimous: one generalized spine, per-kind leaves. No engine
+runs parallel per-kind pipelines.**
+
+- **Unreal** — one derived-data cache spine: `FDerivedDataPluginInterface`
+  is name + version + `Build(bytes)`
+  (`Developer/DerivedDataCache/Public/DerivedDataPluginInterface.h:12-58`);
+  the newer API registers per-kind `IBuildFunction`s (name +
+  `Build(FBuildContext&)`, `DerivedDataBuildFunction.h:40-59`) in one
+  `IBuildFunctionRegistry`. Leaves live apart: `TextureBuildFunction` in its
+  own `Developer/TextureBuild` module; texture cache keys at
+  `TextureDerivedData.cpp:419-599`, static-mesh keys at
+  `StaticMesh.cpp:3593-3800` — per-kind key builders + version stamps, same
+  cache. Import side matches: one Interchange module, per-format translator
+  dirs side by side (`Import/Private/{Fbx,Gltf,MaterialX,Material,Animation}`).
+- **Unity** (docs) — one AssetDatabase pipeline for all types ("all native
+  importers first, and then all scripted importers in a separate phase"),
+  importers registered per file extension into that one pipeline
+  (`[ScriptedImporter]`), re-import keyed by hashed "asset name, importer ID,
+  importer version, build target" — near-verbatim Arcane's cook-key triple.
+- **Source 2** (VRF) — one generic compiled-resource container for every
+  type: type enum/extension discrimination, generic block table, per-type
+  handlers attached as block subclasses (`Resource.cs`
+  `ConstructResourceType()` instantiates Mesh/Material/Texture handlers onto
+  the shared container).
+
+**Ruling adopted at the brainstorm (user-confirmed): §6 Q7 = generalize the
+spine (session orchestration, store/index, arccook CLI) with kind dispatch;
+importers, settings, cook-key builders, and artifact payload shapes stay
+per-kind.** Recorded fallback if spec-writing finds the generalization
+forcing awkward signatures: generalize only the store/index (the true
+forcing point — one directory, one Guid-recovery scan) and keep sessions
+separate.
